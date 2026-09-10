@@ -6,7 +6,7 @@ import (
 	"searchengine/internal/domain"
 )
 
-// --- Sekundäre (getriebene) Ports ---
+// --- Secondary (driven) ports ---
 
 type Fetcher interface {
 	Fetch(ctx context.Context, url string) (string, error)
@@ -27,13 +27,13 @@ type Indexer interface {
 	DocCount() int
 }
 
-// EmbeddingProvider wandelt Text in einen Vektor um.
+// EmbeddingProvider converts text into a vector.
 type EmbeddingProvider interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
 	Dimensions() int
 }
 
-// SQLRepository ist der Port zur relationalen Datenbank.
+// SQLRepository is the port to the relational database.
 type SQLRepository interface {
 	SaveDocument(ctx context.Context, doc domain.Document, embedding []float32) error
 	PostingsForTerm(ctx context.Context, term string) ([]domain.PostingStats, error)
@@ -42,7 +42,7 @@ type SQLRepository interface {
 	DocumentByID(ctx context.Context, docID string) (domain.Document, error)
 }
 
-// --- Primäre (treibende) Ports ---
+// --- Primary (driving) ports ---
 
 type SearchService interface {
 	Search(ctx context.Context, query string, topK int) ([]domain.SearchResult, error)

@@ -2,7 +2,7 @@ package domain
 
 import "sort"
 
-// HybridResult ist ein gerankter Treffer mit aufgeschlüsseltem Score.
+// HybridResult is a ranked match with a broken-down score.
 type HybridResult struct {
 	DocID       string
 	URL         string
@@ -13,8 +13,8 @@ type HybridResult struct {
 	FinalScore  float64
 }
 
-// CombineScores mischt BM25 und Cosine-Similarity zu einem finalen Score.
-// alpha=1 -> reines BM25, alpha=0 -> rein semantisch.
+// CombineScores blends BM25 and cosine similarity into a final score.
+// alpha=1 -> pure BM25, alpha=0 -> pure semantic.
 func CombineScores(candidates []HybridResult, alpha float64) []HybridResult {
 	if alpha < 0 {
 		alpha = 0

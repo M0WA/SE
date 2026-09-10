@@ -17,10 +17,10 @@ type Repository struct {
 func New(ctx context.Context, driverName, dsn string) (*Repository, error) {
 	db, err := sql.Open(driverName, dsn)
 	if err != nil {
-		return nil, fmt.Errorf("DB öffnen (%s): %w", driverName, err)
+		return nil, fmt.Errorf("opening DB (%s): %w", driverName, err)
 	}
 	if err := db.PingContext(ctx); err != nil {
-		return nil, fmt.Errorf("DB Ping (%s): %w", driverName, err)
+		return nil, fmt.Errorf("DB ping (%s): %w", driverName, err)
 	}
 
 	repo := &Repository{db: db, dialect: NewDialect(driverName)}
@@ -37,7 +37,7 @@ func NewWithDB(db *sql.DB, driverName string) *Repository {
 func (r *Repository) migrate(ctx context.Context) error {
 	for _, stmt := range r.dialect.CreateSchemaSQL() {
 		if _, err := r.db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("Migration fehlgeschlagen: %w", err)
+			return fmt.Errorf("migration failed: %w", err)
 		}
 	}
 	return nil
@@ -49,23 +49,23 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 	tokens := domain.Tokenize(doc.Title + " " + doc.Text)
 	embJSON, err := json.Marshal(embedding)
 	if err != nil {
-		return fmt.Errorf("Embedding serialisieren: %w", err)
+		return fmt.Errorf("serializing embedding: %w", err)
 	}
 
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("Transaktion starten: %w", err)
+		return fmt.Errorf("starting transaction: %w", err)
 	}
 	defer tx.Rollback()
 
 	if _, err := tx.ExecContext(ctx, r.dialect.UpsertDocumentSQL(),
 		doc.ID, doc.URL, doc.Title, doc.Text, len(tokens), string(embJSON),
 	); err != nil {
-		return fmt.Errorf("Dokument speichern: %w", err)
+		return fmt.Errorf("saving document: %w", err)
 	}
 
 	if _, err := tx.ExecContext(ctx, r.ph(`DELETE FROM postings WHERE doc_id = %s`, 1), doc.ID); err != nil {
-		return fmt.Errorf("alte Postings löschen: %w", err)
+		return fmt.Errorf("deleting old postings: %w", err)
 	}
 
 	counts := make(map[string]int)
@@ -75,7 +75,7 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 	insertSQL := r.ph(`INSERT INTO postings (term, doc_id, term_freq) VALUES (%s, %s, %s)`, 1, 2, 3)
 	for term, freq := range counts {
 		if _, err := tx.ExecContext(ctx, insertSQL, term, doc.ID, freq); err != nil {
-			return fmt.Errorf("Posting speichern: %w", err)
+			return fmt.Errorf("saving posting: %w", err)
 		}
 	}
 
@@ -91,7 +91,7 @@ func (r *Repository) PostingsForTerm(ctx context.Context, term string) ([]domain
 	var docFreq int
 	dfQuery := r.ph(`SELECT COUNT(*) FROM postings WHERE term = %s`, 1)
 	if err := r.db.QueryRowContext(ctx, dfQuery, term).Scan(&docFreq); err != nil {
-		return nil, fmt.Errorf("DocFreq abfragen: %w", err)
+		return nil, fmt.Errorf("querying doc freq: %w", err)
 	}
 	if docFreq == 0 {
 		return nil, nil
@@ -102,7 +102,7 @@ func (r *Repository) PostingsForTerm(ctx context.Context, term string) ([]domain
 	               WHERE p.term = %s`, 1)
 	rows, err := r.db.QueryContext(ctx, query, term)
 	if err != nil {
-		return nil, fmt.Errorf("Postings abfragen: %w", err)
+		return nil, fmt.Errorf("querying postings: %w", err)
 	}
 	defer rows.Close()
 
@@ -110,7 +110,7 @@ func (r *Repository) PostingsForTerm(ctx context.Context, term string) ([]domain
 	for rows.Next() {
 		var s domain.PostingStats
 		if err := rows.Scan(&s.DocID, &s.TermFreq, &s.DocLength); err != nil {
-			return nil, fmt.Errorf("Zeile scannen: %w", err)
+			return nil, fmt.Errorf("scanning row: %w", err)
 		}
 		s.DocFreq = docFreq
 		s.TotalDocs = totalDocs
@@ -125,7 +125,7 @@ func (r *Repository) CorpusStats(ctx context.Context) (int, float64, error) {
 	var avgLen sql.NullFloat64
 	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*), AVG(doc_length) FROM documents`).Scan(&totalDocs, &avgLen)
 	if err != nil {
-		return 0, 0, fmt.Errorf("Corpus-Statistik abfragen: %w", err)
+		return 0, 0, fmt.Errorf("querying corpus stats: %w", err)
 	}
 	if totalDocs == 0 || !avgLen.Valid {
 		return totalDocs, 1, nil
@@ -136,7 +136,7 @@ func (r *Repository) CorpusStats(ctx context.Context) (int, float64, error) {
 func (r *Repository) AllEmbeddings(ctx context.Context) (map[string][]float32, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id, embedding FROM documents`)
 	if err != nil {
-		return nil, fmt.Errorf("Embeddings abfragen: %w", err)
+		return nil, fmt.Errorf("querying embeddings: %w", err)
 	}
 	defer rows.Close()
 
@@ -144,11 +144,11 @@ func (r *Repository) AllEmbeddings(ctx context.Context) (map[string][]float32, e
 	for rows.Next() {
 		var id, embJSON string
 		if err := rows.Scan(&id, &embJSON); err != nil {
-			return nil, fmt.Errorf("Zeile scannen: %w", err)
+			return nil, fmt.Errorf("scanning row: %w", err)
 		}
 		var vec []float32
 		if err := json.Unmarshal([]byte(embJSON), &vec); err != nil {
-			return nil, fmt.Errorf("Embedding deserialisieren (%s): %w", id, err)
+			return nil, fmt.Errorf("deserializing embedding (%s): %w", id, err)
 		}
 		out[id] = vec
 	}
@@ -160,7 +160,7 @@ func (r *Repository) DocumentByID(ctx context.Context, docID string) (domain.Doc
 	var doc domain.Document
 	err := r.db.QueryRowContext(ctx, query, docID).Scan(&doc.ID, &doc.URL, &doc.Title, &doc.Text)
 	if err != nil {
-		return domain.Document{}, fmt.Errorf("Dokument laden (%s): %w", docID, err)
+		return domain.Document{}, fmt.Errorf("loading document (%s): %w", docID, err)
 	}
 	return doc, nil
 }

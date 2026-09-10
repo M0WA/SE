@@ -1,5 +1,5 @@
 [Unit]
-Description=Eigene Hybrid-Suchmaschine (BM25 + Semantik)
+Description=Custom hybrid search engine (BM25 + semantic)
 After=network.target
 
 [Service]

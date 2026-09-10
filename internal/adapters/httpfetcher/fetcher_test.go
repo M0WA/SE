@@ -13,7 +13,7 @@ import (
 func TestFetcher_Fetch_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("User-Agent") == "" {
-			t.Error("erwartet gesetzten User-Agent-Header")
+			t.Error("expected User-Agent header to be set")
 		}
 		w.Write([]byte("<html>hello</html>"))
 	}))
@@ -22,10 +22,10 @@ func TestFetcher_Fetch_Success(t *testing.T) {
 	f := httpfetcher.New()
 	body, err := f.Fetch(context.Background(), srv.URL)
 	if err != nil {
-		t.Fatalf("unerwarteter Fehler: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(body, "hello") {
-		t.Errorf("unerwarteter Body: %s", body)
+		t.Errorf("unexpected body: %s", body)
 	}
 }
 
@@ -37,20 +37,20 @@ func TestFetcher_Fetch_NonOKStatus(t *testing.T) {
 
 	f := httpfetcher.New()
 	if _, err := f.Fetch(context.Background(), srv.URL); err == nil {
-		t.Error("erwartet Fehler bei 404-Status")
+		t.Error("expected error for 404 status")
 	}
 }
 
 func TestFetcher_Fetch_InvalidURL(t *testing.T) {
 	f := httpfetcher.New()
 	if _, err := f.Fetch(context.Background(), "://ungueltig"); err == nil {
-		t.Error("erwartet Fehler bei ungültiger URL")
+		t.Error("expected error for invalid URL")
 	}
 }
 
 func TestFetcher_Fetch_ConnectionError(t *testing.T) {
 	f := httpfetcher.New()
 	if _, err := f.Fetch(context.Background(), "http://127.0.0.1:1"); err == nil {
-		t.Error("erwartet Fehler bei nicht erreichbarem Host")
+		t.Error("expected error for unreachable host")
 	}
 }

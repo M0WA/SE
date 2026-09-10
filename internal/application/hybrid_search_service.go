@@ -21,7 +21,7 @@ func NewHybridSearchService(repo ports.SQLRepository, embedder ports.EmbeddingPr
 func (s *hybridSearchService) Search(ctx context.Context, query string, topK int) ([]domain.HybridResult, error) {
 	terms := domain.Tokenize(query)
 	if len(terms) == 0 {
-		return nil, errors.New("query darf nicht leer sein")
+		return nil, errors.New("query must not be empty")
 	}
 	if topK <= 0 {
 		topK = 10

@@ -49,10 +49,10 @@ func TestHybridSearch_CombinesBM25AndSemantic(t *testing.T) {
 	svc := application.NewHybridSearchService(repo, embedder, 0.5)
 	results, err := svc.Search(context.Background(), "katzen", 10)
 	if err != nil {
-		t.Fatalf("unerwarteter Fehler: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(results) == 0 || results[0].DocID != "1" {
-		t.Errorf("erwartet Doc 1 zuerst (BM25+Semantik), bekam %+v", results)
+		t.Errorf("expected doc 1 first (BM25+semantic), got %+v", results)
 	}
 }
 
@@ -67,10 +67,10 @@ func TestHybridSearch_FindsSemanticOnlyMatch(t *testing.T) {
 	svc := application.NewHybridSearchService(repo, embedder, 0.3)
 	results, err := svc.Search(context.Background(), "quantenphysik", 10)
 	if err != nil {
-		t.Fatalf("unerwarteter Fehler: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(results) != 1 || results[0].DocID != "2" {
-		t.Errorf("erwartet rein semantischen Treffer gefunden, bekam %+v", results)
+		t.Errorf("expected purely semantic match found, got %+v", results)
 	}
 }
 
@@ -78,7 +78,7 @@ func TestHybridSearch_EmptyQueryRejected(t *testing.T) {
 	svc := application.NewHybridSearchService(&fakeSQLRepo{}, &fakeEmbedder{}, 0.5)
 	_, err := svc.Search(context.Background(), "   ", 10)
 	if err == nil {
-		t.Error("erwartet Fehler bei leerer Query")
+		t.Error("expected error for empty query")
 	}
 }
 
@@ -96,6 +96,6 @@ func TestHybridSearch_TopKLimitsResults(t *testing.T) {
 	svc := application.NewHybridSearchService(repo, embedder, 0.5)
 	results, _ := svc.Search(context.Background(), "test", 2)
 	if len(results) != 2 {
-		t.Errorf("erwartet topK=2, bekam %d", len(results))
+		t.Errorf("expected topK=2, got %d", len(results))
 	}
 }

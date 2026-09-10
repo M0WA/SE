@@ -25,8 +25,8 @@ cover:
 
 coverage-check: cover
 	@pct=$$(go tool cover -func=$(BUILD_DIR)/coverage.out | tail -1 | grep -oE '[0-9.]+'); \
-	echo "Gesamt-Coverage: $$pct%"; \
-	awk -v p=$$pct 'BEGIN { if (p < 100.0) { print "FEHLER: Coverage unter 100%"; exit 1 } }'
+	echo "Total coverage: $$pct%"; \
+	awk -v p=$$pct 'BEGIN { if (p < 100.0) { print "ERROR: coverage below 100%"; exit 1 } }'
 
 lint:
 	go vet ./...
@@ -49,7 +49,7 @@ deb: build
 	chmod 755 $(DEB_DIR)/DEBIAN/postinst $(DEB_DIR)/DEBIAN/prerm
 	chmod 755 $(DEB_DIR)/usr/bin/$(BINARY)
 	dpkg-deb --build --root-owner-group $(DEB_DIR) $(BUILD_DIR)/$(BINARY)_$(PKG_VERSION)_amd64.deb
-	@echo "Paket gebaut: $(BUILD_DIR)/$(BINARY)_$(PKG_VERSION)_amd64.deb"
+	@echo "Package built: $(BUILD_DIR)/$(BINARY)_$(PKG_VERSION)_amd64.deb"
 
 docker:
 	docker build -t $(BINARY):$(PKG_VERSION) .

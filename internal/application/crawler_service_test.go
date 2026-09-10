@@ -58,13 +58,13 @@ func TestCrawlerService_Crawl_HappyPath(t *testing.T) {
 	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse)
 	count, err := svc.Crawl(context.Background(), []string{"http://a"}, 5)
 	if err != nil {
-		t.Fatalf("unerwarteter Fehler: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if count != 2 {
-		t.Errorf("erwartet 2 gecrawlte Seiten, bekam %d", count)
+		t.Errorf("expected 2 crawled pages, got %d", count)
 	}
 	if len(repo.saved) != 2 || len(idx.addCalls) != 2 {
-		t.Errorf("erwartet gespeicherte+indexierte Docs, repo=%d idx=%d", len(repo.saved), len(idx.addCalls))
+		t.Errorf("expected saved+indexed docs, repo=%d idx=%d", len(repo.saved), len(idx.addCalls))
 	}
 }
 
@@ -78,7 +78,7 @@ func TestCrawlerService_Crawl_RespectsRobots(t *testing.T) {
 	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse)
 	count, _ := svc.Crawl(context.Background(), []string{"http://a"}, 5)
 	if count != 0 {
-		t.Errorf("erwartet 0 gecrawlt (robots disallow), bekam %d", count)
+		t.Errorf("expected 0 crawled (robots disallow), got %d", count)
 	}
 }
 
@@ -92,7 +92,7 @@ func TestCrawlerService_Crawl_SkipsFetchErrors(t *testing.T) {
 	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse)
 	count, err := svc.Crawl(context.Background(), []string{"http://a"}, 5)
 	if err != nil || count != 0 {
-		t.Errorf("erwartet sanftes Überspringen, bekam count=%d err=%v", count, err)
+		t.Errorf("expected graceful skip, got count=%d err=%v", count, err)
 	}
 }
 
@@ -106,7 +106,7 @@ func TestCrawlerService_Crawl_SkipsThinContent(t *testing.T) {
 	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse)
 	count, _ := svc.Crawl(context.Background(), []string{"http://a"}, 5)
 	if count != 0 {
-		t.Errorf("erwartet dünnen Inhalt übersprungen, bekam %d", count)
+		t.Errorf("expected thin content skipped, got %d", count)
 	}
 }
 
@@ -125,7 +125,7 @@ func TestCrawlerService_Crawl_StopsAtMaxPages(t *testing.T) {
 	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse)
 	count, _ := svc.Crawl(context.Background(), []string{"http://a"}, 2)
 	if count != 2 {
-		t.Errorf("erwartet Stopp bei maxPages=2, bekam %d", count)
+		t.Errorf("expected stop at maxPages=2, got %d", count)
 	}
 }
 
@@ -139,7 +139,7 @@ func TestCrawlerService_Crawl_IgnoresNonHTTPURLs(t *testing.T) {
 	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse)
 	count, _ := svc.Crawl(context.Background(), []string{"ftp://a", "mailto:x@y.com"}, 5)
 	if count != 0 {
-		t.Errorf("erwartet ignorierte Nicht-HTTP-URLs, bekam %d", count)
+		t.Errorf("expected non-HTTP URLs ignored, got %d", count)
 	}
 }
 
@@ -155,7 +155,7 @@ func TestCrawlerService_Crawl_RepoSaveErrorPropagates(t *testing.T) {
 	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse)
 	_, err := svc.Crawl(context.Background(), []string{"http://a"}, 5)
 	if err == nil {
-		t.Error("erwartet dass Repo-Fehler propagiert wird")
+		t.Error("expected repo error to propagate")
 	}
 }
 
@@ -173,6 +173,6 @@ func TestCrawlerService_Crawl_DeduplicatesVisitedURLs(t *testing.T) {
 	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse)
 	count, _ := svc.Crawl(context.Background(), []string{"http://a", "http://a"}, 5)
 	if count != 1 || calls != 1 {
-		t.Errorf("erwartet Deduplizierung, count=%d calls=%d", count, calls)
+		t.Errorf("expected deduplication, count=%d calls=%d", count, calls)
 	}
 }

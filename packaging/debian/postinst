@@ -7,5 +7,5 @@ chown searchengine:searchengine /etc/searchengine/searchengine.env
 chmod 640 /etc/searchengine/searchengine.env
 systemctl daemon-reload
 systemctl enable searchengine.service
-echo "searchengine installiert. Start mit: systemctl start searchengine"
+echo "searchengine installed. Start with: systemctl start searchengine"
 exit 0

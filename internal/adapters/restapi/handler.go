@@ -66,11 +66,11 @@ func (h *Handler) handleCrawl(w http.ResponseWriter, r *http.Request) {
 	}
 	var req crawlRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "ungültiger JSON-Body", http.StatusBadRequest)
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
 	if len(req.SeedURLs) == 0 {
-		http.Error(w, "seed_urls darf nicht leer sein", http.StatusBadRequest)
+		http.Error(w, "seed_urls must not be empty", http.StatusBadRequest)
 		return
 	}
 

@@ -8,8 +8,8 @@ import (
 	"searchengine/internal/domain"
 )
 
-// Embedder erzeugt einen deterministischen Pseudo-Embedding-Vektor via
-// Feature Hashing. Kein echtes Sprachverständnis, aber abhängigkeitsfrei.
+// Embedder produces a deterministic pseudo-embedding vector via
+// feature hashing. No real language understanding, but dependency-free.
 type Embedder struct {
 	dims int
 }

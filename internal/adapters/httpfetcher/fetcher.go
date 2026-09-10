@@ -16,14 +16,14 @@ type Fetcher struct {
 func New() *Fetcher {
 	return &Fetcher{
 		Client:    &http.Client{Timeout: 8 * time.Second},
-		UserAgent: "EigeneSuchmaschine/1.0 (+educational)",
+		UserAgent: "OwnSearchEngine/1.0 (+educational)",
 	}
 }
 
 func (f *Fetcher) Fetch(ctx context.Context, rawURL string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("Request bauen: %w", err)
+		return "", fmt.Errorf("building request: %w", err)
 	}
 	req.Header.Set("User-Agent", f.UserAgent)
 
@@ -34,12 +34,12 @@ func (f *Fetcher) Fetch(ctx context.Context, rawURL string) (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("fetch %s: unerwarteter Status %d", rawURL, resp.StatusCode)
+		return "", fmt.Errorf("fetch %s: unexpected status %d", rawURL, resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("Body lesen: %w", err)
+		return "", fmt.Errorf("reading body: %w", err)
 	}
 	return string(body), nil
 }

@@ -43,10 +43,10 @@ func TestHandleSearch_Success(t *testing.T) {
 	h.Routes().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("erwartet 200, bekam %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 	if fs.gotQ != "katzen" || fs.gotTopK != 5 {
-		t.Errorf("unerwartete Argumente an Search: %q %d", fs.gotQ, fs.gotTopK)
+		t.Errorf("unexpected arguments to Search: %q %d", fs.gotQ, fs.gotTopK)
 	}
 }
 
@@ -57,7 +57,7 @@ func TestHandleSearch_DefaultTopK(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
 	if fs.gotTopK != 10 {
-		t.Errorf("erwartet Standard top_k=10, bekam %d", fs.gotTopK)
+		t.Errorf("expected default top_k=10, got %d", fs.gotTopK)
 	}
 }
 
@@ -67,18 +67,18 @@ func TestHandleSearch_MethodNotAllowed(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
-		t.Errorf("erwartet 405, bekam %d", rec.Code)
+		t.Errorf("expected 405, got %d", rec.Code)
 	}
 }
 
 func TestHandleSearch_ServiceError(t *testing.T) {
-	fs := &fakeSearch{err: errors.New("ungültige Anfrage")}
+	fs := &fakeSearch{err: errors.New("invalid request")}
 	h := restapi.New(fs, &fakeCrawler{})
 	req := httptest.NewRequest(http.MethodGet, "/search?q=", nil)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
-		t.Errorf("erwartet 400, bekam %d", rec.Code)
+		t.Errorf("expected 400, got %d", rec.Code)
 	}
 }
 
@@ -92,12 +92,12 @@ func TestHandleCrawl_Success(t *testing.T) {
 	h.Routes().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("erwartet 200, bekam %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 	var resp map[string]int
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if resp["crawled_count"] != 3 {
-		t.Errorf("erwartet crawled_count=3, bekam %v", resp)
+		t.Errorf("expected crawled_count=3, got %v", resp)
 	}
 }
 
@@ -107,7 +107,7 @@ func TestHandleCrawl_MethodNotAllowed(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
-		t.Errorf("erwartet 405, bekam %d", rec.Code)
+		t.Errorf("expected 405, got %d", rec.Code)
 	}
 }
 
@@ -117,7 +117,7 @@ func TestHandleCrawl_InvalidJSON(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
-		t.Errorf("erwartet 400, bekam %d", rec.Code)
+		t.Errorf("expected 400, got %d", rec.Code)
 	}
 }
 
@@ -128,18 +128,18 @@ func TestHandleCrawl_EmptySeedURLs(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
-		t.Errorf("erwartet 400, bekam %d", rec.Code)
+		t.Errorf("expected 400, got %d", rec.Code)
 	}
 }
 
 func TestHandleCrawl_ServiceError(t *testing.T) {
-	fc := &fakeCrawler{err: errors.New("crawl fehlgeschlagen")}
+	fc := &fakeCrawler{err: errors.New("crawl failed")}
 	h := restapi.New(&fakeSearch{}, fc)
 	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}})
 	req := httptest.NewRequest(http.MethodPost, "/crawl", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("erwartet 500, bekam %d", rec.Code)
+		t.Errorf("expected 500, got %d", rec.Code)
 	}
 }

@@ -8,7 +8,7 @@ import (
 	"searchengine/internal/ports"
 )
 
-var ErrEmptyQuery = errors.New("query darf nicht leer sein")
+var ErrEmptyQuery = errors.New("query must not be empty")
 
 type searchService struct {
 	index ports.Indexer

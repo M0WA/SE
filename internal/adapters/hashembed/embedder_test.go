@@ -14,7 +14,7 @@ func TestEmbedder_DeterministicOutput(t *testing.T) {
 	v1, _ := e.Embed(context.Background(), "Katzen sind toll")
 	v2, _ := e.Embed(context.Background(), "Katzen sind toll")
 	if domain.CosineSimilarity(v1, v2) < 0.999 {
-		t.Error("erwartet identische Embeddings für identischen Text")
+		t.Error("expected identical embeddings for identical text")
 	}
 }
 
@@ -27,7 +27,7 @@ func TestEmbedder_SimilarTextsHaveHigherSimilarityThanUnrelated(t *testing.T) {
 	simAB := domain.CosineSimilarity(a, b)
 	simAC := domain.CosineSimilarity(a, c)
 	if simAB <= simAC {
-		t.Errorf("erwartet höhere Ähnlichkeit bei Wortüberlappung: AB=%f AC=%f", simAB, simAC)
+		t.Errorf("expected higher similarity for word overlap: AB=%f AC=%f", simAB, simAC)
 	}
 }
 
@@ -39,7 +39,7 @@ func TestEmbedder_OutputIsNormalized(t *testing.T) {
 		norm += float64(x) * float64(x)
 	}
 	if math.Abs(math.Sqrt(norm)-1.0) > 0.001 {
-		t.Errorf("erwartet L2-normalisierten Vektor (Norm=1), bekam Norm=%f", math.Sqrt(norm))
+		t.Errorf("expected L2-normalized vector (norm=1), got norm=%f", math.Sqrt(norm))
 	}
 }
 
@@ -47,16 +47,16 @@ func TestEmbedder_EmptyTextReturnsZeroVector(t *testing.T) {
 	e := hashembed.New(16)
 	v, err := e.Embed(context.Background(), "")
 	if err != nil {
-		t.Fatalf("unerwarteter Fehler: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(v) != 16 {
-		t.Errorf("erwartet Vektor der Länge 16, bekam %d", len(v))
+		t.Errorf("expected vector of length 16, got %d", len(v))
 	}
 }
 
 func TestEmbedder_DefaultDimensions(t *testing.T) {
 	e := hashembed.New(0)
 	if e.Dimensions() != 128 {
-		t.Errorf("erwartet Default 128 Dimensionen, bekam %d", e.Dimensions())
+		t.Errorf("expected default 128 dimensions, got %d", e.Dimensions())
 	}
 }

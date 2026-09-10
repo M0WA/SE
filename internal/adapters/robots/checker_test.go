@@ -22,7 +22,7 @@ func (f *fakeFetcher) Fetch(_ context.Context, _ string) (string, error) {
 func TestChecker_Allowed_NoRobotsTxt(t *testing.T) {
 	c := robots.New(&fakeFetcher{err: errors.New("404")})
 	if !c.Allowed(context.Background(), "https://x.example/anything") {
-		t.Error("erwartet erlaubt, wenn robots.txt nicht erreichbar")
+		t.Error("expected allowed when robots.txt unreachable")
 	}
 }
 
@@ -30,10 +30,10 @@ func TestChecker_Allowed_DisallowedPath(t *testing.T) {
 	body := "User-agent: *\nDisallow: /private\n"
 	c := robots.New(&fakeFetcher{body: body})
 	if c.Allowed(context.Background(), "https://x.example/private/page") {
-		t.Error("erwartet /private verboten")
+		t.Error("expected /private disallowed")
 	}
 	if !c.Allowed(context.Background(), "https://x.example/public") {
-		t.Error("erwartet /public erlaubt")
+		t.Error("expected /public allowed")
 	}
 }
 
@@ -41,7 +41,7 @@ func TestChecker_Allowed_IgnoresOtherAgents(t *testing.T) {
 	body := "User-agent: Googlebot\nDisallow: /\nUser-agent: *\nDisallow:\n"
 	c := robots.New(&fakeFetcher{body: body})
 	if !c.Allowed(context.Background(), "https://x.example/anything") {
-		t.Error("erwartet *-Gruppe (leeres Disallow) erlaubt alles")
+		t.Error("expected *-group (empty Disallow) allows everything")
 	}
 }
 
@@ -51,13 +51,13 @@ func TestChecker_Allowed_CachesPerOrigin(t *testing.T) {
 	c.Allowed(context.Background(), "https://x.example/a")
 	c.Allowed(context.Background(), "https://x.example/b")
 	if f.calls != 1 {
-		t.Errorf("erwartet robots.txt nur 1x geladen (Cache), bekam %d Aufrufe", f.calls)
+		t.Errorf("expected robots.txt loaded only once (cache), got %d calls", f.calls)
 	}
 }
 
 func TestChecker_Allowed_InvalidURL(t *testing.T) {
 	c := robots.New(&fakeFetcher{})
 	if c.Allowed(context.Background(), "://ungueltig") {
-		t.Error("erwartet ungültige URL als verboten")
+		t.Error("expected invalid URL treated as disallowed")
 	}
 }

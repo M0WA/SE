@@ -2,7 +2,7 @@ package domain
 
 import "math"
 
-// CosineSimilarity misst semantische Nähe zweier Embedding-Vektoren, Wertebereich [-1, 1].
+// CosineSimilarity measures the semantic closeness of two embedding vectors, range [-1, 1].
 func CosineSimilarity(a, b []float32) float64 {
 	if len(a) != len(b) || len(a) == 0 {
 		return 0

@@ -29,13 +29,13 @@ func TestSearchService_Search_ReturnsIndexResults(t *testing.T) {
 
 	results, err := svc.Search(context.Background(), "katzen", 5)
 	if err != nil {
-		t.Fatalf("unerwarteter Fehler: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(results) != 1 || results[0].URL != "http://a" {
-		t.Errorf("unerwartete Ergebnisse: %v", results)
+		t.Errorf("unexpected results: %v", results)
 	}
 	if idx.searchQuery != "katzen" || idx.searchTopK != 5 {
-		t.Errorf("Index mit falschen Argumenten aufgerufen: %q %d", idx.searchQuery, idx.searchTopK)
+		t.Errorf("index called with wrong arguments: %q %d", idx.searchQuery, idx.searchTopK)
 	}
 }
 
@@ -43,7 +43,7 @@ func TestSearchService_Search_EmptyQueryRejected(t *testing.T) {
 	svc := application.NewSearchService(&fakeIndexer{})
 	_, err := svc.Search(context.Background(), "   ", 5)
 	if err != application.ErrEmptyQuery {
-		t.Errorf("erwartet ErrEmptyQuery, bekam %v", err)
+		t.Errorf("expected ErrEmptyQuery, got %v", err)
 	}
 }
 
@@ -52,6 +52,6 @@ func TestSearchService_Search_DefaultsTopK(t *testing.T) {
 	svc := application.NewSearchService(idx)
 	_, _ = svc.Search(context.Background(), "katzen", 0)
 	if idx.searchTopK != 10 {
-		t.Errorf("erwartet Standard topK=10, bekam %d", idx.searchTopK)
+		t.Errorf("expected default topK=10, got %d", idx.searchTopK)
 	}
 }

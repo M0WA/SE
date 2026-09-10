@@ -7,13 +7,13 @@ import (
 	"sync"
 )
 
-// InvertedIndex ist die zentrale Suchstruktur: Term -> DocID -> Häufigkeit.
-// Thread-safe durch internes Mutex.
+// InvertedIndex is the central search structure: term -> docID -> frequency.
+// Thread-safe via an internal mutex.
 type InvertedIndex struct {
 	mu         sync.RWMutex
-	postings   map[string]map[string]int // term -> docID -> Häufigkeit
-	docLengths map[string]int            // docID -> Token-Anzahl
-	docs       map[string]Document       // docID -> Dokument
+	postings   map[string]map[string]int // term -> docID -> frequency
+	docLengths map[string]int            // docID -> token count
+	docs       map[string]Document       // docID -> document
 }
 
 func NewInvertedIndex() *InvertedIndex {
@@ -24,7 +24,7 @@ func NewInvertedIndex() *InvertedIndex {
 	}
 }
 
-// Add indexiert Titel + Text eines Dokuments.
+// Add indexes a document's title + text.
 func (idx *InvertedIndex) Add(doc Document) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
@@ -45,7 +45,7 @@ func (idx *InvertedIndex) Add(doc Document) {
 	}
 }
 
-// DocCount liefert die Anzahl indexierter Dokumente.
+// DocCount returns the number of indexed documents.
 func (idx *InvertedIndex) DocCount() int {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
@@ -67,7 +67,7 @@ func (idx *InvertedIndex) tfidf(term, docID string) float64 {
 	return tf * idf
 }
 
-// Search rankt indexierte Dokumente per TF-IDF und liefert die Top-K Ergebnisse.
+// Search ranks indexed documents via TF-IDF and returns the top-K results.
 func (idx *InvertedIndex) Search(query string, topK int) []SearchResult {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
@@ -116,7 +116,7 @@ func round4(f float64) float64 {
 	return math.Round(f*10000) / 10000
 }
 
-// Snippet extrahiert ein Textfenster um den ersten Treffer und hebt Treffer hervor.
+// Snippet extracts a text window around the first match and highlights matches.
 func Snippet(text string, terms []string, maxLen int) string {
 	lower := strings.ToLower(text)
 	pos := -1

@@ -16,8 +16,8 @@ var stopwords = map[string]struct{}{
 
 var nonWordRe = regexp.MustCompile(`[^a-zA-ZäöüßÄÖÜ0-9\s]+`)
 
-// Tokenize normalisiert Text zu bedeutungstragenden Kleinbuchstaben-Termen:
-// Satzzeichen entfernen, auf Wörter splitten, Stoppwörter und kurze Tokens filtern.
+// Tokenize normalizes text into meaningful lowercase terms:
+// strip punctuation, split into words, and filter stopwords and short tokens.
 func Tokenize(text string) []string {
 	cleaned := nonWordRe.ReplaceAllString(strings.ToLower(text), " ")
 	fields := strings.Fields(cleaned)

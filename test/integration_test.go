@@ -60,23 +60,23 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 	})
 	resp, err := http.Post(api.URL+"/crawl", "application/json", bytes.NewReader(crawlBody))
 	if err != nil {
-		t.Fatalf("Crawl-Request fehlgeschlagen: %v", err)
+		t.Fatalf("crawl request failed: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("erwartet 200 von /crawl, bekam %d", resp.StatusCode)
+		t.Fatalf("expected 200 from /crawl, got %d", resp.StatusCode)
 	}
 	var crawlResp struct {
 		CrawledCount int `json:"crawled_count"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&crawlResp)
 	if crawlResp.CrawledCount != 2 {
-		t.Fatalf("erwartet 2 gecrawlte Seiten, bekam %d", crawlResp.CrawledCount)
+		t.Fatalf("expected 2 crawled pages, got %d", crawlResp.CrawledCount)
 	}
 
 	searchResp, err := http.Get(api.URL + "/search?q=Hunde")
 	if err != nil {
-		t.Fatalf("Such-Request fehlgeschlagen: %v", err)
+		t.Fatalf("search request failed: %v", err)
 	}
 	defer searchResp.Body.Close()
 	var result struct {
@@ -84,7 +84,7 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 	}
 	_ = json.NewDecoder(searchResp.Body).Decode(&result)
 	if len(result.Results) != 2 {
-		t.Fatalf("erwartet 2 Suchergebnisse für 'Hunde', bekam %d: %+v", len(result.Results), result.Results)
+		t.Fatalf("expected 2 search results for 'Hunde', got %d: %+v", len(result.Results), result.Results)
 	}
 
 	searchResp2, _ := http.Get(api.URL + "/search?q=Training")
@@ -93,12 +93,12 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 	}
 	_ = json.NewDecoder(searchResp2.Body).Decode(&result2)
 	if len(result2.Results) == 0 || !strings.Contains(result2.Results[0].URL, "seite2") {
-		t.Fatalf("erwartet seite2 zuerst bei eindeutigem Begriff, bekam %+v", result2.Results)
+		t.Fatalf("expected seite2 first for unique term, got %+v", result2.Results)
 	}
 
 	for _, doc := range result.Results {
 		if strings.Contains(doc.URL, "geheim") {
-			t.Errorf("robots.txt-verbotene Seite wurde indexiert: %s", doc.URL)
+			t.Errorf("robots.txt-disallowed page was indexed: %s", doc.URL)
 		}
 	}
 }

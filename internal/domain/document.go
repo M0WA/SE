@@ -1,6 +1,6 @@
 package domain
 
-// Document repräsentiert eine gecrawlte und indexierte Webseite.
+// Document represents a crawled and indexed web page.
 type Document struct {
 	ID    string
 	URL   string
@@ -9,7 +9,7 @@ type Document struct {
 	Links []string
 }
 
-// SearchResult ist ein einzelnes gerankte Ergebnis, das nach außen geliefert wird.
+// SearchResult is a single ranked result returned to the caller.
 type SearchResult struct {
 	URL     string  `json:"url"`
 	Title   string  `json:"title"`

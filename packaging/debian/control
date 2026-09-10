@@ -3,8 +3,8 @@ Version: 1.0.0
 Section: web
 Priority: optional
 Architecture: amd64
-Maintainer: Ihr Name <ihre-email@example.com>
+Maintainer: Your Name <your-email@example.com>
 Depends: libc6 (>= 2.31)
-Description: Eigene Hybrid-Suchmaschine (BM25 + Semantik)
- Crawler, invertierter Index, BM25-Ranking und semantische Suche
- über SQLite/MySQL/PostgreSQL. Hexagonale Architektur, in Go.
+Description: Custom hybrid search engine (BM25 + semantic)
+ Crawler, inverted index, BM25 ranking, and semantic search
+ over SQLite/MySQL/PostgreSQL. Hexagonal architecture, in Go.

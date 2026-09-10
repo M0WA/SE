@@ -24,7 +24,7 @@ func main() {
 	ctx := context.Background()
 	repo, err := sqlrepo.New(ctx, driver, dsn)
 	if err != nil {
-		log.Fatalf("DB-Verbindung fehlgeschlagen (%s): %v", driver, err)
+		log.Fatalf("DB connection failed (%s): %v", driver, err)
 	}
 	defer repo.Close()
 
@@ -33,7 +33,7 @@ func main() {
 
 	handler := restapi.New(nil, nil)
 	_ = searchSvc
-	log.Printf("Suchmaschine läuft auf :8080 (DB: %s)", driver)
+	log.Printf("Search engine running on :8080 (DB: %s)", driver)
 	log.Fatal(http.ListenAndServe(":8080", handler.Routes()))
 }
 

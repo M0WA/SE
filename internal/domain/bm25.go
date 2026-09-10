@@ -7,7 +7,7 @@ const (
 	bm25B  = 0.75
 )
 
-// PostingStats sind die Rohdaten, die die SQL-Repository liefert.
+// PostingStats is the raw data returned by the SQL repository.
 type PostingStats struct {
 	DocID     string
 	TermFreq  int
@@ -17,7 +17,7 @@ type PostingStats struct {
 	AvgDocLen float64
 }
 
-// BM25Score berechnet den Relevanz-Score für einen einzelnen Term/Dokument-Treffer.
+// BM25Score computes the relevance score for a single term/document match.
 func BM25Score(s PostingStats) float64 {
 	idf := math.Log(
 		(float64(s.TotalDocs)-float64(s.DocFreq)+0.5)/(float64(s.DocFreq)+0.5) + 1,
@@ -27,7 +27,7 @@ func BM25Score(s PostingStats) float64 {
 	return idf * (numerator / denominator)
 }
 
-// BM25ScoreDocument summiert BM25 über alle Query-Terme für ein Dokument.
+// BM25ScoreDocument sums BM25 over all query terms for a document.
 func BM25ScoreDocument(postingsPerTerm []PostingStats) float64 {
 	total := 0.0
 	for _, p := range postingsPerTerm {
