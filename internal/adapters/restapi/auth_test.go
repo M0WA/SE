@@ -114,7 +114,7 @@ func TestHandleLogout_ClearsSession(t *testing.T) {
 		t.Fatalf("expected 200 from logout, got %d", logoutRec.Code)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/crawl", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)

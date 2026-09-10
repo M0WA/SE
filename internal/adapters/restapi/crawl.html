@@ -3,25 +3,34 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>se. — add a page</title>
+<title>se. — crawl</title>
 <link rel="stylesheet" href="/style.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
 </head>
-<body>
+<body class="admin">
 <main>
   <div class="page-header">
-    <a class="back" href="/">&larr; se.</a>
+    <a class="mark" href="/">se.</a>
     <button id="sign-out" class="text-button" type="button">Sign out</button>
   </div>
-  <form id="crawl-form" class="crawl-form" autocomplete="off">
+  <nav class="admin-nav">
+    <a href="/admin">Overview</a>
+    <a href="/admin/documents">Documents</a>
+    <a href="/admin/crawl" aria-current="page">Crawl</a>
+    <a href="/admin/tuning">Tuning</a>
+    <a href="/admin/search">Search</a>
+  </nav>
+
+  <form id="crawl-form" class="crawl-form">
     <input id="crawl-url" class="field" name="url" type="url" placeholder="https://example.com" autofocus required>
     <input id="max-pages" name="max_pages" type="number" min="1" value="20" aria-label="Max pages">
     <button type="submit">Crawl</button>
   </form>
   <div id="crawl-status"></div>
 </main>
+<script src="/admin.js"></script>
 <script>
   const crawlForm = document.getElementById('crawl-form');
   const crawlURL = document.getElementById('crawl-url');
@@ -38,33 +47,17 @@
     const pages = parseInt(maxPages.value, 10) || 20;
     crawlStatus.textContent = 'Crawling…';
     try {
-      const resp = await fetch('/crawl', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ seed_urls: [url], max_pages: pages }),
-      });
-      if (!resp.ok) {
-        const msg = await resp.text();
-        crawlStatus.textContent = 'Crawl failed: ' + msg.trim();
-        return;
-      }
-      const data = await resp.json();
+      const data = await postJSON('/admin/api/crawl', { seed_urls: [url], max_pages: pages });
       const count = data.crawled_count || 0;
       crawlStatus.textContent = count === 1
         ? 'Indexed 1 page.'
         : 'Indexed ' + count + ' pages.';
     } catch (err) {
-      crawlStatus.textContent = 'Crawl failed: could not reach the server.';
+      crawlStatus.textContent = 'Crawl failed: ' + err.message;
     }
   });
 
-  document.getElementById('sign-out').addEventListener('click', async () => {
-    try {
-      await fetch('/logout', { method: 'POST' });
-    } finally {
-      window.location = '/';
-    }
-  });
+  wireSignOut();
 </script>
 </body>
 </html>

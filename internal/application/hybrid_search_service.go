@@ -11,21 +11,22 @@ import (
 type hybridSearchService struct {
 	repo     ports.SQLRepository
 	embedder ports.EmbeddingProvider
-	alpha    float64
+	settings *domain.TuningSettings
 }
 
-func NewHybridSearchService(repo ports.SQLRepository, embedder ports.EmbeddingProvider, alpha float64) *hybridSearchService {
-	return &hybridSearchService{repo: repo, embedder: embedder, alpha: alpha}
+func NewHybridSearchService(repo ports.SQLRepository, embedder ports.EmbeddingProvider, settings *domain.TuningSettings) *hybridSearchService {
+	return &hybridSearchService{repo: repo, embedder: embedder, settings: settings}
 }
 
 func (s *hybridSearchService) Search(ctx context.Context, query string, topK int) ([]domain.HybridResult, error) {
-	terms := domain.Tokenize(query)
-	if len(terms) == 0 {
+	parsed := domain.ParseQuery(query)
+	if parsed.Empty() {
 		return nil, errors.New("query must not be empty")
 	}
 	if topK <= 0 {
 		topK = 10
 	}
+	terms := parsed.AllTerms()
 
 	bm25PerDoc := make(map[string][]domain.PostingStats)
 	seen := make(map[string]bool)
@@ -60,24 +61,49 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, topK int
 		candidateIDs[id] = true
 	}
 
+	// +required/-excluded/"phrase" constraints need each candidate's full
+	// text, which the ranking step below doesn't otherwise fetch until
+	// after truncating to topK -- so filter (and cache the fetched docs
+	// for reuse below) before ranking, only when such constraints exist.
+	docCache := make(map[string]domain.Document)
+	if parsed.HasConstraints() {
+		for id := range candidateIDs {
+			doc, err := s.repo.DocumentByID(ctx, id)
+			if err != nil {
+				delete(candidateIDs, id)
+				continue
+			}
+			docCache[id] = doc
+			if !parsed.Matches(doc.Title, doc.Text) {
+				delete(candidateIDs, id)
+			}
+		}
+	}
+
+	alpha, k1, b := s.settings.Get()
+
 	candidates := make([]domain.HybridResult, 0, len(candidateIDs))
 	for id := range candidateIDs {
-		bm25 := domain.BM25ScoreDocument(bm25PerDoc[id])
+		bm25 := domain.BM25ScoreDocument(bm25PerDoc[id], k1, b)
 		semantic := domain.CosineSimilarity(queryVec, embeddings[id])
 		candidates = append(candidates, domain.HybridResult{
 			DocID: id, BM25Score: bm25, SemanticSim: semantic,
 		})
 	}
 
-	ranked := domain.CombineScores(candidates, s.alpha)
+	ranked := domain.CombineScores(candidates, alpha)
 	if len(ranked) > topK {
 		ranked = ranked[:topK]
 	}
 
 	for i := range ranked {
-		doc, err := s.repo.DocumentByID(ctx, ranked[i].DocID)
-		if err != nil {
-			continue
+		doc, ok := docCache[ranked[i].DocID]
+		if !ok {
+			var err error
+			doc, err = s.repo.DocumentByID(ctx, ranked[i].DocID)
+			if err != nil {
+				continue
+			}
 		}
 		ranked[i].URL = doc.URL
 		ranked[i].Title = doc.Title

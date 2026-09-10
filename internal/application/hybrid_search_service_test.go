@@ -28,6 +28,7 @@ func (r *fakeSQLRepo) DocumentByID(_ context.Context, id string) (domain.Documen
 func (r *fakeSQLRepo) ListDocuments(context.Context, int) ([]domain.IndexedDocument, error) {
 	return nil, nil
 }
+func (r *fakeSQLRepo) DeleteDocument(context.Context, string) error { return nil }
 
 type fakeEmbedder struct{ vec []float32 }
 
@@ -49,7 +50,7 @@ func TestHybridSearch_CombinesBM25AndSemantic(t *testing.T) {
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 
-	svc := application.NewHybridSearchService(repo, embedder, 0.5)
+	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B))
 	results, err := svc.Search(context.Background(), "katzen", 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -67,7 +68,7 @@ func TestHybridSearch_FindsSemanticOnlyMatch(t *testing.T) {
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 
-	svc := application.NewHybridSearchService(repo, embedder, 0.3)
+	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.3, domain.DefaultBM25K1, domain.DefaultBM25B))
 	results, err := svc.Search(context.Background(), "quantenphysik", 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -78,7 +79,7 @@ func TestHybridSearch_FindsSemanticOnlyMatch(t *testing.T) {
 }
 
 func TestHybridSearch_EmptyQueryRejected(t *testing.T) {
-	svc := application.NewHybridSearchService(&fakeSQLRepo{}, &fakeEmbedder{}, 0.5)
+	svc := application.NewHybridSearchService(&fakeSQLRepo{}, &fakeEmbedder{}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B))
 	_, err := svc.Search(context.Background(), "   ", 10)
 	if err == nil {
 		t.Error("expected error for empty query")
@@ -96,7 +97,7 @@ func TestHybridSearch_TopKLimitsResults(t *testing.T) {
 		},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(repo, embedder, 0.5)
+	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B))
 	results, _ := svc.Search(context.Background(), "test", 2)
 	if len(results) != 2 {
 		t.Errorf("expected topK=2, got %d", len(results))

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — tuning</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<main>
+  <div class="page-header">
+    <a class="mark" href="/">se.</a>
+    <button id="sign-out" class="text-button" type="button">Sign out</button>
+  </div>
+  <nav class="admin-nav">
+    <a href="/admin">Overview</a>
+    <a href="/admin/documents">Documents</a>
+    <a href="/admin/crawl">Crawl</a>
+    <a href="/admin/tuning" aria-current="page">Tuning</a>
+    <a href="/admin/search">Search</a>
+  </nav>
+
+  <p class="lede" style="margin: 0 0 2rem;">Adjust how search ranks results. Changes apply to the next search, on this running instance only.</p>
+
+  <form id="tuning-form" class="stacked-form">
+    <div class="form-row">
+      <label for="alpha">Alpha — BM25 vs. semantic weight (0 = pure semantic, 1 = pure BM25)</label><br>
+      <input id="alpha" class="field" type="number" step="0.05" min="0" max="1" required>
+    </div>
+    <div class="form-row">
+      <label for="k1">k1 — term-frequency saturation</label><br>
+      <input id="k1" class="field" type="number" step="0.1" min="0" required>
+    </div>
+    <div class="form-row">
+      <label for="b">b — document-length normalization (0 = none, 1 = full)</label><br>
+      <input id="b" class="field" type="number" step="0.05" min="0" max="1" required>
+    </div>
+    <div class="form-actions">
+      <button type="submit">Save</button>
+      <span id="tuning-status" class="error-text"></span>
+    </div>
+  </form>
+  <p class="tuning-hint">Defaults: alpha 0.5, k1 1.2, b 0.75. Values outside 0–1 (alpha, b) or below 0 (k1) are clamped.</p>
+</main>
+<script src="/admin.js"></script>
+<script>
+  const form = document.getElementById('tuning-form');
+  const alphaEl = document.getElementById('alpha');
+  const k1El = document.getElementById('k1');
+  const bEl = document.getElementById('b');
+  const status = document.getElementById('tuning-status');
+
+  async function loadSettings() {
+    try {
+      const s = await getJSON('/admin/api/settings');
+      alphaEl.value = s.alpha;
+      k1El.value = s.k1;
+      bEl.value = s.b;
+    } catch (err) {
+      status.textContent = 'Could not load settings: ' + err.message;
+    }
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    status.textContent = '';
+    try {
+      const s = await postJSON('/admin/api/settings', {
+        alpha: parseFloat(alphaEl.value),
+        k1: parseFloat(k1El.value),
+        b: parseFloat(bEl.value),
+      });
+      alphaEl.value = s.alpha;
+      k1El.value = s.k1;
+      bEl.value = s.b;
+      status.style.color = 'var(--ink-muted)';
+      status.textContent = 'Saved.';
+    } catch (err) {
+      status.style.color = 'var(--accent)';
+      status.textContent = 'Could not save: ' + err.message;
+    }
+  });
+
+  wireSignOut();
+  loadSettings();
+</script>
+</body>
+</html>

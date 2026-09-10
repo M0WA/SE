@@ -192,23 +192,23 @@ func TestHandleSearch_ServiceError(t *testing.T) {
 	}
 }
 
-func TestHandleCrawl_Unauthenticated_GetRedirectsToLogin(t *testing.T) {
+func TestHandleAdminCrawlPage_Unauthenticated_Redirects(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
-	req := httptest.NewRequest(http.MethodGet, "/crawl", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/crawl", nil)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("expected 303 redirect, got %d", rec.Code)
 	}
-	if loc := rec.Header().Get("Location"); loc != "/login?next=%2Fcrawl" {
-		t.Errorf("expected redirect to login with next=/crawl, got %q", loc)
+	if loc := rec.Header().Get("Location"); loc != "/login?next=%2Fadmin%2Fcrawl" {
+		t.Errorf("expected redirect to login with next=/admin/crawl, got %q", loc)
 	}
 }
 
-func TestHandleCrawl_Unauthenticated_PostReturns401(t *testing.T) {
+func TestHandleAdminCrawl_Unauthenticated_PostReturns401(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
-	req := httptest.NewRequest(http.MethodPost, "/crawl", bytes.NewReader([]byte(`{}`)))
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader([]byte(`{}`)))
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
 
@@ -217,9 +217,9 @@ func TestHandleCrawl_Unauthenticated_PostReturns401(t *testing.T) {
 	}
 }
 
-func TestHandleCrawl_NoAdminConfigured_AlwaysUnauthenticated(t *testing.T) {
+func TestHandleAdminCrawlPage_NoAdminConfigured_AlwaysUnauthenticated(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
-	req := httptest.NewRequest(http.MethodGet, "/crawl", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/crawl", nil)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
 
@@ -228,12 +228,12 @@ func TestHandleCrawl_NoAdminConfigured_AlwaysUnauthenticated(t *testing.T) {
 	}
 }
 
-func TestHandleCrawl_Success(t *testing.T) {
+func TestHandleAdminCrawl_Success(t *testing.T) {
 	fc := &fakeCrawler{count: 3}
 	h, cookie := authedHandler(t, &fakeSearch{}, fc)
 
 	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}, "max_pages": 5})
-	req := httptest.NewRequest(http.MethodPost, "/crawl", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader(body))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
@@ -248,9 +248,9 @@ func TestHandleCrawl_Success(t *testing.T) {
 	}
 }
 
-func TestHandleCrawl_GetServesPage(t *testing.T) {
+func TestHandleAdminCrawlPage_GetServesPage(t *testing.T) {
 	h, cookie := authedHandler(t, &fakeSearch{}, &fakeCrawler{})
-	req := httptest.NewRequest(http.MethodGet, "/crawl", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/crawl", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
@@ -266,9 +266,9 @@ func TestHandleCrawl_GetServesPage(t *testing.T) {
 	}
 }
 
-func TestHandleCrawl_HeadServesNoBody(t *testing.T) {
+func TestHandleAdminCrawlPage_HeadServesNoBody(t *testing.T) {
 	h, cookie := authedHandler(t, &fakeSearch{}, &fakeCrawler{})
-	req := httptest.NewRequest(http.MethodHead, "/crawl", nil)
+	req := httptest.NewRequest(http.MethodHead, "/admin/crawl", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
@@ -281,9 +281,9 @@ func TestHandleCrawl_HeadServesNoBody(t *testing.T) {
 	}
 }
 
-func TestHandleCrawl_MethodNotAllowed(t *testing.T) {
+func TestHandleAdminCrawlPage_MethodNotAllowed(t *testing.T) {
 	h, cookie := authedHandler(t, &fakeSearch{}, &fakeCrawler{})
-	req := httptest.NewRequest(http.MethodPut, "/crawl", nil)
+	req := httptest.NewRequest(http.MethodPut, "/admin/crawl", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
@@ -292,9 +292,20 @@ func TestHandleCrawl_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-func TestHandleCrawl_InvalidJSON(t *testing.T) {
+func TestHandleAdminCrawl_MethodNotAllowed(t *testing.T) {
 	h, cookie := authedHandler(t, &fakeSearch{}, &fakeCrawler{})
-	req := httptest.NewRequest(http.MethodPost, "/crawl", bytes.NewReader([]byte("{ungültig")))
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/crawl", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminCrawl_InvalidJSON(t *testing.T) {
+	h, cookie := authedHandler(t, &fakeSearch{}, &fakeCrawler{})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader([]byte("{ungültig")))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
@@ -303,10 +314,10 @@ func TestHandleCrawl_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestHandleCrawl_EmptySeedURLs(t *testing.T) {
+func TestHandleAdminCrawl_EmptySeedURLs(t *testing.T) {
 	h, cookie := authedHandler(t, &fakeSearch{}, &fakeCrawler{})
 	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{}})
-	req := httptest.NewRequest(http.MethodPost, "/crawl", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader(body))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
@@ -315,11 +326,11 @@ func TestHandleCrawl_EmptySeedURLs(t *testing.T) {
 	}
 }
 
-func TestHandleCrawl_ServiceError(t *testing.T) {
+func TestHandleAdminCrawl_ServiceError(t *testing.T) {
 	fc := &fakeCrawler{err: errors.New("crawl failed")}
 	h, cookie := authedHandler(t, &fakeSearch{}, fc)
 	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}})
-	req := httptest.NewRequest(http.MethodPost, "/crawl", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader(body))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)

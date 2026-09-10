@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — search debug</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<main>
+  <div class="page-header">
+    <a class="mark" href="/">se.</a>
+    <button id="sign-out" class="text-button" type="button">Sign out</button>
+  </div>
+  <nav class="admin-nav">
+    <a href="/admin">Overview</a>
+    <a href="/admin/documents">Documents</a>
+    <a href="/admin/crawl">Crawl</a>
+    <a href="/admin/tuning">Tuning</a>
+    <a href="/admin/search" aria-current="page">Search</a>
+  </nav>
+
+  <section class="panel">
+    <h2>Debug a query</h2>
+    <p class="lede" style="margin: 0 0 1rem;">Shows the BM25 and semantic scores behind a search's ranking, unblended. Supports +required, -excluded, and "exact phrase" terms.</p>
+    <form id="debug-form" class="panel-form">
+      <input id="debug-q" class="field" type="text" placeholder='cats +required -excluded "exact phrase"' required>
+      <button type="submit">Run</button>
+    </form>
+    <div id="debug-status" class="panel-status"></div>
+    <div id="debug-result"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Look up a term</h2>
+    <form id="postings-form" class="panel-form">
+      <input id="postings-term" class="field" type="text" placeholder="a single token, e.g. cats" required>
+      <button type="submit">Look up</button>
+    </form>
+    <div id="postings-status" class="panel-status"></div>
+    <div id="postings-result"></div>
+  </section>
+</main>
+<script src="/admin.js"></script>
+<script>
+  document.getElementById('debug-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const q = document.getElementById('debug-q').value.trim();
+    const status = document.getElementById('debug-status');
+    const result = document.getElementById('debug-result');
+    clear(result);
+    if (!q) { status.textContent = 'Type a query to debug.'; return; }
+    status.textContent = 'Running…';
+    try {
+      const results = await getJSON('/admin/api/search?q=' + encodeURIComponent(q));
+      if (results.length === 0) {
+        status.textContent = 'No matches for “' + q + '”.';
+        return;
+      }
+      status.textContent = results.length === 1 ? '1 match' : results.length + ' matches';
+      const table = document.createElement('table');
+      table.innerHTML = '<thead><tr><th>title</th><th class="num">bm25</th><th class="num">semantic</th><th class="num">final</th></tr></thead>';
+      const tbody = document.createElement('tbody');
+      for (const r of results) {
+        const tr = document.createElement('tr');
+        const titleTd = document.createElement('td');
+        titleTd.textContent = r.title || r.url;
+        tr.appendChild(titleTd);
+        const bm25Td = document.createElement('td'); bm25Td.className = 'num'; bm25Td.textContent = r.bm25_score.toFixed(3); tr.appendChild(bm25Td);
+        const semTd = document.createElement('td'); semTd.className = 'num'; semTd.textContent = r.semantic_sim.toFixed(3); tr.appendChild(semTd);
+        const finalTd = document.createElement('td'); finalTd.className = 'num'; finalTd.textContent = r.final_score.toFixed(3); tr.appendChild(finalTd);
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      result.appendChild(table);
+    } catch (err) {
+      status.textContent = 'Debug search failed: ' + err.message;
+    }
+  });
+
+  document.getElementById('postings-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const term = document.getElementById('postings-term').value.trim().toLowerCase();
+    const status = document.getElementById('postings-status');
+    const result = document.getElementById('postings-result');
+    clear(result);
+    if (!term) { status.textContent = 'Enter a term to look up.'; return; }
+    status.textContent = 'Looking up…';
+    try {
+      const data = await getJSON('/admin/api/postings?term=' + encodeURIComponent(term));
+      if (data.postings.length === 0) {
+        status.textContent = '"' + term + '" does not appear in the index.';
+        return;
+      }
+      status.textContent = 'Appears in ' + data.doc_freq + (data.doc_freq === 1 ? ' document.' : ' documents.');
+      const table = document.createElement('table');
+      table.innerHTML = '<thead><tr><th>doc id</th><th class="num">term freq</th><th class="num">doc length</th></tr></thead>';
+      const tbody = document.createElement('tbody');
+      for (const p of data.postings) {
+        const tr = document.createElement('tr');
+        const a = document.createElement('td'); a.textContent = p.doc_id; tr.appendChild(a);
+        const b = document.createElement('td'); b.className = 'num'; b.textContent = String(p.term_freq); tr.appendChild(b);
+        const c = document.createElement('td'); c.className = 'num'; c.textContent = String(p.doc_length); tr.appendChild(c);
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      result.appendChild(table);
+    } catch (err) {
+      status.textContent = 'Look up failed: ' + err.message;
+    }
+  });
+
+  wireSignOut();
+</script>
+</body>
+</html>

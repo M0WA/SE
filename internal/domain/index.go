@@ -72,11 +72,21 @@ func (idx *InvertedIndex) Search(query string, topK int) []SearchResult {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
-	terms := Tokenize(query)
+	parsed := ParseQuery(query)
+	terms := parsed.AllTerms()
 	scores := make(map[string]float64)
 	for _, term := range terms {
 		for docID := range idx.postings[term] {
 			scores[docID] += idx.tfidf(term, docID)
+		}
+	}
+
+	if parsed.HasConstraints() {
+		for docID := range scores {
+			doc := idx.docs[docID]
+			if !parsed.Matches(doc.Title, doc.Text) {
+				delete(scores, docID)
+			}
 		}
 	}
 

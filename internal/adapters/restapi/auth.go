@@ -113,23 +113,6 @@ func (h *Handler) requireAuthAPI(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// requireAuthCrawl gates /crawl, which serves an HTML page on GET/HEAD and
-// a JSON action on POST from the same handler: redirect for the former,
-// plain 401 for the latter.
-func (h *Handler) requireAuthCrawl(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if !h.isAuthenticated(r) {
-			if r.Method == http.MethodGet || r.Method == http.MethodHead {
-				http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.Path), http.StatusSeeOther)
-				return
-			}
-			http.Error(w, "authentication required", http.StatusUnauthorized)
-			return
-		}
-		next(w, r)
-	}
-}
-
 func isHTTPS(r *http.Request) bool {
 	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 }

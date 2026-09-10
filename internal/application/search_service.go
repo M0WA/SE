@@ -19,7 +19,7 @@ func NewSearchService(index ports.Indexer) ports.SearchService {
 }
 
 func (s *searchService) Search(_ context.Context, query string, topK int) ([]domain.SearchResult, error) {
-	if len(domain.Tokenize(query)) == 0 {
+	if domain.ParseQuery(query).Empty() {
 		return nil, ErrEmptyQuery
 	}
 	if topK <= 0 {

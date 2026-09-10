@@ -2,9 +2,14 @@ package ports
 
 import (
 	"context"
+	"errors"
 
 	"searchengine/internal/domain"
 )
+
+// ErrDocumentNotFound is returned by SQLRepository/AdminRepository's
+// DeleteDocument when no document with the given ID exists.
+var ErrDocumentNotFound = errors.New("document not found")
 
 // --- Secondary (driven) ports ---
 
@@ -41,6 +46,7 @@ type SQLRepository interface {
 	AllEmbeddings(ctx context.Context) (map[string][]float32, error)
 	DocumentByID(ctx context.Context, docID string) (domain.Document, error)
 	ListDocuments(ctx context.Context, limit int) ([]domain.IndexedDocument, error)
+	DeleteDocument(ctx context.Context, docID string) error
 }
 
 // AdminRepository is the subset of SQLRepository the admin diagnostics UI
@@ -49,6 +55,7 @@ type AdminRepository interface {
 	CorpusStats(ctx context.Context) (totalDocs int, avgDocLen float64, err error)
 	ListDocuments(ctx context.Context, limit int) ([]domain.IndexedDocument, error)
 	PostingsForTerm(ctx context.Context, term string) ([]domain.PostingStats, error)
+	DeleteDocument(ctx context.Context, docID string) error
 }
 
 // --- Primary (driving) ports ---

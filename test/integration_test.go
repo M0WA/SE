@@ -78,13 +78,13 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 		"seed_urls": []string{site.URL + "/"},
 		"max_pages": 10,
 	})
-	resp, err := client.Post(api.URL+"/crawl", "application/json", bytes.NewReader(crawlBody))
+	resp, err := client.Post(api.URL+"/admin/api/crawl", "application/json", bytes.NewReader(crawlBody))
 	if err != nil {
 		t.Fatalf("crawl request failed: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 from /crawl, got %d", resp.StatusCode)
+		t.Fatalf("expected 200 from /admin/api/crawl, got %d", resp.StatusCode)
 	}
 	var crawlResp struct {
 		CrawledCount int `json:"crawled_count"`

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"searchengine/internal/domain"
 	"searchengine/internal/ports"
 )
 
@@ -21,30 +22,45 @@ var loginHTML []byte
 //go:embed admin.html
 var adminHTML []byte
 
+//go:embed admin_documents.html
+var adminDocumentsHTML []byte
+
+//go:embed admin_tuning.html
+var adminTuningHTML []byte
+
+//go:embed admin_search.html
+var adminSearchHTML []byte
+
 //go:embed style.css
 var styleCSS []byte
+
+//go:embed admin.js
+var adminJS []byte
 
 type Handler struct {
 	search    ports.SearchService
 	crawler   ports.CrawlerService
 	debug     ports.DebugSearchService
 	admin     ports.AdminRepository
+	settings  *domain.TuningSettings
 	dbDriver  string
 	adminUser string
 	adminPass string
 	sessions  *sessionStore
 }
 
-// Config wires a Handler's dependencies. Debug, Admin, DBDriver, AdminUser
-// and AdminPass are optional: without AdminUser/AdminPass configured,
-// authentication fails closed (nobody can sign in, so /crawl and /admin
-// stay locked) rather than defaulting to open access. Without Debug/Admin,
-// the admin diagnostics endpoints report themselves unavailable.
+// Config wires a Handler's dependencies. Debug, Admin, Settings, DBDriver,
+// AdminUser and AdminPass are optional: without AdminUser/AdminPass
+// configured, authentication fails closed (nobody can sign in, so /admin
+// stays locked) rather than defaulting to open access. Without
+// Debug/Admin/Settings, the corresponding admin endpoints report
+// themselves unavailable.
 type Config struct {
 	Search    ports.SearchService
 	Crawler   ports.CrawlerService
 	Debug     ports.DebugSearchService
 	Admin     ports.AdminRepository
+	Settings  *domain.TuningSettings
 	DBDriver  string
 	AdminUser string
 	AdminPass string
@@ -56,6 +72,7 @@ func New(cfg Config) *Handler {
 		crawler:   cfg.Crawler,
 		debug:     cfg.Debug,
 		admin:     cfg.Admin,
+		settings:  cfg.Settings,
 		dbDriver:  cfg.DBDriver,
 		adminUser: cfg.AdminUser,
 		adminPass: cfg.AdminPass,
@@ -67,15 +84,24 @@ func (h *Handler) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.handleIndex)
 	mux.HandleFunc("/style.css", h.handleStyle)
+	mux.HandleFunc("/admin.js", h.handleAdminJS)
 	mux.HandleFunc("/search", h.handleSearch)
-	mux.HandleFunc("/crawl", h.requireAuthCrawl(h.handleCrawl))
 	mux.HandleFunc("/login", h.handleLoginRoute)
 	mux.HandleFunc("/logout", h.handleLogout)
+
 	mux.HandleFunc("/admin", h.requireAuthPage(h.handleAdminPage))
+	mux.HandleFunc("/admin/documents", h.requireAuthPage(h.handleAdminDocumentsPage))
+	mux.HandleFunc("/admin/crawl", h.requireAuthPage(h.handleAdminCrawlPage))
+	mux.HandleFunc("/admin/tuning", h.requireAuthPage(h.handleAdminTuningPage))
+	mux.HandleFunc("/admin/search", h.requireAuthPage(h.handleAdminSearchPage))
+
 	mux.HandleFunc("/admin/api/stats", h.requireAuthAPI(h.handleAdminStats))
 	mux.HandleFunc("/admin/api/documents", h.requireAuthAPI(h.handleAdminDocuments))
+	mux.HandleFunc("DELETE /admin/api/documents/{id}", h.requireAuthAPI(h.handleAdminDeleteDocument))
 	mux.HandleFunc("/admin/api/postings", h.requireAuthAPI(h.handleAdminPostings))
 	mux.HandleFunc("/admin/api/search", h.requireAuthAPI(h.handleAdminSearch))
+	mux.HandleFunc("/admin/api/settings", h.requireAuthAPI(h.handleAdminSettings))
+	mux.HandleFunc("/admin/api/crawl", h.requireAuthAPI(h.handleAdminCrawl))
 	return mux
 }
 
@@ -97,6 +123,18 @@ func (h *Handler) handleStyle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = w.Write(styleCSS)
+}
+
+func (h *Handler) handleAdminJS(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	if r.Method == http.MethodHead {
+		return
+	}
+	_, _ = w.Write(adminJS)
 }
 
 func (h *Handler) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -139,45 +177,6 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, searchResponse{Query: query, Results: results})
-}
-
-type crawlRequest struct {
-	SeedURLs []string `json:"seed_urls"`
-	MaxPages int      `json:"max_pages"`
-}
-
-type crawlResponse struct {
-	CrawledCount int `json:"crawled_count"`
-}
-
-func (h *Handler) handleCrawl(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet || r.Method == http.MethodHead {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if r.Method == http.MethodGet {
-			_, _ = w.Write(crawlHTML)
-		}
-		return
-	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req crawlRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
-		return
-	}
-	if len(req.SeedURLs) == 0 {
-		http.Error(w, "seed_urls must not be empty", http.StatusBadRequest)
-		return
-	}
-
-	count, err := h.crawler.Crawl(r.Context(), req.SeedURLs, req.MaxPages)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, crawlResponse{CrawledCount: count})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

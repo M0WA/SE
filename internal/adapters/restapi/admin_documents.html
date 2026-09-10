@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — documents</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<main>
+  <div class="page-header">
+    <a class="mark" href="/">se.</a>
+    <button id="sign-out" class="text-button" type="button">Sign out</button>
+  </div>
+  <nav class="admin-nav">
+    <a href="/admin">Overview</a>
+    <a href="/admin/documents" aria-current="page">Documents</a>
+    <a href="/admin/crawl">Crawl</a>
+    <a href="/admin/tuning">Tuning</a>
+    <a href="/admin/search">Search</a>
+  </nav>
+
+  <p class="lede" style="margin: 0 0 2rem;">Indexed pages grouped by domain, with each domain's document-length spread and the option to remove a page from the index.</p>
+  <div id="documents-status" class="panel-status"></div>
+  <div id="domains"></div>
+</main>
+<script src="/admin.js"></script>
+<script>
+  const domainsEl = document.getElementById('domains');
+  const statusEl = document.getElementById('documents-status');
+
+  function hostnameOf(url) {
+    try {
+      return new URL(url).hostname;
+    } catch (err) {
+      return url;
+    }
+  }
+
+  function buildChart(docs) {
+    const maxLen = Math.max.apply(null, docs.map((d) => d.doc_length).concat([1]));
+    const barWidth = 8;
+    const gap = 3;
+    const height = 56;
+    const width = docs.length * (barWidth + gap);
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 ' + Math.max(width, 1) + ' ' + height);
+    svg.setAttribute('width', width);
+    svg.setAttribute('height', height);
+    svg.classList.add('domain-chart');
+
+    docs.forEach((d, i) => {
+      const h = Math.max(2, (d.doc_length / maxLen) * height);
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rect.setAttribute('x', String(i * (barWidth + gap)));
+      rect.setAttribute('y', String(height - h));
+      rect.setAttribute('width', String(barWidth));
+      rect.setAttribute('height', String(h));
+      const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+      title.textContent = (d.title || d.url) + ' — ' + d.doc_length + ' tokens indexed';
+      rect.appendChild(title);
+      svg.appendChild(rect);
+    });
+    return svg;
+  }
+
+  async function deleteDocument(id, row) {
+    if (!window.confirm('Remove this page from the index?')) return;
+    try {
+      await deleteRequest('/admin/api/documents/' + encodeURIComponent(id));
+      row.remove();
+    } catch (err) {
+      window.alert('Could not delete: ' + err.message);
+    }
+  }
+
+  async function deleteDomain(ids, group) {
+    if (!window.confirm('Remove all ' + ids.length + ' pages in this domain from the index?')) return;
+    for (const id of ids) {
+      try {
+        await deleteRequest('/admin/api/documents/' + encodeURIComponent(id));
+      } catch (err) {
+        window.alert('Stopped: could not delete ' + id + ': ' + err.message);
+        return;
+      }
+    }
+    group.remove();
+  }
+
+  function renderDomain(hostname, docs) {
+    const group = document.createElement('section');
+    group.className = 'domain-group';
+
+    const head = document.createElement('div');
+    head.className = 'domain-head';
+    const h3 = document.createElement('h3');
+    h3.textContent = hostname;
+    head.appendChild(h3);
+
+    const totalLen = docs.reduce((sum, d) => sum + d.doc_length, 0);
+    const avgLen = totalLen / docs.length;
+    const metrics = document.createElement('span');
+    metrics.className = 'domain-metrics';
+    metrics.textContent = docs.length + (docs.length === 1 ? ' page' : ' pages') +
+      ' · avg ' + avgLen.toFixed(0) + ' · total ' + totalLen;
+    head.appendChild(metrics);
+    group.appendChild(head);
+
+    group.appendChild(buildChart(docs));
+
+    const table = document.createElement('table');
+    table.innerHTML = '<thead><tr><th>title</th><th class="num">length</th><th></th></tr></thead>';
+    const tbody = document.createElement('tbody');
+    for (const d of docs) {
+      const tr = document.createElement('tr');
+
+      const titleTd = document.createElement('td');
+      const link = document.createElement('a');
+      link.href = d.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.style.color = 'var(--ink)';
+      link.textContent = d.title || d.url;
+      titleTd.appendChild(link);
+      const urlDiv = document.createElement('div');
+      urlDiv.className = 'url';
+      urlDiv.textContent = d.url;
+      titleTd.appendChild(urlDiv);
+      tr.appendChild(titleTd);
+
+      const lenTd = document.createElement('td');
+      lenTd.className = 'num';
+      lenTd.textContent = String(d.doc_length);
+      tr.appendChild(lenTd);
+
+      const actionTd = document.createElement('td');
+      actionTd.className = 'actions';
+      const delBtn = document.createElement('button');
+      delBtn.className = 'text-button';
+      delBtn.type = 'button';
+      delBtn.textContent = 'Delete';
+      delBtn.addEventListener('click', () => deleteDocument(d.id, tr));
+      actionTd.appendChild(delBtn);
+      tr.appendChild(actionTd);
+
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    group.appendChild(table);
+
+    const deleteAll = document.createElement('button');
+    deleteAll.className = 'text-button';
+    deleteAll.type = 'button';
+    deleteAll.style.marginTop = '0.75rem';
+    deleteAll.textContent = 'Delete all in this domain';
+    deleteAll.addEventListener('click', () => deleteDomain(docs.map((d) => d.id), group));
+    group.appendChild(deleteAll);
+
+    return group;
+  }
+
+  async function loadDocuments() {
+    try {
+      const docs = await getJSON('/admin/api/documents?limit=1000');
+      clear(domainsEl);
+      if (docs.length === 0) {
+        statusEl.textContent = 'No documents indexed yet.';
+        return;
+      }
+      const byDomain = new Map();
+      for (const d of docs) {
+        const host = hostnameOf(d.url);
+        if (!byDomain.has(host)) byDomain.set(host, []);
+        byDomain.get(host).push(d);
+      }
+      statusEl.textContent = docs.length + (docs.length === 1 ? ' page across ' : ' pages across ') +
+        byDomain.size + (byDomain.size === 1 ? ' domain' : ' domains');
+      const hosts = Array.from(byDomain.keys()).sort();
+      for (const host of hosts) {
+        domainsEl.appendChild(renderDomain(host, byDomain.get(host)));
+      }
+    } catch (err) {
+      statusEl.textContent = 'Could not load documents: ' + err.message;
+    }
+  }
+
+  wireSignOut();
+  loadDocuments();
+</script>
+</body>
+</html>

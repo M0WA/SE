@@ -18,12 +18,13 @@ import (
 	"searchengine/internal/adapters/robots"
 	"searchengine/internal/adapters/sqlrepo"
 	"searchengine/internal/application"
+	"searchengine/internal/domain"
 )
 
 func main() {
 	driver := getEnv("DB_DRIVER", "sqlite")
 	dsn := getEnv("DB_DSN", "file:search.db?cache=shared")
-	alpha := 0.5
+	settings := domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B)
 
 	ctx := context.Background()
 	repo, err := sqlrepo.New(ctx, driver, dsn)
@@ -33,8 +34,8 @@ func main() {
 	defer repo.Close()
 
 	embedder := hashembed.New(128)
-	searchSvc := application.NewHybridAsSearchService(repo, embedder, alpha)
-	debugSvc := application.NewHybridSearchService(repo, embedder, alpha)
+	searchSvc := application.NewHybridAsSearchService(repo, embedder, settings)
+	debugSvc := application.NewHybridSearchService(repo, embedder, settings)
 
 	fetcher := httpfetcher.New()
 	robotsChecker := robots.New(fetcher)
@@ -54,6 +55,7 @@ func main() {
 		Crawler:   crawlerSvc,
 		Debug:     debugSvc,
 		Admin:     repo,
+		Settings:  settings,
 		DBDriver:  driver,
 		AdminUser: adminUser,
 		AdminPass: adminPass,

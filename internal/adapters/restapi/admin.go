@@ -1,13 +1,17 @@
 package restapi
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
+
+	"searchengine/internal/ports"
 )
 
 const defaultDocumentListLimit = 100
 
-func (h *Handler) handleAdminPage(w http.ResponseWriter, r *http.Request) {
+func servePage(w http.ResponseWriter, r *http.Request, page []byte) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -16,7 +20,27 @@ func (h *Handler) handleAdminPage(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodHead {
 		return
 	}
-	_, _ = w.Write(adminHTML)
+	_, _ = w.Write(page)
+}
+
+func (h *Handler) handleAdminPage(w http.ResponseWriter, r *http.Request) {
+	servePage(w, r, adminHTML)
+}
+
+func (h *Handler) handleAdminDocumentsPage(w http.ResponseWriter, r *http.Request) {
+	servePage(w, r, adminDocumentsHTML)
+}
+
+func (h *Handler) handleAdminTuningPage(w http.ResponseWriter, r *http.Request) {
+	servePage(w, r, adminTuningHTML)
+}
+
+func (h *Handler) handleAdminSearchPage(w http.ResponseWriter, r *http.Request) {
+	servePage(w, r, adminSearchHTML)
+}
+
+func (h *Handler) handleAdminCrawlPage(w http.ResponseWriter, r *http.Request) {
+	servePage(w, r, crawlHTML)
 }
 
 type adminStatsResponse struct {
@@ -78,6 +102,30 @@ func (h *Handler) handleAdminDocuments(w http.ResponseWriter, r *http.Request) {
 		out[i] = adminDocument{ID: d.ID, URL: d.URL, Title: d.Title, DocLength: d.DocLength}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleAdminDeleteDocument is registered on the Go 1.22+ pattern
+// "DELETE /admin/api/documents/{id}", since a wildcard path segment is
+// exactly what that routing style is for.
+func (h *Handler) handleAdminDeleteDocument(w http.ResponseWriter, r *http.Request) {
+	if h.admin == nil {
+		http.Error(w, "admin diagnostics not configured", http.StatusServiceUnavailable)
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "document id must not be empty", http.StatusBadRequest)
+		return
+	}
+	err := h.admin.DeleteDocument(r.Context(), id)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	case errors.Is(err, ports.ErrDocumentNotFound):
+		http.Error(w, "document not found", http.StatusNotFound)
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 type adminPosting struct {
@@ -160,4 +208,65 @@ func (h *Handler) handleAdminSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+type settingsResponse struct {
+	Alpha float64 `json:"alpha"`
+	K1    float64 `json:"k1"`
+	B     float64 `json:"b"`
+}
+
+func (h *Handler) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
+	if h.settings == nil {
+		http.Error(w, "tuning not configured", http.StatusServiceUnavailable)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		alpha, k1, b := h.settings.Get()
+		writeJSON(w, http.StatusOK, settingsResponse{Alpha: alpha, K1: k1, B: b})
+	case http.MethodPost:
+		var req settingsResponse
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		h.settings.Set(req.Alpha, req.K1, req.B)
+		alpha, k1, b := h.settings.Get()
+		writeJSON(w, http.StatusOK, settingsResponse{Alpha: alpha, K1: k1, B: b})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+type crawlRequest struct {
+	SeedURLs []string `json:"seed_urls"`
+	MaxPages int      `json:"max_pages"`
+}
+
+type crawlResponse struct {
+	CrawledCount int `json:"crawled_count"`
+}
+
+func (h *Handler) handleAdminCrawl(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req crawlRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if len(req.SeedURLs) == 0 {
+		http.Error(w, "seed_urls must not be empty", http.StatusBadRequest)
+		return
+	}
+
+	count, err := h.crawler.Crawl(r.Context(), req.SeedURLs, req.MaxPages)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, crawlResponse{CrawledCount: count})
 }

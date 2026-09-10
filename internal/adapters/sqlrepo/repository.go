@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"searchengine/internal/domain"
+	"searchengine/internal/ports"
 )
 
 type Repository struct {
@@ -163,6 +164,24 @@ func (r *Repository) DocumentByID(ctx context.Context, docID string) (domain.Doc
 		return domain.Document{}, fmt.Errorf("loading document (%s): %w", docID, err)
 	}
 	return doc, nil
+}
+
+// DeleteDocument removes a document and its postings (the postings table's
+// foreign key cascades the delete across all three dialects' schemas).
+func (r *Repository) DeleteDocument(ctx context.Context, docID string) error {
+	query := r.ph(`DELETE FROM documents WHERE id = %s`, 1)
+	res, err := r.db.ExecContext(ctx, query, docID)
+	if err != nil {
+		return fmt.Errorf("deleting document (%s): %w", docID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking delete result (%s): %w", docID, err)
+	}
+	if n == 0 {
+		return ports.ErrDocumentNotFound
+	}
+	return nil
 }
 
 func (r *Repository) ListDocuments(ctx context.Context, limit int) ([]domain.IndexedDocument, error) {
