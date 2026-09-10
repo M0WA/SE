@@ -38,6 +38,7 @@ jobs:
     steps:
       - run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v4
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - env:
           CGO_ENABLED: "0"
         run: make deb PKG_VERSION=${{ env.PKG_VERSION }}
