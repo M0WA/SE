@@ -5,13 +5,17 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 
 	"searchengine/internal/adapters/hashembed"
+	"searchengine/internal/adapters/htmlparser"
+	"searchengine/internal/adapters/httpfetcher"
 	"searchengine/internal/adapters/restapi"
+	"searchengine/internal/adapters/robots"
 	"searchengine/internal/adapters/sqlrepo"
 	"searchengine/internal/application"
 )
@@ -29,10 +33,16 @@ func main() {
 	defer repo.Close()
 
 	embedder := hashembed.New(128)
-	searchSvc := application.NewHybridSearchService(repo, embedder, alpha)
+	searchSvc := application.NewHybridAsSearchService(repo, embedder, alpha)
 
-	handler := restapi.New(nil, nil)
-	_ = searchSvc
+	fetcher := httpfetcher.New()
+	robotsChecker := robots.New(fetcher)
+	parseHTML := func(html, pageURL string) (string, string, []string) {
+		return htmlparser.Parse(strings.NewReader(html), pageURL)
+	}
+	crawlerSvc := application.NewSQLCrawlerService(fetcher, robotsChecker, repo, embedder, parseHTML)
+
+	handler := restapi.New(searchSvc, crawlerSvc)
 	log.Printf("Search engine running on :8080 (DB: %s)", driver)
 	log.Fatal(http.ListenAndServe(":8080", handler.Routes()))
 }

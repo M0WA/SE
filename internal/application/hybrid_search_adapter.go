@@ -1,0 +1,31 @@
+package application
+
+import (
+	"context"
+
+	"searchengine/internal/domain"
+	"searchengine/internal/ports"
+)
+
+type hybridSearchAdapter struct {
+	hybrid *hybridSearchService
+}
+
+// NewHybridAsSearchService adapts a hybrid (BM25 + semantic) search service to
+// the plain ports.SearchService contract expected by the HTTP layer, mapping
+// each domain.HybridResult's blended score into a domain.SearchResult.
+func NewHybridAsSearchService(repo ports.SQLRepository, embedder ports.EmbeddingProvider, alpha float64) ports.SearchService {
+	return &hybridSearchAdapter{hybrid: NewHybridSearchService(repo, embedder, alpha)}
+}
+
+func (a *hybridSearchAdapter) Search(ctx context.Context, query string, topK int) ([]domain.SearchResult, error) {
+	hybridResults, err := a.hybrid.Search(ctx, query, topK)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]domain.SearchResult, len(hybridResults))
+	for i, r := range hybridResults {
+		results[i] = domain.SearchResult{URL: r.URL, Title: r.Title, Snippet: r.Snippet, Score: r.FinalScore}
+	}
+	return results, nil
+}
