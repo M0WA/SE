@@ -6,13 +6,13 @@ on:
       - "v*.*.*"
 
 env:
-  GO_VERSION: "1.22"
+  GO_VERSION: "1.25"
 
 jobs:
   package-debian:
     name: Build .deb (Debian)
     runs-on: ubuntu-latest
-    container: golang:1.22-bookworm
+    container: golang:1.25-bookworm
     steps:
       - run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v4
