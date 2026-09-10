@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  GO_VERSION: "1.22"
+  PKG_VERSION: "1.0.0"
+
+jobs:
+  test:
+    name: Build, vet & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - run: go build ./...
+      - run: go vet ./...
+      - name: gofmt check
+        run: |
+          fmt_out="$(gofmt -l .)"
+          if [ -n "$fmt_out" ]; then
+            echo "$fmt_out"
+            echo "gofmt found unformatted files (run 'gofmt -w .')"
+            exit 1
+          fi
+      - run: go test ./... -v
+
+  package-debian:
+    name: Build .deb (Debian)
+    needs: test
+    runs-on: ubuntu-latest
+    container: golang:1.22-bookworm
+    steps:
+      - run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+      - uses: actions/checkout@v4
+      - env:
+          CGO_ENABLED: "0"
+        run: make deb PKG_VERSION=${{ env.PKG_VERSION }}
+      - run: mv build/searchengine_${{ env.PKG_VERSION }}_amd64.deb build/searchengine_${{ env.PKG_VERSION }}_debian_amd64.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: searchengine-debian-amd64-deb
+          path: build/searchengine_${{ env.PKG_VERSION }}_debian_amd64.deb
+
+  package-ubuntu:
+    name: Build .deb (Ubuntu)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - env:
+          CGO_ENABLED: "0"
+        run: make deb PKG_VERSION=${{ env.PKG_VERSION }}
+      - run: mv build/searchengine_${{ env.PKG_VERSION }}_amd64.deb build/searchengine_${{ env.PKG_VERSION }}_ubuntu_amd64.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: searchengine-ubuntu-amd64-deb
+          path: build/searchengine_${{ env.PKG_VERSION }}_ubuntu_amd64.deb
+
+  verify-install:
+    name: Verify install (${{ matrix.distro }})
+    needs: [package-debian, package-ubuntu]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: debian
+            image: debian:12
+            artifact: searchengine-debian-amd64-deb
+          - distro: ubuntu
+            image: ubuntu:22.04
+            artifact: searchengine-ubuntu-amd64-deb
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: pkg
+      - name: Install package
+        run: |
+          apt-get update
+          apt-get install -y curl
+          apt-get install -y ./pkg/*.deb
+      - name: Smoke test
+        run: |
+          dpkg -s searchengine
+          DB_DRIVER=sqlite3 DB_DSN='file:/tmp/smoke.db?cache=shared' \
+            timeout 3 /usr/bin/searchengine &
+          sleep 1
+          curl -sf 'http://127.0.0.1:8080/search?q=test' | grep -q '"query"'

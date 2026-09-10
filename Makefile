@@ -41,7 +41,7 @@ deb: build
 	mkdir -p $(DEB_DIR)/lib/systemd/system
 	mkdir -p $(DEB_DIR)/etc/searchengine
 	cp $(BUILD_DIR)/$(BINARY) $(DEB_DIR)/usr/bin/$(BINARY)
-	cp packaging/debian/control $(DEB_DIR)/DEBIAN/control
+	sed 's/^Version: .*/Version: $(PKG_VERSION)/' packaging/debian/control > $(DEB_DIR)/DEBIAN/control
 	cp packaging/debian/postinst $(DEB_DIR)/DEBIAN/postinst
 	cp packaging/debian/prerm $(DEB_DIR)/DEBIAN/prerm
 	cp packaging/searchengine.service $(DEB_DIR)/lib/systemd/system/searchengine.service
