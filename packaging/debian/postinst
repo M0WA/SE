@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+if ! id searchengine >/dev/null 2>&1; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin searchengine
+fi
+chown searchengine:searchengine /etc/searchengine/searchengine.env
+chmod 640 /etc/searchengine/searchengine.env
+systemctl daemon-reload
+systemctl enable searchengine.service
+echo "searchengine installiert. Start mit: systemctl start searchengine"
+exit 0

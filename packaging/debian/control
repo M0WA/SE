@@ -1,0 +1,10 @@
+Package: searchengine
+Version: 1.0.0
+Section: web
+Priority: optional
+Architecture: amd64
+Maintainer: Ihr Name <ihre-email@example.com>
+Depends: libc6 (>= 2.31)
+Description: Eigene Hybrid-Suchmaschine (BM25 + Semantik)
+ Crawler, invertierter Index, BM25-Ranking und semantische Suche
+ über SQLite/MySQL/PostgreSQL. Hexagonale Architektur, in Go.

@@ -1,0 +1,104 @@
+package integration_test
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"searchengine/internal/adapters/htmlparser"
+	"searchengine/internal/adapters/httpfetcher"
+	"searchengine/internal/adapters/memrepo"
+	"searchengine/internal/adapters/restapi"
+	"searchengine/internal/adapters/robots"
+	"searchengine/internal/application"
+	"searchengine/internal/domain"
+)
+
+func TestEndToEnd_CrawlThenSearch(t *testing.T) {
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/robots.txt":
+			w.Write([]byte("User-agent: *\nDisallow: /geheim\n"))
+		case "/":
+			w.Write([]byte(`<html><head><title>Startseite</title></head><body>
+                <p>Willkommen auf der Startseite. Hier geht es um Katzen und Hunde.</p>
+                <a href="/seite2">weiter</a>
+                <a href="/geheim">geheim</a>
+            </body></html>`))
+		case "/seite2":
+			w.Write([]byte(`<html><head><title>Seite Zwei</title></head><body>
+                <p>Diese Seite handelt ausschließlich von Hunden und ihrem Training.</p>
+            </body></html>`))
+		case "/geheim":
+			w.Write([]byte(`<html><head><title>Geheim</title></head><body>
+                <p>Dieser Inhalt darf laut robots.txt nicht gecrawlt werden.</p>
+            </body></html>`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer site.Close()
+
+	fetcher := httpfetcher.New()
+	repo := memrepo.New()
+	index := domain.NewInvertedIndex()
+	robotsChecker := robots.New(fetcher)
+	parse := func(h, u string) (string, string, []string) { return htmlparser.Parse(strings.NewReader(h), u) }
+
+	crawlerSvc := application.NewCrawlerService(fetcher, robotsChecker, repo, index, parse)
+	searchSvc := application.NewSearchService(index)
+	handler := restapi.New(searchSvc, crawlerSvc)
+	api := httptest.NewServer(handler.Routes())
+	defer api.Close()
+
+	crawlBody, _ := json.Marshal(map[string]interface{}{
+		"seed_urls": []string{site.URL + "/"},
+		"max_pages": 10,
+	})
+	resp, err := http.Post(api.URL+"/crawl", "application/json", bytes.NewReader(crawlBody))
+	if err != nil {
+		t.Fatalf("Crawl-Request fehlgeschlagen: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("erwartet 200 von /crawl, bekam %d", resp.StatusCode)
+	}
+	var crawlResp struct {
+		CrawledCount int `json:"crawled_count"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&crawlResp)
+	if crawlResp.CrawledCount != 2 {
+		t.Fatalf("erwartet 2 gecrawlte Seiten, bekam %d", crawlResp.CrawledCount)
+	}
+
+	searchResp, err := http.Get(api.URL + "/search?q=Hunde")
+	if err != nil {
+		t.Fatalf("Such-Request fehlgeschlagen: %v", err)
+	}
+	defer searchResp.Body.Close()
+	var result struct {
+		Results []domain.SearchResult `json:"results"`
+	}
+	_ = json.NewDecoder(searchResp.Body).Decode(&result)
+	if len(result.Results) != 2 {
+		t.Fatalf("erwartet 2 Suchergebnisse für 'Hunde', bekam %d: %+v", len(result.Results), result.Results)
+	}
+
+	searchResp2, _ := http.Get(api.URL + "/search?q=Training")
+	var result2 struct {
+		Results []domain.SearchResult `json:"results"`
+	}
+	_ = json.NewDecoder(searchResp2.Body).Decode(&result2)
+	if len(result2.Results) == 0 || !strings.Contains(result2.Results[0].URL, "seite2") {
+		t.Fatalf("erwartet seite2 zuerst bei eindeutigem Begriff, bekam %+v", result2.Results)
+	}
+
+	for _, doc := range result.Results {
+		if strings.Contains(doc.URL, "geheim") {
+			t.Errorf("robots.txt-verbotene Seite wurde indexiert: %s", doc.URL)
+		}
+	}
+}
