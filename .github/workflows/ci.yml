@@ -94,7 +94,7 @@ jobs:
       - name: Smoke test
         run: |
           dpkg -s searchengine
-          DB_DRIVER=sqlite3 DB_DSN='file:/tmp/smoke.db?cache=shared' \
+          DB_DRIVER=sqlite DB_DSN='file:/tmp/smoke.db?cache=shared' \
             timeout 3 /usr/bin/searchengine &
           sleep 1
           curl -sf 'http://127.0.0.1:8080/search?q=test' | grep -q '"query"'
