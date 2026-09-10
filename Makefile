@@ -47,6 +47,7 @@ deb: build
 	cp packaging/debian/prerm $(DEB_DIR)/DEBIAN/prerm
 	cp packaging/searchengine.service $(DEB_DIR)/lib/systemd/system/searchengine.service
 	cp packaging/searchengine.env $(DEB_DIR)/etc/searchengine/searchengine.env
+	echo "/etc/searchengine/searchengine.env" > $(DEB_DIR)/DEBIAN/conffiles
 	chmod 755 $(DEB_DIR)/DEBIAN/postinst $(DEB_DIR)/DEBIAN/prerm
 	chmod 755 $(DEB_DIR)/usr/bin/$(BINARY)
 	dpkg-deb --build --root-owner-group $(DEB_DIR) $(BUILD_DIR)/$(BINARY)_$(PKG_VERSION)_amd64.deb

@@ -1,12 +1,16 @@
 package restapi
 
 import (
+	_ "embed"
 	"encoding/json"
 	"net/http"
 	"strconv"
 
 	"searchengine/internal/ports"
 )
+
+//go:embed index.html
+var indexHTML []byte
 
 type Handler struct {
 	search  ports.SearchService
@@ -19,9 +23,26 @@ func New(search ports.SearchService, crawler ports.CrawlerService) *Handler {
 
 func (h *Handler) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/", h.handleIndex)
 	mux.HandleFunc("/search", h.handleSearch)
 	mux.HandleFunc("/crawl", h.handleCrawl)
 	return mux
+}
+
+func (h *Handler) handleIndex(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if r.Method == http.MethodHead {
+		return
+	}
+	_, _ = w.Write(indexHTML)
 }
 
 type searchResponse struct {

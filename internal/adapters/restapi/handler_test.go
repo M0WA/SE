@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"searchengine/internal/adapters/restapi"
@@ -32,6 +33,59 @@ type fakeCrawler struct {
 
 func (f *fakeCrawler) Crawl(_ context.Context, _ []string, _ int) (int, error) {
 	return f.count, f.err
+}
+
+func TestHandleIndex_Success(t *testing.T) {
+	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+		t.Errorf("expected html content type, got %q", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "<html") {
+		t.Errorf("expected an HTML document, got: %s", rec.Body.String())
+	}
+}
+
+func TestHandleIndex_HeadRequestAllowed(t *testing.T) {
+	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
+	req := httptest.NewRequest(http.MethodHead, "/", nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected empty body for HEAD request, got %d bytes", rec.Body.Len())
+	}
+}
+
+func TestHandleIndex_MethodNotAllowed(t *testing.T) {
+	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestHandleIndex_UnknownPathStill404s(t *testing.T) {
+	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
+	req := httptest.NewRequest(http.MethodGet, "/nonexistent", nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for unknown path, got %d", rec.Code)
+	}
 }
 
 func TestHandleSearch_Success(t *testing.T) {
