@@ -17,7 +17,7 @@ import (
 )
 
 func main() {
-	driver := getEnv("DB_DRIVER", "sqlite3")
+	driver := getEnv("DB_DRIVER", "sqlite")
 	dsn := getEnv("DB_DSN", "file:search.db?cache=shared")
 	alpha := 0.5
 

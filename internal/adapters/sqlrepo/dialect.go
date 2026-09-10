@@ -9,7 +9,7 @@ type Dialect interface {
 
 type sqliteDialect struct{}
 
-func (sqliteDialect) Name() string             { return "sqlite3" }
+func (sqliteDialect) Name() string             { return "sqlite" }
 func (sqliteDialect) Placeholder(_ int) string { return "?" }
 func (sqliteDialect) UpsertDocumentSQL() string {
 	return `INSERT INTO documents (id, url, title, text, doc_length, embedding)

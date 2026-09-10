@@ -9,8 +9,8 @@ import (
 
 func TestNewDialect_SelectsCorrectDialect(t *testing.T) {
 	cases := map[string]string{
-		"sqlite3": "sqlite3", "mysql": "mysql", "postgres": "postgres",
-		"pgx": "postgres", "unknown": "sqlite3",
+		"sqlite": "sqlite", "mysql": "mysql", "postgres": "postgres",
+		"pgx": "postgres", "unknown": "sqlite",
 	}
 	for driver, wantName := range cases {
 		if got := sqlrepo.NewDialect(driver).Name(); got != wantName {
@@ -27,14 +27,14 @@ func TestPostgresDialect_UsesPositionalPlaceholders(t *testing.T) {
 }
 
 func TestSQLiteDialect_UsesQuestionMarkPlaceholders(t *testing.T) {
-	d := sqlrepo.NewDialect("sqlite3")
+	d := sqlrepo.NewDialect("sqlite")
 	if !strings.Contains(d.UpsertDocumentSQL(), "?") {
 		t.Error("expected ?-placeholder in SQLite upsert")
 	}
 }
 
 func TestAllDialects_CreateSchemaSQLNonEmpty(t *testing.T) {
-	for _, driver := range []string{"sqlite3", "mysql", "postgres"} {
+	for _, driver := range []string{"sqlite", "mysql", "postgres"} {
 		stmts := sqlrepo.NewDialect(driver).CreateSchemaSQL()
 		if len(stmts) == 0 {
 			t.Errorf("expected schema statements for %s", driver)
