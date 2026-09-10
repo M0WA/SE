@@ -88,6 +88,33 @@ func TestHandleIndex_UnknownPathStill404s(t *testing.T) {
 	}
 }
 
+func TestHandleStyle_Success(t *testing.T) {
+	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
+	req := httptest.NewRequest(http.MethodGet, "/style.css", nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/css; charset=utf-8" {
+		t.Errorf("expected css content type, got %q", ct)
+	}
+	if rec.Body.Len() == 0 {
+		t.Error("expected non-empty stylesheet body")
+	}
+}
+
+func TestHandleStyle_MethodNotAllowed(t *testing.T) {
+	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
+	req := httptest.NewRequest(http.MethodPost, "/style.css", nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
 func TestHandleSearch_Success(t *testing.T) {
 	fs := &fakeSearch{results: []domain.SearchResult{{URL: "http://a", Score: 1}}}
 	h := restapi.New(fs, &fakeCrawler{})
@@ -155,9 +182,40 @@ func TestHandleCrawl_Success(t *testing.T) {
 	}
 }
 
-func TestHandleCrawl_MethodNotAllowed(t *testing.T) {
+func TestHandleCrawl_GetServesPage(t *testing.T) {
 	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
 	req := httptest.NewRequest(http.MethodGet, "/crawl", nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+		t.Errorf("expected html content type, got %q", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "crawl-form") {
+		t.Errorf("expected the crawl form in the page, got: %s", rec.Body.String())
+	}
+}
+
+func TestHandleCrawl_HeadServesNoBody(t *testing.T) {
+	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
+	req := httptest.NewRequest(http.MethodHead, "/crawl", nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected empty body for HEAD request, got %d bytes", rec.Body.Len())
+	}
+}
+
+func TestHandleCrawl_MethodNotAllowed(t *testing.T) {
+	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
+	req := httptest.NewRequest(http.MethodPut, "/crawl", nil)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {

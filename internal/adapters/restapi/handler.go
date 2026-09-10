@@ -12,6 +12,12 @@ import (
 //go:embed index.html
 var indexHTML []byte
 
+//go:embed crawl.html
+var crawlHTML []byte
+
+//go:embed style.css
+var styleCSS []byte
+
 type Handler struct {
 	search  ports.SearchService
 	crawler ports.CrawlerService
@@ -24,9 +30,22 @@ func New(search ports.SearchService, crawler ports.CrawlerService) *Handler {
 func (h *Handler) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.handleIndex)
+	mux.HandleFunc("/style.css", h.handleStyle)
 	mux.HandleFunc("/search", h.handleSearch)
 	mux.HandleFunc("/crawl", h.handleCrawl)
 	return mux
+}
+
+func (h *Handler) handleStyle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	if r.Method == http.MethodHead {
+		return
+	}
+	_, _ = w.Write(styleCSS)
 }
 
 func (h *Handler) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -81,6 +100,13 @@ type crawlResponse struct {
 }
 
 func (h *Handler) handleCrawl(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if r.Method == http.MethodGet {
+			_, _ = w.Write(crawlHTML)
+		}
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
