@@ -15,16 +15,52 @@ var indexHTML []byte
 //go:embed crawl.html
 var crawlHTML []byte
 
+//go:embed login.html
+var loginHTML []byte
+
+//go:embed admin.html
+var adminHTML []byte
+
 //go:embed style.css
 var styleCSS []byte
 
 type Handler struct {
-	search  ports.SearchService
-	crawler ports.CrawlerService
+	search    ports.SearchService
+	crawler   ports.CrawlerService
+	debug     ports.DebugSearchService
+	admin     ports.AdminRepository
+	dbDriver  string
+	adminUser string
+	adminPass string
+	sessions  *sessionStore
 }
 
-func New(search ports.SearchService, crawler ports.CrawlerService) *Handler {
-	return &Handler{search: search, crawler: crawler}
+// Config wires a Handler's dependencies. Debug, Admin, DBDriver, AdminUser
+// and AdminPass are optional: without AdminUser/AdminPass configured,
+// authentication fails closed (nobody can sign in, so /crawl and /admin
+// stay locked) rather than defaulting to open access. Without Debug/Admin,
+// the admin diagnostics endpoints report themselves unavailable.
+type Config struct {
+	Search    ports.SearchService
+	Crawler   ports.CrawlerService
+	Debug     ports.DebugSearchService
+	Admin     ports.AdminRepository
+	DBDriver  string
+	AdminUser string
+	AdminPass string
+}
+
+func New(cfg Config) *Handler {
+	return &Handler{
+		search:    cfg.Search,
+		crawler:   cfg.Crawler,
+		debug:     cfg.Debug,
+		admin:     cfg.Admin,
+		dbDriver:  cfg.DBDriver,
+		adminUser: cfg.AdminUser,
+		adminPass: cfg.AdminPass,
+		sessions:  newSessionStore(),
+	}
 }
 
 func (h *Handler) Routes() *http.ServeMux {
@@ -32,8 +68,23 @@ func (h *Handler) Routes() *http.ServeMux {
 	mux.HandleFunc("/", h.handleIndex)
 	mux.HandleFunc("/style.css", h.handleStyle)
 	mux.HandleFunc("/search", h.handleSearch)
-	mux.HandleFunc("/crawl", h.handleCrawl)
+	mux.HandleFunc("/crawl", h.requireAuthCrawl(h.handleCrawl))
+	mux.HandleFunc("/login", h.handleLoginRoute)
+	mux.HandleFunc("/logout", h.handleLogout)
+	mux.HandleFunc("/admin", h.requireAuthPage(h.handleAdminPage))
+	mux.HandleFunc("/admin/api/stats", h.requireAuthAPI(h.handleAdminStats))
+	mux.HandleFunc("/admin/api/documents", h.requireAuthAPI(h.handleAdminDocuments))
+	mux.HandleFunc("/admin/api/postings", h.requireAuthAPI(h.handleAdminPostings))
+	mux.HandleFunc("/admin/api/search", h.requireAuthAPI(h.handleAdminSearch))
 	return mux
+}
+
+func (h *Handler) handleLoginRoute(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		h.handleLogin(w, r)
+		return
+	}
+	h.handleLoginPage(w, r)
 }
 
 func (h *Handler) handleStyle(w http.ResponseWriter, r *http.Request) {

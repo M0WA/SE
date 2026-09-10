@@ -64,6 +64,33 @@ main {
 
 .back:hover { color: var(--accent); }
 
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 2.5rem;
+}
+
+.page-header .back { margin: 0; }
+
+.text-button {
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--ink-muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.text-button:hover { color: var(--accent); }
+
+.text-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+
 form {
   display: flex;
   align-items: baseline;
@@ -176,6 +203,8 @@ button:focus-visible {
   margin-top: 3.5rem;
   padding-top: 1.5rem;
   border-top: 1px solid var(--rule);
+  display: flex;
+  gap: 1.5rem;
 }
 
 .footer-link a {
@@ -185,6 +214,36 @@ button:focus-visible {
 }
 
 .footer-link a:hover { color: var(--accent); }
+
+.lede {
+  color: var(--ink-muted);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  margin: -1.5rem 0 2rem;
+}
+
+.stacked-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.3rem;
+}
+
+.form-row { border-bottom: 1px solid var(--rule); padding-bottom: 0.5rem; }
+
+.form-row .field { width: 100%; font-size: 1.05rem; }
+
+.form-actions {
+  display: flex;
+  align-items: baseline;
+  gap: 1.5rem;
+  margin-top: 0.3rem;
+}
+
+.error-text {
+  color: var(--accent);
+  font-size: 0.9rem;
+  min-height: 1.2em;
+}
 
 .crawl-form .field { font-size: 1rem; }
 

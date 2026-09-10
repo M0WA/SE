@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — sign in</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body>
+<main>
+  <p class="mark">se.</p>
+  <p class="lede">Sign in to add pages or look at index diagnostics.</p>
+  <form id="login-form" class="stacked-form" autocomplete="on">
+    <div class="form-row">
+      <input id="username" class="field" name="username" type="text" placeholder="Username" autofocus required>
+    </div>
+    <div class="form-row">
+      <input id="password" class="field" name="password" type="password" placeholder="Password" required>
+    </div>
+    <div class="form-actions">
+      <button type="submit">Sign in</button>
+      <span id="login-error" class="error-text"></span>
+    </div>
+  </form>
+</main>
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const next = params.get('next') || '/admin';
+
+  const form = document.getElementById('login-form');
+  const username = document.getElementById('username');
+  const password = document.getElementById('password');
+  const error = document.getElementById('login-error');
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    error.textContent = '';
+    try {
+      const resp = await fetch('/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: username.value,
+          password: password.value,
+          next: next,
+        }),
+      });
+      if (!resp.ok) {
+        error.textContent = resp.status === 401
+          ? 'Incorrect username or password.'
+          : 'Sign-in failed: could not reach the server.';
+        password.value = '';
+        password.focus();
+        return;
+      }
+      const data = await resp.json();
+      window.location = data.redirect || '/admin';
+    } catch (err) {
+      error.textContent = 'Sign-in failed: could not reach the server.';
+    }
+  });
+</script>
+</body>
+</html>

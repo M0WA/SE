@@ -40,6 +40,15 @@ type SQLRepository interface {
 	CorpusStats(ctx context.Context) (totalDocs int, avgDocLen float64, err error)
 	AllEmbeddings(ctx context.Context) (map[string][]float32, error)
 	DocumentByID(ctx context.Context, docID string) (domain.Document, error)
+	ListDocuments(ctx context.Context, limit int) ([]domain.IndexedDocument, error)
+}
+
+// AdminRepository is the subset of SQLRepository the admin diagnostics UI
+// needs -- a narrower dependency than the full port.
+type AdminRepository interface {
+	CorpusStats(ctx context.Context) (totalDocs int, avgDocLen float64, err error)
+	ListDocuments(ctx context.Context, limit int) ([]domain.IndexedDocument, error)
+	PostingsForTerm(ctx context.Context, term string) ([]domain.PostingStats, error)
 }
 
 // --- Primary (driving) ports ---
@@ -50,4 +59,10 @@ type SearchService interface {
 
 type CrawlerService interface {
 	Crawl(ctx context.Context, seedURLs []string, maxPages int) (int, error)
+}
+
+// DebugSearchService exposes the raw, unblended hybrid search results
+// (BM25/semantic/final score breakdown) for admin diagnostics.
+type DebugSearchService interface {
+	Search(ctx context.Context, query string, topK int) ([]domain.HybridResult, error)
 }

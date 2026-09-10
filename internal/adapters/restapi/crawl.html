@@ -11,7 +11,10 @@
 </head>
 <body>
 <main>
-  <a class="back" href="/">&larr; se.</a>
+  <div class="page-header">
+    <a class="back" href="/">&larr; se.</a>
+    <button id="sign-out" class="text-button" type="button">Sign out</button>
+  </div>
   <form id="crawl-form" class="crawl-form" autocomplete="off">
     <input id="crawl-url" class="field" name="url" type="url" placeholder="https://example.com" autofocus required>
     <input id="max-pages" name="max_pages" type="number" min="1" value="20" aria-label="Max pages">
@@ -52,6 +55,14 @@
         : 'Indexed ' + count + ' pages.';
     } catch (err) {
       crawlStatus.textContent = 'Crawl failed: could not reach the server.';
+    }
+  });
+
+  document.getElementById('sign-out').addEventListener('click', async () => {
+    try {
+      await fetch('/logout', { method: 'POST' });
+    } finally {
+      window.location = '/';
     }
   });
 </script>

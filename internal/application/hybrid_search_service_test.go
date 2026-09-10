@@ -25,6 +25,9 @@ func (r *fakeSQLRepo) AllEmbeddings(context.Context) (map[string][]float32, erro
 func (r *fakeSQLRepo) DocumentByID(_ context.Context, id string) (domain.Document, error) {
 	return r.docs[id], nil
 }
+func (r *fakeSQLRepo) ListDocuments(context.Context, int) ([]domain.IndexedDocument, error) {
+	return nil, nil
+}
 
 type fakeEmbedder struct{ vec []float32 }
 

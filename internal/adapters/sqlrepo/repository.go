@@ -165,6 +165,25 @@ func (r *Repository) DocumentByID(ctx context.Context, docID string) (domain.Doc
 	return doc, nil
 }
 
+func (r *Repository) ListDocuments(ctx context.Context, limit int) ([]domain.IndexedDocument, error) {
+	query := r.ph(`SELECT id, url, title, doc_length FROM documents ORDER BY id LIMIT %s`, 1)
+	rows, err := r.db.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("querying documents: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.IndexedDocument
+	for rows.Next() {
+		var d domain.IndexedDocument
+		if err := rows.Scan(&d.ID, &d.URL, &d.Title, &d.DocLength); err != nil {
+			return nil, fmt.Errorf("scanning row: %w", err)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 func (r *Repository) ph(template string, positions ...int) string {
 	args := make([]interface{}, len(positions))
 	for i, pos := range positions {

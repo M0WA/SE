@@ -35,8 +35,37 @@ func (f *fakeCrawler) Crawl(_ context.Context, _ []string, _ int) (int, error) {
 	return f.count, f.err
 }
 
+const (
+	testAdminUser = "admin"
+	testAdminPass = "test-password"
+)
+
+// authedHandler returns a Handler with an admin account configured, plus a
+// valid session cookie obtained via a real POST /login -- so tests exercise
+// the actual login flow rather than bypassing it.
+func authedHandler(t *testing.T, search *fakeSearch, crawler *fakeCrawler) (*restapi.Handler, *http.Cookie) {
+	t.Helper()
+	h := restapi.New(restapi.Config{
+		Search: search, Crawler: crawler,
+		AdminUser: testAdminUser, AdminPass: testAdminPass,
+	})
+
+	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
+	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login failed: %d %s", rec.Code, rec.Body.String())
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatalf("expected a session cookie after login")
+	}
+	return h, cookies[0]
+}
+
 func TestHandleIndex_Success(t *testing.T) {
-	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
@@ -53,7 +82,7 @@ func TestHandleIndex_Success(t *testing.T) {
 }
 
 func TestHandleIndex_HeadRequestAllowed(t *testing.T) {
-	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodHead, "/", nil)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
@@ -67,7 +96,7 @@ func TestHandleIndex_HeadRequestAllowed(t *testing.T) {
 }
 
 func TestHandleIndex_MethodNotAllowed(t *testing.T) {
-	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
@@ -78,7 +107,7 @@ func TestHandleIndex_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHandleIndex_UnknownPathStill404s(t *testing.T) {
-	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodGet, "/nonexistent", nil)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
@@ -89,7 +118,7 @@ func TestHandleIndex_UnknownPathStill404s(t *testing.T) {
 }
 
 func TestHandleStyle_Success(t *testing.T) {
-	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodGet, "/style.css", nil)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
@@ -106,7 +135,7 @@ func TestHandleStyle_Success(t *testing.T) {
 }
 
 func TestHandleStyle_MethodNotAllowed(t *testing.T) {
-	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodPost, "/style.css", nil)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
@@ -117,7 +146,7 @@ func TestHandleStyle_MethodNotAllowed(t *testing.T) {
 
 func TestHandleSearch_Success(t *testing.T) {
 	fs := &fakeSearch{results: []domain.SearchResult{{URL: "http://a", Score: 1}}}
-	h := restapi.New(fs, &fakeCrawler{})
+	h := restapi.New(restapi.Config{Search: fs, Crawler: &fakeCrawler{}})
 
 	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen&top_k=5", nil)
 	rec := httptest.NewRecorder()
@@ -133,7 +162,7 @@ func TestHandleSearch_Success(t *testing.T) {
 
 func TestHandleSearch_DefaultTopK(t *testing.T) {
 	fs := &fakeSearch{}
-	h := restapi.New(fs, &fakeCrawler{})
+	h := restapi.New(restapi.Config{Search: fs, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen", nil)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
@@ -143,7 +172,7 @@ func TestHandleSearch_DefaultTopK(t *testing.T) {
 }
 
 func TestHandleSearch_MethodNotAllowed(t *testing.T) {
-	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodPost, "/search", nil)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
@@ -154,7 +183,7 @@ func TestHandleSearch_MethodNotAllowed(t *testing.T) {
 
 func TestHandleSearch_ServiceError(t *testing.T) {
 	fs := &fakeSearch{err: errors.New("invalid request")}
-	h := restapi.New(fs, &fakeCrawler{})
+	h := restapi.New(restapi.Config{Search: fs, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodGet, "/search?q=", nil)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
@@ -163,12 +192,49 @@ func TestHandleSearch_ServiceError(t *testing.T) {
 	}
 }
 
+func TestHandleCrawl_Unauthenticated_GetRedirectsToLogin(t *testing.T) {
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
+	req := httptest.NewRequest(http.MethodGet, "/crawl", nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303 redirect, got %d", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/login?next=%2Fcrawl" {
+		t.Errorf("expected redirect to login with next=/crawl, got %q", loc)
+	}
+}
+
+func TestHandleCrawl_Unauthenticated_PostReturns401(t *testing.T) {
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
+	req := httptest.NewRequest(http.MethodPost, "/crawl", bytes.NewReader([]byte(`{}`)))
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestHandleCrawl_NoAdminConfigured_AlwaysUnauthenticated(t *testing.T) {
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
+	req := httptest.NewRequest(http.MethodGet, "/crawl", nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Errorf("expected redirect to login when no admin account is configured, got %d", rec.Code)
+	}
+}
+
 func TestHandleCrawl_Success(t *testing.T) {
 	fc := &fakeCrawler{count: 3}
-	h := restapi.New(&fakeSearch{}, fc)
+	h, cookie := authedHandler(t, &fakeSearch{}, fc)
 
 	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}, "max_pages": 5})
 	req := httptest.NewRequest(http.MethodPost, "/crawl", bytes.NewReader(body))
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
 
@@ -183,8 +249,9 @@ func TestHandleCrawl_Success(t *testing.T) {
 }
 
 func TestHandleCrawl_GetServesPage(t *testing.T) {
-	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
+	h, cookie := authedHandler(t, &fakeSearch{}, &fakeCrawler{})
 	req := httptest.NewRequest(http.MethodGet, "/crawl", nil)
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
 
@@ -200,8 +267,9 @@ func TestHandleCrawl_GetServesPage(t *testing.T) {
 }
 
 func TestHandleCrawl_HeadServesNoBody(t *testing.T) {
-	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
+	h, cookie := authedHandler(t, &fakeSearch{}, &fakeCrawler{})
 	req := httptest.NewRequest(http.MethodHead, "/crawl", nil)
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
 
@@ -214,8 +282,9 @@ func TestHandleCrawl_HeadServesNoBody(t *testing.T) {
 }
 
 func TestHandleCrawl_MethodNotAllowed(t *testing.T) {
-	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
+	h, cookie := authedHandler(t, &fakeSearch{}, &fakeCrawler{})
 	req := httptest.NewRequest(http.MethodPut, "/crawl", nil)
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -224,8 +293,9 @@ func TestHandleCrawl_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHandleCrawl_InvalidJSON(t *testing.T) {
-	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
+	h, cookie := authedHandler(t, &fakeSearch{}, &fakeCrawler{})
 	req := httptest.NewRequest(http.MethodPost, "/crawl", bytes.NewReader([]byte("{ungültig")))
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -234,9 +304,10 @@ func TestHandleCrawl_InvalidJSON(t *testing.T) {
 }
 
 func TestHandleCrawl_EmptySeedURLs(t *testing.T) {
-	h := restapi.New(&fakeSearch{}, &fakeCrawler{})
+	h, cookie := authedHandler(t, &fakeSearch{}, &fakeCrawler{})
 	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{}})
 	req := httptest.NewRequest(http.MethodPost, "/crawl", bytes.NewReader(body))
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -246,9 +317,10 @@ func TestHandleCrawl_EmptySeedURLs(t *testing.T) {
 
 func TestHandleCrawl_ServiceError(t *testing.T) {
 	fc := &fakeCrawler{err: errors.New("crawl failed")}
-	h := restapi.New(&fakeSearch{}, fc)
+	h, cookie := authedHandler(t, &fakeSearch{}, fc)
 	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}})
 	req := httptest.NewRequest(http.MethodPost, "/crawl", bytes.NewReader(body))
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusInternalServerError {

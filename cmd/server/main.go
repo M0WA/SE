@@ -34,6 +34,7 @@ func main() {
 
 	embedder := hashembed.New(128)
 	searchSvc := application.NewHybridAsSearchService(repo, embedder, alpha)
+	debugSvc := application.NewHybridSearchService(repo, embedder, alpha)
 
 	fetcher := httpfetcher.New()
 	robotsChecker := robots.New(fetcher)
@@ -42,7 +43,21 @@ func main() {
 	}
 	crawlerSvc := application.NewSQLCrawlerService(fetcher, robotsChecker, repo, embedder, parseHTML)
 
-	handler := restapi.New(searchSvc, crawlerSvc)
+	adminUser := getEnv("ADMIN_USER", "")
+	adminPass := getEnv("ADMIN_PASSWORD", "")
+	if adminUser == "" || adminPass == "" {
+		log.Print("ADMIN_USER/ADMIN_PASSWORD not set: /crawl and /admin will refuse all sign-ins")
+	}
+
+	handler := restapi.New(restapi.Config{
+		Search:    searchSvc,
+		Crawler:   crawlerSvc,
+		Debug:     debugSvc,
+		Admin:     repo,
+		DBDriver:  driver,
+		AdminUser: adminUser,
+		AdminPass: adminPass,
+	})
 	log.Printf("Search engine running on :8080 (DB: %s)", driver)
 	log.Fatal(http.ListenAndServe(":8080", handler.Routes()))
 }

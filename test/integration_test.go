@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -50,15 +51,34 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 
 	crawlerSvc := application.NewCrawlerService(fetcher, robotsChecker, repo, index, parse)
 	searchSvc := application.NewSearchService(index)
-	handler := restapi.New(searchSvc, crawlerSvc)
+	handler := restapi.New(restapi.Config{
+		Search: searchSvc, Crawler: crawlerSvc,
+		AdminUser: "admin", AdminPass: "test-password",
+	})
 	api := httptest.NewServer(handler.Routes())
 	defer api.Close()
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("failed to create cookie jar: %v", err)
+	}
+	client := &http.Client{Jar: jar}
+
+	loginBody, _ := json.Marshal(map[string]string{"username": "admin", "password": "test-password"})
+	loginResp, err := client.Post(api.URL+"/login", "application/json", bytes.NewReader(loginBody))
+	if err != nil {
+		t.Fatalf("login request failed: %v", err)
+	}
+	defer loginResp.Body.Close()
+	if loginResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from /login, got %d", loginResp.StatusCode)
+	}
 
 	crawlBody, _ := json.Marshal(map[string]interface{}{
 		"seed_urls": []string{site.URL + "/"},
 		"max_pages": 10,
 	})
-	resp, err := http.Post(api.URL+"/crawl", "application/json", bytes.NewReader(crawlBody))
+	resp, err := client.Post(api.URL+"/crawl", "application/json", bytes.NewReader(crawlBody))
 	if err != nil {
 		t.Fatalf("crawl request failed: %v", err)
 	}

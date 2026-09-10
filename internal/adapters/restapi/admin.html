@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — admin</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+<style>
+  .page-header .mark { margin: 0; }
+
+  section.panel {
+    margin-top: 2.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--rule);
+  }
+
+  section.panel:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
+
+  .panel h2 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0 0 1rem;
+  }
+
+  .kv-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.4rem 0;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .kv-row:last-child { border-bottom: none; }
+
+  .kv-row .k { color: var(--ink-muted); }
+
+  .kv-row .v {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: 0.92rem;
+  }
+
+  .panel-form {
+    margin-bottom: 1rem;
+  }
+
+  .panel-form .field { font-size: 1rem; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+  }
+
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.6rem 0.5rem 0;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+
+  th {
+    color: var(--ink-muted);
+    font-weight: 400;
+    font-size: 0.85rem;
+  }
+
+  td.num, th.num {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  td.url {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: 0.8rem;
+    color: var(--ink-muted);
+    word-break: break-all;
+  }
+
+  .panel-status {
+    color: var(--ink-muted);
+    font-size: 0.9rem;
+    min-height: 1.2em;
+    margin-bottom: 0.75rem;
+  }
+</style>
+</head>
+<body>
+<main>
+  <div class="page-header">
+    <a class="mark" href="/">se.</a>
+    <button id="sign-out" class="text-button" type="button">Sign out</button>
+  </div>
+
+  <section class="panel">
+    <h2>Index stats</h2>
+    <div id="stats"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Look up a term</h2>
+    <form id="postings-form" class="panel-form" autocomplete="off">
+      <input id="postings-term" class="field" type="text" placeholder="a token, e.g. katzen" required>
+      <button type="submit">Look up</button>
+    </form>
+    <div id="postings-status" class="panel-status"></div>
+    <div id="postings-result"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Debug a query</h2>
+    <p class="lede" style="margin: 0 0 1rem;">Shows the BM25 and semantic scores behind a search's ranking, unblended.</p>
+    <form id="debug-form" class="panel-form" autocomplete="off">
+      <input id="debug-q" class="field" type="text" placeholder="Search the index…" required>
+      <button type="submit">Run</button>
+    </form>
+    <div id="debug-status" class="panel-status"></div>
+    <div id="debug-result"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Documents</h2>
+    <div id="documents-status" class="panel-status"></div>
+    <div id="documents-result"></div>
+  </section>
+</main>
+<script>
+  function clear(el) {
+    while (el.firstChild) el.removeChild(el.firstChild);
+  }
+
+  function kvRow(container, key, value) {
+    const row = document.createElement('div');
+    row.className = 'kv-row';
+    const k = document.createElement('span');
+    k.className = 'k';
+    k.textContent = key;
+    const v = document.createElement('span');
+    v.className = 'v';
+    v.textContent = value;
+    row.appendChild(k);
+    row.appendChild(v);
+    container.appendChild(row);
+  }
+
+  async function getJSON(url) {
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      const msg = await resp.text();
+      throw new Error(msg.trim() || ('request failed: ' + resp.status));
+    }
+    return resp.json();
+  }
+
+  async function loadStats() {
+    const el = document.getElementById('stats');
+    try {
+      const s = await getJSON('/admin/api/stats');
+      clear(el);
+      kvRow(el, 'Documents', String(s.total_docs));
+      kvRow(el, 'Avg length', s.avg_doc_len.toFixed(1) + ' tokens');
+      kvRow(el, 'Driver', s.driver);
+    } catch (err) {
+      el.textContent = 'Could not load stats: ' + err.message;
+    }
+  }
+
+  async function loadDocuments() {
+    const status = document.getElementById('documents-status');
+    const result = document.getElementById('documents-result');
+    try {
+      const docs = await getJSON('/admin/api/documents');
+      if (docs.length === 0) {
+        status.textContent = 'No documents indexed yet.';
+        return;
+      }
+      status.textContent = docs.length === 1 ? '1 document' : docs.length + ' documents';
+      const table = document.createElement('table');
+      table.innerHTML = '<thead><tr><th>id</th><th>title</th><th class="num">length</th></tr></thead>';
+      const tbody = document.createElement('tbody');
+      for (const d of docs) {
+        const tr = document.createElement('tr');
+
+        const idTd = document.createElement('td');
+        idTd.textContent = d.id;
+        tr.appendChild(idTd);
+
+        const titleTd = document.createElement('td');
+        const link = document.createElement('a');
+        link.href = d.url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = d.title || d.url;
+        link.style.color = 'var(--ink)';
+        titleTd.appendChild(link);
+        const urlDiv = document.createElement('div');
+        urlDiv.className = 'url';
+        urlDiv.textContent = d.url;
+        titleTd.appendChild(urlDiv);
+        tr.appendChild(titleTd);
+
+        const lenTd = document.createElement('td');
+        lenTd.className = 'num';
+        lenTd.textContent = String(d.doc_length);
+        tr.appendChild(lenTd);
+
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      clear(result);
+      result.appendChild(table);
+    } catch (err) {
+      status.textContent = 'Could not load documents: ' + err.message;
+    }
+  }
+
+  document.getElementById('postings-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const term = document.getElementById('postings-term').value.trim().toLowerCase();
+    const status = document.getElementById('postings-status');
+    const result = document.getElementById('postings-result');
+    clear(result);
+    if (!term) { status.textContent = 'Enter a term to look up.'; return; }
+    status.textContent = 'Looking up…';
+    try {
+      const data = await getJSON('/admin/api/postings?term=' + encodeURIComponent(term));
+      if (data.postings.length === 0) {
+        status.textContent = '"' + term + '" does not appear in the index.';
+        return;
+      }
+      status.textContent = 'Appears in ' + data.doc_freq + (data.doc_freq === 1 ? ' document.' : ' documents.');
+      const table = document.createElement('table');
+      table.innerHTML = '<thead><tr><th>doc id</th><th class="num">term freq</th><th class="num">doc length</th></tr></thead>';
+      const tbody = document.createElement('tbody');
+      for (const p of data.postings) {
+        const tr = document.createElement('tr');
+        const a = document.createElement('td'); a.textContent = p.doc_id; tr.appendChild(a);
+        const b = document.createElement('td'); b.className = 'num'; b.textContent = String(p.term_freq); tr.appendChild(b);
+        const c = document.createElement('td'); c.className = 'num'; c.textContent = String(p.doc_length); tr.appendChild(c);
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      result.appendChild(table);
+    } catch (err) {
+      status.textContent = 'Look up failed: ' + err.message;
+    }
+  });
+
+  document.getElementById('debug-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const q = document.getElementById('debug-q').value.trim();
+    const status = document.getElementById('debug-status');
+    const result = document.getElementById('debug-result');
+    clear(result);
+    if (!q) { status.textContent = 'Type a query to debug.'; return; }
+    status.textContent = 'Running…';
+    try {
+      const results = await getJSON('/admin/api/search?q=' + encodeURIComponent(q));
+      if (results.length === 0) {
+        status.textContent = 'No matches for “' + q + '”.';
+        return;
+      }
+      status.textContent = results.length === 1 ? '1 match' : results.length + ' matches';
+      const table = document.createElement('table');
+      table.innerHTML = '<thead><tr><th>title</th><th class="num">bm25</th><th class="num">semantic</th><th class="num">final</th></tr></thead>';
+      const tbody = document.createElement('tbody');
+      for (const r of results) {
+        const tr = document.createElement('tr');
+        const titleTd = document.createElement('td');
+        titleTd.textContent = r.title || r.url;
+        tr.appendChild(titleTd);
+        const bm25Td = document.createElement('td'); bm25Td.className = 'num'; bm25Td.textContent = r.bm25_score.toFixed(3); tr.appendChild(bm25Td);
+        const semTd = document.createElement('td'); semTd.className = 'num'; semTd.textContent = r.semantic_sim.toFixed(3); tr.appendChild(semTd);
+        const finalTd = document.createElement('td'); finalTd.className = 'num'; finalTd.textContent = r.final_score.toFixed(3); tr.appendChild(finalTd);
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      result.appendChild(table);
+    } catch (err) {
+      status.textContent = 'Debug search failed: ' + err.message;
+    }
+  });
+
+  document.getElementById('sign-out').addEventListener('click', async () => {
+    try {
+      await fetch('/logout', { method: 'POST' });
+    } finally {
+      window.location = '/';
+    }
+  });
+
+  loadStats();
+  loadDocuments();
+</script>
+</body>
+</html>
