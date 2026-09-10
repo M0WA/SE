@@ -40,6 +40,7 @@ deb: build
 	mkdir -p $(DEB_DIR)/usr/bin
 	mkdir -p $(DEB_DIR)/lib/systemd/system
 	mkdir -p $(DEB_DIR)/etc/searchengine
+	mkdir -p $(DEB_DIR)/var/lib/searchengine
 	cp $(BUILD_DIR)/$(BINARY) $(DEB_DIR)/usr/bin/$(BINARY)
 	sed 's/^Version: .*/Version: $(PKG_VERSION)/' packaging/debian/control > $(DEB_DIR)/DEBIAN/control
 	cp packaging/debian/postinst $(DEB_DIR)/DEBIAN/postinst
