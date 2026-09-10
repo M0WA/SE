@@ -50,9 +50,9 @@ func TestCrawlerService_Crawl_HappyPath(t *testing.T) {
 
 	parse := func(html, pageURL string) (string, string, []string) {
 		if pageURL == "http://a" {
-			return "A", "genuegend inhalt text fuer die seite a hier bitte", []string{"http://b"}
+			return "A", "genuegend inhalt text fuer die seite a hier bitte danke", []string{"http://b"}
 		}
-		return "B", "genuegend inhalt text fuer die seite b hier auch", nil
+		return "B", "genuegend inhalt text fuer die seite b hier auch danke", nil
 	}
 
 	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse)

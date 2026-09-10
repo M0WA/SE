@@ -30,7 +30,7 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
             </body></html>`))
 		case "/seite2":
 			w.Write([]byte(`<html><head><title>Seite Zwei</title></head><body>
-                <p>Diese Seite handelt ausschließlich von Hunden und ihrem Training.</p>
+                <p>Diese Seite handelt ausschließlich von Hunde und ihrem Training.</p>
             </body></html>`))
 		case "/geheim":
 			w.Write([]byte(`<html><head><title>Geheim</title></head><body>
