@@ -114,27 +114,11 @@ func (h *Handler) handleLoginRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleStyle(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	w.Header().Set("Content-Type", "text/css; charset=utf-8")
-	if r.Method == http.MethodHead {
-		return
-	}
-	_, _ = w.Write(styleCSS)
+	serveStatic(w, r, "text/css; charset=utf-8", styleCSS)
 }
 
 func (h *Handler) handleAdminJS(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-	if r.Method == http.MethodHead {
-		return
-	}
-	_, _ = w.Write(adminJS)
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminJS)
 }
 
 func (h *Handler) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -142,15 +126,23 @@ func (h *Handler) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	serveStatic(w, r, "text/html; charset=utf-8", indexHTML)
+}
+
+// serveStatic answers a GET/HEAD request with a fixed, embedded payload --
+// the entirety of every static asset handler (HTML pages, style.css,
+// admin.js) except for how they're addressed and what content type/bytes
+// they serve.
+func serveStatic(w http.ResponseWriter, r *http.Request, contentType string, content []byte) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Type", contentType)
 	if r.Method == http.MethodHead {
 		return
 	}
-	_, _ = w.Write(indexHTML)
+	_, _ = w.Write(content)
 }
 
 type searchResponse struct {

@@ -16,34 +16,65 @@ function kvRow(container, key, value) {
   container.appendChild(row);
 }
 
-async function getJSON(url) {
-  const resp = await fetch(url);
+async function checkResponse(resp) {
   if (!resp.ok) {
     const msg = await resp.text();
     throw new Error(msg.trim() || ('request failed: ' + resp.status));
   }
-  return resp.json();
+  return resp;
+}
+
+async function getJSON(url) {
+  return (await checkResponse(await fetch(url))).json();
 }
 
 async function postJSON(url, body) {
-  const resp = await fetch(url, {
+  return (await checkResponse(await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  });
-  if (!resp.ok) {
-    const msg = await resp.text();
-    throw new Error(msg.trim() || ('request failed: ' + resp.status));
-  }
-  return resp.json();
+  }))).json();
 }
 
 async function deleteRequest(url) {
-  const resp = await fetch(url, { method: 'DELETE' });
-  if (!resp.ok) {
-    const msg = await resp.text();
-    throw new Error(msg.trim() || ('request failed: ' + resp.status));
+  await checkResponse(await fetch(url, { method: 'DELETE' }));
+}
+
+// textCell builds a plain <td>; opts.num right-aligns and monospaces it
+// (for numeric/technical columns).
+function textCell(text, opts) {
+  const td = document.createElement('td');
+  if (opts && opts.num) td.className = 'num';
+  td.textContent = text;
+  return td;
+}
+
+// buildTable assembles a <table> from a header spec ({label, num?}[]) and
+// one or more data rows, delegating each row's <td> cells to cellsForRow
+// so callers can mix textCell with richer custom cells (links, buttons).
+function buildTable(headers, rows, cellsForRow) {
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  for (const h of headers) {
+    const th = document.createElement('th');
+    if (h.num) th.className = 'num';
+    th.textContent = h.label;
+    headRow.appendChild(th);
   }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  for (const row of rows) {
+    const tr = document.createElement('tr');
+    for (const cell of cellsForRow(row)) {
+      tr.appendChild(cell);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  return table;
 }
 
 function wireSignOut() {

@@ -151,11 +151,9 @@ type loginRequest struct {
 	Next     string `json:"next"`
 }
 
+// handleLogin is only ever reached via handleLoginRoute, which already
+// guarantees the method is POST -- no method check needed here.
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)

@@ -21,6 +21,39 @@ func TestInvertedIndex_SearchRanksByRelevance(t *testing.T) {
 	}
 }
 
+func TestInvertedIndex_SearchRequiredWordFiltersResults(t *testing.T) {
+	idx := domain.NewInvertedIndex()
+	idx.Add(domain.Document{ID: "1", URL: "http://a", Title: "Katzen", Text: "Katzen sind haustiere"})
+	idx.Add(domain.Document{ID: "2", URL: "http://b", Title: "Katzen", Text: "Katzen im zoo"})
+
+	results := idx.Search("katzen +haustiere", 10)
+	if len(results) != 1 || results[0].URL != "http://a" {
+		t.Errorf("expected only doc a (has 'haustiere'), got %+v", results)
+	}
+}
+
+func TestInvertedIndex_SearchExcludedWordFiltersResults(t *testing.T) {
+	idx := domain.NewInvertedIndex()
+	idx.Add(domain.Document{ID: "1", URL: "http://a", Title: "Katzen", Text: "Katzen sind haustiere"})
+	idx.Add(domain.Document{ID: "2", URL: "http://b", Title: "Katzen", Text: "Katzen im zoo"})
+
+	results := idx.Search("katzen -zoo", 10)
+	if len(results) != 1 || results[0].URL != "http://a" {
+		t.Errorf("expected only doc a (excludes 'zoo'), got %+v", results)
+	}
+}
+
+func TestInvertedIndex_SearchPhraseFiltersResults(t *testing.T) {
+	idx := domain.NewInvertedIndex()
+	idx.Add(domain.Document{ID: "1", URL: "http://a", Title: "Katzen", Text: "Katzen sind sehr verspielt"})
+	idx.Add(domain.Document{ID: "2", URL: "http://b", Title: "Katzen", Text: "Katzen sind manchmal verspielt"})
+
+	results := idx.Search(`katzen "sehr verspielt"`, 10)
+	if len(results) != 1 || results[0].URL != "http://a" {
+		t.Errorf("expected only doc a (exact phrase), got %+v", results)
+	}
+}
+
 func TestInvertedIndex_SearchNoMatches(t *testing.T) {
 	idx := domain.NewInvertedIndex()
 	idx.Add(domain.Document{ID: "1", URL: "http://a", Title: "Katzen", Text: "Katzen sind Haustiere."})

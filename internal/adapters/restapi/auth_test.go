@@ -71,6 +71,29 @@ func TestHandleLogin_RejectsOpenRedirect(t *testing.T) {
 	}
 }
 
+func TestHandleLogin_InvalidJSON(t *testing.T) {
+	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader([]byte("{not json")))
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleLoginPage_HeadRequestAllowed(t *testing.T) {
+	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	req := httptest.NewRequest(http.MethodHead, "/login", nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected empty body for HEAD request, got %d bytes", rec.Body.Len())
+	}
+}
+
 func TestHandleLoginRoute_GetServesPage(t *testing.T) {
 	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
 	req := httptest.NewRequest(http.MethodGet, "/login?next=%2Fadmin", nil)
@@ -120,5 +143,25 @@ func TestHandleLogout_ClearsSession(t *testing.T) {
 	h.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusSeeOther {
 		t.Errorf("expected the revoked session to be treated as unauthenticated, got %d", rec.Code)
+	}
+}
+
+func TestHandleLogout_WithoutSessionCookieStillSucceeds(t *testing.T) {
+	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	req := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 even with no session cookie, got %d", rec.Code)
+	}
+}
+
+func TestHandleLogout_MethodNotAllowed(t *testing.T) {
+	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	req := httptest.NewRequest(http.MethodGet, "/logout", nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
 	}
 }

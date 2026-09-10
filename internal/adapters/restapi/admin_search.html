@@ -61,20 +61,16 @@
         return;
       }
       status.textContent = results.length === 1 ? '1 match' : results.length + ' matches';
-      const table = document.createElement('table');
-      table.innerHTML = '<thead><tr><th>title</th><th class="num">bm25</th><th class="num">semantic</th><th class="num">final</th></tr></thead>';
-      const tbody = document.createElement('tbody');
-      for (const r of results) {
-        const tr = document.createElement('tr');
-        const titleTd = document.createElement('td');
-        titleTd.textContent = r.title || r.url;
-        tr.appendChild(titleTd);
-        const bm25Td = document.createElement('td'); bm25Td.className = 'num'; bm25Td.textContent = r.bm25_score.toFixed(3); tr.appendChild(bm25Td);
-        const semTd = document.createElement('td'); semTd.className = 'num'; semTd.textContent = r.semantic_sim.toFixed(3); tr.appendChild(semTd);
-        const finalTd = document.createElement('td'); finalTd.className = 'num'; finalTd.textContent = r.final_score.toFixed(3); tr.appendChild(finalTd);
-        tbody.appendChild(tr);
-      }
-      table.appendChild(tbody);
+      const table = buildTable(
+        [{ label: 'title' }, { label: 'bm25', num: true }, { label: 'semantic', num: true }, { label: 'final', num: true }],
+        results,
+        (r) => [
+          textCell(r.title || r.url),
+          textCell(r.bm25_score.toFixed(3), { num: true }),
+          textCell(r.semantic_sim.toFixed(3), { num: true }),
+          textCell(r.final_score.toFixed(3), { num: true }),
+        ],
+      );
       result.appendChild(table);
     } catch (err) {
       status.textContent = 'Debug search failed: ' + err.message;
@@ -96,17 +92,15 @@
         return;
       }
       status.textContent = 'Appears in ' + data.doc_freq + (data.doc_freq === 1 ? ' document.' : ' documents.');
-      const table = document.createElement('table');
-      table.innerHTML = '<thead><tr><th>doc id</th><th class="num">term freq</th><th class="num">doc length</th></tr></thead>';
-      const tbody = document.createElement('tbody');
-      for (const p of data.postings) {
-        const tr = document.createElement('tr');
-        const a = document.createElement('td'); a.textContent = p.doc_id; tr.appendChild(a);
-        const b = document.createElement('td'); b.className = 'num'; b.textContent = String(p.term_freq); tr.appendChild(b);
-        const c = document.createElement('td'); c.className = 'num'; c.textContent = String(p.doc_length); tr.appendChild(c);
-        tbody.appendChild(tr);
-      }
-      table.appendChild(tbody);
+      const table = buildTable(
+        [{ label: 'doc id' }, { label: 'term freq', num: true }, { label: 'doc length', num: true }],
+        data.postings,
+        (p) => [
+          textCell(p.doc_id),
+          textCell(String(p.term_freq), { num: true }),
+          textCell(String(p.doc_length), { num: true }),
+        ],
+      );
       result.appendChild(table);
     } catch (err) {
       status.textContent = 'Look up failed: ' + err.message;

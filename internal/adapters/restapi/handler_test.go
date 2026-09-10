@@ -144,6 +144,59 @@ func TestHandleStyle_MethodNotAllowed(t *testing.T) {
 	}
 }
 
+func TestHandleStyle_HeadRequestAllowed(t *testing.T) {
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
+	req := httptest.NewRequest(http.MethodHead, "/style.css", nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected empty body for HEAD request, got %d bytes", rec.Body.Len())
+	}
+}
+
+func TestHandleAdminJS_Success(t *testing.T) {
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
+	req := httptest.NewRequest(http.MethodGet, "/admin.js", nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/javascript; charset=utf-8" {
+		t.Errorf("expected js content type, got %q", ct)
+	}
+	if rec.Body.Len() == 0 {
+		t.Error("expected non-empty script body")
+	}
+}
+
+func TestHandleAdminJS_HeadRequestAllowed(t *testing.T) {
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
+	req := httptest.NewRequest(http.MethodHead, "/admin.js", nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected empty body for HEAD request, got %d bytes", rec.Body.Len())
+	}
+}
+
+func TestHandleAdminJS_MethodNotAllowed(t *testing.T) {
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
+	req := httptest.NewRequest(http.MethodPost, "/admin.js", nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
 func TestHandleSearch_Success(t *testing.T) {
 	fs := &fakeSearch{results: []domain.SearchResult{{URL: "http://a", Score: 1}}}
 	h := restapi.New(restapi.Config{Search: fs, Crawler: &fakeCrawler{}})

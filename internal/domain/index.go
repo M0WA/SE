@@ -52,16 +52,12 @@ func (idx *InvertedIndex) DocCount() int {
 	return len(idx.docs)
 }
 
+// tfidf is only ever called with a (term, docID) pair already known to be
+// in idx.postings (Search ranges over idx.postings[term] itself), so no
+// existence checks are needed here.
 func (idx *InvertedIndex) tfidf(term, docID string) float64 {
-	postings, ok := idx.postings[term]
-	if !ok {
-		return 0
-	}
-	freq, ok := postings[docID]
-	if !ok {
-		return 0
-	}
-	tf := float64(freq) / float64(idx.docLengths[docID])
+	postings := idx.postings[term]
+	tf := float64(postings[docID]) / float64(idx.docLengths[docID])
 	df := float64(len(postings))
 	idf := math.Log(float64(len(idx.docs)+1)/(df+1)) + 1
 	return tf * idf

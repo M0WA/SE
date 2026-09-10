@@ -36,6 +36,14 @@ func TestCombineScores_ClampsAlphaOutOfRange(t *testing.T) {
 	}
 }
 
+func TestCombineScores_ClampsNegativeAlpha(t *testing.T) {
+	in := []domain.HybridResult{{DocID: "a", BM25Score: 1, SemanticSim: 1}}
+	out := domain.CombineScores(in, -1.0)
+	if out[0].FinalScore != 1.0 {
+		t.Errorf("expected clamped alpha=0 (pure semantic), got FinalScore=%f", out[0].FinalScore)
+	}
+}
+
 func TestCombineScores_NegativeCosineClampedToZero(t *testing.T) {
 	in := []domain.HybridResult{{DocID: "a", BM25Score: 10, SemanticSim: -0.5}}
 	out := domain.CombineScores(in, 0.0)

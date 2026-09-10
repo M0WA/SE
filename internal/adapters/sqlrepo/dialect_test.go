@@ -33,6 +33,26 @@ func TestSQLiteDialect_UsesQuestionMarkPlaceholders(t *testing.T) {
 	}
 }
 
+func TestMySQLDialect_UsesQuestionMarkPlaceholders(t *testing.T) {
+	d := sqlrepo.NewDialect("mysql")
+	if d.Placeholder(1) != "?" {
+		t.Errorf("expected ? placeholder for MySQL, got %q", d.Placeholder(1))
+	}
+	if !strings.Contains(d.UpsertDocumentSQL(), "ON DUPLICATE KEY UPDATE") {
+		t.Error("expected MySQL's ON DUPLICATE KEY UPDATE upsert syntax")
+	}
+}
+
+func TestPostgresDialect_PlaceholderNumbersPositionally(t *testing.T) {
+	d := sqlrepo.NewDialect("postgres")
+	cases := map[int]string{0: "$0", 1: "$1", 9: "$9", 12: "$12", 103: "$103"}
+	for pos, want := range cases {
+		if got := d.Placeholder(pos); got != want {
+			t.Errorf("Placeholder(%d): expected %q, got %q", pos, want, got)
+		}
+	}
+}
+
 func TestAllDialects_CreateSchemaSQLNonEmpty(t *testing.T) {
 	for _, driver := range []string{"sqlite", "mysql", "postgres"} {
 		stmts := sqlrepo.NewDialect(driver).CreateSchemaSQL()

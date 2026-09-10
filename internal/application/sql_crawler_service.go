@@ -2,8 +2,6 @@ package application
 
 import (
 	"context"
-	"fmt"
-	"strings"
 
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
@@ -31,52 +29,11 @@ func NewSQLCrawlerService(
 }
 
 func (c *sqlCrawlerService) Crawl(ctx context.Context, seedURLs []string, maxPages int) (int, error) {
-	if maxPages <= 0 {
-		maxPages = 20
-	}
-
-	visited := make(map[string]bool)
-	queue := append([]string{}, seedURLs...)
-	crawled := 0
-
-	for len(queue) > 0 && crawled < maxPages {
-		u := queue[0]
-		queue = queue[1:]
-
-		if visited[u] || !isHTTP(u) {
-			continue
-		}
-		visited[u] = true
-
-		if c.robots != nil && !c.robots.Allowed(ctx, u) {
-			continue
-		}
-
-		html, err := c.fetcher.Fetch(ctx, u)
+	return crawlLoop(ctx, c.fetcher, c.robots, c.parseHTML, seedURLs, maxPages, func(ctx context.Context, doc domain.Document) error {
+		embedding, err := c.embedder.Embed(ctx, doc.Title+" "+doc.Text)
 		if err != nil {
-			continue
+			return err
 		}
-
-		title, text, links := c.parseHTML(html, u)
-		if len(strings.TrimSpace(text)) < 50 {
-			continue
-		}
-
-		doc := domain.Document{ID: fmt.Sprintf("doc-%d", crawled), URL: u, Title: title, Text: text, Links: links}
-		embedding, err := c.embedder.Embed(ctx, title+" "+text)
-		if err != nil {
-			return crawled, err
-		}
-		if err := c.repo.SaveDocument(ctx, doc, embedding); err != nil {
-			return crawled, err
-		}
-		crawled++
-
-		for _, l := range links {
-			if !visited[l] {
-				queue = append(queue, l)
-			}
-		}
-	}
-	return crawled, nil
+		return c.repo.SaveDocument(ctx, doc, embedding)
+	})
 }

@@ -11,36 +11,44 @@ import (
 
 const defaultDocumentListLimit = 100
 
-func servePage(w http.ResponseWriter, r *http.Request, page []byte) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+// requireMethod writes 405 and reports false if the request method isn't
+// the one this endpoint accepts.
+func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
+	if r.Method != method {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
+		return false
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if r.Method == http.MethodHead {
-		return
+	return true
+}
+
+// requireConfigured writes 503 and reports false if a dependency this
+// endpoint needs wasn't wired up in Config.
+func requireConfigured(w http.ResponseWriter, configured bool, what string) bool {
+	if !configured {
+		http.Error(w, what+" not configured", http.StatusServiceUnavailable)
+		return false
 	}
-	_, _ = w.Write(page)
+	return true
 }
 
 func (h *Handler) handleAdminPage(w http.ResponseWriter, r *http.Request) {
-	servePage(w, r, adminHTML)
+	serveStatic(w, r, "text/html; charset=utf-8", adminHTML)
 }
 
 func (h *Handler) handleAdminDocumentsPage(w http.ResponseWriter, r *http.Request) {
-	servePage(w, r, adminDocumentsHTML)
+	serveStatic(w, r, "text/html; charset=utf-8", adminDocumentsHTML)
 }
 
 func (h *Handler) handleAdminTuningPage(w http.ResponseWriter, r *http.Request) {
-	servePage(w, r, adminTuningHTML)
+	serveStatic(w, r, "text/html; charset=utf-8", adminTuningHTML)
 }
 
 func (h *Handler) handleAdminSearchPage(w http.ResponseWriter, r *http.Request) {
-	servePage(w, r, adminSearchHTML)
+	serveStatic(w, r, "text/html; charset=utf-8", adminSearchHTML)
 }
 
 func (h *Handler) handleAdminCrawlPage(w http.ResponseWriter, r *http.Request) {
-	servePage(w, r, crawlHTML)
+	serveStatic(w, r, "text/html; charset=utf-8", crawlHTML)
 }
 
 type adminStatsResponse struct {
@@ -50,12 +58,7 @@ type adminStatsResponse struct {
 }
 
 func (h *Handler) handleAdminStats(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if h.admin == nil {
-		http.Error(w, "admin diagnostics not configured", http.StatusServiceUnavailable)
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
 		return
 	}
 	totalDocs, avgDocLen, err := h.admin.CorpusStats(r.Context())
@@ -78,12 +81,7 @@ type adminDocument struct {
 }
 
 func (h *Handler) handleAdminDocuments(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if h.admin == nil {
-		http.Error(w, "admin diagnostics not configured", http.StatusServiceUnavailable)
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
 		return
 	}
 	limit := defaultDocumentListLimit
@@ -106,18 +104,14 @@ func (h *Handler) handleAdminDocuments(w http.ResponseWriter, r *http.Request) {
 
 // handleAdminDeleteDocument is registered on the Go 1.22+ pattern
 // "DELETE /admin/api/documents/{id}", since a wildcard path segment is
-// exactly what that routing style is for.
+// exactly what that routing style is for. The mux never invokes this
+// handler with an empty {id} (a bare or double-slash path either 404s or
+// redirects before reaching here), so no separate empty-id check is needed.
 func (h *Handler) handleAdminDeleteDocument(w http.ResponseWriter, r *http.Request) {
-	if h.admin == nil {
-		http.Error(w, "admin diagnostics not configured", http.StatusServiceUnavailable)
+	if !requireConfigured(w, h.admin != nil, "admin diagnostics") {
 		return
 	}
-	id := r.PathValue("id")
-	if id == "" {
-		http.Error(w, "document id must not be empty", http.StatusBadRequest)
-		return
-	}
-	err := h.admin.DeleteDocument(r.Context(), id)
+	err := h.admin.DeleteDocument(r.Context(), r.PathValue("id"))
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -141,12 +135,7 @@ type adminPostingsResponse struct {
 }
 
 func (h *Handler) handleAdminPostings(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if h.admin == nil {
-		http.Error(w, "admin diagnostics not configured", http.StatusServiceUnavailable)
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
 		return
 	}
 	term := r.URL.Query().Get("term")
@@ -180,12 +169,7 @@ type adminDebugResult struct {
 }
 
 func (h *Handler) handleAdminSearch(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if h.debug == nil {
-		http.Error(w, "search debugging not configured", http.StatusServiceUnavailable)
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.debug != nil, "search debugging") {
 		return
 	}
 	query := r.URL.Query().Get("q")
@@ -217,8 +201,7 @@ type settingsResponse struct {
 }
 
 func (h *Handler) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
-	if h.settings == nil {
-		http.Error(w, "tuning not configured", http.StatusServiceUnavailable)
+	if !requireConfigured(w, h.settings != nil, "tuning") {
 		return
 	}
 	switch r.Method {
@@ -249,8 +232,7 @@ type crawlResponse struct {
 }
 
 func (h *Handler) handleAdminCrawl(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	var req crawlRequest

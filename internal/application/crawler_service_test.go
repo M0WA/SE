@@ -129,6 +129,22 @@ func TestCrawlerService_Crawl_StopsAtMaxPages(t *testing.T) {
 	}
 }
 
+func TestCrawlerService_Crawl_ZeroMaxPagesDefaultsToTwenty(t *testing.T) {
+	fetcher := &fakeFetcher{pages: map[string]string{"http://a": "<html>a</html>"}}
+	robots := &fakeRobots{}
+	repo := &fakeRepo{}
+	idx := &fakeIndexer{}
+	parse := func(html, pageURL string) (string, string, []string) {
+		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil
+	}
+
+	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse)
+	count, _ := svc.Crawl(context.Background(), []string{"http://a"}, 0)
+	if count != 1 {
+		t.Errorf("expected maxPages=0 to default and still crawl the single seed, got %d", count)
+	}
+}
+
 func TestCrawlerService_Crawl_IgnoresNonHTTPURLs(t *testing.T) {
 	fetcher := &fakeFetcher{pages: map[string]string{}}
 	robots := &fakeRobots{}

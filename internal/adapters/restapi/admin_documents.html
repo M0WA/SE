@@ -68,11 +68,11 @@
     return svg;
   }
 
-  async function deleteDocument(id, row) {
+  async function deleteDocument(id, btn) {
     if (!window.confirm('Remove this page from the index?')) return;
     try {
       await deleteRequest('/admin/api/documents/' + encodeURIComponent(id));
-      row.remove();
+      btn.closest('tr').remove();
     } catch (err) {
       window.alert('Could not delete: ' + err.message);
     }
@@ -112,44 +112,35 @@
 
     group.appendChild(buildChart(docs));
 
-    const table = document.createElement('table');
-    table.innerHTML = '<thead><tr><th>title</th><th class="num">length</th><th></th></tr></thead>';
-    const tbody = document.createElement('tbody');
-    for (const d of docs) {
-      const tr = document.createElement('tr');
+    const table = buildTable(
+      [{ label: 'title' }, { label: 'length', num: true }, { label: '' }],
+      docs,
+      (d) => {
+        const link = document.createElement('a');
+        link.href = d.url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.style.color = 'var(--ink)';
+        link.textContent = d.title || d.url;
+        const urlDiv = document.createElement('div');
+        urlDiv.className = 'url';
+        urlDiv.textContent = d.url;
+        const titleTd = document.createElement('td');
+        titleTd.appendChild(link);
+        titleTd.appendChild(urlDiv);
 
-      const titleTd = document.createElement('td');
-      const link = document.createElement('a');
-      link.href = d.url;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      link.style.color = 'var(--ink)';
-      link.textContent = d.title || d.url;
-      titleTd.appendChild(link);
-      const urlDiv = document.createElement('div');
-      urlDiv.className = 'url';
-      urlDiv.textContent = d.url;
-      titleTd.appendChild(urlDiv);
-      tr.appendChild(titleTd);
+        const delBtn = document.createElement('button');
+        delBtn.className = 'text-button';
+        delBtn.type = 'button';
+        delBtn.textContent = 'Delete';
+        delBtn.addEventListener('click', () => deleteDocument(d.id, delBtn));
+        const actionTd = document.createElement('td');
+        actionTd.className = 'actions';
+        actionTd.appendChild(delBtn);
 
-      const lenTd = document.createElement('td');
-      lenTd.className = 'num';
-      lenTd.textContent = String(d.doc_length);
-      tr.appendChild(lenTd);
-
-      const actionTd = document.createElement('td');
-      actionTd.className = 'actions';
-      const delBtn = document.createElement('button');
-      delBtn.className = 'text-button';
-      delBtn.type = 'button';
-      delBtn.textContent = 'Delete';
-      delBtn.addEventListener('click', () => deleteDocument(d.id, tr));
-      actionTd.appendChild(delBtn);
-      tr.appendChild(actionTd);
-
-      tbody.appendChild(tr);
-    }
-    table.appendChild(tbody);
+        return [titleTd, textCell(String(d.doc_length), { num: true }), actionTd];
+      },
+    );
     group.appendChild(table);
 
     const deleteAll = document.createElement('button');

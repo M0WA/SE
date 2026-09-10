@@ -41,9 +41,11 @@ func (f *fakeAdminRepo) PostingsForTerm(context.Context, string) ([]domain.Posti
 type fakeDebugSearch struct {
 	results []domain.HybridResult
 	err     error
+	gotTopK int
 }
 
-func (f *fakeDebugSearch) Search(context.Context, string, int) ([]domain.HybridResult, error) {
+func (f *fakeDebugSearch) Search(_ context.Context, _ string, topK int) ([]domain.HybridResult, error) {
+	f.gotTopK = topK
 	return f.results, f.err
 }
 
@@ -133,6 +135,28 @@ func TestHandleAdminStats_NotConfigured(t *testing.T) {
 	}
 }
 
+func TestHandleAdminStats_ServiceError(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{err: errors.New("boom")}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/stats", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminStats_MethodNotAllowed(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/stats", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
 func TestHandleAdminDocuments_Success(t *testing.T) {
 	docs := []domain.IndexedDocument{{ID: "doc-0", URL: "http://a", Title: "A", DocLength: 10}}
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{docs: docs}, &fakeDebugSearch{})
@@ -148,6 +172,51 @@ func TestHandleAdminDocuments_Success(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if len(resp) != 1 || resp[0]["id"] != "doc-0" {
 		t.Errorf("unexpected documents response: %v", resp)
+	}
+}
+
+func TestHandleAdminDocuments_RespectsLimitParam(t *testing.T) {
+	repo := &fakeAdminRepo{docs: []domain.IndexedDocument{{ID: "doc-0"}}}
+	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/documents?limit=5", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDocuments_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, nil, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/documents", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDocuments_ServiceError(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{err: errors.New("boom")}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/documents", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDocuments_MethodNotAllowed(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/documents", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
 	}
 }
 
@@ -187,6 +256,39 @@ func TestHandleAdminPostings_EmptyTerm(t *testing.T) {
 	}
 }
 
+func TestHandleAdminPostings_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, nil, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/postings?term=x", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminPostings_ServiceError(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{err: errors.New("boom")}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/postings?term=x", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminPostings_MethodNotAllowed(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/postings?term=x", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
 func TestHandleAdminSearch_Success(t *testing.T) {
 	results := []domain.HybridResult{{DocID: "doc-0", URL: "http://a", Title: "A", BM25Score: 1.2, SemanticSim: 0.5, FinalScore: 0.9}}
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{results: results})
@@ -205,6 +307,21 @@ func TestHandleAdminSearch_Success(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if len(resp) != 1 || resp[0].BM25Score != 1.2 || resp[0].FinalScore != 0.9 {
 		t.Errorf("unexpected debug search response: %+v", resp)
+	}
+}
+
+func TestHandleAdminSearch_RespectsTopKParam(t *testing.T) {
+	fd := &fakeDebugSearch{}
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, fd)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/search?q=katzen&top_k=3", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if fd.gotTopK != 3 {
+		t.Errorf("expected top_k=3 to be passed through, got %d", fd.gotTopK)
 	}
 }
 
@@ -227,6 +344,17 @@ func TestHandleAdminSearch_ServiceError(t *testing.T) {
 	h.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminSearch_MethodNotAllowed(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/search?q=katzen", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
 	}
 }
 
@@ -293,6 +421,28 @@ func TestHandleAdminDeleteDocument_Unauthenticated(t *testing.T) {
 	}
 }
 
+func TestHandleAdminDeleteDocument_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, nil, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/documents/doc-3", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDeleteDocument_ServiceError(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{deleteErr: errors.New("boom")}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/documents/doc-3", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
 func TestHandleAdminSettings_GetReturnsCurrentValues(t *testing.T) {
 	settings := domain.NewTuningSettings(0.6, 1.3, 0.8)
 	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings)
@@ -341,5 +491,29 @@ func TestHandleAdminSettings_NotConfigured(t *testing.T) {
 	h.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected 503 when settings aren't configured, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminSettings_InvalidJSON(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader([]byte("{not json")))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminSettings_MethodNotAllowed(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings)
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/settings", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
 	}
 }

@@ -54,3 +54,27 @@ func TestFetcher_Fetch_ConnectionError(t *testing.T) {
 		t.Error("expected error for unreachable host")
 	}
 }
+
+func TestFetcher_Fetch_BodyReadError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("expected a hijackable response writer")
+		}
+		conn, buf, err := hj.Hijack()
+		if err != nil {
+			t.Fatalf("failed to hijack connection: %v", err)
+		}
+		defer conn.Close()
+		// Promise more body than is actually sent, then close the
+		// connection early -- io.ReadAll sees an unexpected EOF.
+		buf.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort")
+		buf.Flush()
+	}))
+	defer srv.Close()
+
+	f := httpfetcher.New()
+	if _, err := f.Fetch(context.Background(), srv.URL); err == nil {
+		t.Error("expected an error when the response body can't be fully read")
+	}
+}
