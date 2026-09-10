@@ -1,7 +1,9 @@
 #!/bin/sh
 set -e
-if systemctl is-active --quiet searchengine; then
-    systemctl stop searchengine
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    if systemctl is-active --quiet searchengine; then
+        systemctl stop searchengine
+    fi
+    systemctl disable searchengine.service || true
 fi
-systemctl disable searchengine.service || true
 exit 0

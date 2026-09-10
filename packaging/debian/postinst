@@ -5,7 +5,9 @@ if ! id searchengine >/dev/null 2>&1; then
 fi
 chown searchengine:searchengine /etc/searchengine/searchengine.env
 chmod 640 /etc/searchengine/searchengine.env
-systemctl daemon-reload
-systemctl enable searchengine.service
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+    systemctl enable searchengine.service
+fi
 echo "searchengine installed. Start with: systemctl start searchengine"
 exit 0
