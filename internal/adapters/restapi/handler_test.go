@@ -12,6 +12,7 @@ import (
 
 	"searchengine/internal/adapters/restapi"
 	"searchengine/internal/domain"
+	"searchengine/internal/ports"
 )
 
 type fakeSearch struct {
@@ -27,11 +28,13 @@ func (f *fakeSearch) Search(_ context.Context, q string, topK int) ([]domain.Sea
 }
 
 type fakeCrawler struct {
-	count int
-	err   error
+	count      int
+	err        error
+	gotOptions ports.CrawlOptions
 }
 
-func (f *fakeCrawler) Crawl(_ context.Context, _ []string, _ int) (int, error) {
+func (f *fakeCrawler) Crawl(_ context.Context, opts ports.CrawlOptions) (int, error) {
+	f.gotOptions = opts
 	return f.count, f.err
 }
 

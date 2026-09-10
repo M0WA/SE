@@ -12,10 +12,7 @@ import (
 	"time"
 )
 
-const (
-	sessionCookieName = "se_session"
-	sessionTTL        = 12 * time.Hour
-)
+const sessionCookieName = "se_session"
 
 // sessionStore is a small in-memory session table. Sessions are lost on
 // restart -- acceptable for a single self-hosted instance with one admin
@@ -164,6 +161,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	sessionTTL := h.opSettings.Get().SessionTTL
 	token := h.sessions.create(sessionTTL)
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
+	"searchengine/internal/domain"
 	"searchengine/internal/ports"
 )
 
@@ -173,7 +175,7 @@ func (h *Handler) handleAdminSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query().Get("q")
-	topK := 10
+	topK := h.opSettings.Get().DefaultTopK
 	if v := r.URL.Query().Get("top_k"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			topK = n
@@ -194,10 +196,57 @@ func (h *Handler) handleAdminSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-type settingsResponse struct {
+type tuningValues struct {
 	Alpha float64 `json:"alpha"`
 	K1    float64 `json:"k1"`
 	B     float64 `json:"b"`
+}
+
+// operationalValues mirrors domain.OperationalSettingsValues for the wire
+// format: durations as whole seconds/hours, which are friendlier for an
+// admin form (and JSON) than Go's time.Duration nanosecond encoding.
+type operationalValues struct {
+	FetchTimeoutSeconds int    `json:"fetch_timeout_seconds"`
+	UserAgent           string `json:"user_agent"`
+	DefaultMaxPages     int    `json:"default_max_pages"`
+	MinTextLength       int    `json:"min_text_length"`
+	DefaultTopK         int    `json:"default_top_k"`
+	SessionTTLHours     int    `json:"session_ttl_hours"`
+}
+
+func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
+	return operationalValues{
+		FetchTimeoutSeconds: int(v.FetchTimeout / time.Second),
+		UserAgent:           v.UserAgent,
+		DefaultMaxPages:     v.DefaultMaxPages,
+		MinTextLength:       v.MinTextLength,
+		DefaultTopK:         v.DefaultTopK,
+		SessionTTLHours:     int(v.SessionTTL / time.Hour),
+	}
+}
+
+func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
+	return domain.OperationalSettingsValues{
+		FetchTimeout:    time.Duration(o.FetchTimeoutSeconds) * time.Second,
+		UserAgent:       o.UserAgent,
+		DefaultMaxPages: o.DefaultMaxPages,
+		MinTextLength:   o.MinTextLength,
+		DefaultTopK:     o.DefaultTopK,
+		SessionTTL:      time.Duration(o.SessionTTLHours) * time.Hour,
+	}
+}
+
+type settingsResponse struct {
+	Tuning      tuningValues      `json:"tuning"`
+	Operational operationalValues `json:"operational"`
+}
+
+func (h *Handler) currentSettings() settingsResponse {
+	alpha, k1, b := h.settings.Get()
+	return settingsResponse{
+		Tuning:      tuningValues{Alpha: alpha, K1: k1, B: b},
+		Operational: toOperationalValues(h.opSettings.Get()),
+	}
 }
 
 func (h *Handler) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
@@ -206,25 +255,27 @@ func (h *Handler) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		alpha, k1, b := h.settings.Get()
-		writeJSON(w, http.StatusOK, settingsResponse{Alpha: alpha, K1: k1, B: b})
+		writeJSON(w, http.StatusOK, h.currentSettings())
 	case http.MethodPost:
 		var req settingsResponse
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		h.settings.Set(req.Alpha, req.K1, req.B)
-		alpha, k1, b := h.settings.Get()
-		writeJSON(w, http.StatusOK, settingsResponse{Alpha: alpha, K1: k1, B: b})
+		h.settings.Set(req.Tuning.Alpha, req.Tuning.K1, req.Tuning.B)
+		h.opSettings.Set(req.Operational.toSettingsValues())
+		writeJSON(w, http.StatusOK, h.currentSettings())
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
 type crawlRequest struct {
-	SeedURLs []string `json:"seed_urls"`
-	MaxPages int      `json:"max_pages"`
+	SeedURLs      []string `json:"seed_urls"`
+	MaxPages      int      `json:"max_pages"`
+	Cookie        string   `json:"cookie"`
+	BasicAuthUser string   `json:"basic_auth_user"`
+	BasicAuthPass string   `json:"basic_auth_pass"`
 }
 
 type crawlResponse struct {
@@ -245,7 +296,13 @@ func (h *Handler) handleAdminCrawl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	count, err := h.crawler.Crawl(r.Context(), req.SeedURLs, req.MaxPages)
+	count, err := h.crawler.Crawl(r.Context(), ports.CrawlOptions{
+		SeedURLs:      req.SeedURLs,
+		MaxPages:      req.MaxPages,
+		Cookie:        req.Cookie,
+		BasicAuthUser: req.BasicAuthUser,
+		BasicAuthPass: req.BasicAuthPass,
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

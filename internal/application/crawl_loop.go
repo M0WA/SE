@@ -10,8 +10,6 @@ import (
 	"searchengine/internal/ports"
 )
 
-const minIndexableTextLength = 50
-
 // crawlLoop drives the crawl control flow shared by every CrawlerService
 // backend: seed queue, dedup, robots check, fetch, and thin-content
 // filtering. save is called once per successfully fetched, non-thin page;
@@ -19,19 +17,22 @@ const minIndexableTextLength = 50
 // one thing that actually differs between backends.
 func crawlLoop(
 	ctx context.Context,
-	fetcher ports.Fetcher,
+	fetcher ports.AuthFetcher,
 	robots ports.RobotsChecker,
 	parseHTML func(html, pageURL string) (title, text string, links []string),
-	seedURLs []string,
-	maxPages int,
+	settings *domain.OperationalSettings,
+	opts ports.CrawlOptions,
 	save func(ctx context.Context, doc domain.Document) error,
 ) (int, error) {
+	v := settings.Get()
+	maxPages := opts.MaxPages
 	if maxPages <= 0 {
-		maxPages = 20
+		maxPages = v.DefaultMaxPages
 	}
+	fetchOpts := ports.FetchOptions{Cookie: opts.Cookie, BasicAuthUser: opts.BasicAuthUser, BasicAuthPass: opts.BasicAuthPass}
 
 	visited := make(map[string]bool)
-	queue := append([]string{}, seedURLs...)
+	queue := append([]string{}, opts.SeedURLs...)
 	crawled := 0
 
 	for len(queue) > 0 && crawled < maxPages {
@@ -47,13 +48,13 @@ func crawlLoop(
 			continue
 		}
 
-		html, err := fetcher.Fetch(ctx, u)
+		html, err := fetcher.FetchWithOptions(ctx, u, fetchOpts)
 		if err != nil {
 			continue
 		}
 
 		title, text, links := parseHTML(html, u)
-		if len(strings.TrimSpace(text)) < minIndexableTextLength {
+		if len(strings.TrimSpace(text)) < v.MinTextLength {
 			continue
 		}
 

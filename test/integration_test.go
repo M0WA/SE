@@ -43,13 +43,13 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 	}))
 	defer site.Close()
 
-	fetcher := httpfetcher.New()
+	fetcher := httpfetcher.New(nil)
 	repo := memrepo.New()
 	index := domain.NewInvertedIndex()
 	robotsChecker := robots.New(fetcher)
 	parse := func(h, u string) (string, string, []string) { return htmlparser.Parse(strings.NewReader(h), u) }
 
-	crawlerSvc := application.NewCrawlerService(fetcher, robotsChecker, repo, index, parse)
+	crawlerSvc := application.NewCrawlerService(fetcher, robotsChecker, repo, index, parse, nil)
 	searchSvc := application.NewSearchService(index)
 	handler := restapi.New(restapi.Config{
 		Search: searchSvc, Crawler: crawlerSvc,

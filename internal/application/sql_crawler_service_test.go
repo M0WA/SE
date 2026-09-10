@@ -7,6 +7,7 @@ import (
 
 	"searchengine/internal/application"
 	"searchengine/internal/domain"
+	"searchengine/internal/ports"
 )
 
 type recordingSQLRepo struct {
@@ -48,8 +49,8 @@ func TestSQLCrawlerService_Crawl_HappyPath(t *testing.T) {
 		return "B", "genuegend inhalt text fuer die seite b hier auch danke", nil
 	}
 
-	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedder, parse)
-	count, err := svc.Crawl(context.Background(), []string{"http://a"}, 5)
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedder, parse, nil)
+	count, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -73,8 +74,8 @@ func TestSQLCrawlerService_Crawl_RespectsRobots(t *testing.T) {
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 	parse := func(html, pageURL string) (string, string, []string) { return "A", "genuegend text inhalt seite", nil }
 
-	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedder, parse)
-	count, _ := svc.Crawl(context.Background(), []string{"http://a"}, 5)
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedder, parse, nil)
+	count, _ := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5})
 	if count != 0 {
 		t.Errorf("expected 0 crawled (robots disallow), got %d", count)
 	}
@@ -87,8 +88,8 @@ func TestSQLCrawlerService_Crawl_SkipsThinContent(t *testing.T) {
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 	parse := func(html, pageURL string) (string, string, []string) { return "A", "zu kurz", nil }
 
-	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedder, parse)
-	count, _ := svc.Crawl(context.Background(), []string{"http://a"}, 5)
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedder, parse, nil)
+	count, _ := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5})
 	if count != 0 {
 		t.Errorf("expected thin content skipped, got %d", count)
 	}
@@ -103,8 +104,8 @@ func TestSQLCrawlerService_Crawl_SaveErrorPropagates(t *testing.T) {
 		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil
 	}
 
-	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedder, parse)
-	_, err := svc.Crawl(context.Background(), []string{"http://a"}, 5)
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedder, parse, nil)
+	_, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5})
 	if err == nil {
 		t.Error("expected repo error to propagate")
 	}
@@ -119,8 +120,8 @@ func TestSQLCrawlerService_Crawl_EmbedErrorPropagates(t *testing.T) {
 		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil
 	}
 
-	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedder, parse)
-	_, err := svc.Crawl(context.Background(), []string{"http://a"}, 5)
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedder, parse, nil)
+	_, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5})
 	if err == nil {
 		t.Error("expected embed error to propagate")
 	}

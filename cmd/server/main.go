@@ -25,6 +25,7 @@ func main() {
 	driver := getEnv("DB_DRIVER", "sqlite")
 	dsn := getEnv("DB_DSN", "file:search.db?cache=shared")
 	settings := domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B)
+	opSettings := domain.DefaultOperationalSettings()
 
 	ctx := context.Background()
 	repo, err := sqlrepo.New(ctx, driver, dsn)
@@ -37,12 +38,12 @@ func main() {
 	searchSvc := application.NewHybridAsSearchService(repo, embedder, settings)
 	debugSvc := application.NewHybridSearchService(repo, embedder, settings)
 
-	fetcher := httpfetcher.New()
+	fetcher := httpfetcher.New(opSettings)
 	robotsChecker := robots.New(fetcher)
 	parseHTML := func(html, pageURL string) (string, string, []string) {
 		return htmlparser.Parse(strings.NewReader(html), pageURL)
 	}
-	crawlerSvc := application.NewSQLCrawlerService(fetcher, robotsChecker, repo, embedder, parseHTML)
+	crawlerSvc := application.NewSQLCrawlerService(fetcher, robotsChecker, repo, embedder, parseHTML, opSettings)
 
 	adminUser := getEnv("ADMIN_USER", "")
 	adminPass := getEnv("ADMIN_PASSWORD", "")
@@ -51,14 +52,15 @@ func main() {
 	}
 
 	handler := restapi.New(restapi.Config{
-		Search:    searchSvc,
-		Crawler:   crawlerSvc,
-		Debug:     debugSvc,
-		Admin:     repo,
-		Settings:  settings,
-		DBDriver:  driver,
-		AdminUser: adminUser,
-		AdminPass: adminPass,
+		Search:     searchSvc,
+		Crawler:    crawlerSvc,
+		Debug:      debugSvc,
+		Admin:      repo,
+		Settings:   settings,
+		OpSettings: opSettings,
+		DBDriver:   driver,
+		AdminUser:  adminUser,
+		AdminPass:  adminPass,
 	})
 	log.Printf("Search engine running on :8080 (DB: %s)", driver)
 	log.Fatal(http.ListenAndServe(":8080", handler.Routes()))

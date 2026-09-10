@@ -5,27 +5,43 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
+
+	"searchengine/internal/domain"
+	"searchengine/internal/ports"
 )
 
 type Fetcher struct {
-	Client    *http.Client
-	UserAgent string
+	Client   *http.Client
+	settings *domain.OperationalSettings
 }
 
-func New() *Fetcher {
-	return &Fetcher{
-		Client:    &http.Client{Timeout: 8 * time.Second},
-		UserAgent: "OwnSearchEngine/1.0 (+educational)",
-	}
+// New builds a Fetcher whose timeout and User-Agent are read from settings
+// on every request, so they can be changed live from the admin panel. A
+// nil settings uses the built-in defaults (see domain.OperationalSettings).
+func New(settings *domain.OperationalSettings) *Fetcher {
+	return &Fetcher{Client: &http.Client{}, settings: settings}
 }
 
 func (f *Fetcher) Fetch(ctx context.Context, rawURL string) (string, error) {
+	return f.FetchWithOptions(ctx, rawURL, ports.FetchOptions{})
+}
+
+func (f *Fetcher) FetchWithOptions(ctx context.Context, rawURL string, opts ports.FetchOptions) (string, error) {
+	v := f.settings.Get()
+	ctx, cancel := context.WithTimeout(ctx, v.FetchTimeout)
+	defer cancel()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("building request: %w", err)
 	}
-	req.Header.Set("User-Agent", f.UserAgent)
+	req.Header.Set("User-Agent", v.UserAgent)
+	if opts.Cookie != "" {
+		req.Header.Set("Cookie", opts.Cookie)
+	}
+	if opts.BasicAuthUser != "" || opts.BasicAuthPass != "" {
+		req.SetBasicAuth(opts.BasicAuthUser, opts.BasicAuthPass)
+	}
 
 	resp, err := f.Client.Do(req)
 	if err != nil {

@@ -23,27 +23,70 @@
     <a href="/admin/search">Search</a>
   </nav>
 
-  <p class="lede" style="margin: 0 0 2rem;">Adjust how search ranks results. Changes apply to the next search, on this running instance only.</p>
+  <p class="lede" style="margin: 0 0 2rem;">Adjust ranking, crawling, and session behavior. Changes apply immediately, on this running instance only.</p>
 
   <form id="tuning-form" class="stacked-form">
-    <div class="form-row">
-      <label for="alpha">Alpha — BM25 vs. semantic weight (0 = pure semantic, 1 = pure BM25)</label><br>
-      <input id="alpha" class="field" type="number" step="0.05" min="0" max="1" required>
-    </div>
-    <div class="form-row">
-      <label for="k1">k1 — term-frequency saturation</label><br>
-      <input id="k1" class="field" type="number" step="0.1" min="0" required>
-    </div>
-    <div class="form-row">
-      <label for="b">b — document-length normalization (0 = none, 1 = full)</label><br>
-      <input id="b" class="field" type="number" step="0.05" min="0" max="1" required>
-    </div>
+    <section class="panel">
+      <h2>Ranking</h2>
+      <div class="form-row">
+        <label for="alpha">Alpha — BM25 vs. semantic weight (0 = pure semantic, 1 = pure BM25)</label><br>
+        <input id="alpha" class="field" type="number" step="0.05" min="0" max="1" required>
+      </div>
+      <div class="form-row">
+        <label for="k1">k1 — term-frequency saturation</label><br>
+        <input id="k1" class="field" type="number" step="0.1" min="0" required>
+      </div>
+      <div class="form-row">
+        <label for="b">b — document-length normalization (0 = none, 1 = full)</label><br>
+        <input id="b" class="field" type="number" step="0.05" min="0" max="1" required>
+      </div>
+      <p class="tuning-hint">Defaults: alpha 0.5, k1 1.2, b 0.75. Values outside 0–1 (alpha, b) or below 0 (k1) are clamped.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Crawler</h2>
+      <div class="form-row">
+        <label for="fetch-timeout">Fetch timeout — seconds per page before giving up</label><br>
+        <input id="fetch-timeout" class="field" type="number" step="1" min="1" required>
+      </div>
+      <div class="form-row">
+        <label for="user-agent">User-Agent sent with every fetch</label><br>
+        <input id="user-agent" class="field" type="text" required>
+      </div>
+      <div class="form-row">
+        <label for="default-max-pages">Default max pages — used when a crawl doesn't specify one</label><br>
+        <input id="default-max-pages" class="field" type="number" step="1" min="1" required>
+      </div>
+      <div class="form-row">
+        <label for="min-text-length">Minimum text length — shorter pages are skipped as thin content</label><br>
+        <input id="min-text-length" class="field" type="number" step="1" min="0" required>
+      </div>
+      <p class="tuning-hint">Defaults: 8s timeout, 20 pages, 50 characters minimum.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Search</h2>
+      <div class="form-row">
+        <label for="default-top-k">Default result count — used when a search doesn't specify one</label><br>
+        <input id="default-top-k" class="field" type="number" step="1" min="1" required>
+      </div>
+      <p class="tuning-hint">Default: 10 results.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Session</h2>
+      <div class="form-row">
+        <label for="session-ttl">Session length — hours before a sign-in expires</label><br>
+        <input id="session-ttl" class="field" type="number" step="1" min="1" required>
+      </div>
+      <p class="tuning-hint">Default: 12 hours. Applies to sessions created after saving.</p>
+    </section>
+
     <div class="form-actions">
       <button type="submit">Save</button>
       <span id="tuning-status" class="error-text"></span>
     </div>
   </form>
-  <p class="tuning-hint">Defaults: alpha 0.5, k1 1.2, b 0.75. Values outside 0–1 (alpha, b) or below 0 (k1) are clamped.</p>
 </main>
 <script src="/admin.js"></script>
 <script>
@@ -51,14 +94,29 @@
   const alphaEl = document.getElementById('alpha');
   const k1El = document.getElementById('k1');
   const bEl = document.getElementById('b');
+  const fetchTimeoutEl = document.getElementById('fetch-timeout');
+  const userAgentEl = document.getElementById('user-agent');
+  const defaultMaxPagesEl = document.getElementById('default-max-pages');
+  const minTextLengthEl = document.getElementById('min-text-length');
+  const defaultTopKEl = document.getElementById('default-top-k');
+  const sessionTTLEl = document.getElementById('session-ttl');
   const status = document.getElementById('tuning-status');
+
+  function applySettings(s) {
+    alphaEl.value = s.tuning.alpha;
+    k1El.value = s.tuning.k1;
+    bEl.value = s.tuning.b;
+    fetchTimeoutEl.value = s.operational.fetch_timeout_seconds;
+    userAgentEl.value = s.operational.user_agent;
+    defaultMaxPagesEl.value = s.operational.default_max_pages;
+    minTextLengthEl.value = s.operational.min_text_length;
+    defaultTopKEl.value = s.operational.default_top_k;
+    sessionTTLEl.value = s.operational.session_ttl_hours;
+  }
 
   async function loadSettings() {
     try {
-      const s = await getJSON('/admin/api/settings');
-      alphaEl.value = s.alpha;
-      k1El.value = s.k1;
-      bEl.value = s.b;
+      applySettings(await getJSON('/admin/api/settings'));
     } catch (err) {
       status.textContent = 'Could not load settings: ' + err.message;
     }
@@ -69,13 +127,21 @@
     status.textContent = '';
     try {
       const s = await postJSON('/admin/api/settings', {
-        alpha: parseFloat(alphaEl.value),
-        k1: parseFloat(k1El.value),
-        b: parseFloat(bEl.value),
+        tuning: {
+          alpha: parseFloat(alphaEl.value),
+          k1: parseFloat(k1El.value),
+          b: parseFloat(bEl.value),
+        },
+        operational: {
+          fetch_timeout_seconds: parseInt(fetchTimeoutEl.value, 10),
+          user_agent: userAgentEl.value,
+          default_max_pages: parseInt(defaultMaxPagesEl.value, 10),
+          min_text_length: parseInt(minTextLengthEl.value, 10),
+          default_top_k: parseInt(defaultTopKEl.value, 10),
+          session_ttl_hours: parseInt(sessionTTLEl.value, 10),
+        },
       });
-      alphaEl.value = s.alpha;
-      k1El.value = s.k1;
-      bEl.value = s.b;
+      applySettings(s);
       status.style.color = 'var(--ink-muted)';
       status.textContent = 'Saved.';
     } catch (err) {

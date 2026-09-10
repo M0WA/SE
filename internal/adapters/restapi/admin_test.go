@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"searchengine/internal/adapters/restapi"
 	"searchengine/internal/domain"
@@ -51,13 +52,13 @@ func (f *fakeDebugSearch) Search(_ context.Context, _ string, topK int) ([]domai
 
 func adminAuthedHandler(t *testing.T, admin ports.AdminRepository, debug ports.DebugSearchService) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
-	return adminAuthedHandlerWithSettings(t, admin, debug, nil)
+	return adminAuthedHandlerWithSettings(t, admin, debug, nil, nil)
 }
 
-func adminAuthedHandlerWithSettings(t *testing.T, admin ports.AdminRepository, debug ports.DebugSearchService, settings *domain.TuningSettings) (*restapi.Handler, *http.Cookie) {
+func adminAuthedHandlerWithSettings(t *testing.T, admin ports.AdminRepository, debug ports.DebugSearchService, settings *domain.TuningSettings, opSettings *domain.OperationalSettings) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
 	h := restapi.New(restapi.Config{
-		Admin: admin, Debug: debug, Settings: settings, DBDriver: "pgx",
+		Admin: admin, Debug: debug, Settings: settings, OpSettings: opSettings, DBDriver: "pgx",
 		AdminUser: testAdminUser, AdminPass: testAdminPass,
 	})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
@@ -445,7 +446,11 @@ func TestHandleAdminDeleteDocument_ServiceError(t *testing.T) {
 
 func TestHandleAdminSettings_GetReturnsCurrentValues(t *testing.T) {
 	settings := domain.NewTuningSettings(0.6, 1.3, 0.8)
-	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings)
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
+		FetchTimeout: 5 * time.Second, UserAgent: "test-agent", DefaultMaxPages: 15,
+		MinTextLength: 30, DefaultTopK: 7, SessionTTL: 6 * time.Hour,
+	})
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
@@ -455,31 +460,58 @@ func TestHandleAdminSettings_GetReturnsCurrentValues(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 	var resp struct {
-		Alpha float64 `json:"alpha"`
-		K1    float64 `json:"k1"`
-		B     float64 `json:"b"`
+		Tuning struct {
+			Alpha float64 `json:"alpha"`
+			K1    float64 `json:"k1"`
+			B     float64 `json:"b"`
+		} `json:"tuning"`
+		Operational struct {
+			FetchTimeoutSeconds int    `json:"fetch_timeout_seconds"`
+			UserAgent           string `json:"user_agent"`
+			DefaultMaxPages     int    `json:"default_max_pages"`
+			MinTextLength       int    `json:"min_text_length"`
+			DefaultTopK         int    `json:"default_top_k"`
+			SessionTTLHours     int    `json:"session_ttl_hours"`
+		} `json:"operational"`
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
-	if resp.Alpha != 0.6 || resp.K1 != 1.3 || resp.B != 0.8 {
-		t.Errorf("unexpected settings response: %+v", resp)
+	if resp.Tuning.Alpha != 0.6 || resp.Tuning.K1 != 1.3 || resp.Tuning.B != 0.8 {
+		t.Errorf("unexpected tuning response: %+v", resp.Tuning)
+	}
+	if resp.Operational.FetchTimeoutSeconds != 5 || resp.Operational.UserAgent != "test-agent" ||
+		resp.Operational.DefaultMaxPages != 15 || resp.Operational.MinTextLength != 30 ||
+		resp.Operational.DefaultTopK != 7 || resp.Operational.SessionTTLHours != 6 {
+		t.Errorf("unexpected operational response: %+v", resp.Operational)
 	}
 }
 
 func TestHandleAdminSettings_PostUpdatesValues(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
-	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings)
-	body, _ := json.Marshal(map[string]float64{"alpha": 0.9, "k1": 2.0, "b": 0.2})
+	opSettings := domain.DefaultOperationalSettings()
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.9, "k1": 2.0, "b": 0.2},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 3, "user_agent": "custom-bot", "default_max_pages": 5,
+			"min_text_length": 10, "default_top_k": 20, "session_ttl_hours": 2,
+		},
+	})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 	alpha, k1, b := settings.Get()
 	if alpha != 0.9 || k1 != 2.0 || b != 0.2 {
-		t.Errorf("expected settings to be updated, got (%v, %v, %v)", alpha, k1, b)
+		t.Errorf("expected tuning to be updated, got (%v, %v, %v)", alpha, k1, b)
+	}
+	ov := opSettings.Get()
+	if ov.FetchTimeout != 3*time.Second || ov.UserAgent != "custom-bot" || ov.DefaultMaxPages != 5 ||
+		ov.MinTextLength != 10 || ov.DefaultTopK != 20 || ov.SessionTTL != 2*time.Hour {
+		t.Errorf("expected operational settings to be updated, got %+v", ov)
 	}
 }
 
@@ -496,7 +528,7 @@ func TestHandleAdminSettings_NotConfigured(t *testing.T) {
 
 func TestHandleAdminSettings_InvalidJSON(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
-	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings)
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, nil)
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader([]byte("{not json")))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
@@ -508,7 +540,7 @@ func TestHandleAdminSettings_InvalidJSON(t *testing.T) {
 
 func TestHandleAdminSettings_MethodNotAllowed(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
-	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings)
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, nil)
 	req := httptest.NewRequest(http.MethodDelete, "/admin/api/settings", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()

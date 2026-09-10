@@ -7,6 +7,7 @@ import (
 
 	"searchengine/internal/application"
 	"searchengine/internal/domain"
+	"searchengine/internal/ports"
 )
 
 type fakeFetcher struct {
@@ -14,7 +15,7 @@ type fakeFetcher struct {
 	err   map[string]error
 }
 
-func (f *fakeFetcher) Fetch(_ context.Context, url string) (string, error) {
+func (f *fakeFetcher) FetchWithOptions(_ context.Context, url string, _ ports.FetchOptions) (string, error) {
 	if err, ok := f.err[url]; ok {
 		return "", err
 	}
@@ -55,8 +56,8 @@ func TestCrawlerService_Crawl_HappyPath(t *testing.T) {
 		return "B", "genuegend inhalt text fuer die seite b hier auch danke", nil
 	}
 
-	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse)
-	count, err := svc.Crawl(context.Background(), []string{"http://a"}, 5)
+	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse, nil)
+	count, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -75,8 +76,8 @@ func TestCrawlerService_Crawl_RespectsRobots(t *testing.T) {
 	idx := &fakeIndexer{}
 	parse := func(html, pageURL string) (string, string, []string) { return "A", "genuegend text inhalt seite", nil }
 
-	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse)
-	count, _ := svc.Crawl(context.Background(), []string{"http://a"}, 5)
+	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse, nil)
+	count, _ := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5})
 	if count != 0 {
 		t.Errorf("expected 0 crawled (robots disallow), got %d", count)
 	}
@@ -89,8 +90,8 @@ func TestCrawlerService_Crawl_SkipsFetchErrors(t *testing.T) {
 	idx := &fakeIndexer{}
 	parse := func(html, pageURL string) (string, string, []string) { return "", "", nil }
 
-	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse)
-	count, err := svc.Crawl(context.Background(), []string{"http://a"}, 5)
+	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse, nil)
+	count, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5})
 	if err != nil || count != 0 {
 		t.Errorf("expected graceful skip, got count=%d err=%v", count, err)
 	}
@@ -103,8 +104,8 @@ func TestCrawlerService_Crawl_SkipsThinContent(t *testing.T) {
 	idx := &fakeIndexer{}
 	parse := func(html, pageURL string) (string, string, []string) { return "A", "zu kurz", nil }
 
-	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse)
-	count, _ := svc.Crawl(context.Background(), []string{"http://a"}, 5)
+	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse, nil)
+	count, _ := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5})
 	if count != 0 {
 		t.Errorf("expected thin content skipped, got %d", count)
 	}
@@ -122,8 +123,8 @@ func TestCrawlerService_Crawl_StopsAtMaxPages(t *testing.T) {
 		return "T", "genuegend inhalt text fuer diese seite bitte danke", next[pageURL]
 	}
 
-	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse)
-	count, _ := svc.Crawl(context.Background(), []string{"http://a"}, 2)
+	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse, nil)
+	count, _ := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 2})
 	if count != 2 {
 		t.Errorf("expected stop at maxPages=2, got %d", count)
 	}
@@ -138,8 +139,8 @@ func TestCrawlerService_Crawl_ZeroMaxPagesDefaultsToTwenty(t *testing.T) {
 		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil
 	}
 
-	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse)
-	count, _ := svc.Crawl(context.Background(), []string{"http://a"}, 0)
+	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse, nil)
+	count, _ := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 0})
 	if count != 1 {
 		t.Errorf("expected maxPages=0 to default and still crawl the single seed, got %d", count)
 	}
@@ -152,8 +153,8 @@ func TestCrawlerService_Crawl_IgnoresNonHTTPURLs(t *testing.T) {
 	idx := &fakeIndexer{}
 	parse := func(html, pageURL string) (string, string, []string) { return "", "", nil }
 
-	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse)
-	count, _ := svc.Crawl(context.Background(), []string{"ftp://a", "mailto:x@y.com"}, 5)
+	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse, nil)
+	count, _ := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"ftp://a", "mailto:x@y.com"}, MaxPages: 5})
 	if count != 0 {
 		t.Errorf("expected non-HTTP URLs ignored, got %d", count)
 	}
@@ -168,8 +169,8 @@ func TestCrawlerService_Crawl_RepoSaveErrorPropagates(t *testing.T) {
 		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil
 	}
 
-	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse)
-	_, err := svc.Crawl(context.Background(), []string{"http://a"}, 5)
+	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse, nil)
+	_, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5})
 	if err == nil {
 		t.Error("expected repo error to propagate")
 	}
@@ -186,8 +187,8 @@ func TestCrawlerService_Crawl_DeduplicatesVisitedURLs(t *testing.T) {
 		return "A", "genuegend inhalt text fuer diese seite bitte danke", []string{"http://a"}
 	}
 
-	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse)
-	count, _ := svc.Crawl(context.Background(), []string{"http://a", "http://a"}, 5)
+	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse, nil)
+	count, _ := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a", "http://a"}, MaxPages: 5})
 	if count != 1 || calls != 1 {
 		t.Errorf("expected deduplication, count=%d calls=%d", count, calls)
 	}

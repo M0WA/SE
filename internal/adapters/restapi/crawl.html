@@ -28,6 +28,22 @@
     <input id="max-pages" name="max_pages" type="number" min="1" value="20" aria-label="Max pages">
     <button type="submit">Crawl</button>
   </form>
+  <details class="crawl-advanced">
+    <summary>Cookie / basic auth for this crawl</summary>
+    <div class="form-row">
+      <label for="crawl-cookie">Cookie header</label><br>
+      <input id="crawl-cookie" class="field" type="text" placeholder="session=abc123">
+    </div>
+    <div class="form-row">
+      <label for="crawl-basic-user">Basic auth username</label><br>
+      <input id="crawl-basic-user" class="field" type="text" autocomplete="off">
+    </div>
+    <div class="form-row">
+      <label for="crawl-basic-pass">Basic auth password</label><br>
+      <input id="crawl-basic-pass" class="field" type="password" autocomplete="off">
+    </div>
+    <p class="tuning-hint">Applies only to this crawl — nothing is stored.</p>
+  </details>
   <div id="crawl-status"></div>
 </main>
 <script src="/admin.js"></script>
@@ -35,6 +51,9 @@
   const crawlForm = document.getElementById('crawl-form');
   const crawlURL = document.getElementById('crawl-url');
   const maxPages = document.getElementById('max-pages');
+  const crawlCookie = document.getElementById('crawl-cookie');
+  const crawlBasicUser = document.getElementById('crawl-basic-user');
+  const crawlBasicPass = document.getElementById('crawl-basic-pass');
   const crawlStatus = document.getElementById('crawl-status');
 
   crawlForm.addEventListener('submit', async (e) => {
@@ -47,7 +66,13 @@
     const pages = parseInt(maxPages.value, 10) || 20;
     crawlStatus.textContent = 'Crawling…';
     try {
-      const data = await postJSON('/admin/api/crawl', { seed_urls: [url], max_pages: pages });
+      const data = await postJSON('/admin/api/crawl', {
+        seed_urls: [url],
+        max_pages: pages,
+        cookie: crawlCookie.value,
+        basic_auth_user: crawlBasicUser.value,
+        basic_auth_pass: crawlBasicPass.value,
+      });
       const count = data.crawled_count || 0;
       crawlStatus.textContent = count === 1
         ? 'Indexed 1 page.'

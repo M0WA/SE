@@ -38,45 +38,49 @@ var styleCSS []byte
 var adminJS []byte
 
 type Handler struct {
-	search    ports.SearchService
-	crawler   ports.CrawlerService
-	debug     ports.DebugSearchService
-	admin     ports.AdminRepository
-	settings  *domain.TuningSettings
-	dbDriver  string
-	adminUser string
-	adminPass string
-	sessions  *sessionStore
+	search     ports.SearchService
+	crawler    ports.CrawlerService
+	debug      ports.DebugSearchService
+	admin      ports.AdminRepository
+	settings   *domain.TuningSettings
+	opSettings *domain.OperationalSettings
+	dbDriver   string
+	adminUser  string
+	adminPass  string
+	sessions   *sessionStore
 }
 
-// Config wires a Handler's dependencies. Debug, Admin, Settings, DBDriver,
-// AdminUser and AdminPass are optional: without AdminUser/AdminPass
-// configured, authentication fails closed (nobody can sign in, so /admin
-// stays locked) rather than defaulting to open access. Without
-// Debug/Admin/Settings, the corresponding admin endpoints report
-// themselves unavailable.
+// Config wires a Handler's dependencies. Debug, Admin, Settings,
+// OperationalSettings, DBDriver, AdminUser and AdminPass are optional:
+// without AdminUser/AdminPass configured, authentication fails closed
+// (nobody can sign in, so /admin stays locked) rather than defaulting to
+// open access. Without Debug/Admin/Settings, the corresponding admin
+// endpoints report themselves unavailable. A nil OperationalSettings
+// behaves like domain.DefaultOperationalSettings().
 type Config struct {
-	Search    ports.SearchService
-	Crawler   ports.CrawlerService
-	Debug     ports.DebugSearchService
-	Admin     ports.AdminRepository
-	Settings  *domain.TuningSettings
-	DBDriver  string
-	AdminUser string
-	AdminPass string
+	Search     ports.SearchService
+	Crawler    ports.CrawlerService
+	Debug      ports.DebugSearchService
+	Admin      ports.AdminRepository
+	Settings   *domain.TuningSettings
+	OpSettings *domain.OperationalSettings
+	DBDriver   string
+	AdminUser  string
+	AdminPass  string
 }
 
 func New(cfg Config) *Handler {
 	return &Handler{
-		search:    cfg.Search,
-		crawler:   cfg.Crawler,
-		debug:     cfg.Debug,
-		admin:     cfg.Admin,
-		settings:  cfg.Settings,
-		dbDriver:  cfg.DBDriver,
-		adminUser: cfg.AdminUser,
-		adminPass: cfg.AdminPass,
-		sessions:  newSessionStore(),
+		search:     cfg.Search,
+		crawler:    cfg.Crawler,
+		debug:      cfg.Debug,
+		admin:      cfg.Admin,
+		settings:   cfg.Settings,
+		opSettings: cfg.OpSettings,
+		dbDriver:   cfg.DBDriver,
+		adminUser:  cfg.AdminUser,
+		adminPass:  cfg.AdminPass,
+		sessions:   newSessionStore(),
 	}
 }
 
@@ -156,7 +160,7 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query().Get("q")
-	topK := 10
+	topK := h.opSettings.Get().DefaultTopK
 	if v := r.URL.Query().Get("top_k"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			topK = n

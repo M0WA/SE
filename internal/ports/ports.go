@@ -17,6 +17,21 @@ type Fetcher interface {
 	Fetch(ctx context.Context, url string) (string, error)
 }
 
+// FetchOptions carries per-request credentials for sites that need a
+// session cookie or HTTP Basic auth to crawl.
+type FetchOptions struct {
+	Cookie        string
+	BasicAuthUser string
+	BasicAuthPass string
+}
+
+// AuthFetcher is a Fetcher that also accepts per-request credentials.
+// httpfetcher.Fetcher implements both this and the plain Fetcher (used by
+// the robots-checker, which never needs credentials).
+type AuthFetcher interface {
+	FetchWithOptions(ctx context.Context, url string, opts FetchOptions) (string, error)
+}
+
 type RobotsChecker interface {
 	Allowed(ctx context.Context, url string) bool
 }
@@ -64,8 +79,19 @@ type SearchService interface {
 	Search(ctx context.Context, query string, topK int) ([]domain.SearchResult, error)
 }
 
+// CrawlOptions is a single crawl request: seed URLs and page budget, plus
+// optional credentials for sites that require a session cookie or HTTP
+// Basic auth (applied to every fetch made during that crawl).
+type CrawlOptions struct {
+	SeedURLs      []string
+	MaxPages      int
+	Cookie        string
+	BasicAuthUser string
+	BasicAuthPass string
+}
+
 type CrawlerService interface {
-	Crawl(ctx context.Context, seedURLs []string, maxPages int) (int, error)
+	Crawl(ctx context.Context, opts CrawlOptions) (int, error)
 }
 
 // DebugSearchService exposes the raw, unblended hybrid search results

@@ -8,25 +8,27 @@ import (
 )
 
 type crawlerService struct {
-	fetcher   ports.Fetcher
+	fetcher   ports.AuthFetcher
 	robots    ports.RobotsChecker
 	repo      ports.Repository
 	index     ports.Indexer
 	parseHTML func(html, pageURL string) (title, text string, links []string)
+	settings  *domain.OperationalSettings
 }
 
 func NewCrawlerService(
-	fetcher ports.Fetcher,
+	fetcher ports.AuthFetcher,
 	robots ports.RobotsChecker,
 	repo ports.Repository,
 	index ports.Indexer,
 	parseHTML func(string, string) (string, string, []string),
+	settings *domain.OperationalSettings,
 ) ports.CrawlerService {
-	return &crawlerService{fetcher, robots, repo, index, parseHTML}
+	return &crawlerService{fetcher, robots, repo, index, parseHTML, settings}
 }
 
-func (c *crawlerService) Crawl(ctx context.Context, seedURLs []string, maxPages int) (int, error) {
-	return crawlLoop(ctx, c.fetcher, c.robots, c.parseHTML, seedURLs, maxPages, func(ctx context.Context, doc domain.Document) error {
+func (c *crawlerService) Crawl(ctx context.Context, opts ports.CrawlOptions) (int, error) {
+	return crawlLoop(ctx, c.fetcher, c.robots, c.parseHTML, c.settings, opts, func(ctx context.Context, doc domain.Document) error {
 		if err := c.repo.Save(ctx, doc); err != nil {
 			return err
 		}
