@@ -43,6 +43,9 @@ var adminJS []byte
 type Handler struct {
 	search     ports.SearchService
 	crawler    ports.CrawlerService
+	crawlJobs  *domain.CrawlJobStore
+	crawlSem   chan struct{}
+	jobs       ports.CrawlJobService
 	debug      ports.DebugSearchService
 	admin      ports.AdminRepository
 	settings   *domain.TuningSettings
@@ -54,18 +57,22 @@ type Handler struct {
 	sessions   *sessionStore
 }
 
-// Config wires a Handler's dependencies. Debug, Admin, Settings,
-// OperationalSettings, Overrides, DBDriver, AdminUser and AdminPass are
-// optional: without AdminUser/AdminPass configured, authentication fails
-// closed (nobody can sign in, so /admin stays locked) rather than
-// defaulting to open access. Without Debug/Admin/Settings/Overrides, the
-// corresponding admin endpoints report themselves unavailable. A nil
-// OperationalSettings behaves like domain.DefaultOperationalSettings(),
-// and a nil RankingOverrides like domain.DefaultRankingOverrides() (both
-// via their nil-safe Get()).
+// Config wires a Handler's dependencies. Crawler and CrawlJobs are used
+// only by crawl-server (RoutesCrawlInternal); Jobs is used only by
+// admin-server (RoutesAdmin), talking to crawl-server over the network.
+// Debug, Admin, Settings, OperationalSettings, Overrides, DBDriver,
+// AdminUser and AdminPass are optional: without AdminUser/AdminPass
+// configured, authentication fails closed (nobody can sign in, so /admin
+// stays locked) rather than defaulting to open access. Without
+// Debug/Admin/Settings/Overrides/Jobs, the corresponding admin endpoints
+// report themselves unavailable. A nil OperationalSettings behaves like
+// domain.DefaultOperationalSettings(), and a nil RankingOverrides like
+// domain.DefaultRankingOverrides() (both via their nil-safe Get()).
 type Config struct {
 	Search     ports.SearchService
 	Crawler    ports.CrawlerService
+	CrawlJobs  *domain.CrawlJobStore
+	Jobs       ports.CrawlJobService
 	Debug      ports.DebugSearchService
 	Admin      ports.AdminRepository
 	Settings   *domain.TuningSettings
@@ -80,6 +87,9 @@ func New(cfg Config) *Handler {
 	return &Handler{
 		search:     cfg.Search,
 		crawler:    cfg.Crawler,
+		crawlJobs:  cfg.CrawlJobs,
+		crawlSem:   make(chan struct{}, maxConcurrentCrawls),
+		jobs:       cfg.Jobs,
 		debug:      cfg.Debug,
 		admin:      cfg.Admin,
 		settings:   cfg.Settings,
@@ -128,6 +138,8 @@ func (h *Handler) RoutesAdmin() *http.ServeMux {
 	mux.HandleFunc("/admin/api/settings", h.requireAuthAPI(h.handleAdminSettings))
 	mux.HandleFunc("/admin/api/overrides", h.requireAuthAPI(h.handleAdminOverrides))
 	mux.HandleFunc("/admin/api/crawl", h.requireAuthAPI(h.handleAdminCrawl))
+	mux.HandleFunc("/admin/api/crawl/jobs", h.requireAuthAPI(h.handleAdminCrawlJobs))
+	mux.HandleFunc("GET /admin/api/crawl/jobs/{id}", h.requireAuthAPI(h.handleAdminCrawlJob))
 	return mux
 }
 

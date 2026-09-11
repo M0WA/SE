@@ -369,12 +369,15 @@ type crawlRequest struct {
 	BasicAuthPass string   `json:"basic_auth_pass"`
 }
 
-type crawlResponse struct {
-	CrawledCount int `json:"crawled_count"`
+type startCrawlResponse struct {
+	JobID string `json:"job_id"`
 }
 
+// handleAdminCrawl starts a crawl job on crawl-server and returns
+// immediately with its ID -- it does not wait for the crawl to finish.
+// Progress is polled via handleAdminCrawlJobs/handleAdminCrawlJob.
 func (h *Handler) handleAdminCrawl(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.jobs != nil, "crawl jobs") {
 		return
 	}
 	var req crawlRequest
@@ -387,7 +390,7 @@ func (h *Handler) handleAdminCrawl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	count, err := h.crawler.Crawl(r.Context(), ports.CrawlOptions{
+	jobID, err := h.jobs.StartCrawlJob(r.Context(), ports.CrawlOptions{
 		SeedURLs:      req.SeedURLs,
 		MaxPages:      req.MaxPages,
 		Cookie:        req.Cookie,
@@ -398,5 +401,32 @@ func (h *Handler) handleAdminCrawl(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, crawlResponse{CrawledCount: count})
+	writeJSON(w, http.StatusAccepted, startCrawlResponse{JobID: jobID})
+}
+
+func (h *Handler) handleAdminCrawlJobs(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.jobs != nil, "crawl jobs") {
+		return
+	}
+	jobs, err := h.jobs.ListCrawlJobs(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, jobs)
+}
+
+func (h *Handler) handleAdminCrawlJob(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.jobs != nil, "crawl jobs") {
+		return
+	}
+	job, err := h.jobs.GetCrawlJob(r.Context(), r.PathValue("id"))
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, job)
+	case errors.Is(err, ports.ErrCrawlJobNotFound):
+		http.Error(w, "crawl job not found", http.StatusNotFound)
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }

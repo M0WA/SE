@@ -23,6 +23,7 @@ func crawlLoop(
 	settings *domain.OperationalSettings,
 	opts ports.CrawlOptions,
 	save func(ctx context.Context, doc domain.Document) error,
+	onPage func(domain.CrawlPageEvent),
 ) (int, error) {
 	v := settings.Get()
 	maxPages := opts.MaxPages
@@ -30,6 +31,12 @@ func crawlLoop(
 		maxPages = v.DefaultMaxPages
 	}
 	fetchOpts := ports.FetchOptions{Cookie: opts.Cookie, BasicAuthUser: opts.BasicAuthUser, BasicAuthPass: opts.BasicAuthPass}
+
+	emit := func(ev domain.CrawlPageEvent) {
+		if onPage != nil {
+			onPage(ev)
+		}
+	}
 
 	visited := make(map[string]bool)
 	queue := append([]string{}, opts.SeedURLs...)
@@ -45,16 +52,19 @@ func crawlLoop(
 		visited[u] = true
 
 		if robots != nil && !robots.Allowed(ctx, u) {
+			emit(domain.CrawlPageEvent{URL: u, Status: domain.CrawlPageRobotsDisallowed})
 			continue
 		}
 
 		html, err := fetcher.FetchWithOptions(ctx, u, fetchOpts)
 		if err != nil {
+			emit(domain.CrawlPageEvent{URL: u, Status: domain.CrawlPageFetchFailed})
 			continue
 		}
 
 		title, text, links := parseHTML(html, u)
 		if len(strings.TrimSpace(text)) < v.MinTextLength {
+			emit(domain.CrawlPageEvent{URL: u, Status: domain.CrawlPageThinContent})
 			continue
 		}
 
@@ -63,6 +73,7 @@ func crawlLoop(
 			return crawled, err
 		}
 		crawled++
+		emit(domain.CrawlPageEvent{URL: u, Status: domain.CrawlPageIndexed, Title: title})
 
 		for _, l := range links {
 			if !visited[l] {

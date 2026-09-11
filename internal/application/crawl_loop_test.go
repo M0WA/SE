@@ -33,7 +33,7 @@ func TestCrawlLoop_PassesAuthOptionsToFetcher(t *testing.T) {
 		BasicAuthPass: "secret",
 	}
 
-	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save)
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestCrawlLoop_NoAuthOptionsMeansEmptyFetchOptions(t *testing.T) {
 	save := func(ctx context.Context, doc domain.Document) error { return nil }
 
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5}
-	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save); err != nil {
+	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got := fetcher.gotOptions[0]

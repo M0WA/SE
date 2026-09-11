@@ -46,6 +46,18 @@
     <p class="tuning-hint">Applies only to this crawl — nothing is stored.</p>
   </details>
   <div id="crawl-status"></div>
+
+  <section class="panel">
+    <h2>Jobs</h2>
+    <p class="lede" style="margin: 0 0 1rem;">Every crawl triggered on this instance, most recent first. Up to three run at once; the rest wait their turn.</p>
+    <div id="jobs-status" class="panel-status"></div>
+    <div id="jobs-table"></div>
+  </section>
+
+  <section class="panel">
+    <h2 id="job-detail-heading" hidden>Job detail</h2>
+    <div id="job-detail"></div>
+  </section>
 </main>
 <script src="/admin.js"></script>
 <script>
@@ -56,6 +68,137 @@
   const crawlBasicUser = document.getElementById('crawl-basic-user');
   const crawlBasicPass = document.getElementById('crawl-basic-pass');
   const crawlStatus = document.getElementById('crawl-status');
+  const jobsStatusEl = document.getElementById('jobs-status');
+  const jobsTableEl = document.getElementById('jobs-table');
+  const jobDetailHeading = document.getElementById('job-detail-heading');
+  const jobDetailEl = document.getElementById('job-detail');
+
+  const ACTIVE_STATUSES = ['queued', 'running'];
+  let selectedJobID = null;
+  let pollTimer = null;
+
+  const prefillURL = new URLSearchParams(window.location.search).get('url');
+  if (prefillURL) {
+    crawlURL.value = prefillURL;
+    crawlURL.focus();
+  }
+
+  function capitalize(s) {
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  function formatDuration(startedAt, finishedAt) {
+    if (!startedAt) return '—';
+    const start = new Date(startedAt).getTime();
+    const end = finishedAt ? new Date(finishedAt).getTime() : Date.now();
+    const secs = Math.max(0, (end - start) / 1000);
+    if (secs < 60) return secs.toFixed(1) + 's';
+    return Math.floor(secs / 60) + 'm ' + Math.round(secs % 60) + 's';
+  }
+
+  function seedSummary(request) {
+    const urls = request.seed_urls || [];
+    if (urls.length === 0) return '(no seed)';
+    return urls.length === 1 ? urls[0] : urls[0] + ' +' + (urls.length - 1) + ' more';
+  }
+
+  function urlCell(text) {
+    const td = document.createElement('td');
+    td.className = 'url';
+    td.textContent = text;
+    return td;
+  }
+
+  function viewButtonCell(jobID) {
+    const td = document.createElement('td');
+    td.className = 'actions';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'text-button';
+    btn.textContent = 'View';
+    btn.addEventListener('click', () => loadJobDetail(jobID));
+    td.appendChild(btn);
+    return td;
+  }
+
+  function renderJobs(jobs) {
+    clear(jobsTableEl);
+    if (jobs.length === 0) {
+      jobsStatusEl.textContent = 'No crawls triggered yet.';
+      return;
+    }
+    jobsStatusEl.textContent = '';
+    const table = buildTable(
+      [{ label: 'seed' }, { label: 'status' }, { label: 'pages', num: true }, { label: 'duration' }, { label: '' }],
+      jobs,
+      (j) => [
+        urlCell(seedSummary(j.request)),
+        textCell(capitalize(j.status)),
+        textCell(String(j.pages_crawled), { num: true }),
+        textCell(formatDuration(j.started_at, j.finished_at)),
+        viewButtonCell(j.id),
+      ],
+    );
+    jobsTableEl.appendChild(table);
+  }
+
+  async function loadJobs() {
+    try {
+      const jobs = await getJSON('/admin/api/crawl/jobs');
+      renderJobs(jobs);
+      if (selectedJobID && jobs.some((j) => j.id === selectedJobID && ACTIVE_STATUSES.includes(j.status))) {
+        loadJobDetail(selectedJobID);
+      }
+      if (jobs.some((j) => ACTIVE_STATUSES.includes(j.status))) {
+        scheduleNextPoll();
+      }
+    } catch (err) {
+      jobsStatusEl.textContent = 'Could not load crawl jobs: ' + err.message;
+    }
+  }
+
+  function scheduleNextPoll() {
+    if (pollTimer) return;
+    pollTimer = setTimeout(() => {
+      pollTimer = null;
+      loadJobs();
+    }, 1500);
+  }
+
+  function renderJobDetail(job) {
+    jobDetailHeading.hidden = false;
+    clear(jobDetailEl);
+    const summary = document.createElement('p');
+    summary.className = 'panel-status';
+    summary.textContent = seedSummary(job.request) + ' — ' + capitalize(job.status) +
+      (job.error ? ': ' + job.error : '');
+    jobDetailEl.appendChild(summary);
+
+    if (!job.pages || job.pages.length === 0) {
+      const p = document.createElement('p');
+      p.className = 'panel-status';
+      p.textContent = 'No pages attempted yet.';
+      jobDetailEl.appendChild(p);
+      return;
+    }
+    const table = buildTable(
+      [{ label: 'url' }, { label: 'status' }, { label: 'title' }],
+      job.pages,
+      (p) => [urlCell(p.url), textCell(capitalize(p.status).replace(/_/g, ' ')), textCell(p.title || '')],
+    );
+    jobDetailEl.appendChild(table);
+  }
+
+  async function loadJobDetail(jobID) {
+    selectedJobID = jobID;
+    try {
+      const job = await getJSON('/admin/api/crawl/jobs/' + encodeURIComponent(jobID));
+      renderJobDetail(job);
+    } catch (err) {
+      jobDetailHeading.hidden = false;
+      jobDetailEl.textContent = 'Could not load job: ' + err.message;
+    }
+  }
 
   crawlForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -65,7 +208,7 @@
       return;
     }
     const pages = parseInt(maxPages.value, 10) || 20;
-    crawlStatus.textContent = 'Crawling…';
+    crawlStatus.textContent = 'Starting…';
     try {
       const data = await postJSON('/admin/api/crawl', {
         seed_urls: [url],
@@ -74,16 +217,16 @@
         basic_auth_user: crawlBasicUser.value,
         basic_auth_pass: crawlBasicPass.value,
       });
-      const count = data.crawled_count || 0;
-      crawlStatus.textContent = count === 1
-        ? 'Indexed 1 page.'
-        : 'Indexed ' + count + ' pages.';
+      crawlStatus.textContent = 'Job started.';
+      await loadJobs();
+      if (data.job_id) loadJobDetail(data.job_id);
     } catch (err) {
       crawlStatus.textContent = 'Crawl failed: ' + err.message;
     }
   });
 
   wireSignOut();
+  loadJobs();
 </script>
 </body>
 </html>

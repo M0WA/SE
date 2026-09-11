@@ -30,12 +30,12 @@ func NewSQLCrawlerService(
 	return &sqlCrawlerService{fetcher, robots, repo, embedder, parseHTML, settings}
 }
 
-func (c *sqlCrawlerService) Crawl(ctx context.Context, opts ports.CrawlOptions) (int, error) {
+func (c *sqlCrawlerService) Crawl(ctx context.Context, opts ports.CrawlOptions, onPage func(domain.CrawlPageEvent)) (int, error) {
 	return crawlLoop(ctx, c.fetcher, c.robots, c.parseHTML, c.settings, opts, func(ctx context.Context, doc domain.Document) error {
 		embedding, err := c.embedder.Embed(ctx, doc.Title+" "+doc.Text)
 		if err != nil {
 			return err
 		}
 		return c.repo.SaveDocument(ctx, doc, embedding)
-	})
+	}, onPage)
 }

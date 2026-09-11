@@ -115,7 +115,7 @@ func TestHandleLoginRoute_UnsupportedMethod(t *testing.T) {
 }
 
 func TestHandleLoginPage_AlreadyAuthenticatedRedirects(t *testing.T) {
-	h, cookie := authedHandler(t, &fakeSearch{}, &fakeCrawler{})
+	h, cookie := authedHandler(t, &fakeSearch{}, &fakeJobService{})
 	req := httptest.NewRequest(http.MethodGet, "/login", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
@@ -127,7 +127,7 @@ func TestHandleLoginPage_AlreadyAuthenticatedRedirects(t *testing.T) {
 }
 
 func TestHandleLogout_ClearsSession(t *testing.T) {
-	h, cookie := authedHandler(t, &fakeSearch{}, &fakeCrawler{})
+	h, cookie := authedHandler(t, &fakeSearch{}, &fakeJobService{})
 
 	logoutReq := httptest.NewRequest(http.MethodPost, "/logout", nil)
 	logoutReq.AddCookie(cookie)

@@ -34,7 +34,8 @@ func main() {
 	crawlerSvc := application.NewSQLCrawlerService(fetcher, robotsChecker, repo, embedder, parseHTML, opSettings)
 
 	handler := restapi.New(restapi.Config{
-		Crawler: crawlerSvc,
+		Crawler:   crawlerSvc,
+		CrawlJobs: domain.NewCrawlJobStore(),
 	})
 
 	addr := bootstrap.GetEnv("CRAWL_LISTEN_ADDR", "127.0.0.1:8082")

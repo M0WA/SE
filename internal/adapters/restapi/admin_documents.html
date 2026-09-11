@@ -24,7 +24,7 @@
     <a href="/admin/overrides">Overrides</a>
   </nav>
 
-  <p class="lede" style="margin: 0 0 2rem;">Indexed pages grouped by domain, with each domain's document-length spread and the option to remove a page from the index. Each domain also carries a rough 0-100 content-quality rating from page count, average document length, and any block/boost override — hover it for details.</p>
+  <p class="lede" style="margin: 0 0 2rem;">Indexed pages grouped by domain — click a domain to see its pages, length spread, and the option to remove one. Each domain also carries a rough 0-100 content-quality rating from page count, average document length, and any block/boost override — hover it for details.</p>
   <div id="documents-status" class="panel-status"></div>
   <div id="domains"></div>
 </main>
@@ -112,10 +112,25 @@
     return 'none';
   }
 
-  function renderDomain(hostname, docs, overrides) {
-    const group = document.createElement('section');
-    group.className = 'domain-group';
+function originOf(url) {
+    try {
+      return new URL(url).origin;
+    } catch (err) {
+      return url;
+    }
+  }
 
+  // The chart + table + delete-all are the expensive part of a domain
+  // group (an SVG bar per page, a table row per page) -- with many
+  // domains or many pages, building all of them up front is wasted work
+  // for whichever ones an admin never opens. buildBody() is called once,
+  // the first time this domain's <details> is expanded.
+  function renderDomain(hostname, docs, overrides) {
+    const details = document.createElement('details');
+    details.className = 'domain-group';
+
+    const summary = document.createElement('summary');
+    summary.className = 'domain-summary';
     const head = document.createElement('div');
     head.className = 'domain-head';
     const h3 = document.createElement('h3');
@@ -143,52 +158,67 @@
       ' · avg ' + avgLen.toFixed(0) + ' · total ' + totalLen;
     tail.appendChild(metrics);
 
+    const crawlLink = document.createElement('a');
+    crawlLink.className = 'domain-crawl-link';
+    crawlLink.href = '/admin/crawl?url=' + encodeURIComponent(originOf(docs[0].url));
+    crawlLink.textContent = 'Crawl';
+    crawlLink.addEventListener('click', (e) => e.stopPropagation());
+    tail.appendChild(crawlLink);
+
     head.appendChild(tail);
-    group.appendChild(head);
+    summary.appendChild(head);
+    details.appendChild(summary);
 
-    group.appendChild(buildChart(docs));
+    let built = false;
+    details.addEventListener('toggle', () => {
+      if (!details.open || built) return;
+      built = true;
+      details.appendChild(buildChart(docs));
 
-    const table = buildTable(
-      [{ label: 'title' }, { label: 'length', num: true }, { label: '' }],
-      docs,
-      (d) => {
-        const link = document.createElement('a');
-        link.href = d.url;
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-        link.style.color = 'var(--ink)';
-        link.textContent = d.title || d.url;
-        const urlDiv = document.createElement('div');
-        urlDiv.className = 'url';
-        urlDiv.textContent = d.url;
-        const titleTd = document.createElement('td');
-        titleTd.appendChild(link);
-        titleTd.appendChild(urlDiv);
+      const table = buildTable(
+        [{ label: 'title' }, { label: 'length', num: true }, { label: '' }],
+        docs,
+        (d) => {
+          const link = document.createElement('a');
+          link.href = d.url;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.style.color = 'var(--ink)';
+          link.textContent = d.title || d.url;
+          const urlDiv = document.createElement('div');
+          urlDiv.className = 'url';
+          urlDiv.textContent = d.url;
+          const titleTd = document.createElement('td');
+          titleTd.appendChild(link);
+          titleTd.appendChild(urlDiv);
 
-        const delBtn = document.createElement('button');
-        delBtn.className = 'text-button';
-        delBtn.type = 'button';
-        delBtn.textContent = 'Delete';
-        delBtn.addEventListener('click', () => deleteDocument(d.id, delBtn));
-        const actionTd = document.createElement('td');
-        actionTd.className = 'actions';
-        actionTd.appendChild(delBtn);
+          const delBtn = document.createElement('button');
+          delBtn.className = 'text-button';
+          delBtn.type = 'button';
+          delBtn.textContent = 'Delete';
+          delBtn.addEventListener('click', () => deleteDocument(d.id, delBtn));
+          const actionTd = document.createElement('td');
+          actionTd.className = 'actions';
+          actionTd.appendChild(delBtn);
 
-        return [titleTd, textCell(String(d.doc_length), { num: true }), actionTd];
-      },
-    );
-    group.appendChild(table);
+          return [titleTd, textCell(String(d.doc_length), { num: true }), actionTd];
+        },
+      );
+      details.appendChild(table);
 
-    const deleteAll = document.createElement('button');
-    deleteAll.className = 'text-button';
-    deleteAll.type = 'button';
-    deleteAll.style.marginTop = '0.75rem';
-    deleteAll.textContent = 'Delete all in this domain';
-    deleteAll.addEventListener('click', () => deleteDomain(docs.map((d) => d.id), group));
-    group.appendChild(deleteAll);
+      const deleteAll = document.createElement('button');
+      deleteAll.className = 'text-button';
+      deleteAll.type = 'button';
+      deleteAll.style.marginTop = '0.75rem';
+      deleteAll.textContent = 'Delete all in this domain';
+      deleteAll.addEventListener('click', () => deleteDomain(docs.map((d) => d.id), details));
+      details.appendChild(deleteAll);
+    });
 
-    return group;
+    return details;
   }
+
+  const DOCUMENT_FETCH_LIMIT = 1000;
 
   async function loadOverridesForRating() {
     try {
@@ -198,11 +228,20 @@
     }
   }
 
+  async function loadTotalDocs() {
+    try {
+      return (await getJSON('/admin/api/stats')).total_docs;
+    } catch (err) {
+      return null;
+    }
+  }
+
   async function loadDocuments() {
     try {
-      const [docs, overrides] = await Promise.all([
-        getJSON('/admin/api/documents?limit=1000'),
+      const [docs, overrides, totalDocs] = await Promise.all([
+        getJSON('/admin/api/documents?limit=' + DOCUMENT_FETCH_LIMIT),
         loadOverridesForRating(),
+        loadTotalDocs(),
       ]);
       clear(domainsEl);
       if (docs.length === 0) {
@@ -217,6 +256,9 @@
       }
       statusEl.textContent = docs.length + (docs.length === 1 ? ' page across ' : ' pages across ') +
         byDomain.size + (byDomain.size === 1 ? ' domain' : ' domains');
+      if (totalDocs !== null && totalDocs > docs.length) {
+        statusEl.textContent += ' (showing the first ' + DOCUMENT_FETCH_LIMIT + ' of ' + totalDocs + ' indexed pages)';
+      }
       const hosts = Array.from(byDomain.keys()).sort();
       for (const host of hosts) {
         domainsEl.appendChild(renderDomain(host, byDomain.get(host), overrides));

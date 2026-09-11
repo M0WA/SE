@@ -92,8 +92,23 @@ type CrawlOptions struct {
 	BasicAuthPass string
 }
 
+// CrawlerService actually executes a crawl. onPage, when non-nil, is
+// called once per URL attempted (indexed, skipped, or failed) so a caller
+// can report live progress; it may be nil for a fire-and-forget crawl.
 type CrawlerService interface {
-	Crawl(ctx context.Context, opts CrawlOptions) (int, error)
+	Crawl(ctx context.Context, opts CrawlOptions, onPage func(domain.CrawlPageEvent)) (int, error)
+}
+
+// ErrCrawlJobNotFound is returned by CrawlJobService.GetCrawlJob when no
+// job with the given ID exists (or is no longer retained).
+var ErrCrawlJobNotFound = errors.New("crawl job not found")
+
+// CrawlJobService lets a caller trigger a crawl asynchronously and poll its
+// progress, without blocking on the crawl itself completing.
+type CrawlJobService interface {
+	StartCrawlJob(ctx context.Context, opts CrawlOptions) (jobID string, err error)
+	ListCrawlJobs(ctx context.Context) ([]domain.CrawlJobSummary, error)
+	GetCrawlJob(ctx context.Context, jobID string) (domain.CrawlJob, error)
 }
 
 // DebugSearchService exposes the raw, unblended hybrid search results

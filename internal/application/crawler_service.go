@@ -27,12 +27,12 @@ func NewCrawlerService(
 	return &crawlerService{fetcher, robots, repo, index, parseHTML, settings}
 }
 
-func (c *crawlerService) Crawl(ctx context.Context, opts ports.CrawlOptions) (int, error) {
+func (c *crawlerService) Crawl(ctx context.Context, opts ports.CrawlOptions, onPage func(domain.CrawlPageEvent)) (int, error) {
 	return crawlLoop(ctx, c.fetcher, c.robots, c.parseHTML, c.settings, opts, func(ctx context.Context, doc domain.Document) error {
 		if err := c.repo.Save(ctx, doc); err != nil {
 			return err
 		}
 		c.index.Add(doc)
 		return nil
-	})
+	}, onPage)
 }
