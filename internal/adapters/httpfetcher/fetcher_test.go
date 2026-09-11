@@ -134,6 +134,24 @@ func TestFetcher_FetchWithOptions_UsesSettingsUserAgent(t *testing.T) {
 	}
 }
 
+func TestFetcher_FetchWithOptions_PerRequestUserAgentOverridesSettings(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("User-Agent"); got != "per-crawl-agent/1.0" {
+			t.Errorf("expected per-request User-Agent to win, got %q", got)
+		}
+		w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
+		UserAgent: "process-default-agent/1.0",
+	})
+	f := httpfetcher.New(settings)
+	if _, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{UserAgent: "per-crawl-agent/1.0"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestFetcher_Fetch_BodyReadError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hj, ok := w.(http.Hijacker)

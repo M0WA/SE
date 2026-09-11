@@ -81,6 +81,23 @@ func TestHandleCrawlInternal_Success(t *testing.T) {
 	}
 }
 
+func TestHandleCrawlInternal_RecordsRespectRobotsAndUserAgentOnTheJob(t *testing.T) {
+	fc := &fakeCrawler{count: 1}
+	h := newCrawlServerHandler(fc)
+
+	jobID := startCrawl(t, h, ports.CrawlOptions{
+		SeedURLs: []string{"http://a"}, RespectRobots: true, UserAgent: "custom-bot/1.0",
+	})
+	job := waitForJob(t, h, jobID)
+
+	if !job.Request.RespectRobots || job.Request.UserAgent != "custom-bot/1.0" {
+		t.Errorf("expected the job to record respect_robots/user_agent, got %+v", job.Request)
+	}
+	if fc.gotOptions.UserAgent != "custom-bot/1.0" || !fc.gotOptions.RespectRobots {
+		t.Errorf("expected the crawler to receive respect_robots/user_agent, got %+v", fc.gotOptions)
+	}
+}
+
 func TestHandleCrawlInternal_InvalidJSON(t *testing.T) {
 	h := newCrawlServerHandler(&fakeCrawler{})
 	req := httptest.NewRequest(http.MethodPost, "/crawl", bytes.NewReader([]byte("{ungültig")))

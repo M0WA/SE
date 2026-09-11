@@ -318,7 +318,10 @@ func TestHandleAdminCrawl_Success(t *testing.T) {
 	fj := &fakeJobService{jobID: "job-42"}
 	h, cookie := authedHandler(t, &fakeSearch{}, fj)
 
-	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}, "max_pages": 5})
+	body, _ := json.Marshal(map[string]interface{}{
+		"seed_urls": []string{"http://a"}, "max_pages": 5,
+		"respect_robots": true, "user_agent": "custom-bot/1.0",
+	})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader(body))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
@@ -334,6 +337,9 @@ func TestHandleAdminCrawl_Success(t *testing.T) {
 	}
 	if len(fj.gotOptions.SeedURLs) != 1 || fj.gotOptions.SeedURLs[0] != "http://a" || fj.gotOptions.MaxPages != 5 {
 		t.Errorf("unexpected options passed to job service: %+v", fj.gotOptions)
+	}
+	if !fj.gotOptions.RespectRobots || fj.gotOptions.UserAgent != "custom-bot/1.0" {
+		t.Errorf("expected respect_robots/user_agent to pass through, got %+v", fj.gotOptions)
 	}
 }
 

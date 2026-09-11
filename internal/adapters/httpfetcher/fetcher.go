@@ -35,7 +35,11 @@ func (f *Fetcher) FetchWithOptions(ctx context.Context, rawURL string, opts port
 	if err != nil {
 		return "", fmt.Errorf("building request: %w", err)
 	}
-	req.Header.Set("User-Agent", v.UserAgent)
+	userAgent := v.UserAgent
+	if opts.UserAgent != "" {
+		userAgent = opts.UserAgent
+	}
+	req.Header.Set("User-Agent", userAgent)
 	if opts.Cookie != "" {
 		req.Header.Set("Cookie", opts.Cookie)
 	}

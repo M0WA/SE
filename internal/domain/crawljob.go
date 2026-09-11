@@ -32,17 +32,21 @@ type CrawlPageEvent struct {
 	URL    string          `json:"url"`
 	Status CrawlPageStatus `json:"status"`
 	Title  string          `json:"title,omitempty"`
+	Error  string          `json:"error,omitempty"`
 }
 
 // CrawlJobRequest is a redacted summary of the request that started a job:
 // it deliberately carries HasCookie/HasBasicAuth booleans rather than the
 // actual credentials, so a crawl's secrets never appear in a job listing
-// or detail view.
+// or detail view. RespectRobots and UserAgent aren't secrets, so they're
+// carried through as-is.
 type CrawlJobRequest struct {
-	SeedURLs     []string `json:"seed_urls"`
-	MaxPages     int      `json:"max_pages"`
-	HasCookie    bool     `json:"has_cookie"`
-	HasBasicAuth bool     `json:"has_basic_auth"`
+	SeedURLs      []string `json:"seed_urls"`
+	MaxPages      int      `json:"max_pages"`
+	HasCookie     bool     `json:"has_cookie"`
+	HasBasicAuth  bool     `json:"has_basic_auth"`
+	RespectRobots bool     `json:"respect_robots"`
+	UserAgent     string   `json:"user_agent,omitempty"`
 }
 
 // CrawlJob is one triggered crawl's full state, including every page event

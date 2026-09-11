@@ -18,11 +18,13 @@ type Fetcher interface {
 }
 
 // FetchOptions carries per-request credentials for sites that need a
-// session cookie or HTTP Basic auth to crawl.
+// session cookie or HTTP Basic auth to crawl, plus an optional UserAgent
+// override (falls back to the process's configured default when empty).
 type FetchOptions struct {
 	Cookie        string
 	BasicAuthUser string
 	BasicAuthPass string
+	UserAgent     string
 }
 
 // AuthFetcher is a Fetcher that also accepts per-request credentials.
@@ -86,13 +88,17 @@ type SearchService interface {
 
 // CrawlOptions is a single crawl request: seed URLs and page budget, plus
 // optional credentials for sites that require a session cookie or HTTP
-// Basic auth (applied to every fetch made during that crawl).
+// Basic auth (applied to every fetch made during that crawl). RespectRobots
+// defaults to false (robots.txt is ignored) unless explicitly set; UserAgent
+// overrides the process's configured default for this crawl only.
 type CrawlOptions struct {
 	SeedURLs      []string
 	MaxPages      int
 	Cookie        string
 	BasicAuthUser string
 	BasicAuthPass string
+	RespectRobots bool
+	UserAgent     string
 }
 
 // CrawlerService actually executes a crawl. onPage, when non-nil, is

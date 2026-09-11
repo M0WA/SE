@@ -72,12 +72,30 @@ func TestSQLCrawlerService_Crawl_RespectsRobots(t *testing.T) {
 	robots := &fakeRobots{disallowed: map[string]bool{"http://a": true}}
 	repo := &recordingSQLRepo{}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	parse := func(html, pageURL string) (string, string, []string) { return "A", "genuegend text inhalt seite", nil }
+	parse := func(html, pageURL string) (string, string, []string) {
+		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil
+	}
+
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedder, parse, nil)
+	count, _ := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5, RespectRobots: true}, nil)
+	if count != 0 {
+		t.Errorf("expected 0 crawled (robots disallow), got %d", count)
+	}
+}
+
+func TestSQLCrawlerService_Crawl_IgnoresRobotsByDefault(t *testing.T) {
+	fetcher := &fakeFetcher{pages: map[string]string{"http://a": "<html>a</html>"}}
+	robots := &fakeRobots{disallowed: map[string]bool{"http://a": true}}
+	repo := &recordingSQLRepo{}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+	parse := func(html, pageURL string) (string, string, []string) {
+		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil
+	}
 
 	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedder, parse, nil)
 	count, _ := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5}, nil)
-	if count != 0 {
-		t.Errorf("expected 0 crawled (robots disallow), got %d", count)
+	if count != 1 {
+		t.Errorf("expected robots.txt to be ignored by default, got count=%d", count)
 	}
 }
 

@@ -18,10 +18,16 @@ type OperationalSettingsValues struct {
 	SessionTTL      time.Duration
 }
 
+// defaultUserAgent mimics a standard desktop Firefox so crawled sites treat
+// requests like an ordinary browser visit rather than flagging or blocking
+// an identifiable bot -- overridable process-wide via the tuning page, or
+// per crawl via CrawlOptions.UserAgent.
+const defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0"
+
 func defaultOperationalSettings() OperationalSettingsValues {
 	return OperationalSettingsValues{
 		FetchTimeout:    8 * time.Second,
-		UserAgent:       "OwnSearchEngine/1.0 (+educational)",
+		UserAgent:       defaultUserAgent,
 		DefaultMaxPages: 20,
 		MinTextLength:   50,
 		DefaultTopK:     10,

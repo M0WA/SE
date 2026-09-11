@@ -368,6 +368,19 @@ button:focus-visible {
 
 .crawl-advanced .field { width: 100%; font-size: 0.95rem; }
 
+.form-row-check label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.form-row-check input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+.form-row-check .tuning-hint { margin: 0.3rem 0 0; }
+
 body.admin main { max-width: 820px; }
 
 .admin-nav {

@@ -62,7 +62,7 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 	v := domain.DefaultOperationalSettings().Get()
 	want := domain.OperationalSettingsValues{
 		FetchTimeout:    8 * time.Second,
-		UserAgent:       "OwnSearchEngine/1.0 (+educational)",
+		UserAgent:       "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0",
 		DefaultMaxPages: 20,
 		MinTextLength:   50,
 		DefaultTopK:     10,

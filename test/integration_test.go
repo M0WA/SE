@@ -88,8 +88,9 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 	}
 
 	crawlBody, _ := json.Marshal(map[string]interface{}{
-		"seed_urls": []string{site.URL + "/"},
-		"max_pages": 10,
+		"seed_urls":      []string{site.URL + "/"},
+		"max_pages":      10,
+		"respect_robots": true,
 	})
 	resp, err := client.Post(adminAPI.URL+"/admin/api/crawl", "application/json", bytes.NewReader(crawlBody))
 	if err != nil {

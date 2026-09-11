@@ -74,12 +74,30 @@ func TestCrawlerService_Crawl_RespectsRobots(t *testing.T) {
 	robots := &fakeRobots{disallowed: map[string]bool{"http://a": true}}
 	repo := &fakeRepo{}
 	idx := &fakeIndexer{}
-	parse := func(html, pageURL string) (string, string, []string) { return "A", "genuegend text inhalt seite", nil }
+	parse := func(html, pageURL string) (string, string, []string) {
+		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil
+	}
+
+	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse, nil)
+	count, _ := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5, RespectRobots: true}, nil)
+	if count != 0 {
+		t.Errorf("expected 0 crawled (robots disallow), got %d", count)
+	}
+}
+
+func TestCrawlerService_Crawl_IgnoresRobotsByDefault(t *testing.T) {
+	fetcher := &fakeFetcher{pages: map[string]string{"http://a": "<html>a</html>"}}
+	robots := &fakeRobots{disallowed: map[string]bool{"http://a": true}}
+	repo := &fakeRepo{}
+	idx := &fakeIndexer{}
+	parse := func(html, pageURL string) (string, string, []string) {
+		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil
+	}
 
 	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse, nil)
 	count, _ := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5}, nil)
-	if count != 0 {
-		t.Errorf("expected 0 crawled (robots disallow), got %d", count)
+	if count != 1 {
+		t.Errorf("expected robots.txt to be ignored by default, got count=%d", count)
 	}
 }
 

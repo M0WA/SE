@@ -30,7 +30,18 @@
     <button type="submit">Crawl</button>
   </form>
   <details class="crawl-advanced">
-    <summary>Cookie / basic auth for this crawl</summary>
+    <summary>Advanced options for this crawl</summary>
+    <div class="form-row form-row-check">
+      <label for="crawl-respect-robots">
+        <input id="crawl-respect-robots" type="checkbox">
+        Respect robots.txt
+      </label>
+      <p class="tuning-hint">Off by default — this crawl ignores robots.txt unless checked.</p>
+    </div>
+    <div class="form-row">
+      <label for="crawl-user-agent">User-Agent</label><br>
+      <input id="crawl-user-agent" class="field" type="text" placeholder="Default: standard Firefox">
+    </div>
     <div class="form-row">
       <label for="crawl-cookie">Cookie header</label><br>
       <input id="crawl-cookie" class="field" type="text" placeholder="session=abc123">
@@ -67,6 +78,8 @@
   const crawlCookie = document.getElementById('crawl-cookie');
   const crawlBasicUser = document.getElementById('crawl-basic-user');
   const crawlBasicPass = document.getElementById('crawl-basic-pass');
+  const crawlRespectRobots = document.getElementById('crawl-respect-robots');
+  const crawlUserAgent = document.getElementById('crawl-user-agent');
   const crawlStatus = document.getElementById('crawl-status');
   const jobsStatusEl = document.getElementById('jobs-status');
   const jobsTableEl = document.getElementById('jobs-table');
@@ -165,6 +178,12 @@
     }, 1500);
   }
 
+  function requestOptionsSummary(request) {
+    const parts = [request.respect_robots ? 'respects robots.txt' : 'ignores robots.txt'];
+    parts.push(request.user_agent ? 'custom User-Agent' : 'default User-Agent');
+    return parts.join(', ');
+  }
+
   function renderJobDetail(job) {
     jobDetailHeading.hidden = false;
     clear(jobDetailEl);
@@ -174,6 +193,11 @@
       (job.error ? ': ' + job.error : '');
     jobDetailEl.appendChild(summary);
 
+    const options = document.createElement('p');
+    options.className = 'panel-status';
+    options.textContent = requestOptionsSummary(job.request);
+    jobDetailEl.appendChild(options);
+
     if (!job.pages || job.pages.length === 0) {
       const p = document.createElement('p');
       p.className = 'panel-status';
@@ -182,9 +206,14 @@
       return;
     }
     const table = buildTable(
-      [{ label: 'url' }, { label: 'status' }, { label: 'title' }],
+      [{ label: 'url' }, { label: 'status' }, { label: 'title' }, { label: 'detail' }],
       job.pages,
-      (p) => [urlCell(p.url), textCell(capitalize(p.status).replace(/_/g, ' ')), textCell(p.title || '')],
+      (p) => [
+        urlCell(p.url),
+        textCell(capitalize(p.status).replace(/_/g, ' ')),
+        textCell(p.title || ''),
+        textCell(p.error || ''),
+      ],
     );
     jobDetailEl.appendChild(table);
   }
@@ -216,6 +245,8 @@
         cookie: crawlCookie.value,
         basic_auth_user: crawlBasicUser.value,
         basic_auth_pass: crawlBasicPass.value,
+        respect_robots: crawlRespectRobots.checked,
+        user_agent: crawlUserAgent.value,
       });
       crawlStatus.textContent = 'Job started.';
       await loadJobs();

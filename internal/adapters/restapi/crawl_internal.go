@@ -46,10 +46,12 @@ func (h *Handler) handleCrawl(w http.ResponseWriter, r *http.Request) {
 	}
 
 	job := h.crawlJobs.Create(domain.CrawlJobRequest{
-		SeedURLs:     opts.SeedURLs,
-		MaxPages:     opts.MaxPages,
-		HasCookie:    opts.Cookie != "",
-		HasBasicAuth: opts.BasicAuthUser != "" || opts.BasicAuthPass != "",
+		SeedURLs:      opts.SeedURLs,
+		MaxPages:      opts.MaxPages,
+		HasCookie:     opts.Cookie != "",
+		HasBasicAuth:  opts.BasicAuthUser != "" || opts.BasicAuthPass != "",
+		RespectRobots: opts.RespectRobots,
+		UserAgent:     opts.UserAgent,
 	})
 	go h.runCrawlJob(job.ID, opts)
 

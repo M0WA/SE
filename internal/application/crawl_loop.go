@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/url"
 	"strings"
 
@@ -31,7 +32,10 @@ func crawlLoop(
 	if maxPages <= 0 {
 		maxPages = v.DefaultMaxPages
 	}
-	fetchOpts := ports.FetchOptions{Cookie: opts.Cookie, BasicAuthUser: opts.BasicAuthUser, BasicAuthPass: opts.BasicAuthPass}
+	fetchOpts := ports.FetchOptions{
+		Cookie: opts.Cookie, BasicAuthUser: opts.BasicAuthUser, BasicAuthPass: opts.BasicAuthPass,
+		UserAgent: opts.UserAgent,
+	}
 
 	emit := func(ev domain.CrawlPageEvent) {
 		if onPage != nil {
@@ -52,20 +56,23 @@ func crawlLoop(
 		}
 		visited[u] = true
 
-		if robots != nil && !robots.Allowed(ctx, u) {
+		if opts.RespectRobots && robots != nil && !robots.Allowed(ctx, u) {
 			emit(domain.CrawlPageEvent{URL: u, Status: domain.CrawlPageRobotsDisallowed})
 			continue
 		}
 
 		html, err := fetcher.FetchWithOptions(ctx, u, fetchOpts)
 		if err != nil {
-			emit(domain.CrawlPageEvent{URL: u, Status: domain.CrawlPageFetchFailed})
+			emit(domain.CrawlPageEvent{URL: u, Status: domain.CrawlPageFetchFailed, Error: err.Error()})
 			continue
 		}
 
 		title, text, links := parseHTML(html, u)
-		if len(strings.TrimSpace(text)) < v.MinTextLength {
-			emit(domain.CrawlPageEvent{URL: u, Status: domain.CrawlPageThinContent})
+		if trimmed := strings.TrimSpace(text); len(trimmed) < v.MinTextLength {
+			emit(domain.CrawlPageEvent{
+				URL: u, Status: domain.CrawlPageThinContent,
+				Error: fmt.Sprintf("%d characters, need at least %d", len(trimmed), v.MinTextLength),
+			})
 			continue
 		}
 

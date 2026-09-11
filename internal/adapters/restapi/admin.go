@@ -481,6 +481,8 @@ type crawlRequest struct {
 	Cookie        string   `json:"cookie"`
 	BasicAuthUser string   `json:"basic_auth_user"`
 	BasicAuthPass string   `json:"basic_auth_pass"`
+	RespectRobots bool     `json:"respect_robots"`
+	UserAgent     string   `json:"user_agent"`
 }
 
 type startCrawlResponse struct {
@@ -510,6 +512,8 @@ func (h *Handler) handleAdminCrawl(w http.ResponseWriter, r *http.Request) {
 		Cookie:        req.Cookie,
 		BasicAuthUser: req.BasicAuthUser,
 		BasicAuthPass: req.BasicAuthPass,
+		RespectRobots: req.RespectRobots,
+		UserAgent:     req.UserAgent,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
