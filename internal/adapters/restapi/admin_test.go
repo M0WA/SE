@@ -21,6 +21,11 @@ type fakeAdminRepo struct {
 	vocabularySize int
 	topTerms       []domain.TermStat
 	docs           []domain.IndexedDocument
+	gotHost        string
+	domains        []domain.DomainSummary
+	gotQuery       string
+	versions       []domain.DocumentVersion
+	overview       domain.DocumentsOverview
 	postings       []domain.PostingStats
 	err            error
 	deleteErr      error
@@ -33,8 +38,19 @@ func (f *fakeAdminRepo) CorpusStats(context.Context) (int, float64, error) {
 func (f *fakeAdminRepo) VocabularyStats(context.Context, int) (int, []domain.TermStat, error) {
 	return f.vocabularySize, f.topTerms, f.err
 }
-func (f *fakeAdminRepo) ListDocuments(context.Context, int) ([]domain.IndexedDocument, error) {
+func (f *fakeAdminRepo) ListDocuments(_ context.Context, _ int, host string) ([]domain.IndexedDocument, error) {
+	f.gotHost = host
 	return f.docs, f.err
+}
+func (f *fakeAdminRepo) SearchDomains(_ context.Context, q string, _ int) ([]domain.DomainSummary, error) {
+	f.gotQuery = q
+	return f.domains, f.err
+}
+func (f *fakeAdminRepo) DocumentVersions(context.Context, string) ([]domain.DocumentVersion, error) {
+	return f.versions, f.err
+}
+func (f *fakeAdminRepo) DocumentsOverview(context.Context, int) (domain.DocumentsOverview, error) {
+	return f.overview, f.err
 }
 func (f *fakeAdminRepo) DeleteDocument(_ context.Context, id string) error {
 	f.deletedID = id
@@ -299,6 +315,190 @@ func TestHandleAdminDocuments_MethodNotAllowed(t *testing.T) {
 	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDocuments_PassesDomainFilterThrough(t *testing.T) {
+	repo := &fakeAdminRepo{docs: []domain.IndexedDocument{{ID: "doc-0"}}}
+	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/documents?domain=example.com", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if repo.gotHost != "example.com" {
+		t.Errorf("expected domain filter passed through, got %q", repo.gotHost)
+	}
+}
+
+func TestHandleAdminSearchDomains_Success(t *testing.T) {
+	domains := []domain.DomainSummary{{Host: "example.com", DocCount: 3}}
+	repo := &fakeAdminRepo{domains: domains}
+	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/domains?q=example", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if repo.gotQuery != "example" {
+		t.Errorf("expected query passed through, got %q", repo.gotQuery)
+	}
+	var resp []map[string]interface{}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp) != 1 || resp[0]["host"] != "example.com" {
+		t.Errorf("unexpected domains response: %v", resp)
+	}
+}
+
+func TestHandleAdminSearchDomains_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, nil, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/domains?q=example", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminSearchDomains_ServiceError(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{err: errors.New("boom")}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/domains?q=example", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminSearchDomains_MethodNotAllowed(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/domains", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDocumentsOverview_Success(t *testing.T) {
+	overview := domain.DocumentsOverview{
+		TopDomains: []domain.DomainSummary{{Host: "example.com", DocCount: 2}},
+		AgeBuckets: []domain.AgeBucket{{Label: "last 24h", Count: 2}},
+	}
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{overview: overview}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/documents/overview", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		TopDomains []map[string]interface{} `json:"top_domains"`
+		AgeBuckets []map[string]interface{} `json:"age_buckets"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp.TopDomains) != 1 || resp.TopDomains[0]["host"] != "example.com" {
+		t.Errorf("unexpected top_domains: %v", resp.TopDomains)
+	}
+	if len(resp.AgeBuckets) != 1 || resp.AgeBuckets[0]["label"] != "last 24h" {
+		t.Errorf("unexpected age_buckets: %v", resp.AgeBuckets)
+	}
+}
+
+func TestHandleAdminDocumentsOverview_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, nil, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/documents/overview", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDocumentsOverview_ServiceError(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{err: errors.New("boom")}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/documents/overview", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDocumentVersions_Success(t *testing.T) {
+	versions := []domain.DocumentVersion{{Version: 1, Title: "Old", DocLength: 5}}
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{versions: versions}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/documents/doc-1/versions", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp []map[string]interface{}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp) != 1 || resp[0]["title"] != "Old" {
+		t.Errorf("unexpected versions response: %v", resp)
+	}
+}
+
+func TestHandleAdminDocumentVersions_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, nil, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/documents/doc-1/versions", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDocumentVersions_ServiceError(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{err: errors.New("boom")}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/documents/doc-1/versions", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDomainPage_GetServesPage(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/documents/example.com", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+		t.Errorf("expected html content type, got %q", ct)
+	}
+}
+
+func TestHandleAdminDomainPage_Unauthenticated_Redirects(t *testing.T) {
+	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	req := httptest.NewRequest(http.MethodGet, "/admin/documents/example.com", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Errorf("expected 303 redirect, got %d", rec.Code)
 	}
 }
 

@@ -24,252 +24,216 @@
     <a href="/admin/overrides">Overrides</a>
   </nav>
 
-  <p class="lede" style="margin: 0 0 2rem;">Indexed pages grouped by domain — click a domain to see its pages, length spread, and the option to remove one. Each domain also carries a rough 0-100 content-quality rating from page count, average document length, and any block/boost override — hover it for details.</p>
-  <div id="documents-status" class="panel-status"></div>
-  <div id="domains"></div>
+  <p class="lede" style="margin: 0 0 1.5rem;">Every crawled domain gets its own page — search for one below to see its pages, length spread, and version history.</p>
+
+  <form id="domain-search-form" class="crawl-form" style="margin-bottom: 0.5rem;">
+    <input id="domain-q" class="field" type="text" placeholder="Find a domain…" autofocus autocomplete="off">
+  </form>
+  <div id="domain-results"></div>
+
+  <section class="panel">
+    <h2>Index at a glance</h2>
+    <div id="overview-status" class="panel-status"></div>
+    <div id="overview-charts"></div>
+  </section>
 </main>
 <script src="/admin.js"></script>
 <script>
-  const domainsEl = document.getElementById('domains');
-  const statusEl = document.getElementById('documents-status');
+  const domainQ = document.getElementById('domain-q');
+  const domainResultsEl = document.getElementById('domain-results');
+  const overviewStatusEl = document.getElementById('overview-status');
+  const overviewChartsEl = document.getElementById('overview-charts');
 
-  function hostnameOf(url) {
+  let searchTimer = null;
+
+  function renderDomainResults(domains, q) {
+    clear(domainResultsEl);
+    if (q === '') return;
+    if (domains.length === 0) {
+      domainResultsEl.textContent = 'No crawled domain matches “' + q + '”.';
+      return;
+    }
+    const list = document.createElement('div');
+    list.className = 'domain-result-list';
+    for (const d of domains) {
+      const row = document.createElement('a');
+      row.className = 'domain-result';
+      row.href = '/admin/documents/' + encodeURIComponent(d.host);
+      const name = document.createElement('span');
+      name.textContent = d.host;
+      const count = document.createElement('span');
+      count.className = 'domain-metrics';
+      count.textContent = d.doc_count + (d.doc_count === 1 ? ' page' : ' pages');
+      row.appendChild(name);
+      row.appendChild(count);
+      list.appendChild(row);
+    }
+    domainResultsEl.appendChild(list);
+  }
+
+  async function searchDomains() {
+    const q = domainQ.value.trim();
+    if (q === '') {
+      clear(domainResultsEl);
+      return;
+    }
     try {
-      return new URL(url).hostname;
+      const domains = await getJSON('/admin/api/domains?q=' + encodeURIComponent(q));
+      renderDomainResults(domains, q);
     } catch (err) {
-      return url;
+      domainResultsEl.textContent = 'Could not search domains: ' + err.message;
     }
   }
 
-  function buildChart(docs) {
-    const maxLen = Math.max.apply(null, docs.map((d) => d.doc_length).concat([1]));
-    const barWidth = 8;
-    const gap = 3;
-    const height = 56;
-    const width = docs.length * (barWidth + gap);
+  domainQ.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(searchDomains, 200);
+  });
+  document.getElementById('domain-search-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    clearTimeout(searchTimer);
+    searchDomains();
+  });
+
+  // A quiet, single-color donut: shade (not hue) ranks each domain, so the
+  // chart stays in the site's one-accent palette. The legend beside it is
+  // what actually distinguishes domains -- the arcs are a supporting
+  // silhouette of the corpus's shape, not meant to be read precisely.
+  function buildDonut(domains, total) {
+    const size = 120;
+    const r = 46;
+    const strokeWidth = 16;
+    const circumference = 2 * Math.PI * r;
 
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('viewBox', '0 0 ' + Math.max(width, 1) + ' ' + height);
-    svg.setAttribute('width', width);
-    svg.setAttribute('height', height);
-    svg.classList.add('domain-chart');
+    svg.setAttribute('viewBox', '0 0 ' + size + ' ' + size);
+    svg.setAttribute('width', size);
+    svg.setAttribute('height', size);
+    svg.classList.add('donut-chart');
 
-    docs.forEach((d, i) => {
-      const h = Math.max(2, (d.doc_length / maxLen) * height);
-      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-      rect.setAttribute('x', String(i * (barWidth + gap)));
-      rect.setAttribute('y', String(height - h));
-      rect.setAttribute('width', String(barWidth));
-      rect.setAttribute('height', String(h));
+    const track = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    track.setAttribute('cx', size / 2);
+    track.setAttribute('cy', size / 2);
+    track.setAttribute('r', r);
+    track.setAttribute('fill', 'none');
+    track.setAttribute('stroke', 'var(--rule)');
+    track.setAttribute('stroke-width', strokeWidth);
+    svg.appendChild(track);
+
+    let offset = 0;
+    domains.forEach((d, i) => {
+      const frac = total > 0 ? d.doc_count / total : 0;
+      const len = frac * circumference;
+      const arc = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      arc.setAttribute('cx', size / 2);
+      arc.setAttribute('cy', size / 2);
+      arc.setAttribute('r', r);
+      arc.setAttribute('fill', 'none');
+      arc.setAttribute('stroke', 'var(--accent)');
+      arc.setAttribute('stroke-opacity', Math.max(0.25, 1 - i * (0.65 / Math.max(1, domains.length - 1))).toFixed(2));
+      arc.setAttribute('stroke-width', strokeWidth);
+      arc.setAttribute('stroke-dasharray', len.toFixed(1) + ' ' + (circumference - len).toFixed(1));
+      arc.setAttribute('stroke-dashoffset', (-offset).toFixed(1));
+      arc.setAttribute('transform', 'rotate(-90 ' + size / 2 + ' ' + size / 2 + ')');
       const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-      title.textContent = (d.title || d.url) + ' — ' + d.doc_length + ' tokens indexed';
-      rect.appendChild(title);
-      svg.appendChild(rect);
+      title.textContent = d.host + ' — ' + d.doc_count + (d.doc_count === 1 ? ' page' : ' pages');
+      arc.appendChild(title);
+      svg.appendChild(arc);
+      offset += len;
     });
     return svg;
   }
 
-  async function deleteDocument(id, btn) {
-    if (!window.confirm('Remove this page from the index?')) return;
-    try {
-      await deleteRequest('/admin/api/documents/' + encodeURIComponent(id));
-      btn.closest('tr').remove();
-    } catch (err) {
-      window.alert('Could not delete: ' + err.message);
-    }
-  }
-
-  async function deleteDomain(ids, group) {
-    if (!window.confirm('Remove all ' + ids.length + ' pages in this domain from the index?')) return;
-    for (const id of ids) {
-      try {
-        await deleteRequest('/admin/api/documents/' + encodeURIComponent(id));
-      } catch (err) {
-        window.alert('Stopped: could not delete ' + id + ': ' + err.message);
-        return;
-      }
-    }
-    group.remove();
-  }
-
-  // Rating (0-100): rewards having more than a couple of pages and healthy
-  // document length (thin, boilerplate-only pages score low), then shifts
-  // the result toward the extremes when an admin has already blocked or
-  // boosted the domain via overrides.
-  function domainRating(docs, avgLen, status) {
-    const countScore = Math.min(1, docs.length / 8);
-    const lengthScore = Math.min(1, avgLen / 400);
-    let score = 100 * (0.5 * countScore + 0.5 * lengthScore);
-    if (status === 'blocked') score = Math.min(score, 15);
-    else if (status === 'boosted') score = Math.max(score, 85);
-    return Math.round(Math.max(0, Math.min(100, score)));
-  }
-
-  function overrideStatus(hostname, overrides) {
-    const host = hostname.toLowerCase();
-    if ((overrides.blocked_domains || []).includes(host)) return 'blocked';
-    if (Object.prototype.hasOwnProperty.call(overrides.boosted_domains || {}, host)) return 'boosted';
-    return 'none';
-  }
-
-function originOf(url) {
-    try {
-      return new URL(url).origin;
-    } catch (err) {
-      return url;
-    }
-  }
-
-  // The chart + table + delete-all are the expensive part of a domain
-  // group (an SVG bar per page, a table row per page) -- with many
-  // domains or many pages, building all of them up front is wasted work
-  // for whichever ones an admin never opens. buildBody() is called once,
-  // the first time this domain's <details> is expanded.
-  function renderDomain(hostname, docs, overrides) {
-    const details = document.createElement('details');
-    details.className = 'domain-group';
-
-    const summary = document.createElement('summary');
-    summary.className = 'domain-summary';
-    const head = document.createElement('div');
-    head.className = 'domain-head';
-    const h3 = document.createElement('h3');
-    h3.textContent = hostname;
-    head.appendChild(h3);
-
-    const totalLen = docs.reduce((sum, d) => sum + d.doc_length, 0);
-    const avgLen = totalLen / docs.length;
-
-    const tail = document.createElement('span');
-    tail.className = 'domain-head-tail';
-
-    const status = overrideStatus(hostname, overrides);
-    const rating = domainRating(docs, avgLen, status);
-    const ratingEl = document.createElement('span');
-    ratingEl.className = 'domain-rating';
-    ratingEl.textContent = 'rating ' + rating;
-    ratingEl.title = 'Rough content-quality score (0-100) from page count and average document length' +
-      (status === 'none' ? '' : ', adjusted because this domain is ' + status + ' in overrides') + '.';
-    tail.appendChild(ratingEl);
-
-    const metrics = document.createElement('span');
-    metrics.className = 'domain-metrics';
-    metrics.textContent = docs.length + (docs.length === 1 ? ' page' : ' pages') +
-      ' · avg ' + avgLen.toFixed(0) + ' · total ' + totalLen;
-    tail.appendChild(metrics);
-
-    const crawlLink = document.createElement('a');
-    crawlLink.className = 'domain-crawl-link';
-    crawlLink.href = '/admin/crawl?url=' + encodeURIComponent(originOf(docs[0].url));
-    crawlLink.textContent = 'Crawl';
-    crawlLink.addEventListener('click', (e) => e.stopPropagation());
-    tail.appendChild(crawlLink);
-
-    head.appendChild(tail);
-    summary.appendChild(head);
-    details.appendChild(summary);
-
-    let built = false;
-    details.addEventListener('toggle', () => {
-      if (!details.open || built) return;
-      built = true;
-      details.appendChild(buildChart(docs));
-
-      const table = buildTable(
-        [{ label: 'title' }, { label: 'length', num: true }, { label: '' }],
-        docs,
-        (d) => {
-          const link = document.createElement('a');
-          link.href = d.url;
-          link.target = '_blank';
-          link.rel = 'noopener noreferrer';
-          link.style.color = 'var(--ink)';
-          link.textContent = d.title || d.url;
-          const urlDiv = document.createElement('div');
-          urlDiv.className = 'url';
-          urlDiv.textContent = d.url;
-          const titleTd = document.createElement('td');
-          titleTd.appendChild(link);
-          titleTd.appendChild(urlDiv);
-
-          const delBtn = document.createElement('button');
-          delBtn.className = 'text-button';
-          delBtn.type = 'button';
-          delBtn.textContent = 'Delete';
-          delBtn.addEventListener('click', () => deleteDocument(d.id, delBtn));
-          const actionTd = document.createElement('td');
-          actionTd.className = 'actions';
-          actionTd.appendChild(delBtn);
-
-          return [titleTd, textCell(String(d.doc_length), { num: true }), actionTd];
-        },
-      );
-      details.appendChild(table);
-
-      const deleteAll = document.createElement('button');
-      deleteAll.className = 'text-button';
-      deleteAll.type = 'button';
-      deleteAll.style.marginTop = '0.75rem';
-      deleteAll.textContent = 'Delete all in this domain';
-      deleteAll.addEventListener('click', () => deleteDomain(docs.map((d) => d.id), details));
-      details.appendChild(deleteAll);
+  function buildDonutLegend(domains) {
+    const legend = document.createElement('div');
+    legend.className = 'donut-legend';
+    domains.forEach((d, i) => {
+      const row = document.createElement('div');
+      row.className = 'donut-legend-row';
+      const swatch = document.createElement('span');
+      swatch.className = 'donut-swatch';
+      swatch.style.opacity = Math.max(0.25, 1 - i * (0.65 / Math.max(1, domains.length - 1))).toFixed(2);
+      const label = document.createElement('a');
+      label.href = '/admin/documents/' + encodeURIComponent(d.host);
+      label.textContent = d.host;
+      const count = document.createElement('span');
+      count.className = 'domain-metrics';
+      count.textContent = String(d.doc_count);
+      row.appendChild(swatch);
+      row.appendChild(label);
+      row.appendChild(count);
+      legend.appendChild(row);
     });
-
-    return details;
+    return legend;
   }
 
-  const DOCUMENT_FETCH_LIMIT = 1000;
-
-  async function loadOverridesForRating() {
-    try {
-      return await getJSON('/admin/api/overrides');
-    } catch (err) {
-      return { blocked_domains: [], boosted_domains: {} };
+  function buildAgeBars(buckets) {
+    const maxCount = Math.max.apply(null, buckets.map((b) => b.count).concat([1]));
+    const wrap = document.createElement('div');
+    wrap.className = 'age-bars';
+    for (const b of buckets) {
+      const col = document.createElement('div');
+      col.className = 'age-bar-col';
+      const bar = document.createElement('div');
+      bar.className = 'age-bar';
+      bar.style.height = Math.max(2, (b.count / maxCount) * 80) + 'px';
+      bar.title = b.label + ': ' + b.count + (b.count === 1 ? ' page' : ' pages');
+      const count = document.createElement('div');
+      count.className = 'age-bar-count';
+      count.textContent = String(b.count);
+      const label = document.createElement('div');
+      label.className = 'age-bar-label';
+      label.textContent = b.label;
+      col.appendChild(count);
+      col.appendChild(bar);
+      col.appendChild(label);
+      wrap.appendChild(col);
     }
+    return wrap;
   }
 
-  async function loadTotalDocs() {
+  async function loadOverview() {
     try {
-      return (await getJSON('/admin/api/stats')).total_docs;
-    } catch (err) {
-      return null;
-    }
-  }
-
-  async function loadDocuments() {
-    try {
-      const [docs, overrides, totalDocs] = await Promise.all([
-        getJSON('/admin/api/documents?limit=' + DOCUMENT_FETCH_LIMIT),
-        loadOverridesForRating(),
-        loadTotalDocs(),
-      ]);
-      clear(domainsEl);
-      if (docs.length === 0) {
-        statusEl.textContent = 'No documents indexed yet.';
+      const overview = await getJSON('/admin/api/documents/overview');
+      clear(overviewChartsEl);
+      const total = overview.top_domains.reduce((sum, d) => sum + d.doc_count, 0);
+      if (total === 0) {
+        overviewStatusEl.textContent = 'No documents indexed yet.';
         return;
       }
-      const byDomain = new Map();
-      for (const d of docs) {
-        const host = hostnameOf(d.url);
-        if (!byDomain.has(host)) byDomain.set(host, []);
-        byDomain.get(host).push(d);
-      }
-      statusEl.textContent = docs.length + (docs.length === 1 ? ' page across ' : ' pages across ') +
-        byDomain.size + (byDomain.size === 1 ? ' domain' : ' domains');
-      if (totalDocs !== null && totalDocs > docs.length) {
-        statusEl.textContent += ' (showing the first ' + DOCUMENT_FETCH_LIMIT + ' of ' + totalDocs + ' indexed pages)';
-      }
-      const hosts = Array.from(byDomain.keys()).sort();
-      for (const host of hosts) {
-        domainsEl.appendChild(renderDomain(host, byDomain.get(host), overrides));
-      }
+      overviewStatusEl.textContent = '';
+
+      const row = document.createElement('div');
+      row.className = 'overview-row';
+
+      const domainBlock = document.createElement('div');
+      domainBlock.className = 'overview-block';
+      const domainHeading = document.createElement('h3');
+      domainHeading.textContent = 'Pages per domain';
+      domainBlock.appendChild(domainHeading);
+      const donutWrap = document.createElement('div');
+      donutWrap.className = 'donut-wrap';
+      donutWrap.appendChild(buildDonut(overview.top_domains, total));
+      donutWrap.appendChild(buildDonutLegend(overview.top_domains));
+      domainBlock.appendChild(donutWrap);
+      row.appendChild(domainBlock);
+
+      const ageBlock = document.createElement('div');
+      ageBlock.className = 'overview-block';
+      const ageHeading = document.createElement('h3');
+      ageHeading.textContent = 'Age of indexed content';
+      ageBlock.appendChild(ageHeading);
+      ageBlock.appendChild(buildAgeBars(overview.age_buckets));
+      row.appendChild(ageBlock);
+
+      overviewChartsEl.appendChild(row);
     } catch (err) {
-      statusEl.textContent = 'Could not load documents: ' + err.message;
+      overviewStatusEl.textContent = 'Could not load overview: ' + err.message;
     }
   }
 
   wireSignOut();
-  loadDocuments();
+  loadOverview();
 </script>
 </body>
 </html>

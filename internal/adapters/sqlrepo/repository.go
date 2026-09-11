@@ -5,10 +5,22 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"time"
 
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
 )
+
+const crawledAtLayout = time.RFC3339Nano
+
+func hostOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
 
 type Repository struct {
 	db      *sql.DB
@@ -41,17 +53,151 @@ func (r *Repository) migrate(ctx context.Context) error {
 			return fmt.Errorf("migration failed: %w", err)
 		}
 	}
+	if err := r.migrateDocumentColumns(ctx); err != nil {
+		return err
+	}
+	return r.ensureHostIndex(ctx)
+}
+
+// ensureHostIndex runs after migrateDocumentColumns, since on a database
+// that predates the host column, an index on it can't be created any
+// earlier -- CreateSchemaSQL's CREATE TABLE IF NOT EXISTS is a no-op
+// against an existing table, so the column wouldn't exist yet if this
+// were part of that same statement list. MySQL has no IF NOT EXISTS for
+// CREATE INDEX, so there it's a best-effort statement whose "already
+// exists" error is expected (and ignored) on every startup after the
+// first.
+func (r *Repository) ensureHostIndex(ctx context.Context) error {
+	if r.dialect.Name() == "mysql" {
+		_, _ = r.db.ExecContext(ctx, "CREATE INDEX idx_documents_host ON documents(host)")
+		return nil
+	}
+	if _, err := r.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_documents_host ON documents(host)"); err != nil {
+		return fmt.Errorf("creating host index: %w", err)
+	}
+	return nil
+}
+
+// migrateDocumentColumns adds host/version/crawled_at to a documents table
+// that predates them (CREATE TABLE IF NOT EXISTS above only shapes a fresh
+// table) and backfills host for any pre-existing row, so an upgrade never
+// requires a manual migration step.
+func (r *Repository) migrateDocumentColumns(ctx context.Context) error {
+	existing, err := r.existingColumns(ctx, "documents")
+	if err != nil {
+		return err
+	}
+	addColumn := func(name, ddl string) error {
+		if existing[name] {
+			return nil
+		}
+		if _, err := r.db.ExecContext(ctx, "ALTER TABLE documents ADD COLUMN "+ddl); err != nil {
+			return fmt.Errorf("adding %s column: %w", name, err)
+		}
+		return nil
+	}
+	if err := addColumn("host", "host TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := addColumn("version", "version INTEGER NOT NULL DEFAULT 1"); err != nil {
+		return err
+	}
+	if err := addColumn("crawled_at", "crawled_at TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return r.backfillHost(ctx)
+}
+
+// existingColumns introspects which columns a table actually has, so
+// migrateDocumentColumns only ALTERs in what's missing (dialects vary in
+// whether ADD COLUMN IF NOT EXISTS is supported at all).
+func (r *Repository) existingColumns(ctx context.Context, table string) (map[string]bool, error) {
+	cols := make(map[string]bool)
+	var rows *sql.Rows
+	var err error
+	if r.dialect.Name() == "sqlite" {
+		rows, err = r.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	} else {
+		rows, err = r.db.QueryContext(ctx,
+			r.ph(`SELECT column_name FROM information_schema.columns WHERE table_name = %s`, 1), table)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("introspecting %s columns: %w", table, err)
+	}
+	defer rows.Close()
+
+	if r.dialect.Name() == "sqlite" {
+		for rows.Next() {
+			var cid int
+			var name, ctype string
+			var notnull, pk int
+			var dflt sql.NullString
+			if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+				return nil, fmt.Errorf("scanning column info: %w", err)
+			}
+			cols[name] = true
+		}
+	} else {
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				return nil, fmt.Errorf("scanning column info: %w", err)
+			}
+			cols[name] = true
+		}
+	}
+	return cols, rows.Err()
+}
+
+// backfillHost fills in host for any row saved before that column existed
+// (it defaults to an empty string), so domain search/filtering and the
+// overview charts see every previously-indexed page too. A no-op once
+// every row has it.
+func (r *Repository) backfillHost(ctx context.Context) error {
+	rows, err := r.db.QueryContext(ctx, r.ph(`SELECT id, url FROM documents WHERE host = %s`, 1), "")
+	if err != nil {
+		return fmt.Errorf("finding rows needing a host backfill: %w", err)
+	}
+	type idURL struct{ id, url string }
+	var pending []idURL
+	for rows.Next() {
+		var iu idURL
+		if err := rows.Scan(&iu.id, &iu.url); err != nil {
+			rows.Close()
+			return fmt.Errorf("scanning row: %w", err)
+		}
+		pending = append(pending, iu)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	updateSQL := r.ph(`UPDATE documents SET host = %s WHERE id = %s`, 1, 2)
+	for _, iu := range pending {
+		if _, err := r.db.ExecContext(ctx, updateSQL, hostOf(iu.url), iu.id); err != nil {
+			return fmt.Errorf("backfilling host for %s: %w", iu.id, err)
+		}
+	}
 	return nil
 }
 
 func (r *Repository) Close() error { return r.db.Close() }
 
+// SaveDocument upserts doc keyed by its ID (callers derive that ID
+// deterministically from the URL, so re-crawling the same page always
+// lands on the same row rather than creating a duplicate). When the new
+// content actually differs from what's on record, the previous version is
+// archived to document_versions and the version counter advances;
+// re-confirming unchanged content just refreshes crawled_at.
 func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embedding []float32) error {
 	tokens := domain.Tokenize(doc.Title + " " + doc.Text)
 	embJSON, err := json.Marshal(embedding)
 	if err != nil {
 		return fmt.Errorf("serializing embedding: %w", err)
 	}
+	host := hostOf(doc.URL)
+	now := time.Now().UTC().Format(crawledAtLayout)
 
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -59,8 +205,28 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 	}
 	defer tx.Rollback()
 
+	version := 1
+	var existingVersion int
+	var existingText string
+	selectSQL := r.ph(`SELECT version, text FROM documents WHERE id = %s`, 1)
+	switch selectErr := tx.QueryRowContext(ctx, selectSQL, doc.ID).Scan(&existingVersion, &existingText); {
+	case selectErr == sql.ErrNoRows:
+		// new document: version stays 1, nothing to archive
+	case selectErr != nil:
+		return fmt.Errorf("checking existing document: %w", selectErr)
+	case existingText == doc.Text:
+		version = existingVersion // unchanged content: not a new version
+	default:
+		archiveSQL := r.ph(`INSERT INTO document_versions (doc_id, version, title, text, doc_length, crawled_at)
+		                     SELECT id, version, title, text, doc_length, crawled_at FROM documents WHERE id = %s`, 1)
+		if _, err := tx.ExecContext(ctx, archiveSQL, doc.ID); err != nil {
+			return fmt.Errorf("archiving previous version: %w", err)
+		}
+		version = existingVersion + 1
+	}
+
 	if _, err := tx.ExecContext(ctx, r.dialect.UpsertDocumentSQL(),
-		doc.ID, doc.URL, doc.Title, doc.Text, len(tokens), string(embJSON),
+		doc.ID, doc.URL, doc.Title, doc.Text, len(tokens), string(embJSON), host, version, now,
 	); err != nil {
 		return fmt.Errorf("saving document: %w", err)
 	}
@@ -211,9 +377,22 @@ func (r *Repository) DeleteDocument(ctx context.Context, docID string) error {
 	return nil
 }
 
-func (r *Repository) ListDocuments(ctx context.Context, limit int) ([]domain.IndexedDocument, error) {
-	query := r.ph(`SELECT id, url, title, doc_length FROM documents ORDER BY id LIMIT %s`, 1)
-	rows, err := r.db.QueryContext(ctx, query, limit)
+// ListDocuments lists indexed pages, most recent ID first, optionally
+// narrowed to a single host (used by the per-domain admin subpage so it
+// doesn't need to fetch and filter the whole corpus client-side).
+func (r *Repository) ListDocuments(ctx context.Context, limit int, host string) ([]domain.IndexedDocument, error) {
+	var query string
+	var args []interface{}
+	if host != "" {
+		query = r.ph(`SELECT id, url, host, title, doc_length, version, crawled_at
+		               FROM documents WHERE host = %s ORDER BY id LIMIT %s`, 1, 2)
+		args = []interface{}{host, limit}
+	} else {
+		query = r.ph(`SELECT id, url, host, title, doc_length, version, crawled_at
+		               FROM documents ORDER BY id LIMIT %s`, 1)
+		args = []interface{}{limit}
+	}
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying documents: %w", err)
 	}
@@ -222,12 +401,146 @@ func (r *Repository) ListDocuments(ctx context.Context, limit int) ([]domain.Ind
 	var out []domain.IndexedDocument
 	for rows.Next() {
 		var d domain.IndexedDocument
-		if err := rows.Scan(&d.ID, &d.URL, &d.Title, &d.DocLength); err != nil {
+		var crawledAt string
+		if err := rows.Scan(&d.ID, &d.URL, &d.Host, &d.Title, &d.DocLength, &d.Version, &crawledAt); err != nil {
 			return nil, fmt.Errorf("scanning row: %w", err)
+		}
+		if t, err := time.Parse(crawledAtLayout, crawledAt); err == nil {
+			d.CrawledAt = t
 		}
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// SearchDomains finds distinct crawled domains whose hostname contains q,
+// most-documents-first. An empty q intentionally matches nothing -- the
+// admin Documents page only shows domains once an admin searches for one,
+// rather than listing every domain by default.
+func (r *Repository) SearchDomains(ctx context.Context, q string, limit int) ([]domain.DomainSummary, error) {
+	if q == "" {
+		return nil, nil
+	}
+	query := r.ph(`SELECT host, COUNT(*) AS cnt FROM documents
+	               WHERE host LIKE %s GROUP BY host ORDER BY cnt DESC, host ASC LIMIT %s`, 1, 2)
+	rows, err := r.db.QueryContext(ctx, query, "%"+q+"%", limit)
+	if err != nil {
+		return nil, fmt.Errorf("searching domains: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.DomainSummary
+	for rows.Next() {
+		var s domain.DomainSummary
+		if err := rows.Scan(&s.Host, &s.DocCount); err != nil {
+			return nil, fmt.Errorf("scanning row: %w", err)
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// DocumentVersions lists a document's superseded prior versions, most
+// recent first (the current content lives in ListDocuments/DocumentByID,
+// not here).
+func (r *Repository) DocumentVersions(ctx context.Context, docID string) ([]domain.DocumentVersion, error) {
+	query := r.ph(`SELECT version, title, doc_length, crawled_at FROM document_versions
+	               WHERE doc_id = %s ORDER BY version DESC`, 1)
+	rows, err := r.db.QueryContext(ctx, query, docID)
+	if err != nil {
+		return nil, fmt.Errorf("querying document versions: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.DocumentVersion
+	for rows.Next() {
+		var v domain.DocumentVersion
+		var crawledAt string
+		if err := rows.Scan(&v.Version, &v.Title, &v.DocLength, &crawledAt); err != nil {
+			return nil, fmt.Errorf("scanning row: %w", err)
+		}
+		if t, err := time.Parse(crawledAtLayout, crawledAt); err == nil {
+			v.CrawledAt = t
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// DocumentsOverview aggregates the corpus for the admin Documents page's
+// summary charts: which domains hold the most pages, and how recently
+// each page's content was last (re-)confirmed by a crawl.
+func (r *Repository) DocumentsOverview(ctx context.Context, topDomains int) (domain.DocumentsOverview, error) {
+	var overview domain.DocumentsOverview
+
+	topQuery := r.ph(`SELECT host, COUNT(*) AS cnt FROM documents
+	                   GROUP BY host ORDER BY cnt DESC, host ASC LIMIT %s`, 1)
+	rows, err := r.db.QueryContext(ctx, topQuery, topDomains)
+	if err != nil {
+		return overview, fmt.Errorf("querying top domains: %w", err)
+	}
+	for rows.Next() {
+		var s domain.DomainSummary
+		if err := rows.Scan(&s.Host, &s.DocCount); err != nil {
+			rows.Close()
+			return overview, fmt.Errorf("scanning row: %w", err)
+		}
+		overview.TopDomains = append(overview.TopDomains, s)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return overview, err
+	}
+
+	now := time.Now().UTC()
+	last24h := now.Add(-24 * time.Hour).Format(crawledAtLayout)
+	last7d := now.Add(-7 * 24 * time.Hour).Format(crawledAtLayout)
+	last30d := now.Add(-30 * 24 * time.Hour).Format(crawledAtLayout)
+
+	buckets := []struct {
+		label        string
+		since, until string
+	}{
+		{"last 24h", last24h, ""},
+		{"last 7d", last7d, last24h},
+		{"last 30d", last30d, last7d},
+		{"older", "", last30d},
+	}
+	for _, b := range buckets {
+		count, err := r.countDocumentsCrawled(ctx, b.since, b.until)
+		if err != nil {
+			return overview, err
+		}
+		overview.AgeBuckets = append(overview.AgeBuckets, domain.AgeBucket{Label: b.label, Count: count})
+	}
+	return overview, nil
+}
+
+// countDocumentsCrawled counts documents whose crawled_at falls in
+// [since, until) -- an empty bound on either side means unbounded on that
+// side. crawled_at is stored as RFC3339Nano UTC text, which sorts
+// lexicographically the same as chronologically, so plain string
+// comparison works across all three dialects without a native TIMESTAMP
+// column or driver-specific time scanning.
+func (r *Repository) countDocumentsCrawled(ctx context.Context, since, until string) (int, error) {
+	var query string
+	var args []interface{}
+	switch {
+	case since != "" && until != "":
+		query = r.ph(`SELECT COUNT(*) FROM documents WHERE crawled_at >= %s AND crawled_at < %s`, 1, 2)
+		args = []interface{}{since, until}
+	case since != "":
+		query = r.ph(`SELECT COUNT(*) FROM documents WHERE crawled_at >= %s`, 1)
+		args = []interface{}{since}
+	default:
+		query = r.ph(`SELECT COUNT(*) FROM documents WHERE crawled_at < %s`, 1)
+		args = []interface{}{until}
+	}
+	var n int
+	if err := r.db.QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("counting documents by age: %w", err)
+	}
+	return n, nil
 }
 
 func (r *Repository) ph(template string, positions ...int) string {

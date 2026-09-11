@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — domain</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<main>
+  <div class="page-header">
+    <a class="mark" href="/">se.</a>
+    <button id="sign-out" class="text-button" type="button">Sign out</button>
+  </div>
+  <a class="back" href="/admin/documents">Back to Documents</a>
+
+  <div class="domain-head" id="domain-head">
+    <h3 id="domain-title">Loading…</h3>
+    <span class="domain-head-tail" id="domain-tail"></span>
+  </div>
+  <div id="domain-status" class="panel-status"></div>
+  <div id="domain-chart"></div>
+  <div id="domain-table"></div>
+  <button id="delete-all" class="text-button" type="button" style="margin-top: 0.75rem;" hidden>Delete all in this domain</button>
+
+  <section class="panel" id="history-panel" hidden>
+    <h2 id="history-heading">History</h2>
+    <div id="history-body"></div>
+  </section>
+</main>
+<script src="/admin.js"></script>
+<script>
+  const host = decodeURIComponent(window.location.pathname.split('/').pop());
+  document.title = 'se. — ' + host;
+
+  const titleEl = document.getElementById('domain-title');
+  const tailEl = document.getElementById('domain-tail');
+  const statusEl = document.getElementById('domain-status');
+  const chartEl = document.getElementById('domain-chart');
+  const tableEl = document.getElementById('domain-table');
+  const deleteAllBtn = document.getElementById('delete-all');
+  const historyPanel = document.getElementById('history-panel');
+  const historyHeading = document.getElementById('history-heading');
+  const historyBody = document.getElementById('history-body');
+
+  titleEl.textContent = host;
+
+  function buildChart(docs) {
+    const maxLen = Math.max.apply(null, docs.map((d) => d.doc_length).concat([1]));
+    const barWidth = 8;
+    const gap = 3;
+    const height = 56;
+    const width = docs.length * (barWidth + gap);
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 ' + Math.max(width, 1) + ' ' + height);
+    svg.setAttribute('width', width);
+    svg.setAttribute('height', height);
+    svg.classList.add('domain-chart');
+
+    docs.forEach((d, i) => {
+      const h = Math.max(2, (d.doc_length / maxLen) * height);
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rect.setAttribute('x', String(i * (barWidth + gap)));
+      rect.setAttribute('y', String(height - h));
+      rect.setAttribute('width', String(barWidth));
+      rect.setAttribute('height', String(h));
+      const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+      title.textContent = (d.title || d.url) + ' — ' + d.doc_length + ' tokens indexed';
+      rect.appendChild(title);
+      svg.appendChild(rect);
+    });
+    return svg;
+  }
+
+  async function deleteDocument(id, btn) {
+    if (!window.confirm('Remove this page from the index?')) return;
+    try {
+      await deleteRequest('/admin/api/documents/' + encodeURIComponent(id));
+      btn.closest('tr').remove();
+    } catch (err) {
+      window.alert('Could not delete: ' + err.message);
+    }
+  }
+
+  async function deleteAllInDomain(ids) {
+    if (!window.confirm('Remove all ' + ids.length + ' pages in this domain from the index?')) return;
+    for (const id of ids) {
+      try {
+        await deleteRequest('/admin/api/documents/' + encodeURIComponent(id));
+      } catch (err) {
+        window.alert('Stopped: could not delete ' + id + ': ' + err.message);
+        return;
+      }
+    }
+    window.location = '/admin/documents';
+  }
+
+  async function showHistory(doc) {
+    historyPanel.hidden = false;
+    historyHeading.textContent = 'History — ' + (doc.title || doc.url);
+    clear(historyBody);
+    historyBody.textContent = 'Loading…';
+    try {
+      const versions = await getJSON('/admin/api/documents/' + encodeURIComponent(doc.id) + '/versions');
+      clear(historyBody);
+      if (versions.length === 0) {
+        historyBody.textContent = 'No prior versions — this page has only been crawled once.';
+        return;
+      }
+      const table = buildTable(
+        [{ label: 'version', num: true }, { label: 'title' }, { label: 'length', num: true }, { label: 'crawled' }],
+        versions,
+        (v) => [
+          textCell('v' + v.version, { num: true }),
+          textCell(v.title || '(untitled)'),
+          textCell(String(v.doc_length), { num: true }),
+          textCell(new Date(v.crawled_at).toLocaleString()),
+        ],
+      );
+      historyBody.appendChild(table);
+    } catch (err) {
+      historyBody.textContent = 'Could not load history: ' + err.message;
+    }
+  }
+
+  function renderDocs(docs) {
+    const totalLen = docs.reduce((sum, d) => sum + d.doc_length, 0);
+    const avgLen = docs.length ? totalLen / docs.length : 0;
+    const metrics = document.createElement('span');
+    metrics.className = 'domain-metrics';
+    metrics.textContent = docs.length + (docs.length === 1 ? ' page' : ' pages') +
+      ' · avg ' + avgLen.toFixed(0) + ' · total ' + totalLen;
+    tailEl.appendChild(metrics);
+
+    const crawlLink = document.createElement('a');
+    crawlLink.className = 'domain-crawl-link';
+    crawlLink.href = '/admin/crawl?url=' + encodeURIComponent(docs.length ? new URL(docs[0].url).origin : 'https://' + host);
+    crawlLink.textContent = 'Crawl';
+    tailEl.appendChild(crawlLink);
+
+    if (docs.length === 0) {
+      statusEl.textContent = 'No pages indexed for this domain.';
+      return;
+    }
+
+    chartEl.appendChild(buildChart(docs));
+
+    const table = buildTable(
+      [{ label: 'title' }, { label: 'length', num: true }, { label: 'version' }, { label: '' }],
+      docs,
+      (d) => {
+        const link = document.createElement('a');
+        link.href = d.url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.style.color = 'var(--ink)';
+        link.textContent = d.title || d.url;
+        const urlDiv = document.createElement('div');
+        urlDiv.className = 'url';
+        urlDiv.textContent = d.url;
+        const titleTd = document.createElement('td');
+        titleTd.appendChild(link);
+        titleTd.appendChild(urlDiv);
+
+        const versionTd = document.createElement('td');
+        if (d.version > 1) {
+          const histBtn = document.createElement('button');
+          histBtn.type = 'button';
+          histBtn.className = 'text-button';
+          histBtn.textContent = 'v' + d.version;
+          histBtn.title = 'See prior versions';
+          histBtn.addEventListener('click', () => showHistory(d));
+          versionTd.appendChild(histBtn);
+        } else {
+          versionTd.textContent = 'v1';
+        }
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'text-button';
+        delBtn.type = 'button';
+        delBtn.textContent = 'Delete';
+        delBtn.addEventListener('click', () => deleteDocument(d.id, delBtn));
+        const actionTd = document.createElement('td');
+        actionTd.className = 'actions';
+        actionTd.appendChild(delBtn);
+
+        return [titleTd, textCell(String(d.doc_length), { num: true }), versionTd, actionTd];
+      },
+    );
+    tableEl.appendChild(table);
+
+    deleteAllBtn.hidden = false;
+    deleteAllBtn.addEventListener('click', () => deleteAllInDomain(docs.map((d) => d.id)));
+  }
+
+  async function load() {
+    try {
+      const docs = await getJSON('/admin/api/documents?domain=' + encodeURIComponent(host) + '&limit=1000');
+      renderDocs(docs);
+    } catch (err) {
+      statusEl.textContent = 'Could not load documents: ' + err.message;
+    }
+  }
+
+  wireSignOut();
+  load();
+</script>
+</body>
+</html>

@@ -65,3 +65,43 @@ func TestCrawlLoop_NoAuthOptionsMeansEmptyFetchOptions(t *testing.T) {
 		t.Errorf("expected empty fetch options, got %+v", got)
 	}
 }
+
+func TestDocumentID_DeterministicForSameURL(t *testing.T) {
+	a := documentID("https://example.com/page")
+	b := documentID("https://example.com/page")
+	if a != b {
+		t.Errorf("expected the same URL to always produce the same ID, got %q and %q", a, b)
+	}
+}
+
+func TestDocumentID_DiffersForDifferentURLs(t *testing.T) {
+	a := documentID("https://example.com/page1")
+	b := documentID("https://example.com/page2")
+	if a == b {
+		t.Errorf("expected different URLs to produce different IDs, both got %q", a)
+	}
+}
+
+func TestCrawlLoop_RecrawlingSameURLReusesSameDocumentID(t *testing.T) {
+	fetcher := &recordingFetcher{html: "<html>ok</html>"}
+	parse := func(html, pageURL string) (string, string, []string) {
+		return "T", "genuegend inhalt text fuer diese seite bitte danke", nil
+	}
+	var savedIDs []string
+	save := func(ctx context.Context, doc domain.Document) error {
+		savedIDs = append(savedIDs, doc.ID)
+		return nil
+	}
+
+	opts := ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 1}
+	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil); err != nil {
+		t.Fatalf("unexpected error on first crawl: %v", err)
+	}
+	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil); err != nil {
+		t.Fatalf("unexpected error on second crawl: %v", err)
+	}
+
+	if len(savedIDs) != 2 || savedIDs[0] != savedIDs[1] {
+		t.Errorf("expected re-crawling the same URL to reuse the same document ID, got %v", savedIDs)
+	}
+}

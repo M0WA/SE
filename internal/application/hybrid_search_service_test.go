@@ -33,7 +33,7 @@ func (r *fakeSQLRepo) DocumentByID(_ context.Context, id string) (domain.Documen
 	}
 	return r.docs[id], nil
 }
-func (r *fakeSQLRepo) ListDocuments(context.Context, int) ([]domain.IndexedDocument, error) {
+func (r *fakeSQLRepo) ListDocuments(context.Context, int, string) ([]domain.IndexedDocument, error) {
 	return nil, nil
 }
 func (r *fakeSQLRepo) DeleteDocument(context.Context, string) error { return nil }

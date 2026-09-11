@@ -538,6 +538,113 @@ td.actions { text-align: right; white-space: nowrap; }
 
 .domain-chart rect:hover { fill: var(--accent); }
 
+.domain-result-list {
+  margin-top: 1rem;
+  border-top: 1px solid var(--rule);
+}
+
+.domain-result {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.domain-result:hover { color: var(--accent); }
+
+.overview-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3rem;
+}
+
+.overview-block { flex: 1 1 260px; min-width: 0; }
+
+.overview-block h3 {
+  font-size: 0.92rem;
+  font-weight: 600;
+  margin: 0 0 1rem;
+}
+
+.donut-wrap {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.donut-chart { flex-shrink: 0; }
+
+.donut-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  min-width: 0;
+}
+
+.donut-legend-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.donut-legend-row a {
+  color: var(--ink);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.donut-legend-row a:hover { color: var(--accent); }
+
+.donut-legend-row .domain-metrics { margin-left: auto; }
+
+.donut-swatch {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.age-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 1.25rem;
+  height: 120px;
+}
+
+.age-bar-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.age-bar {
+  width: 1.75rem;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 2px 2px 0 0;
+}
+
+.age-bar-count {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+
+.age-bar-label {
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
 textarea.field {
   display: block;
   width: 100%;

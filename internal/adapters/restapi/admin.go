@@ -41,6 +41,13 @@ func (h *Handler) handleAdminDocumentsPage(w http.ResponseWriter, r *http.Reques
 	serveStatic(w, r, "text/html; charset=utf-8", adminDocumentsHTML)
 }
 
+// handleAdminDomainPage serves the per-domain subpage template; the
+// domain name in the path is read client-side (JS) to fetch that
+// domain's documents, so the same static page works for every host.
+func (h *Handler) handleAdminDomainPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminDomainHTML)
+}
+
 func (h *Handler) handleAdminTuningPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/html; charset=utf-8", adminTuningHTML)
 }
@@ -115,12 +122,18 @@ func (h *Handler) handleAdminVocabulary(w http.ResponseWriter, r *http.Request) 
 }
 
 type adminDocument struct {
-	ID        string `json:"id"`
-	URL       string `json:"url"`
-	Title     string `json:"title"`
-	DocLength int    `json:"doc_length"`
+	ID        string    `json:"id"`
+	URL       string    `json:"url"`
+	Host      string    `json:"host"`
+	Title     string    `json:"title"`
+	DocLength int       `json:"doc_length"`
+	Version   int       `json:"version"`
+	CrawledAt time.Time `json:"crawled_at"`
 }
 
+// handleAdminDocuments lists indexed pages, optionally narrowed to one
+// domain via ?domain= (used by the per-domain admin subpage) -- without
+// that filter it's the whole corpus, still capped at limit.
 func (h *Handler) handleAdminDocuments(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
 		return
@@ -131,14 +144,111 @@ func (h *Handler) handleAdminDocuments(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	docs, err := h.admin.ListDocuments(r.Context(), limit)
+	docs, err := h.admin.ListDocuments(r.Context(), limit, r.URL.Query().Get("domain"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	out := make([]adminDocument, len(docs))
 	for i, d := range docs {
-		out[i] = adminDocument{ID: d.ID, URL: d.URL, Title: d.Title, DocLength: d.DocLength}
+		out[i] = adminDocument{
+			ID: d.ID, URL: d.URL, Host: d.Host, Title: d.Title,
+			DocLength: d.DocLength, Version: d.Version, CrawledAt: d.CrawledAt,
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+const defaultDomainSearchLimit = 20
+
+type adminDomainSummary struct {
+	Host     string `json:"host"`
+	DocCount int    `json:"doc_count"`
+}
+
+// handleAdminSearchDomains backs the Documents page's domain search: an
+// empty or missing q returns an empty list on purpose, so domains are
+// discoverable by name rather than dumped in full by default.
+func (h *Handler) handleAdminSearchDomains(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+		return
+	}
+	limit := defaultDomainSearchLimit
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	domains, err := h.admin.SearchDomains(r.Context(), r.URL.Query().Get("q"), limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := make([]adminDomainSummary, len(domains))
+	for i, d := range domains {
+		out[i] = adminDomainSummary{Host: d.Host, DocCount: d.DocCount}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+const defaultOverviewTopDomains = 8
+
+type adminAgeBucket struct {
+	Label string `json:"label"`
+	Count int    `json:"count"`
+}
+
+type adminDocumentsOverview struct {
+	TopDomains []adminDomainSummary `json:"top_domains"`
+	AgeBuckets []adminAgeBucket     `json:"age_buckets"`
+}
+
+// handleAdminDocumentsOverview backs the Documents page's summary charts:
+// document count per (top) domain, and how recently pages were crawled.
+// Registered as "GET /admin/api/documents/overview", so the method is
+// already guaranteed -- no separate check needed here.
+func (h *Handler) handleAdminDocumentsOverview(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+		return
+	}
+	overview, err := h.admin.DocumentsOverview(r.Context(), defaultOverviewTopDomains)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	topDomains := make([]adminDomainSummary, len(overview.TopDomains))
+	for i, d := range overview.TopDomains {
+		topDomains[i] = adminDomainSummary{Host: d.Host, DocCount: d.DocCount}
+	}
+	ageBuckets := make([]adminAgeBucket, len(overview.AgeBuckets))
+	for i, b := range overview.AgeBuckets {
+		ageBuckets[i] = adminAgeBucket{Label: b.Label, Count: b.Count}
+	}
+	writeJSON(w, http.StatusOK, adminDocumentsOverview{TopDomains: topDomains, AgeBuckets: ageBuckets})
+}
+
+type adminDocumentVersion struct {
+	Version   int       `json:"version"`
+	Title     string    `json:"title"`
+	DocLength int       `json:"doc_length"`
+	CrawledAt time.Time `json:"crawled_at"`
+}
+
+// handleAdminDocumentVersions lists a document's superseded prior
+// versions (an empty list just means it's never been re-crawled with
+// different content, not an error).
+func (h *Handler) handleAdminDocumentVersions(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+		return
+	}
+	versions, err := h.admin.DocumentVersions(r.Context(), r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := make([]adminDocumentVersion, len(versions))
+	for i, v := range versions {
+		out[i] = adminDocumentVersion{Version: v.Version, Title: v.Title, DocLength: v.DocLength, CrawledAt: v.CrawledAt}
 	}
 	writeJSON(w, http.StatusOK, out)
 }

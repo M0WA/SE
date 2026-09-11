@@ -2,7 +2,8 @@ package application
 
 import (
 	"context"
-	"fmt"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/url"
 	"strings"
 
@@ -68,7 +69,7 @@ func crawlLoop(
 			continue
 		}
 
-		doc := domain.Document{ID: fmt.Sprintf("doc-%d", crawled), URL: u, Title: title, Text: text, Links: links}
+		doc := domain.Document{ID: documentID(u), URL: u, Title: title, Text: text, Links: links}
 		if err := save(ctx, doc); err != nil {
 			return crawled, err
 		}
@@ -87,4 +88,12 @@ func crawlLoop(
 func isHTTP(raw string) bool {
 	u, err := url.Parse(raw)
 	return err == nil && (u.Scheme == "http" || u.Scheme == "https")
+}
+
+// documentID derives a stable ID from a URL, so re-crawling the same page
+// always upserts the same row instead of creating a duplicate under a new
+// ID -- the SQL repository's uniqueness/versioning relies on this.
+func documentID(rawURL string) string {
+	sum := sha256.Sum256([]byte(rawURL))
+	return "doc-" + hex.EncodeToString(sum[:8])
 }

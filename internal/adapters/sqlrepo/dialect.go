@@ -12,23 +12,32 @@ type sqliteDialect struct{}
 func (sqliteDialect) Name() string             { return "sqlite" }
 func (sqliteDialect) Placeholder(_ int) string { return "?" }
 func (sqliteDialect) UpsertDocumentSQL() string {
-	return `INSERT INTO documents (id, url, title, text, doc_length, embedding)
-	        VALUES (?, ?, ?, ?, ?, ?)
+	return `INSERT INTO documents (id, url, title, text, doc_length, embedding, host, version, crawled_at)
+	        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	        ON CONFLICT(id) DO UPDATE SET
 	          url=excluded.url, title=excluded.title, text=excluded.text,
-	          doc_length=excluded.doc_length, embedding=excluded.embedding`
+	          doc_length=excluded.doc_length, embedding=excluded.embedding,
+	          host=excluded.host, version=excluded.version, crawled_at=excluded.crawled_at`
 }
 func (sqliteDialect) CreateSchemaSQL() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS documents (
 			id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT, text TEXT,
-			doc_length INTEGER NOT NULL, embedding TEXT NOT NULL
+			doc_length INTEGER NOT NULL, embedding TEXT NOT NULL,
+			host TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1,
+			crawled_at TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE TABLE IF NOT EXISTS postings (
 			term TEXT NOT NULL, doc_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
 			term_freq INTEGER NOT NULL, PRIMARY KEY (term, doc_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_postings_term ON postings(term)`,
+		`CREATE TABLE IF NOT EXISTS document_versions (
+			doc_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+			version INTEGER NOT NULL, title TEXT, text TEXT,
+			doc_length INTEGER NOT NULL, crawled_at TEXT NOT NULL,
+			PRIMARY KEY (doc_id, version)
+		)`,
 	}
 }
 
@@ -37,17 +46,20 @@ type mysqlDialect struct{}
 func (mysqlDialect) Name() string             { return "mysql" }
 func (mysqlDialect) Placeholder(_ int) string { return "?" }
 func (mysqlDialect) UpsertDocumentSQL() string {
-	return `INSERT INTO documents (id, url, title, text, doc_length, embedding)
-	        VALUES (?, ?, ?, ?, ?, ?)
+	return `INSERT INTO documents (id, url, title, text, doc_length, embedding, host, version, crawled_at)
+	        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	        ON DUPLICATE KEY UPDATE
 	          url=VALUES(url), title=VALUES(title), text=VALUES(text),
-	          doc_length=VALUES(doc_length), embedding=VALUES(embedding)`
+	          doc_length=VALUES(doc_length), embedding=VALUES(embedding),
+	          host=VALUES(host), version=VALUES(version), crawled_at=VALUES(crawled_at)`
 }
 func (mysqlDialect) CreateSchemaSQL() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS documents (
 			id VARCHAR(64) PRIMARY KEY, url TEXT NOT NULL, title TEXT, text LONGTEXT,
-			doc_length INT NOT NULL, embedding LONGTEXT NOT NULL
+			doc_length INT NOT NULL, embedding LONGTEXT NOT NULL,
+			host VARCHAR(255) NOT NULL DEFAULT '', version INT NOT NULL DEFAULT 1,
+			crawled_at VARCHAR(64) NOT NULL DEFAULT ''
 		) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS postings (
 			term VARCHAR(128) NOT NULL, doc_id VARCHAR(64) NOT NULL,
@@ -55,6 +67,12 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			FOREIGN KEY (doc_id) REFERENCES documents(id) ON DELETE CASCADE
 		) ENGINE=InnoDB`,
 		`CREATE INDEX idx_postings_term ON postings(term)`,
+		`CREATE TABLE IF NOT EXISTS document_versions (
+			doc_id VARCHAR(64) NOT NULL, version INT NOT NULL,
+			title TEXT, text LONGTEXT, doc_length INT NOT NULL, crawled_at VARCHAR(64) NOT NULL,
+			PRIMARY KEY (doc_id, version),
+			FOREIGN KEY (doc_id) REFERENCES documents(id) ON DELETE CASCADE
+		) ENGINE=InnoDB`,
 	}
 }
 
@@ -65,23 +83,32 @@ func (postgresDialect) Placeholder(pos int) string {
 	return "$" + itoa(pos)
 }
 func (postgresDialect) UpsertDocumentSQL() string {
-	return `INSERT INTO documents (id, url, title, text, doc_length, embedding)
-	        VALUES ($1, $2, $3, $4, $5, $6)
+	return `INSERT INTO documents (id, url, title, text, doc_length, embedding, host, version, crawled_at)
+	        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	        ON CONFLICT (id) DO UPDATE SET
 	          url=EXCLUDED.url, title=EXCLUDED.title, text=EXCLUDED.text,
-	          doc_length=EXCLUDED.doc_length, embedding=EXCLUDED.embedding`
+	          doc_length=EXCLUDED.doc_length, embedding=EXCLUDED.embedding,
+	          host=EXCLUDED.host, version=EXCLUDED.version, crawled_at=EXCLUDED.crawled_at`
 }
 func (postgresDialect) CreateSchemaSQL() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS documents (
 			id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT, text TEXT,
-			doc_length INT NOT NULL, embedding TEXT NOT NULL
+			doc_length INT NOT NULL, embedding TEXT NOT NULL,
+			host TEXT NOT NULL DEFAULT '', version INT NOT NULL DEFAULT 1,
+			crawled_at TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE TABLE IF NOT EXISTS postings (
 			term TEXT NOT NULL, doc_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
 			term_freq INT NOT NULL, PRIMARY KEY (term, doc_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_postings_term ON postings(term)`,
+		`CREATE TABLE IF NOT EXISTS document_versions (
+			doc_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+			version INT NOT NULL, title TEXT, text TEXT,
+			doc_length INT NOT NULL, crawled_at TEXT NOT NULL,
+			PRIMARY KEY (doc_id, version)
+		)`,
 	}
 }
 

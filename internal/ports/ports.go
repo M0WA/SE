@@ -61,7 +61,7 @@ type SQLRepository interface {
 	VocabularyStats(ctx context.Context, topN int) (vocabularySize int, topTerms []domain.TermStat, err error)
 	AllEmbeddings(ctx context.Context) (map[string][]float32, error)
 	DocumentByID(ctx context.Context, docID string) (domain.Document, error)
-	ListDocuments(ctx context.Context, limit int) ([]domain.IndexedDocument, error)
+	ListDocuments(ctx context.Context, limit int, host string) ([]domain.IndexedDocument, error)
 	DeleteDocument(ctx context.Context, docID string) error
 }
 
@@ -70,7 +70,10 @@ type SQLRepository interface {
 type AdminRepository interface {
 	CorpusStats(ctx context.Context) (totalDocs int, avgDocLen float64, err error)
 	VocabularyStats(ctx context.Context, topN int) (vocabularySize int, topTerms []domain.TermStat, err error)
-	ListDocuments(ctx context.Context, limit int) ([]domain.IndexedDocument, error)
+	ListDocuments(ctx context.Context, limit int, host string) ([]domain.IndexedDocument, error)
+	SearchDomains(ctx context.Context, q string, limit int) ([]domain.DomainSummary, error)
+	DocumentVersions(ctx context.Context, docID string) ([]domain.DocumentVersion, error)
+	DocumentsOverview(ctx context.Context, topDomains int) (domain.DocumentsOverview, error)
 	PostingsForTerm(ctx context.Context, term string) ([]domain.PostingStats, error)
 	DeleteDocument(ctx context.Context, docID string) error
 }

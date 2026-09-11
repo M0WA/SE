@@ -25,6 +25,9 @@ var adminHTML []byte
 //go:embed admin_documents.html
 var adminDocumentsHTML []byte
 
+//go:embed admin_domain.html
+var adminDomainHTML []byte
+
 //go:embed admin_tuning.html
 var adminTuningHTML []byte
 
@@ -124,6 +127,7 @@ func (h *Handler) RoutesAdmin() *http.ServeMux {
 
 	mux.HandleFunc("/admin", h.requireAuthPage(h.handleAdminPage))
 	mux.HandleFunc("/admin/documents", h.requireAuthPage(h.handleAdminDocumentsPage))
+	mux.HandleFunc("/admin/documents/{host}", h.requireAuthPage(h.handleAdminDomainPage))
 	mux.HandleFunc("/admin/crawl", h.requireAuthPage(h.handleAdminCrawlPage))
 	mux.HandleFunc("/admin/tuning", h.requireAuthPage(h.handleAdminTuningPage))
 	mux.HandleFunc("/admin/search", h.requireAuthPage(h.handleAdminSearchPage))
@@ -132,7 +136,10 @@ func (h *Handler) RoutesAdmin() *http.ServeMux {
 	mux.HandleFunc("/admin/api/stats", h.requireAuthAPI(h.handleAdminStats))
 	mux.HandleFunc("/admin/api/vocabulary", h.requireAuthAPI(h.handleAdminVocabulary))
 	mux.HandleFunc("/admin/api/documents", h.requireAuthAPI(h.handleAdminDocuments))
+	mux.HandleFunc("GET /admin/api/documents/overview", h.requireAuthAPI(h.handleAdminDocumentsOverview))
 	mux.HandleFunc("DELETE /admin/api/documents/{id}", h.requireAuthAPI(h.handleAdminDeleteDocument))
+	mux.HandleFunc("GET /admin/api/documents/{id}/versions", h.requireAuthAPI(h.handleAdminDocumentVersions))
+	mux.HandleFunc("/admin/api/domains", h.requireAuthAPI(h.handleAdminSearchDomains))
 	mux.HandleFunc("/admin/api/postings", h.requireAuthAPI(h.handleAdminPostings))
 	mux.HandleFunc("/admin/api/search", h.requireAuthAPI(h.handleAdminSearch))
 	mux.HandleFunc("/admin/api/settings", h.requireAuthAPI(h.handleAdminSettings))

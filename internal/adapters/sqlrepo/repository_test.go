@@ -98,7 +98,7 @@ func TestSaveDocument_ThenRetrieveEverywhere(t *testing.T) {
 		t.Errorf("expected saved embedding back, got %v", embeddings["doc-1"])
 	}
 
-	docs, err := repo.ListDocuments(ctx, 10)
+	docs, err := repo.ListDocuments(ctx, 10, "")
 	if err != nil {
 		t.Fatalf("unexpected error listing documents: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestListDocuments_RespectsLimit(t *testing.T) {
 		}
 	}
 
-	docs, err := repo.ListDocuments(ctx, 2)
+	docs, err := repo.ListDocuments(ctx, 2, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -381,7 +381,7 @@ func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 		}
 	})
 	t.Run("ListDocuments", func(t *testing.T) {
-		if _, err := closedRepo(t).ListDocuments(ctx, 10); err == nil {
+		if _, err := closedRepo(t).ListDocuments(ctx, 10, ""); err == nil {
 			t.Error("expected an error")
 		}
 	})
@@ -391,6 +391,40 @@ func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 			t.Error("expected an error")
 		}
 	})
+	t.Run("SearchDomains", func(t *testing.T) {
+		if _, err := closedRepo(t).SearchDomains(ctx, "example", 10); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("DocumentVersions", func(t *testing.T) {
+		if _, err := closedRepo(t).DocumentVersions(ctx, "doc-1"); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("DocumentsOverview", func(t *testing.T) {
+		if _, err := closedRepo(t).DocumentsOverview(ctx, 5); err == nil {
+			t.Error("expected an error")
+		}
+	})
+}
+
+func TestHostOf_InvalidURLReturnsEmpty(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	// A control character makes url.Parse fail outright, exercising
+	// hostOf's error branch (a merely relative/schemeless URL still parses
+	// fine and just yields an empty Hostname(), which isn't this branch).
+	doc := domain.Document{ID: "doc-1", URL: "http://\x7f", Title: "A", Text: "some text"}
+	if err := repo.SaveDocument(ctx, doc, []float32{1}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	docs, err := repo.ListDocuments(ctx, 10, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(docs) != 1 || docs[0].Host != "" {
+		t.Errorf("expected an unparseable URL to yield an empty host, got %+v", docs)
+	}
 }
 
 func TestAllEmbeddings_EmptyWhenNoDocuments(t *testing.T) {
@@ -401,5 +435,263 @@ func TestAllEmbeddings_EmptyWhenNoDocuments(t *testing.T) {
 	}
 	if len(embeddings) != 0 {
 		t.Errorf("expected no embeddings, got %v", embeddings)
+	}
+}
+
+func TestSaveDocument_SetsHostFromURL(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	doc := domain.Document{ID: "doc-1", URL: "https://example.com/page", Title: "A", Text: "some text"}
+	if err := repo.SaveDocument(ctx, doc, []float32{1}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	docs, err := repo.ListDocuments(ctx, 10, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(docs) != 1 || docs[0].Host != "example.com" {
+		t.Errorf("expected host=example.com, got %+v", docs)
+	}
+	if docs[0].Version != 1 {
+		t.Errorf("expected version=1 for a new document, got %d", docs[0].Version)
+	}
+	if docs[0].CrawledAt.IsZero() {
+		t.Error("expected CrawledAt to be set")
+	}
+}
+
+func TestSaveDocument_UnchangedContentKeepsVersion(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	doc := domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "same text"}
+	if err := repo.SaveDocument(ctx, doc, []float32{1}); err != nil {
+		t.Fatalf("unexpected error on first save: %v", err)
+	}
+	if err := repo.SaveDocument(ctx, doc, []float32{1}); err != nil {
+		t.Fatalf("unexpected error on re-save: %v", err)
+	}
+	docs, _ := repo.ListDocuments(ctx, 10, "")
+	if len(docs) != 1 || docs[0].Version != 1 {
+		t.Errorf("expected version to stay at 1 for unchanged content, got %+v", docs)
+	}
+	versions, err := repo.DocumentVersions(ctx, "doc-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(versions) != 0 {
+		t.Errorf("expected no archived versions for unchanged content, got %+v", versions)
+	}
+}
+
+func TestSaveDocument_ChangedContentArchivesPreviousVersion(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	v1 := domain.Document{ID: "doc-1", URL: "http://a", Title: "Old Title", Text: "old text"}
+	if err := repo.SaveDocument(ctx, v1, []float32{1}); err != nil {
+		t.Fatalf("unexpected error on first save: %v", err)
+	}
+	v2 := domain.Document{ID: "doc-1", URL: "http://a", Title: "New Title", Text: "new text"}
+	if err := repo.SaveDocument(ctx, v2, []float32{2}); err != nil {
+		t.Fatalf("unexpected error on second save: %v", err)
+	}
+	v3 := domain.Document{ID: "doc-1", URL: "http://a", Title: "Newer Title", Text: "newer text"}
+	if err := repo.SaveDocument(ctx, v3, []float32{3}); err != nil {
+		t.Fatalf("unexpected error on third save: %v", err)
+	}
+
+	docs, _ := repo.ListDocuments(ctx, 10, "")
+	if len(docs) != 1 || docs[0].Version != 3 {
+		t.Errorf("expected version=3 after two content changes, got %+v", docs)
+	}
+
+	versions, err := repo.DocumentVersions(ctx, "doc-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(versions) != 2 {
+		t.Fatalf("expected 2 archived versions, got %d: %+v", len(versions), versions)
+	}
+	if versions[0].Version != 2 || versions[0].Title != "New Title" {
+		t.Errorf("expected most recent archived version first (v2, New Title), got %+v", versions[0])
+	}
+	if versions[1].Version != 1 || versions[1].Title != "Old Title" {
+		t.Errorf("expected oldest archived version last (v1, Old Title), got %+v", versions[1])
+	}
+}
+
+func TestDocumentVersions_EmptyForNeverModifiedDocument(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	doc := domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "text"}
+	if err := repo.SaveDocument(ctx, doc, []float32{1}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	versions, err := repo.DocumentVersions(ctx, "doc-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(versions) != 0 {
+		t.Errorf("expected no versions, got %+v", versions)
+	}
+}
+
+func TestListDocuments_FiltersByHost(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	docs := []domain.Document{
+		{ID: "doc-1", URL: "http://a.example/1", Title: "A1", Text: "text"},
+		{ID: "doc-2", URL: "http://a.example/2", Title: "A2", Text: "text"},
+		{ID: "doc-3", URL: "http://b.example/1", Title: "B1", Text: "text"},
+	}
+	for _, d := range docs {
+		if err := repo.SaveDocument(ctx, d, []float32{1}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	got, err := repo.ListDocuments(ctx, 10, "a.example")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("expected 2 documents for a.example, got %d: %+v", len(got), got)
+	}
+	for _, d := range got {
+		if d.Host != "a.example" {
+			t.Errorf("expected only a.example documents, got %+v", d)
+		}
+	}
+}
+
+func TestSearchDomains_EmptyQueryReturnsNothing(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	doc := domain.Document{ID: "doc-1", URL: "http://a.example/1", Title: "A", Text: "text"}
+	if err := repo.SaveDocument(ctx, doc, []float32{1}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	domains, err := repo.SearchDomains(ctx, "", 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if domains != nil {
+		t.Errorf("expected an empty query to match nothing, got %+v", domains)
+	}
+}
+
+func TestSearchDomains_MatchesSubstringOrderedByCount(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	docs := []domain.Document{
+		{ID: "doc-1", URL: "http://shop.example.com/1", Title: "A", Text: "text"},
+		{ID: "doc-2", URL: "http://shop.example.com/2", Title: "B", Text: "text"},
+		{ID: "doc-3", URL: "http://blog.example.com/1", Title: "C", Text: "text"},
+		{ID: "doc-4", URL: "http://other.org/1", Title: "D", Text: "text"},
+	}
+	for _, d := range docs {
+		if err := repo.SaveDocument(ctx, d, []float32{1}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	domains, err := repo.SearchDomains(ctx, "example", 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(domains) != 2 {
+		t.Fatalf("expected 2 matching domains, got %+v", domains)
+	}
+	if domains[0].Host != "shop.example.com" || domains[0].DocCount != 2 {
+		t.Errorf("expected shop.example.com (2 docs) first, got %+v", domains[0])
+	}
+	if domains[1].Host != "blog.example.com" || domains[1].DocCount != 1 {
+		t.Errorf("expected blog.example.com (1 doc) second, got %+v", domains[1])
+	}
+}
+
+func TestDocumentsOverview_TopDomainsAndAgeBuckets(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	docs := []domain.Document{
+		{ID: "doc-1", URL: "http://a.example/1", Title: "A", Text: "text"},
+		{ID: "doc-2", URL: "http://a.example/2", Title: "A2", Text: "text"},
+		{ID: "doc-3", URL: "http://b.example/1", Title: "B", Text: "text"},
+	}
+	for _, d := range docs {
+		if err := repo.SaveDocument(ctx, d, []float32{1}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	overview, err := repo.DocumentsOverview(ctx, 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(overview.TopDomains) != 2 || overview.TopDomains[0].Host != "a.example" || overview.TopDomains[0].DocCount != 2 {
+		t.Errorf("expected a.example (2 docs) first, got %+v", overview.TopDomains)
+	}
+	if len(overview.AgeBuckets) != 4 {
+		t.Fatalf("expected 4 age buckets, got %d: %+v", len(overview.AgeBuckets), overview.AgeBuckets)
+	}
+	total := 0
+	for _, b := range overview.AgeBuckets {
+		total += b.Count
+	}
+	if total != 3 {
+		t.Errorf("expected age buckets to account for all 3 documents, got total=%d (%+v)", total, overview.AgeBuckets)
+	}
+	if overview.AgeBuckets[0].Label != "last 24h" || overview.AgeBuckets[0].Count != 3 {
+		t.Errorf("expected all 3 freshly-saved documents in the 'last 24h' bucket, got %+v", overview.AgeBuckets[0])
+	}
+}
+
+func TestDocumentsOverview_EmptyCorpus(t *testing.T) {
+	repo := newTestRepo(t)
+	overview, err := repo.DocumentsOverview(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(overview.TopDomains) != 0 {
+		t.Errorf("expected no top domains for an empty corpus, got %+v", overview.TopDomains)
+	}
+}
+
+func TestMigrateDocumentColumns_BackfillsHostOnPreExistingRows(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testmigrate%d?mode=memory&cache=shared", n)
+
+	// Simulate a database created before host/version/crawled_at existed.
+	pre, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open pre-migration DB: %v", err)
+	}
+	if _, err := pre.Exec(`CREATE TABLE documents (
+		id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT, text TEXT,
+		doc_length INTEGER NOT NULL, embedding TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("failed to create legacy schema: %v", err)
+	}
+	if _, err := pre.Exec(`INSERT INTO documents (id, url, title, text, doc_length, embedding)
+	                       VALUES ('doc-1', 'https://old.example/page', 'Old', 'old text', 10, '[]')`); err != nil {
+		t.Fatalf("failed to insert legacy row: %v", err)
+	}
+	// Keep pre open for the rest of the test: an in-memory sqlite database
+	// (even with cache=shared) is destroyed once every connection to it
+	// closes, and repo below opens its own separate connection pool to
+	// the same DSN.
+	t.Cleanup(func() { _ = pre.Close() })
+
+	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("expected New to migrate the legacy schema without error, got: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	docs, err := repo.ListDocuments(context.Background(), 10, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(docs) != 1 || docs[0].Host != "old.example" {
+		t.Errorf("expected the pre-existing row's host to be backfilled to old.example, got %+v", docs)
+	}
+	if docs[0].Version != 1 {
+		t.Errorf("expected a backfilled row to default to version 1, got %d", docs[0].Version)
 	}
 }
