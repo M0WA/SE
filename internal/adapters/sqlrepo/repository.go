@@ -185,6 +185,12 @@ func (r *Repository) backfillHost(ctx context.Context) error {
 
 func (r *Repository) Close() error { return r.db.Close() }
 
+// Ping confirms the database connection is alive, for GET /healthz -- a
+// plain connection check, not a query against any application table.
+func (r *Repository) Ping(ctx context.Context) error {
+	return r.db.PingContext(ctx)
+}
+
 // SaveDocument upserts doc keyed by its ID (callers derive that ID
 // deterministically from the URL, so re-crawling the same page always
 // lands on the same row rather than creating a duplicate). When the new
@@ -369,11 +375,15 @@ func (r *Repository) AllEmbeddings(ctx context.Context) (map[string][]float32, e
 }
 
 func (r *Repository) DocumentByID(ctx context.Context, docID string) (domain.Document, error) {
-	query := r.ph(`SELECT id, url, title, text FROM documents WHERE id = %s`, 1)
+	query := r.ph(`SELECT id, url, title, text, crawled_at FROM documents WHERE id = %s`, 1)
 	var doc domain.Document
-	err := r.db.QueryRowContext(ctx, query, docID).Scan(&doc.ID, &doc.URL, &doc.Title, &doc.Text)
+	var crawledAt string
+	err := r.db.QueryRowContext(ctx, query, docID).Scan(&doc.ID, &doc.URL, &doc.Title, &doc.Text, &crawledAt)
 	if err != nil {
 		return domain.Document{}, fmt.Errorf("loading document (%s): %w", docID, err)
+	}
+	if t, err := time.Parse(crawledAtLayout, crawledAt); err == nil {
+		doc.CrawledAt = t
 	}
 	return doc, nil
 }
@@ -665,6 +675,211 @@ func (r *Repository) countDocumentsCrawled(ctx context.Context, since, until str
 		return 0, fmt.Errorf("counting documents by age: %w", err)
 	}
 	return n, nil
+}
+
+// SaveSetting upserts key's value (an admin-configured settings JSON blob),
+// stamping updated_at so callers could reason about staleness if they ever
+// need to -- nothing currently reads that column back.
+func (r *Repository) SaveSetting(ctx context.Context, key, value string) error {
+	now := time.Now().UTC().Format(crawledAtLayout)
+	if _, err := r.db.ExecContext(ctx, r.dialect.UpsertSettingSQL(), key, value, now); err != nil {
+		return fmt.Errorf("saving setting (%s): %w", key, err)
+	}
+	return nil
+}
+
+// GetSetting loads key's stored value. found is false (with a nil error)
+// when no row exists yet -- a fresh database, or a key nothing has ever
+// saved to -- so callers fall back to their hardcoded default rather than
+// treating that as a failure.
+func (r *Repository) GetSetting(ctx context.Context, key string) (value string, found bool, err error) {
+	query := r.ph(`SELECT value FROM app_settings WHERE setting_key = %s`, 1)
+	err = r.db.QueryRowContext(ctx, query, key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("loading setting (%s): %w", key, err)
+	}
+	return value, true, nil
+}
+
+// scheduledCrawlColumns is the column list (and order) every
+// scheduled_crawls SELECT below scans, shared with the INSERT/UPDATE
+// statements so all four stay in sync.
+const scheduledCrawlColumns = `id, seed_urls, max_pages, respect_robots, user_agent,
+	allow_off_domain_links, use_sitemap, interval_minutes, enabled, last_run_at, next_run_at, created_at`
+
+// CreateScheduledCrawl inserts a new recurring crawl schedule. Deliberately
+// carries no credentials to persist -- ScheduledCrawl has none.
+func (r *Repository) CreateScheduledCrawl(ctx context.Context, s domain.ScheduledCrawl) error {
+	seedJSON, err := json.Marshal(s.SeedURLs)
+	if err != nil {
+		return fmt.Errorf("encoding seed urls: %w", err)
+	}
+	insertSQL := r.ph(`INSERT INTO scheduled_crawls (`+scheduledCrawlColumns+`)
+	                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`,
+		1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+	_, err = r.db.ExecContext(ctx, insertSQL,
+		s.ID, string(seedJSON), s.MaxPages, s.RespectRobots, s.UserAgent,
+		s.AllowOffDomainLinks, s.UseSitemap, s.IntervalMinutes, s.Enabled,
+		nullableTimeString(s.LastRunAt), s.NextRunAt.UTC().Format(crawledAtLayout), s.CreatedAt.UTC().Format(crawledAtLayout),
+	)
+	if err != nil {
+		return fmt.Errorf("creating scheduled crawl: %w", err)
+	}
+	return nil
+}
+
+// ListScheduledCrawls lists every schedule, soonest next run first.
+func (r *Repository) ListScheduledCrawls(ctx context.Context) ([]domain.ScheduledCrawl, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+scheduledCrawlColumns+` FROM scheduled_crawls ORDER BY next_run_at ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("querying scheduled crawls: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.ScheduledCrawl
+	for rows.Next() {
+		s, err := scanScheduledCrawl(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning scheduled crawl: %w", err)
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// UpdateScheduledCrawl replaces s's editable fields (everything but
+// CreatedAt and LastRunAt, which only CreateScheduledCrawl and
+// MarkScheduledCrawlRun touch).
+func (r *Repository) UpdateScheduledCrawl(ctx context.Context, s domain.ScheduledCrawl) error {
+	seedJSON, err := json.Marshal(s.SeedURLs)
+	if err != nil {
+		return fmt.Errorf("encoding seed urls: %w", err)
+	}
+	updateSQL := r.ph(`UPDATE scheduled_crawls SET
+	                      seed_urls = %s, max_pages = %s, respect_robots = %s, user_agent = %s,
+	                      allow_off_domain_links = %s, use_sitemap = %s, interval_minutes = %s,
+	                      enabled = %s, next_run_at = %s
+	                    WHERE id = %s`, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+	res, err := r.db.ExecContext(ctx, updateSQL,
+		string(seedJSON), s.MaxPages, s.RespectRobots, s.UserAgent,
+		s.AllowOffDomainLinks, s.UseSitemap, s.IntervalMinutes, s.Enabled,
+		s.NextRunAt.UTC().Format(crawledAtLayout), s.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("updating scheduled crawl (%s): %w", s.ID, err)
+	}
+	return requireRowsAffected(res, s.ID)
+}
+
+// SetScheduledCrawlEnabled flips a schedule's enabled flag without
+// touching any of its other fields.
+func (r *Repository) SetScheduledCrawlEnabled(ctx context.Context, id string, enabled bool) error {
+	updateSQL := r.ph(`UPDATE scheduled_crawls SET enabled = %s WHERE id = %s`, 1, 2)
+	res, err := r.db.ExecContext(ctx, updateSQL, enabled, id)
+	if err != nil {
+		return fmt.Errorf("updating scheduled crawl enabled flag (%s): %w", id, err)
+	}
+	return requireRowsAffected(res, id)
+}
+
+func (r *Repository) DeleteScheduledCrawl(ctx context.Context, id string) error {
+	res, err := r.db.ExecContext(ctx, r.ph(`DELETE FROM scheduled_crawls WHERE id = %s`, 1), id)
+	if err != nil {
+		return fmt.Errorf("deleting scheduled crawl (%s): %w", id, err)
+	}
+	return requireRowsAffected(res, id)
+}
+
+// requireRowsAffected turns a zero-rows-affected result into
+// ErrScheduledCrawlNotFound, so callers can tell "nothing to do" apart from
+// "that ID doesn't exist".
+func requireRowsAffected(res sql.Result, id string) error {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking result for %s: %w", id, err)
+	}
+	if n == 0 {
+		return ports.ErrScheduledCrawlNotFound
+	}
+	return nil
+}
+
+// DueScheduledCrawls lists every enabled schedule whose next_run_at is at
+// or before now, soonest-due first.
+func (r *Repository) DueScheduledCrawls(ctx context.Context, now time.Time) ([]domain.ScheduledCrawl, error) {
+	query := r.ph(`SELECT `+scheduledCrawlColumns+` FROM scheduled_crawls
+	               WHERE enabled = %s AND next_run_at <= %s ORDER BY next_run_at ASC`, 1, 2)
+	rows, err := r.db.QueryContext(ctx, query, true, now.UTC().Format(crawledAtLayout))
+	if err != nil {
+		return nil, fmt.Errorf("querying due scheduled crawls: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.ScheduledCrawl
+	for rows.Next() {
+		s, err := scanScheduledCrawl(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning scheduled crawl: %w", err)
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// MarkScheduledCrawlRun records that a schedule was just triggered, so the
+// next tick's DueScheduledCrawls call doesn't pick it up again until its
+// interval has actually elapsed.
+func (r *Repository) MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time) error {
+	updateSQL := r.ph(`UPDATE scheduled_crawls SET last_run_at = %s, next_run_at = %s WHERE id = %s`, 1, 2, 3)
+	res, err := r.db.ExecContext(ctx, updateSQL,
+		lastRunAt.UTC().Format(crawledAtLayout), nextRunAt.UTC().Format(crawledAtLayout), id)
+	if err != nil {
+		return fmt.Errorf("marking scheduled crawl run (%s): %w", id, err)
+	}
+	return requireRowsAffected(res, id)
+}
+
+func nullableTimeString(t *time.Time) sql.NullString {
+	if t == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: t.UTC().Format(crawledAtLayout), Valid: true}
+}
+
+// scanner is satisfied by both *sql.Row and *sql.Rows, so
+// scanScheduledCrawl works for either a single-row Get or a multi-row List.
+type scanner interface {
+	Scan(dest ...interface{}) error
+}
+
+func scanScheduledCrawl(row scanner) (domain.ScheduledCrawl, error) {
+	var s domain.ScheduledCrawl
+	var seedJSON string
+	var lastRunAt sql.NullString
+	var nextRunAt, createdAt string
+	if err := row.Scan(&s.ID, &seedJSON, &s.MaxPages, &s.RespectRobots, &s.UserAgent,
+		&s.AllowOffDomainLinks, &s.UseSitemap, &s.IntervalMinutes, &s.Enabled,
+		&lastRunAt, &nextRunAt, &createdAt); err != nil {
+		return domain.ScheduledCrawl{}, err
+	}
+	if err := json.Unmarshal([]byte(seedJSON), &s.SeedURLs); err != nil {
+		return domain.ScheduledCrawl{}, fmt.Errorf("decoding seed urls: %w", err)
+	}
+	if lastRunAt.Valid {
+		if t, err := time.Parse(crawledAtLayout, lastRunAt.String); err == nil {
+			s.LastRunAt = &t
+		}
+	}
+	if t, err := time.Parse(crawledAtLayout, nextRunAt); err == nil {
+		s.NextRunAt = t
+	}
+	if t, err := time.Parse(crawledAtLayout, createdAt); err == nil {
+		s.CreatedAt = t
+	}
+	return s, nil
 }
 
 func (r *Repository) ph(template string, positions ...int) string {

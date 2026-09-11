@@ -42,22 +42,22 @@ func (r *fakeRepo) All(_ context.Context) ([]domain.Document, error) { return r.
 
 func TestCrawlerService_Crawl_HappyPath(t *testing.T) {
 	fetcher := &fakeFetcher{pages: map[string]string{
-		"http://a": "<html>a</html>",
-		"http://b": "<html>b</html>",
+		"http://a/":  "<html>a</html>",
+		"http://a/b": "<html>b</html>",
 	}}
 	robots := &fakeRobots{}
 	repo := &fakeRepo{}
 	idx := &fakeIndexer{}
 
 	parse := func(html, pageURL string) (string, string, []string) {
-		if pageURL == "http://a" {
-			return "A", "genuegend inhalt text fuer die seite a hier bitte danke", []string{"http://b"}
+		if pageURL == "http://a/" {
+			return "A", "genuegend inhalt text fuer die seite a hier bitte danke", []string{"http://a/b"}
 		}
 		return "B", "genuegend inhalt text fuer die seite b hier auch danke", nil
 	}
 
 	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse, nil)
-	count, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5}, nil)
+	count, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a/"}, MaxPages: 5}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -131,18 +131,18 @@ func TestCrawlerService_Crawl_SkipsThinContent(t *testing.T) {
 
 func TestCrawlerService_Crawl_StopsAtMaxPages(t *testing.T) {
 	fetcher := &fakeFetcher{pages: map[string]string{
-		"http://a": "<html>a</html>", "http://b": "<html>b</html>", "http://c": "<html>c</html>",
+		"http://a/1": "<html>a</html>", "http://a/2": "<html>b</html>", "http://a/3": "<html>c</html>",
 	}}
 	robots := &fakeRobots{}
 	repo := &fakeRepo{}
 	idx := &fakeIndexer{}
 	parse := func(html, pageURL string) (string, string, []string) {
-		next := map[string][]string{"http://a": {"http://b"}, "http://b": {"http://c"}}
+		next := map[string][]string{"http://a/1": {"http://a/2"}, "http://a/2": {"http://a/3"}}
 		return "T", "genuegend inhalt text fuer diese seite bitte danke", next[pageURL]
 	}
 
 	svc := application.NewCrawlerService(fetcher, robots, repo, idx, parse, nil)
-	count, _ := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 2}, nil)
+	count, _ := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a/1"}, MaxPages: 2}, nil)
 	if count != 2 {
 		t.Errorf("expected stop at maxPages=2, got %d", count)
 	}

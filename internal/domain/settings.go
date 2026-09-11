@@ -10,12 +10,14 @@ import (
 // TuningSettings for that): how the crawler fetches pages, what a search
 // returns by default, and how long a sign-in session lasts.
 type OperationalSettingsValues struct {
-	FetchTimeout    time.Duration
-	UserAgent       string
-	DefaultMaxPages int
-	MinTextLength   int
-	DefaultTopK     int
-	SessionTTL      time.Duration
+	FetchTimeout     time.Duration
+	UserAgent        string
+	DefaultMaxPages  int
+	MinTextLength    int
+	DefaultTopK      int
+	SessionTTL       time.Duration
+	CrawlDelayMs     int
+	MaxResponseBytes int
 }
 
 // defaultUserAgent mimics a standard desktop Firefox so crawled sites treat
@@ -24,14 +26,24 @@ type OperationalSettingsValues struct {
 // per crawl via CrawlOptions.UserAgent.
 const defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0"
 
+// defaultCrawlDelayMs and defaultMaxResponseBytes are the built-in
+// politeness/safety defaults: a quarter-second between fetches, and a 5MB
+// cap on how much of a response body gets read.
+const (
+	defaultCrawlDelayMs     = 250
+	defaultMaxResponseBytes = 5 * 1024 * 1024
+)
+
 func defaultOperationalSettings() OperationalSettingsValues {
 	return OperationalSettingsValues{
-		FetchTimeout:    8 * time.Second,
-		UserAgent:       defaultUserAgent,
-		DefaultMaxPages: 20,
-		MinTextLength:   50,
-		DefaultTopK:     10,
-		SessionTTL:      12 * time.Hour,
+		FetchTimeout:     8 * time.Second,
+		UserAgent:        defaultUserAgent,
+		DefaultMaxPages:  20,
+		MinTextLength:    50,
+		DefaultTopK:      10,
+		SessionTTL:       12 * time.Hour,
+		CrawlDelayMs:     defaultCrawlDelayMs,
+		MaxResponseBytes: defaultMaxResponseBytes,
 	}
 }
 
@@ -93,6 +105,12 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 	}
 	if v.SessionTTL <= 0 {
 		v.SessionTTL = d.SessionTTL
+	}
+	if v.CrawlDelayMs < 0 {
+		v.CrawlDelayMs = 0
+	}
+	if v.MaxResponseBytes <= 0 {
+		v.MaxResponseBytes = d.MaxResponseBytes
 	}
 
 	s.mu.Lock()

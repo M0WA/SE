@@ -61,3 +61,43 @@ func TestAllDialects_CreateSchemaSQLNonEmpty(t *testing.T) {
 		}
 	}
 }
+
+func TestAllDialects_CreateSchemaSQLIncludesAppSettings(t *testing.T) {
+	for _, driver := range []string{"sqlite", "mysql", "postgres"} {
+		stmts := sqlrepo.NewDialect(driver).CreateSchemaSQL()
+		found := false
+		for _, stmt := range stmts {
+			if strings.Contains(stmt, "app_settings") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected an app_settings table statement for %s", driver)
+		}
+	}
+}
+
+func TestAllDialects_CreateSchemaSQLIncludesScheduledCrawls(t *testing.T) {
+	for _, driver := range []string{"sqlite", "mysql", "postgres"} {
+		stmts := sqlrepo.NewDialect(driver).CreateSchemaSQL()
+		found := false
+		for _, stmt := range stmts {
+			if strings.Contains(stmt, "scheduled_crawls") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected a scheduled_crawls table statement for %s", driver)
+		}
+	}
+}
+
+func TestAllDialects_UpsertSettingSQLNonEmpty(t *testing.T) {
+	for _, driver := range []string{"sqlite", "mysql", "postgres"} {
+		if sqlrepo.NewDialect(driver).UpsertSettingSQL() == "" {
+			t.Errorf("expected an upsert-setting statement for %s", driver)
+		}
+	}
+}

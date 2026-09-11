@@ -19,11 +19,11 @@ type fakeSearch struct {
 	results []domain.SearchResult
 	err     error
 	gotQ    string
-	gotTopK int
+	gotOpts ports.SearchQuery
 }
 
-func (f *fakeSearch) Search(_ context.Context, q string, topK int) ([]domain.SearchResult, error) {
-	f.gotQ, f.gotTopK = q, topK
+func (f *fakeSearch) Search(_ context.Context, q string, opts ports.SearchQuery) ([]domain.SearchResult, error) {
+	f.gotQ, f.gotOpts = q, opts
 	return f.results, f.err
 }
 
@@ -66,6 +66,16 @@ func (f *fakeJobService) ListCrawlJobs(_ context.Context) ([]domain.CrawlJobSumm
 
 func (f *fakeJobService) GetCrawlJob(_ context.Context, _ string) (domain.CrawlJob, error) {
 	return f.job, f.getErr
+}
+
+// fakeHealthChecker is used by TestHandleHealthz_* -- a stand-in for the
+// repository's real DB ping.
+type fakeHealthChecker struct {
+	err error
+}
+
+func (f *fakeHealthChecker) Ping(context.Context) error {
+	return f.err
 }
 
 const (
@@ -241,8 +251,8 @@ func TestHandleSearch_Success(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if fs.gotQ != "katzen" || fs.gotTopK != 5 {
-		t.Errorf("unexpected arguments to Search: %q %d", fs.gotQ, fs.gotTopK)
+	if fs.gotQ != "katzen" || fs.gotOpts.TopK != 5 {
+		t.Errorf("unexpected arguments to Search: %q %d", fs.gotQ, fs.gotOpts.TopK)
 	}
 }
 
@@ -252,8 +262,41 @@ func TestHandleSearch_DefaultTopK(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
-	if fs.gotTopK != 10 {
-		t.Errorf("expected default top_k=10, got %d", fs.gotTopK)
+	if fs.gotOpts.TopK != 10 {
+		t.Errorf("expected default top_k=10, got %d", fs.gotOpts.TopK)
+	}
+}
+
+func TestHandleSearch_DefaultSortIsRelevance(t *testing.T) {
+	fs := &fakeSearch{}
+	h := restapi.New(restapi.Config{Search: fs})
+	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+	if fs.gotOpts.Sort != ports.SortRelevance {
+		t.Errorf("expected default sort=relevance, got %q", fs.gotOpts.Sort)
+	}
+}
+
+func TestHandleSearch_SortRecencyPassesThrough(t *testing.T) {
+	fs := &fakeSearch{}
+	h := restapi.New(restapi.Config{Search: fs})
+	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen&sort=recency", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+	if fs.gotOpts.Sort != ports.SortRecency {
+		t.Errorf("expected sort=recency to pass through, got %q", fs.gotOpts.Sort)
+	}
+}
+
+func TestHandleSearch_UnrecognizedSortFallsBackToRelevance(t *testing.T) {
+	fs := &fakeSearch{}
+	h := restapi.New(restapi.Config{Search: fs})
+	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen&sort=bogus", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+	if fs.gotOpts.Sort != ports.SortRelevance {
+		t.Errorf("expected an unrecognized sort value to fall back to relevance, got %q", fs.gotOpts.Sort)
 	}
 }
 
@@ -275,6 +318,83 @@ func TestHandleSearch_ServiceError(t *testing.T) {
 	h.RoutesSearch().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleHealthz_SearchServer_HealthyByDefault(t *testing.T) {
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.Status != "ok" {
+		t.Errorf(`expected status "ok", got %q`, resp.Status)
+	}
+}
+
+func TestHandleHealthz_SearchServer_UnhealthyWhenDBPingFails(t *testing.T) {
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Health: &fakeHealthChecker{err: errors.New("db unreachable")}})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleHealthz_SearchServer_HealthyWhenDBPingSucceeds(t *testing.T) {
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Health: &fakeHealthChecker{}})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleHealthz_AdminServer_Unauthenticated(t *testing.T) {
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected /healthz to bypass admin auth entirely, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleHealthz_AdminServer_UnhealthyWhenDBPingFails(t *testing.T) {
+	h := restapi.New(restapi.Config{
+		Search: &fakeSearch{}, AdminUser: testAdminUser, AdminPass: testAdminPass,
+		Health: &fakeHealthChecker{err: errors.New("db unreachable")},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleHealthz_MethodNotAllowed(t *testing.T) {
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}})
+	req := httptest.NewRequest(http.MethodPost, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
 	}
 }
 
@@ -340,6 +460,44 @@ func TestHandleAdminCrawl_Success(t *testing.T) {
 	}
 	if !fj.gotOptions.RespectRobots || fj.gotOptions.UserAgent != "custom-bot/1.0" {
 		t.Errorf("expected respect_robots/user_agent to pass through, got %+v", fj.gotOptions)
+	}
+}
+
+func TestHandleAdminCrawl_PassesOffDomainAndSitemapOptionsThrough(t *testing.T) {
+	fj := &fakeJobService{jobID: "job-42"}
+	h, cookie := authedHandler(t, &fakeSearch{}, fj)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"seed_urls": []string{"http://a"}, "allow_off_domain_links": true, "use_sitemap": true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !fj.gotOptions.AllowOffDomainLinks || !fj.gotOptions.UseSitemap {
+		t.Errorf("expected allow_off_domain_links/use_sitemap to pass through, got %+v", fj.gotOptions)
+	}
+}
+
+func TestHandleAdminCrawl_OffDomainAndSitemapOptionsDefaultFalse(t *testing.T) {
+	fj := &fakeJobService{jobID: "job-42"}
+	h, cookie := authedHandler(t, &fakeSearch{}, fj)
+
+	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if fj.gotOptions.AllowOffDomainLinks || fj.gotOptions.UseSitemap {
+		t.Errorf("expected allow_off_domain_links/use_sitemap to default false, got %+v", fj.gotOptions)
 	}
 }
 

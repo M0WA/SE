@@ -19,14 +19,16 @@ func NewHybridSearchService(repo ports.SQLRepository, embedder ports.EmbeddingPr
 	return &hybridSearchService{repo: repo, embedder: embedder, settings: settings, overrides: overrides}
 }
 
-func (s *hybridSearchService) Search(ctx context.Context, query string, topK int) ([]domain.HybridResult, error) {
+func (s *hybridSearchService) Search(ctx context.Context, query string, opts ports.SearchQuery) ([]domain.HybridResult, error) {
 	parsed := domain.ParseQuery(query)
 	if parsed.Empty() {
 		return nil, errors.New("query must not be empty")
 	}
+	topK := opts.TopK
 	if topK <= 0 {
 		topK = 10
 	}
+	recency := opts.Sort == ports.SortRecency
 	terms := parsed.AllTerms()
 
 	bm25PerDoc := make(map[string][]domain.PostingStats)
@@ -66,13 +68,15 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, topK int
 	hasOverrides := len(overrides.BlockedTerms) > 0 || len(overrides.BlockedDomains) > 0 ||
 		len(overrides.BoostedTerms) > 0 || len(overrides.BoostedDomains) > 0
 
-	// +required/-excluded/"phrase" constraints and blocked terms/domains
-	// need each candidate's full text and URL, which the ranking step
-	// below doesn't otherwise fetch until after truncating to topK -- so
-	// filter (and cache the fetched docs for reuse below, including by
-	// the boost step) before ranking, only when such constraints exist.
+	// +required/-excluded/"phrase"/site: constraints and blocked
+	// terms/domains need each candidate's full text and URL, which the
+	// ranking step below doesn't otherwise fetch until after truncating to
+	// topK -- so filter (and cache the fetched docs for reuse below,
+	// including by the boost step and recency sort) before ranking,
+	// whenever such constraints exist or recency sort needs every
+	// candidate's CrawledAt.
 	docCache := make(map[string]domain.Document)
-	if parsed.HasConstraints() || hasOverrides {
+	if parsed.HasConstraints() || hasOverrides || recency {
 		for id := range candidateIDs {
 			doc, err := s.repo.DocumentByID(ctx, id)
 			if err != nil {
@@ -80,7 +84,7 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, topK int
 				continue
 			}
 			docCache[id] = doc
-			if !parsed.Matches(doc.Title, doc.Text) || overrides.Blocked(doc) {
+			if !parsed.Matches(doc.Title, doc.Text) || !parsed.SiteAllowed(doc) || overrides.Blocked(doc) {
 				delete(candidateIDs, id)
 			}
 		}
@@ -93,7 +97,7 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, topK int
 		bm25 := domain.BM25ScoreDocument(bm25PerDoc[id], k1, b)
 		semantic := domain.CosineSimilarity(queryVec, embeddings[id])
 		candidates = append(candidates, domain.HybridResult{
-			DocID: id, BM25Score: bm25, SemanticSim: semantic,
+			DocID: id, BM25Score: bm25, SemanticSim: semantic, CrawledAt: docCache[id].CrawledAt,
 		})
 	}
 
@@ -111,6 +115,11 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, topK int
 		if boosted {
 			domain.SortByFinalScore(ranked)
 		}
+	}
+	if recency {
+		// Recency sort ignores BM25/semantic/final score entirely -- this
+		// overrides whatever order CombineScores/boosting produced above.
+		domain.SortByCrawledAt(ranked)
 	}
 	if len(ranked) > topK {
 		ranked = ranked[:topK]

@@ -1,8 +1,13 @@
 package domain
 
-import "sort"
+import (
+	"sort"
+	"time"
+)
 
-// HybridResult is a ranked match with a broken-down score.
+// HybridResult is a ranked match with a broken-down score. CrawledAt is
+// populated only when the caller needs it for recency sorting -- it's the
+// zero time otherwise.
 type HybridResult struct {
 	DocID       string
 	URL         string
@@ -11,6 +16,7 @@ type HybridResult struct {
 	BM25Score   float64
 	SemanticSim float64
 	FinalScore  float64
+	CrawledAt   time.Time
 }
 
 // CombineScores blends BM25 and cosine similarity into a final score.
@@ -58,5 +64,18 @@ func SortByFinalScore(results []HybridResult) {
 			return results[i].DocID < results[j].DocID
 		}
 		return results[i].FinalScore > results[j].FinalScore
+	})
+}
+
+// SortByCrawledAt orders results by descending CrawledAt (most recently
+// crawled first), ignoring BM25Score/SemanticSim/FinalScore entirely --
+// ties (including two zero CrawledAt values, from documents the caller
+// never populated it for) are broken by DocID for a deterministic order.
+func SortByCrawledAt(results []HybridResult) {
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].CrawledAt.Equal(results[j].CrawledAt) {
+			return results[i].DocID < results[j].DocID
+		}
+		return results[i].CrawledAt.After(results[j].CrawledAt)
 	})
 }

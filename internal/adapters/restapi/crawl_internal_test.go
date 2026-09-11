@@ -98,6 +98,23 @@ func TestHandleCrawlInternal_RecordsRespectRobotsAndUserAgentOnTheJob(t *testing
 	}
 }
 
+func TestHandleCrawlInternal_RecordsOffDomainAndSitemapOptionsOnTheJob(t *testing.T) {
+	fc := &fakeCrawler{count: 1}
+	h := newCrawlServerHandler(fc)
+
+	jobID := startCrawl(t, h, ports.CrawlOptions{
+		SeedURLs: []string{"http://a"}, AllowOffDomainLinks: true, UseSitemap: true,
+	})
+	job := waitForJob(t, h, jobID)
+
+	if !job.Request.AllowOffDomainLinks || !job.Request.UseSitemap {
+		t.Errorf("expected the job to record allow_off_domain_links/use_sitemap, got %+v", job.Request)
+	}
+	if !fc.gotOptions.AllowOffDomainLinks || !fc.gotOptions.UseSitemap {
+		t.Errorf("expected the crawler to receive allow_off_domain_links/use_sitemap, got %+v", fc.gotOptions)
+	}
+}
+
 func TestHandleCrawlInternal_InvalidJSON(t *testing.T) {
 	h := newCrawlServerHandler(&fakeCrawler{})
 	req := httptest.NewRequest(http.MethodPost, "/crawl", bytes.NewReader([]byte("{ungültig")))
@@ -171,6 +188,29 @@ func TestHandleGetCrawlJob_NotFound(t *testing.T) {
 	h.RoutesCrawlInternal().ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleHealthz_CrawlServer_HealthyByDefault(t *testing.T) {
+	h := newCrawlServerHandler(&fakeCrawler{})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesCrawlInternal().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleHealthz_CrawlServer_UnhealthyWhenDBPingFails(t *testing.T) {
+	h := restapi.New(restapi.Config{
+		Crawler: &fakeCrawler{}, CrawlJobs: domain.NewCrawlJobStore(),
+		Health: &fakeHealthChecker{err: errors.New("db unreachable")},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesCrawlInternal().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

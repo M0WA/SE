@@ -3,10 +3,13 @@ package application_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
+	"time"
 
 	"searchengine/internal/application"
 	"searchengine/internal/domain"
+	"searchengine/internal/ports"
 )
 
 type fakeSQLRepo struct {
@@ -59,7 +62,7 @@ func TestHybridSearch_CombinesBM25AndSemantic(t *testing.T) {
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 
 	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil)
-	results, err := svc.Search(context.Background(), "katzen", 10)
+	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -77,7 +80,7 @@ func TestHybridSearch_FindsSemanticOnlyMatch(t *testing.T) {
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 
 	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.3, domain.DefaultBM25K1, domain.DefaultBM25B), nil)
-	results, err := svc.Search(context.Background(), "quantenphysik", 10)
+	results, err := svc.Search(context.Background(), "quantenphysik", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -88,7 +91,7 @@ func TestHybridSearch_FindsSemanticOnlyMatch(t *testing.T) {
 
 func TestHybridSearch_EmptyQueryRejected(t *testing.T) {
 	svc := application.NewHybridSearchService(&fakeSQLRepo{}, &fakeEmbedder{}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil)
-	_, err := svc.Search(context.Background(), "   ", 10)
+	_, err := svc.Search(context.Background(), "   ", ports.SearchQuery{TopK: 10})
 	if err == nil {
 		t.Error("expected error for empty query")
 	}
@@ -111,7 +114,7 @@ func TestHybridSearch_RequiredWordFiltersOutNonMatching(t *testing.T) {
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil)
 
-	results, err := svc.Search(context.Background(), "katzen +haustiere", 10)
+	results, err := svc.Search(context.Background(), "katzen +haustiere", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -137,7 +140,7 @@ func TestHybridSearch_ExcludedWordFiltersOutMatching(t *testing.T) {
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil)
 
-	results, err := svc.Search(context.Background(), "katzen -zoo", 10)
+	results, err := svc.Search(context.Background(), "katzen -zoo", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -163,7 +166,7 @@ func TestHybridSearch_PhraseFiltersOutNonMatching(t *testing.T) {
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil)
 
-	results, err := svc.Search(context.Background(), `katzen "sehr verspielt"`, 10)
+	results, err := svc.Search(context.Background(), `katzen "sehr verspielt"`, ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -183,7 +186,7 @@ func TestHybridSearch_ConstraintDocumentFetchErrorSkipsCandidate(t *testing.T) {
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil)
 
-	results, err := svc.Search(context.Background(), "katzen +erforderlich", 10)
+	results, err := svc.Search(context.Background(), "katzen +erforderlich", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -210,7 +213,7 @@ func TestHybridSearch_BlockedDomainExcludesDocument(t *testing.T) {
 	overrides := domain.NewRankingOverrides(domain.RankingOverridesValues{BlockedDomains: []string{"spammy.example"}})
 	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), overrides)
 
-	results, err := svc.Search(context.Background(), "katzen", 10)
+	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -237,7 +240,7 @@ func TestHybridSearch_BlockedTermExcludesDocument(t *testing.T) {
 	overrides := domain.NewRankingOverrides(domain.RankingOverridesValues{BlockedTerms: []string{"casino"}})
 	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), overrides)
 
-	results, err := svc.Search(context.Background(), "katzen", 10)
+	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -264,7 +267,7 @@ func TestHybridSearch_BoostedDomainReordersResults(t *testing.T) {
 
 	// Without any boost, doc 1's higher term frequency ranks it first.
 	plainSvc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(1.0, domain.DefaultBM25K1, domain.DefaultBM25B), nil)
-	plainResults, err := plainSvc.Search(context.Background(), "katzen", 10)
+	plainResults, err := plainSvc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -274,7 +277,7 @@ func TestHybridSearch_BoostedDomainReordersResults(t *testing.T) {
 
 	overrides := domain.NewRankingOverrides(domain.RankingOverridesValues{BoostedDomains: map[string]float64{"trusted.example": 10.0}})
 	boostedSvc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(1.0, domain.DefaultBM25K1, domain.DefaultBM25B), overrides)
-	boostedResults, err := boostedSvc.Search(context.Background(), "katzen", 10)
+	boostedResults, err := boostedSvc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -294,12 +297,128 @@ func TestHybridSearch_NilOverridesBehavesUnrestricted(t *testing.T) {
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil)
 
-	results, err := svc.Search(context.Background(), "katzen", 10)
+	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(results) != 1 || results[0].DocID != "1" {
 		t.Errorf("expected doc 1 unaffected by a nil overrides pointer, got %+v", results)
+	}
+}
+
+func TestHybridSearch_SiteFilterExcludesNonMatchingHost(t *testing.T) {
+	repo := &fakeSQLRepo{
+		postings: map[string][]domain.PostingStats{
+			"katzen": {
+				{DocID: "1", TermFreq: 1, DocLength: 10, DocFreq: 2, TotalDocs: 2, AvgDocLen: 10},
+				{DocID: "2", TermFreq: 1, DocLength: 10, DocFreq: 2, TotalDocs: 2, AvgDocLen: 10},
+			},
+		},
+		embeddings: map[string][]float32{"1": {1, 0}, "2": {1, 0}},
+		docs: map[string]domain.Document{
+			"1": {ID: "1", URL: "https://example.com/a", Title: "Katzen", Text: "Katzen sind toll"},
+			"2": {ID: "2", URL: "https://other.example/b", Title: "Katzen", Text: "Katzen sind toll"},
+		},
+	}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil)
+
+	results, err := svc.Search(context.Background(), "katzen site:example.com", ports.SearchQuery{TopK: 10})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 || results[0].DocID != "1" {
+		t.Errorf("expected only doc 1 (matches site:example.com), got %+v", results)
+	}
+}
+
+func TestHybridSearch_SiteFilterAllowsSubdomain(t *testing.T) {
+	repo := &fakeSQLRepo{
+		postings: map[string][]domain.PostingStats{
+			"katzen": {{DocID: "1", TermFreq: 1, DocLength: 10, DocFreq: 1, TotalDocs: 1, AvgDocLen: 10}},
+		},
+		embeddings: map[string][]float32{"1": {1, 0}},
+		docs: map[string]domain.Document{
+			"1": {ID: "1", URL: "https://www.example.com/a", Title: "Katzen", Text: "Katzen sind toll"},
+		},
+	}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil)
+
+	results, err := svc.Search(context.Background(), "katzen site:example.com", ports.SearchQuery{TopK: 10})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 || results[0].DocID != "1" {
+		t.Errorf("expected doc 1 (www.example.com is a subdomain of example.com), got %+v", results)
+	}
+}
+
+func TestHybridSearch_RecencySortOrdersByCrawledAtDescending(t *testing.T) {
+	oldest := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	middle := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	newest := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	repo := &fakeSQLRepo{
+		postings: map[string][]domain.PostingStats{
+			"katzen": {
+				{DocID: "1", TermFreq: 5, DocLength: 10, DocFreq: 3, TotalDocs: 3, AvgDocLen: 10},
+				{DocID: "2", TermFreq: 1, DocLength: 10, DocFreq: 3, TotalDocs: 3, AvgDocLen: 10},
+				{DocID: "3", TermFreq: 1, DocLength: 10, DocFreq: 3, TotalDocs: 3, AvgDocLen: 10},
+			},
+		},
+		embeddings: map[string][]float32{"1": {1, 0}, "2": {1, 0}, "3": {1, 0}},
+		docs: map[string]domain.Document{
+			// Doc 1 has by far the strongest BM25 score (highest term
+			// frequency) but is the oldest -- relevance order would put it
+			// first; recency order must put it last.
+			"1": {ID: "1", URL: "http://a", Title: "Katzen", Text: "Katzen Katzen Katzen Katzen Katzen", CrawledAt: oldest},
+			"2": {ID: "2", URL: "http://b", Title: "Katzen", Text: "Katzen sind toll", CrawledAt: newest},
+			"3": {ID: "3", URL: "http://c", Title: "Katzen", Text: "Katzen sind toll", CrawledAt: middle},
+		},
+	}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+
+	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(1.0, domain.DefaultBM25K1, domain.DefaultBM25B), nil)
+
+	relevance, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10, Sort: ports.SortRelevance})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(relevance) != 3 || relevance[0].DocID != "1" {
+		t.Fatalf("expected doc 1 first by relevance (highest BM25), got %+v", relevance)
+	}
+
+	recency, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10, Sort: ports.SortRecency})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(recency) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(recency))
+	}
+	gotOrder := []string{recency[0].DocID, recency[1].DocID, recency[2].DocID}
+	wantOrder := []string{"2", "3", "1"}
+	if !reflect.DeepEqual(gotOrder, wantOrder) {
+		t.Errorf("expected recency order (newest first) %v, got %v", wantOrder, gotOrder)
+	}
+}
+
+func TestHybridSearch_UnrecognizedSortFallsBackToRelevance(t *testing.T) {
+	repo := &fakeSQLRepo{
+		postings: map[string][]domain.PostingStats{
+			"katzen": {{DocID: "1", TermFreq: 1, DocLength: 10, DocFreq: 1, TotalDocs: 1, AvgDocLen: 10}},
+		},
+		embeddings: map[string][]float32{"1": {1, 0}},
+		docs:       map[string]domain.Document{"1": {ID: "1", URL: "http://a", Title: "Katzen", Text: "Katzen sind toll"}},
+	}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil)
+
+	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10, Sort: "bogus"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 || results[0].DocID != "1" {
+		t.Errorf("expected an unrecognized sort value to behave like relevance, got %+v", results)
 	}
 }
 
@@ -315,7 +434,7 @@ func TestHybridSearch_TopKLimitsResults(t *testing.T) {
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil)
-	results, _ := svc.Search(context.Background(), "test", 2)
+	results, _ := svc.Search(context.Background(), "test", ports.SearchQuery{TopK: 2})
 	if len(results) != 2 {
 		t.Errorf("expected topK=2, got %d", len(results))
 	}

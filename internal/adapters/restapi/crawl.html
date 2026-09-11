@@ -19,13 +19,14 @@
     <a href="/admin">Overview</a>
     <a href="/admin/documents">Documents</a>
     <a href="/admin/crawl" aria-current="page">Crawl</a>
+    <a href="/admin/schedules">Schedules</a>
     <a href="/admin/tuning">Tuning</a>
     <a href="/admin/search">Search</a>
     <a href="/admin/overrides">Overrides</a>
   </nav>
 
   <form id="crawl-form" class="crawl-form">
-    <input id="crawl-url" class="field" name="url" type="url" placeholder="https://example.com" autofocus required>
+    <input id="crawl-url" class="field" name="url" type="text" placeholder="example.com" autofocus required>
     <input id="max-pages" name="max_pages" type="number" min="1" value="20" aria-label="Max pages">
     <button type="submit">Crawl</button>
   </form>
@@ -37,6 +38,20 @@
         Respect robots.txt
       </label>
       <p class="tuning-hint">Off by default — this crawl ignores robots.txt unless checked.</p>
+    </div>
+    <div class="form-row form-row-check">
+      <label for="crawl-allow-off-domain">
+        <input id="crawl-allow-off-domain" type="checkbox">
+        Allow linking to other domains
+      </label>
+      <p class="tuning-hint">Off by default — this crawl stays on the seed URL's own domain and never follows links elsewhere.</p>
+    </div>
+    <div class="form-row form-row-check">
+      <label for="crawl-use-sitemap">
+        <input id="crawl-use-sitemap" type="checkbox">
+        Discover pages via sitemap.xml
+      </label>
+      <p class="tuning-hint">Off by default — when checked, /sitemap.xml is fetched from the seed's domain and every URL it lists is queued too.</p>
     </div>
     <div class="form-row">
       <label for="crawl-user-agent">User-Agent</label><br>
@@ -67,7 +82,15 @@
 
   <section class="panel">
     <h2 id="job-detail-heading" hidden>Job detail</h2>
-    <div id="job-detail"></div>
+    <div id="job-detail-summary"></div>
+    <input id="job-detail-filter" class="field" type="text" placeholder="Filter pages (regex) — matches URL, status, or title" hidden>
+    <div id="job-detail-filter-error" class="error-text"></div>
+    <div id="job-detail-table" class="table-scroll"></div>
+    <div id="job-detail-pager" class="pager" hidden>
+      <button id="job-detail-prev" class="text-button" type="button">Previous</button>
+      <span id="job-detail-page-info"></span>
+      <button id="job-detail-next" class="text-button" type="button">Next</button>
+    </div>
   </section>
 </main>
 <script src="/admin.js"></script>
@@ -79,22 +102,38 @@
   const crawlBasicUser = document.getElementById('crawl-basic-user');
   const crawlBasicPass = document.getElementById('crawl-basic-pass');
   const crawlRespectRobots = document.getElementById('crawl-respect-robots');
+  const crawlAllowOffDomain = document.getElementById('crawl-allow-off-domain');
+  const crawlUseSitemap = document.getElementById('crawl-use-sitemap');
   const crawlUserAgent = document.getElementById('crawl-user-agent');
   const crawlStatus = document.getElementById('crawl-status');
   const jobsStatusEl = document.getElementById('jobs-status');
   const jobsTableEl = document.getElementById('jobs-table');
   const jobDetailHeading = document.getElementById('job-detail-heading');
-  const jobDetailEl = document.getElementById('job-detail');
+  const jobDetailSummaryEl = document.getElementById('job-detail-summary');
+  const jobDetailFilterEl = document.getElementById('job-detail-filter');
+  const jobDetailFilterErrorEl = document.getElementById('job-detail-filter-error');
+  const jobDetailTableEl = document.getElementById('job-detail-table');
+  const jobDetailPagerEl = document.getElementById('job-detail-pager');
+  const jobDetailPrevBtn = document.getElementById('job-detail-prev');
+  const jobDetailNextBtn = document.getElementById('job-detail-next');
+  const jobDetailPageInfoEl = document.getElementById('job-detail-page-info');
 
   const ACTIVE_STATUSES = ['queued', 'running'];
+  const JOB_DETAIL_PAGE_SIZE = 50;
   let selectedJobID = null;
   let pollTimer = null;
+  let jobDetailPages = [];
+  let jobDetailFilterText = '';
+  let jobDetailPageNum = 1;
 
   const prefillURL = new URLSearchParams(window.location.search).get('url');
   if (prefillURL) {
     crawlURL.value = prefillURL;
     crawlURL.focus();
   }
+  crawlURL.addEventListener('blur', () => {
+    if (crawlURL.value.trim() !== '') crawlURL.value = normalizeURL(crawlURL.value);
+  });
 
   function capitalize(s) {
     return s.charAt(0).toUpperCase() + s.slice(1);
@@ -181,57 +220,139 @@
   function requestOptionsSummary(request) {
     const parts = [request.respect_robots ? 'respects robots.txt' : 'ignores robots.txt'];
     parts.push(request.user_agent ? 'custom User-Agent' : 'default User-Agent');
+    parts.push(request.allow_off_domain_links ? 'allows other domains' : 'stays on seed domain');
+    if (request.use_sitemap) parts.push('uses sitemap.xml');
     return parts.join(', ');
   }
 
-  function renderJobDetail(job) {
-    jobDetailHeading.hidden = false;
-    clear(jobDetailEl);
-    const summary = document.createElement('p');
-    summary.className = 'panel-status';
-    summary.textContent = seedSummary(job.request) + ' — ' + capitalize(job.status) +
-      (job.error ? ': ' + job.error : '');
-    jobDetailEl.appendChild(summary);
+  function formatMs(ms) {
+    if (!ms) return '—';
+    return ms < 1000 ? ms + 'ms' : (ms / 1000).toFixed(1) + 's';
+  }
 
-    const options = document.createElement('p');
-    options.className = 'panel-status';
-    options.textContent = requestOptionsSummary(job.request);
-    jobDetailEl.appendChild(options);
+  function formatFetchedAt(iso) {
+    return iso ? new Date(iso).toLocaleTimeString() : '—';
+  }
 
-    if (!job.pages || job.pages.length === 0) {
-      const p = document.createElement('p');
-      p.className = 'panel-status';
-      p.textContent = 'No pages attempted yet.';
-      jobDetailEl.appendChild(p);
+  // filterPages applies the admin's regex (matched against url/status/title/
+  // detail, case-insensitive) client-side -- the API already returned every
+  // page for this job, so filtering here just narrows what's displayed.
+  // An invalid pattern shows a message instead of silently discarding it.
+  function filterPages(pages, pattern) {
+    if (!pattern) {
+      jobDetailFilterErrorEl.textContent = '';
+      return pages;
+    }
+    try {
+      const re = new RegExp(pattern, 'i');
+      jobDetailFilterErrorEl.textContent = '';
+      return pages.filter((p) =>
+        re.test(p.url) || re.test(p.status) || re.test(p.title || '') || re.test(p.error || ''));
+    } catch (err) {
+      jobDetailFilterErrorEl.textContent = 'Invalid regex: ' + err.message;
+      return pages;
+    }
+  }
+
+  // renderJobDetailTable re-derives the visible page from jobDetailPages
+  // every time -- never renders more than JOB_DETAIL_PAGE_SIZE rows at
+  // once, however large the underlying crawl was.
+  function renderJobDetailTable() {
+    const filtered = filterPages(jobDetailPages, jobDetailFilterText);
+    const totalPages = Math.max(1, Math.ceil(filtered.length / JOB_DETAIL_PAGE_SIZE));
+    jobDetailPageNum = Math.min(Math.max(1, jobDetailPageNum), totalPages);
+    const start = (jobDetailPageNum - 1) * JOB_DETAIL_PAGE_SIZE;
+    const pageItems = filtered.slice(start, start + JOB_DETAIL_PAGE_SIZE);
+
+    clear(jobDetailTableEl);
+    if (pageItems.length === 0) {
+      jobDetailTableEl.textContent = jobDetailFilterText ? 'No pages match that filter.' : 'No pages attempted yet.';
+      jobDetailPagerEl.hidden = true;
       return;
     }
     const table = buildTable(
-      [{ label: 'url' }, { label: 'status' }, { label: 'title' }, { label: 'detail' }],
-      job.pages,
+      [
+        { label: 'url' }, { label: 'status' }, { label: 'title' },
+        { label: 'length', num: true }, { label: 'links', num: true },
+        { label: 'duration', num: true }, { label: 'fetched at' }, { label: 'detail' },
+      ],
+      pageItems,
       (p) => [
         urlCell(p.url),
         textCell(capitalize(p.status).replace(/_/g, ' ')),
         textCell(p.title || ''),
+        textCell(p.doc_length ? String(p.doc_length) : '—', { num: true }),
+        textCell(p.links_found ? String(p.links_found) : '—', { num: true }),
+        textCell(formatMs(p.duration_ms), { num: true }),
+        textCell(formatFetchedAt(p.fetched_at)),
         textCell(p.error || ''),
       ],
     );
-    jobDetailEl.appendChild(table);
+    jobDetailTableEl.appendChild(table);
+
+    jobDetailPagerEl.hidden = totalPages <= 1;
+    jobDetailPageInfoEl.textContent = 'Page ' + jobDetailPageNum + ' of ' + totalPages +
+      ' (' + filtered.length + (filtered.length === 1 ? ' page)' : ' pages)');
+    jobDetailPrevBtn.disabled = jobDetailPageNum <= 1;
+    jobDetailNextBtn.disabled = jobDetailPageNum >= totalPages;
+  }
+
+  jobDetailFilterEl.addEventListener('input', () => {
+    jobDetailFilterText = jobDetailFilterEl.value.trim();
+    jobDetailPageNum = 1;
+    renderJobDetailTable();
+  });
+  jobDetailPrevBtn.addEventListener('click', () => {
+    jobDetailPageNum--;
+    renderJobDetailTable();
+  });
+  jobDetailNextBtn.addEventListener('click', () => {
+    jobDetailPageNum++;
+    renderJobDetailTable();
+  });
+
+  function renderJobDetail(job) {
+    jobDetailHeading.hidden = false;
+    clear(jobDetailSummaryEl);
+    const summary = document.createElement('p');
+    summary.className = 'panel-status';
+    summary.textContent = seedSummary(job.request) + ' — ' + capitalize(job.status) +
+      (job.error ? ': ' + job.error : '');
+    jobDetailSummaryEl.appendChild(summary);
+
+    const options = document.createElement('p');
+    options.className = 'panel-status';
+    options.textContent = requestOptionsSummary(job.request);
+    jobDetailSummaryEl.appendChild(options);
+
+    jobDetailPages = job.pages || [];
+    jobDetailFilterEl.hidden = jobDetailPages.length === 0;
+    renderJobDetailTable();
   }
 
   async function loadJobDetail(jobID) {
+    if (jobID !== selectedJobID) {
+      jobDetailFilterText = '';
+      jobDetailFilterEl.value = '';
+      jobDetailPageNum = 1;
+    }
     selectedJobID = jobID;
     try {
       const job = await getJSON('/admin/api/crawl/jobs/' + encodeURIComponent(jobID));
       renderJobDetail(job);
     } catch (err) {
       jobDetailHeading.hidden = false;
-      jobDetailEl.textContent = 'Could not load job: ' + err.message;
+      clear(jobDetailSummaryEl);
+      jobDetailSummaryEl.textContent = 'Could not load job: ' + err.message;
+      clear(jobDetailTableEl);
+      jobDetailPagerEl.hidden = true;
+      jobDetailFilterEl.hidden = true;
     }
   }
 
   crawlForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const url = crawlURL.value.trim();
+    const url = normalizeURL(crawlURL.value);
     if (!url) {
       crawlStatus.textContent = 'Enter a URL to crawl.';
       return;
@@ -247,6 +368,8 @@
         basic_auth_pass: crawlBasicPass.value,
         respect_robots: crawlRespectRobots.checked,
         user_agent: crawlUserAgent.value,
+        allow_off_domain_links: crawlAllowOffDomain.checked,
+        use_sitemap: crawlUseSitemap.checked,
       });
       crawlStatus.textContent = 'Job started.';
       await loadJobs();

@@ -152,6 +152,92 @@ func TestFetcher_FetchWithOptions_PerRequestUserAgentOverridesSettings(t *testin
 	}
 }
 
+func TestFetcher_FetchWithOptions_RejectsBinaryContentType(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write([]byte("\x89PNG\r\n"))
+	}))
+	defer srv.Close()
+
+	f := httpfetcher.New(nil)
+	if _, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{}); err == nil {
+		t.Error("expected an error for a non-textual content-type")
+	}
+}
+
+func TestFetcher_FetchWithOptions_AcceptsHTMLContentType(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte("<html>ok</html>"))
+	}))
+	defer srv.Close()
+
+	f := httpfetcher.New(nil)
+	if _, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFetcher_FetchWithOptions_AcceptsXMLContentTypeForSitemaps(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.Write([]byte("<urlset></urlset>"))
+	}))
+	defer srv.Close()
+
+	f := httpfetcher.New(nil)
+	if _, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFetcher_FetchWithOptions_MissingContentTypeIsAllowed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Del("Content-Type")
+		w.Write([]byte("<html>ok</html>"))
+	}))
+	defer srv.Close()
+
+	f := httpfetcher.New(nil)
+	if _, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFetcher_FetchWithOptions_TruncatesBodyAtMaxResponseBytes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("0123456789"))
+	}))
+	defer srv.Close()
+
+	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{MaxResponseBytes: 4})
+	f := httpfetcher.New(settings)
+	body, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if body != "0123" {
+		t.Errorf("expected the body truncated to 4 bytes, got %q", body)
+	}
+}
+
+func TestFetcher_FetchWithOptions_BodyUnderCapIsNotTruncated(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("short"))
+	}))
+	defer srv.Close()
+
+	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{MaxResponseBytes: 5 * 1024 * 1024})
+	f := httpfetcher.New(settings)
+	body, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if body != "short" {
+		t.Errorf("expected the full body, got %q", body)
+	}
+}
+
 func TestFetcher_Fetch_BodyReadError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hj, ok := w.(http.Hijacker)

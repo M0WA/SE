@@ -10,7 +10,11 @@ import (
 	"testing"
 	"time"
 
+	_ "modernc.org/sqlite"
+
 	"searchengine/internal/adapters/restapi"
+	"searchengine/internal/adapters/sqlrepo"
+	"searchengine/internal/bootstrap"
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
 )
@@ -63,11 +67,11 @@ func (f *fakeAdminRepo) PostingsForTerm(context.Context, string) ([]domain.Posti
 type fakeDebugSearch struct {
 	results []domain.HybridResult
 	err     error
-	gotTopK int
+	gotOpts ports.SearchQuery
 }
 
-func (f *fakeDebugSearch) Search(_ context.Context, _ string, topK int) ([]domain.HybridResult, error) {
-	f.gotTopK = topK
+func (f *fakeDebugSearch) Search(_ context.Context, _ string, opts ports.SearchQuery) ([]domain.HybridResult, error) {
+	f.gotOpts = opts
 	return f.results, f.err
 }
 
@@ -623,8 +627,44 @@ func TestHandleAdminSearch_RespectsTopKParam(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
-	if fd.gotTopK != 3 {
-		t.Errorf("expected top_k=3 to be passed through, got %d", fd.gotTopK)
+	if fd.gotOpts.TopK != 3 {
+		t.Errorf("expected top_k=3 to be passed through, got %d", fd.gotOpts.TopK)
+	}
+}
+
+func TestHandleAdminSearch_DefaultSortIsRelevance(t *testing.T) {
+	fd := &fakeDebugSearch{}
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, fd)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/search?q=katzen", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if fd.gotOpts.Sort != ports.SortRelevance {
+		t.Errorf("expected default sort=relevance, got %q", fd.gotOpts.Sort)
+	}
+}
+
+func TestHandleAdminSearch_SortRecencyPassesThrough(t *testing.T) {
+	fd := &fakeDebugSearch{}
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, fd)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/search?q=katzen&sort=recency", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if fd.gotOpts.Sort != ports.SortRecency {
+		t.Errorf("expected sort=recency to pass through, got %q", fd.gotOpts.Sort)
+	}
+}
+
+func TestHandleAdminSearch_UnrecognizedSortFallsBackToRelevance(t *testing.T) {
+	fd := &fakeDebugSearch{}
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, fd)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/search?q=katzen&sort=bogus", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if fd.gotOpts.Sort != ports.SortRelevance {
+		t.Errorf("expected an unrecognized sort value to fall back to relevance, got %q", fd.gotOpts.Sort)
 	}
 }
 
@@ -751,6 +791,7 @@ func TestHandleAdminSettings_GetReturnsCurrentValues(t *testing.T) {
 	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
 		FetchTimeout: 5 * time.Second, UserAgent: "test-agent", DefaultMaxPages: 15,
 		MinTextLength: 30, DefaultTopK: 7, SessionTTL: 6 * time.Hour,
+		CrawlDelayMs: 400, MaxResponseBytes: 2048,
 	})
 	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
@@ -774,6 +815,8 @@ func TestHandleAdminSettings_GetReturnsCurrentValues(t *testing.T) {
 			MinTextLength       int    `json:"min_text_length"`
 			DefaultTopK         int    `json:"default_top_k"`
 			SessionTTLHours     int    `json:"session_ttl_hours"`
+			CrawlDelayMs        int    `json:"crawl_delay_ms"`
+			MaxResponseKB       int    `json:"max_response_kb"`
 		} `json:"operational"`
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
@@ -782,7 +825,8 @@ func TestHandleAdminSettings_GetReturnsCurrentValues(t *testing.T) {
 	}
 	if resp.Operational.FetchTimeoutSeconds != 5 || resp.Operational.UserAgent != "test-agent" ||
 		resp.Operational.DefaultMaxPages != 15 || resp.Operational.MinTextLength != 30 ||
-		resp.Operational.DefaultTopK != 7 || resp.Operational.SessionTTLHours != 6 {
+		resp.Operational.DefaultTopK != 7 || resp.Operational.SessionTTLHours != 6 ||
+		resp.Operational.CrawlDelayMs != 400 || resp.Operational.MaxResponseKB != 2 {
 		t.Errorf("unexpected operational response: %+v", resp.Operational)
 	}
 }
@@ -796,6 +840,7 @@ func TestHandleAdminSettings_PostUpdatesValues(t *testing.T) {
 		"operational": map[string]interface{}{
 			"fetch_timeout_seconds": 3, "user_agent": "custom-bot", "default_max_pages": 5,
 			"min_text_length": 10, "default_top_k": 20, "session_ttl_hours": 2,
+			"crawl_delay_ms": 100, "max_response_kb": 1024,
 		},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
@@ -812,7 +857,8 @@ func TestHandleAdminSettings_PostUpdatesValues(t *testing.T) {
 	}
 	ov := opSettings.Get()
 	if ov.FetchTimeout != 3*time.Second || ov.UserAgent != "custom-bot" || ov.DefaultMaxPages != 5 ||
-		ov.MinTextLength != 10 || ov.DefaultTopK != 20 || ov.SessionTTL != 2*time.Hour {
+		ov.MinTextLength != 10 || ov.DefaultTopK != 20 || ov.SessionTTL != 2*time.Hour ||
+		ov.CrawlDelayMs != 100 || ov.MaxResponseBytes != 1024*1024 {
 		t.Errorf("expected operational settings to be updated, got %+v", ov)
 	}
 }
@@ -953,5 +999,162 @@ func TestHandleAdminOverrides_MethodNotAllowed(t *testing.T) {
 	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+func newSettingsStoreTestRepo(t *testing.T) *sqlrepo.Repository {
+	t.Helper()
+	repo, err := sqlrepo.New(context.Background(), "sqlite", "file:admintest_"+t.Name()+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("failed to create test repository: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	return repo
+}
+
+func adminAuthedHandlerWithSettingsStore(t *testing.T, settings *domain.TuningSettings, opSettings *domain.OperationalSettings, overrides *domain.RankingOverrides, store ports.SettingsStore) (*restapi.Handler, *http.Cookie) {
+	t.Helper()
+	h := restapi.New(restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
+		Settings: settings, OpSettings: opSettings, Overrides: overrides, SettingsStore: store,
+		DBDriver: "sqlite", AdminUser: testAdminUser, AdminPass: testAdminPass,
+	})
+	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
+	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login failed: %d %s", rec.Code, rec.Body.String())
+	}
+	return h, rec.Result().Cookies()[0]
+}
+
+func TestHandleAdminSettings_PostPersistsToSettingsStore(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	opSettings := domain.DefaultOperationalSettings()
+	h, cookie := adminAuthedHandlerWithSettingsStore(t, settings, opSettings, nil, repo)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.9, "k1": 2.0, "b": 0.2},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 3, "user_agent": "custom-bot", "default_max_pages": 5,
+			"min_text_length": 10, "default_top_k": 20, "session_ttl_hours": 2,
+			"crawl_delay_ms": 100, "max_response_kb": 1024,
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rawTuning, found, err := repo.GetSetting(context.Background(), ports.SettingsKeyTuning)
+	if err != nil || !found {
+		t.Fatalf("expected the tuning setting to be persisted, found=%v err=%v", found, err)
+	}
+	var storedTuning domain.TuningValues
+	if err := json.Unmarshal([]byte(rawTuning), &storedTuning); err != nil {
+		t.Fatalf("failed to decode persisted tuning: %v", err)
+	}
+	if storedTuning.Alpha != 0.9 || storedTuning.K1 != 2.0 || storedTuning.B != 0.2 {
+		t.Errorf("unexpected persisted tuning: %+v", storedTuning)
+	}
+
+	rawOp, found, err := repo.GetSetting(context.Background(), ports.SettingsKeyOperational)
+	if err != nil || !found {
+		t.Fatalf("expected the operational setting to be persisted, found=%v err=%v", found, err)
+	}
+	var storedOp domain.OperationalSettingsValues
+	if err := json.Unmarshal([]byte(rawOp), &storedOp); err != nil {
+		t.Fatalf("failed to decode persisted operational settings: %v", err)
+	}
+	if storedOp.UserAgent != "custom-bot" || storedOp.DefaultMaxPages != 5 || storedOp.CrawlDelayMs != 100 {
+		t.Errorf("unexpected persisted operational settings: %+v", storedOp)
+	}
+}
+
+func TestHandleAdminSettings_PostWithoutSettingsStoreStillSucceeds(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	h, cookie := adminAuthedHandlerWithSettingsStore(t, settings, domain.DefaultOperationalSettings(), nil, nil)
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning":      map[string]float64{"alpha": 0.9, "k1": 2.0, "b": 0.2},
+		"operational": map[string]interface{}{"fetch_timeout_seconds": 3, "user_agent": "x", "default_max_pages": 5, "min_text_length": 1, "default_top_k": 1, "session_ttl_hours": 1, "crawl_delay_ms": 1, "max_response_kb": 1},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 even with no settings store configured, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleAdminOverrides_PostPersistsToSettingsStore(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	overrides := domain.DefaultRankingOverrides()
+	h, cookie := adminAuthedHandlerWithSettingsStore(t, nil, nil, overrides, repo)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"blocked_terms":   []string{"Casino"},
+		"boosted_terms":   map[string]float64{"Official": 1.5},
+		"blocked_domains": []string{"Spammy.example"},
+		"boosted_domains": map[string]float64{"Trusted.example": 2.0},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/overrides", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	raw, found, err := repo.GetSetting(context.Background(), ports.SettingsKeyOverrides)
+	if err != nil || !found {
+		t.Fatalf("expected the overrides setting to be persisted, found=%v err=%v", found, err)
+	}
+	var stored domain.RankingOverridesValues
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
+		t.Fatalf("failed to decode persisted overrides: %v", err)
+	}
+	if len(stored.BlockedTerms) != 1 || stored.BlockedTerms[0] != "casino" {
+		t.Errorf("expected persisted overrides to be normalized, got %+v", stored)
+	}
+	if stored.BoostedDomains["trusted.example"] != 2.0 {
+		t.Errorf("unexpected persisted overrides: %+v", stored)
+	}
+}
+
+// TestSyncSettings_PicksUpAdminPersistedValues proves the two ends of the
+// propagation path actually connect: what handleAdminSettings persists via
+// SaveSetting is exactly what bootstrap.SyncSettings' GetSetting-based load
+// later applies to a *different* TuningSettings instance -- simulating
+// another process's next poll picking up this admin edit.
+func TestSyncSettings_PicksUpAdminPersistedValues(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	adminSettings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	h, cookie := adminAuthedHandlerWithSettingsStore(t, adminSettings, domain.DefaultOperationalSettings(), nil, repo)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning":      map[string]float64{"alpha": 0.42, "k1": 1.5, "b": 0.6},
+		"operational": map[string]interface{}{"fetch_timeout_seconds": 3, "user_agent": "x", "default_max_pages": 5, "min_text_length": 1, "default_top_k": 1, "session_ttl_hours": 1, "crawl_delay_ms": 1, "max_response_kb": 1},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	otherProcessSettings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	syncCtx, cancelSync := context.WithCancel(context.Background())
+	t.Cleanup(cancelSync)
+	bootstrap.SyncSettings(syncCtx, repo, otherProcessSettings, nil, nil)
+	alpha, k1, b := otherProcessSettings.Get()
+	if alpha != 0.42 || k1 != 1.5 || b != 0.6 {
+		t.Errorf("expected another process's settings to pick up the admin edit, got (%v, %v, %v)", alpha, k1, b)
 	}
 }

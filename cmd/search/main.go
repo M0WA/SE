@@ -23,12 +23,14 @@ func main() {
 	settings := domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B)
 	opSettings := domain.DefaultOperationalSettings()
 	overrides := domain.DefaultRankingOverrides()
+	bootstrap.SyncSettings(ctx, repo, settings, opSettings, overrides)
 	embedder := hashembed.New(128)
 	searchSvc := application.NewHybridAsSearchService(repo, embedder, settings, overrides)
 
 	handler := restapi.New(restapi.Config{
 		Search:     searchSvc,
 		OpSettings: opSettings,
+		Health:     repo,
 	})
 
 	addr := bootstrap.GetEnv("SEARCH_LISTEN_ADDR", "127.0.0.1:8080")

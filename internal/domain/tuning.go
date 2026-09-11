@@ -39,6 +39,25 @@ func (s *TuningSettings) Set(alpha, k1, b float64) {
 	s.alpha, s.k1, s.b = alpha, k1, b
 }
 
+// TuningValues is a JSON-serializable snapshot of TuningSettings' three
+// fields, for callers (the settings store, the admin API) that need to
+// read or write them as a single value rather than through Get()/Set()'s
+// positional float64s.
+type TuningValues struct {
+	Alpha float64 `json:"alpha"`
+	K1    float64 `json:"k1"`
+	B     float64 `json:"b"`
+}
+
+func (s *TuningSettings) Values() TuningValues {
+	alpha, k1, b := s.Get()
+	return TuningValues{Alpha: alpha, K1: k1, B: b}
+}
+
+func (s *TuningSettings) SetValues(v TuningValues) {
+	s.Set(v.Alpha, v.K1, v.B)
+}
+
 func clamp(v, min, max float64) float64 {
 	if v < min {
 		return min

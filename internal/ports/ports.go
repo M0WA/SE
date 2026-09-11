@@ -3,6 +3,7 @@ package ports
 import (
 	"context"
 	"errors"
+	"time"
 
 	"searchengine/internal/domain"
 )
@@ -67,6 +68,15 @@ type SQLRepository interface {
 	DeleteDocument(ctx context.Context, docID string) error
 }
 
+// HealthChecker is a cheap liveness check for the shared database
+// connection, used only by GET /healthz. Ping must stay a plain connection
+// check (what sql.DB.PingContext already does) -- never a real query against
+// application tables -- so the endpoint stays safe for frequent automated
+// polling.
+type HealthChecker interface {
+	Ping(ctx context.Context) error
+}
+
 // AdminRepository is the subset of SQLRepository the admin diagnostics UI
 // needs -- a narrower dependency than the full port.
 type AdminRepository interface {
@@ -82,8 +92,25 @@ type AdminRepository interface {
 
 // --- Primary (driving) ports ---
 
+// Search sort modes: SortRelevance (the default) orders by blended
+// BM25/semantic score; SortRecency orders strictly by crawl time, most
+// recently crawled first, ignoring relevance entirely. Any other (or empty)
+// value is treated as SortRelevance.
+const (
+	SortRelevance = "relevance"
+	SortRecency   = "recency"
+)
+
+// SearchQuery bundles a search request's options beyond the raw query text
+// itself, so a new search-time option has one obvious place to live rather
+// than growing the Search method's parameter list.
+type SearchQuery struct {
+	TopK int
+	Sort string
+}
+
 type SearchService interface {
-	Search(ctx context.Context, query string, topK int) ([]domain.SearchResult, error)
+	Search(ctx context.Context, query string, opts SearchQuery) ([]domain.SearchResult, error)
 }
 
 // CrawlOptions is a single crawl request: seed URLs and page budget, plus
@@ -91,14 +118,21 @@ type SearchService interface {
 // Basic auth (applied to every fetch made during that crawl). RespectRobots
 // defaults to false (robots.txt is ignored) unless explicitly set; UserAgent
 // overrides the process's configured default for this crawl only.
+// AllowOffDomainLinks defaults to false, so a crawl stays on the seed URLs'
+// own host(s) unless explicitly allowed to wander to other domains via
+// discovered links. UseSitemap defaults to false; when set, each seed's
+// /sitemap.xml is fetched and its URLs enqueued alongside normally
+// discovered links.
 type CrawlOptions struct {
-	SeedURLs      []string
-	MaxPages      int
-	Cookie        string
-	BasicAuthUser string
-	BasicAuthPass string
-	RespectRobots bool
-	UserAgent     string
+	SeedURLs            []string
+	MaxPages            int
+	Cookie              string
+	BasicAuthUser       string
+	BasicAuthPass       string
+	RespectRobots       bool
+	UserAgent           string
+	AllowOffDomainLinks bool `json:"allow_off_domain_links"`
+	UseSitemap          bool `json:"use_sitemap"`
 }
 
 // CrawlerService actually executes a crawl. onPage, when non-nil, is
@@ -123,5 +157,47 @@ type CrawlJobService interface {
 // DebugSearchService exposes the raw, unblended hybrid search results
 // (BM25/semantic/final score breakdown) for admin diagnostics.
 type DebugSearchService interface {
-	Search(ctx context.Context, query string, topK int) ([]domain.HybridResult, error)
+	Search(ctx context.Context, query string, opts SearchQuery) ([]domain.HybridResult, error)
+}
+
+// Settings store keys: each names one JSON-encoded blob in SettingsStore.
+const (
+	SettingsKeyTuning      = "tuning"
+	SettingsKeyOperational = "operational"
+	SettingsKeyOverrides   = "overrides"
+)
+
+// SettingsStore persists the admin-configurable tuning/operational/ranking
+// settings blobs to the shared database, so every process reads the same
+// values instead of only the copy an admin edit happened to update in its
+// own in-memory instance.
+type SettingsStore interface {
+	SaveSetting(ctx context.Context, key, value string) error
+	GetSetting(ctx context.Context, key string) (value string, found bool, err error)
+}
+
+// ErrScheduledCrawlNotFound is returned by ScheduledCrawlStore's Update,
+// SetScheduledCrawlEnabled and Delete when no schedule with the given ID
+// exists.
+var ErrScheduledCrawlNotFound = errors.New("scheduled crawl not found")
+
+// ScheduledCrawlStore persists recurring crawl schedules an admin creates
+// through the admin UI. It's implemented by the same *sqlrepo.Repository
+// admin-server and crawl-server each already open their own DB connection
+// to (for AdminRepository and SettingsStore respectively) -- both
+// processes talk to the shared scheduled_crawls table directly rather than
+// crawl-server's ticker or admin-server's CRUD endpoints needing an HTTP
+// round-trip to reach each other.
+type ScheduledCrawlStore interface {
+	CreateScheduledCrawl(ctx context.Context, s domain.ScheduledCrawl) error
+	ListScheduledCrawls(ctx context.Context) ([]domain.ScheduledCrawl, error)
+	UpdateScheduledCrawl(ctx context.Context, s domain.ScheduledCrawl) error
+	SetScheduledCrawlEnabled(ctx context.Context, id string, enabled bool) error
+	DeleteScheduledCrawl(ctx context.Context, id string) error
+	// DueScheduledCrawls lists every enabled schedule whose NextRunAt is at
+	// or before now.
+	DueScheduledCrawls(ctx context.Context, now time.Time) ([]domain.ScheduledCrawl, error)
+	// MarkScheduledCrawlRun records that a schedule was just triggered,
+	// advancing it to its next run.
+	MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time) error
 }

@@ -3,6 +3,7 @@ package restapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"searchengine/internal/domain"
@@ -25,6 +26,7 @@ func (h *Handler) RoutesCrawlInternal() *http.ServeMux {
 	mux.HandleFunc("POST /crawl", h.handleCrawl)
 	mux.HandleFunc("GET /jobs", h.handleListCrawlJobs)
 	mux.HandleFunc("GET /jobs/{id}", h.handleGetCrawlJob)
+	mux.HandleFunc("/healthz", h.handleHealthz)
 	return mux
 }
 
@@ -40,22 +42,40 @@ func (h *Handler) handleCrawl(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	if len(opts.SeedURLs) == 0 {
-		http.Error(w, "seed_urls must not be empty", http.StatusBadRequest)
+
+	jobID, err := h.TriggerCrawl(opts)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	writeJSON(w, http.StatusAccepted, startJobResponse{JobID: jobID})
+}
+
+// TriggerCrawl registers a new crawl job and starts it in the background,
+// returning its ID immediately. This is the one job-creation path every
+// caller on crawl-server goes through -- handleCrawl for a manually
+// triggered crawl, and the scheduler ticker in cmd/crawl/main.go for a
+// scheduled crawl that just came due -- so both get identical job
+// tracking, concurrency limiting (h.crawlSem) and progress reporting.
+func (h *Handler) TriggerCrawl(opts ports.CrawlOptions) (string, error) {
+	if len(opts.SeedURLs) == 0 {
+		return "", errors.New("seed_urls must not be empty")
+	}
+
 	job := h.crawlJobs.Create(domain.CrawlJobRequest{
-		SeedURLs:      opts.SeedURLs,
-		MaxPages:      opts.MaxPages,
-		HasCookie:     opts.Cookie != "",
-		HasBasicAuth:  opts.BasicAuthUser != "" || opts.BasicAuthPass != "",
-		RespectRobots: opts.RespectRobots,
-		UserAgent:     opts.UserAgent,
+		SeedURLs:            opts.SeedURLs,
+		MaxPages:            opts.MaxPages,
+		HasCookie:           opts.Cookie != "",
+		HasBasicAuth:        opts.BasicAuthUser != "" || opts.BasicAuthPass != "",
+		RespectRobots:       opts.RespectRobots,
+		UserAgent:           opts.UserAgent,
+		AllowOffDomainLinks: opts.AllowOffDomainLinks,
+		UseSitemap:          opts.UseSitemap,
 	})
 	go h.runCrawlJob(job.ID, opts)
 
-	writeJSON(w, http.StatusAccepted, startJobResponse{JobID: job.ID})
+	return job.ID, nil
 }
 
 // runCrawlJob executes opts in the background against job.ID's tracked

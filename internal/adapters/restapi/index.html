@@ -14,6 +14,10 @@
   <p class="mark">se.</p>
   <form id="search-form" autocomplete="off">
     <input id="q" class="field" name="q" type="text" placeholder="Search the index…" autofocus>
+    <select id="sort" class="field" name="sort" aria-label="Sort order">
+      <option value="relevance" selected>Best match</option>
+      <option value="recency">Most recent</option>
+    </select>
     <button type="submit">Search</button>
   </form>
 
@@ -28,8 +32,10 @@
       <dd>must not appear</dd>
       <dt><span class="syntax-token">"exact phrase"</span></dt>
       <dd>matches that phrase exactly</dd>
+      <dt><span class="syntax-token">site:example.com</span></dt>
+      <dd>only that site (and its subdomains)</dd>
     </dl>
-    <p class="syntax-aside">Combine them freely — e.g. <span class="syntax-token">cats +shelter -kitten</span>. Add <span class="syntax-token">&amp;top_k=N</span> to the URL for more than the default number of results.</p>
+    <p class="syntax-aside">Combine them freely — e.g. <span class="syntax-token">cats +shelter -kitten site:example.com</span>. Add <span class="syntax-token">&amp;top_k=N</span> to the URL for more than the default number of results.</p>
   </details>
 
   <div id="status"></div>
@@ -120,11 +126,11 @@
     }
   }
 
-  async function runSearch(query) {
+  async function runSearch(query, sort) {
     clear(results);
     status.textContent = 'Searching…';
     try {
-      const resp = await fetch('/search?q=' + encodeURIComponent(query));
+      const resp = await fetch('/search?q=' + encodeURIComponent(query) + '&sort=' + encodeURIComponent(sort));
       if (!resp.ok) {
         const msg = await resp.text();
         status.textContent = 'Search failed: ' + msg.trim();
@@ -137,6 +143,8 @@
     }
   }
 
+  const sortSelect = document.getElementById('sort');
+
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     const query = input.value.trim();
@@ -145,7 +153,7 @@
       clear(results);
       return;
     }
-    runSearch(query);
+    runSearch(query, sortSelect.value);
   });
 </script>
 </body>

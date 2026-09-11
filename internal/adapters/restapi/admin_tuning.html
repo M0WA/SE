@@ -19,12 +19,13 @@
     <a href="/admin">Overview</a>
     <a href="/admin/documents">Documents</a>
     <a href="/admin/crawl">Crawl</a>
+    <a href="/admin/schedules">Schedules</a>
     <a href="/admin/tuning" aria-current="page">Tuning</a>
     <a href="/admin/search">Search</a>
     <a href="/admin/overrides">Overrides</a>
   </nav>
 
-  <p class="lede" style="margin: 0 0 2rem;">Adjust ranking, crawling, and session behavior. Changes apply immediately, on this running instance only.</p>
+  <p class="lede" style="margin: 0 0 2rem;">Adjust ranking, crawling, and session behavior. Changes apply to every process (search, admin, crawl) within about 10 seconds.</p>
 
   <form id="tuning-form" class="stacked-form">
     <section class="panel">
@@ -62,7 +63,15 @@
         <label for="min-text-length">Minimum text length — shorter pages are skipped as thin content</label><br>
         <input id="min-text-length" class="field" type="number" step="1" min="0" required>
       </div>
-      <p class="tuning-hint">Defaults: 8s timeout, 20 pages, 50 characters minimum.</p>
+      <div class="form-row">
+        <label for="crawl-delay">Crawl delay — milliseconds to wait before each fetch after the first</label><br>
+        <input id="crawl-delay" class="field" type="number" step="1" min="0" required>
+      </div>
+      <div class="form-row">
+        <label for="max-response-kb">Max response size — kilobytes read from a page before truncating</label><br>
+        <input id="max-response-kb" class="field" type="number" step="1" min="1" required>
+      </div>
+      <p class="tuning-hint">Defaults: 8s timeout, 20 pages, 50 characters minimum, 250ms delay, 5120 KB (5 MB) response cap.</p>
     </section>
 
     <section class="panel">
@@ -99,6 +108,8 @@
   const userAgentEl = document.getElementById('user-agent');
   const defaultMaxPagesEl = document.getElementById('default-max-pages');
   const minTextLengthEl = document.getElementById('min-text-length');
+  const crawlDelayEl = document.getElementById('crawl-delay');
+  const maxResponseKBEl = document.getElementById('max-response-kb');
   const defaultTopKEl = document.getElementById('default-top-k');
   const sessionTTLEl = document.getElementById('session-ttl');
   const status = document.getElementById('tuning-status');
@@ -111,6 +122,8 @@
     userAgentEl.value = s.operational.user_agent;
     defaultMaxPagesEl.value = s.operational.default_max_pages;
     minTextLengthEl.value = s.operational.min_text_length;
+    crawlDelayEl.value = s.operational.crawl_delay_ms;
+    maxResponseKBEl.value = s.operational.max_response_kb;
     defaultTopKEl.value = s.operational.default_top_k;
     sessionTTLEl.value = s.operational.session_ttl_hours;
   }
@@ -138,6 +151,8 @@
           user_agent: userAgentEl.value,
           default_max_pages: parseInt(defaultMaxPagesEl.value, 10),
           min_text_length: parseInt(minTextLengthEl.value, 10),
+          crawl_delay_ms: parseInt(crawlDelayEl.value, 10),
+          max_response_kb: parseInt(maxResponseKBEl.value, 10),
           default_top_k: parseInt(defaultTopKEl.value, 10),
           session_ttl_hours: parseInt(sessionTTLEl.value, 10),
         },

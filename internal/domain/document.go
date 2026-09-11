@@ -2,13 +2,16 @@ package domain
 
 import "time"
 
-// Document represents a crawled and indexed web page.
+// Document represents a crawled and indexed web page. CrawledAt is the zero
+// time for callers that never populate it (e.g. a freshly-crawled Document
+// not yet saved).
 type Document struct {
-	ID    string
-	URL   string
-	Title string
-	Text  string
-	Links []string
+	ID        string
+	URL       string
+	Title     string
+	Text      string
+	Links     []string
+	CrawledAt time.Time
 }
 
 // SearchResult is a single ranked result returned to the caller. BM25Score

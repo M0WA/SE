@@ -7,20 +7,25 @@ import (
 
 var queryTokenRe = regexp.MustCompile(`"[^"]*"|\S+`)
 
+// sitePrefix is the "site:" operator prefix, matched case-insensitively
+// (e.g. "Site:Example.com" is equivalent to "site:example.com").
+const sitePrefix = "site:"
+
 // ParsedQuery is a search query broken into its structural pieces: plain
 // optional terms that just contribute to relevance ranking, required terms
-// (+word) and excluded terms (-word), and required exact phrases ("quoted
-// text").
+// (+word) and excluded terms (-word), required exact phrases ("quoted
+// text"), and site: filters restricting results to one or more hosts.
 type ParsedQuery struct {
 	Optional []string
 	Required []string
 	Excluded []string
 	Phrases  []string
+	Sites    []string
 }
 
 // ParseQuery splits a raw query string into its structural pieces. It must
 // run on the raw string before Tokenize, which would otherwise strip the
-// +/-/" syntax characters this depends on.
+// +/-/"/site: syntax this depends on.
 func ParseQuery(raw string) ParsedQuery {
 	var parsed ParsedQuery
 	for _, tok := range queryTokenRe.FindAllString(raw, -1) {
@@ -29,6 +34,11 @@ func ParseQuery(raw string) ParsedQuery {
 			phrase := strings.ToLower(strings.TrimSpace(tok[1 : len(tok)-1]))
 			if phrase != "" {
 				parsed.Phrases = append(parsed.Phrases, phrase)
+			}
+		case len(tok) >= len(sitePrefix) && strings.EqualFold(tok[:len(sitePrefix)], sitePrefix):
+			site := strings.ToLower(strings.TrimSpace(tok[len(sitePrefix):]))
+			if site != "" {
+				parsed.Sites = append(parsed.Sites, site)
 			}
 		case strings.HasPrefix(tok, "+") && len(tok) > 1:
 			parsed.Required = append(parsed.Required, Tokenize(tok[1:])...)
@@ -70,10 +80,27 @@ func (q ParsedQuery) Empty() bool {
 }
 
 // HasConstraints reports whether this query has any required/excluded
-// terms or phrases that need per-document filtering, beyond ordinary
-// relevance ranking.
+// terms, phrases, or site: filters that need per-document filtering,
+// beyond ordinary relevance ranking.
 func (q ParsedQuery) HasConstraints() bool {
-	return len(q.Required) > 0 || len(q.Excluded) > 0 || len(q.Phrases) > 0
+	return len(q.Required) > 0 || len(q.Excluded) > 0 || len(q.Phrases) > 0 || len(q.Sites) > 0
+}
+
+// SiteAllowed reports whether doc's URL host satisfies this query's site:
+// filter(s), if any -- an exact host match or a subdomain of one (so
+// "site:example.com" also matches "www.example.com"). A query with no
+// site: filter allows every host.
+func (q ParsedQuery) SiteAllowed(doc Document) bool {
+	if len(q.Sites) == 0 {
+		return true
+	}
+	host := hostOf(doc.URL)
+	for _, site := range q.Sites {
+		if host == site || strings.HasSuffix(host, "."+site) {
+			return true
+		}
+	}
+	return false
 }
 
 // Matches reports whether a document's title and text satisfy this query's

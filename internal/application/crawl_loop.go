@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/xml"
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
@@ -43,9 +45,35 @@ func crawlLoop(
 		}
 	}
 
+	hosts := seedHosts(opts.SeedURLs)
+	enqueue := func(queue []string, links []string) []string {
+		for _, l := range links {
+			if opts.AllowOffDomainLinks || onDomain(l, hosts) {
+				queue = append(queue, l)
+			}
+		}
+		return queue
+	}
+
 	visited := make(map[string]bool)
 	queue := append([]string{}, opts.SeedURLs...)
+
+	if opts.UseSitemap {
+		for _, seed := range opts.SeedURLs {
+			sitemap, ok := sitemapURL(seed)
+			if !ok {
+				continue
+			}
+			body, err := fetcher.FetchWithOptions(ctx, sitemap, fetchOpts)
+			if err != nil {
+				continue
+			}
+			queue = enqueue(queue, parseSitemap(body))
+		}
+	}
+
 	crawled := 0
+	fetchCount := 0
 
 	for len(queue) > 0 && crawled < maxPages {
 		u := queue[0]
@@ -55,23 +83,41 @@ func crawlLoop(
 			continue
 		}
 		visited[u] = true
+		attemptedAt := time.Now()
 
 		if opts.RespectRobots && robots != nil && !robots.Allowed(ctx, u) {
-			emit(domain.CrawlPageEvent{URL: u, Status: domain.CrawlPageRobotsDisallowed})
+			emit(domain.CrawlPageEvent{URL: u, Status: domain.CrawlPageRobotsDisallowed, FetchedAt: attemptedAt})
 			continue
 		}
 
+		if fetchCount > 0 && v.CrawlDelayMs > 0 {
+			select {
+			case <-time.After(time.Duration(v.CrawlDelayMs) * time.Millisecond):
+			case <-ctx.Done():
+				return crawled, ctx.Err()
+			}
+		}
+		fetchCount++
+
+		fetchStart := time.Now()
 		html, err := fetcher.FetchWithOptions(ctx, u, fetchOpts)
+		durationMs := time.Since(fetchStart).Milliseconds()
 		if err != nil {
-			emit(domain.CrawlPageEvent{URL: u, Status: domain.CrawlPageFetchFailed, Error: err.Error()})
+			emit(domain.CrawlPageEvent{
+				URL: u, Status: domain.CrawlPageFetchFailed, Error: err.Error(),
+				FetchedAt: attemptedAt, DurationMs: durationMs,
+			})
 			continue
 		}
 
 		title, text, links := parseHTML(html, u)
-		if trimmed := strings.TrimSpace(text); len(trimmed) < v.MinTextLength {
+		trimmed := strings.TrimSpace(text)
+		if len(trimmed) < v.MinTextLength {
 			emit(domain.CrawlPageEvent{
 				URL: u, Status: domain.CrawlPageThinContent,
-				Error: fmt.Sprintf("%d characters, need at least %d", len(trimmed), v.MinTextLength),
+				Error:     fmt.Sprintf("%d characters, need at least %d", len(trimmed), v.MinTextLength),
+				DocLength: len(trimmed),
+				FetchedAt: attemptedAt, DurationMs: durationMs,
 			})
 			continue
 		}
@@ -81,15 +127,72 @@ func crawlLoop(
 			return crawled, err
 		}
 		crawled++
-		emit(domain.CrawlPageEvent{URL: u, Status: domain.CrawlPageIndexed, Title: title})
+		emit(domain.CrawlPageEvent{
+			URL: u, Status: domain.CrawlPageIndexed, Title: title,
+			DocLength: len(trimmed), LinksFound: len(links),
+			FetchedAt: attemptedAt, DurationMs: durationMs,
+		})
 
-		for _, l := range links {
-			if !visited[l] {
-				queue = append(queue, l)
-			}
-		}
+		queue = enqueue(queue, links)
 	}
 	return crawled, nil
+}
+
+// seedHosts collects the host of every seed URL, so discovered links can be
+// checked against the crawl's own starting point(s) rather than growing to
+// include every domain a crawl happens to wander onto.
+func seedHosts(seeds []string) map[string]bool {
+	hosts := make(map[string]bool, len(seeds))
+	for _, s := range seeds {
+		if u, err := url.Parse(s); err == nil && u.Host != "" {
+			hosts[u.Host] = true
+		}
+	}
+	return hosts
+}
+
+func onDomain(rawURL string, hosts map[string]bool) bool {
+	u, err := url.Parse(rawURL)
+	return err == nil && hosts[u.Host]
+}
+
+// sitemapURL builds the /sitemap.xml URL at a seed's origin, discarding any
+// path/query/fragment the seed itself carried.
+func sitemapURL(seed string) (string, bool) {
+	u, err := url.Parse(seed)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", false
+	}
+	u.Path = "/sitemap.xml"
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String(), true
+}
+
+// sitemapURLSet is the small slice of the sitemaps.org urlset schema this
+// crawler actually uses -- just each entry's <loc>.
+type sitemapURLSet struct {
+	XMLName xml.Name `xml:"urlset"`
+	Entries []struct {
+		Loc string `xml:"loc"`
+	} `xml:"url"`
+}
+
+// parseSitemap extracts every <loc> from a sitemap.xml body. A body that
+// isn't valid XML, or isn't a urlset, just yields no URLs -- the caller
+// treats a sitemap as an optional bonus, never a reason to fail the crawl.
+func parseSitemap(body string) []string {
+	var set sitemapURLSet
+	if err := xml.Unmarshal([]byte(body), &set); err != nil {
+		return nil
+	}
+	urls := make([]string, 0, len(set.Entries))
+	for _, e := range set.Entries {
+		if loc := strings.TrimSpace(e.Loc); loc != "" {
+			urls = append(urls, loc)
+		}
+	}
+	return urls
 }
 
 func isHTTP(raw string) bool {

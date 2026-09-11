@@ -13,6 +13,20 @@ jobs:
   test:
     name: Build, vet & test
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: searchengine
+          POSTGRES_PASSWORD: searchengine
+          POSTGRES_DB: searchengine_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U searchengine -d searchengine_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -29,6 +43,8 @@ jobs:
             exit 1
           fi
       - run: go test ./... -v
+        env:
+          TEST_POSTGRES_DSN: postgres://searchengine:searchengine@localhost:5432/searchengine_test?sslmode=disable
 
   package-debian:
     name: Build .deb (Debian)

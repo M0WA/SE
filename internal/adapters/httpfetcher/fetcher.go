@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
@@ -57,9 +58,23 @@ func (f *Fetcher) FetchWithOptions(ctx context.Context, rawURL string, opts port
 		return "", fmt.Errorf("fetch %s: unexpected status %d", rawURL, resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	if ct := resp.Header.Get("Content-Type"); ct != "" && !looksTextual(ct) {
+		return "", fmt.Errorf("fetch %s: unsupported content-type %q", rawURL, ct)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(v.MaxResponseBytes)))
 	if err != nil {
 		return "", fmt.Errorf("reading body: %w", err)
 	}
 	return string(body), nil
+}
+
+// looksTextual reports whether a Content-Type header value looks like it
+// carries parseable text rather than a binary format (image, video, PDF,
+// etc.) we have no use for. It deliberately allows "xml" alongside "html"
+// and "text" -- sitemap.xml is commonly served as application/xml or
+// text/xml, and both need to pass through this same guard.
+func looksTextual(contentType string) bool {
+	ct := strings.ToLower(contentType)
+	return strings.Contains(ct, "html") || strings.Contains(ct, "text") || strings.Contains(ct, "xml")
 }

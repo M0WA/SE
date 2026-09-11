@@ -19,6 +19,7 @@
     <a href="/admin">Overview</a>
     <a href="/admin/documents">Documents</a>
     <a href="/admin/crawl">Crawl</a>
+    <a href="/admin/schedules">Schedules</a>
     <a href="/admin/tuning">Tuning</a>
     <a href="/admin/search" aria-current="page">Search</a>
     <a href="/admin/overrides">Overrides</a>
@@ -26,9 +27,13 @@
 
   <section class="panel">
     <h2>Debug a query</h2>
-    <p class="lede" style="margin: 0 0 1rem;">Shows the BM25 and semantic scores behind a search's ranking, unblended. Supports +required, -excluded, and "exact phrase" terms.</p>
+    <p class="lede" style="margin: 0 0 1rem;">Shows the BM25 and semantic scores behind a search's ranking, unblended. Supports +required, -excluded, "exact phrase", and site:host terms.</p>
     <form id="debug-form" class="panel-form">
-      <input id="debug-q" class="field" type="text" placeholder='cats +required -excluded "exact phrase"' required>
+      <input id="debug-q" class="field" type="text" placeholder='cats +required -excluded "exact phrase" site:example.com' required>
+      <select id="debug-sort" class="field" aria-label="Sort order">
+        <option value="relevance" selected>Best match</option>
+        <option value="recency">Most recent</option>
+      </select>
       <button type="submit">Run</button>
     </form>
     <div id="debug-status" class="panel-status"></div>
@@ -50,13 +55,14 @@
   document.getElementById('debug-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const q = document.getElementById('debug-q').value.trim();
+    const sort = document.getElementById('debug-sort').value;
     const status = document.getElementById('debug-status');
     const result = document.getElementById('debug-result');
     clear(result);
     if (!q) { status.textContent = 'Type a query to debug.'; return; }
     status.textContent = 'Running…';
     try {
-      const results = await getJSON('/admin/api/search?q=' + encodeURIComponent(q));
+      const results = await getJSON('/admin/api/search?q=' + encodeURIComponent(q) + '&sort=' + encodeURIComponent(sort));
       if (results.length === 0) {
         status.textContent = 'No matches for “' + q + '”.';
         return;

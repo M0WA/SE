@@ -35,22 +35,22 @@ func (erroringEmbedder) Dimensions() int { return 0 }
 
 func TestSQLCrawlerService_Crawl_HappyPath(t *testing.T) {
 	fetcher := &fakeFetcher{pages: map[string]string{
-		"http://a": "<html>a</html>",
-		"http://b": "<html>b</html>",
+		"http://a/":  "<html>a</html>",
+		"http://a/b": "<html>b</html>",
 	}}
 	robots := &fakeRobots{}
 	repo := &recordingSQLRepo{}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 
 	parse := func(html, pageURL string) (string, string, []string) {
-		if pageURL == "http://a" {
-			return "A", "genuegend inhalt text fuer die seite a hier bitte danke", []string{"http://b"}
+		if pageURL == "http://a/" {
+			return "A", "genuegend inhalt text fuer die seite a hier bitte danke", []string{"http://a/b"}
 		}
 		return "B", "genuegend inhalt text fuer die seite b hier auch danke", nil
 	}
 
 	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedder, parse, nil)
-	count, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5}, nil)
+	count, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a/"}, MaxPages: 5}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

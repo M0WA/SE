@@ -5,10 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 
 	"searchengine/internal/adapters/sqlrepo"
@@ -18,12 +21,25 @@ import (
 
 var dsnCounter int64
 
-// newTestRepo gives each test its own isolated in-memory SQLite database
-// (a shared cache keyed by a unique name, so the pooled *sql.DB connections
-// within one test all see the same schema/data without leaking into
-// other tests).
+// testPostgresDSNEnv names the environment variable that, when set, points
+// this package's whole test suite at a real Postgres server (e.g. the
+// postgres:16 service container CI runs) instead of in-memory SQLite. Left
+// unset -- the default for a local `go test ./...` -- every test stays
+// exactly as fast and dependency-free as before this suite learned to also
+// run against Postgres.
+const testPostgresDSNEnv = "TEST_POSTGRES_DSN"
+
+// newTestRepo gives each test its own isolated database. Normally that's an
+// in-memory SQLite database (a shared cache keyed by a unique name, so the
+// pooled *sql.DB connections within one test all see the same schema/data
+// without leaking into other tests). When TEST_POSTGRES_DSN is set, it
+// instead runs the same test against that real Postgres server, in a fresh
+// schema created just for this test so concurrent tests never collide.
 func newTestRepo(t *testing.T) *sqlrepo.Repository {
 	t.Helper()
+	if dsn := os.Getenv(testPostgresDSNEnv); dsn != "" {
+		return newPostgresTestRepo(t, dsn)
+	}
 	n := atomic.AddInt64(&dsnCounter, 1)
 	dsn := fmt.Sprintf("file:testdb%d?mode=memory&cache=shared", n)
 	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
@@ -32,6 +48,72 @@ func newTestRepo(t *testing.T) *sqlrepo.Repository {
 	}
 	t.Cleanup(func() { _ = repo.Close() })
 	return repo
+}
+
+// newPostgresTestRepo points the calling test at baseDSN's Postgres server,
+// scoped to a throwaway schema (named after a monotonic counter plus the
+// wall clock, so two tests can never collide even across separate `go test`
+// invocations against the same long-lived server). The schema -- and every
+// table in it -- is dropped in t.Cleanup, so a re-run against the same
+// server always starts clean rather than accumulating schemas over time.
+func newPostgresTestRepo(t *testing.T, baseDSN string) *sqlrepo.Repository {
+	t.Helper()
+	ctx := context.Background()
+	n := atomic.AddInt64(&dsnCounter, 1)
+	schema := fmt.Sprintf("sqlrepo_test_%d_%d", time.Now().UnixNano(), n)
+
+	admin, err := sql.Open("pgx", baseDSN)
+	if err != nil {
+		t.Fatalf("failed to open postgres admin connection: %v", err)
+	}
+	defer admin.Close()
+	if _, err := admin.ExecContext(ctx, `CREATE SCHEMA "`+schema+`"`); err != nil {
+		t.Fatalf("failed to create postgres test schema %s: %v", schema, err)
+	}
+	t.Cleanup(func() {
+		cleanupConn, err := sql.Open("pgx", baseDSN)
+		if err != nil {
+			t.Logf("failed to open postgres connection to drop schema %s: %v", schema, err)
+			return
+		}
+		defer cleanupConn.Close()
+		if _, err := cleanupConn.ExecContext(context.Background(), `DROP SCHEMA IF EXISTS "`+schema+`" CASCADE`); err != nil {
+			t.Logf("failed to drop postgres test schema %s: %v", schema, err)
+		}
+	})
+
+	scopedDSN, err := dsnWithSearchPath(baseDSN, schema)
+	if err != nil {
+		t.Fatalf("failed to scope postgres DSN to test schema: %v", err)
+	}
+	repo, err := sqlrepo.New(ctx, "pgx", scopedDSN)
+	if err != nil {
+		t.Fatalf("failed to create postgres test repository: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	return repo
+}
+
+// dsnWithSearchPath sets baseDSN's search_path query parameter to schema --
+// pgx forwards search_path as a Postgres startup parameter on every physical
+// connection it opens (not just the first), so this keeps every connection
+// database/sql pools for the returned DSN scoped to that one schema.
+func dsnWithSearchPath(baseDSN, schema string) (string, error) {
+	u, err := url.Parse(baseDSN)
+	if err != nil {
+		return "", fmt.Errorf("parsing DSN: %w", err)
+	}
+	q := u.Query()
+	q.Set("search_path", schema)
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+func TestPing_Success(t *testing.T) {
+	repo := newTestRepo(t)
+	if err := repo.Ping(context.Background()); err != nil {
+		t.Errorf("expected Ping to succeed on an open connection, got %v", err)
+	}
 }
 
 func TestNew_MigratesSchemaAndConnects(t *testing.T) {
@@ -88,6 +170,9 @@ func TestSaveDocument_ThenRetrieveEverywhere(t *testing.T) {
 	}
 	if got.URL != doc.URL || got.Title != doc.Title || got.Text != doc.Text {
 		t.Errorf("expected saved document back, got %+v", got)
+	}
+	if got.CrawledAt.IsZero() || time.Since(got.CrawledAt) > time.Minute {
+		t.Errorf("expected CrawledAt to be populated with a recent timestamp, got %v", got.CrawledAt)
 	}
 
 	embeddings, err := repo.AllEmbeddings(ctx)
@@ -350,6 +435,11 @@ func closedRepo(t *testing.T) *sqlrepo.Repository {
 func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 	ctx := context.Background()
 
+	t.Run("Ping", func(t *testing.T) {
+		if err := closedRepo(t).Ping(ctx); err == nil {
+			t.Error("expected an error")
+		}
+	})
 	t.Run("CorpusStats", func(t *testing.T) {
 		if _, _, err := closedRepo(t).CorpusStats(ctx); err == nil {
 			t.Error("expected an error")
@@ -403,6 +493,43 @@ func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 	})
 	t.Run("DocumentsOverview", func(t *testing.T) {
 		if _, err := closedRepo(t).DocumentsOverview(ctx, 5); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("CreateScheduledCrawl", func(t *testing.T) {
+		s := domain.ScheduledCrawl{ID: "sched-1", SeedURLs: []string{"http://a"}, IntervalMinutes: 5}
+		if err := closedRepo(t).CreateScheduledCrawl(ctx, s); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("ListScheduledCrawls", func(t *testing.T) {
+		if _, err := closedRepo(t).ListScheduledCrawls(ctx); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("UpdateScheduledCrawl", func(t *testing.T) {
+		s := domain.ScheduledCrawl{ID: "sched-1", SeedURLs: []string{"http://a"}, IntervalMinutes: 5}
+		if err := closedRepo(t).UpdateScheduledCrawl(ctx, s); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("SetScheduledCrawlEnabled", func(t *testing.T) {
+		if err := closedRepo(t).SetScheduledCrawlEnabled(ctx, "sched-1", false); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("DeleteScheduledCrawl", func(t *testing.T) {
+		if err := closedRepo(t).DeleteScheduledCrawl(ctx, "sched-1"); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("DueScheduledCrawls", func(t *testing.T) {
+		if _, err := closedRepo(t).DueScheduledCrawls(ctx, time.Now()); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("MarkScheduledCrawlRun", func(t *testing.T) {
+		if err := closedRepo(t).MarkScheduledCrawlRun(ctx, "sched-1", time.Now(), time.Now()); err == nil {
 			t.Error("expected an error")
 		}
 	})
@@ -820,5 +947,74 @@ func TestDeleteDocument_RemovesItsOutboundLinks(t *testing.T) {
 	}
 	if got[0].Backlinks != 0 {
 		t.Errorf("expected doc-b's backlinks to drop to 0 once doc-a (its only linker) is deleted, got %d", got[0].Backlinks)
+	}
+}
+
+func TestGetSetting_NotFoundOnFreshDB(t *testing.T) {
+	repo := newTestRepo(t)
+	value, found, err := repo.GetSetting(context.Background(), "tuning")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if found {
+		t.Errorf("expected found=false on a fresh DB, got value %q", value)
+	}
+}
+
+func TestSaveSetting_ThenGetSettingRoundTrips(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveSetting(ctx, "tuning", `{"alpha":0.9,"k1":2,"b":0.3}`); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	value, found, err := repo.GetSetting(ctx, "tuning")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !found {
+		t.Fatal("expected found=true after saving")
+	}
+	if value != `{"alpha":0.9,"k1":2,"b":0.3}` {
+		t.Errorf("unexpected value: %q", value)
+	}
+}
+
+func TestSaveSetting_UpsertOverwritesExistingValue(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveSetting(ctx, "operational", "first"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := repo.SaveSetting(ctx, "operational", "second"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	value, found, err := repo.GetSetting(ctx, "operational")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !found || value != "second" {
+		t.Errorf("expected the second save to overwrite the first, got (%q, %v)", value, found)
+	}
+}
+
+func TestSaveSetting_KeysAreIndependent(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveSetting(ctx, "tuning", "tuning-value"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := repo.SaveSetting(ctx, "overrides", "overrides-value"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tuning, _, err := repo.GetSetting(ctx, "tuning")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	overrides, _, err := repo.GetSetting(ctx, "overrides")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tuning != "tuning-value" || overrides != "overrides-value" {
+		t.Errorf("expected independent keys, got tuning=%q overrides=%q", tuning, overrides)
 	}
 }

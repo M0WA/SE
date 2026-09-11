@@ -6,6 +6,7 @@ import (
 
 	"searchengine/internal/application"
 	"searchengine/internal/domain"
+	"searchengine/internal/ports"
 )
 
 type fakeIndexer struct {
@@ -27,7 +28,7 @@ func TestSearchService_Search_ReturnsIndexResults(t *testing.T) {
 	idx := &fakeIndexer{results: []domain.SearchResult{{URL: "http://a", Score: 1.2}}}
 	svc := application.NewSearchService(idx)
 
-	results, err := svc.Search(context.Background(), "katzen", 5)
+	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 5})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -41,7 +42,7 @@ func TestSearchService_Search_ReturnsIndexResults(t *testing.T) {
 
 func TestSearchService_Search_EmptyQueryRejected(t *testing.T) {
 	svc := application.NewSearchService(&fakeIndexer{})
-	_, err := svc.Search(context.Background(), "   ", 5)
+	_, err := svc.Search(context.Background(), "   ", ports.SearchQuery{TopK: 5})
 	if err != application.ErrEmptyQuery {
 		t.Errorf("expected ErrEmptyQuery, got %v", err)
 	}
@@ -50,7 +51,7 @@ func TestSearchService_Search_EmptyQueryRejected(t *testing.T) {
 func TestSearchService_Search_DefaultsTopK(t *testing.T) {
 	idx := &fakeIndexer{}
 	svc := application.NewSearchService(idx)
-	_, _ = svc.Search(context.Background(), "katzen", 0)
+	_, _ = svc.Search(context.Background(), "katzen", ports.SearchQuery{})
 	if idx.searchTopK != 10 {
 		t.Errorf("expected default topK=10, got %d", idx.searchTopK)
 	}

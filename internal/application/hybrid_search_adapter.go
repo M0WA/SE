@@ -18,8 +18,8 @@ func NewHybridAsSearchService(repo ports.SQLRepository, embedder ports.Embedding
 	return &hybridSearchAdapter{hybrid: NewHybridSearchService(repo, embedder, settings, overrides)}
 }
 
-func (a *hybridSearchAdapter) Search(ctx context.Context, query string, topK int) ([]domain.SearchResult, error) {
-	hybridResults, err := a.hybrid.Search(ctx, query, topK)
+func (a *hybridSearchAdapter) Search(ctx context.Context, query string, opts ports.SearchQuery) ([]domain.SearchResult, error) {
+	hybridResults, err := a.hybrid.Search(ctx, query, opts)
 	if err != nil {
 		return nil, err
 	}

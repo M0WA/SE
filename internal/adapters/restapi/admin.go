@@ -1,8 +1,10 @@
 package restapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -62,6 +64,10 @@ func (h *Handler) handleAdminOverridesPage(w http.ResponseWriter, r *http.Reques
 
 func (h *Handler) handleAdminCrawlPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/html; charset=utf-8", crawlHTML)
+}
+
+func (h *Handler) handleAdminSchedulesPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminSchedulesHTML)
 }
 
 type adminStatsResponse struct {
@@ -334,7 +340,7 @@ func (h *Handler) handleAdminSearch(w http.ResponseWriter, r *http.Request) {
 			topK = n
 		}
 	}
-	results, err := h.debug.Search(r.Context(), query, topK)
+	results, err := h.debug.Search(r.Context(), query, ports.SearchQuery{TopK: topK, Sort: parseSortParam(r)})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -365,6 +371,8 @@ type operationalValues struct {
 	MinTextLength       int    `json:"min_text_length"`
 	DefaultTopK         int    `json:"default_top_k"`
 	SessionTTLHours     int    `json:"session_ttl_hours"`
+	CrawlDelayMs        int    `json:"crawl_delay_ms"`
+	MaxResponseKB       int    `json:"max_response_kb"`
 }
 
 func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
@@ -375,23 +383,47 @@ func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 		MinTextLength:       v.MinTextLength,
 		DefaultTopK:         v.DefaultTopK,
 		SessionTTLHours:     int(v.SessionTTL / time.Hour),
+		CrawlDelayMs:        v.CrawlDelayMs,
+		MaxResponseKB:       v.MaxResponseBytes / 1024,
 	}
 }
 
 func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 	return domain.OperationalSettingsValues{
-		FetchTimeout:    time.Duration(o.FetchTimeoutSeconds) * time.Second,
-		UserAgent:       o.UserAgent,
-		DefaultMaxPages: o.DefaultMaxPages,
-		MinTextLength:   o.MinTextLength,
-		DefaultTopK:     o.DefaultTopK,
-		SessionTTL:      time.Duration(o.SessionTTLHours) * time.Hour,
+		FetchTimeout:     time.Duration(o.FetchTimeoutSeconds) * time.Second,
+		UserAgent:        o.UserAgent,
+		DefaultMaxPages:  o.DefaultMaxPages,
+		MinTextLength:    o.MinTextLength,
+		DefaultTopK:      o.DefaultTopK,
+		SessionTTL:       time.Duration(o.SessionTTLHours) * time.Hour,
+		CrawlDelayMs:     o.CrawlDelayMs,
+		MaxResponseBytes: o.MaxResponseKB * 1024,
 	}
 }
 
 type settingsResponse struct {
 	Tuning      tuningValues      `json:"tuning"`
 	Operational operationalValues `json:"operational"`
+}
+
+// persistSetting saves v (JSON-encoded) to the settings store under key, so
+// every other process's next poll picks up this edit -- a no-op when no
+// SettingsStore was configured (this process's in-memory update above still
+// applies either way). Encoding/save failures are logged, not surfaced to
+// the admin: the in-memory update already succeeded, and this is a
+// best-effort convenience knob, not a transactional write.
+func (h *Handler) persistSetting(ctx context.Context, key string, v interface{}) {
+	if h.settingsStore == nil {
+		return
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		log.Printf("encoding %s setting: %v", key, err)
+		return
+	}
+	if err := h.settingsStore.SaveSetting(ctx, key, string(data)); err != nil {
+		log.Printf("saving %s setting: %v", key, err)
+	}
 }
 
 func (h *Handler) currentSettings() settingsResponse {
@@ -417,6 +449,8 @@ func (h *Handler) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		h.settings.Set(req.Tuning.Alpha, req.Tuning.K1, req.Tuning.B)
 		h.opSettings.Set(req.Operational.toSettingsValues())
+		h.persistSetting(r.Context(), ports.SettingsKeyTuning, h.settings.Values())
+		h.persistSetting(r.Context(), ports.SettingsKeyOperational, h.opSettings.Get())
 		writeJSON(w, http.StatusOK, h.currentSettings())
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -469,6 +503,7 @@ func (h *Handler) handleAdminOverrides(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.overrides.Set(req.toSettingsValues())
+		h.persistSetting(r.Context(), ports.SettingsKeyOverrides, h.overrides.Get())
 		writeJSON(w, http.StatusOK, h.currentOverrides())
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -476,13 +511,15 @@ func (h *Handler) handleAdminOverrides(w http.ResponseWriter, r *http.Request) {
 }
 
 type crawlRequest struct {
-	SeedURLs      []string `json:"seed_urls"`
-	MaxPages      int      `json:"max_pages"`
-	Cookie        string   `json:"cookie"`
-	BasicAuthUser string   `json:"basic_auth_user"`
-	BasicAuthPass string   `json:"basic_auth_pass"`
-	RespectRobots bool     `json:"respect_robots"`
-	UserAgent     string   `json:"user_agent"`
+	SeedURLs            []string `json:"seed_urls"`
+	MaxPages            int      `json:"max_pages"`
+	Cookie              string   `json:"cookie"`
+	BasicAuthUser       string   `json:"basic_auth_user"`
+	BasicAuthPass       string   `json:"basic_auth_pass"`
+	RespectRobots       bool     `json:"respect_robots"`
+	UserAgent           string   `json:"user_agent"`
+	AllowOffDomainLinks bool     `json:"allow_off_domain_links"`
+	UseSitemap          bool     `json:"use_sitemap"`
 }
 
 type startCrawlResponse struct {
@@ -507,13 +544,15 @@ func (h *Handler) handleAdminCrawl(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jobID, err := h.jobs.StartCrawlJob(r.Context(), ports.CrawlOptions{
-		SeedURLs:      req.SeedURLs,
-		MaxPages:      req.MaxPages,
-		Cookie:        req.Cookie,
-		BasicAuthUser: req.BasicAuthUser,
-		BasicAuthPass: req.BasicAuthPass,
-		RespectRobots: req.RespectRobots,
-		UserAgent:     req.UserAgent,
+		SeedURLs:            req.SeedURLs,
+		MaxPages:            req.MaxPages,
+		Cookie:              req.Cookie,
+		BasicAuthUser:       req.BasicAuthUser,
+		BasicAuthPass:       req.BasicAuthPass,
+		RespectRobots:       req.RespectRobots,
+		UserAgent:           req.UserAgent,
+		AllowOffDomainLinks: req.AllowOffDomainLinks,
+		UseSitemap:          req.UseSitemap,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -544,6 +583,166 @@ func (h *Handler) handleAdminCrawlJob(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, job)
 	case errors.Is(err, ports.ErrCrawlJobNotFound):
 		http.Error(w, "crawl job not found", http.StatusNotFound)
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// scheduledCrawlRequest is the wire shape for both creating a schedule
+// (POST /admin/api/schedules) and replacing one's editable fields
+// (PATCH /admin/api/schedules/{id}) -- deliberately no cookie/basic-auth
+// fields, since a recurring schedule never stores credentials at rest.
+type scheduledCrawlRequest struct {
+	SeedURLs            []string `json:"seed_urls"`
+	MaxPages            int      `json:"max_pages"`
+	RespectRobots       bool     `json:"respect_robots"`
+	UserAgent           string   `json:"user_agent"`
+	AllowOffDomainLinks bool     `json:"allow_off_domain_links"`
+	UseSitemap          bool     `json:"use_sitemap"`
+	IntervalMinutes     int      `json:"interval_minutes"`
+	Enabled             bool     `json:"enabled"`
+}
+
+type scheduledCrawlResponse struct {
+	ID                  string     `json:"id"`
+	SeedURLs            []string   `json:"seed_urls"`
+	MaxPages            int        `json:"max_pages"`
+	RespectRobots       bool       `json:"respect_robots"`
+	UserAgent           string     `json:"user_agent"`
+	AllowOffDomainLinks bool       `json:"allow_off_domain_links"`
+	UseSitemap          bool       `json:"use_sitemap"`
+	IntervalMinutes     int        `json:"interval_minutes"`
+	Enabled             bool       `json:"enabled"`
+	LastRunAt           *time.Time `json:"last_run_at,omitempty"`
+	NextRunAt           time.Time  `json:"next_run_at"`
+	CreatedAt           time.Time  `json:"created_at"`
+}
+
+func toScheduledCrawlResponse(s domain.ScheduledCrawl) scheduledCrawlResponse {
+	return scheduledCrawlResponse{
+		ID: s.ID, SeedURLs: s.SeedURLs, MaxPages: s.MaxPages,
+		RespectRobots: s.RespectRobots, UserAgent: s.UserAgent,
+		AllowOffDomainLinks: s.AllowOffDomainLinks, UseSitemap: s.UseSitemap,
+		IntervalMinutes: s.IntervalMinutes, Enabled: s.Enabled,
+		LastRunAt: s.LastRunAt, NextRunAt: s.NextRunAt, CreatedAt: s.CreatedAt,
+	}
+}
+
+func validateScheduledCrawlRequest(w http.ResponseWriter, req scheduledCrawlRequest) bool {
+	if len(req.SeedURLs) == 0 {
+		http.Error(w, "seed_urls must not be empty", http.StatusBadRequest)
+		return false
+	}
+	if req.IntervalMinutes <= 0 {
+		http.Error(w, "interval_minutes must be positive", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// handleAdminSchedules lists (GET) or creates (POST) recurring crawl
+// schedules. A freshly created schedule is always enabled, with its first
+// run interval_minutes from now -- the same rule editing an existing
+// schedule's options applies (see handleAdminUpdateSchedule).
+func (h *Handler) handleAdminSchedules(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.scheduledCrawls != nil, "scheduled crawls") {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		schedules, err := h.scheduledCrawls.ListScheduledCrawls(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		out := make([]scheduledCrawlResponse, len(schedules))
+		for i, s := range schedules {
+			out[i] = toScheduledCrawlResponse(s)
+		}
+		writeJSON(w, http.StatusOK, out)
+	case http.MethodPost:
+		var req scheduledCrawlRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		if !validateScheduledCrawlRequest(w, req) {
+			return
+		}
+		now := time.Now().UTC()
+		s := domain.ScheduledCrawl{
+			ID:                  domain.NewScheduledCrawlID(),
+			SeedURLs:            req.SeedURLs,
+			MaxPages:            req.MaxPages,
+			RespectRobots:       req.RespectRobots,
+			UserAgent:           req.UserAgent,
+			AllowOffDomainLinks: req.AllowOffDomainLinks,
+			UseSitemap:          req.UseSitemap,
+			IntervalMinutes:     req.IntervalMinutes,
+			Enabled:             true,
+			NextRunAt:           now.Add(time.Duration(req.IntervalMinutes) * time.Minute),
+			CreatedAt:           now,
+		}
+		if err := h.scheduledCrawls.CreateScheduledCrawl(r.Context(), s); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusCreated, toScheduledCrawlResponse(s))
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleAdminUpdateSchedule replaces a schedule's editable fields --
+// seed(s), page budget, per-crawl options, interval and enabled flag.
+// Editing reschedules it: next_run_at becomes interval_minutes from now,
+// same as a freshly created schedule, rather than trying to preserve a
+// stale cadence computed under the old interval.
+func (h *Handler) handleAdminUpdateSchedule(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.scheduledCrawls != nil, "scheduled crawls") {
+		return
+	}
+	var req scheduledCrawlRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if !validateScheduledCrawlRequest(w, req) {
+		return
+	}
+	s := domain.ScheduledCrawl{
+		ID:                  r.PathValue("id"),
+		SeedURLs:            req.SeedURLs,
+		MaxPages:            req.MaxPages,
+		RespectRobots:       req.RespectRobots,
+		UserAgent:           req.UserAgent,
+		AllowOffDomainLinks: req.AllowOffDomainLinks,
+		UseSitemap:          req.UseSitemap,
+		IntervalMinutes:     req.IntervalMinutes,
+		Enabled:             req.Enabled,
+		NextRunAt:           time.Now().UTC().Add(time.Duration(req.IntervalMinutes) * time.Minute),
+	}
+	err := h.scheduledCrawls.UpdateScheduledCrawl(r.Context(), s)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	case errors.Is(err, ports.ErrScheduledCrawlNotFound):
+		http.Error(w, "scheduled crawl not found", http.StatusNotFound)
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (h *Handler) handleAdminDeleteSchedule(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.scheduledCrawls != nil, "scheduled crawls") {
+		return
+	}
+	err := h.scheduledCrawls.DeleteScheduledCrawl(r.Context(), r.PathValue("id"))
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	case errors.Is(err, ports.ErrScheduledCrawlNotFound):
+		http.Error(w, "scheduled crawl not found", http.StatusNotFound)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}

@@ -39,6 +39,23 @@ func TestTuningSettings_SetClampsOutOfRangeValues(t *testing.T) {
 	}
 }
 
+func TestTuningSettings_ValuesReturnsSnapshot(t *testing.T) {
+	s := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	v := s.Values()
+	if v.Alpha != 0.5 || v.K1 != 1.2 || v.B != 0.75 {
+		t.Errorf("expected {0.5, 1.2, 0.75}, got %+v", v)
+	}
+}
+
+func TestTuningSettings_SetValuesUpdatesAndClamps(t *testing.T) {
+	s := domain.NewTuningSettings(0, 0, 0)
+	s.SetValues(domain.TuningValues{Alpha: 1.5, K1: -1, B: 0.5})
+	alpha, k1, b := s.Get()
+	if alpha != 1 || k1 != 0 || b != 0.5 {
+		t.Errorf("expected SetValues to clamp like Set, got (%v, %v, %v)", alpha, k1, b)
+	}
+}
+
 func TestTuningSettings_ConcurrentAccess(t *testing.T) {
 	s := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	var wg sync.WaitGroup

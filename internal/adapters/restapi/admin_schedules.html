@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — schedules</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<main>
+  <div class="page-header">
+    <a class="mark" href="/">se.</a>
+    <button id="sign-out" class="text-button" type="button">Sign out</button>
+  </div>
+  <nav class="admin-nav">
+    <a href="/admin">Overview</a>
+    <a href="/admin/documents">Documents</a>
+    <a href="/admin/crawl">Crawl</a>
+    <a href="/admin/schedules" aria-current="page">Schedules</a>
+    <a href="/admin/tuning">Tuning</a>
+    <a href="/admin/search">Search</a>
+    <a href="/admin/overrides">Overrides</a>
+  </nav>
+
+  <p class="lede" style="margin: 0 0 1.5rem;">Crawls that repeat automatically on an interval, instead of only ever being triggered manually. No cookie or Basic auth here — a recurring schedule never stores credentials at rest.</p>
+
+  <form id="schedule-form" class="stacked-form">
+    <section class="panel">
+      <h2>New schedule</h2>
+      <div class="form-row">
+        <label for="schedule-seeds">Seed URL(s) — one per line</label><br>
+        <textarea id="schedule-seeds" class="field" rows="3" placeholder="https://example.com" required></textarea>
+      </div>
+      <div class="form-row">
+        <label for="schedule-max-pages">Max pages</label><br>
+        <input id="schedule-max-pages" class="field" type="number" min="1" value="20" required>
+      </div>
+      <div class="form-row">
+        <label for="schedule-interval">Interval — minutes between runs</label><br>
+        <input id="schedule-interval" class="field" type="number" min="1" value="60" required>
+      </div>
+      <div class="form-row form-row-check">
+        <label for="schedule-respect-robots">
+          <input id="schedule-respect-robots" type="checkbox">
+          Respect robots.txt
+        </label>
+        <p class="tuning-hint">Off by default — each run ignores robots.txt unless checked.</p>
+      </div>
+      <div class="form-row form-row-check">
+        <label for="schedule-allow-off-domain">
+          <input id="schedule-allow-off-domain" type="checkbox">
+          Allow linking to other domains
+        </label>
+        <p class="tuning-hint">Off by default — each run stays on the seed URL's own domain.</p>
+      </div>
+      <div class="form-row form-row-check">
+        <label for="schedule-use-sitemap">
+          <input id="schedule-use-sitemap" type="checkbox">
+          Discover pages via sitemap.xml
+        </label>
+        <p class="tuning-hint">Off by default — when checked, /sitemap.xml is fetched from the seed's domain on each run.</p>
+      </div>
+      <div class="form-row">
+        <label for="schedule-user-agent">User-Agent</label><br>
+        <input id="schedule-user-agent" class="field" type="text" placeholder="Default: standard Firefox">
+      </div>
+      <div class="form-actions">
+        <button type="submit">Create schedule</button>
+        <span id="schedule-form-status" class="error-text"></span>
+      </div>
+    </section>
+  </form>
+
+  <section class="panel">
+    <h2>Schedules</h2>
+    <div id="schedules-status" class="panel-status"></div>
+    <div id="schedules-table"></div>
+  </section>
+</main>
+<script src="/admin.js"></script>
+<script>
+  const scheduleForm = document.getElementById('schedule-form');
+  const seedsEl = document.getElementById('schedule-seeds');
+  const maxPagesEl = document.getElementById('schedule-max-pages');
+  const intervalEl = document.getElementById('schedule-interval');
+  const respectRobotsEl = document.getElementById('schedule-respect-robots');
+  const allowOffDomainEl = document.getElementById('schedule-allow-off-domain');
+  const useSitemapEl = document.getElementById('schedule-use-sitemap');
+  const userAgentEl = document.getElementById('schedule-user-agent');
+  const formStatus = document.getElementById('schedule-form-status');
+  const schedulesStatusEl = document.getElementById('schedules-status');
+  const schedulesTableEl = document.getElementById('schedules-table');
+
+  function parseLines(text) {
+    return text.split('\n').map((s) => normalizeURL(s)).filter(Boolean);
+  }
+
+  function seedSummary(seedURLs) {
+    const urls = seedURLs || [];
+    if (urls.length === 0) return '(no seed)';
+    return urls.length === 1 ? urls[0] : urls[0] + ' +' + (urls.length - 1) + ' more';
+  }
+
+  function formatTimestamp(iso) {
+    return iso ? new Date(iso).toLocaleString() : '—';
+  }
+
+  function urlCell(text) {
+    const td = document.createElement('td');
+    td.className = 'url';
+    td.textContent = text;
+    return td;
+  }
+
+  function requestBodyFor(s) {
+    return {
+      seed_urls: s.seed_urls,
+      max_pages: s.max_pages,
+      respect_robots: s.respect_robots,
+      user_agent: s.user_agent,
+      allow_off_domain_links: s.allow_off_domain_links,
+      use_sitemap: s.use_sitemap,
+      interval_minutes: s.interval_minutes,
+      enabled: s.enabled,
+    };
+  }
+
+  async function toggleEnabled(s) {
+    try {
+      await patchJSON('/admin/api/schedules/' + encodeURIComponent(s.id), requestBodyFor({ ...s, enabled: !s.enabled }));
+      await loadSchedules();
+    } catch (err) {
+      window.alert('Could not update: ' + err.message);
+    }
+  }
+
+  async function deleteSchedule(id) {
+    try {
+      await deleteRequest('/admin/api/schedules/' + encodeURIComponent(id));
+      await loadSchedules();
+    } catch (err) {
+      window.alert('Could not delete: ' + err.message);
+    }
+  }
+
+  function enabledCell(s) {
+    const td = document.createElement('td');
+    const label = document.createElement('label');
+    label.className = 'form-row-check';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = s.enabled;
+    checkbox.addEventListener('change', () => toggleEnabled(s));
+    label.appendChild(checkbox);
+    td.appendChild(label);
+    return td;
+  }
+
+  function actionsCell(s) {
+    const td = document.createElement('td');
+    td.className = 'actions';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'text-button';
+    btn.textContent = 'Delete';
+    btn.addEventListener('click', () => deleteSchedule(s.id));
+    td.appendChild(btn);
+    return td;
+  }
+
+  function renderSchedules(schedules) {
+    clear(schedulesTableEl);
+    if (schedules.length === 0) {
+      schedulesStatusEl.textContent = 'No schedules yet — create one above.';
+      return;
+    }
+    schedulesStatusEl.textContent = '';
+    const table = buildTable(
+      [{ label: 'seed' }, { label: 'interval' }, { label: 'next run' }, { label: 'last run' }, { label: 'enabled' }, { label: '' }],
+      schedules,
+      (s) => [
+        urlCell(seedSummary(s.seed_urls)),
+        textCell(s.interval_minutes + ' min'),
+        textCell(formatTimestamp(s.next_run_at)),
+        textCell(formatTimestamp(s.last_run_at)),
+        enabledCell(s),
+        actionsCell(s),
+      ],
+    );
+    schedulesTableEl.appendChild(table);
+  }
+
+  async function loadSchedules() {
+    try {
+      renderSchedules(await getJSON('/admin/api/schedules'));
+    } catch (err) {
+      schedulesStatusEl.textContent = 'Could not load schedules: ' + err.message;
+    }
+  }
+
+  scheduleForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    formStatus.textContent = '';
+    const seedURLs = parseLines(seedsEl.value);
+    if (seedURLs.length === 0) {
+      formStatus.textContent = 'Enter at least one seed URL.';
+      return;
+    }
+    try {
+      await postJSON('/admin/api/schedules', {
+        seed_urls: seedURLs,
+        max_pages: parseInt(maxPagesEl.value, 10) || 20,
+        interval_minutes: parseInt(intervalEl.value, 10) || 60,
+        respect_robots: respectRobotsEl.checked,
+        allow_off_domain_links: allowOffDomainEl.checked,
+        use_sitemap: useSitemapEl.checked,
+        user_agent: userAgentEl.value,
+      });
+      scheduleForm.reset();
+      maxPagesEl.value = 20;
+      intervalEl.value = 60;
+      await loadSchedules();
+    } catch (err) {
+      formStatus.textContent = 'Could not create schedule: ' + err.message;
+    }
+  });
+
+  wireSignOut();
+  loadSchedules();
+</script>
+</body>
+</html>

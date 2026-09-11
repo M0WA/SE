@@ -4,6 +4,7 @@ type Dialect interface {
 	Name() string
 	Placeholder(argPosition int) string
 	UpsertDocumentSQL() string
+	UpsertSettingSQL() string
 	CreateSchemaSQL() []string
 }
 
@@ -18,6 +19,10 @@ func (sqliteDialect) UpsertDocumentSQL() string {
 	          url=excluded.url, title=excluded.title, text=excluded.text,
 	          doc_length=excluded.doc_length, embedding=excluded.embedding,
 	          host=excluded.host, version=excluded.version, crawled_at=excluded.crawled_at`
+}
+func (sqliteDialect) UpsertSettingSQL() string {
+	return `INSERT INTO app_settings (setting_key, value, updated_at) VALUES (?, ?, ?)
+	        ON CONFLICT(setting_key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`
 }
 func (sqliteDialect) CreateSchemaSQL() []string {
 	return []string{
@@ -44,6 +49,16 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			PRIMARY KEY (from_id, to_url)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_links_to_url ON links(to_url)`,
+		`CREATE TABLE IF NOT EXISTS app_settings (
+			setting_key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS scheduled_crawls (
+			id TEXT PRIMARY KEY, seed_urls TEXT NOT NULL, max_pages INTEGER NOT NULL,
+			respect_robots BOOLEAN, user_agent TEXT, allow_off_domain_links BOOLEAN,
+			use_sitemap BOOLEAN, interval_minutes INTEGER NOT NULL,
+			enabled BOOLEAN NOT NULL DEFAULT true, last_run_at TEXT,
+			next_run_at TEXT NOT NULL, created_at TEXT NOT NULL
+		)`,
 	}
 }
 
@@ -58,6 +73,10 @@ func (mysqlDialect) UpsertDocumentSQL() string {
 	          url=VALUES(url), title=VALUES(title), text=VALUES(text),
 	          doc_length=VALUES(doc_length), embedding=VALUES(embedding),
 	          host=VALUES(host), version=VALUES(version), crawled_at=VALUES(crawled_at)`
+}
+func (mysqlDialect) UpsertSettingSQL() string {
+	return `INSERT INTO app_settings (setting_key, value, updated_at) VALUES (?, ?, ?)
+	        ON DUPLICATE KEY UPDATE value=VALUES(value), updated_at=VALUES(updated_at)`
 }
 func (mysqlDialect) CreateSchemaSQL() []string {
 	return []string{
@@ -85,6 +104,16 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			FOREIGN KEY (from_id) REFERENCES documents(id) ON DELETE CASCADE
 		) ENGINE=InnoDB`,
 		`CREATE INDEX idx_links_to_url ON links(to_url)`,
+		`CREATE TABLE IF NOT EXISTS app_settings (
+			setting_key VARCHAR(64) PRIMARY KEY, value LONGTEXT NOT NULL, updated_at VARCHAR(64) NOT NULL
+		) ENGINE=InnoDB`,
+		`CREATE TABLE IF NOT EXISTS scheduled_crawls (
+			id VARCHAR(64) PRIMARY KEY, seed_urls TEXT NOT NULL, max_pages INT NOT NULL,
+			respect_robots BOOLEAN, user_agent VARCHAR(255), allow_off_domain_links BOOLEAN,
+			use_sitemap BOOLEAN, interval_minutes INT NOT NULL,
+			enabled BOOLEAN NOT NULL DEFAULT true, last_run_at VARCHAR(64),
+			next_run_at VARCHAR(64) NOT NULL, created_at VARCHAR(64) NOT NULL
+		) ENGINE=InnoDB`,
 	}
 }
 
@@ -101,6 +130,10 @@ func (postgresDialect) UpsertDocumentSQL() string {
 	          url=EXCLUDED.url, title=EXCLUDED.title, text=EXCLUDED.text,
 	          doc_length=EXCLUDED.doc_length, embedding=EXCLUDED.embedding,
 	          host=EXCLUDED.host, version=EXCLUDED.version, crawled_at=EXCLUDED.crawled_at`
+}
+func (postgresDialect) UpsertSettingSQL() string {
+	return `INSERT INTO app_settings (setting_key, value, updated_at) VALUES ($1, $2, $3)
+	        ON CONFLICT (setting_key) DO UPDATE SET value=EXCLUDED.value, updated_at=EXCLUDED.updated_at`
 }
 func (postgresDialect) CreateSchemaSQL() []string {
 	return []string{
@@ -127,6 +160,16 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			PRIMARY KEY (from_id, to_url)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_links_to_url ON links(to_url)`,
+		`CREATE TABLE IF NOT EXISTS app_settings (
+			setting_key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS scheduled_crawls (
+			id TEXT PRIMARY KEY, seed_urls TEXT NOT NULL, max_pages INT NOT NULL,
+			respect_robots BOOLEAN, user_agent TEXT, allow_off_domain_links BOOLEAN,
+			use_sitemap BOOLEAN, interval_minutes INT NOT NULL,
+			enabled BOOLEAN NOT NULL DEFAULT true, last_run_at TEXT,
+			next_run_at TEXT NOT NULL, created_at TEXT NOT NULL
+		)`,
 	}
 }
 

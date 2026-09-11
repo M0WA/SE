@@ -27,26 +27,36 @@ const (
 	CrawlPageFetchFailed      CrawlPageStatus = "fetch_failed"
 )
 
-// CrawlPageEvent reports what happened to one URL a crawl job visited.
+// CrawlPageEvent reports what happened to one URL a crawl job visited, with
+// as much diagnostic detail as is available for that outcome: DocLength and
+// LinksFound are only meaningful once a page was actually parsed (so they're
+// zero for a robots-disallowed or fetch-failed URL), and DurationMs is zero
+// for a robots-disallowed URL since no fetch was ever attempted for it.
 type CrawlPageEvent struct {
-	URL    string          `json:"url"`
-	Status CrawlPageStatus `json:"status"`
-	Title  string          `json:"title,omitempty"`
-	Error  string          `json:"error,omitempty"`
+	URL        string          `json:"url"`
+	Status     CrawlPageStatus `json:"status"`
+	Title      string          `json:"title,omitempty"`
+	Error      string          `json:"error,omitempty"`
+	DocLength  int             `json:"doc_length,omitempty"`
+	LinksFound int             `json:"links_found,omitempty"`
+	DurationMs int64           `json:"duration_ms,omitempty"`
+	FetchedAt  time.Time       `json:"fetched_at"`
 }
 
 // CrawlJobRequest is a redacted summary of the request that started a job:
 // it deliberately carries HasCookie/HasBasicAuth booleans rather than the
 // actual credentials, so a crawl's secrets never appear in a job listing
-// or detail view. RespectRobots and UserAgent aren't secrets, so they're
-// carried through as-is.
+// or detail view. RespectRobots, UserAgent, AllowOffDomainLinks and
+// UseSitemap aren't secrets, so they're carried through as-is.
 type CrawlJobRequest struct {
-	SeedURLs      []string `json:"seed_urls"`
-	MaxPages      int      `json:"max_pages"`
-	HasCookie     bool     `json:"has_cookie"`
-	HasBasicAuth  bool     `json:"has_basic_auth"`
-	RespectRobots bool     `json:"respect_robots"`
-	UserAgent     string   `json:"user_agent,omitempty"`
+	SeedURLs            []string `json:"seed_urls"`
+	MaxPages            int      `json:"max_pages"`
+	HasCookie           bool     `json:"has_cookie"`
+	HasBasicAuth        bool     `json:"has_basic_auth"`
+	RespectRobots       bool     `json:"respect_robots"`
+	UserAgent           string   `json:"user_agent,omitempty"`
+	AllowOffDomainLinks bool     `json:"allow_off_domain_links"`
+	UseSitemap          bool     `json:"use_sitemap"`
 }
 
 // CrawlJob is one triggered crawl's full state, including every page event

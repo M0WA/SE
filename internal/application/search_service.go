@@ -18,10 +18,14 @@ func NewSearchService(index ports.Indexer) ports.SearchService {
 	return &searchService{index: index}
 }
 
-func (s *searchService) Search(_ context.Context, query string, topK int) ([]domain.SearchResult, error) {
+// Search ignores opts.Sort: the in-memory Indexer this wraps has no notion
+// of crawl time, so it always ranks by relevance regardless -- only the
+// SQL-backed hybrid search service supports recency sort.
+func (s *searchService) Search(_ context.Context, query string, opts ports.SearchQuery) ([]domain.SearchResult, error) {
 	if domain.ParseQuery(query).Empty() {
 		return nil, ErrEmptyQuery
 	}
+	topK := opts.TopK
 	if topK <= 0 {
 		topK = 10
 	}

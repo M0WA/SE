@@ -24,6 +24,7 @@ func main() {
 	settings := domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B)
 	opSettings := domain.DefaultOperationalSettings()
 	overrides := domain.DefaultRankingOverrides()
+	bootstrap.SyncSettings(ctx, repo, settings, opSettings, overrides)
 	embedder := hashembed.New(128)
 	debugSvc := application.NewHybridSearchService(repo, embedder, settings, overrides)
 
@@ -36,15 +37,18 @@ func main() {
 	jobs := crawlclient.New(bootstrap.GetEnv("CRAWL_SERVER_URL", "http://127.0.0.1:8082"))
 
 	handler := restapi.New(restapi.Config{
-		Jobs:       jobs,
-		Debug:      debugSvc,
-		Admin:      repo,
-		Settings:   settings,
-		OpSettings: opSettings,
-		Overrides:  overrides,
-		DBDriver:   driver,
-		AdminUser:  adminUser,
-		AdminPass:  adminPass,
+		Jobs:            jobs,
+		Debug:           debugSvc,
+		Admin:           repo,
+		Settings:        settings,
+		OpSettings:      opSettings,
+		Overrides:       overrides,
+		SettingsStore:   repo,
+		ScheduledCrawls: repo,
+		Health:          repo,
+		DBDriver:        driver,
+		AdminUser:       adminUser,
+		AdminPass:       adminPass,
 	})
 
 	addr := bootstrap.GetEnv("ADMIN_LISTEN_ADDR", "127.0.0.1:8081")

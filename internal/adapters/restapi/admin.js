@@ -2,6 +2,18 @@ function clear(el) {
   while (el.firstChild) el.removeChild(el.firstChild);
 }
 
+// normalizeURL prepends https:// when a URL has no scheme at all, so an
+// admin can type "example.com" instead of always needing the full
+// "https://example.com" -- a URL that already names an explicit scheme
+// (http://, ftp://, etc.) is left untouched.
+function normalizeURL(value) {
+  const trimmed = value.trim();
+  if (trimmed === '' || /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) {
+    return trimmed;
+  }
+  return 'https://' + trimmed;
+}
+
 function kvRow(container, key, value) {
   const row = document.createElement('div');
   row.className = 'kv-row';
@@ -38,6 +50,14 @@ async function postJSON(url, body) {
 
 async function deleteRequest(url) {
   await checkResponse(await fetch(url, { method: 'DELETE' }));
+}
+
+async function patchJSON(url, body) {
+  return (await checkResponse(await fetch(url, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }))).json();
 }
 
 // textCell builds a plain <td>; opts.num right-aligns and monospaces it

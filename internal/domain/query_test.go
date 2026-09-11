@@ -77,6 +77,107 @@ func TestParsedQuery_AllTerms_DedupesAndExcludesExcluded(t *testing.T) {
 	}
 }
 
+func TestParseQuery_SiteFilter(t *testing.T) {
+	q := domain.ParseQuery("cats site:example.com")
+	if !reflect.DeepEqual(q.Optional, []string{"cats"}) {
+		t.Errorf("expected 'cats' optional (site: stripped out), got %+v", q.Optional)
+	}
+	if !reflect.DeepEqual(q.Sites, []string{"example.com"}) {
+		t.Errorf("expected 'example.com' as a site filter, got %+v", q.Sites)
+	}
+}
+
+func TestParseQuery_SiteFilterBeforeTerm(t *testing.T) {
+	q := domain.ParseQuery("site:example.com cats")
+	if !reflect.DeepEqual(q.Optional, []string{"cats"}) {
+		t.Errorf("expected 'cats' optional, got %+v", q.Optional)
+	}
+	if !reflect.DeepEqual(q.Sites, []string{"example.com"}) {
+		t.Errorf("expected 'example.com' as a site filter, got %+v", q.Sites)
+	}
+}
+
+func TestParseQuery_SiteFilterIsLowercased(t *testing.T) {
+	q := domain.ParseQuery("Site:Example.COM")
+	if !reflect.DeepEqual(q.Sites, []string{"example.com"}) {
+		t.Errorf("expected lowercased site filter, got %+v", q.Sites)
+	}
+}
+
+func TestParseQuery_MultipleSiteFilters(t *testing.T) {
+	q := domain.ParseQuery("cats site:example.com site:example.org")
+	want := []string{"example.com", "example.org"}
+	if !reflect.DeepEqual(q.Sites, want) {
+		t.Errorf("expected both site filters captured, got %+v", q.Sites)
+	}
+}
+
+func TestParseQuery_SiteFilterCombinedWithOtherOperators(t *testing.T) {
+	q := domain.ParseQuery(`katzen +haustier -hund "sehr treu" site:example.com`)
+	if !reflect.DeepEqual(q.Optional, []string{"katzen"}) {
+		t.Errorf("expected 'katzen' optional, got %+v", q.Optional)
+	}
+	if !reflect.DeepEqual(q.Required, []string{"haustier"}) {
+		t.Errorf("expected 'haustier' required, got %+v", q.Required)
+	}
+	if !reflect.DeepEqual(q.Excluded, []string{"hund"}) {
+		t.Errorf("expected 'hund' excluded, got %+v", q.Excluded)
+	}
+	if !reflect.DeepEqual(q.Phrases, []string{"sehr treu"}) {
+		t.Errorf("expected one phrase, got %+v", q.Phrases)
+	}
+	if !reflect.DeepEqual(q.Sites, []string{"example.com"}) {
+		t.Errorf("expected 'example.com' as a site filter, got %+v", q.Sites)
+	}
+}
+
+func TestParseQuery_SiteFilterWithoutHostIsDropped(t *testing.T) {
+	q := domain.ParseQuery("cats site:")
+	if len(q.Sites) != 0 {
+		t.Errorf("expected a bare 'site:' with no host to be dropped, got %+v", q.Sites)
+	}
+	if !reflect.DeepEqual(q.Optional, []string{"cats"}) {
+		t.Errorf("expected 'cats' optional, got %+v", q.Optional)
+	}
+}
+
+func TestParsedQuery_HasConstraints_SiteFilterAlone(t *testing.T) {
+	q := domain.ParseQuery("cats site:example.com")
+	if !q.HasConstraints() {
+		t.Error("expected a site: filter alone to count as a constraint")
+	}
+}
+
+func TestParsedQuery_SiteAllowed(t *testing.T) {
+	q := domain.ParseQuery("cats site:example.com")
+	if !q.SiteAllowed(domain.Document{URL: "https://example.com/page"}) {
+		t.Error("expected an exact host match to be allowed")
+	}
+	if !q.SiteAllowed(domain.Document{URL: "https://www.example.com/page"}) {
+		t.Error("expected a subdomain of the filtered site to be allowed")
+	}
+	if q.SiteAllowed(domain.Document{URL: "https://other.example/page"}) {
+		t.Error("expected a non-matching host to be disallowed")
+	}
+}
+
+func TestParsedQuery_SiteAllowed_MultipleSitesIsAnyOf(t *testing.T) {
+	q := domain.ParseQuery("cats site:example.com site:example.org")
+	if !q.SiteAllowed(domain.Document{URL: "https://example.org/page"}) {
+		t.Error("expected a match on the second site filter to be allowed")
+	}
+	if q.SiteAllowed(domain.Document{URL: "https://example.net/page"}) {
+		t.Error("expected a host matching neither filter to be disallowed")
+	}
+}
+
+func TestParsedQuery_SiteAllowed_NoFilterAllowsEverything(t *testing.T) {
+	q := domain.ParseQuery("cats")
+	if !q.SiteAllowed(domain.Document{URL: "https://anything.example/page"}) {
+		t.Error("expected no site: filter to allow any host")
+	}
+}
+
 func TestParsedQuery_Empty(t *testing.T) {
 	if !domain.ParseQuery("   ").Empty() {
 		t.Error("expected blank query to be empty")
