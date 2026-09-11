@@ -199,6 +199,80 @@ button:focus-visible {
   border-radius: 2px;
 }
 
+.result-details {
+  margin-top: 0.6rem;
+}
+
+.result-details summary {
+  cursor: pointer;
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+}
+
+.result-details summary:hover { color: var(--accent); }
+
+.result-details[open] summary { margin-bottom: 0.5rem; }
+
+.score-row {
+  display: flex;
+  justify-content: space-between;
+  max-width: 220px;
+  padding: 0.2rem 0;
+  border-top: 1px solid var(--rule);
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 0.82rem;
+}
+
+.score-row:first-of-type { border-top: none; padding-top: 0; }
+
+.score-label { color: var(--ink-muted); }
+
+.score-value { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+.syntax-note {
+  margin: -0.75rem 0 1.5rem;
+}
+
+.syntax-note summary {
+  cursor: pointer;
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+}
+
+.syntax-note summary:hover { color: var(--accent); }
+
+.syntax-note dl {
+  margin: 0.9rem 0 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.3rem 1rem;
+}
+
+.syntax-note dt { margin: 0; }
+
+.syntax-note dd {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.9rem;
+  align-self: center;
+}
+
+.syntax-token {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 0.85rem;
+  background: var(--accent-soft);
+  padding: 0.05em 0.35em;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+.syntax-aside {
+  margin: 0.9rem 0 0;
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
 .footer-link {
   margin-top: 3.5rem;
   padding-top: 1.5rem;

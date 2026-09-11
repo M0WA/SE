@@ -16,6 +16,22 @@
     <input id="q" class="field" name="q" type="text" placeholder="Search the index…" autofocus>
     <button type="submit">Search</button>
   </form>
+
+  <details class="syntax-note">
+    <summary>Search syntax</summary>
+    <dl>
+      <dt><span class="syntax-token">word</span></dt>
+      <dd>matches pages containing it</dd>
+      <dt><span class="syntax-token">+word</span></dt>
+      <dd>must appear</dd>
+      <dt><span class="syntax-token">-word</span></dt>
+      <dd>must not appear</dd>
+      <dt><span class="syntax-token">"exact phrase"</span></dt>
+      <dd>matches that phrase exactly</dd>
+    </dl>
+    <p class="syntax-aside">Combine them freely — e.g. <span class="syntax-token">cats +shelter -kitten</span>. Add <span class="syntax-token">&amp;top_k=N</span> to the URL for more than the default number of results.</p>
+  </details>
+
   <div id="status"></div>
   <div id="results"></div>
 
@@ -31,6 +47,20 @@
 
   function clear(el) {
     while (el.firstChild) el.removeChild(el.firstChild);
+  }
+
+  function scoreRow(label, value) {
+    const row = document.createElement('div');
+    row.className = 'score-row';
+    const k = document.createElement('span');
+    k.className = 'score-label';
+    k.textContent = label;
+    const v = document.createElement('span');
+    v.className = 'score-value';
+    v.textContent = Number(value).toFixed(3);
+    row.appendChild(k);
+    row.appendChild(v);
+    return row;
   }
 
   function renderResults(query, list) {
@@ -72,6 +102,18 @@
         snippet.className = 'result-snippet';
         snippet.innerHTML = r.snippet;
         row.appendChild(snippet);
+      }
+
+      if (r.bm25_score !== undefined && r.semantic_sim !== undefined) {
+        const details = document.createElement('details');
+        details.className = 'result-details';
+        const summary = document.createElement('summary');
+        summary.textContent = 'Details';
+        details.appendChild(summary);
+        details.appendChild(scoreRow('bm25', r.bm25_score));
+        details.appendChild(scoreRow('semantic', r.semantic_sim));
+        details.appendChild(scoreRow('final', r.score));
+        row.appendChild(details);
       }
 
       results.appendChild(row);

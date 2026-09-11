@@ -25,7 +25,10 @@ func (a *hybridSearchAdapter) Search(ctx context.Context, query string, topK int
 	}
 	results := make([]domain.SearchResult, len(hybridResults))
 	for i, r := range hybridResults {
-		results[i] = domain.SearchResult{URL: r.URL, Title: r.Title, Snippet: r.Snippet, Score: r.FinalScore}
+		results[i] = domain.SearchResult{
+			URL: r.URL, Title: r.Title, Snippet: r.Snippet, Score: r.FinalScore,
+			BM25Score: r.BM25Score, SemanticSim: r.SemanticSim,
+		}
 	}
 	return results, nil
 }
