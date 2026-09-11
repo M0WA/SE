@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"searchengine/internal/domain"
@@ -246,6 +247,24 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 		}
 	}
 
+	if _, err := tx.ExecContext(ctx, r.ph(`DELETE FROM links WHERE from_id = %s`, 1), doc.ID); err != nil {
+		return fmt.Errorf("deleting old links: %w", err)
+	}
+	insertLinkSQL := r.ph(`INSERT INTO links (from_id, to_url, to_host) VALUES (%s, %s, %s)`, 1, 2, 3)
+	seenLinks := make(map[string]bool)
+	for _, link := range doc.Links {
+		// A link back to the page itself (e.g. a logo/home link) isn't a
+		// meaningful internal link or backlink -- skip it so it can't
+		// inflate either count.
+		if link == doc.URL || seenLinks[link] {
+			continue
+		}
+		seenLinks[link] = true
+		if _, err := tx.ExecContext(ctx, insertLinkSQL, doc.ID, link, hostOf(link)); err != nil {
+			return fmt.Errorf("saving link: %w", err)
+		}
+	}
+
 	return tx.Commit()
 }
 
@@ -359,11 +378,21 @@ func (r *Repository) DocumentByID(ctx context.Context, docID string) (domain.Doc
 	return doc, nil
 }
 
-// DeleteDocument removes a document and its postings (the postings table's
-// foreign key cascades the delete across all three dialects' schemas).
+// DeleteDocument removes a document and every row that references it
+// (postings, archived versions, outbound links). The schema also declares
+// ON DELETE CASCADE for all three, but that's only a backstop here, not
+// relied on: SQLite's foreign-key enforcement is off by default and is a
+// per-connection PRAGMA, so a pooled connection that never ran it would
+// silently leave orphaned rows behind -- deleting them explicitly is
+// correct regardless of whether cascade enforcement happens to be active.
 func (r *Repository) DeleteDocument(ctx context.Context, docID string) error {
-	query := r.ph(`DELETE FROM documents WHERE id = %s`, 1)
-	res, err := r.db.ExecContext(ctx, query, docID)
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	res, err := tx.ExecContext(ctx, r.ph(`DELETE FROM documents WHERE id = %s`, 1), docID)
 	if err != nil {
 		return fmt.Errorf("deleting document (%s): %w", docID, err)
 	}
@@ -374,7 +403,18 @@ func (r *Repository) DeleteDocument(ctx context.Context, docID string) error {
 	if n == 0 {
 		return ports.ErrDocumentNotFound
 	}
-	return nil
+
+	for _, table := range []string{"postings", "document_versions"} {
+		stmt := r.ph(`DELETE FROM `+table+` WHERE doc_id = %s`, 1)
+		if _, err := tx.ExecContext(ctx, stmt, docID); err != nil {
+			return fmt.Errorf("deleting %s for %s: %w", table, docID, err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, r.ph(`DELETE FROM links WHERE from_id = %s`, 1), docID); err != nil {
+		return fmt.Errorf("deleting links for %s: %w", docID, err)
+	}
+
+	return tx.Commit()
 }
 
 // ListDocuments lists indexed pages, most recent ID first, optionally
@@ -410,7 +450,91 @@ func (r *Repository) ListDocuments(ctx context.Context, limit int, host string) 
 		}
 		out = append(out, d)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := r.attachLinkStats(ctx, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// attachLinkStats fills in InternalLinks, ExternalLinks and Backlinks for
+// each document (mutated in place) using two batched queries -- one for
+// this page's own outbound links classified against its own host, one for
+// how many other indexed pages link to each of these URLs -- rather than
+// one query per document.
+func (r *Repository) attachLinkStats(ctx context.Context, docs []domain.IndexedDocument) error {
+	if len(docs) == 0 {
+		return nil
+	}
+	ids := make([]interface{}, len(docs))
+	urls := make([]interface{}, len(docs))
+	byID := make(map[string]*domain.IndexedDocument, len(docs))
+	byURL := make(map[string]*domain.IndexedDocument, len(docs))
+	for i := range docs {
+		ids[i] = docs[i].ID
+		urls[i] = docs[i].URL
+		byID[docs[i].ID] = &docs[i]
+		byURL[docs[i].URL] = &docs[i]
+	}
+
+	outQuery := fmt.Sprintf(`SELECT l.from_id,
+	                          SUM(CASE WHEN l.to_host = d.host THEN 1 ELSE 0 END),
+	                          SUM(CASE WHEN l.to_host != d.host THEN 1 ELSE 0 END)
+	                          FROM links l JOIN documents d ON d.id = l.from_id
+	                          WHERE l.from_id IN (%s)
+	                          GROUP BY l.from_id`, r.placeholderList(len(ids), 1))
+	outRows, err := r.db.QueryContext(ctx, outQuery, ids...)
+	if err != nil {
+		return fmt.Errorf("querying outbound link counts: %w", err)
+	}
+	for outRows.Next() {
+		var fromID string
+		var internal, external int
+		if err := outRows.Scan(&fromID, &internal, &external); err != nil {
+			outRows.Close()
+			return fmt.Errorf("scanning outbound link counts: %w", err)
+		}
+		if d, ok := byID[fromID]; ok {
+			d.InternalLinks, d.ExternalLinks = internal, external
+		}
+	}
+	outRows.Close()
+	if err := outRows.Err(); err != nil {
+		return err
+	}
+
+	backlinkQuery := fmt.Sprintf(`SELECT to_url, COUNT(DISTINCT from_id)
+	                               FROM links WHERE to_url IN (%s) GROUP BY to_url`,
+		r.placeholderList(len(urls), 1))
+	backlinkRows, err := r.db.QueryContext(ctx, backlinkQuery, urls...)
+	if err != nil {
+		return fmt.Errorf("querying backlink counts: %w", err)
+	}
+	defer backlinkRows.Close()
+	for backlinkRows.Next() {
+		var toURL string
+		var count int
+		if err := backlinkRows.Scan(&toURL, &count); err != nil {
+			return fmt.Errorf("scanning backlink counts: %w", err)
+		}
+		if d, ok := byURL[toURL]; ok {
+			d.Backlinks = count
+		}
+	}
+	return backlinkRows.Err()
+}
+
+// placeholderList builds n comma-separated placeholders starting at
+// startPos (e.g. "?, ?, ?" for sqlite/mysql, "$1, $2, $3" for postgres)
+// for an IN (...) clause of variable width.
+func (r *Repository) placeholderList(n, startPos int) string {
+	parts := make([]string, n)
+	for i := 0; i < n; i++ {
+		parts[i] = r.dialect.Placeholder(startPos + i)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // SearchDomains finds distinct crawled domains whose hostname contains q,

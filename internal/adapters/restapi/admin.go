@@ -122,13 +122,16 @@ func (h *Handler) handleAdminVocabulary(w http.ResponseWriter, r *http.Request) 
 }
 
 type adminDocument struct {
-	ID        string    `json:"id"`
-	URL       string    `json:"url"`
-	Host      string    `json:"host"`
-	Title     string    `json:"title"`
-	DocLength int       `json:"doc_length"`
-	Version   int       `json:"version"`
-	CrawledAt time.Time `json:"crawled_at"`
+	ID            string    `json:"id"`
+	URL           string    `json:"url"`
+	Host          string    `json:"host"`
+	Title         string    `json:"title"`
+	DocLength     int       `json:"doc_length"`
+	Version       int       `json:"version"`
+	CrawledAt     time.Time `json:"crawled_at"`
+	InternalLinks int       `json:"internal_links"`
+	ExternalLinks int       `json:"external_links"`
+	Backlinks     int       `json:"backlinks"`
 }
 
 // handleAdminDocuments lists indexed pages, optionally narrowed to one
@@ -154,6 +157,7 @@ func (h *Handler) handleAdminDocuments(w http.ResponseWriter, r *http.Request) {
 		out[i] = adminDocument{
 			ID: d.ID, URL: d.URL, Host: d.Host, Title: d.Title,
 			DocLength: d.DocLength, Version: d.Version, CrawledAt: d.CrawledAt,
+			InternalLinks: d.InternalLinks, ExternalLinks: d.ExternalLinks, Backlinks: d.Backlinks,
 		}
 	}
 	writeJSON(w, http.StatusOK, out)

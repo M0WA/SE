@@ -273,6 +273,27 @@ func TestHandleAdminDocuments_Success(t *testing.T) {
 	}
 }
 
+func TestHandleAdminDocuments_IncludesLinkStats(t *testing.T) {
+	docs := []domain.IndexedDocument{{
+		ID: "doc-0", URL: "http://a", Title: "A", DocLength: 10,
+		InternalLinks: 3, ExternalLinks: 2, Backlinks: 5,
+	}}
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{docs: docs}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/documents", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	var resp []map[string]interface{}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp) != 1 {
+		t.Fatalf("expected 1 document, got %d", len(resp))
+	}
+	if resp[0]["internal_links"] != float64(3) || resp[0]["external_links"] != float64(2) || resp[0]["backlinks"] != float64(5) {
+		t.Errorf("expected link stats to pass through, got %v", resp[0])
+	}
+}
+
 func TestHandleAdminDocuments_RespectsLimitParam(t *testing.T) {
 	repo := &fakeAdminRepo{docs: []domain.IndexedDocument{{ID: "doc-0"}}}
 	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})

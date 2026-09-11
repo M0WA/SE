@@ -695,3 +695,130 @@ func TestMigrateDocumentColumns_BackfillsHostOnPreExistingRows(t *testing.T) {
 		t.Errorf("expected a backfilled row to default to version 1, got %d", docs[0].Version)
 	}
 }
+
+func TestSaveDocument_ClassifiesOutboundLinksInternalVsExternal(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	doc := domain.Document{
+		ID: "doc-1", URL: "https://a.example/page", Title: "A", Text: "text",
+		Links: []string{
+			"https://a.example/other",
+			"https://a.example/third",
+			"https://b.example/elsewhere",
+		},
+	}
+	if err := repo.SaveDocument(ctx, doc, []float32{1}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	docs, err := repo.ListDocuments(ctx, 10, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("expected 1 document, got %d", len(docs))
+	}
+	if docs[0].InternalLinks != 2 {
+		t.Errorf("expected 2 internal links, got %d", docs[0].InternalLinks)
+	}
+	if docs[0].ExternalLinks != 1 {
+		t.Errorf("expected 1 external link, got %d", docs[0].ExternalLinks)
+	}
+}
+
+func TestSaveDocument_SelfLinkIsExcludedFromLinkCounts(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	doc := domain.Document{
+		ID: "doc-1", URL: "https://a.example/page", Title: "A", Text: "text",
+		Links: []string{"https://a.example/page", "https://a.example/page"},
+	}
+	if err := repo.SaveDocument(ctx, doc, []float32{1}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	docs, _ := repo.ListDocuments(ctx, 10, "")
+	if len(docs) != 1 || docs[0].InternalLinks != 0 || docs[0].ExternalLinks != 0 {
+		t.Errorf("expected a self-link to be excluded entirely, got %+v", docs)
+	}
+}
+
+func TestSaveDocument_ResavingReplacesLinks(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	first := domain.Document{
+		ID: "doc-1", URL: "https://a.example/page", Title: "A", Text: "text one",
+		Links: []string{"https://a.example/other", "https://b.example/x"},
+	}
+	if err := repo.SaveDocument(ctx, first, []float32{1}); err != nil {
+		t.Fatalf("unexpected error on first save: %v", err)
+	}
+	second := domain.Document{
+		ID: "doc-1", URL: "https://a.example/page", Title: "A", Text: "text two",
+		Links: []string{"https://b.example/x"},
+	}
+	if err := repo.SaveDocument(ctx, second, []float32{1}); err != nil {
+		t.Fatalf("unexpected error on re-save: %v", err)
+	}
+	docs, _ := repo.ListDocuments(ctx, 10, "")
+	if len(docs) != 1 || docs[0].InternalLinks != 0 || docs[0].ExternalLinks != 1 {
+		t.Errorf("expected re-saving to replace the old link set, got %+v", docs)
+	}
+}
+
+func TestListDocuments_ComputesBacklinksFromOtherIndexedPages(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	docs := []domain.Document{
+		{ID: "doc-a", URL: "https://a.example/", Title: "A", Text: "text",
+			Links: []string{"https://c.example/target"}},
+		{ID: "doc-b", URL: "https://b.example/", Title: "B", Text: "text",
+			Links: []string{"https://c.example/target"}},
+		{ID: "doc-c", URL: "https://c.example/target", Title: "C", Text: "text"},
+	}
+	for _, d := range docs {
+		if err := repo.SaveDocument(ctx, d, []float32{1}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	got, err := repo.ListDocuments(ctx, 10, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	byID := map[string]domain.IndexedDocument{}
+	for _, d := range got {
+		byID[d.ID] = d
+	}
+	if byID["doc-c"].Backlinks != 2 {
+		t.Errorf("expected doc-c to have 2 backlinks, got %d", byID["doc-c"].Backlinks)
+	}
+	if byID["doc-a"].Backlinks != 0 || byID["doc-b"].Backlinks != 0 {
+		t.Errorf("expected doc-a/doc-b to have 0 backlinks, got a=%d b=%d", byID["doc-a"].Backlinks, byID["doc-b"].Backlinks)
+	}
+}
+
+func TestDeleteDocument_RemovesItsOutboundLinks(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	docs := []domain.Document{
+		{ID: "doc-a", URL: "https://a.example/", Title: "A", Text: "text",
+			Links: []string{"https://b.example/target"}},
+		{ID: "doc-b", URL: "https://b.example/target", Title: "B", Text: "text"},
+	}
+	for _, d := range docs {
+		if err := repo.SaveDocument(ctx, d, []float32{1}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if err := repo.DeleteDocument(ctx, "doc-a"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got, err := repo.ListDocuments(ctx, 10, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "doc-b" {
+		t.Fatalf("expected only doc-b to remain, got %+v", got)
+	}
+	if got[0].Backlinks != 0 {
+		t.Errorf("expected doc-b's backlinks to drop to 0 once doc-a (its only linker) is deleted, got %d", got[0].Backlinks)
+	}
+}

@@ -38,6 +38,12 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			doc_length INTEGER NOT NULL, crawled_at TEXT NOT NULL,
 			PRIMARY KEY (doc_id, version)
 		)`,
+		`CREATE TABLE IF NOT EXISTS links (
+			from_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+			to_url TEXT NOT NULL, to_host TEXT NOT NULL,
+			PRIMARY KEY (from_id, to_url)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_links_to_url ON links(to_url)`,
 	}
 }
 
@@ -73,6 +79,12 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			PRIMARY KEY (doc_id, version),
 			FOREIGN KEY (doc_id) REFERENCES documents(id) ON DELETE CASCADE
 		) ENGINE=InnoDB`,
+		`CREATE TABLE IF NOT EXISTS links (
+			from_id VARCHAR(64) NOT NULL, to_url VARCHAR(767) NOT NULL, to_host VARCHAR(255) NOT NULL,
+			PRIMARY KEY (from_id, to_url),
+			FOREIGN KEY (from_id) REFERENCES documents(id) ON DELETE CASCADE
+		) ENGINE=InnoDB`,
+		`CREATE INDEX idx_links_to_url ON links(to_url)`,
 	}
 }
 
@@ -109,6 +121,12 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			doc_length INT NOT NULL, crawled_at TEXT NOT NULL,
 			PRIMARY KEY (doc_id, version)
 		)`,
+		`CREATE TABLE IF NOT EXISTS links (
+			from_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+			to_url TEXT NOT NULL, to_host TEXT NOT NULL,
+			PRIMARY KEY (from_id, to_url)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_links_to_url ON links(to_url)`,
 	}
 }
 

@@ -28,13 +28,16 @@ type SearchResult struct {
 // counts up each time a re-crawl of the same URL changes its content;
 // CrawledAt is when this version was last (re-)confirmed.
 type IndexedDocument struct {
-	ID        string
-	URL       string
-	Host      string
-	Title     string
-	DocLength int
-	Version   int
-	CrawledAt time.Time
+	ID            string
+	URL           string
+	Host          string
+	Title         string
+	DocLength     int
+	Version       int
+	CrawledAt     time.Time
+	InternalLinks int
+	ExternalLinks int
+	Backlinks     int
 }
 
 // DocumentVersion is one prior, superseded version of a document, kept so

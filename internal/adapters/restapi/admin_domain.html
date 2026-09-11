@@ -130,10 +130,14 @@
   function renderDocs(docs) {
     const totalLen = docs.reduce((sum, d) => sum + d.doc_length, 0);
     const avgLen = docs.length ? totalLen / docs.length : 0;
+    const totalInternal = docs.reduce((sum, d) => sum + d.internal_links, 0);
+    const totalExternal = docs.reduce((sum, d) => sum + d.external_links, 0);
+    const totalBacklinks = docs.reduce((sum, d) => sum + d.backlinks, 0);
     const metrics = document.createElement('span');
     metrics.className = 'domain-metrics';
     metrics.textContent = docs.length + (docs.length === 1 ? ' page' : ' pages') +
-      ' · avg ' + avgLen.toFixed(0) + ' · total ' + totalLen;
+      ' · avg ' + avgLen.toFixed(0) + ' · total ' + totalLen +
+      ' · ' + totalInternal + ' internal · ' + totalExternal + ' external · ' + totalBacklinks + ' backlinks';
     tailEl.appendChild(metrics);
 
     const crawlLink = document.createElement('a');
@@ -150,7 +154,11 @@
     chartEl.appendChild(buildChart(docs));
 
     const table = buildTable(
-      [{ label: 'title' }, { label: 'length', num: true }, { label: 'version' }, { label: '' }],
+      [
+        { label: 'title' }, { label: 'length', num: true },
+        { label: 'internal', num: true }, { label: 'external', num: true }, { label: 'backlinks', num: true },
+        { label: 'version' }, { label: '' },
+      ],
       docs,
       (d) => {
         const link = document.createElement('a');
@@ -165,6 +173,13 @@
         const titleTd = document.createElement('td');
         titleTd.appendChild(link);
         titleTd.appendChild(urlDiv);
+
+        const internalCell = textCell(String(d.internal_links), { num: true });
+        internalCell.title = 'Links from this page to the same domain';
+        const externalCell = textCell(String(d.external_links), { num: true });
+        externalCell.title = 'Links from this page to a different domain';
+        const backlinksCell = textCell(String(d.backlinks), { num: true });
+        backlinksCell.title = 'Other indexed pages linking to this one';
 
         const versionTd = document.createElement('td');
         if (d.version > 1) {
@@ -188,7 +203,11 @@
         actionTd.className = 'actions';
         actionTd.appendChild(delBtn);
 
-        return [titleTd, textCell(String(d.doc_length), { num: true }), versionTd, actionTd];
+        return [
+          titleTd, textCell(String(d.doc_length), { num: true }),
+          internalCell, externalCell, backlinksCell,
+          versionTd, actionTd,
+        ];
       },
     );
     tableEl.appendChild(table);
