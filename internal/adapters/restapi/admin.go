@@ -49,6 +49,10 @@ func (h *Handler) handleAdminSearchPage(w http.ResponseWriter, r *http.Request) 
 	serveStatic(w, r, "text/html; charset=utf-8", adminSearchHTML)
 }
 
+func (h *Handler) handleAdminOverridesPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminOverridesHTML)
+}
+
 func (h *Handler) handleAdminCrawlPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/html; charset=utf-8", crawlHTML)
 }
@@ -73,6 +77,41 @@ func (h *Handler) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 		TotalDocs: totalDocs,
 		AvgDocLen: avgDocLen,
 	})
+}
+
+const defaultVocabularyTopTermsLimit = 20
+
+type adminTermStat struct {
+	Term      string `json:"term"`
+	DocFreq   int    `json:"doc_freq"`
+	TotalFreq int    `json:"total_freq"`
+}
+
+type adminVocabularyResponse struct {
+	VocabularySize int             `json:"vocabulary_size"`
+	TopTerms       []adminTermStat `json:"top_terms"`
+}
+
+func (h *Handler) handleAdminVocabulary(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+		return
+	}
+	limit := defaultVocabularyTopTermsLimit
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	vocabSize, topTerms, err := h.admin.VocabularyStats(r.Context(), limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := make([]adminTermStat, len(topTerms))
+	for i, t := range topTerms {
+		out[i] = adminTermStat{Term: t.Term, DocFreq: t.DocFreq, TotalFreq: t.TotalFreq}
+	}
+	writeJSON(w, http.StatusOK, adminVocabularyResponse{VocabularySize: vocabSize, TopTerms: out})
 }
 
 type adminDocument struct {
@@ -265,6 +304,58 @@ func (h *Handler) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		h.settings.Set(req.Tuning.Alpha, req.Tuning.K1, req.Tuning.B)
 		h.opSettings.Set(req.Operational.toSettingsValues())
 		writeJSON(w, http.StatusOK, h.currentSettings())
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// overridesValues mirrors domain.RankingOverridesValues for the wire
+// format, keeping JSON tags (and the map-vs-slice choice for the wire
+// format) out of the domain type.
+type overridesValues struct {
+	BlockedTerms   []string           `json:"blocked_terms"`
+	BoostedTerms   map[string]float64 `json:"boosted_terms"`
+	BlockedDomains []string           `json:"blocked_domains"`
+	BoostedDomains map[string]float64 `json:"boosted_domains"`
+}
+
+func toOverridesValues(v domain.RankingOverridesValues) overridesValues {
+	return overridesValues{
+		BlockedTerms:   v.BlockedTerms,
+		BoostedTerms:   v.BoostedTerms,
+		BlockedDomains: v.BlockedDomains,
+		BoostedDomains: v.BoostedDomains,
+	}
+}
+
+func (o overridesValues) toSettingsValues() domain.RankingOverridesValues {
+	return domain.RankingOverridesValues{
+		BlockedTerms:   o.BlockedTerms,
+		BoostedTerms:   o.BoostedTerms,
+		BlockedDomains: o.BlockedDomains,
+		BoostedDomains: o.BoostedDomains,
+	}
+}
+
+func (h *Handler) currentOverrides() overridesValues {
+	return toOverridesValues(h.overrides.Get())
+}
+
+func (h *Handler) handleAdminOverrides(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.overrides != nil, "ranking overrides") {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, h.currentOverrides())
+	case http.MethodPost:
+		var req overridesValues
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		h.overrides.Set(req.toSettingsValues())
+		writeJSON(w, http.StatusOK, h.currentOverrides())
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}

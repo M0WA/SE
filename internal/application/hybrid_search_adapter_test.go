@@ -21,7 +21,7 @@ func TestHybridAsSearchService_MapsFinalScoreToSearchResult(t *testing.T) {
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 
-	svc := application.NewHybridAsSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B))
+	svc := application.NewHybridAsSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil)
 	results, err := svc.Search(context.Background(), "katzen", 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -39,7 +39,7 @@ func TestHybridAsSearchService_MapsFinalScoreToSearchResult(t *testing.T) {
 }
 
 func TestHybridAsSearchService_PropagatesError(t *testing.T) {
-	svc := application.NewHybridAsSearchService(&fakeSQLRepo{}, &fakeEmbedder{}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B))
+	svc := application.NewHybridAsSearchService(&fakeSQLRepo{}, &fakeEmbedder{}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil)
 	_, err := svc.Search(context.Background(), "   ", 10)
 	if err == nil {
 		t.Error("expected empty-query error to propagate")
@@ -53,7 +53,7 @@ func (r *erroringSQLRepo) PostingsForTerm(context.Context, string) ([]domain.Pos
 }
 
 func TestHybridAsSearchService_PropagatesRepoError(t *testing.T) {
-	svc := application.NewHybridAsSearchService(&erroringSQLRepo{}, &fakeEmbedder{}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B))
+	svc := application.NewHybridAsSearchService(&erroringSQLRepo{}, &fakeEmbedder{}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil)
 	_, err := svc.Search(context.Background(), "katzen", 10)
 	if err == nil {
 		t.Error("expected repo error to propagate")

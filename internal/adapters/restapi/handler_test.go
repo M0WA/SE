@@ -56,7 +56,7 @@ func authedHandler(t *testing.T, search *fakeSearch, crawler *fakeCrawler) (*res
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("login failed: %d %s", rec.Code, rec.Body.String())
 	}
@@ -71,7 +71,7 @@ func TestHandleIndex_Success(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesSearch().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
@@ -88,7 +88,7 @@ func TestHandleIndex_HeadRequestAllowed(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodHead, "/", nil)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesSearch().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -102,7 +102,7 @@ func TestHandleIndex_MethodNotAllowed(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesSearch().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405, got %d", rec.Code)
@@ -113,7 +113,7 @@ func TestHandleIndex_UnknownPathStill404s(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodGet, "/nonexistent", nil)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesSearch().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("expected 404 for unknown path, got %d", rec.Code)
@@ -124,7 +124,7 @@ func TestHandleStyle_Success(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodGet, "/style.css", nil)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesSearch().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -141,7 +141,7 @@ func TestHandleStyle_MethodNotAllowed(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodPost, "/style.css", nil)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesSearch().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405, got %d", rec.Code)
 	}
@@ -151,7 +151,7 @@ func TestHandleStyle_HeadRequestAllowed(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodHead, "/style.css", nil)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesSearch().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
@@ -164,7 +164,7 @@ func TestHandleAdminJS_Success(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodGet, "/admin.js", nil)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesAdmin().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -181,7 +181,7 @@ func TestHandleAdminJS_HeadRequestAllowed(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodHead, "/admin.js", nil)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
@@ -194,7 +194,7 @@ func TestHandleAdminJS_MethodNotAllowed(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodPost, "/admin.js", nil)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405, got %d", rec.Code)
 	}
@@ -206,7 +206,7 @@ func TestHandleSearch_Success(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen&top_k=5", nil)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesSearch().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
@@ -221,7 +221,7 @@ func TestHandleSearch_DefaultTopK(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: fs, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen", nil)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesSearch().ServeHTTP(rec, req)
 	if fs.gotTopK != 10 {
 		t.Errorf("expected default top_k=10, got %d", fs.gotTopK)
 	}
@@ -231,7 +231,7 @@ func TestHandleSearch_MethodNotAllowed(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodPost, "/search", nil)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesSearch().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405, got %d", rec.Code)
 	}
@@ -242,7 +242,7 @@ func TestHandleSearch_ServiceError(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: fs, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodGet, "/search?q=", nil)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesSearch().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", rec.Code)
 	}
@@ -252,7 +252,7 @@ func TestHandleAdminCrawlPage_Unauthenticated_Redirects(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
 	req := httptest.NewRequest(http.MethodGet, "/admin/crawl", nil)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesAdmin().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("expected 303 redirect, got %d", rec.Code)
@@ -266,7 +266,7 @@ func TestHandleAdminCrawl_Unauthenticated_PostReturns401(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader([]byte(`{}`)))
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesAdmin().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("expected 401, got %d", rec.Code)
@@ -277,7 +277,7 @@ func TestHandleAdminCrawlPage_NoAdminConfigured_AlwaysUnauthenticated(t *testing
 	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Crawler: &fakeCrawler{}})
 	req := httptest.NewRequest(http.MethodGet, "/admin/crawl", nil)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesAdmin().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusSeeOther {
 		t.Errorf("expected redirect to login when no admin account is configured, got %d", rec.Code)
@@ -292,7 +292,7 @@ func TestHandleAdminCrawl_Success(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader(body))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesAdmin().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
@@ -309,7 +309,7 @@ func TestHandleAdminCrawlPage_GetServesPage(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/admin/crawl", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesAdmin().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -327,7 +327,7 @@ func TestHandleAdminCrawlPage_HeadServesNoBody(t *testing.T) {
 	req := httptest.NewRequest(http.MethodHead, "/admin/crawl", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesAdmin().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -342,7 +342,7 @@ func TestHandleAdminCrawlPage_MethodNotAllowed(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/admin/crawl", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405, got %d", rec.Code)
 	}
@@ -353,7 +353,7 @@ func TestHandleAdminCrawl_MethodNotAllowed(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/crawl", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405, got %d", rec.Code)
 	}
@@ -364,7 +364,7 @@ func TestHandleAdminCrawl_InvalidJSON(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader([]byte("{ungültig")))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", rec.Code)
 	}
@@ -376,7 +376,7 @@ func TestHandleAdminCrawl_EmptySeedURLs(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader(body))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", rec.Code)
 	}
@@ -389,7 +389,7 @@ func TestHandleAdminCrawl_ServiceError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader(body))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rec, req)
+	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", rec.Code)
 	}

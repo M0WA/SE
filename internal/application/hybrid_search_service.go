@@ -9,13 +9,14 @@ import (
 )
 
 type hybridSearchService struct {
-	repo     ports.SQLRepository
-	embedder ports.EmbeddingProvider
-	settings *domain.TuningSettings
+	repo      ports.SQLRepository
+	embedder  ports.EmbeddingProvider
+	settings  *domain.TuningSettings
+	overrides *domain.RankingOverrides
 }
 
-func NewHybridSearchService(repo ports.SQLRepository, embedder ports.EmbeddingProvider, settings *domain.TuningSettings) *hybridSearchService {
-	return &hybridSearchService{repo: repo, embedder: embedder, settings: settings}
+func NewHybridSearchService(repo ports.SQLRepository, embedder ports.EmbeddingProvider, settings *domain.TuningSettings, overrides *domain.RankingOverrides) *hybridSearchService {
+	return &hybridSearchService{repo: repo, embedder: embedder, settings: settings, overrides: overrides}
 }
 
 func (s *hybridSearchService) Search(ctx context.Context, query string, topK int) ([]domain.HybridResult, error) {
@@ -61,12 +62,17 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, topK int
 		candidateIDs[id] = true
 	}
 
-	// +required/-excluded/"phrase" constraints need each candidate's full
-	// text, which the ranking step below doesn't otherwise fetch until
-	// after truncating to topK -- so filter (and cache the fetched docs
-	// for reuse below) before ranking, only when such constraints exist.
+	overrides := s.overrides.Get()
+	hasOverrides := len(overrides.BlockedTerms) > 0 || len(overrides.BlockedDomains) > 0 ||
+		len(overrides.BoostedTerms) > 0 || len(overrides.BoostedDomains) > 0
+
+	// +required/-excluded/"phrase" constraints and blocked terms/domains
+	// need each candidate's full text and URL, which the ranking step
+	// below doesn't otherwise fetch until after truncating to topK -- so
+	// filter (and cache the fetched docs for reuse below, including by
+	// the boost step) before ranking, only when such constraints exist.
 	docCache := make(map[string]domain.Document)
-	if parsed.HasConstraints() {
+	if parsed.HasConstraints() || hasOverrides {
 		for id := range candidateIDs {
 			doc, err := s.repo.DocumentByID(ctx, id)
 			if err != nil {
@@ -74,7 +80,7 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, topK int
 				continue
 			}
 			docCache[id] = doc
-			if !parsed.Matches(doc.Title, doc.Text) {
+			if !parsed.Matches(doc.Title, doc.Text) || overrides.Blocked(doc) {
 				delete(candidateIDs, id)
 			}
 		}
@@ -92,6 +98,20 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, topK int
 	}
 
 	ranked := domain.CombineScores(candidates, alpha)
+	if hasOverrides {
+		boosted := false
+		for i := range ranked {
+			if doc, ok := docCache[ranked[i].DocID]; ok {
+				if f := overrides.BoostFactor(doc); f != 1.0 {
+					ranked[i].FinalScore *= f
+					boosted = true
+				}
+			}
+		}
+		if boosted {
+			domain.SortByFinalScore(ranked)
+		}
+	}
 	if len(ranked) > topK {
 		ranked = ranked[:topK]
 	}

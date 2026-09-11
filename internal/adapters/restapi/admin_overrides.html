@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — overrides</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<main>
+  <div class="page-header">
+    <a class="mark" href="/">se.</a>
+    <button id="sign-out" class="text-button" type="button">Sign out</button>
+  </div>
+  <nav class="admin-nav">
+    <a href="/admin">Overview</a>
+    <a href="/admin/documents">Documents</a>
+    <a href="/admin/crawl">Crawl</a>
+    <a href="/admin/tuning">Tuning</a>
+    <a href="/admin/search">Search</a>
+    <a href="/admin/overrides" aria-current="page">Overrides</a>
+  </nav>
+
+  <p class="lede" style="margin: 0 0 2rem;">Block or boost specific words and domains, on top of alpha/k1/b tuning. Changes apply immediately, on this running instance only.</p>
+
+  <form id="overrides-form" class="stacked-form">
+    <section class="panel">
+      <h2>Blocked</h2>
+      <div class="form-row">
+        <label for="blocked-terms">Blocked words — one per line; a document containing any of these is excluded from results entirely</label><br>
+        <textarea id="blocked-terms" class="field" rows="4" placeholder="spam&#10;scam"></textarea>
+      </div>
+      <div class="form-row">
+        <label for="blocked-domains">Blocked domains — one host or URL per line; a document served from any of these is excluded entirely</label><br>
+        <textarea id="blocked-domains" class="field" rows="4" placeholder="spammy.example"></textarea>
+      </div>
+      <p class="tuning-hint">Word matching uses the same tokenization as search, so casing and punctuation don't matter.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Boosted</h2>
+      <div class="form-row">
+        <label for="boosted-terms">Boosted words — one "word factor" pair per line; a matching document's final score is multiplied by factor</label><br>
+        <textarea id="boosted-terms" class="field" rows="4" placeholder="official 1.5"></textarea>
+      </div>
+      <div class="form-row">
+        <label for="boosted-domains">Boosted domains — one "host factor" pair per line</label><br>
+        <textarea id="boosted-domains" class="field" rows="4" placeholder="trusted.example 2.0"></textarea>
+      </div>
+      <p class="tuning-hint">A factor above 1 ranks a match higher, below 1 lower. Matching factors multiply together; zero or blank is ignored.</p>
+    </section>
+
+    <div class="form-actions">
+      <button type="submit">Save</button>
+      <span id="overrides-status" class="error-text"></span>
+    </div>
+  </form>
+</main>
+<script src="/admin.js"></script>
+<script>
+  const form = document.getElementById('overrides-form');
+  const blockedTermsEl = document.getElementById('blocked-terms');
+  const blockedDomainsEl = document.getElementById('blocked-domains');
+  const boostedTermsEl = document.getElementById('boosted-terms');
+  const boostedDomainsEl = document.getElementById('boosted-domains');
+  const status = document.getElementById('overrides-status');
+
+  function linesToText(lines) {
+    return (lines || []).join('\n');
+  }
+
+  function factorsToText(factors) {
+    return Object.entries(factors || {}).map(([k, v]) => k + ' ' + v).join('\n');
+  }
+
+  function parseLines(text) {
+    return text.split('\n').map((s) => s.trim()).filter(Boolean);
+  }
+
+  function parseFactorLines(text) {
+    const out = {};
+    for (const line of parseLines(text)) {
+      const parts = line.split(/\s+/);
+      if (parts.length < 2) continue;
+      const factor = parseFloat(parts[parts.length - 1]);
+      if (Number.isNaN(factor)) continue;
+      out[parts.slice(0, -1).join(' ')] = factor;
+    }
+    return out;
+  }
+
+  function applyOverrides(o) {
+    blockedTermsEl.value = linesToText(o.blocked_terms);
+    blockedDomainsEl.value = linesToText(o.blocked_domains);
+    boostedTermsEl.value = factorsToText(o.boosted_terms);
+    boostedDomainsEl.value = factorsToText(o.boosted_domains);
+  }
+
+  async function loadOverrides() {
+    try {
+      applyOverrides(await getJSON('/admin/api/overrides'));
+    } catch (err) {
+      status.textContent = 'Could not load overrides: ' + err.message;
+    }
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    status.textContent = '';
+    try {
+      const o = await postJSON('/admin/api/overrides', {
+        blocked_terms: parseLines(blockedTermsEl.value),
+        blocked_domains: parseLines(blockedDomainsEl.value),
+        boosted_terms: parseFactorLines(boostedTermsEl.value),
+        boosted_domains: parseFactorLines(boostedDomainsEl.value),
+      });
+      applyOverrides(o);
+      status.style.color = 'var(--ink-muted)';
+      status.textContent = 'Saved.';
+    } catch (err) {
+      status.style.color = 'var(--accent)';
+      status.textContent = 'Could not save: ' + err.message;
+    }
+  });
+
+  wireSignOut();
+  loadOverrides();
+</script>
+</body>
+</html>

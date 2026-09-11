@@ -134,6 +134,33 @@ func (r *Repository) CorpusStats(ctx context.Context) (int, float64, error) {
 	return totalDocs, avgLen.Float64, nil
 }
 
+// VocabularyStats reports the total number of distinct indexed terms plus
+// the topN terms by document frequency (ties broken by total frequency).
+func (r *Repository) VocabularyStats(ctx context.Context, topN int) (int, []domain.TermStat, error) {
+	var vocabSize int
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT term) FROM postings`).Scan(&vocabSize); err != nil {
+		return 0, nil, fmt.Errorf("querying vocabulary size: %w", err)
+	}
+
+	query := r.ph(`SELECT term, COUNT(*) AS doc_freq, SUM(term_freq) AS total_freq
+	               FROM postings GROUP BY term ORDER BY doc_freq DESC, total_freq DESC LIMIT %s`, 1)
+	rows, err := r.db.QueryContext(ctx, query, topN)
+	if err != nil {
+		return 0, nil, fmt.Errorf("querying top terms: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.TermStat
+	for rows.Next() {
+		var s domain.TermStat
+		if err := rows.Scan(&s.Term, &s.DocFreq, &s.TotalFreq); err != nil {
+			return 0, nil, fmt.Errorf("scanning row: %w", err)
+		}
+		out = append(out, s)
+	}
+	return vocabSize, out, rows.Err()
+}
+
 func (r *Repository) AllEmbeddings(ctx context.Context) (map[string][]float32, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id, embedding FROM documents`)
 	if err != nil {

@@ -31,6 +31,9 @@ var adminTuningHTML []byte
 //go:embed admin_search.html
 var adminSearchHTML []byte
 
+//go:embed admin_overrides.html
+var adminOverridesHTML []byte
+
 //go:embed style.css
 var styleCSS []byte
 
@@ -44,6 +47,7 @@ type Handler struct {
 	admin      ports.AdminRepository
 	settings   *domain.TuningSettings
 	opSettings *domain.OperationalSettings
+	overrides  *domain.RankingOverrides
 	dbDriver   string
 	adminUser  string
 	adminPass  string
@@ -51,12 +55,14 @@ type Handler struct {
 }
 
 // Config wires a Handler's dependencies. Debug, Admin, Settings,
-// OperationalSettings, DBDriver, AdminUser and AdminPass are optional:
-// without AdminUser/AdminPass configured, authentication fails closed
-// (nobody can sign in, so /admin stays locked) rather than defaulting to
-// open access. Without Debug/Admin/Settings, the corresponding admin
-// endpoints report themselves unavailable. A nil OperationalSettings
-// behaves like domain.DefaultOperationalSettings().
+// OperationalSettings, Overrides, DBDriver, AdminUser and AdminPass are
+// optional: without AdminUser/AdminPass configured, authentication fails
+// closed (nobody can sign in, so /admin stays locked) rather than
+// defaulting to open access. Without Debug/Admin/Settings/Overrides, the
+// corresponding admin endpoints report themselves unavailable. A nil
+// OperationalSettings behaves like domain.DefaultOperationalSettings(),
+// and a nil RankingOverrides like domain.DefaultRankingOverrides() (both
+// via their nil-safe Get()).
 type Config struct {
 	Search     ports.SearchService
 	Crawler    ports.CrawlerService
@@ -64,6 +70,7 @@ type Config struct {
 	Admin      ports.AdminRepository
 	Settings   *domain.TuningSettings
 	OpSettings *domain.OperationalSettings
+	Overrides  *domain.RankingOverrides
 	DBDriver   string
 	AdminUser  string
 	AdminPass  string
@@ -77,6 +84,7 @@ func New(cfg Config) *Handler {
 		admin:      cfg.Admin,
 		settings:   cfg.Settings,
 		opSettings: cfg.OpSettings,
+		overrides:  cfg.Overrides,
 		dbDriver:   cfg.DBDriver,
 		adminUser:  cfg.AdminUser,
 		adminPass:  cfg.AdminPass,
@@ -84,12 +92,23 @@ func New(cfg Config) *Handler {
 	}
 }
 
-func (h *Handler) Routes() *http.ServeMux {
+// RoutesSearch serves the public-facing search site only: the index page,
+// its stylesheet, and the search API. No admin, login or crawl endpoints --
+// this is the mux the internet-facing search-server binary listens with.
+func (h *Handler) RoutesSearch() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.handleIndex)
 	mux.HandleFunc("/style.css", h.handleStyle)
-	mux.HandleFunc("/admin.js", h.handleAdminJS)
 	mux.HandleFunc("/search", h.handleSearch)
+	return mux
+}
+
+// RoutesAdmin serves login/session management plus every /admin and
+// /admin/api/* route -- the mux the admin-server binary listens with,
+// reachable only through a local nginx proxy, never directly.
+func (h *Handler) RoutesAdmin() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/admin.js", h.handleAdminJS)
 	mux.HandleFunc("/login", h.handleLoginRoute)
 	mux.HandleFunc("/logout", h.handleLogout)
 
@@ -98,13 +117,16 @@ func (h *Handler) Routes() *http.ServeMux {
 	mux.HandleFunc("/admin/crawl", h.requireAuthPage(h.handleAdminCrawlPage))
 	mux.HandleFunc("/admin/tuning", h.requireAuthPage(h.handleAdminTuningPage))
 	mux.HandleFunc("/admin/search", h.requireAuthPage(h.handleAdminSearchPage))
+	mux.HandleFunc("/admin/overrides", h.requireAuthPage(h.handleAdminOverridesPage))
 
 	mux.HandleFunc("/admin/api/stats", h.requireAuthAPI(h.handleAdminStats))
+	mux.HandleFunc("/admin/api/vocabulary", h.requireAuthAPI(h.handleAdminVocabulary))
 	mux.HandleFunc("/admin/api/documents", h.requireAuthAPI(h.handleAdminDocuments))
 	mux.HandleFunc("DELETE /admin/api/documents/{id}", h.requireAuthAPI(h.handleAdminDeleteDocument))
 	mux.HandleFunc("/admin/api/postings", h.requireAuthAPI(h.handleAdminPostings))
 	mux.HandleFunc("/admin/api/search", h.requireAuthAPI(h.handleAdminSearch))
 	mux.HandleFunc("/admin/api/settings", h.requireAuthAPI(h.handleAdminSettings))
+	mux.HandleFunc("/admin/api/overrides", h.requireAuthAPI(h.handleAdminOverrides))
 	mux.HandleFunc("/admin/api/crawl", h.requireAuthAPI(h.handleAdminCrawl))
 	return mux
 }

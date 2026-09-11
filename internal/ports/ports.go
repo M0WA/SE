@@ -58,6 +58,7 @@ type SQLRepository interface {
 	SaveDocument(ctx context.Context, doc domain.Document, embedding []float32) error
 	PostingsForTerm(ctx context.Context, term string) ([]domain.PostingStats, error)
 	CorpusStats(ctx context.Context) (totalDocs int, avgDocLen float64, err error)
+	VocabularyStats(ctx context.Context, topN int) (vocabularySize int, topTerms []domain.TermStat, err error)
 	AllEmbeddings(ctx context.Context) (map[string][]float32, error)
 	DocumentByID(ctx context.Context, docID string) (domain.Document, error)
 	ListDocuments(ctx context.Context, limit int) ([]domain.IndexedDocument, error)
@@ -68,6 +69,7 @@ type SQLRepository interface {
 // needs -- a narrower dependency than the full port.
 type AdminRepository interface {
 	CorpusStats(ctx context.Context) (totalDocs int, avgDocLen float64, err error)
+	VocabularyStats(ctx context.Context, topN int) (vocabularySize int, topTerms []domain.TermStat, err error)
 	ListDocuments(ctx context.Context, limit int) ([]domain.IndexedDocument, error)
 	PostingsForTerm(ctx context.Context, term string) ([]domain.PostingStats, error)
 	DeleteDocument(ctx context.Context, docID string) error

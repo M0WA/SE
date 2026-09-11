@@ -44,11 +44,19 @@ func CombineScores(candidates []HybridResult, alpha float64) []HybridResult {
 		result[i].FinalScore = alpha*normBM25 + (1-alpha)*semantic
 	}
 
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].FinalScore == result[j].FinalScore {
-			return result[i].DocID < result[j].DocID
-		}
-		return result[i].FinalScore > result[j].FinalScore
-	})
+	SortByFinalScore(result)
 	return result
+}
+
+// SortByFinalScore orders results by descending FinalScore, breaking ties
+// by DocID for a deterministic order. Exported so callers that adjust
+// FinalScore after CombineScores (a boost multiplier, say) can restore
+// this invariant without duplicating the tie-break rule.
+func SortByFinalScore(results []HybridResult) {
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].FinalScore == results[j].FinalScore {
+			return results[i].DocID < results[j].DocID
+		}
+		return results[i].FinalScore > results[j].FinalScore
+	})
 }

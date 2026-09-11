@@ -21,9 +21,10 @@
     <a href="/admin/crawl">Crawl</a>
     <a href="/admin/tuning">Tuning</a>
     <a href="/admin/search">Search</a>
+    <a href="/admin/overrides">Overrides</a>
   </nav>
 
-  <p class="lede" style="margin: 0 0 2rem;">Indexed pages grouped by domain, with each domain's document-length spread and the option to remove a page from the index.</p>
+  <p class="lede" style="margin: 0 0 2rem;">Indexed pages grouped by domain, with each domain's document-length spread and the option to remove a page from the index. Each domain also carries a rough 0-100 content-quality rating from page count, average document length, and any block/boost override — hover it for details.</p>
   <div id="documents-status" class="panel-status"></div>
   <div id="domains"></div>
 </main>
@@ -91,7 +92,27 @@
     group.remove();
   }
 
-  function renderDomain(hostname, docs) {
+  // Rating (0-100): rewards having more than a couple of pages and healthy
+  // document length (thin, boilerplate-only pages score low), then shifts
+  // the result toward the extremes when an admin has already blocked or
+  // boosted the domain via overrides.
+  function domainRating(docs, avgLen, status) {
+    const countScore = Math.min(1, docs.length / 8);
+    const lengthScore = Math.min(1, avgLen / 400);
+    let score = 100 * (0.5 * countScore + 0.5 * lengthScore);
+    if (status === 'blocked') score = Math.min(score, 15);
+    else if (status === 'boosted') score = Math.max(score, 85);
+    return Math.round(Math.max(0, Math.min(100, score)));
+  }
+
+  function overrideStatus(hostname, overrides) {
+    const host = hostname.toLowerCase();
+    if ((overrides.blocked_domains || []).includes(host)) return 'blocked';
+    if (Object.prototype.hasOwnProperty.call(overrides.boosted_domains || {}, host)) return 'boosted';
+    return 'none';
+  }
+
+  function renderDomain(hostname, docs, overrides) {
     const group = document.createElement('section');
     group.className = 'domain-group';
 
@@ -103,11 +124,26 @@
 
     const totalLen = docs.reduce((sum, d) => sum + d.doc_length, 0);
     const avgLen = totalLen / docs.length;
+
+    const tail = document.createElement('span');
+    tail.className = 'domain-head-tail';
+
+    const status = overrideStatus(hostname, overrides);
+    const rating = domainRating(docs, avgLen, status);
+    const ratingEl = document.createElement('span');
+    ratingEl.className = 'domain-rating';
+    ratingEl.textContent = 'rating ' + rating;
+    ratingEl.title = 'Rough content-quality score (0-100) from page count and average document length' +
+      (status === 'none' ? '' : ', adjusted because this domain is ' + status + ' in overrides') + '.';
+    tail.appendChild(ratingEl);
+
     const metrics = document.createElement('span');
     metrics.className = 'domain-metrics';
     metrics.textContent = docs.length + (docs.length === 1 ? ' page' : ' pages') +
       ' · avg ' + avgLen.toFixed(0) + ' · total ' + totalLen;
-    head.appendChild(metrics);
+    tail.appendChild(metrics);
+
+    head.appendChild(tail);
     group.appendChild(head);
 
     group.appendChild(buildChart(docs));
@@ -154,9 +190,20 @@
     return group;
   }
 
+  async function loadOverridesForRating() {
+    try {
+      return await getJSON('/admin/api/overrides');
+    } catch (err) {
+      return { blocked_domains: [], boosted_domains: {} };
+    }
+  }
+
   async function loadDocuments() {
     try {
-      const docs = await getJSON('/admin/api/documents?limit=1000');
+      const [docs, overrides] = await Promise.all([
+        getJSON('/admin/api/documents?limit=1000'),
+        loadOverridesForRating(),
+      ]);
       clear(domainsEl);
       if (docs.length === 0) {
         statusEl.textContent = 'No documents indexed yet.';
@@ -172,7 +219,7 @@
         byDomain.size + (byDomain.size === 1 ? ' domain' : ' domains');
       const hosts = Array.from(byDomain.keys()).sort();
       for (const host of hosts) {
-        domainsEl.appendChild(renderDomain(host, byDomain.get(host)));
+        domainsEl.appendChild(renderDomain(host, byDomain.get(host), overrides));
       }
     } catch (err) {
       statusEl.textContent = 'Could not load documents: ' + err.message;

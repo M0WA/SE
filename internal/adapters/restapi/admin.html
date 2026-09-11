@@ -21,16 +21,24 @@
     <a href="/admin/crawl">Crawl</a>
     <a href="/admin/tuning">Tuning</a>
     <a href="/admin/search">Search</a>
+    <a href="/admin/overrides">Overrides</a>
   </nav>
 
   <section class="panel">
     <h2>Index stats</h2>
     <div id="stats"></div>
   </section>
+
+  <section class="panel">
+    <h2>Vocabulary</h2>
+    <div id="vocab-summary"></div>
+    <div id="vocab-table"></div>
+  </section>
 </main>
 <script src="/admin.js"></script>
 <script>
   loadStats();
+  loadVocabulary();
   wireSignOut();
 </script>
 </body>

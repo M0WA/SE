@@ -9,7 +9,12 @@ mkdir -p /var/lib/searchengine
 chown searchengine:searchengine /var/lib/searchengine
 if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     systemctl daemon-reload
-    systemctl enable searchengine.service
+    systemctl enable searchengine-search.service
+    systemctl enable searchengine-admin.service
+    systemctl enable searchengine-crawl.service
+    systemctl start searchengine-search.service
+    systemctl start searchengine-admin.service
+    systemctl start searchengine-crawl.service
 fi
-echo "searchengine installed. Start with: systemctl start searchengine"
+echo "searchengine installed. Services: searchengine-search, searchengine-admin, searchengine-crawl"
 exit 0

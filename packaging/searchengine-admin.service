@@ -1,0 +1,19 @@
+[Unit]
+Description=Custom hybrid search engine - admin server
+After=network.target
+
+[Service]
+Type=simple
+User=searchengine
+Group=searchengine
+EnvironmentFile=/etc/searchengine/searchengine.env
+ExecStart=/usr/bin/searchengine-admin
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/searchengine
+
+[Install]
+WantedBy=multi-user.target

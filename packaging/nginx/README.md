@@ -1,8 +1,28 @@
 # nginx + Let's Encrypt setup
 
-The `searchengine` package runs the app on `127.0.0.1:8080` (an
-unprivileged systemd service, so it can't bind :80/:443 directly).
-nginx sits in front, handling TLS and proxying to that local port.
+The `searchengine` package runs three independent systemd services, each
+its own binary/process:
+
+- `searchengine-search` (search-server) -- listens on `:8080`, public.
+- `searchengine-admin` (admin-server) -- listens on `127.0.0.1:8081`, login/admin UI.
+- `searchengine-crawl` (crawl-server) -- listens on `127.0.0.1:8082`, internal only.
+
+None of them bind :80/:443 directly (unprivileged systemd services).
+nginx sits in front, handling TLS and proxying to the two servers meant
+to be reachable from outside this host.
+
+## Routing
+
+nginx must split traffic between search-server and admin-server by path:
+
+- `/`, `/style.css`, `/search` -> search-server, `http://127.0.0.1:8080`
+- `/login`, `/logout`, `/admin` and its subpaths (`/admin.js`,
+  `/admin/documents`, `/admin/crawl`, `/admin/tuning`, `/admin/search`,
+  `/admin/api/...`) -> admin-server, `http://127.0.0.1:8081`
+
+crawl-server (`127.0.0.1:8082`) is an internal API that only
+admin-server talks to (via `CRAWL_SERVER_URL`). It must never be added
+to the nginx config or otherwise exposed on a public listener.
 
 ## Install
 
@@ -49,8 +69,12 @@ certbot certificates
 
 ## Notes
 
-- Only port 80/443 need to be open on this host; the app itself stays
-  on `127.0.0.1:8080` and is never exposed directly.
+- Only port 80/443 need to be open on this host; nginx proxies to
+  search-server (`:8080`) and admin-server (`127.0.0.1:8081`) over
+  localhost, neither of which is exposed directly.
+- crawl-server (`127.0.0.1:8082`) must never be proxied or opened
+  publicly -- it has no auth of its own and is only meant to be called
+  by admin-server on localhost.
 - If the domain's DNS changes to point at a different host, certbot
   won't be able to renew until the domain resolves back to this
   machine (HTTP-01 validation fetches the challenge from the domain

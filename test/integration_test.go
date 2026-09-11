@@ -55,8 +55,13 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 		Search: searchSvc, Crawler: crawlerSvc,
 		AdminUser: "admin", AdminPass: "test-password",
 	})
-	api := httptest.NewServer(handler.Routes())
-	defer api.Close()
+	// One Handler, but exercised through the same two muxes that
+	// search-server and admin-server each run as separate processes in
+	// production -- they share only the underlying services, not a mux.
+	searchAPI := httptest.NewServer(handler.RoutesSearch())
+	defer searchAPI.Close()
+	adminAPI := httptest.NewServer(handler.RoutesAdmin())
+	defer adminAPI.Close()
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -65,7 +70,7 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 	client := &http.Client{Jar: jar}
 
 	loginBody, _ := json.Marshal(map[string]string{"username": "admin", "password": "test-password"})
-	loginResp, err := client.Post(api.URL+"/login", "application/json", bytes.NewReader(loginBody))
+	loginResp, err := client.Post(adminAPI.URL+"/login", "application/json", bytes.NewReader(loginBody))
 	if err != nil {
 		t.Fatalf("login request failed: %v", err)
 	}
@@ -78,7 +83,7 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 		"seed_urls": []string{site.URL + "/"},
 		"max_pages": 10,
 	})
-	resp, err := client.Post(api.URL+"/admin/api/crawl", "application/json", bytes.NewReader(crawlBody))
+	resp, err := client.Post(adminAPI.URL+"/admin/api/crawl", "application/json", bytes.NewReader(crawlBody))
 	if err != nil {
 		t.Fatalf("crawl request failed: %v", err)
 	}
@@ -94,7 +99,7 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 		t.Fatalf("expected 2 crawled pages, got %d", crawlResp.CrawledCount)
 	}
 
-	searchResp, err := http.Get(api.URL + "/search?q=Hunde")
+	searchResp, err := http.Get(searchAPI.URL + "/search?q=Hunde")
 	if err != nil {
 		t.Fatalf("search request failed: %v", err)
 	}
@@ -107,7 +112,7 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 		t.Fatalf("expected 2 search results for 'Hunde', got %d: %+v", len(result.Results), result.Results)
 	}
 
-	searchResp2, _ := http.Get(api.URL + "/search?q=Training")
+	searchResp2, _ := http.Get(searchAPI.URL + "/search?q=Training")
 	var result2 struct {
 		Results []domain.SearchResult `json:"results"`
 	}

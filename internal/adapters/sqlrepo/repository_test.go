@@ -213,6 +213,50 @@ func TestPostingsForTerm_AcrossMultipleDocuments(t *testing.T) {
 	}
 }
 
+func TestVocabularyStats_EmptyCorpus(t *testing.T) {
+	repo := newTestRepo(t)
+	vocabSize, topTerms, err := repo.VocabularyStats(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if vocabSize != 0 || topTerms != nil {
+		t.Errorf("expected an empty vocabulary, got (%d, %+v)", vocabSize, topTerms)
+	}
+}
+
+func TestVocabularyStats_ReportsSizeAndTopTermsByDocFreq(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	docs := []domain.Document{
+		{ID: "doc-1", URL: "http://a", Title: "A", Text: "shared common rare"},
+		{ID: "doc-2", URL: "http://b", Title: "B", Text: "shared common common"},
+		{ID: "doc-3", URL: "http://c", Title: "C", Text: "shared unique"},
+	}
+	for _, d := range docs {
+		if err := repo.SaveDocument(ctx, d, []float32{1}); err != nil {
+			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
+		}
+	}
+
+	vocabSize, topTerms, err := repo.VocabularyStats(ctx, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// distinct terms across all three docs: shared, common, rare, unique.
+	if vocabSize != 4 {
+		t.Errorf("expected vocabulary size 4, got %d", vocabSize)
+	}
+	if len(topTerms) != 2 {
+		t.Fatalf("expected limit=2 to be respected, got %+v", topTerms)
+	}
+	if topTerms[0].Term != "shared" || topTerms[0].DocFreq != 3 || topTerms[0].TotalFreq != 3 {
+		t.Errorf("expected 'shared' first with doc_freq=3, total_freq=3, got %+v", topTerms[0])
+	}
+	if topTerms[1].Term != "common" || topTerms[1].DocFreq != 2 || topTerms[1].TotalFreq != 3 {
+		t.Errorf("expected 'common' second with doc_freq=2, total_freq=3, got %+v", topTerms[1])
+	}
+}
+
 func TestDeleteDocument_Success(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
@@ -313,6 +357,11 @@ func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 	})
 	t.Run("AllEmbeddings", func(t *testing.T) {
 		if _, err := closedRepo(t).AllEmbeddings(ctx); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("VocabularyStats", func(t *testing.T) {
+		if _, _, err := closedRepo(t).VocabularyStats(ctx, 10); err == nil {
 			t.Error("expected an error")
 		}
 	})

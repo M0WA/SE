@@ -102,3 +102,31 @@ async function loadStats() {
     el.textContent = 'Could not load stats: ' + err.message;
   }
 }
+
+async function loadVocabulary() {
+  const summaryEl = document.getElementById('vocab-summary');
+  const tableEl = document.getElementById('vocab-table');
+  if (!summaryEl || !tableEl) return;
+  try {
+    const v = await getJSON('/admin/api/vocabulary?limit=20');
+    clear(summaryEl);
+    kvRow(summaryEl, 'Vocabulary size', String(v.vocabulary_size) + ' distinct terms');
+    clear(tableEl);
+    if (v.top_terms.length === 0) {
+      tableEl.textContent = 'No terms indexed yet.';
+      return;
+    }
+    const table = buildTable(
+      [{ label: 'term' }, { label: 'doc freq', num: true }, { label: 'total freq', num: true }],
+      v.top_terms,
+      (t) => [
+        textCell(t.term),
+        textCell(String(t.doc_freq), { num: true }),
+        textCell(String(t.total_freq), { num: true }),
+      ],
+    );
+    tableEl.appendChild(table);
+  } catch (err) {
+    summaryEl.textContent = 'Could not load vocabulary: ' + err.message;
+  }
+}

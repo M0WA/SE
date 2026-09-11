@@ -1,5 +1,5 @@
 [Unit]
-Description=Custom hybrid search engine (BM25 + semantic)
+Description=Custom hybrid search engine - public search server
 After=network.target
 
 [Service]
@@ -7,7 +7,7 @@ Type=simple
 User=searchengine
 Group=searchengine
 EnvironmentFile=/etc/searchengine/searchengine.env
-ExecStart=/usr/bin/searchengine
+ExecStart=/usr/bin/searchengine-search
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true

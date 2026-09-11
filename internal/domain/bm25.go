@@ -37,3 +37,11 @@ func BM25ScoreDocument(postingsPerTerm []PostingStats, k1, b float64) float64 {
 	}
 	return total
 }
+
+// TermStat is a single term's aggregate stats across the whole corpus, used
+// by the admin vocabulary diagnostics.
+type TermStat struct {
+	Term      string
+	DocFreq   int
+	TotalFreq int
+}

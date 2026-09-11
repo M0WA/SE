@@ -408,10 +408,25 @@ td.actions { text-align: right; white-space: nowrap; }
   margin: 0;
 }
 
+.domain-head-tail {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
 .domain-metrics {
   font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
   font-size: 0.82rem;
   color: var(--ink-muted);
+}
+
+.domain-rating {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 0.82rem;
+  color: var(--ink-muted);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 0.05rem 0.4rem;
 }
 
 .domain-chart {
@@ -427,6 +442,15 @@ td.actions { text-align: right; white-space: nowrap; }
 }
 
 .domain-chart rect:hover { fill: var(--accent); }
+
+textarea.field {
+  display: block;
+  width: 100%;
+  resize: vertical;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
 
 .tuning-hint {
   color: var(--ink-muted);
