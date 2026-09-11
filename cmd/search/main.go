@@ -31,7 +31,7 @@ func main() {
 		OpSettings: opSettings,
 	})
 
-	addr := bootstrap.GetEnv("SEARCH_LISTEN_ADDR", ":8080")
+	addr := bootstrap.GetEnv("SEARCH_LISTEN_ADDR", "127.0.0.1:8080")
 	log.Printf("Search server running on %s (DB: %s)", addr, driver)
 	log.Fatal(http.ListenAndServe(addr, handler.RoutesSearch()))
 }

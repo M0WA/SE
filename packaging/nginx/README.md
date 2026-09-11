@@ -3,13 +3,14 @@
 The `searchengine` package runs three independent systemd services, each
 its own binary/process:
 
-- `searchengine-search` (search-server) -- listens on `:8080`, public.
+- `searchengine-search` (search-server) -- listens on `127.0.0.1:8080`, serves public search.
 - `searchengine-admin` (admin-server) -- listens on `127.0.0.1:8081`, login/admin UI.
 - `searchengine-crawl` (crawl-server) -- listens on `127.0.0.1:8082`, internal only.
 
-None of them bind :80/:443 directly (unprivileged systemd services).
-nginx sits in front, handling TLS and proxying to the two servers meant
-to be reachable from outside this host.
+All three bind loopback-only. nginx is the only thing meant to reach any
+of them -- including search-server, whose *results* are public but whose
+plain-HTTP port isn't meant to be reachable directly (no TLS, no access
+control, no rate limiting outside of nginx).
 
 ## Routing
 
@@ -70,8 +71,11 @@ certbot certificates
 ## Notes
 
 - Only port 80/443 need to be open on this host; nginx proxies to
-  search-server (`:8080`) and admin-server (`127.0.0.1:8081`) over
-  localhost, neither of which is exposed directly.
+  search-server (`127.0.0.1:8080`) and admin-server (`127.0.0.1:8081`)
+  over localhost, neither of which is exposed directly. This matters in
+  practice, not just in principle: there's no firewall on a typical bare
+  VM blocking other ports, so an app that binds `0.0.0.0` is directly
+  reachable from the internet the moment it starts.
 - crawl-server (`127.0.0.1:8082`) must never be proxied or opened
   publicly -- it has no auth of its own and is only meant to be called
   by admin-server on localhost.
