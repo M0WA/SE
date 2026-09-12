@@ -68,15 +68,23 @@ func PageRank(adjacency map[string][]string) map[string]float64 {
 		scores[node] = init
 	}
 
+	// contribution[u] is what u passes along each of its outbound links
+	// this iteration -- computed once per node (not once per incoming
+	// edge) since every edge out of u carries the identical
+	// scores[u]/outdegree[u] share.
+	contribution := make(map[string]float64, len(outdegree))
 	for iter := 0; iter < PageRankMaxIterations; iter++ {
+		for u, deg := range outdegree {
+			if deg > 0 {
+				contribution[u] = scores[u] / float64(deg)
+			}
+		}
 		next := make(map[string]float64, n)
 		delta := 0.0
 		for node := range nodes {
 			sum := 0.0
 			for _, u := range incoming[node] {
-				if outdegree[u] > 0 {
-					sum += scores[u] / float64(outdegree[u])
-				}
+				sum += contribution[u]
 			}
 			v := base + PageRankDamping*sum
 			next[node] = v

@@ -88,16 +88,3 @@ func SortByFinalScore(results []HybridResult) {
 		return results[i].FinalScore > results[j].FinalScore
 	})
 }
-
-// SortByCrawledAt orders results by descending CrawledAt (most recently
-// crawled first), ignoring BM25Score/SemanticSim/FinalScore entirely --
-// ties (including two zero CrawledAt values, from documents the caller
-// never populated it for) are broken by DocID for a deterministic order.
-func SortByCrawledAt(results []HybridResult) {
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].CrawledAt.Equal(results[j].CrawledAt) {
-			return results[i].DocID < results[j].DocID
-		}
-		return results[i].CrawledAt.After(results[j].CrawledAt)
-	})
-}

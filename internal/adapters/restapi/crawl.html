@@ -148,19 +148,6 @@
     return Math.floor(secs / 60) + 'm ' + Math.round(secs % 60) + 's';
   }
 
-  function seedSummary(request) {
-    const urls = request.seed_urls || [];
-    if (urls.length === 0) return '(no seed)';
-    return urls.length === 1 ? urls[0] : urls[0] + ' +' + (urls.length - 1) + ' more';
-  }
-
-  function urlCell(text) {
-    const td = document.createElement('td');
-    td.className = 'url';
-    td.textContent = text;
-    return td;
-  }
-
   function viewButtonCell(jobID) {
     const td = document.createElement('td');
     td.className = 'actions';
@@ -184,7 +171,7 @@
       [{ label: 'seed' }, { label: 'status' }, { label: 'pages', num: true }, { label: 'duration' }, { label: '' }],
       jobs,
       (j) => [
-        urlCell(seedSummary(j.request)),
+        urlCell(seedSummary(j.request.seed_urls)),
         textCell(capitalize(j.status)),
         textCell(String(j.pages_crawled), { num: true }),
         textCell(formatDuration(j.started_at, j.finished_at)),
@@ -228,10 +215,6 @@
   function formatMs(ms) {
     if (!ms) return '—';
     return ms < 1000 ? ms + 'ms' : (ms / 1000).toFixed(1) + 's';
-  }
-
-  function formatFetchedAt(iso) {
-    return iso ? new Date(iso).toLocaleTimeString() : '—';
   }
 
   // filterPages applies the admin's regex (matched against url/status/title/
@@ -284,7 +267,7 @@
         textCell(p.doc_length ? String(p.doc_length) : '—', { num: true }),
         textCell(p.links_found ? String(p.links_found) : '—', { num: true }),
         textCell(formatMs(p.duration_ms), { num: true }),
-        textCell(formatFetchedAt(p.fetched_at)),
+        textCell(formatTimestamp(p.fetched_at, { timeOnly: true })),
         textCell(p.error || ''),
       ],
     );
@@ -316,7 +299,7 @@
     clear(jobDetailSummaryEl);
     const summary = document.createElement('p');
     summary.className = 'panel-status';
-    summary.textContent = seedSummary(job.request) + ' — ' + capitalize(job.status) +
+    summary.textContent = seedSummary(job.request.seed_urls) + ' — ' + capitalize(job.status) +
       (job.error ? ': ' + job.error : '');
     jobDetailSummaryEl.appendChild(summary);
 

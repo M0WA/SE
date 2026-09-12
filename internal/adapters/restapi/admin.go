@@ -35,6 +35,38 @@ func requireConfigured(w http.ResponseWriter, configured bool, what string) bool
 	return true
 }
 
+// respondOrNotFound writes okPayload as a 200 JSON response if err is nil,
+// a 404 with notFoundMsg if err is notFound, or err's own message as a 500
+// otherwise -- the "success / not-found / other error" 3-way response
+// every admin endpoint backed by a store that can report a specific
+// not-found sentinel needs.
+func respondOrNotFound(w http.ResponseWriter, err, notFound error, notFoundMsg string, okPayload interface{}) {
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, okPayload)
+	case errors.Is(err, notFound):
+		http.Error(w, notFoundMsg, http.StatusNotFound)
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// intQueryParam reads name from r's query string as an int, falling back
+// to def if it's missing, non-numeric, or -- when positiveOnly is set --
+// not greater than zero. Shared by every endpoint that accepts an optional
+// ?limit=/?top_k=-style override with its own default.
+func intQueryParam(r *http.Request, name string, def int, positiveOnly bool) int {
+	v := r.URL.Query().Get(name)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || (positiveOnly && n <= 0) {
+		return def
+	}
+	return n
+}
+
 func (h *Handler) handleAdminPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/html; charset=utf-8", adminHTML)
 }
@@ -109,12 +141,7 @@ func (h *Handler) handleAdminVocabulary(w http.ResponseWriter, r *http.Request) 
 	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
 		return
 	}
-	limit := defaultVocabularyTopTermsLimit
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
-	}
+	limit := intQueryParam(r, "limit", defaultVocabularyTopTermsLimit, true)
 	vocabSize, topTerms, err := h.admin.VocabularyStats(r.Context(), limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -148,12 +175,7 @@ func (h *Handler) handleAdminDocuments(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
 		return
 	}
-	limit := defaultDocumentListLimit
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
-	}
+	limit := intQueryParam(r, "limit", defaultDocumentListLimit, true)
 	docs, err := h.admin.ListDocuments(r.Context(), limit, r.URL.Query().Get("domain"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -185,12 +207,7 @@ func (h *Handler) handleAdminSearchDomains(w http.ResponseWriter, r *http.Reques
 	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
 		return
 	}
-	limit := defaultDomainSearchLimit
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
-	}
+	limit := intQueryParam(r, "limit", defaultDomainSearchLimit, true)
 	domains, err := h.admin.SearchDomains(r.Context(), r.URL.Query().Get("q"), limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -275,14 +292,7 @@ func (h *Handler) handleAdminDeleteDocument(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	err := h.admin.DeleteDocument(r.Context(), r.PathValue("id"))
-	switch {
-	case err == nil:
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-	case errors.Is(err, ports.ErrDocumentNotFound):
-		http.Error(w, "document not found", http.StatusNotFound)
-	default:
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	respondOrNotFound(w, err, ports.ErrDocumentNotFound, "document not found", map[string]bool{"ok": true})
 }
 
 type adminPosting struct {
@@ -342,12 +352,7 @@ func (h *Handler) handleAdminSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query().Get("q")
-	topK := h.opSettings.Get().DefaultTopK
-	if v := r.URL.Query().Get("top_k"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			topK = n
-		}
-	}
+	topK := intQueryParam(r, "top_k", h.opSettings.Get().DefaultTopK, false)
 	results, err := h.debug.Search(r.Context(), query, ports.SearchQuery{TopK: topK, Sort: parseSortParam(r)})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -628,14 +633,7 @@ func (h *Handler) handleAdminCrawlJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	job, err := h.jobs.GetCrawlJob(r.Context(), r.PathValue("id"))
-	switch {
-	case err == nil:
-		writeJSON(w, http.StatusOK, job)
-	case errors.Is(err, ports.ErrCrawlJobNotFound):
-		http.Error(w, "crawl job not found", http.StatusNotFound)
-	default:
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	respondOrNotFound(w, err, ports.ErrCrawlJobNotFound, "crawl job not found", job)
 }
 
 // scheduledCrawlRequest is the wire shape for both creating a schedule
@@ -675,6 +673,25 @@ func toScheduledCrawlResponse(s domain.ScheduledCrawl) scheduledCrawlResponse {
 		AllowOffDomainLinks: s.AllowOffDomainLinks, UseSitemap: s.UseSitemap,
 		IntervalMinutes: s.IntervalMinutes, Enabled: s.Enabled,
 		LastRunAt: s.LastRunAt, NextRunAt: s.NextRunAt, CreatedAt: s.CreatedAt,
+	}
+}
+
+// toScheduledCrawl builds the domain.ScheduledCrawl req describes -- shared
+// by handleAdminSchedules' POST (a new schedule) and
+// handleAdminUpdateSchedule (replacing an existing one's editable fields),
+// since both otherwise build the identical seven fields from req by hand.
+// next_run_at is always interval_minutes from now, the same rule a freshly
+// created and a just-edited schedule both follow; created_at is only
+// meaningful for a new schedule (UpdateScheduledCrawl's SQL never touches
+// that column, so passing "now" there too is harmless).
+func (req scheduledCrawlRequest) toScheduledCrawl(id string, enabled bool, now time.Time) domain.ScheduledCrawl {
+	return domain.ScheduledCrawl{
+		ID: id, SeedURLs: req.SeedURLs, MaxPages: req.MaxPages,
+		RespectRobots: req.RespectRobots, UserAgent: req.UserAgent,
+		AllowOffDomainLinks: req.AllowOffDomainLinks, UseSitemap: req.UseSitemap,
+		IntervalMinutes: req.IntervalMinutes, Enabled: enabled,
+		NextRunAt: now.Add(time.Duration(req.IntervalMinutes) * time.Minute),
+		CreatedAt: now,
 	}
 }
 
@@ -719,20 +736,7 @@ func (h *Handler) handleAdminSchedules(w http.ResponseWriter, r *http.Request) {
 		if !validateScheduledCrawlRequest(w, req) {
 			return
 		}
-		now := time.Now().UTC()
-		s := domain.ScheduledCrawl{
-			ID:                  domain.NewScheduledCrawlID(),
-			SeedURLs:            req.SeedURLs,
-			MaxPages:            req.MaxPages,
-			RespectRobots:       req.RespectRobots,
-			UserAgent:           req.UserAgent,
-			AllowOffDomainLinks: req.AllowOffDomainLinks,
-			UseSitemap:          req.UseSitemap,
-			IntervalMinutes:     req.IntervalMinutes,
-			Enabled:             true,
-			NextRunAt:           now.Add(time.Duration(req.IntervalMinutes) * time.Minute),
-			CreatedAt:           now,
-		}
+		s := req.toScheduledCrawl(domain.NewScheduledCrawlID(), true, time.Now().UTC())
 		if err := h.scheduledCrawls.CreateScheduledCrawl(r.Context(), s); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -760,27 +764,9 @@ func (h *Handler) handleAdminUpdateSchedule(w http.ResponseWriter, r *http.Reque
 	if !validateScheduledCrawlRequest(w, req) {
 		return
 	}
-	s := domain.ScheduledCrawl{
-		ID:                  r.PathValue("id"),
-		SeedURLs:            req.SeedURLs,
-		MaxPages:            req.MaxPages,
-		RespectRobots:       req.RespectRobots,
-		UserAgent:           req.UserAgent,
-		AllowOffDomainLinks: req.AllowOffDomainLinks,
-		UseSitemap:          req.UseSitemap,
-		IntervalMinutes:     req.IntervalMinutes,
-		Enabled:             req.Enabled,
-		NextRunAt:           time.Now().UTC().Add(time.Duration(req.IntervalMinutes) * time.Minute),
-	}
+	s := req.toScheduledCrawl(r.PathValue("id"), req.Enabled, time.Now().UTC())
 	err := h.scheduledCrawls.UpdateScheduledCrawl(r.Context(), s)
-	switch {
-	case err == nil:
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-	case errors.Is(err, ports.ErrScheduledCrawlNotFound):
-		http.Error(w, "scheduled crawl not found", http.StatusNotFound)
-	default:
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, "scheduled crawl not found", map[string]bool{"ok": true})
 }
 
 func (h *Handler) handleAdminDeleteSchedule(w http.ResponseWriter, r *http.Request) {
@@ -788,12 +774,5 @@ func (h *Handler) handleAdminDeleteSchedule(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	err := h.scheduledCrawls.DeleteScheduledCrawl(r.Context(), r.PathValue("id"))
-	switch {
-	case err == nil:
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-	case errors.Is(err, ports.ErrScheduledCrawlNotFound):
-		http.Error(w, "scheduled crawl not found", http.StatusNotFound)
-	default:
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, "scheduled crawl not found", map[string]bool{"ok": true})
 }

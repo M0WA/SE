@@ -10,6 +10,22 @@ import (
 	"searchengine/internal/ports"
 )
 
+type fakeFetcher struct {
+	pages map[string]string
+	err   map[string]error
+}
+
+func (f *fakeFetcher) FetchWithOptions(_ context.Context, url string, _ ports.FetchOptions) (string, error) {
+	if err, ok := f.err[url]; ok {
+		return "", err
+	}
+	return f.pages[url], nil
+}
+
+type fakeRobots struct{ disallowed map[string]bool }
+
+func (r *fakeRobots) Allowed(_ context.Context, url string) bool { return !r.disallowed[url] }
+
 type recordingSQLRepo struct {
 	fakeSQLRepo
 	saved      []domain.Document

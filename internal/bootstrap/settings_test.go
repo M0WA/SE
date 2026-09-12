@@ -3,6 +3,7 @@ package bootstrap_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -112,6 +113,51 @@ func TestSyncSettings_LeavesDefaultsWhenNothingStored(t *testing.T) {
 	}
 	if len(overrides.Get().BlockedTerms) != 0 {
 		t.Errorf("expected overrides defaults untouched")
+	}
+}
+
+// fakeSettingsStore lets tests drive loadSetting's two failure branches
+// directly (a GetSetting error, and a stored value that fails to decode)
+// without needing a real repository in a hard-to-reach state.
+type fakeSettingsStore struct {
+	getErr  error
+	rawJSON string
+	found   bool
+}
+
+func (f *fakeSettingsStore) SaveSetting(context.Context, string, string) error { return nil }
+func (f *fakeSettingsStore) GetSetting(context.Context, string) (string, bool, error) {
+	if f.getErr != nil {
+		return "", false, f.getErr
+	}
+	return f.rawJSON, f.found, nil
+}
+
+// TestSyncSettings_GetSettingErrorLeavesDefaults proves loadSetting's
+// "store.GetSetting failed" branch is logged and skipped, not fatal --
+// tuning keeps whatever value it already had.
+func TestSyncSettings_GetSettingErrorLeavesDefaults(t *testing.T) {
+	store := &fakeSettingsStore{getErr: errors.New("db unavailable")}
+	tuning := domain.NewTuningSettings(0.5, 1.2, 0.75)
+
+	bootstrap.SyncSettings(syncContext(t), store, tuning, nil, nil, nil)
+
+	if alpha, k1, b := tuning.Get(); alpha != 0.5 || k1 != 1.2 || b != 0.75 {
+		t.Errorf("expected tuning untouched on a GetSetting error, got (%v, %v, %v)", alpha, k1, b)
+	}
+}
+
+// TestSyncSettings_MalformedStoredValueLeavesDefaults proves loadSetting's
+// "stored value isn't valid JSON for the target type" branch is logged
+// and skipped, not fatal.
+func TestSyncSettings_MalformedStoredValueLeavesDefaults(t *testing.T) {
+	store := &fakeSettingsStore{rawJSON: "{not valid json", found: true}
+	tuning := domain.NewTuningSettings(0.5, 1.2, 0.75)
+
+	bootstrap.SyncSettings(syncContext(t), store, tuning, nil, nil, nil)
+
+	if alpha, k1, b := tuning.Get(); alpha != 0.5 || k1 != 1.2 || b != 0.75 {
+		t.Errorf("expected tuning untouched on a malformed stored value, got (%v, %v, %v)", alpha, k1, b)
 	}
 }
 

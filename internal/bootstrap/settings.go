@@ -44,19 +44,7 @@ type PoolConfigurer interface {
 // separate change-detection. pool may be nil for a caller with no
 // connection pool to manage (e.g. a test that only cares about tuning).
 func SyncSettings(ctx context.Context, store ports.SettingsStore, tuning *domain.TuningSettings, op *domain.OperationalSettings, overrides *domain.RankingOverrides, pool PoolConfigurer) {
-	applySettingsOnce(ctx, store, tuning, op, overrides, pool)
-	go func() {
-		ticker := time.NewTicker(settingsPollInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				applySettingsOnce(ctx, store, tuning, op, overrides, pool)
-			}
-		}
-	}()
+	pollRefresh(ctx, settingsPollInterval, func() { applySettingsOnce(ctx, store, tuning, op, overrides, pool) })
 }
 
 func applySettingsOnce(ctx context.Context, store ports.SettingsStore, tuning *domain.TuningSettings, op *domain.OperationalSettings, overrides *domain.RankingOverrides, pool PoolConfigurer) {

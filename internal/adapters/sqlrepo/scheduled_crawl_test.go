@@ -126,38 +126,6 @@ func TestUpdateScheduledCrawl_NotFound(t *testing.T) {
 	}
 }
 
-func TestSetScheduledCrawlEnabled_TogglesWithoutTouchingOtherFields(t *testing.T) {
-	repo := newTestRepo(t)
-	ctx := context.Background()
-	s := newScheduledCrawl("sched-1", 30, time.Now().UTC().Add(30*time.Minute))
-	if err := repo.CreateScheduledCrawl(ctx, s); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if err := repo.SetScheduledCrawlEnabled(ctx, "sched-1", false); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	got, err := repo.ListScheduledCrawls(ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(got) != 1 || got[0].Enabled {
-		t.Fatalf("expected schedule to be disabled, got %+v", got)
-	}
-	if got[0].MaxPages != s.MaxPages || got[0].IntervalMinutes != s.IntervalMinutes {
-		t.Errorf("expected other fields untouched, got %+v", got[0])
-	}
-}
-
-func TestSetScheduledCrawlEnabled_NotFound(t *testing.T) {
-	repo := newTestRepo(t)
-	err := repo.SetScheduledCrawlEnabled(context.Background(), "missing", true)
-	if !errors.Is(err, ports.ErrScheduledCrawlNotFound) {
-		t.Errorf("expected ErrScheduledCrawlNotFound, got %v", err)
-	}
-}
-
 func TestDeleteScheduledCrawl_Success(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()

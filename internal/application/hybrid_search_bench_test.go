@@ -81,10 +81,6 @@ func (r *benchHybridRepo) SampleEmbeddings(_ context.Context, limit int) (map[st
 	return out, nil
 }
 
-func (r *benchHybridRepo) DocumentByID(_ context.Context, id string) (domain.Document, error) {
-	return r.docs[id], nil
-}
-
 func (r *benchHybridRepo) DocumentsByIDs(_ context.Context, ids []string) (map[string]domain.Document, error) {
 	out := make(map[string]domain.Document, len(ids))
 	for _, id := range ids {

@@ -37,9 +37,6 @@ func (f *fakeScheduledCrawlStore) ListScheduledCrawls(context.Context) ([]domain
 func (f *fakeScheduledCrawlStore) UpdateScheduledCrawl(context.Context, domain.ScheduledCrawl) error {
 	return errors.New("not implemented")
 }
-func (f *fakeScheduledCrawlStore) SetScheduledCrawlEnabled(context.Context, string, bool) error {
-	return errors.New("not implemented")
-}
 func (f *fakeScheduledCrawlStore) DeleteScheduledCrawl(context.Context, string) error {
 	return errors.New("not implemented")
 }

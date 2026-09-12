@@ -2,6 +2,7 @@ package bootstrap_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"searchengine/internal/bootstrap"
@@ -60,5 +61,24 @@ func TestSyncVocabulary_ReReadsOnEachCall(t *testing.T) {
 	terms := cache.Get()
 	if len(terms) != 1 || terms[0].Term != "widgets" {
 		t.Errorf("expected the vocabulary to pick up 'widgets' after a later sync (simulating the next poll tick), got %+v", terms)
+	}
+}
+
+type erroringVocabularySource struct{}
+
+func (erroringVocabularySource) AllTerms(context.Context) ([]domain.TermStat, error) {
+	return nil, errors.New("db unavailable")
+}
+
+// TestSyncVocabulary_SourceErrorLeavesCacheUntouched proves a source
+// failure is logged and skipped rather than wiping out -- or crashing --
+// an otherwise-healthy cache.
+func TestSyncVocabulary_SourceErrorLeavesCacheUntouched(t *testing.T) {
+	cache := domain.NewVocabularyCache([]domain.TermStat{{Term: "widgets", DocFreq: 1, TotalFreq: 1}})
+	bootstrap.SyncVocabulary(syncContext(t), erroringVocabularySource{}, cache)
+
+	terms := cache.Get()
+	if len(terms) != 1 || terms[0].Term != "widgets" {
+		t.Errorf("expected the cache's prior vocabulary preserved on a source error, got %+v", terms)
 	}
 }

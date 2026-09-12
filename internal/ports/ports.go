@@ -39,17 +39,6 @@ type RobotsChecker interface {
 	Allowed(ctx context.Context, url string) bool
 }
 
-type Repository interface {
-	Save(ctx context.Context, doc domain.Document) error
-	All(ctx context.Context) ([]domain.Document, error)
-}
-
-type Indexer interface {
-	Add(doc domain.Document)
-	Search(query string, topK int) []domain.SearchResult
-	DocCount() int
-}
-
 // EmbeddingProvider converts text into a vector.
 type EmbeddingProvider interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
@@ -103,11 +92,11 @@ type SQLRepository interface {
 	// availability question) and should be treated like any other
 	// repository error.
 	TopSemanticMatches(ctx context.Context, queryVec []float32, limit int) (matches map[string]domain.EmbeddedVector, ok bool, err error)
-	DocumentByID(ctx context.Context, docID string) (domain.Document, error)
 	// DocumentsByIDs batch-fetches documents for the given IDs in one
 	// round trip (a missing ID is simply absent from the result, not an
-	// error), for callers that would otherwise call DocumentByID once per
-	// candidate.
+	// error) -- the only document-lookup-by-ID this port exposes, since
+	// every caller either already has a batch of IDs or can trivially pass
+	// a single-element slice, avoiding a second, N+1-shaped method.
 	DocumentsByIDs(ctx context.Context, ids []string) (map[string]domain.Document, error)
 	// DocumentsByIDsSortedByCrawledAt is DocumentsByIDs' counterpart for the
 	// recency-sort path: same batched "WHERE id IN (...)" fetch, but ordered
@@ -275,9 +264,8 @@ type SettingsStore interface {
 	GetSetting(ctx context.Context, key string) (value string, found bool, err error)
 }
 
-// ErrScheduledCrawlNotFound is returned by ScheduledCrawlStore's Update,
-// SetScheduledCrawlEnabled and Delete when no schedule with the given ID
-// exists.
+// ErrScheduledCrawlNotFound is returned by ScheduledCrawlStore's Update and
+// Delete when no schedule with the given ID exists.
 var ErrScheduledCrawlNotFound = errors.New("scheduled crawl not found")
 
 // ScheduledCrawlStore persists recurring crawl schedules an admin creates
@@ -291,7 +279,6 @@ type ScheduledCrawlStore interface {
 	CreateScheduledCrawl(ctx context.Context, s domain.ScheduledCrawl) error
 	ListScheduledCrawls(ctx context.Context) ([]domain.ScheduledCrawl, error)
 	UpdateScheduledCrawl(ctx context.Context, s domain.ScheduledCrawl) error
-	SetScheduledCrawlEnabled(ctx context.Context, id string, enabled bool) error
 	DeleteScheduledCrawl(ctx context.Context, id string) error
 	// DueScheduledCrawls lists every enabled schedule whose NextRunAt is at
 	// or before now.

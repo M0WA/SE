@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"sync"
 
 	"searchengine/internal/adapters/crawlclient"
 	"searchengine/internal/adapters/hashembed"
@@ -24,15 +25,27 @@ func main() {
 	settings := domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B)
 	opSettings := domain.DefaultOperationalSettings()
 	overrides := domain.DefaultRankingOverrides()
-	bootstrap.SyncSettings(ctx, repo, settings, opSettings, overrides, repo)
 	corpusStats := domain.NewCorpusStatsCache(0, 1)
-	bootstrap.SyncCorpusStats(ctx, repo, corpusStats)
 	vocabulary := domain.NewVocabularyCache(nil)
-	bootstrap.SyncVocabulary(ctx, repo, vocabulary)
 	embedder := hashembed.New(128)
-	// See cmd/search's identical call: enables Postgres pgvector ANN
-	// search for this process when available, never fatal otherwise.
-	repo.EnableANN(ctx, embedder.Dimensions())
+
+	// See cmd/search's identical block: each of these is an independent
+	// blocking DB round-trip against unrelated tables/state, so running
+	// them concurrently makes startup latency the slowest one rather than
+	// their sum.
+	var wg sync.WaitGroup
+	wg.Add(4)
+	go func() { defer wg.Done(); bootstrap.SyncSettings(ctx, repo, settings, opSettings, overrides, repo) }()
+	go func() { defer wg.Done(); bootstrap.SyncCorpusStats(ctx, repo, corpusStats) }()
+	go func() { defer wg.Done(); bootstrap.SyncVocabulary(ctx, repo, vocabulary) }()
+	go func() {
+		defer wg.Done()
+		// Enables Postgres pgvector ANN search for this process when
+		// available, never fatal otherwise.
+		repo.EnableANN(ctx, embedder.Dimensions())
+	}()
+	wg.Wait()
+
 	debugSvc := application.NewHybridSearchService(repo, embedder, settings, opSettings, overrides, corpusStats, vocabulary)
 
 	adminUser := bootstrap.GetEnv("ADMIN_USER", "")

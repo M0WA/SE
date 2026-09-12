@@ -35,12 +35,10 @@ type fakeSQLRepo struct {
 	// query-term correction tests.
 	vocabulary []domain.TermStat
 
-	// Call counters so tests can assert the N+1 fix actually took: a
-	// per-result DocumentByID round trip must never fire during result
-	// hydration, and DocumentsByIDs must be called at most once per
-	// Search() phase (constraint filtering, then hydration) rather than
-	// once per candidate/result.
-	documentByIDCalls   int
+	// documentsByIDsCalls lets tests assert the N+1 fix actually took:
+	// DocumentsByIDs must be called at most once per Search() phase
+	// (constraint filtering, then hydration) rather than once per
+	// candidate/result.
 	documentsByIDsCalls int
 	// documentsByIDsSortedCalls counts DocumentsByIDsSortedByCrawledAt calls
 	// separately from documentsByIDsCalls, so a recency-sort test can assert
@@ -158,14 +156,6 @@ func (r *fakeSQLRepo) SampleEmbeddings(_ context.Context, limit int) (map[string
 	}
 	return out, nil
 }
-func (r *fakeSQLRepo) DocumentByID(_ context.Context, id string) (domain.Document, error) {
-	r.documentByIDCalls++
-	doc, ok := r.docs[id]
-	if !ok {
-		return domain.Document{}, errors.New("not found")
-	}
-	return doc, nil
-}
 
 // DocumentsByIDs mimics a batched "WHERE id IN (...)" fetch: an ID with no
 // matching document is simply absent from the result, never an error.
@@ -256,6 +246,52 @@ func TestHybridSearch_CombinesBM25AndSemantic(t *testing.T) {
 	}
 	if len(results) == 0 || results[0].DocID != "1" {
 		t.Errorf("expected doc 1 first (BM25+semantic), got %+v", results)
+	}
+}
+
+// TestHybridSearch_NonPositiveTopKDefaultsToTen proves Search's own
+// internal fallback (independent of the HTTP layer's intQueryParam
+// default): a caller passing TopK<=0 directly still gets a sane result
+// count rather than zero results or an error.
+func TestHybridSearch_NonPositiveTopKDefaultsToTen(t *testing.T) {
+	repo := &fakeSQLRepo{
+		postings: map[string][]domain.PostingStats{
+			"katzen": {{DocID: "1", TermFreq: 5, DocLength: 10, DocFreq: 1, TotalDocs: 1, AvgDocLen: 10}},
+		},
+		embeddings: map[string][]float32{"1": {1, 0}},
+		docs:       map[string]domain.Document{"1": {ID: "1", URL: "http://a", Title: "Katzen", Text: "Katzen sind toll"}},
+	}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
+
+	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 0})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("expected the single matching doc back with a non-positive TopK, got %+v", results)
+	}
+}
+
+// TestHybridSearch_DuplicateQueryTermsCountedOnce proves the query-term
+// dedup loop: a query repeating the same term must not fetch or score
+// its postings more than once.
+func TestHybridSearch_DuplicateQueryTermsCountedOnce(t *testing.T) {
+	repo := &fakeSQLRepo{
+		postings: map[string][]domain.PostingStats{
+			"katzen": {{DocID: "1", TermFreq: 5, DocLength: 10, DocFreq: 1, TotalDocs: 1, AvgDocLen: 10}},
+		},
+		embeddings: map[string][]float32{"1": {1, 0}},
+		docs:       map[string]domain.Document{"1": {ID: "1", URL: "http://a", Title: "Katzen", Text: "Katzen sind toll"}},
+	}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
+
+	if _, err := svc.Search(context.Background(), "katzen katzen katzen", ports.SearchQuery{TopK: 10}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(repo.postingsForTermsArgs) != 1 || len(repo.postingsForTermsArgs[0]) != 1 {
+		t.Errorf("expected the repeated term deduped to a single-term batched call, got %+v", repo.postingsForTermsArgs)
 	}
 }
 
@@ -695,9 +731,6 @@ func TestHybridSearch_ResultHydrationUsesBatchedFetchNotPerResult(t *testing.T) 
 			t.Errorf("expected doc %s to be hydrated with URL/Title, got %+v", r.DocID, r)
 		}
 	}
-	if repo.documentByIDCalls != 0 {
-		t.Errorf("expected zero per-result DocumentByID round trips on the unconstrained fast path, got %d", repo.documentByIDCalls)
-	}
 	if repo.documentsByIDsCalls != 1 {
 		t.Errorf("expected exactly one batched DocumentsByIDs call to hydrate all topK results, got %d", repo.documentsByIDsCalls)
 	}
@@ -706,8 +739,8 @@ func TestHybridSearch_ResultHydrationUsesBatchedFetchNotPerResult(t *testing.T) 
 // TestHybridSearch_ConstrainedQueryReusesDocCacheForHydration verifies that
 // when the constraint-filter step already ran (populating docCache), the
 // result-hydration step makes no further document fetch at all -- it must
-// not issue a second DocumentsByIDs call (let alone one DocumentByID call
-// per topK result) for documents it already has cached.
+// not issue a second DocumentsByIDs call for documents it already has
+// cached.
 func TestHybridSearch_ConstrainedQueryReusesDocCacheForHydration(t *testing.T) {
 	repo := &fakeSQLRepo{
 		postings: map[string][]domain.PostingStats{
@@ -731,9 +764,6 @@ func TestHybridSearch_ConstrainedQueryReusesDocCacheForHydration(t *testing.T) {
 	}
 	if len(results) != 1 || results[0].DocID != "1" || results[0].URL == "" {
 		t.Fatalf("expected hydrated doc 1, got %+v", results)
-	}
-	if repo.documentByIDCalls != 0 {
-		t.Errorf("expected zero DocumentByID round trips, got %d", repo.documentByIDCalls)
 	}
 	if repo.documentsByIDsCalls != 1 {
 		t.Errorf("expected exactly one DocumentsByIDs call (constraint filtering), reused for hydration with no second call, got %d", repo.documentsByIDsCalls)

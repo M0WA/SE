@@ -115,43 +115,38 @@ func (r *Repository) migrate(ctx context.Context) error {
 	return r.ensureCrawledAtIndex(ctx)
 }
 
-// ensureHostIndex runs after migrateDocumentColumns, since on a database
-// that predates the host column, an index on it can't be created any
-// earlier -- CreateSchemaSQL's CREATE TABLE IF NOT EXISTS is a no-op
-// against an existing table, so the column wouldn't exist yet if this
-// were part of that same statement list. MySQL has no IF NOT EXISTS for
-// CREATE INDEX, so there it's a best-effort statement whose "already
-// exists" error is expected (and ignored) on every startup after the
-// first.
+// ensureHostIndex and ensureCrawledAtIndex both run after
+// migrateDocumentColumns, since on a database that predates the host
+// column, an index on it can't be created any earlier -- CreateSchemaSQL's
+// CREATE TABLE IF NOT EXISTS is a no-op against an existing table, so the
+// column wouldn't exist yet if this were part of that same statement list
+// (crawled_at itself has been part of the base schema since before its
+// index existed, so for it this is purely about the missing index, not a
+// missing column). Both delegate to ensureIndex, which handles MySQL's
+// lack of CREATE INDEX IF NOT EXISTS (a best-effort statement whose
+// "already exists" error is expected and ignored on every startup after
+// the first) and the concurrent-migration race on Postgres/SQLite
+// (isIndexAlreadyExistsError).
 func (r *Repository) ensureHostIndex(ctx context.Context) error {
-	if r.dialect.Name() == "mysql" {
-		_, _ = r.db.ExecContext(ctx, "CREATE INDEX idx_documents_host ON documents(host)")
-		return nil
-	}
-	if _, err := r.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_documents_host ON documents(host)"); err != nil && !isIndexAlreadyExistsError(err) {
-		return fmt.Errorf("creating host index: %w", err)
-	}
-	return nil
+	return r.ensureIndex(ctx, "idx_documents_host", "host")
 }
 
-// ensureCrawledAtIndex mirrors ensureHostIndex exactly, for the same
-// reason: crawled_at-based range queries (countDocumentsCrawled, backing
-// DocumentsOverview's admin age-bucket charts) and the recency-sort
-// ORDER BY crawled_at DESC query below were both running as full table
-// scans with no supporting index. Runs after migrateDocumentColumns for
-// the same reason ensureHostIndex does (though crawled_at itself has been
-// part of the base schema since before this index existed, so this is
-// purely about the missing index, not a missing column). MySQL has no IF
-// NOT EXISTS for CREATE INDEX, so there it's a best-effort statement
-// whose "already exists" error is expected (and ignored) on every startup
-// after the first.
 func (r *Repository) ensureCrawledAtIndex(ctx context.Context) error {
+	return r.ensureIndex(ctx, "idx_documents_crawled_at", "crawled_at")
+}
+
+// ensureIndex creates a single-column index on documents(column) if it
+// doesn't already exist, tolerating both MySQL's lack of IF NOT EXISTS and
+// the benign concurrent-creation race the other dialects can hit when
+// search/admin/crawl all migrate on startup at once (see
+// isIndexAlreadyExistsError).
+func (r *Repository) ensureIndex(ctx context.Context, indexName, column string) error {
 	if r.dialect.Name() == "mysql" {
-		_, _ = r.db.ExecContext(ctx, "CREATE INDEX idx_documents_crawled_at ON documents(crawled_at)")
+		_, _ = r.db.ExecContext(ctx, "CREATE INDEX "+indexName+" ON documents("+column+")")
 		return nil
 	}
-	if _, err := r.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_documents_crawled_at ON documents(crawled_at)"); err != nil && !isIndexAlreadyExistsError(err) {
-		return fmt.Errorf("creating crawled_at index: %w", err)
+	if _, err := r.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS "+indexName+" ON documents("+column+")"); err != nil && !isIndexAlreadyExistsError(err) {
+		return fmt.Errorf("creating %s: %w", indexName, err)
 	}
 	return nil
 }
@@ -693,27 +688,13 @@ func (r *Repository) SampleEmbeddings(ctx context.Context, limit int) (map[strin
 	return scanEmbeddingRows(rows)
 }
 
-func (r *Repository) DocumentByID(ctx context.Context, docID string) (domain.Document, error) {
-	query := r.ph(`SELECT id, url, title, text, crawled_at FROM documents WHERE id = %s`, 1)
-	var doc domain.Document
-	var crawledAt string
-	err := r.db.QueryRowContext(ctx, query, docID).Scan(&doc.ID, &doc.URL, &doc.Title, &doc.Text, &crawledAt)
-	if err != nil {
-		return domain.Document{}, fmt.Errorf("loading document (%s): %w", docID, err)
-	}
-	if t, err := time.Parse(crawledAtLayout, crawledAt); err == nil {
-		doc.CrawledAt = t
-	}
-	return doc, nil
-}
-
 // DocumentsByIDs batch-fetches documents for the given IDs in a single
 // "WHERE id IN (...)" query, for callers (e.g. hybrid search's
-// constraint/boost/recency filtering) that would otherwise call
-// DocumentByID once per candidate -- an ID with no matching row is simply
-// absent from the result rather than an error, so a candidate whose
-// document was deleted concurrently is silently dropped by the caller
-// rather than failing the whole search.
+// constraint/boost/recency filtering) that would otherwise need one round
+// trip per candidate -- an ID with no matching row is simply absent from
+// the result rather than an error, so a candidate whose document was
+// deleted concurrently is silently dropped by the caller rather than
+// failing the whole search.
 func (r *Repository) DocumentsByIDs(ctx context.Context, ids []string) (map[string]domain.Document, error) {
 	if len(ids) == 0 {
 		return map[string]domain.Document{}, nil
@@ -736,9 +717,7 @@ func (r *Repository) DocumentsByIDs(ctx context.Context, ids []string) (map[stri
 		if err := rows.Scan(&doc.ID, &doc.URL, &doc.Title, &doc.Text, &crawledAt); err != nil {
 			return nil, fmt.Errorf("scanning row: %w", err)
 		}
-		if t, err := time.Parse(crawledAtLayout, crawledAt); err == nil {
-			doc.CrawledAt = t
-		}
+		doc.CrawledAt = parseCrawledAt(crawledAt)
 		out[doc.ID] = doc
 	}
 	return out, rows.Err()
@@ -747,9 +726,8 @@ func (r *Repository) DocumentsByIDs(ctx context.Context, ids []string) (map[stri
 // DocumentsByIDsSortedByCrawledAt batch-fetches documents for the given IDs
 // exactly like DocumentsByIDs (an ID with no matching row is simply absent,
 // not an error), but returns them as a slice in descending crawled_at order
-// (ties broken by id ascending, for a deterministic order matching the
-// tie-break domain.SortByCrawledAt used to apply in Go) -- pushed down into
-// SQL and served by idx_documents_crawled_at, so the hybrid search
+// (ties broken by id ascending, for a deterministic order) -- pushed down
+// into SQL and served by idx_documents_crawled_at, so the hybrid search
 // service's recency-sort path never needs an in-app sort.Slice over the
 // fetched candidates.
 func (r *Repository) DocumentsByIDsSortedByCrawledAt(ctx context.Context, ids []string) ([]domain.Document, error) {
@@ -775,9 +753,7 @@ func (r *Repository) DocumentsByIDsSortedByCrawledAt(ctx context.Context, ids []
 		if err := rows.Scan(&doc.ID, &doc.URL, &doc.Title, &doc.Text, &crawledAt); err != nil {
 			return nil, fmt.Errorf("scanning row: %w", err)
 		}
-		if t, err := time.Parse(crawledAtLayout, crawledAt); err == nil {
-			doc.CrawledAt = t
-		}
+		doc.CrawledAt = parseCrawledAt(crawledAt)
 		out = append(out, doc)
 	}
 	return out, rows.Err()
@@ -894,9 +870,7 @@ func (r *Repository) ListDocuments(ctx context.Context, limit int, host string) 
 		if err := rows.Scan(&d.ID, &d.URL, &d.Host, &d.Title, &d.DocLength, &d.Version, &crawledAt, &d.PageRank); err != nil {
 			return nil, fmt.Errorf("scanning row: %w", err)
 		}
-		if t, err := time.Parse(crawledAtLayout, crawledAt); err == nil {
-			d.CrawledAt = t
-		}
+		d.CrawledAt = parseCrawledAt(crawledAt)
 		out = append(out, d)
 	}
 	if err := rows.Err(); err != nil {
@@ -1012,23 +986,66 @@ func (r *Repository) LinkGraph(ctx context.Context) (map[string][]string, error)
 // PageRank score to documents.pagerank, one UPDATE per ID within a single
 // transaction. A document ID not present in scores is left untouched --
 // see application.RunPageRankJob and ports.PageRankRepository.
+// pageRankUpdateBatchSize bounds how many documents one UPDATE statement in
+// UpdatePageRanks covers -- each document contributes 3 placeholders (a
+// CASE WHEN id/THEN score pair, plus the id again in the WHERE IN list), so
+// 200 keeps every batch's placeholder count comfortably under any SQL
+// driver's per-statement parameter limit regardless of dialect.
+const pageRankUpdateBatchSize = 200
+
+// UpdatePageRanks writes every document's freshly computed PageRank score
+// in batches of one CASE-WHEN UPDATE per pageRankUpdateBatchSize documents
+// (standard SQL, portable across sqlite/postgres/mysql) rather than one
+// UPDATE per document -- the same batching principle DocumentsByIDs/
+// PostingsForTerms already apply to reads, applied here to a write that
+// can touch the entire corpus every time application.RunPageRankJob runs.
 func (r *Repository) UpdatePageRanks(ctx context.Context, scores map[string]float64) error {
 	if len(scores) == 0 {
 		return nil
 	}
+	ids := make([]string, 0, len(scores))
+	for id := range scores {
+		ids = append(ids, id)
+	}
+
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("starting transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	updateSQL := r.ph(`UPDATE documents SET pagerank = %s WHERE id = %s`, 1, 2)
-	for id, score := range scores {
-		if _, err := tx.ExecContext(ctx, updateSQL, score, id); err != nil {
-			return fmt.Errorf("updating pagerank for %s: %w", id, err)
+	for start := 0; start < len(ids); start += pageRankUpdateBatchSize {
+		end := start + pageRankUpdateBatchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		if err := r.updatePageRankBatch(ctx, tx, ids[start:end], scores); err != nil {
+			return err
 		}
 	}
 	return tx.Commit()
+}
+
+// updatePageRankBatch runs one UPDATE documents SET pagerank = CASE id
+// WHEN ... THEN ... END WHERE id IN (...) statement for the given ids.
+func (r *Repository) updatePageRankBatch(ctx context.Context, tx *sql.Tx, ids []string, scores map[string]float64) error {
+	var stmt strings.Builder
+	stmt.WriteString("UPDATE documents SET pagerank = CASE id ")
+	args := make([]interface{}, 0, len(ids)*3)
+	pos := 1
+	for _, id := range ids {
+		stmt.WriteString("WHEN " + r.dialect.Placeholder(pos) + " THEN " + r.dialect.Placeholder(pos+1) + " ")
+		args = append(args, id, scores[id])
+		pos += 2
+	}
+	stmt.WriteString("END WHERE id IN (" + r.placeholderList(len(ids), pos) + ")")
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	if _, err := tx.ExecContext(ctx, stmt.String(), args...); err != nil {
+		return fmt.Errorf("batch-updating pagerank: %w", err)
+	}
+	return nil
 }
 
 // placeholderList builds n comma-separated placeholders starting at
@@ -1070,7 +1087,7 @@ func (r *Repository) SearchDomains(ctx context.Context, q string, limit int) ([]
 }
 
 // DocumentVersions lists a document's superseded prior versions, most
-// recent first (the current content lives in ListDocuments/DocumentByID,
+// recent first (the current content lives in ListDocuments/DocumentsByIDs,
 // not here).
 func (r *Repository) DocumentVersions(ctx context.Context, docID string) ([]domain.DocumentVersion, error) {
 	query := r.ph(`SELECT version, title, doc_length, crawled_at FROM document_versions
@@ -1088,9 +1105,7 @@ func (r *Repository) DocumentVersions(ctx context.Context, docID string) ([]doma
 		if err := rows.Scan(&v.Version, &v.Title, &v.DocLength, &crawledAt); err != nil {
 			return nil, fmt.Errorf("scanning row: %w", err)
 		}
-		if t, err := time.Parse(crawledAtLayout, crawledAt); err == nil {
-			v.CrawledAt = t
-		}
+		v.CrawledAt = parseCrawledAt(crawledAt)
 		out = append(out, v)
 	}
 	return out, rows.Err()
@@ -1269,17 +1284,6 @@ func (r *Repository) UpdateScheduledCrawl(ctx context.Context, s domain.Schedule
 	return requireRowsAffected(res, s.ID)
 }
 
-// SetScheduledCrawlEnabled flips a schedule's enabled flag without
-// touching any of its other fields.
-func (r *Repository) SetScheduledCrawlEnabled(ctx context.Context, id string, enabled bool) error {
-	updateSQL := r.ph(`UPDATE scheduled_crawls SET enabled = %s WHERE id = %s`, 1, 2)
-	res, err := r.db.ExecContext(ctx, updateSQL, enabled, id)
-	if err != nil {
-		return fmt.Errorf("updating scheduled crawl enabled flag (%s): %w", id, err)
-	}
-	return requireRowsAffected(res, id)
-}
-
 func (r *Repository) DeleteScheduledCrawl(ctx context.Context, id string) error {
 	res, err := r.db.ExecContext(ctx, r.ph(`DELETE FROM scheduled_crawls WHERE id = %s`, 1), id)
 	if err != nil {
@@ -1344,6 +1348,29 @@ func nullableTimeString(t *time.Time) sql.NullString {
 	return sql.NullString{String: t.UTC().Format(crawledAtLayout), Valid: true}
 }
 
+// parseCrawledAt parses s (expected in crawledAtLayout) into a time.Time,
+// silently leaving the zero value on a parse error -- the same
+// "malformed/missing timestamp isn't worth failing the whole row over"
+// convention every timestamp column in this package already follows.
+func parseCrawledAt(s string) time.Time {
+	t, _ := time.Parse(crawledAtLayout, s)
+	return t
+}
+
+// parseNullableCrawledAt is parseCrawledAt's counterpart for an optional
+// timestamp column (started_at, finished_at, last_run_at): a NULL/invalid
+// value yields a nil *time.Time rather than a zero-value one, matching
+// domain's own convention for "this hasn't happened yet."
+func parseNullableCrawledAt(ns sql.NullString) *time.Time {
+	if !ns.Valid {
+		return nil
+	}
+	if t, err := time.Parse(crawledAtLayout, ns.String); err == nil {
+		return &t
+	}
+	return nil
+}
+
 // scanner is satisfied by both *sql.Row and *sql.Rows, so
 // scanScheduledCrawl works for either a single-row Get or a multi-row List.
 type scanner interface {
@@ -1363,17 +1390,9 @@ func scanScheduledCrawl(row scanner) (domain.ScheduledCrawl, error) {
 	if err := json.Unmarshal([]byte(seedJSON), &s.SeedURLs); err != nil {
 		return domain.ScheduledCrawl{}, fmt.Errorf("decoding seed urls: %w", err)
 	}
-	if lastRunAt.Valid {
-		if t, err := time.Parse(crawledAtLayout, lastRunAt.String); err == nil {
-			s.LastRunAt = &t
-		}
-	}
-	if t, err := time.Parse(crawledAtLayout, nextRunAt); err == nil {
-		s.NextRunAt = t
-	}
-	if t, err := time.Parse(crawledAtLayout, createdAt); err == nil {
-		s.CreatedAt = t
-	}
+	s.LastRunAt = parseNullableCrawledAt(lastRunAt)
+	s.NextRunAt = parseCrawledAt(nextRunAt)
+	s.CreatedAt = parseCrawledAt(createdAt)
 	return s, nil
 }
 

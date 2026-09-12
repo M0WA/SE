@@ -31,19 +31,7 @@ type CorpusStatsSource interface {
 // per term, per request; a document crawled or deleted by another process
 // still reaches this process's BM25 scoring within a poll interval.
 func SyncCorpusStats(ctx context.Context, source CorpusStatsSource, cache *domain.CorpusStatsCache) {
-	refreshCorpusStats(ctx, source, cache)
-	go func() {
-		ticker := time.NewTicker(corpusStatsPollInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				refreshCorpusStats(ctx, source, cache)
-			}
-		}
-	}()
+	pollRefresh(ctx, corpusStatsPollInterval, func() { refreshCorpusStats(ctx, source, cache) })
 }
 
 func refreshCorpusStats(ctx context.Context, source CorpusStatsSource, cache *domain.CorpusStatsCache) {

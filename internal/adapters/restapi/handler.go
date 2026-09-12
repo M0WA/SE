@@ -4,7 +4,6 @@ import (
 	_ "embed"
 	"encoding/json"
 	"net/http"
-	"strconv"
 
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
@@ -235,12 +234,7 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query().Get("q")
-	topK := h.opSettings.Get().DefaultTopK
-	if v := r.URL.Query().Get("top_k"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			topK = n
-		}
-	}
+	topK := intQueryParam(r, "top_k", h.opSettings.Get().DefaultTopK, false)
 
 	results, err := h.search.Search(r.Context(), query, ports.SearchQuery{TopK: topK, Sort: parseSortParam(r)})
 	if err != nil {

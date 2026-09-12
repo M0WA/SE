@@ -104,29 +104,45 @@ func (q ParsedQuery) SiteAllowed(doc Document) bool {
 }
 
 // Matches reports whether a document's title and text satisfy this query's
-// required words, excluded words, and required phrases. Required/excluded
-// checks use the same tokenization as indexing, for consistency with what
-// the BM25 postings actually contain. Phrase checks are a literal,
-// case-insensitive substring match, since phrases aren't positionally
-// indexed.
+// required words, excluded words, and required phrases. A one-off
+// convenience wrapper around MatchesTokens for a caller that doesn't
+// already have the document's tokens; hybrid_search_service.go calls
+// MatchesTokens directly since it needs the same tokens for ranking
+// overrides too (see domain.TokenSet).
 func (q ParsedQuery) Matches(title, text string) bool {
+	if !q.HasConstraints() {
+		return true
+	}
+	var tokens map[string]bool
+	if len(q.Required) > 0 || len(q.Excluded) > 0 {
+		tokens = TokenSet(title, text)
+	}
+	return q.MatchesTokens(tokens, title, text)
+}
+
+// MatchesTokens is Matches' counterpart for a caller that already
+// tokenized title+text (see TokenSet) for some other reason. tokens is
+// only consulted when this query has required/excluded words -- pass nil
+// if the caller doesn't have a token set for a query it already knows to
+// be phrase-only.
+//
+// Required/excluded checks use the same tokenization as indexing, for
+// consistency with what the BM25 postings actually contain. Phrase checks
+// are a literal, case-insensitive substring match, since phrases aren't
+// positionally indexed.
+func (q ParsedQuery) MatchesTokens(tokens map[string]bool, title, text string) bool {
 	if !q.HasConstraints() {
 		return true
 	}
 
 	if len(q.Required) > 0 || len(q.Excluded) > 0 {
-		docTokens := Tokenize(title + " " + text)
-		tokenSet := make(map[string]bool, len(docTokens))
-		for _, t := range docTokens {
-			tokenSet[t] = true
-		}
 		for _, req := range q.Required {
-			if !tokenSet[req] {
+			if !tokens[req] {
 				return false
 			}
 		}
 		for _, exc := range q.Excluded {
-			if tokenSet[exc] {
+			if tokens[exc] {
 				return false
 			}
 		}

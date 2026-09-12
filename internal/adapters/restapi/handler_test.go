@@ -720,6 +720,17 @@ func TestHandleAdminCrawlJob_NotFound(t *testing.T) {
 	}
 }
 
+func TestHandleAdminCrawlJob_NotConfigured(t *testing.T) {
+	h, cookie := authedHandler(t, &fakeSearch{}, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/crawl/jobs/job-1", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
 func TestHandleAdminCrawlJob_ServiceError(t *testing.T) {
 	fj := &fakeJobService{getErr: errors.New("boom")}
 	h, cookie := authedHandler(t, &fakeSearch{}, fj)

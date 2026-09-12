@@ -2,6 +2,7 @@ package bootstrap_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"searchengine/internal/bootstrap"
@@ -64,5 +65,24 @@ func TestSyncCorpusStats_ReReadsOnEachCall(t *testing.T) {
 	bootstrap.SyncCorpusStats(syncContext(t), repo, cache)
 	if totalDocs, _ := cache.Get(); totalDocs != 1 {
 		t.Errorf("expected totalDocs=1 after a later sync (simulating the next poll tick), got %d", totalDocs)
+	}
+}
+
+type erroringCorpusStatsSource struct{}
+
+func (erroringCorpusStatsSource) CorpusStats(context.Context) (int, float64, error) {
+	return 0, 0, errors.New("db unavailable")
+}
+
+// TestSyncCorpusStats_SourceErrorLeavesCacheUntouched proves a source
+// failure (the DB briefly unreachable, say) is logged and skipped rather
+// than zeroing out -- or crashing -- an otherwise-healthy cache.
+func TestSyncCorpusStats_SourceErrorLeavesCacheUntouched(t *testing.T) {
+	cache := domain.NewCorpusStatsCache(7, 42)
+	bootstrap.SyncCorpusStats(syncContext(t), erroringCorpusStatsSource{}, cache)
+
+	totalDocs, avgDocLen := cache.Get()
+	if totalDocs != 7 || avgDocLen != 42 {
+		t.Errorf("expected the cache's prior values preserved on a source error, got (%d, %v)", totalDocs, avgDocLen)
 	}
 }

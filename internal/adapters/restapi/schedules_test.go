@@ -25,10 +25,6 @@ type fakeScheduledCrawlStore struct {
 	updated   domain.ScheduledCrawl
 	updateErr error
 
-	enabledID string
-	enabled   bool
-	enableErr error
-
 	deletedID string
 	deleteErr error
 }
@@ -43,10 +39,6 @@ func (f *fakeScheduledCrawlStore) ListScheduledCrawls(context.Context) ([]domain
 func (f *fakeScheduledCrawlStore) UpdateScheduledCrawl(_ context.Context, s domain.ScheduledCrawl) error {
 	f.updated = s
 	return f.updateErr
-}
-func (f *fakeScheduledCrawlStore) SetScheduledCrawlEnabled(_ context.Context, id string, enabled bool) error {
-	f.enabledID, f.enabled = id, enabled
-	return f.enableErr
 }
 func (f *fakeScheduledCrawlStore) DeleteScheduledCrawl(_ context.Context, id string) error {
 	f.deletedID = id
@@ -231,6 +223,18 @@ func TestHandleAdminSchedules_PostInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestHandleAdminSchedules_PostStoreErrorReturns500(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithSchedules(t, &fakeScheduledCrawlStore{createErr: errors.New("db unavailable")})
+	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}, "interval_minutes": 20})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 when the store fails to create a schedule, got %d", rec.Code)
+	}
+}
+
 func TestHandleAdminSchedules_MethodNotAllowed(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithSchedules(t, &fakeScheduledCrawlStore{})
 	req := httptest.NewRequest(http.MethodPut, "/admin/api/schedules", nil)
@@ -283,6 +287,29 @@ func TestHandleAdminUpdateSchedule_InvalidJSON(t *testing.T) {
 	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminUpdateSchedule_EmptySeedURLs(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithSchedules(t, &fakeScheduledCrawlStore{})
+	body, _ := json.Marshal(map[string]interface{}{"interval_minutes": 10})
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/schedules/sched-1", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminUpdateSchedule_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithSchedules(t, nil)
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/schedules/sched-1", bytes.NewReader([]byte("{}")))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
 	}
 }
 

@@ -201,6 +201,16 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 	// order -- no in-app sort.Slice over the candidates is needed later to
 	// apply recency order.
 	docCache := make(map[string]domain.Document)
+	// docTokens caches each candidate's tokenized title+text, computed at
+	// most once per candidate (only when a term-based check actually needs
+	// it -- a pure site:/recency query needs no tokenization at all), then
+	// reused by the boost step below -- otherwise a query with both
+	// +required/-excluded terms and admin blocked/boosted terms would
+	// tokenize the same document up to three times (once each for
+	// constraint matching, blocking, and boosting).
+	docTokens := make(map[string]map[string]bool)
+	needsTokens := len(parsed.Required) > 0 || len(parsed.Excluded) > 0 ||
+		len(overrides.BlockedTerms) > 0 || len(overrides.BoostedTerms) > 0
 	var recencyOrder []string
 	if parsed.HasConstraints() || hasOverrides || recency {
 		ids := make([]string, 0, len(candidateIDs))
@@ -232,7 +242,12 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 				delete(candidateIDs, id)
 				continue
 			}
-			if !parsed.Matches(doc.Title, doc.Text) || !parsed.SiteAllowed(doc) || overrides.Blocked(doc) {
+			var tokens map[string]bool
+			if needsTokens {
+				tokens = domain.TokenSet(doc.Title, doc.Text)
+				docTokens[id] = tokens
+			}
+			if !parsed.MatchesTokens(tokens, doc.Title, doc.Text) || !parsed.SiteAllowed(doc) || overrides.BlockedTokens(doc.URL, tokens) {
 				delete(candidateIDs, id)
 			}
 		}
@@ -256,7 +271,7 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 		boosted := false
 		for i := range ranked {
 			if doc, ok := docCache[ranked[i].DocID]; ok {
-				if f := overrides.BoostFactor(doc); f != 1.0 {
+				if f := overrides.BoostFactorTokens(doc.URL, docTokens[ranked[i].DocID]); f != 1.0 {
 					ranked[i].FinalScore *= f
 					boosted = true
 				}

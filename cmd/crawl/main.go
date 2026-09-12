@@ -161,12 +161,22 @@ func main() {
 	defer repo.Close()
 
 	opSettings := domain.DefaultOperationalSettings()
-	bootstrap.SyncSettings(ctx, repo, nil, opSettings, nil, repo)
 	embedder := hashembed.New(128)
-	// See cmd/search's identical call: enables Postgres pgvector ANN
-	// search for this process when available (so SaveDocument populates
-	// the vector column below), never fatal otherwise.
-	repo.EnableANN(ctx, embedder.Dimensions())
+
+	// See cmd/search's identical block: these two are independent blocking
+	// DB round-trips against unrelated state, so running them concurrently
+	// makes startup latency the slower one rather than their sum.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); bootstrap.SyncSettings(ctx, repo, nil, opSettings, nil, repo) }()
+	go func() {
+		defer wg.Done()
+		// Enables Postgres pgvector ANN search for this process when
+		// available (so SaveDocument populates the vector column below),
+		// never fatal otherwise.
+		repo.EnableANN(ctx, embedder.Dimensions())
+	}()
+	wg.Wait()
 	fetcher := httpfetcher.New(opSettings)
 	robotsChecker := robots.New(fetcher)
 	parseHTML := func(html, pageURL string) (string, string, []string) {

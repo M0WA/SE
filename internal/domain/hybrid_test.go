@@ -2,7 +2,6 @@ package domain_test
 
 import (
 	"testing"
-	"time"
 
 	"searchengine/internal/domain"
 )
@@ -69,34 +68,5 @@ func TestCombineScores_DeterministicTieBreak(t *testing.T) {
 	out := domain.CombineScores(in, 0.5)
 	if out[0].DocID != "a" {
 		t.Errorf("expected deterministic tie-break with 'a' first, got %s", out[0].DocID)
-	}
-}
-
-func TestSortByCrawledAt_OrdersMostRecentFirstIgnoringScore(t *testing.T) {
-	now := time.Now()
-	in := []domain.HybridResult{
-		{DocID: "old", FinalScore: 0.9, CrawledAt: now.Add(-48 * time.Hour)},
-		{DocID: "new", FinalScore: 0.1, CrawledAt: now},
-		{DocID: "mid", FinalScore: 0.5, CrawledAt: now.Add(-24 * time.Hour)},
-	}
-	domain.SortByCrawledAt(in)
-	got := []string{in[0].DocID, in[1].DocID, in[2].DocID}
-	want := []string{"new", "mid", "old"}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("expected order %v, got %v", want, got)
-		}
-	}
-}
-
-func TestSortByCrawledAt_DeterministicTieBreak(t *testing.T) {
-	same := time.Now()
-	in := []domain.HybridResult{
-		{DocID: "z", CrawledAt: same},
-		{DocID: "a", CrawledAt: same},
-	}
-	domain.SortByCrawledAt(in)
-	if in[0].DocID != "a" {
-		t.Errorf("expected deterministic tie-break with 'a' first, got %s", in[0].DocID)
 	}
 }

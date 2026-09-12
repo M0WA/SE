@@ -61,10 +61,10 @@ func seedBenchDocuments(b *testing.B, repo *sqlrepo.Repository, n int, rareTerms
 }
 
 // BenchmarkDocumentFetch compares fetching 200 candidate documents (a
-// typical constraint-filter/hydration candidate-set size) one at a time via
-// DocumentByID (the pre-n1-document-fetches approach, still present on the
-// repository) against a single batched DocumentsByIDs call, against a
-// 5,000-document corpus.
+// typical constraint-filter/hydration candidate-set size) one at a time --
+// a single-element DocumentsByIDs call per candidate, the pre-n1-document-
+// fetches shape -- against one batched DocumentsByIDs call for all of
+// them, against a 5,000-document corpus.
 func BenchmarkDocumentFetch(b *testing.B) {
 	ctx := context.Background()
 	repo, err := sqlrepo.New(ctx, "sqlite", benchDSN("benchdocfetch"))
@@ -79,13 +79,13 @@ func BenchmarkDocumentFetch(b *testing.B) {
 	candidateIDs := make([]string, candidateCount)
 	copy(candidateIDs, ids[:candidateCount])
 
-	b.Run("Loop_DocumentByID", func(b *testing.B) {
+	b.Run("Loop_SingleDocumentsByIDs", func(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			for _, id := range candidateIDs {
-				if _, err := repo.DocumentByID(ctx, id); err != nil {
-					b.Fatalf("DocumentByID(%s): %v", id, err)
+				if _, err := repo.DocumentsByIDs(ctx, []string{id}); err != nil {
+					b.Fatalf("DocumentsByIDs(%s): %v", id, err)
 				}
 			}
 		}

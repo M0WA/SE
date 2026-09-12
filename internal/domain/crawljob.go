@@ -132,13 +132,17 @@ func NewCrawlJobStore() *CrawlJobStore {
 
 var crawlJobSeq int64
 
-func newCrawlJobID() string {
+// NewCrawlJobID mints an ID for a newly created crawl job, unique within a
+// process without needing a database round-trip first -- shared by this
+// in-memory store and sqlrepo's persistent one, so both name jobs exactly
+// the same way.
+func NewCrawlJobID() string {
 	return fmt.Sprintf("job-%d-%d", time.Now().UnixNano(), atomic.AddInt64(&crawlJobSeq, 1))
 }
 
 // Create registers a new job in CrawlJobQueued status and returns it.
 func (s *CrawlJobStore) Create(_ context.Context, req CrawlJobRequest) (CrawlJob, error) {
-	job := &CrawlJob{ID: newCrawlJobID(), Request: req, Status: CrawlJobQueued, CreatedAt: time.Now()}
+	job := &CrawlJob{ID: NewCrawlJobID(), Request: req, Status: CrawlJobQueued, CreatedAt: time.Now()}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

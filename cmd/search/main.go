@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"sync"
 
 	"searchengine/internal/adapters/hashembed"
 	"searchengine/internal/adapters/restapi"
@@ -23,18 +24,30 @@ func main() {
 	settings := domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B)
 	opSettings := domain.DefaultOperationalSettings()
 	overrides := domain.DefaultRankingOverrides()
-	bootstrap.SyncSettings(ctx, repo, settings, opSettings, overrides, repo)
 	corpusStats := domain.NewCorpusStatsCache(0, 1)
-	bootstrap.SyncCorpusStats(ctx, repo, corpusStats)
 	vocabulary := domain.NewVocabularyCache(nil)
-	bootstrap.SyncVocabulary(ctx, repo, vocabulary)
 	embedder := hashembed.New(128)
-	// Attempt to enable Postgres pgvector-backed ANN semantic search once at
-	// startup -- a no-op on SQLite/MySQL, and never fatal even on Postgres
-	// without the extension installed (see sqlrepo.Repository.EnableANN):
-	// this process just keeps using the brute-force SampleEmbeddings
-	// fallback either way.
-	repo.EnableANN(ctx, embedder.Dimensions())
+
+	// Each of these does its own blocking DB round-trip (or, for EnableANN,
+	// several) against unrelated tables/state, and none depends on another's
+	// result -- run them concurrently so startup latency is the slowest one
+	// of the four rather than their sum.
+	var wg sync.WaitGroup
+	wg.Add(4)
+	go func() { defer wg.Done(); bootstrap.SyncSettings(ctx, repo, settings, opSettings, overrides, repo) }()
+	go func() { defer wg.Done(); bootstrap.SyncCorpusStats(ctx, repo, corpusStats) }()
+	go func() { defer wg.Done(); bootstrap.SyncVocabulary(ctx, repo, vocabulary) }()
+	go func() {
+		defer wg.Done()
+		// Attempt to enable Postgres pgvector-backed ANN semantic search --
+		// a no-op on SQLite/MySQL, and never fatal even on Postgres without
+		// the extension installed (see sqlrepo.Repository.EnableANN): this
+		// process just keeps using the brute-force SampleEmbeddings
+		// fallback either way.
+		repo.EnableANN(ctx, embedder.Dimensions())
+	}()
+	wg.Wait()
+
 	searchSvc := application.NewHybridAsSearchService(repo, embedder, settings, opSettings, overrides, corpusStats, vocabulary)
 
 	handler := restapi.New(restapi.Config{

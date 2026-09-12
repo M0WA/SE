@@ -20,20 +20,26 @@ type RankingOverridesValues struct {
 
 // Blocked reports whether doc should be excluded from results entirely:
 // its URL's host is in BlockedDomains, or its title/text contains a
-// BlockedTerm.
+// BlockedTerm. A one-off convenience wrapper around BlockedTokens for a
+// caller that doesn't already have doc's tokens; hybrid_search_service.go
+// calls BlockedTokens directly since it needs the same tokens for query-
+// constraint matching too, and tokenizing a document is exactly as
+// expensive whether it's done once or three times.
 func (v RankingOverridesValues) Blocked(doc Document) bool {
+	return v.BlockedTokens(doc.URL, TokenSet(doc.Title, doc.Text))
+}
+
+// BlockedTokens is Blocked's counterpart for a caller that already
+// tokenized the document (see TokenSet) for some other reason.
+func (v RankingOverridesValues) BlockedTokens(url string, tokens map[string]bool) bool {
 	if len(v.BlockedDomains) > 0 {
-		host := hostOf(doc.URL)
+		host := hostOf(url)
 		for _, d := range v.BlockedDomains {
 			if d == host {
 				return true
 			}
 		}
 	}
-	if len(v.BlockedTerms) == 0 {
-		return false
-	}
-	tokens := docTokenSet(doc)
 	for _, term := range v.BlockedTerms {
 		if tokens[term] {
 			return true
@@ -44,27 +50,39 @@ func (v RankingOverridesValues) Blocked(doc Document) bool {
 
 // BoostFactor returns the multiplier to apply to doc's final score: 1.0
 // (no-op) if nothing matches, otherwise the product of every matching
-// BoostedDomains/BoostedTerms factor.
+// BoostedDomains/BoostedTerms factor. A one-off convenience wrapper around
+// BoostFactorTokens -- see Blocked's doc comment for why
+// hybrid_search_service.go calls the Tokens form directly instead.
 func (v RankingOverridesValues) BoostFactor(doc Document) float64 {
+	return v.BoostFactorTokens(doc.URL, TokenSet(doc.Title, doc.Text))
+}
+
+// BoostFactorTokens is BoostFactor's counterpart for a caller that already
+// tokenized the document (see TokenSet) for some other reason.
+func (v RankingOverridesValues) BoostFactorTokens(url string, tokens map[string]bool) float64 {
 	factor := 1.0
 	if len(v.BoostedDomains) > 0 {
-		if f, ok := v.BoostedDomains[hostOf(doc.URL)]; ok {
+		if f, ok := v.BoostedDomains[hostOf(url)]; ok {
 			factor *= f
 		}
 	}
-	if len(v.BoostedTerms) > 0 {
-		tokens := docTokenSet(doc)
-		for term, f := range v.BoostedTerms {
-			if tokens[term] {
-				factor *= f
-			}
+	for term, f := range v.BoostedTerms {
+		if tokens[term] {
+			factor *= f
 		}
 	}
 	return factor
 }
 
-func docTokenSet(doc Document) map[string]bool {
-	tokens := Tokenize(doc.Title + " " + doc.Text)
+// TokenSet tokenizes title+text into a set for O(1) membership checks --
+// shared by RankingOverridesValues' Blocked/BoostFactor and
+// ParsedQuery.Matches, all of which otherwise need to ask "does this
+// document contain term X" repeatedly. A caller that needs more than one
+// of these checks against the same document (hybrid_search_service.go, on
+// its hot path) should call this once and reuse the result via the
+// *Tokens-suffixed methods, rather than re-tokenizing per check.
+func TokenSet(title, text string) map[string]bool {
+	tokens := Tokenize(title + " " + text)
 	set := make(map[string]bool, len(tokens))
 	for _, t := range tokens {
 		set[t] = true

@@ -30,19 +30,7 @@ type VocabularySource interface {
 // deleted by another process still reaches this process's fuzzy matching
 // within a poll interval.
 func SyncVocabulary(ctx context.Context, source VocabularySource, cache *domain.VocabularyCache) {
-	refreshVocabulary(ctx, source, cache)
-	go func() {
-		ticker := time.NewTicker(vocabularyPollInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				refreshVocabulary(ctx, source, cache)
-			}
-		}
-	}()
+	pollRefresh(ctx, vocabularyPollInterval, func() { refreshVocabulary(ctx, source, cache) })
 }
 
 func refreshVocabulary(ctx context.Context, source VocabularySource, cache *domain.VocabularyCache) {

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	"searchengine/internal/domain"
@@ -25,7 +24,7 @@ func (r *Repository) Create(ctx context.Context, req domain.CrawlJobRequest) (do
 		return domain.CrawlJob{}, fmt.Errorf("encoding crawl job request: %w", err)
 	}
 	job := domain.CrawlJob{
-		ID: newCrawlJobID(), Request: req, Status: domain.CrawlJobQueued,
+		ID: domain.NewCrawlJobID(), Request: req, Status: domain.CrawlJobQueued,
 		CreatedAt: time.Now().UTC(),
 	}
 	insertSQL := r.ph(`INSERT INTO crawl_jobs (`+crawlJobColumns+`) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)`,
@@ -38,17 +37,6 @@ func (r *Repository) Create(ctx context.Context, req domain.CrawlJobRequest) (do
 		return domain.CrawlJob{}, fmt.Errorf("creating crawl job: %w", err)
 	}
 	return job, nil
-}
-
-// newCrawlJobID mirrors domain's own ID scheme (time-ordered, so
-// ORDER BY created_at and ORDER BY id agree) without depending on domain's
-// unexported sequence counter -- crawl-server's persistent store and the
-// in-memory domain.CrawlJobStore never run in the same process, so two
-// independent ID generators risk no collision between them.
-var crawlJobIDSeq int64
-
-func newCrawlJobID() string {
-	return fmt.Sprintf("job-%d-%d", time.Now().UnixNano(), atomic.AddInt64(&crawlJobIDSeq, 1))
 }
 
 func (r *Repository) MarkRunning(ctx context.Context, id string) error {
@@ -205,19 +193,9 @@ func scanCrawlJob(row scanner) (domain.CrawlJob, error) {
 		return domain.CrawlJob{}, fmt.Errorf("decoding crawl job request: %w", err)
 	}
 	job.Status = domain.CrawlJobStatus(status)
-	if t, err := time.Parse(crawledAtLayout, createdAt); err == nil {
-		job.CreatedAt = t
-	}
-	if startedAt.Valid {
-		if t, err := time.Parse(crawledAtLayout, startedAt.String); err == nil {
-			job.StartedAt = &t
-		}
-	}
-	if finishedAt.Valid {
-		if t, err := time.Parse(crawledAtLayout, finishedAt.String); err == nil {
-			job.FinishedAt = &t
-		}
-	}
+	job.CreatedAt = parseCrawledAt(createdAt)
+	job.StartedAt = parseNullableCrawledAt(startedAt)
+	job.FinishedAt = parseNullableCrawledAt(finishedAt)
 	return job, nil
 }
 
@@ -229,8 +207,6 @@ func scanCrawlPageEvent(row scanner) (domain.CrawlPageEvent, error) {
 		return domain.CrawlPageEvent{}, err
 	}
 	ev.Status = domain.CrawlPageStatus(status)
-	if t, err := time.Parse(crawledAtLayout, fetchedAt); err == nil {
-		ev.FetchedAt = t
-	}
+	ev.FetchedAt = parseCrawledAt(fetchedAt)
 	return ev, nil
 }

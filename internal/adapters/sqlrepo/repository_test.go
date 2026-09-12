@@ -247,9 +247,13 @@ func TestSaveDocument_ThenRetrieveEverywhere(t *testing.T) {
 		t.Fatalf("unexpected error saving document: %v", err)
 	}
 
-	got, err := repo.DocumentByID(ctx, "doc-1")
+	fetchedDocs, err := repo.DocumentsByIDs(ctx, []string{"doc-1"})
 	if err != nil {
 		t.Fatalf("unexpected error loading document: %v", err)
+	}
+	got, ok := fetchedDocs["doc-1"]
+	if !ok {
+		t.Fatalf("expected doc-1 back, got %+v", fetchedDocs)
 	}
 	if got.URL != doc.URL || got.Title != doc.Title || got.Text != doc.Text {
 		t.Errorf("expected saved document back, got %+v", got)
@@ -349,20 +353,12 @@ func TestSaveDocument_UpsertReplacesPostings(t *testing.T) {
 		t.Errorf("expected a 'dogs' posting after upsert, got %+v", dogsPostings)
 	}
 
-	got, err := repo.DocumentByID(ctx, "doc-1")
+	docs, err := repo.DocumentsByIDs(ctx, []string{"doc-1"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.Title != "Dogs" {
-		t.Errorf("expected upserted title, got %q", got.Title)
-	}
-}
-
-func TestDocumentByID_NotFound(t *testing.T) {
-	repo := newTestRepo(t)
-	_, err := repo.DocumentByID(context.Background(), "does-not-exist")
-	if err == nil {
-		t.Error("expected an error for a missing document")
+	if docs["doc-1"].Title != "Dogs" {
+		t.Errorf("expected upserted title, got %q", docs["doc-1"].Title)
 	}
 }
 
@@ -585,8 +581,8 @@ func TestDeleteDocument_Success(t *testing.T) {
 		t.Fatalf("unexpected error deleting: %v", err)
 	}
 
-	if _, err := repo.DocumentByID(ctx, "doc-1"); err == nil {
-		t.Error("expected the document to be gone after delete")
+	if docs, err := repo.DocumentsByIDs(ctx, []string{"doc-1"}); err != nil || len(docs) != 0 {
+		t.Errorf("expected the document to be gone after delete, got docs=%+v err=%v", docs, err)
 	}
 	postings, err := repo.PostingsForTerm(ctx, "cats")
 	if err != nil {
@@ -711,11 +707,6 @@ func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 			t.Error("expected an error")
 		}
 	})
-	t.Run("DocumentByID", func(t *testing.T) {
-		if _, err := closedRepo(t).DocumentByID(ctx, "doc-1"); err == nil {
-			t.Error("expected an error")
-		}
-	})
 	t.Run("DeleteDocument", func(t *testing.T) {
 		if err := closedRepo(t).DeleteDocument(ctx, "doc-1"); err == nil {
 			t.Error("expected an error")
@@ -764,11 +755,6 @@ func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 			t.Error("expected an error")
 		}
 	})
-	t.Run("SetScheduledCrawlEnabled", func(t *testing.T) {
-		if err := closedRepo(t).SetScheduledCrawlEnabled(ctx, "sched-1", false); err == nil {
-			t.Error("expected an error")
-		}
-	})
 	t.Run("DeleteScheduledCrawl", func(t *testing.T) {
 		if err := closedRepo(t).DeleteScheduledCrawl(ctx, "sched-1"); err == nil {
 			t.Error("expected an error")
@@ -781,6 +767,76 @@ func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 	})
 	t.Run("MarkScheduledCrawlRun", func(t *testing.T) {
 		if err := closedRepo(t).MarkScheduledCrawlRun(ctx, "sched-1", time.Now(), time.Now()); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("AllTerms", func(t *testing.T) {
+		if _, err := closedRepo(t).AllTerms(ctx); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("DocumentIDsByHost", func(t *testing.T) {
+		if _, err := closedRepo(t).DocumentIDsByHost(ctx, []string{"example.com"}); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("LinkGraph", func(t *testing.T) {
+		if _, err := closedRepo(t).LinkGraph(ctx); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("UpdatePageRanks", func(t *testing.T) {
+		if err := closedRepo(t).UpdatePageRanks(ctx, map[string]float64{"doc-1": 0.5}); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("GetSetting", func(t *testing.T) {
+		if _, _, err := closedRepo(t).GetSetting(ctx, "some-key"); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("SaveSetting", func(t *testing.T) {
+		if err := closedRepo(t).SaveSetting(ctx, "some-key", "value"); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("CrawlJobs_Create", func(t *testing.T) {
+		if _, err := closedRepo(t).Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://a"}}); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("CrawlJobs_MarkRunning", func(t *testing.T) {
+		if err := closedRepo(t).MarkRunning(ctx, "job-1"); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("CrawlJobs_AppendPage", func(t *testing.T) {
+		if err := closedRepo(t).AppendPage(ctx, "job-1", domain.CrawlPageEvent{URL: "http://a", Status: domain.CrawlPageIndexed}); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("CrawlJobs_MarkDone", func(t *testing.T) {
+		if err := closedRepo(t).MarkDone(ctx, "job-1"); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("CrawlJobs_MarkFailed", func(t *testing.T) {
+		if err := closedRepo(t).MarkFailed(ctx, "job-1", errors.New("boom")); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("CrawlJobs_Get", func(t *testing.T) {
+		if _, err := closedRepo(t).Get(ctx, "job-1"); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("CrawlJobs_List", func(t *testing.T) {
+		if _, err := closedRepo(t).List(ctx); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("CrawlJobs_PruneCrawlJobs", func(t *testing.T) {
+		if err := closedRepo(t).PruneCrawlJobs(ctx, 10); err == nil {
 			t.Error("expected an error")
 		}
 	})
@@ -1435,8 +1491,7 @@ func TestDocumentsByIDsSortedByCrawledAt_MissingIDsAreOmittedNotErrored(t *testi
 // TestDocumentsByIDsSortedByCrawledAt_OrdersDescendingWithDeterministicTieBreak
 // proves the ordering is pushed down into SQL (idx_documents_crawled_at)
 // rather than left to an in-app sort: most-recently-crawled first, ties
-// broken by id ascending -- the same tie-break domain.SortByCrawledAt used
-// to apply in Go, now expected of the query itself.
+// broken by id ascending.
 func TestDocumentsByIDsSortedByCrawledAt_OrdersDescendingWithDeterministicTieBreak(t *testing.T) {
 	n := atomic.AddInt64(&dsnCounter, 1)
 	dsn := fmt.Sprintf("file:testsortedcrawled%d?mode=memory&cache=shared", n)
@@ -1792,6 +1847,51 @@ func TestRepository_UpdatePageRanks_EmptyIsNoop(t *testing.T) {
 	repo := newTestRepo(t)
 	if err := repo.UpdatePageRanks(context.Background(), map[string]float64{}); err != nil {
 		t.Errorf("expected an empty batch to be a no-op, got error: %v", err)
+	}
+}
+
+// TestRepository_UpdatePageRanks_SpansMultipleBatches proves the chunking
+// in UpdatePageRanks (pageRankUpdateBatchSize documents per UPDATE) doesn't
+// drop or miscount any document at a batch boundary -- more documents than
+// one batch holds, every one of them updated correctly.
+func TestRepository_UpdatePageRanks_SpansMultipleBatches(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+
+	const n = 407 // pageRankUpdateBatchSize is 200, so this spans 3 batches, the last one partial
+	scores := make(map[string]float64, n)
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("doc-%d", i)
+		doc := domain.Document{ID: id, URL: "https://example.com/" + id, Title: id, Text: "text"}
+		if err := repo.SaveDocument(ctx, doc, []float32{1}); err != nil {
+			t.Fatalf("unexpected error saving %s: %v", id, err)
+		}
+		scores[id] = float64(i) / float64(n)
+	}
+
+	if err := repo.UpdatePageRanks(ctx, scores); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	ids := make([]string, 0, n)
+	for id := range scores {
+		ids = append(ids, id)
+	}
+	docs, err := repo.DocumentsByIDs(ctx, ids)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	embeddings, err := repo.EmbeddingsForDocs(ctx, ids)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(docs) != n {
+		t.Fatalf("expected all %d documents back, got %d", n, len(docs))
+	}
+	for id, want := range scores {
+		if got := embeddings[id].PageRank; got != want {
+			t.Errorf("expected %s's pagerank updated to %v, got %v", id, want, got)
+		}
 	}
 }
 

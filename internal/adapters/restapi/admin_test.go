@@ -34,12 +34,14 @@ type fakeAdminRepo struct {
 	err            error
 	deleteErr      error
 	deletedID      string
+	gotLimit       int
 }
 
 func (f *fakeAdminRepo) CorpusStats(context.Context) (int, float64, error) {
 	return f.totalDocs, f.avgDocLen, f.err
 }
-func (f *fakeAdminRepo) VocabularyStats(context.Context, int) (int, []domain.TermStat, error) {
+func (f *fakeAdminRepo) VocabularyStats(_ context.Context, limit int) (int, []domain.TermStat, error) {
+	f.gotLimit = limit
 	return f.vocabularySize, f.topTerms, f.err
 }
 func (f *fakeAdminRepo) ListDocuments(_ context.Context, _ int, host string) ([]domain.IndexedDocument, error) {
@@ -223,6 +225,27 @@ func TestHandleAdminVocabulary_RespectsLimitParam(t *testing.T) {
 	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if repo.gotLimit != 5 {
+		t.Errorf("expected limit=5 to reach VocabularyStats, got %d", repo.gotLimit)
+	}
+}
+
+// TestHandleAdminVocabulary_NonNumericLimitFallsBackToDefault proves
+// intQueryParam's parse-failure branch: a non-numeric ?limit= is treated
+// the same as an absent one, not a 400.
+func TestHandleAdminVocabulary_NonNumericLimitFallsBackToDefault(t *testing.T) {
+	repo := &fakeAdminRepo{vocabularySize: 1}
+	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/vocabulary?limit=not-a-number", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 (fallback to default), got %d", rec.Code)
+	}
+	if repo.gotLimit != 20 {
+		t.Errorf("expected the built-in default limit (20) on a non-numeric value, got %d", repo.gotLimit)
 	}
 }
 
@@ -1371,6 +1394,41 @@ func TestHandleAdminSettings_PostWithoutSettingsStoreStillSucceeds(t *testing.T)
 	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 even with no settings store configured, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// erroringSettingsStore always fails to save, letting a test exercise
+// persistSetting's "SaveSetting failed" log-and-continue branch.
+type erroringSettingsStore struct{}
+
+func (erroringSettingsStore) SaveSetting(context.Context, string, string) error {
+	return errors.New("db unavailable")
+}
+func (erroringSettingsStore) GetSetting(context.Context, string) (string, bool, error) {
+	return "", false, nil
+}
+
+// TestHandleAdminSettings_PostSucceedsDespiteSettingsStoreSaveError proves
+// persistSetting's SaveSetting-error branch is logged and skipped, not
+// fatal: the in-process settings are still applied and the request still
+// succeeds even though this process's edit can't reach the shared store
+// for other processes to pick up.
+func TestHandleAdminSettings_PostSucceedsDespiteSettingsStoreSaveError(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	h, cookie := adminAuthedHandlerWithSettingsStore(t, settings, domain.DefaultOperationalSettings(), nil, erroringSettingsStore{})
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning":      map[string]float64{"alpha": 0.9, "k1": 2.0, "b": 0.2},
+		"operational": map[string]interface{}{"fetch_timeout_seconds": 3, "user_agent": "x", "default_max_pages": 5, "min_text_length": 1, "default_top_k": 1, "session_ttl_hours": 1, "crawl_delay_ms": 1, "max_response_kb": 1},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 despite the settings store failing to save, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if alpha, _, _ := settings.Get(); alpha != 0.9 {
+		t.Errorf("expected the in-process tuning settings applied regardless, got alpha=%v", alpha)
 	}
 }
 

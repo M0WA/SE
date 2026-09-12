@@ -595,3 +595,85 @@ func TestParseSitemap_InvalidXMLReturnsNil(t *testing.T) {
 		t.Errorf("expected nil for invalid XML, got %v", urls)
 	}
 }
+
+// TestCrawlLoop_NonPositiveMaxPagesUsesOperationalDefault proves
+// crawlLoop's own fallback: opts.MaxPages<=0 defers to
+// settings.Get().DefaultMaxPages (20, the nil-safe built-in default here)
+// rather than crawling nothing at all.
+func TestCrawlLoop_NonPositiveMaxPagesUsesOperationalDefault(t *testing.T) {
+	fetcher := &scopedFetcher{pages: map[string]string{
+		"http://a/1": `<html><head><title>T</title></head><body>genuegend inhalt text fuer diese seite<a href="http://a/2">n</a></body></html>`,
+		"http://a/2": `<html><head><title>T</title></head><body>genuegend inhalt text fuer diese seite<a href="http://a/3">n</a></body></html>`,
+		"http://a/3": `<html><head><title>T</title></head><body>genuegend inhalt text fuer diese seite</body></html>`,
+	}}
+	parse := fakeHTMLParser(fetcher.pages)
+	save := func(context.Context, domain.Document) error { return nil }
+
+	opts := ports.CrawlOptions{SeedURLs: []string{"http://a/1"}, MaxPages: 0}
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// All 3 linked pages must be crawlable -- if MaxPages<=0 fell back to 0
+	// instead of the operational default, the loop's own "crawled < maxPages"
+	// condition would never let a single page through.
+	if count != 3 {
+		t.Errorf("expected all 3 linked pages crawled under the default max-pages budget, got %d", count)
+	}
+}
+
+// TestCrawlLoop_NonHTTPSeedIsSkippedEntirely proves the dequeue loop's
+// "!isHTTP(u)" branch: a malformed/non-HTTP seed URL is neither fetched
+// nor (with UseSitemap on) used to build a sitemap.xml URL -- it's simply
+// skipped, not an error.
+func TestCrawlLoop_NonHTTPSeedIsSkippedEntirely(t *testing.T) {
+	fetcher := &scopedFetcher{}
+	parse := func(string, string) (string, string, []string) { return "", "", nil }
+	save := func(context.Context, domain.Document) error { return nil }
+
+	opts := ports.CrawlOptions{SeedURLs: []string{"ftp://example.com/"}, MaxPages: 5, UseSitemap: true}
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected nothing crawled for a non-HTTP seed, got %d", count)
+	}
+	if len(fetcher.urls) != 0 {
+		t.Errorf("expected zero fetch attempts (no sitemap fetch, no page fetch) for a non-HTTP seed, got %v", fetcher.urls)
+	}
+}
+
+// fakeHTMLParser builds a parseHTML func backed by a map of page URL to
+// its raw HTML, extracting <a href> links via a tiny ad-hoc scan --
+// enough for crawlLoop tests that need real link discovery without
+// pulling in the full htmlparser package.
+func fakeHTMLParser(pages map[string]string) func(string, string) (string, string, []string) {
+	return func(html, pageURL string) (string, string, []string) {
+		var links []string
+		rest := html
+		for {
+			i := indexOf(rest, `href="`)
+			if i == -1 {
+				break
+			}
+			rest = rest[i+len(`href="`):]
+			j := indexOf(rest, `"`)
+			if j == -1 {
+				break
+			}
+			links = append(links, rest[:j])
+			rest = rest[j:]
+		}
+		return "T", "genuegend inhalt text fuer diese seite bitte danke", links
+	}
+}
+
+func indexOf(s, substr string) int {
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
+}

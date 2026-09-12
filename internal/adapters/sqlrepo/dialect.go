@@ -1,5 +1,7 @@
 package sqlrepo
 
+import "strconv"
+
 type Dialect interface {
 	Name() string
 	Placeholder(argPosition int) string
@@ -157,7 +159,7 @@ type postgresDialect struct{}
 
 func (postgresDialect) Name() string { return "postgres" }
 func (postgresDialect) Placeholder(pos int) string {
-	return "$" + itoa(pos)
+	return "$" + strconv.Itoa(pos)
 }
 func (postgresDialect) UpsertDocumentSQL() string {
 	return `INSERT INTO documents (id, url, title, text, doc_length, embedding, norm_embedding, pagerank, host, version, crawled_at)
@@ -225,18 +227,6 @@ func (postgresDialect) CreateSchemaSQL() []string {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_crawl_job_pages_job_id ON crawl_job_pages(job_id)`,
 	}
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	digits := []byte{}
-	for n > 0 {
-		digits = append([]byte{byte('0' + n%10)}, digits...)
-		n /= 10
-	}
-	return string(digits)
 }
 
 func NewDialect(driverName string) Dialect {

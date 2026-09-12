@@ -80,6 +80,34 @@ function snippetCell(html) {
   return td;
 }
 
+// urlCell builds a <td class="url"> for a raw URL/text value -- shared by
+// the crawl and schedules admin pages' job/schedule tables.
+function urlCell(text) {
+  const td = document.createElement('td');
+  td.className = 'url';
+  td.textContent = text;
+  return td;
+}
+
+// seedSummary renders a crawl's seed URL list as "first +N more" (or
+// "(no seed)" for an empty list) -- shared by the crawl job table and the
+// schedules table.
+function seedSummary(seedURLs) {
+  const urls = seedURLs || [];
+  if (urls.length === 0) return '(no seed)';
+  return urls.length === 1 ? urls[0] : urls[0] + ' +' + (urls.length - 1) + ' more';
+}
+
+// formatTimestamp renders an ISO timestamp for display, or an em-dash for
+// an empty/missing one. opts.timeOnly renders just the time (for a
+// same-page list of events that's already scoped to one job); otherwise
+// renders the full local date and time.
+function formatTimestamp(iso, opts) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return (opts && opts.timeOnly) ? d.toLocaleTimeString() : d.toLocaleString();
+}
+
 // buildTable assembles a <table> from a header spec ({label, num?}[]) and
 // one or more data rows, delegating each row's <td> cells to cellsForRow
 // so callers can mix textCell with richer custom cells (links, buttons).

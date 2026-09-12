@@ -236,3 +236,16 @@ func TestParsedQuery_Matches_NoConstraintsAlwaysTrue(t *testing.T) {
 		t.Error("expected a plain query with no operators to match unconditionally")
 	}
 }
+
+// TestParsedQuery_MatchesTokens_NoConstraintsAlwaysTrue exercises
+// MatchesTokens directly (not through the Matches wrapper, which never
+// even calls it when the query has no constraints) -- a caller like
+// hybrid_search_service.go, which calls MatchesTokens unconditionally
+// whenever ranking overrides are configured, must still get "always
+// matches" for a plain query with no operators, regardless of tokens.
+func TestParsedQuery_MatchesTokens_NoConstraintsAlwaysTrue(t *testing.T) {
+	q := domain.ParseQuery("katzen")
+	if !q.MatchesTokens(nil, "anything", "anything at all") {
+		t.Error("expected a plain query with no operators to match unconditionally")
+	}
+}

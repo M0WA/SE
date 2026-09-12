@@ -98,23 +98,6 @@
     return text.split('\n').map((s) => normalizeURL(s)).filter(Boolean);
   }
 
-  function seedSummary(seedURLs) {
-    const urls = seedURLs || [];
-    if (urls.length === 0) return '(no seed)';
-    return urls.length === 1 ? urls[0] : urls[0] + ' +' + (urls.length - 1) + ' more';
-  }
-
-  function formatTimestamp(iso) {
-    return iso ? new Date(iso).toLocaleString() : '—';
-  }
-
-  function urlCell(text) {
-    const td = document.createElement('td');
-    td.className = 'url';
-    td.textContent = text;
-    return td;
-  }
-
   function requestBodyFor(s) {
     return {
       seed_urls: s.seed_urls,

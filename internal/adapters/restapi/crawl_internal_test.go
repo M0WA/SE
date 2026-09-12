@@ -2,10 +2,12 @@ package restapi_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +18,67 @@ import (
 
 func newCrawlServerHandler(crawler *fakeCrawler) *restapi.Handler {
 	return restapi.New(restapi.Config{Crawler: crawler, CrawlJobs: domain.NewCrawlJobStore()})
+}
+
+// erroringCrawlJobStore wraps a real ports.CrawlJobStore, letting a test
+// force any one method to fail (and counting how many times it was
+// called) while every other method still call through normally -- proves
+// both that TriggerCrawl/handleListCrawlJobs/handleGetCrawlJob surface a
+// store error as a 500 (or 400, for TriggerCrawl) rather than crashing,
+// and that runCrawlJob logs and continues past a store error mid-crawl
+// rather than losing already-crawled pages over it.
+type erroringCrawlJobStore struct {
+	ports.CrawlJobStore
+	createErr, markRunningErr, appendPageErr, markDoneErr, markFailedErr, getErr, listErr error
+	createCalls, markRunningCalls, appendPageCalls, markDoneCalls, markFailedCalls        int32
+}
+
+func (e *erroringCrawlJobStore) Create(ctx context.Context, req domain.CrawlJobRequest) (domain.CrawlJob, error) {
+	atomic.AddInt32(&e.createCalls, 1)
+	if e.createErr != nil {
+		return domain.CrawlJob{}, e.createErr
+	}
+	return e.CrawlJobStore.Create(ctx, req)
+}
+func (e *erroringCrawlJobStore) MarkRunning(ctx context.Context, id string) error {
+	atomic.AddInt32(&e.markRunningCalls, 1)
+	if e.markRunningErr != nil {
+		return e.markRunningErr
+	}
+	return e.CrawlJobStore.MarkRunning(ctx, id)
+}
+func (e *erroringCrawlJobStore) AppendPage(ctx context.Context, id string, ev domain.CrawlPageEvent) error {
+	atomic.AddInt32(&e.appendPageCalls, 1)
+	if e.appendPageErr != nil {
+		return e.appendPageErr
+	}
+	return e.CrawlJobStore.AppendPage(ctx, id, ev)
+}
+func (e *erroringCrawlJobStore) MarkDone(ctx context.Context, id string) error {
+	atomic.AddInt32(&e.markDoneCalls, 1)
+	if e.markDoneErr != nil {
+		return e.markDoneErr
+	}
+	return e.CrawlJobStore.MarkDone(ctx, id)
+}
+func (e *erroringCrawlJobStore) MarkFailed(ctx context.Context, id string, failErr error) error {
+	atomic.AddInt32(&e.markFailedCalls, 1)
+	if e.markFailedErr != nil {
+		return e.markFailedErr
+	}
+	return e.CrawlJobStore.MarkFailed(ctx, id, failErr)
+}
+func (e *erroringCrawlJobStore) Get(ctx context.Context, id string) (domain.CrawlJob, error) {
+	if e.getErr != nil {
+		return domain.CrawlJob{}, e.getErr
+	}
+	return e.CrawlJobStore.Get(ctx, id)
+}
+func (e *erroringCrawlJobStore) List(ctx context.Context) ([]domain.CrawlJobSummary, error) {
+	if e.listErr != nil {
+		return nil, e.listErr
+	}
+	return e.CrawlJobStore.List(ctx)
 }
 
 func startCrawl(t *testing.T, h *restapi.Handler, opts ports.CrawlOptions) string {
@@ -263,5 +326,125 @@ func TestHandleCrawlInternal_ConcurrentJobsAllComplete(t *testing.T) {
 		if job.Status != domain.CrawlJobDone {
 			t.Errorf("expected job %s done, got %s", id, job.Status)
 		}
+	}
+}
+
+// pageEmittingFakeCrawler actually invokes onPage (unlike fakeCrawler,
+// which never does), for tests that need runCrawlJob's AppendPage call to
+// actually fire.
+type pageEmittingFakeCrawler struct{}
+
+func (pageEmittingFakeCrawler) Crawl(_ context.Context, _ ports.CrawlOptions, onPage func(domain.CrawlPageEvent)) (int, error) {
+	onPage(domain.CrawlPageEvent{URL: "http://a", Status: domain.CrawlPageIndexed})
+	return 1, nil
+}
+
+func TestTriggerCrawl_StoreCreateErrorPropagates(t *testing.T) {
+	store := &erroringCrawlJobStore{CrawlJobStore: domain.NewCrawlJobStore(), createErr: errors.New("db unavailable")}
+	h := restapi.New(restapi.Config{Crawler: &fakeCrawler{}, CrawlJobs: store})
+
+	body, _ := json.Marshal(ports.CrawlOptions{SeedURLs: []string{"http://a"}})
+	req := httptest.NewRequest(http.MethodPost, "/crawl", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.RoutesCrawlInternal().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 when the store fails to create a job, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if atomic.LoadInt32(&store.createCalls) != 1 {
+		t.Errorf("expected exactly 1 Create call, got %d", atomic.LoadInt32(&store.createCalls))
+	}
+}
+
+func TestHandleListCrawlJobs_StoreErrorReturns500(t *testing.T) {
+	store := &erroringCrawlJobStore{CrawlJobStore: domain.NewCrawlJobStore(), listErr: errors.New("db unavailable")}
+	h := restapi.New(restapi.Config{Crawler: &fakeCrawler{}, CrawlJobs: store})
+
+	req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesCrawlInternal().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 when the store fails to list jobs, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleGetCrawlJob_StoreErrorReturns500(t *testing.T) {
+	store := &erroringCrawlJobStore{CrawlJobStore: domain.NewCrawlJobStore(), getErr: errors.New("db unavailable")}
+	h := restapi.New(restapi.Config{Crawler: &fakeCrawler{}, CrawlJobs: store})
+
+	req := httptest.NewRequest(http.MethodGet, "/jobs/job-1", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesCrawlInternal().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 for a non-not-found store error, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestRunCrawlJob_StoreErrorsAreLoggedNotFatal proves runCrawlJob's own
+// doc comment: a store failure on any single bookkeeping call (marking
+// running, appending a page, marking done) is logged and the crawl
+// continues to completion rather than losing already-crawled pages over
+// it.
+func TestRunCrawlJob_StoreErrorsAreLoggedNotFatal(t *testing.T) {
+	store := &erroringCrawlJobStore{
+		CrawlJobStore:  domain.NewCrawlJobStore(),
+		markRunningErr: errors.New("mark running failed"),
+		appendPageErr:  errors.New("append page failed"),
+	}
+	h := restapi.New(restapi.Config{Crawler: pageEmittingFakeCrawler{}, CrawlJobs: store})
+
+	jobID := startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"http://a"}})
+	job := waitForJob(t, h, jobID)
+
+	if job.Status != domain.CrawlJobDone {
+		t.Errorf("expected the crawl to still complete despite MarkRunning/AppendPage errors, got %s", job.Status)
+	}
+	if atomic.LoadInt32(&store.markRunningCalls) != 1 {
+		t.Errorf("expected exactly 1 MarkRunning call, got %d", atomic.LoadInt32(&store.markRunningCalls))
+	}
+	if atomic.LoadInt32(&store.appendPageCalls) != 1 {
+		t.Errorf("expected exactly 1 AppendPage call, got %d", atomic.LoadInt32(&store.appendPageCalls))
+	}
+	if atomic.LoadInt32(&store.markDoneCalls) != 1 {
+		t.Errorf("expected MarkDone still called despite the earlier errors, got %d", atomic.LoadInt32(&store.markDoneCalls))
+	}
+}
+
+// TestRunCrawlJob_MarkDoneStoreErrorIsLoggedNotFatal exercises the
+// MarkDone-fails-on-an-otherwise-successful-crawl branch: logged, not
+// fatal -- the crawl goroutine still exits cleanly rather than panicking
+// or hanging.
+func TestRunCrawlJob_MarkDoneStoreErrorIsLoggedNotFatal(t *testing.T) {
+	store := &erroringCrawlJobStore{CrawlJobStore: domain.NewCrawlJobStore(), markDoneErr: errors.New("mark done failed")}
+	h := restapi.New(restapi.Config{Crawler: &fakeCrawler{count: 1}, CrawlJobs: store})
+
+	startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"http://a"}})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for atomic.LoadInt32(&store.markDoneCalls) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if atomic.LoadInt32(&store.markDoneCalls) != 1 {
+		t.Errorf("expected exactly 1 MarkDone call, got %d", atomic.LoadInt32(&store.markDoneCalls))
+	}
+}
+
+// TestRunCrawlJob_MarkFailedStoreErrorIsLoggedNotFatal exercises the
+// MarkFailed-also-errors branch: a crawl that itself fails, on a store
+// that also fails to record the failure, must not panic or hang.
+func TestRunCrawlJob_MarkFailedStoreErrorIsLoggedNotFatal(t *testing.T) {
+	store := &erroringCrawlJobStore{CrawlJobStore: domain.NewCrawlJobStore(), markFailedErr: errors.New("mark failed failed")}
+	h := restapi.New(restapi.Config{Crawler: &fakeCrawler{err: errors.New("crawl failed")}, CrawlJobs: store})
+
+	startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"http://a"}})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for atomic.LoadInt32(&store.markFailedCalls) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if atomic.LoadInt32(&store.markFailedCalls) != 1 {
+		t.Errorf("expected exactly 1 MarkFailed call, got %d", atomic.LoadInt32(&store.markFailedCalls))
 	}
 }

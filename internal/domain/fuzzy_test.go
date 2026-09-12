@@ -20,6 +20,22 @@ func TestNearestTerm_FindsSingleTypoWithinDistanceOne(t *testing.T) {
 	}
 }
 
+// TestNearestTerm_SkipsTermsRuledOutByLengthAlone proves the cheap
+// length-difference pre-filter actually excludes a vocabulary term whose
+// length alone already rules it out, without needing the full Levenshtein
+// DP to reach the same conclusion.
+func TestNearestTerm_SkipsTermsRuledOutByLengthAlone(t *testing.T) {
+	vocabulary := []domain.TermStat{
+		// Length differs from "cat" (3) by 8 -- far more than maxDistance
+		// (1) could ever bridge, so this must be skipped by the length
+		// check alone, never reaching levenshtein.
+		{Term: "caterpillars", DocFreq: 1, TotalFreq: 1},
+	}
+	if _, _, found := domain.NearestTerm("cat", vocabulary, 1); found {
+		t.Error("expected no match: the only vocabulary term is ruled out by length alone")
+	}
+}
+
 func TestNearestTerm_PrefersSmallerDistance(t *testing.T) {
 	// "catss" -> "cats": delete the extra trailing 's' = distance 1.
 	// "catss" -> "dogss": 3 substitutions ("cat"->"dog") = distance 3, far
