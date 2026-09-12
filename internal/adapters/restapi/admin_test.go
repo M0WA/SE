@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ type fakeAdminRepo struct {
 	versions       []domain.DocumentVersion
 	overview       domain.DocumentsOverview
 	postings       []domain.PostingStats
+	postingsDocs   map[string]domain.Document
 	err            error
 	deleteErr      error
 	deletedID      string
@@ -66,6 +68,9 @@ func (f *fakeAdminRepo) DeleteDocument(_ context.Context, id string) error {
 }
 func (f *fakeAdminRepo) PostingsForTerm(context.Context, string) ([]domain.PostingStats, error) {
 	return f.postings, f.err
+}
+func (f *fakeAdminRepo) DocumentsByIDs(context.Context, []string) (map[string]domain.Document, error) {
+	return f.postingsDocs, f.err
 }
 
 type fakeDebugSearch struct {
@@ -600,6 +605,31 @@ func TestHandleAdminDomainPage_Unauthenticated_Redirects(t *testing.T) {
 	}
 }
 
+func TestHandleAdminVocabularyTermPage_GetServesPage(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/vocabulary/term?term=cats", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+		t.Errorf("expected html content type, got %q", ct)
+	}
+}
+
+func TestHandleAdminVocabularyTermPage_Unauthenticated_Redirects(t *testing.T) {
+	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	req := httptest.NewRequest(http.MethodGet, "/admin/vocabulary/term?term=cats", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Errorf("expected 303 redirect, got %d", rec.Code)
+	}
+}
+
 func TestHandleAdminPostings_Success(t *testing.T) {
 	postings := []domain.PostingStats{{DocID: "doc-0", TermFreq: 3, DocLength: 10, DocFreq: 1}}
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{postings: postings}, &fakeDebugSearch{})
@@ -622,6 +652,44 @@ func TestHandleAdminPostings_Success(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if resp.Term != "katzen" || resp.DocFreq != 1 || len(resp.Postings) != 1 || resp.Postings[0].TermFreq != 3 {
 		t.Errorf("unexpected postings response: %+v", resp)
+	}
+}
+
+// TestHandleAdminPostings_IncludesURLTitleAndSnippet verifies the
+// vocabulary term-detail view's enrichment: each posting's URL, title, and
+// a match excerpt (built from the fetched document's text), not just the
+// raw doc_id/term_freq/doc_length triple.
+func TestHandleAdminPostings_IncludesURLTitleAndSnippet(t *testing.T) {
+	postings := []domain.PostingStats{{DocID: "doc-0", TermFreq: 3, DocLength: 10, DocFreq: 1}}
+	docs := map[string]domain.Document{
+		"doc-0": {ID: "doc-0", URL: "http://a", Title: "Katzen", Text: "Katzen sind toll und flauschig"},
+	}
+	repo := &fakeAdminRepo{postings: postings, postingsDocs: docs}
+	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/postings?term=katzen", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var resp struct {
+		Postings []struct {
+			URL     string `json:"url"`
+			Title   string `json:"title"`
+			Snippet string `json:"snippet"`
+		} `json:"postings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(resp.Postings) != 1 {
+		t.Fatalf("expected 1 posting, got %+v", resp.Postings)
+	}
+	p := resp.Postings[0]
+	if p.URL != "http://a" || p.Title != "Katzen" || !strings.Contains(p.Snippet, "<mark>") {
+		t.Errorf("expected URL/title/highlighted snippet, got %+v", p)
 	}
 }
 

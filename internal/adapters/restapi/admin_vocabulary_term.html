@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — term</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<main>
+  <div class="page-header">
+    <a class="mark" href="/">se.</a>
+    <button id="sign-out" class="text-button" type="button">Sign out</button>
+  </div>
+  <a class="back" href="/admin">Back to Overview</a>
+
+  <div class="domain-head" id="term-head">
+    <h3 id="term-title">Loading…</h3>
+    <span class="domain-head-tail" id="term-tail"></span>
+  </div>
+  <div id="term-status" class="panel-status"></div>
+  <div id="term-table"></div>
+</main>
+<script src="/admin.js"></script>
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const term = params.get('term') || '';
+
+  const titleEl = document.getElementById('term-title');
+  const tailEl = document.getElementById('term-tail');
+  const statusEl = document.getElementById('term-status');
+  const tableEl = document.getElementById('term-table');
+
+  document.title = 'se. — ' + (term || 'term');
+  titleEl.textContent = term || '(no term given)';
+
+  function renderPostings(data) {
+    tailEl.appendChild((() => {
+      const span = document.createElement('span');
+      span.className = 'domain-metrics';
+      span.textContent = data.postings.length + (data.postings.length === 1 ? ' page' : ' pages') +
+        ' · appears in ' + data.doc_freq + (data.doc_freq === 1 ? ' document' : ' documents') + ' total';
+      return span;
+    })());
+
+    if (data.postings.length === 0) {
+      statusEl.textContent = 'No pages contain “' + term + '”.';
+      return;
+    }
+
+    // Highest term frequency first -- the strongest matches for this term
+    // lead the list, same ordering convention as the search debug page's
+    // BM25 term breakdown.
+    const sorted = data.postings.slice().sort((a, b) => b.term_freq - a.term_freq);
+
+    const table = buildTable(
+      [{ label: 'url' }, { label: 'excerpt' }, { label: 'term freq', num: true }, { label: 'doc length', num: true }],
+      sorted,
+      (p) => {
+        const link = document.createElement('a');
+        link.href = p.url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.style.color = 'var(--ink)';
+        link.textContent = p.title || p.url;
+        const urlDiv = document.createElement('div');
+        urlDiv.className = 'url';
+        urlDiv.textContent = p.url;
+        const titleTd = document.createElement('td');
+        titleTd.appendChild(link);
+        titleTd.appendChild(urlDiv);
+
+        return [
+          titleTd,
+          snippetCell(p.snippet),
+          textCell(String(p.term_freq), { num: true }),
+          textCell(String(p.doc_length), { num: true }),
+        ];
+      },
+    );
+    tableEl.appendChild(table);
+  }
+
+  async function load() {
+    if (!term) {
+      statusEl.textContent = 'This page needs a term in its URL — open it from the Vocabulary list instead of directly.';
+      return;
+    }
+    try {
+      const data = await getJSON('/admin/api/postings?term=' + encodeURIComponent(term));
+      renderPostings(data);
+    } catch (err) {
+      statusEl.textContent = 'Could not load pages for “' + term + '”: ' + err.message;
+    }
+  }
+
+  wireSignOut();
+  load();
+</script>
+</body>
+</html>

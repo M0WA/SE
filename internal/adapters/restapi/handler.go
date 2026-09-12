@@ -36,6 +36,9 @@ var adminSearchHTML []byte
 //go:embed admin_search_result.html
 var adminSearchResultHTML []byte
 
+//go:embed admin_vocabulary_term.html
+var adminVocabularyTermHTML []byte
+
 //go:embed admin_overrides.html
 var adminOverridesHTML []byte
 
@@ -176,6 +179,7 @@ func (h *Handler) RoutesAdmin() *http.ServeMux {
 	mux.HandleFunc("/admin", h.requireAuthPage(h.handleAdminPage))
 	mux.HandleFunc("/admin/documents", h.requireAuthPage(h.handleAdminDocumentsPage))
 	mux.HandleFunc("/admin/documents/{host}", h.requireAuthPage(h.handleAdminDomainPage))
+	mux.HandleFunc("/admin/vocabulary/term", h.requireAuthPage(h.handleAdminVocabularyTermPage))
 	mux.HandleFunc("/admin/crawl", h.requireAuthPage(h.handleAdminCrawlPage))
 	mux.HandleFunc("/admin/tuning", h.requireAuthPage(h.handleAdminTuningPage))
 	mux.HandleFunc("/admin/search", h.requireAuthPage(h.handleAdminSearchPage))

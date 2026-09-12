@@ -83,6 +83,14 @@ func (h *Handler) handleAdminDomainPage(w http.ResponseWriter, r *http.Request) 
 	serveStatic(w, r, "text/html; charset=utf-8", adminDomainHTML)
 }
 
+// handleAdminVocabularyTermPage serves the vocabulary term-detail subpage
+// template; like handleAdminDomainPage, the term itself is read client-side
+// from the page's own URL querystring, so the same static page works for
+// every term.
+func (h *Handler) handleAdminVocabularyTermPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminVocabularyTermHTML)
+}
+
 func (h *Handler) handleAdminTuningPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/html; charset=utf-8", adminTuningHTML)
 }
@@ -316,6 +324,9 @@ func (h *Handler) handleAdminDeleteDocument(w http.ResponseWriter, r *http.Reque
 
 type adminPosting struct {
 	DocID     string `json:"doc_id"`
+	URL       string `json:"url"`
+	Title     string `json:"title"`
+	Snippet   string `json:"snippet"`
 	TermFreq  int    `json:"term_freq"`
 	DocLength int    `json:"doc_length"`
 }
@@ -325,6 +336,12 @@ type adminPostingsResponse struct {
 	DocFreq  int            `json:"doc_freq"`
 	Postings []adminPosting `json:"postings"`
 }
+
+// postingsSnippetMaxLen bounds each match excerpt built for the vocabulary
+// term-detail view -- the same length the public/debug search snippet uses
+// (see domain.Snippet's callers in hybrid_search_service.go), so an excerpt
+// here reads the same as everywhere else in the admin UI.
+const postingsSnippetMaxLen = 200
 
 func (h *Handler) handleAdminPostings(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
@@ -340,12 +357,26 @@ func (h *Handler) handleAdminPostings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	ids := make([]string, len(postings))
+	for i, p := range postings {
+		ids[i] = p.DocID
+	}
+	docs, err := h.admin.DocumentsByIDs(r.Context(), ids)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	resp := adminPostingsResponse{Term: term, Postings: make([]adminPosting, len(postings))}
 	if len(postings) > 0 {
 		resp.DocFreq = postings[0].DocFreq
 	}
 	for i, p := range postings {
-		resp.Postings[i] = adminPosting{DocID: p.DocID, TermFreq: p.TermFreq, DocLength: p.DocLength}
+		doc := docs[p.DocID]
+		resp.Postings[i] = adminPosting{
+			DocID: p.DocID, URL: doc.URL, Title: doc.Title,
+			Snippet:  domain.Snippet(doc.Text, []string{term}, postingsSnippetMaxLen),
+			TermFreq: p.TermFreq, DocLength: p.DocLength,
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

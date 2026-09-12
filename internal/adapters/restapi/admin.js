@@ -179,11 +179,20 @@ async function loadVocabulary(search) {
     const table = buildTable(
       [{ label: 'term' }, { label: 'doc freq', num: true }, { label: 'total freq', num: true }],
       v.top_terms,
-      (t) => [
-        textCell(t.term),
-        textCell(String(t.doc_freq), { num: true }),
-        textCell(String(t.total_freq), { num: true }),
-      ],
+      (t) => {
+        const link = document.createElement('a');
+        link.href = '/admin/vocabulary/term?term=' + encodeURIComponent(t.term);
+        link.style.color = 'var(--ink)';
+        link.textContent = t.term;
+        link.title = 'See which pages contain this term';
+        const termTd = document.createElement('td');
+        termTd.appendChild(link);
+        return [
+          termTd,
+          textCell(String(t.doc_freq), { num: true }),
+          textCell(String(t.total_freq), { num: true }),
+        ];
+      },
     );
     tableEl.appendChild(table);
   } catch (err) {

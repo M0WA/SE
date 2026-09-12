@@ -183,6 +183,10 @@ type AdminRepository interface {
 	DocumentVersions(ctx context.Context, docID string) ([]domain.DocumentVersion, error)
 	DocumentsOverview(ctx context.Context, topDomains int) (domain.DocumentsOverview, error)
 	PostingsForTerm(ctx context.Context, term string) ([]domain.PostingStats, error)
+	// DocumentsByIDs backs the vocabulary term-detail view: given
+	// PostingsForTerm's doc IDs, fetch each document's URL/title/text so a
+	// match excerpt can be built for it.
+	DocumentsByIDs(ctx context.Context, ids []string) (map[string]domain.Document, error)
 	DeleteDocument(ctx context.Context, docID string) error
 }
 
