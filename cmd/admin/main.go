@@ -66,6 +66,7 @@ func main() {
 		SettingsStore:   repo,
 		ScheduledCrawls: repo,
 		Health:          repo,
+		Sessions:        repo,
 		DBDriver:        driver,
 		AdminUser:       adminUser,
 		AdminPass:       adminPass,

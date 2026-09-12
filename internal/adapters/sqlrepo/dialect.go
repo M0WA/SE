@@ -79,6 +79,10 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			fetched_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_crawl_job_pages_job_id ON crawl_job_pages(job_id)`,
+		`CREATE TABLE IF NOT EXISTS sessions (
+			token TEXT PRIMARY KEY, expires_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
 	}
 }
 
@@ -152,6 +156,10 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			FOREIGN KEY (job_id) REFERENCES crawl_jobs(id) ON DELETE CASCADE
 		) ENGINE=InnoDB`,
 		`CREATE INDEX idx_crawl_job_pages_job_id ON crawl_job_pages(job_id)`,
+		`CREATE TABLE IF NOT EXISTS sessions (
+			token VARCHAR(64) PRIMARY KEY, expires_at VARCHAR(64) NOT NULL
+		) ENGINE=InnoDB`,
+		`CREATE INDEX idx_sessions_expires_at ON sessions(expires_at)`,
 	}
 }
 
@@ -226,6 +234,10 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			fetched_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_crawl_job_pages_job_id ON crawl_job_pages(job_id)`,
+		`CREATE TABLE IF NOT EXISTS sessions (
+			token TEXT PRIMARY KEY, expires_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
 	}
 }
 

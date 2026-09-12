@@ -108,8 +108,9 @@ func authedHandler(t *testing.T, search *fakeSearch, jobs ports.CrawlJobService)
 }
 
 func TestHandleIndex_Success(t *testing.T) {
-	h := restapi.New(restapi.Config{Search: &fakeSearch{}})
+	h, cookie := authedHandler(t, &fakeSearch{}, nil)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
 
@@ -124,9 +125,24 @@ func TestHandleIndex_Success(t *testing.T) {
 	}
 }
 
+func TestHandleIndex_Unauthenticated_Redirects(t *testing.T) {
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303 redirect, got %d", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/login?next=%2F" {
+		t.Errorf("expected redirect to login with next=/, got %q", loc)
+	}
+}
+
 func TestHandleIndex_HeadRequestAllowed(t *testing.T) {
-	h := restapi.New(restapi.Config{Search: &fakeSearch{}})
+	h, cookie := authedHandler(t, &fakeSearch{}, nil)
 	req := httptest.NewRequest(http.MethodHead, "/", nil)
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
 
@@ -139,8 +155,9 @@ func TestHandleIndex_HeadRequestAllowed(t *testing.T) {
 }
 
 func TestHandleIndex_MethodNotAllowed(t *testing.T) {
-	h := restapi.New(restapi.Config{Search: &fakeSearch{}})
+	h, cookie := authedHandler(t, &fakeSearch{}, nil)
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
 
@@ -150,8 +167,9 @@ func TestHandleIndex_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHandleIndex_UnknownPathStill404s(t *testing.T) {
-	h := restapi.New(restapi.Config{Search: &fakeSearch{}})
+	h, cookie := authedHandler(t, &fakeSearch{}, nil)
 	req := httptest.NewRequest(http.MethodGet, "/nonexistent", nil)
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
 
@@ -242,9 +260,10 @@ func TestHandleAdminJS_MethodNotAllowed(t *testing.T) {
 
 func TestHandleSearch_Success(t *testing.T) {
 	fs := &fakeSearch{results: []domain.SearchResult{{URL: "http://a", Score: 1}}}
-	h := restapi.New(restapi.Config{Search: fs})
+	h, cookie := authedHandler(t, fs, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen&top_k=5", nil)
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
 
@@ -253,6 +272,17 @@ func TestHandleSearch_Success(t *testing.T) {
 	}
 	if fs.gotQ != "katzen" || fs.gotOpts.TopK != 5 {
 		t.Errorf("unexpected arguments to Search: %q %d", fs.gotQ, fs.gotOpts.TopK)
+	}
+}
+
+func TestHandleSearch_Unauthenticated_Returns401(t *testing.T) {
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
+	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", rec.Code)
 	}
 }
 
@@ -265,9 +295,10 @@ func TestHandleSearch_SurfacesCorrectedTerms(t *testing.T) {
 		URL: "http://a", Score: 1,
 		CorrectedTerms: []domain.CorrectedTerm{{Original: "katzn", Corrected: "katzen"}},
 	}}}
-	h := restapi.New(restapi.Config{Search: fs})
+	h, cookie := authedHandler(t, fs, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/search?q=katzn", nil)
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
 
@@ -293,8 +324,9 @@ func TestHandleSearch_SurfacesCorrectedTerms(t *testing.T) {
 
 func TestHandleSearch_DefaultTopK(t *testing.T) {
 	fs := &fakeSearch{}
-	h := restapi.New(restapi.Config{Search: fs})
+	h, cookie := authedHandler(t, fs, nil)
 	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen", nil)
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
 	if fs.gotOpts.TopK != 10 {
@@ -304,8 +336,9 @@ func TestHandleSearch_DefaultTopK(t *testing.T) {
 
 func TestHandleSearch_DefaultSortIsRelevance(t *testing.T) {
 	fs := &fakeSearch{}
-	h := restapi.New(restapi.Config{Search: fs})
+	h, cookie := authedHandler(t, fs, nil)
 	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen", nil)
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
 	if fs.gotOpts.Sort != ports.SortRelevance {
@@ -315,8 +348,9 @@ func TestHandleSearch_DefaultSortIsRelevance(t *testing.T) {
 
 func TestHandleSearch_SortRecencyPassesThrough(t *testing.T) {
 	fs := &fakeSearch{}
-	h := restapi.New(restapi.Config{Search: fs})
+	h, cookie := authedHandler(t, fs, nil)
 	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen&sort=recency", nil)
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
 	if fs.gotOpts.Sort != ports.SortRecency {
@@ -326,8 +360,9 @@ func TestHandleSearch_SortRecencyPassesThrough(t *testing.T) {
 
 func TestHandleSearch_UnrecognizedSortFallsBackToRelevance(t *testing.T) {
 	fs := &fakeSearch{}
-	h := restapi.New(restapi.Config{Search: fs})
+	h, cookie := authedHandler(t, fs, nil)
 	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen&sort=bogus", nil)
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
 	if fs.gotOpts.Sort != ports.SortRelevance {
@@ -336,8 +371,9 @@ func TestHandleSearch_UnrecognizedSortFallsBackToRelevance(t *testing.T) {
 }
 
 func TestHandleSearch_MethodNotAllowed(t *testing.T) {
-	h := restapi.New(restapi.Config{Search: &fakeSearch{}})
+	h, cookie := authedHandler(t, &fakeSearch{}, nil)
 	req := httptest.NewRequest(http.MethodPost, "/search", nil)
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -347,8 +383,9 @@ func TestHandleSearch_MethodNotAllowed(t *testing.T) {
 
 func TestHandleSearch_ServiceError(t *testing.T) {
 	fs := &fakeSearch{err: errors.New("invalid request")}
-	h := restapi.New(restapi.Config{Search: fs})
+	h, cookie := authedHandler(t, fs, nil)
 	req := httptest.NewRequest(http.MethodGet, "/search?q=", nil)
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {

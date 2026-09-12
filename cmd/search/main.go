@@ -54,6 +54,7 @@ func main() {
 		Search:     searchSvc,
 		OpSettings: opSettings,
 		Health:     repo,
+		Sessions:   repo,
 	})
 
 	addr := bootstrap.GetEnv("SEARCH_LISTEN_ADDR", "127.0.0.1:8080")

@@ -886,6 +886,21 @@ func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 			t.Error("expected an error")
 		}
 	})
+	t.Run("CreateSession", func(t *testing.T) {
+		if err := closedRepo(t).CreateSession(ctx, "tok", time.Now().Add(time.Hour)); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("ValidSession", func(t *testing.T) {
+		if _, err := closedRepo(t).ValidSession(ctx, "tok"); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("RevokeSession", func(t *testing.T) {
+		if err := closedRepo(t).RevokeSession(ctx, "tok"); err == nil {
+			t.Error("expected an error")
+		}
+	})
 }
 
 func TestHostOf_InvalidURLReturnsEmpty(t *testing.T) {

@@ -66,7 +66,7 @@ type Handler struct {
 	dbDriver        string
 	adminUser       string
 	adminPass       string
-	sessions        *sessionStore
+	sessions        ports.SessionStore
 }
 
 // Config wires a Handler's dependencies. Crawler and CrawlJobs are used
@@ -86,7 +86,13 @@ type Handler struct {
 // admin-server only (backing the schedules admin API) -- crawl-server's own
 // scheduler ticker talks to the same store directly, not through Handler.
 // Health is set on every process to back GET /healthz; without it, /healthz
-// always reports healthy (no DB connection to check). OnCrawlComplete, when
+// always reports healthy (no DB connection to check). Sessions, when set
+// (every production process passes its own *sqlrepo.Repository, which
+// implements ports.SessionStore against a shared "sessions" table), makes a
+// login recognized by every process serving the site, not just the one
+// that issued it -- see ports.SessionStore's doc comment. Without it, New
+// falls back to a private in-memory store, fine for tests but useless
+// across real separate processes. OnCrawlComplete, when
 // set (crawl-server only), is called synchronously right after a crawl job
 // finishes successfully -- e.g. to trigger a PageRank recompute, since a
 // completed crawl is exactly when the link graph changes. A caller that
@@ -106,6 +112,7 @@ type Config struct {
 	SettingsStore   ports.SettingsStore
 	ScheduledCrawls ports.ScheduledCrawlStore
 	Health          ports.HealthChecker
+	Sessions        ports.SessionStore
 	OnCrawlComplete func()
 	DBDriver        string
 	AdminUser       string
@@ -113,6 +120,10 @@ type Config struct {
 }
 
 func New(cfg Config) *Handler {
+	sessions := cfg.Sessions
+	if sessions == nil {
+		sessions = newSessionStore()
+	}
 	return &Handler{
 		search:          cfg.Search,
 		crawler:         cfg.Crawler,
@@ -131,18 +142,23 @@ func New(cfg Config) *Handler {
 		dbDriver:        cfg.DBDriver,
 		adminUser:       cfg.AdminUser,
 		adminPass:       cfg.AdminPass,
-		sessions:        newSessionStore(),
+		sessions:        sessions,
 	}
 }
 
 // RoutesSearch serves the public-facing search site only: the index page,
 // its stylesheet, and the search API. No admin, login or crawl endpoints --
 // this is the mux the internet-facing search-server binary listens with.
+// The index page and the search API both require a signed-in session, the
+// same one /admin and /login already use (the admin account is the only
+// account this site has for now) -- style.css and healthz stay open so an
+// unauthenticated visitor's redirect to /login still renders styled, and
+// monitoring never needs to sign in.
 func (h *Handler) RoutesSearch() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", h.handleIndex)
+	mux.HandleFunc("/", h.requireAuthPage(h.handleIndex))
 	mux.HandleFunc("/style.css", h.handleStyle)
-	mux.HandleFunc("/search", h.handleSearch)
+	mux.HandleFunc("/search", h.requireAuthAPI(h.handleSearch))
 	mux.HandleFunc("/healthz", h.handleHealthz)
 	return mux
 }

@@ -148,7 +148,12 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 	bootstrap.SyncCorpusStats(ctx, repo, corpusStats)
 	bootstrap.SyncVocabulary(ctx, repo, vocabulary)
 
-	searchResp, err := http.Get(searchAPI.URL + "/search?q=Hunde")
+	// The public search page now requires the same signed-in session as
+	// /admin (see restapi.Handler.RoutesSearch) -- reuse the client that
+	// already logged in above rather than plain http.Get, exactly as a
+	// real browser sharing one cookie jar across the reverse-proxied site
+	// would.
+	searchResp, err := client.Get(searchAPI.URL + "/search?q=Hunde")
 	if err != nil {
 		t.Fatalf("search request failed: %v", err)
 	}
@@ -161,7 +166,7 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 		t.Fatalf("expected 2 search results for 'Hunde', got %d: %+v", len(result.Results), result.Results)
 	}
 
-	searchResp2, _ := http.Get(searchAPI.URL + "/search?q=Training")
+	searchResp2, _ := client.Get(searchAPI.URL + "/search?q=Training")
 	var result2 struct {
 		Results []domain.SearchResult `json:"results"`
 	}

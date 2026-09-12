@@ -145,6 +145,25 @@ type PageRankRepository interface {
 	UpdatePageRanks(ctx context.Context, scores map[string]float64) error
 }
 
+// SessionStore backs the admin/search login system's session tokens.
+// Implemented by *sqlrepo.Repository (a "sessions" table any process
+// sharing the database can read) so a login on one process -- e.g.
+// admin-server's /login -- is recognized by every other process serving
+// the same site -- e.g. search-server, once the public search page also
+// requires authentication -- rather than only the process that issued the
+// token, which an in-memory store could never do across separate OS
+// processes.
+type SessionStore interface {
+	// CreateSession persists a freshly issued token, valid until expiresAt.
+	CreateSession(ctx context.Context, token string, expiresAt time.Time) error
+	// ValidSession reports whether token names a session that hasn't
+	// expired yet.
+	ValidSession(ctx context.Context, token string) (bool, error)
+	// RevokeSession deletes a session outright (a sign-out). Revoking an
+	// unknown or already-expired token is not an error.
+	RevokeSession(ctx context.Context, token string) error
+}
+
 // HealthChecker is a cheap liveness check for the shared database
 // connection, used only by GET /healthz. Ping must stay a plain connection
 // check (what sql.DB.PingContext already does) -- never a real query against

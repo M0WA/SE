@@ -1,6 +1,7 @@
 package restapi
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -14,9 +15,13 @@ import (
 
 const sessionCookieName = "se_session"
 
-// sessionStore is a small in-memory session table. Sessions are lost on
-// restart -- acceptable for a single self-hosted instance with one admin
-// account, and avoids needing a persistence layer just for login state.
+// sessionStore is a small in-memory session table, used only as the
+// fallback when no ports.SessionStore is configured (e.g. in tests that
+// don't care about cross-process session sharing). Sessions are lost on
+// restart, and are only ever visible to the one process that created
+// them -- fine for that fallback case, but not for production, where
+// search-server and admin-server are separate processes that must
+// recognize the same login (see ports.SessionStore's doc comment).
 type sessionStore struct {
 	mu       sync.Mutex
 	sessions map[string]time.Time
@@ -26,32 +31,32 @@ func newSessionStore() *sessionStore {
 	return &sessionStore{sessions: make(map[string]time.Time)}
 }
 
-func (s *sessionStore) create(ttl time.Duration) string {
-	token := randomToken()
+func (s *sessionStore) CreateSession(_ context.Context, token string, expiresAt time.Time) error {
 	s.mu.Lock()
-	s.sessions[token] = time.Now().Add(ttl)
+	s.sessions[token] = expiresAt
 	s.mu.Unlock()
-	return token
+	return nil
 }
 
-func (s *sessionStore) valid(token string) bool {
+func (s *sessionStore) ValidSession(_ context.Context, token string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	exp, ok := s.sessions[token]
 	if !ok {
-		return false
+		return false, nil
 	}
 	if time.Now().After(exp) {
 		delete(s.sessions, token)
-		return false
+		return false, nil
 	}
-	return true
+	return true, nil
 }
 
-func (s *sessionStore) revoke(token string) {
+func (s *sessionStore) RevokeSession(_ context.Context, token string) error {
 	s.mu.Lock()
 	delete(s.sessions, token)
 	s.mu.Unlock()
+	return nil
 }
 
 func randomToken() string {
@@ -83,7 +88,8 @@ func (h *Handler) isAuthenticated(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	return h.sessions.valid(c.Value)
+	valid, err := h.sessions.ValidSession(r.Context(), c.Value)
+	return err == nil && valid
 }
 
 // requireAuthPage gates an HTML page: unauthenticated visitors are sent to
@@ -162,7 +168,11 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionTTL := h.opSettings.Get().SessionTTL
-	token := h.sessions.create(sessionTTL)
+	token := randomToken()
+	if err := h.sessions.CreateSession(r.Context(), token, time.Now().Add(sessionTTL)); err != nil {
+		http.Error(w, "could not create session", http.StatusInternalServerError)
+		return
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    token,
@@ -181,7 +191,7 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if c, err := r.Cookie(sessionCookieName); err == nil {
-		h.sessions.revoke(c.Value)
+		_ = h.sessions.RevokeSession(r.Context(), c.Value)
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
