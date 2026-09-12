@@ -44,7 +44,7 @@ func (r *benchHybridRepo) CorpusStats(context.Context) (int, float64, error) {
 	return len(r.sortedIDs), 120, nil
 }
 
-func (r *benchHybridRepo) VocabularyStats(context.Context, int) (int, []domain.TermStat, error) {
+func (r *benchHybridRepo) VocabularyStats(context.Context, int, string) (int, []domain.TermStat, error) {
 	return 0, nil, nil
 }
 

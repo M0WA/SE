@@ -58,7 +58,14 @@ type SQLRepository interface {
 	// otherwise be refetched redundantly for every term in the batch.
 	PostingsForTerms(ctx context.Context, terms []string) (map[string][]domain.PostingStats, error)
 	CorpusStats(ctx context.Context) (totalDocs int, avgDocLen float64, err error)
-	VocabularyStats(ctx context.Context, topN int) (vocabularySize int, topTerms []domain.TermStat, err error)
+	// VocabularyStats reports the corpus's total distinct-term count plus its
+	// topN terms by document frequency. When search is non-empty, the topN
+	// listing is additionally restricted to terms containing search (a
+	// case-sensitive substring match), so an admin can check whether a
+	// specific term is indexed without scanning the unfiltered top list;
+	// vocabularySize itself always reflects the whole corpus, unaffected by
+	// search.
+	VocabularyStats(ctx context.Context, topN int, search string) (vocabularySize int, topTerms []domain.TermStat, err error)
 	// AllTerms returns every distinct term the corpus's postings hold, each
 	// with its doc/total frequency -- the full vocabulary, unlike
 	// VocabularyStats' topN-bounded listing -- for domain.VocabularyCache
@@ -151,7 +158,7 @@ type HealthChecker interface {
 // needs -- a narrower dependency than the full port.
 type AdminRepository interface {
 	CorpusStats(ctx context.Context) (totalDocs int, avgDocLen float64, err error)
-	VocabularyStats(ctx context.Context, topN int) (vocabularySize int, topTerms []domain.TermStat, err error)
+	VocabularyStats(ctx context.Context, topN int, search string) (vocabularySize int, topTerms []domain.TermStat, err error)
 	ListDocuments(ctx context.Context, limit int, host string) ([]domain.IndexedDocument, error)
 	SearchDomains(ctx context.Context, q string, limit int) ([]domain.DomainSummary, error)
 	DocumentVersions(ctx context.Context, docID string) ([]domain.DocumentVersion, error)

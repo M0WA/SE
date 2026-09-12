@@ -162,17 +162,18 @@ async function loadStats() {
   }
 }
 
-async function loadVocabulary() {
+async function loadVocabulary(search) {
   const summaryEl = document.getElementById('vocab-summary');
   const tableEl = document.getElementById('vocab-table');
   if (!summaryEl || !tableEl) return;
+  const q = search || '';
   try {
-    const v = await getJSON('/admin/api/vocabulary?limit=20');
+    const v = await getJSON('/admin/api/vocabulary?limit=20&search=' + encodeURIComponent(q));
     clear(summaryEl);
     kvRow(summaryEl, 'Vocabulary size', String(v.vocabulary_size) + ' distinct terms');
     clear(tableEl);
     if (v.top_terms.length === 0) {
-      tableEl.textContent = 'No terms indexed yet.';
+      tableEl.textContent = q === '' ? 'No terms indexed yet.' : 'No terms match “' + q + '”.';
       return;
     }
     const table = buildTable(
@@ -188,4 +189,28 @@ async function loadVocabulary() {
   } catch (err) {
     summaryEl.textContent = 'Could not load vocabulary: ' + err.message;
   }
+}
+
+// wireVocabularySearch wires the vocabulary panel's term filter (debounced
+// on input, immediate on submit) and performs the initial unfiltered load --
+// the same debounce-then-submit pattern the Documents page's domain search
+// uses.
+function wireVocabularySearch() {
+  const form = document.getElementById('vocab-search-form');
+  const input = document.getElementById('vocab-q');
+  if (!form || !input) {
+    loadVocabulary('');
+    return;
+  }
+  let searchTimer = null;
+  input.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => loadVocabulary(input.value.trim()), 200);
+  });
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    clearTimeout(searchTimer);
+    loadVocabulary(input.value.trim());
+  });
+  loadVocabulary('');
 }

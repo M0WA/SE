@@ -33,13 +33,16 @@
   <section class="panel">
     <h2>Vocabulary</h2>
     <div id="vocab-summary"></div>
+    <form id="vocab-search-form" class="crawl-form" style="margin-bottom: 0.5rem;">
+      <input id="vocab-q" class="field" type="text" placeholder="Find a term…" autocomplete="off">
+    </form>
     <div id="vocab-table"></div>
   </section>
 </main>
 <script src="/admin.js"></script>
 <script>
   loadStats();
-  loadVocabulary();
+  wireVocabularySearch();
   wireSignOut();
 </script>
 </body>

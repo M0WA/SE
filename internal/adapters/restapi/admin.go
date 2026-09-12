@@ -142,7 +142,8 @@ func (h *Handler) handleAdminVocabulary(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	limit := intQueryParam(r, "limit", defaultVocabularyTopTermsLimit, true)
-	vocabSize, topTerms, err := h.admin.VocabularyStats(r.Context(), limit)
+	search := r.URL.Query().Get("search")
+	vocabSize, topTerms, err := h.admin.VocabularyStats(r.Context(), limit, search)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

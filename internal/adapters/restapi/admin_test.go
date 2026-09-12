@@ -35,13 +35,15 @@ type fakeAdminRepo struct {
 	deleteErr      error
 	deletedID      string
 	gotLimit       int
+	gotSearch      string
 }
 
 func (f *fakeAdminRepo) CorpusStats(context.Context) (int, float64, error) {
 	return f.totalDocs, f.avgDocLen, f.err
 }
-func (f *fakeAdminRepo) VocabularyStats(_ context.Context, limit int) (int, []domain.TermStat, error) {
+func (f *fakeAdminRepo) VocabularyStats(_ context.Context, limit int, search string) (int, []domain.TermStat, error) {
 	f.gotLimit = limit
+	f.gotSearch = search
 	return f.vocabularySize, f.topTerms, f.err
 }
 func (f *fakeAdminRepo) ListDocuments(_ context.Context, _ int, host string) ([]domain.IndexedDocument, error) {
@@ -228,6 +230,36 @@ func TestHandleAdminVocabulary_RespectsLimitParam(t *testing.T) {
 	}
 	if repo.gotLimit != 5 {
 		t.Errorf("expected limit=5 to reach VocabularyStats, got %d", repo.gotLimit)
+	}
+}
+
+func TestHandleAdminVocabulary_PassesSearchParamThrough(t *testing.T) {
+	repo := &fakeAdminRepo{vocabularySize: 1}
+	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/vocabulary?search=cat", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if repo.gotSearch != "cat" {
+		t.Errorf("expected search=cat to reach VocabularyStats, got %q", repo.gotSearch)
+	}
+}
+
+func TestHandleAdminVocabulary_AbsentSearchParamIsEmptyString(t *testing.T) {
+	repo := &fakeAdminRepo{vocabularySize: 1}
+	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/vocabulary", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if repo.gotSearch != "" {
+		t.Errorf("expected an absent search param to reach VocabularyStats as \"\", got %q", repo.gotSearch)
 	}
 }
 

@@ -476,7 +476,7 @@ func TestPostingsForTerms_BatchesMultipleTermsInOneCall(t *testing.T) {
 
 func TestVocabularyStats_EmptyCorpus(t *testing.T) {
 	repo := newTestRepo(t)
-	vocabSize, topTerms, err := repo.VocabularyStats(context.Background(), 10)
+	vocabSize, topTerms, err := repo.VocabularyStats(context.Background(), 10, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -499,7 +499,7 @@ func TestVocabularyStats_ReportsSizeAndTopTermsByDocFreq(t *testing.T) {
 		}
 	}
 
-	vocabSize, topTerms, err := repo.VocabularyStats(ctx, 2)
+	vocabSize, topTerms, err := repo.VocabularyStats(ctx, 2, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -515,6 +515,52 @@ func TestVocabularyStats_ReportsSizeAndTopTermsByDocFreq(t *testing.T) {
 	}
 	if topTerms[1].Term != "common" || topTerms[1].DocFreq != 2 || topTerms[1].TotalFreq != 3 {
 		t.Errorf("expected 'common' second with doc_freq=2, total_freq=3, got %+v", topTerms[1])
+	}
+}
+
+// TestVocabularyStats_SearchFiltersTopTermsButNotVocabSize verifies the
+// search-filtered topN listing only includes terms containing the search
+// string, while vocabSize keeps reporting the whole corpus's distinct-term
+// count regardless of the filter.
+func TestVocabularyStats_SearchFiltersTopTermsButNotVocabSize(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	docs := []domain.Document{
+		{ID: "doc-1", URL: "http://a", Title: "A", Text: "shared common rare"},
+		{ID: "doc-2", URL: "http://b", Title: "B", Text: "shared common common"},
+		{ID: "doc-3", URL: "http://c", Title: "C", Text: "shared unique"},
+	}
+	for _, d := range docs {
+		if err := repo.SaveDocument(ctx, d, []float32{1}); err != nil {
+			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
+		}
+	}
+
+	vocabSize, topTerms, err := repo.VocabularyStats(ctx, 10, "rare")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if vocabSize != 4 {
+		t.Errorf("expected vocabSize to stay at the whole corpus's 4 regardless of the filter, got %d", vocabSize)
+	}
+	if len(topTerms) != 1 || topTerms[0].Term != "rare" {
+		t.Errorf("expected only 'rare' to match search %q, got %+v", "rare", topTerms)
+	}
+}
+
+func TestVocabularyStats_SearchWithNoMatchesReturnsEmptyTopTerms(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "shared common"}, []float32{1}); err != nil {
+		t.Fatalf("unexpected error saving doc: %v", err)
+	}
+
+	_, topTerms, err := repo.VocabularyStats(ctx, 10, "zzz-no-such-term")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(topTerms) != 0 {
+		t.Errorf("expected no terms to match, got %+v", topTerms)
 	}
 }
 
@@ -693,7 +739,7 @@ func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 		}
 	})
 	t.Run("VocabularyStats", func(t *testing.T) {
-		if _, _, err := closedRepo(t).VocabularyStats(ctx, 10); err == nil {
+		if _, _, err := closedRepo(t).VocabularyStats(ctx, 10, ""); err == nil {
 			t.Error("expected an error")
 		}
 	})
