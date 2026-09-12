@@ -91,6 +91,19 @@ func (h *Handler) TriggerCrawl(ctx context.Context, opts ports.CrawlOptions) (st
 	return job.ID, nil
 }
 
+// ResumeCrawlJob re-runs an existing job (jobID, already in the store) in
+// the background from opts' seed URLs, without creating a new job record.
+// Used only by application.RecoverInterruptedCrawls at crawl-server
+// startup, so a crawl interrupted by a restart is seen to continue --
+// pages_crawled and page history keep accumulating under the same ID --
+// rather than looking like it failed and was silently replaced by an
+// unrelated new job starting over from zero. runCrawlJob's own
+// MarkRunning call (its first step) takes the job out of whatever
+// stale queued/running state it was left in.
+func (h *Handler) ResumeCrawlJob(jobID string, opts ports.CrawlOptions) {
+	go h.runCrawlJob(jobID, opts)
+}
+
 // runCrawlJob executes opts in the background against job.ID's tracked
 // state. It uses context.Background(), not the triggering request's
 // context, since the crawl must keep running after that request returns.

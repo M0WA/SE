@@ -339,6 +339,43 @@ func (pageEmittingFakeCrawler) Crawl(_ context.Context, _ ports.CrawlOptions, on
 	return 1, nil
 }
 
+// TestResumeCrawlJob_RunsUnderTheSameExistingJobID proves ResumeCrawlJob
+// (used by application.RecoverInterruptedCrawls) reuses the given job ID
+// rather than creating a new one -- a pre-existing job (simulating one
+// left "running" by a crawl-server restart) reaches CrawlJobDone under
+// its own ID, and no second job is ever created.
+func TestResumeCrawlJob_RunsUnderTheSameExistingJobID(t *testing.T) {
+	store := domain.NewCrawlJobStore()
+	existing, err := store.Create(context.Background(), domain.CrawlJobRequest{SeedURLs: []string{"http://a"}, MaxPages: 5})
+	if err != nil {
+		t.Fatalf("unexpected error seeding the existing job: %v", err)
+	}
+	if err := store.MarkRunning(context.Background(), existing.ID); err != nil {
+		t.Fatalf("unexpected error marking the seeded job running: %v", err)
+	}
+
+	fc := &fakeCrawler{count: 3}
+	h := restapi.New(restapi.Config{Crawler: fc, CrawlJobs: store})
+
+	h.ResumeCrawlJob(existing.ID, ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5})
+	job := waitForJob(t, h, existing.ID)
+
+	if job.ID != existing.ID {
+		t.Fatalf("expected the resumed job to keep its original ID %s, got %s", existing.ID, job.ID)
+	}
+	if job.Status != domain.CrawlJobDone {
+		t.Fatalf("expected the resumed job done, got %s (err=%s)", job.Status, job.Error)
+	}
+
+	all, err := store.List(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error listing jobs: %v", err)
+	}
+	if len(all) != 1 {
+		t.Errorf("expected exactly 1 job to exist after resuming (no new job created), got %d: %+v", len(all), all)
+	}
+}
+
 func TestTriggerCrawl_StoreCreateErrorPropagates(t *testing.T) {
 	store := &erroringCrawlJobStore{CrawlJobStore: domain.NewCrawlJobStore(), createErr: errors.New("db unavailable")}
 	h := restapi.New(restapi.Config{Crawler: &fakeCrawler{}, CrawlJobs: store})

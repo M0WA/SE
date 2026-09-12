@@ -201,7 +201,7 @@ func main() {
 	// has no goroutine actually working on it anymore -- recover it (or,
 	// for one that needed credentials that were never persisted, mark it
 	// failed) before this process starts accepting new crawl requests.
-	if recovered, abandoned, err := application.RecoverInterruptedCrawls(ctx, repo, handler.TriggerCrawl); err != nil {
+	if recovered, abandoned, err := application.RecoverInterruptedCrawls(ctx, repo, handler.ResumeCrawlJob); err != nil {
 		log.Printf("recovering interrupted crawl jobs: %v", err)
 	} else if recovered > 0 || abandoned > 0 {
 		log.Printf("recovered %d interrupted crawl job(s), %d could not be resumed (needed credentials) and were marked failed", recovered, abandoned)

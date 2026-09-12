@@ -65,7 +65,13 @@ func (f *fakeCrawlJobStore) List(context.Context) ([]domain.CrawlJobSummary, err
 	return out, nil
 }
 
-func TestRecoverInterruptedCrawls_RestartsQueuedAndRunningJobsWithoutCredentials(t *testing.T) {
+// TestRecoverInterruptedCrawls_ResumesQueuedAndRunningJobsInPlace proves the
+// core behavior: an interrupted job without credentials is resumed under
+// its own existing ID (via resume), never marked failed and never
+// replaced by a separate new job -- so it keeps looking like the same
+// crawl continuing, not a failure followed by an unrelated one starting
+// over from zero.
+func TestRecoverInterruptedCrawls_ResumesQueuedAndRunningJobsInPlace(t *testing.T) {
 	store := newFakeCrawlJobStore(
 		domain.CrawlJobSummary{ID: "job-queued", Status: domain.CrawlJobQueued, Request: domain.CrawlJobRequest{SeedURLs: []string{"http://a"}, MaxPages: 5}},
 		domain.CrawlJobSummary{ID: "job-running", Status: domain.CrawlJobRunning, Request: domain.CrawlJobRequest{SeedURLs: []string{"http://b"}, MaxPages: 10}},
@@ -73,69 +79,78 @@ func TestRecoverInterruptedCrawls_RestartsQueuedAndRunningJobsWithoutCredentials
 		domain.CrawlJobSummary{ID: "job-failed", Status: domain.CrawlJobFailed, Request: domain.CrawlJobRequest{SeedURLs: []string{"http://d"}}},
 	)
 
-	var triggered []ports.CrawlOptions
-	trigger := func(_ context.Context, opts ports.CrawlOptions) (string, error) {
-		triggered = append(triggered, opts)
-		return "new-job-id", nil
+	resumedIDs := make(map[string]ports.CrawlOptions)
+	resume := func(jobID string, opts ports.CrawlOptions) {
+		resumedIDs[jobID] = opts
 	}
 
-	recovered, abandoned, err := application.RecoverInterruptedCrawls(context.Background(), store, trigger)
+	recovered, abandoned, err := application.RecoverInterruptedCrawls(context.Background(), store, resume)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if recovered != 2 || abandoned != 0 {
 		t.Fatalf("expected 2 recovered, 0 abandoned, got recovered=%d abandoned=%d", recovered, abandoned)
 	}
-	if len(triggered) != 2 {
-		t.Fatalf("expected 2 triggered crawls, got %d", len(triggered))
+	if len(resumedIDs) != 2 {
+		t.Fatalf("expected 2 jobs resumed, got %d", len(resumedIDs))
 	}
-	for _, opts := range triggered {
+	if _, ok := resumedIDs["job-queued"]; !ok {
+		t.Error("expected job-queued resumed under its own ID")
+	}
+	if _, ok := resumedIDs["job-running"]; !ok {
+		t.Error("expected job-running resumed under its own ID")
+	}
+	for id, opts := range resumedIDs {
 		if !opts.PrioritizeUnindexed {
-			t.Errorf("expected PrioritizeUnindexed forced on for a recovery pass, got %+v", opts)
+			t.Errorf("expected PrioritizeUnindexed forced on for a recovery pass (job %s), got %+v", id, opts)
 		}
 	}
 
-	// The old queued/running jobs must be marked failed with the
-	// interrupted-by-restart reason, not left showing as active forever.
-	if store.jobs["job-queued"].Status != domain.CrawlJobFailed || store.jobs["job-running"].Status != domain.CrawlJobFailed {
-		t.Errorf("expected the old interrupted jobs marked failed, got %+v / %+v", store.jobs["job-queued"], store.jobs["job-running"])
+	// The resumed jobs must NOT be marked failed -- they're being resumed,
+	// not abandoned, so their status stays whatever resume (runCrawlJob's
+	// own MarkRunning) sets it to, not something this function overwrites.
+	if store.jobs["job-queued"].Status == domain.CrawlJobFailed || store.jobs["job-running"].Status == domain.CrawlJobFailed {
+		t.Errorf("expected resumed jobs never marked failed, got %+v / %+v", store.jobs["job-queued"], store.jobs["job-running"])
+	}
+	if len(store.markFailed) != 0 {
+		t.Errorf("expected no MarkFailed calls for jobs that were resumed, got %+v", store.markFailed)
 	}
 	// Already-terminal jobs must be left alone entirely.
-	if _, ok := store.markFailed["job-done"]; ok {
-		t.Error("expected a done job never touched")
+	if _, ok := resumedIDs["job-done"]; ok {
+		t.Error("expected a done job never resumed")
 	}
-	if _, ok := store.markFailed["job-failed"]; ok {
-		t.Error("expected an already-failed job never re-marked")
+	if _, ok := resumedIDs["job-failed"]; ok {
+		t.Error("expected an already-failed job never resumed")
 	}
 }
 
 // TestRecoverInterruptedCrawls_AbandonsJobsThatNeededCredentials proves the
 // safety boundary: a job whose original request needed a cookie or Basic
-// auth is marked failed but never automatically re-triggered, since those
-// credentials were never persisted.
+// auth is marked failed and never resumed, since those credentials were
+// never persisted.
 func TestRecoverInterruptedCrawls_AbandonsJobsThatNeededCredentials(t *testing.T) {
 	store := newFakeCrawlJobStore(
 		domain.CrawlJobSummary{ID: "job-cookie", Status: domain.CrawlJobRunning, Request: domain.CrawlJobRequest{SeedURLs: []string{"http://a"}, HasCookie: true}},
 		domain.CrawlJobSummary{ID: "job-basicauth", Status: domain.CrawlJobQueued, Request: domain.CrawlJobRequest{SeedURLs: []string{"http://b"}, HasBasicAuth: true}},
 	)
-	triggerCalls := 0
-	trigger := func(context.Context, ports.CrawlOptions) (string, error) {
-		triggerCalls++
-		return "", nil
-	}
+	resumeCalls := 0
+	resume := func(string, ports.CrawlOptions) { resumeCalls++ }
 
-	recovered, abandoned, err := application.RecoverInterruptedCrawls(context.Background(), store, trigger)
+	recovered, abandoned, err := application.RecoverInterruptedCrawls(context.Background(), store, resume)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if recovered != 0 || abandoned != 2 {
 		t.Fatalf("expected 0 recovered, 2 abandoned, got recovered=%d abandoned=%d", recovered, abandoned)
 	}
-	if triggerCalls != 0 {
-		t.Errorf("expected no automatic re-trigger for jobs that needed credentials, got %d calls", triggerCalls)
+	if resumeCalls != 0 {
+		t.Errorf("expected no resume for jobs that needed credentials, got %d calls", resumeCalls)
 	}
 	if store.jobs["job-cookie"].Status != domain.CrawlJobFailed || store.jobs["job-basicauth"].Status != domain.CrawlJobFailed {
-		t.Errorf("expected both jobs marked failed even though not resumed, got %+v / %+v", store.jobs["job-cookie"], store.jobs["job-basicauth"])
+		t.Errorf("expected both jobs marked failed since they can't be resumed, got %+v / %+v", store.jobs["job-cookie"], store.jobs["job-basicauth"])
+	}
+	if store.jobs["job-cookie"].Error != application.ErrCrawlInterruptedByRestart.Error() {
+		t.Errorf("expected the interrupted-by-restart reason recorded, got %q", store.jobs["job-cookie"].Error)
 	}
 }
 
@@ -143,17 +158,14 @@ func TestRecoverInterruptedCrawls_NoInterruptedJobsIsANoOp(t *testing.T) {
 	store := newFakeCrawlJobStore(
 		domain.CrawlJobSummary{ID: "job-done", Status: domain.CrawlJobDone},
 	)
-	triggerCalls := 0
-	trigger := func(context.Context, ports.CrawlOptions) (string, error) {
-		triggerCalls++
-		return "", nil
-	}
-	recovered, abandoned, err := application.RecoverInterruptedCrawls(context.Background(), store, trigger)
+	resumeCalls := 0
+	resume := func(string, ports.CrawlOptions) { resumeCalls++ }
+	recovered, abandoned, err := application.RecoverInterruptedCrawls(context.Background(), store, resume)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if recovered != 0 || abandoned != 0 || triggerCalls != 0 {
-		t.Errorf("expected a complete no-op, got recovered=%d abandoned=%d triggerCalls=%d", recovered, abandoned, triggerCalls)
+	if recovered != 0 || abandoned != 0 || resumeCalls != 0 {
+		t.Errorf("expected a complete no-op, got recovered=%d abandoned=%d resumeCalls=%d", recovered, abandoned, resumeCalls)
 	}
 }
 
@@ -179,11 +191,8 @@ func TestRecoverInterruptedCrawls_PreservesOriginalSettingOverrides(t *testing.T
 		},
 	})
 	var got ports.CrawlOptions
-	trigger := func(_ context.Context, opts ports.CrawlOptions) (string, error) {
-		got = opts
-		return "new-id", nil
-	}
-	if _, _, err := application.RecoverInterruptedCrawls(context.Background(), store, trigger); err != nil {
+	resume := func(_ string, opts ports.CrawlOptions) { got = opts }
+	if _, _, err := application.RecoverInterruptedCrawls(context.Background(), store, resume); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got.MaxPages != 7 || !got.RespectRobots || got.UserAgent != "custom/1.0" ||

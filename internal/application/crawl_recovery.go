@@ -9,7 +9,8 @@ import (
 )
 
 // ErrCrawlInterruptedByRestart is the failure reason recorded for a job
-// that was still queued or running when crawl-server stopped.
+// that was still queued or running when crawl-server stopped and can't be
+// safely resumed (it needed credentials that were never persisted).
 var ErrCrawlInterruptedByRestart = errors.New("crawl-server restarted before this job finished")
 
 // RecoverInterruptedCrawls runs once at crawl-server startup. A job left in
@@ -20,26 +21,28 @@ var ErrCrawlInterruptedByRestart = errors.New("crawl-server restarted before thi
 // active when it's actually dead, and never get picked back up.
 //
 // A job whose request needed a cookie or Basic auth can't be safely
-// restarted: those credentials are deliberately never persisted (the same
+// resumed: those credentials are deliberately never persisted (the same
 // storage-at-rest security rationale as domain.ScheduledCrawl's), so it's
-// simply marked failed with ErrCrawlInterruptedByRestart, and it's on the
-// admin to re-trigger it (e.g. via the Crawl page's "Recrawl" panel) with
+// marked failed with ErrCrawlInterruptedByRestart, and it's on the admin to
+// re-trigger it (e.g. via the Crawl page's "Recrawl" panel) with
 // credentials supplied again.
 //
-// Every other interrupted job is restarted from its own seed URLs via
-// trigger, reusing every setting its original request carried (including
-// the per-crawl overrides) -- not a true resume from wherever it left off
-// (no per-URL frontier is persisted), but safe and complete: the crawler's
-// idempotent per-URL document IDs mean already-indexed pages are just
-// harmlessly re-verified, and PrioritizeUnindexed is forced on for this
-// recovery pass regardless of the original request's setting, since
-// otherwise much of the budget could be spent re-confirming pages already
-// indexed before the restart rather than reaching ones that never got
-// there.
+// Every other interrupted job is resumed **in place**, under its own
+// existing ID (via resume, not a fresh trigger) -- its pages_crawled count
+// and page history keep accumulating rather than the job being marked
+// failed and silently replaced by an unrelated-looking new job that starts
+// over from zero. This is not a true resume from wherever the crawl's
+// frontier actually was (no per-URL frontier is persisted) -- it restarts
+// from the same seed URLs -- but that's safe: the crawler's idempotent
+// per-URL document IDs mean already-indexed pages are just harmlessly
+// re-verified, and PrioritizeUnindexed is forced on for this pass
+// regardless of the original request's own setting, so the budget reaches
+// still-missing pages fastest rather than being spent re-confirming ones
+// already indexed before the restart.
 func RecoverInterruptedCrawls(
 	ctx context.Context,
 	jobs ports.CrawlJobStore,
-	trigger func(ctx context.Context, opts ports.CrawlOptions) (string, error),
+	resume func(jobID string, opts ports.CrawlOptions),
 ) (recovered, abandoned int, err error) {
 	all, err := jobs.List(ctx)
 	if err != nil {
@@ -49,10 +52,10 @@ func RecoverInterruptedCrawls(
 		if j.Status != domain.CrawlJobQueued && j.Status != domain.CrawlJobRunning {
 			continue
 		}
-		if failErr := jobs.MarkFailed(ctx, j.ID, ErrCrawlInterruptedByRestart); failErr != nil {
-			return recovered, abandoned, failErr
-		}
 		if j.Request.HasCookie || j.Request.HasBasicAuth {
+			if failErr := jobs.MarkFailed(ctx, j.ID, ErrCrawlInterruptedByRestart); failErr != nil {
+				return recovered, abandoned, failErr
+			}
 			abandoned++
 			continue
 		}
@@ -69,9 +72,7 @@ func RecoverInterruptedCrawls(
 			MaxResponseKB:       j.Request.MaxResponseKB,
 			PrioritizeUnindexed: true,
 		}
-		if _, triggerErr := trigger(ctx, opts); triggerErr != nil {
-			return recovered, abandoned, triggerErr
-		}
+		resume(j.ID, opts)
 		recovered++
 	}
 	return recovered, abandoned, nil
