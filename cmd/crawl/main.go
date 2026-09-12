@@ -197,6 +197,16 @@ func main() {
 		OnCrawlComplete: func() { go pageRank.recompute() },
 	})
 
+	// Any job still queued/running from before this process last stopped
+	// has no goroutine actually working on it anymore -- recover it (or,
+	// for one that needed credentials that were never persisted, mark it
+	// failed) before this process starts accepting new crawl requests.
+	if recovered, abandoned, err := application.RecoverInterruptedCrawls(ctx, repo, handler.TriggerCrawl); err != nil {
+		log.Printf("recovering interrupted crawl jobs: %v", err)
+	} else if recovered > 0 || abandoned > 0 {
+		log.Printf("recovered %d interrupted crawl job(s), %d could not be resumed (needed credentials) and were marked failed", recovered, abandoned)
+	}
+
 	go runScheduler(ctx, repo, handler)
 	go runCrawlJobPruner(ctx, repo, opSettings)
 
