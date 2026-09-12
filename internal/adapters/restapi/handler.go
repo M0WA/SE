@@ -190,6 +190,7 @@ func (h *Handler) RoutesAdmin() *http.ServeMux {
 	mux.HandleFunc("/admin/api/stats", h.requireAuthAPI(h.handleAdminStats))
 	mux.HandleFunc("/admin/api/vocabulary", h.requireAuthAPI(h.handleAdminVocabulary))
 	mux.HandleFunc("/admin/api/documents", h.requireAuthAPI(h.handleAdminDocuments))
+	mux.HandleFunc("DELETE /admin/api/documents", h.requireAuthAPI(h.handleAdminDeleteDomainDocuments))
 	mux.HandleFunc("GET /admin/api/documents/overview", h.requireAuthAPI(h.handleAdminDocumentsOverview))
 	mux.HandleFunc("DELETE /admin/api/documents/{id}", h.requireAuthAPI(h.handleAdminDeleteDocument))
 	mux.HandleFunc("GET /admin/api/documents/{id}/versions", h.requireAuthAPI(h.handleAdminDocumentVersions))

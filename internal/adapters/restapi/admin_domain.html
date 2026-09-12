@@ -90,49 +90,27 @@
     }
   }
 
-  // deleteAllInDomain runs a bounded pool of concurrent deletes (rather
-  // than one awaited request at a time) so a domain with hundreds of pages
-  // finishes in a handful of round trips' worth of wall-clock time instead
-  // of hundreds, with running progress so it never just looks stuck. A
-  // single failed delete no longer aborts the rest of the batch -- it's
-  // recorded and reported in the final summary, so one already-deleted or
-  // otherwise-failed page doesn't leave every page after it in the list
-  // untouched.
-  const DELETE_ALL_CONCURRENCY = 8;
-
-  async function deleteAllInDomain(ids) {
-    if (!window.confirm('Remove all ' + ids.length + ' pages in this domain from the index?')) return;
+  // deleteAllInDomain fires one request and returns -- the server queues
+  // every page's removal in its own background goroutine (detached from
+  // this request, so it isn't tied to this tab staying open) and responds
+  // immediately, rather than this page driving N individual DELETE calls
+  // itself. That old approach was fetch() calls the browser would simply
+  // abort the moment the admin navigated away or closed the tab mid-batch,
+  // silently leaving the domain half-deleted with no way to know or
+  // resume -- leaving this page (or closing it) can never interrupt the
+  // removal now.
+  async function deleteAllInDomain(count) {
+    if (!window.confirm('Remove all ' + count + ' pages in this domain from the index?')) return;
     deleteAllBtn.disabled = true;
-    let completed = 0;
-    const failures = [];
-    const report = () => {
-      deleteAllStatusEl.textContent = 'Deleting ' + completed + ' of ' + ids.length + '…';
-    };
-    report();
-
-    let next = 0;
-    async function worker() {
-      while (next < ids.length) {
-        const id = ids[next++];
-        try {
-          await deleteRequest('/admin/api/documents/' + encodeURIComponent(id));
-        } catch (err) {
-          failures.push({ id, message: err.message });
-        }
-        completed++;
-        report();
-      }
+    deleteAllStatusEl.textContent = 'Starting…';
+    try {
+      const resp = await deleteRequest('/admin/api/documents?domain=' + encodeURIComponent(host));
+      deleteAllStatusEl.textContent = 'Removing ' + resp.queued + (resp.queued === 1 ? ' page' : ' pages') +
+        ' in the background — safe to leave this page. Reload to see progress.';
+    } catch (err) {
+      deleteAllBtn.disabled = false;
+      deleteAllStatusEl.textContent = 'Could not start the removal: ' + err.message;
     }
-    await Promise.all(Array.from({ length: Math.min(DELETE_ALL_CONCURRENCY, ids.length) }, worker));
-
-    if (failures.length === 0) {
-      window.location = '/admin/documents';
-      return;
-    }
-    deleteAllBtn.disabled = false;
-    deleteAllStatusEl.textContent = 'Deleted ' + (ids.length - failures.length) + ' of ' + ids.length +
-      ' — ' + failures.length + (failures.length === 1 ? ' page' : ' pages') +
-      ' could not be deleted (' + failures[0].message + (failures.length > 1 ? ', …' : '') + ').';
   }
 
   async function showHistory(doc) {
@@ -253,7 +231,7 @@
     tableEl.appendChild(table);
 
     deleteAllBtn.hidden = false;
-    deleteAllBtn.addEventListener('click', () => deleteAllInDomain(docs.map((d) => d.id)));
+    deleteAllBtn.addEventListener('click', () => deleteAllInDomain(docs.length));
   }
 
   async function load() {

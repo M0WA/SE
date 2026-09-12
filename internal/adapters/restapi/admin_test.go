@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,6 +39,22 @@ type fakeAdminRepo struct {
 	deletedID      string
 	gotLimit       int
 	gotSearch      string
+
+	// mu guards deletedIDs, written from handleAdminDeleteDomainDocuments'
+	// own background goroutine and read back from a test's polling
+	// goroutine -- unlike deletedID above (only ever touched synchronously
+	// by the single-document-delete tests), this needs real synchronization
+	// to be race-free.
+	mu         sync.Mutex
+	deletedIDs []string
+}
+
+// DeletedIDs returns every ID DeleteDocument has been called with so far,
+// safe to call concurrently with DeleteDocument itself.
+func (f *fakeAdminRepo) DeletedIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.deletedIDs...)
 }
 
 func (f *fakeAdminRepo) CorpusStats(context.Context) (int, float64, error) {
@@ -64,6 +81,9 @@ func (f *fakeAdminRepo) DocumentsOverview(context.Context, int) (domain.Document
 }
 func (f *fakeAdminRepo) DeleteDocument(_ context.Context, id string) error {
 	f.deletedID = id
+	f.mu.Lock()
+	f.deletedIDs = append(f.deletedIDs, id)
+	f.mu.Unlock()
 	return f.deleteErr
 }
 func (f *fakeAdminRepo) PostingsForTerm(context.Context, string) ([]domain.PostingStats, error) {
@@ -1010,6 +1030,187 @@ func TestHandleAdminDeleteDocument_ServiceError(t *testing.T) {
 	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+// waitForDeletedCount polls repo.DeletedIDs() until it reaches want entries
+// (handleAdminDeleteDomainDocuments' background goroutine runs
+// asynchronously, detached from the request that queued it) or fails the
+// test if it never does.
+func waitForDeletedCount(t *testing.T, repo *fakeAdminRepo, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(repo.DeletedIDs()) >= want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d deletions, got %d: %v", want, len(repo.DeletedIDs()), repo.DeletedIDs())
+}
+
+// TestHandleAdminDeleteDomainDocuments_Success proves the core behavior:
+// the request returns immediately with the queued count, and every
+// document in the domain is deleted via a background goroutine that
+// outlives the request itself.
+func TestHandleAdminDeleteDomainDocuments_Success(t *testing.T) {
+	repo := &fakeAdminRepo{docs: []domain.IndexedDocument{
+		{ID: "doc-1"}, {ID: "doc-2"}, {ID: "doc-3"},
+	}}
+	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/documents?domain=example.com", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Queued int `json:"queued"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.Queued != 3 {
+		t.Errorf("expected queued=3, got %d", resp.Queued)
+	}
+	if repo.gotHost != "example.com" {
+		t.Errorf("expected the domain filter passed to ListDocuments, got %q", repo.gotHost)
+	}
+
+	waitForDeletedCount(t, repo, 3)
+	got := repo.DeletedIDs()
+	want := map[string]bool{"doc-1": true, "doc-2": true, "doc-3": true}
+	if len(got) != 3 {
+		t.Fatalf("expected all 3 documents deleted, got %v", got)
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Errorf("unexpected deleted ID %q", id)
+		}
+	}
+}
+
+// TestHandleAdminDeleteDomainDocuments_ContinuesPastOneFailure proves a
+// single failed delete doesn't stop the rest of the background batch.
+func TestHandleAdminDeleteDomainDocuments_ContinuesPastOneFailure(t *testing.T) {
+	repo := &erroringOnFirstDeleteRepo{
+		fakeAdminRepo: &fakeAdminRepo{docs: []domain.IndexedDocument{{ID: "doc-1"}, {ID: "doc-2"}}},
+	}
+	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/documents?domain=example.com", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	waitForDeletedCount(t, repo.fakeAdminRepo, 2)
+}
+
+// erroringOnFirstDeleteRepo makes only the first DeleteDocument call fail,
+// so a test can prove the batch continues past it.
+type erroringOnFirstDeleteRepo struct {
+	*fakeAdminRepo
+	failedOnce bool
+}
+
+func (r *erroringOnFirstDeleteRepo) DeleteDocument(ctx context.Context, id string) error {
+	_ = r.fakeAdminRepo.DeleteDocument(ctx, id)
+	if !r.failedOnce {
+		r.failedOnce = true
+		return errors.New("boom")
+	}
+	return nil
+}
+
+func TestHandleAdminDeleteDomainDocuments_EmptyDomain(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/documents", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for a missing domain, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDeleteDomainDocuments_Unauthenticated(t *testing.T) {
+	h := restapi.New(restapi.Config{Admin: &fakeAdminRepo{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/documents?domain=example.com", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDeleteDomainDocuments_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, nil, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/documents?domain=example.com", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDeleteDomainDocuments_ListErrorReturns500(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{err: errors.New("db unavailable")}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/documents?domain=example.com", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+// TestHandleAdminDeleteDomainDocuments_NoDocumentsQueuesNothing proves an
+// empty (or already-empty) domain is a harmless no-op, not an error.
+func TestHandleAdminDeleteDomainDocuments_NoDocumentsQueuesNothing(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/documents?domain=empty.example", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Queued int `json:"queued"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Queued != 0 {
+		t.Errorf("expected queued=0, got %d", resp.Queued)
+	}
+}
+
+// TestHandleAdminDeleteDomainDocuments_GetStillUsesListHandler proves the
+// two overlapping route registrations for "/admin/api/documents" (a
+// method-less GET-only handler, and this DELETE-specific one) route by
+// method rather than one shadowing the other.
+func TestHandleAdminDeleteDomainDocuments_GetStillUsesListHandler(t *testing.T) {
+	repo := &fakeAdminRepo{docs: []domain.IndexedDocument{{ID: "doc-1", URL: "http://a"}}}
+	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/documents", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected GET to still reach the list handler (200), got %d: %s", rec.Code, rec.Body.String())
+	}
+	var docs []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &docs); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(docs) != 1 || docs[0].ID != "doc-1" {
+		t.Errorf("expected the document list, got %+v", docs)
 	}
 }
 

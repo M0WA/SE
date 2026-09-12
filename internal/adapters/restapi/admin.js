@@ -49,7 +49,7 @@ async function postJSON(url, body) {
 }
 
 async function deleteRequest(url) {
-  await checkResponse(await fetch(url, { method: 'DELETE' }));
+  return (await checkResponse(await fetch(url, { method: 'DELETE' }))).json();
 }
 
 async function patchJSON(url, body) {

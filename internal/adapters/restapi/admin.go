@@ -220,6 +220,58 @@ func (h *Handler) handleAdminDocuments(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// maxDeleteDomainDocs bounds how many of a domain's documents one bulk
+// delete looks up and queues -- generous enough that no real domain hits
+// it, but still a bound rather than an unbounded query.
+const maxDeleteDomainDocs = 100000
+
+type adminDeleteDomainResponse struct {
+	Queued int `json:"queued"`
+}
+
+// handleAdminDeleteDomainDocuments removes every document in one domain.
+// Deliberately fire-and-forget: it looks up the domain's document IDs
+// synchronously, then queues their deletion in a background goroutine and
+// returns 202 immediately, rather than deleting one at a time across N
+// separate client-driven DELETE requests (the previous design) -- those
+// were plain fetch() calls the browser would simply abort mid-batch the
+// moment the admin navigated away or closed the tab, silently leaving the
+// domain half-deleted with no way to know or resume. The background
+// goroutine uses context.Background(), not r.Context(), specifically so
+// it keeps running to completion even after this request's own context is
+// cancelled by that same navigation -- the same reason runCrawlJob does
+// the same for a triggered crawl.
+func (h *Handler) handleAdminDeleteDomainDocuments(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+		return
+	}
+	domainName := r.URL.Query().Get("domain")
+	if domainName == "" {
+		http.Error(w, "domain must not be empty", http.StatusBadRequest)
+		return
+	}
+	docs, err := h.admin.ListDocuments(r.Context(), maxDeleteDomainDocs, domainName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	ids := make([]string, len(docs))
+	for i, d := range docs {
+		ids[i] = d.ID
+	}
+
+	go func() {
+		ctx := context.Background()
+		for _, id := range ids {
+			if err := h.admin.DeleteDocument(ctx, id); err != nil {
+				log.Printf("bulk-deleting domain %s: deleting %s: %v", domainName, id, err)
+			}
+		}
+	}()
+
+	writeJSON(w, http.StatusAccepted, adminDeleteDomainResponse{Queued: len(ids)})
+}
+
 const defaultDomainSearchLimit = 20
 
 type adminDomainSummary struct {
