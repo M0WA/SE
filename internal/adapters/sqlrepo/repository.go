@@ -38,6 +38,7 @@ func New(ctx context.Context, driverName, dsn string) (*Repository, error) {
 	}
 
 	repo := &Repository{db: db, dialect: NewDialect(driverName)}
+	repo.applyDefaultPoolSettings()
 	if err := repo.migrate(ctx); err != nil {
 		return nil, err
 	}
@@ -45,7 +46,54 @@ func New(ctx context.Context, driverName, dsn string) (*Repository, error) {
 }
 
 func NewWithDB(db *sql.DB, driverName string) *Repository {
-	return &Repository{db: db, dialect: NewDialect(driverName)}
+	repo := &Repository{db: db, dialect: NewDialect(driverName)}
+	repo.applyDefaultPoolSettings()
+	return repo
+}
+
+// applyDefaultPoolSettings applies the built-in operational-settings
+// connection-pool defaults immediately at construction time, before any
+// admin-configured value (if one is ever loaded) is applied via
+// ConfigurePool -- so a freshly started process never runs with Go's
+// unbounded-open/2-idle database/sql defaults, even for the brief window
+// before bootstrap.SyncSettings's first poll completes.
+func (r *Repository) applyDefaultPoolSettings() {
+	d := domain.DefaultOperationalSettings().Get()
+	r.ConfigurePool(d.DBMaxOpenConns, d.DBMaxIdleConns, d.DBConnMaxLifetime)
+}
+
+// ConfigurePool applies connection-pool limits to the live database
+// connection: at most maxOpenConns open connections, up to maxIdleConns of
+// them kept idle rather than closed between requests, and each connection
+// recycled after connMaxLifetime regardless of use (0 means never). Called
+// once at construction with the built-in defaults, and again by
+// bootstrap.SyncSettings whenever the admin-configured operational
+// settings change, so a production Postgres/MySQL deployment always keeps
+// a bounded, warm pool instead of churning connections open and closed
+// past database/sql's default of only 2 cached idle connections.
+//
+// For SQLite, maxOpenConns (and, if larger, maxIdleConns) is always
+// clamped down to 1 regardless of what's requested: SQLite serializes
+// writers at the file level, so more than one open connection doesn't add
+// real concurrency and only risks "database is locked" errors under
+// concurrent writes.
+func (r *Repository) ConfigurePool(maxOpenConns, maxIdleConns int, connMaxLifetime time.Duration) {
+	if r.dialect.Name() == "sqlite" {
+		maxOpenConns = 1
+		if maxIdleConns > 1 {
+			maxIdleConns = 1
+		}
+	}
+	r.db.SetMaxOpenConns(maxOpenConns)
+	r.db.SetMaxIdleConns(maxIdleConns)
+	r.db.SetConnMaxLifetime(connMaxLifetime)
+}
+
+// PoolStats reports the live connection pool's current limits and usage,
+// for diagnostics and tests -- a thin passthrough to the underlying
+// *sql.DB.
+func (r *Repository) PoolStats() sql.DBStats {
+	return r.db.Stats()
 }
 
 func (r *Repository) migrate(ctx context.Context) error {
@@ -57,7 +105,10 @@ func (r *Repository) migrate(ctx context.Context) error {
 	if err := r.migrateDocumentColumns(ctx); err != nil {
 		return err
 	}
-	return r.ensureHostIndex(ctx)
+	if err := r.ensureHostIndex(ctx); err != nil {
+		return err
+	}
+	return r.ensureCrawledAtIndex(ctx)
 }
 
 // ensureHostIndex runs after migrateDocumentColumns, since on a database
@@ -73,16 +124,50 @@ func (r *Repository) ensureHostIndex(ctx context.Context) error {
 		_, _ = r.db.ExecContext(ctx, "CREATE INDEX idx_documents_host ON documents(host)")
 		return nil
 	}
-	if _, err := r.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_documents_host ON documents(host)"); err != nil {
+	if _, err := r.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_documents_host ON documents(host)"); err != nil && !isIndexAlreadyExistsError(err) {
 		return fmt.Errorf("creating host index: %w", err)
 	}
 	return nil
 }
 
-// migrateDocumentColumns adds host/version/crawled_at to a documents table
-// that predates them (CREATE TABLE IF NOT EXISTS above only shapes a fresh
-// table) and backfills host for any pre-existing row, so an upgrade never
-// requires a manual migration step.
+// ensureCrawledAtIndex mirrors ensureHostIndex exactly, for the same
+// reason: crawled_at-based range queries (countDocumentsCrawled, backing
+// DocumentsOverview's admin age-bucket charts) and the recency-sort
+// ORDER BY crawled_at DESC query below were both running as full table
+// scans with no supporting index. Runs after migrateDocumentColumns for
+// the same reason ensureHostIndex does (though crawled_at itself has been
+// part of the base schema since before this index existed, so this is
+// purely about the missing index, not a missing column). MySQL has no IF
+// NOT EXISTS for CREATE INDEX, so there it's a best-effort statement
+// whose "already exists" error is expected (and ignored) on every startup
+// after the first.
+func (r *Repository) ensureCrawledAtIndex(ctx context.Context) error {
+	if r.dialect.Name() == "mysql" {
+		_, _ = r.db.ExecContext(ctx, "CREATE INDEX idx_documents_crawled_at ON documents(crawled_at)")
+		return nil
+	}
+	if _, err := r.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_documents_crawled_at ON documents(crawled_at)"); err != nil && !isIndexAlreadyExistsError(err) {
+		return fmt.Errorf("creating crawled_at index: %w", err)
+	}
+	return nil
+}
+
+// isIndexAlreadyExistsError reports whether err is Postgres's benign race
+// where CREATE INDEX IF NOT EXISTS is run concurrently by more than one
+// process (as happens when search/admin/crawl all migrate on startup at
+// once): the existence check and the catalog insert aren't atomic across
+// sessions, so the loser gets a unique-violation on the system catalog
+// instead of a clean no-op, even though the index ends up created either
+// way. Without this, that race crashes the losing process outright.
+func isIndexAlreadyExistsError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "already exists") || strings.Contains(msg, "duplicate key value violates unique constraint")
+}
+
+// migrateDocumentColumns adds host/version/crawled_at/norm_embedding to a
+// documents table that predates them (CREATE TABLE IF NOT EXISTS above only
+// shapes a fresh table) and backfills host/norm_embedding for any
+// pre-existing row, so an upgrade never requires a manual migration step.
 func (r *Repository) migrateDocumentColumns(ctx context.Context) error {
 	existing, err := r.existingColumns(ctx, "documents")
 	if err != nil {
@@ -106,7 +191,13 @@ func (r *Repository) migrateDocumentColumns(ctx context.Context) error {
 	if err := addColumn("crawled_at", "crawled_at TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	return r.backfillHost(ctx)
+	if err := addColumn("norm_embedding", "norm_embedding REAL NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := r.backfillHost(ctx); err != nil {
+		return err
+	}
+	return r.backfillNormEmbedding(ctx)
 }
 
 // existingColumns introspects which columns a table actually has, so
@@ -183,6 +274,52 @@ func (r *Repository) backfillHost(ctx context.Context) error {
 	return nil
 }
 
+// backfillNormEmbedding fills in norm_embedding for any row saved before
+// that column existed (it defaults to 0, indistinguishable from a
+// genuinely all-zero embedding -- recomputing a zero-vector's norm as 0
+// again is harmless, just a no-op). Computed once here per pre-existing
+// row rather than left to be recomputed from scratch on every future
+// search request that scores the document.
+func (r *Repository) backfillNormEmbedding(ctx context.Context) error {
+	rows, err := r.db.QueryContext(ctx, r.ph(`SELECT id, embedding FROM documents WHERE norm_embedding = %s`, 1), 0)
+	if err != nil {
+		return fmt.Errorf("finding rows needing a norm_embedding backfill: %w", err)
+	}
+	type idEmbedding struct {
+		id      string
+		embJSON string
+	}
+	var pending []idEmbedding
+	for rows.Next() {
+		var ie idEmbedding
+		if err := rows.Scan(&ie.id, &ie.embJSON); err != nil {
+			rows.Close()
+			return fmt.Errorf("scanning row: %w", err)
+		}
+		pending = append(pending, ie)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	updateSQL := r.ph(`UPDATE documents SET norm_embedding = %s WHERE id = %s`, 1, 2)
+	for _, ie := range pending {
+		var vec []float32
+		if err := json.Unmarshal([]byte(ie.embJSON), &vec); err != nil {
+			return fmt.Errorf("deserializing embedding for norm backfill (%s): %w", ie.id, err)
+		}
+		norm := domain.VectorNorm(vec)
+		if norm == 0 {
+			continue // already 0; nothing to update
+		}
+		if _, err := r.db.ExecContext(ctx, updateSQL, norm, ie.id); err != nil {
+			return fmt.Errorf("backfilling norm_embedding for %s: %w", ie.id, err)
+		}
+	}
+	return nil
+}
+
 func (r *Repository) Close() error { return r.db.Close() }
 
 // Ping confirms the database connection is alive, for GET /healthz -- a
@@ -203,6 +340,11 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 	if err != nil {
 		return fmt.Errorf("serializing embedding: %w", err)
 	}
+	// Computed once here, at write time, and persisted alongside the
+	// embedding -- so every future search request that scores this
+	// document against a query reuses this norm instead of recomputing a
+	// full sum-of-squares pass over the embedding from scratch.
+	normEmbedding := domain.VectorNorm(embedding)
 	host := hostOf(doc.URL)
 	now := time.Now().UTC().Format(crawledAtLayout)
 
@@ -233,7 +375,7 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 	}
 
 	if _, err := tx.ExecContext(ctx, r.dialect.UpsertDocumentSQL(),
-		doc.ID, doc.URL, doc.Title, doc.Text, len(tokens), string(embJSON), host, version, now,
+		doc.ID, doc.URL, doc.Title, doc.Text, len(tokens), string(embJSON), normEmbedding, host, version, now,
 	); err != nil {
 		return fmt.Errorf("saving document: %w", err)
 	}
@@ -312,6 +454,56 @@ func (r *Repository) PostingsForTerm(ctx context.Context, term string) ([]domain
 	return out, rows.Err()
 }
 
+// PostingsForTerms batch-fetches postings for every one of terms in a
+// single "WHERE term IN (...)" query joined against documents, instead of
+// hybrid search's caller running one such join (plus a separate doc-freq
+// COUNT(*) query) per unique query term. Each term's DocFreq is simply the
+// number of rows that came back for it -- postings has exactly one row per
+// (term, doc_id) pair, so counting the grouped rows in Go is equivalent to
+// (and cheaper than) a separate "SELECT COUNT(*) ... GROUP BY term" query.
+// TotalDocs/AvgDocLen are deliberately left zero here -- see the
+// ports.SQLRepository.PostingsForTerms doc comment -- since the caller
+// fetches those once per request (or less often, from an in-memory cache)
+// rather than once per term.
+func (r *Repository) PostingsForTerms(ctx context.Context, terms []string) (map[string][]domain.PostingStats, error) {
+	if len(terms) == 0 {
+		return map[string][]domain.PostingStats{}, nil
+	}
+	args := make([]interface{}, len(terms))
+	for i, t := range terms {
+		args[i] = t
+	}
+	query := `SELECT p.term, p.doc_id, p.term_freq, d.doc_length
+	          FROM postings p JOIN documents d ON d.id = p.doc_id
+	          WHERE p.term IN (` + r.placeholderList(len(terms), 1) + `)`
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying postings: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string][]domain.PostingStats, len(terms))
+	for rows.Next() {
+		var term string
+		var s domain.PostingStats
+		if err := rows.Scan(&term, &s.DocID, &s.TermFreq, &s.DocLength); err != nil {
+			return nil, fmt.Errorf("scanning row: %w", err)
+		}
+		out[term] = append(out[term], s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for term, postings := range out {
+		docFreq := len(postings)
+		for i := range postings {
+			postings[i].DocFreq = docFreq
+		}
+		out[term] = postings
+	}
+	return out, nil
+}
+
 func (r *Repository) CorpusStats(ctx context.Context) (int, float64, error) {
 	var totalDocs int
 	var avgLen sql.NullFloat64
@@ -352,26 +544,64 @@ func (r *Repository) VocabularyStats(ctx context.Context, topN int) (int, []doma
 	return vocabSize, out, rows.Err()
 }
 
-func (r *Repository) AllEmbeddings(ctx context.Context) (map[string][]float32, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id, embedding FROM documents`)
-	if err != nil {
-		return nil, fmt.Errorf("querying embeddings: %w", err)
-	}
-	defer rows.Close()
-
-	out := make(map[string][]float32)
+// scanEmbeddingRows reads (id, embedding-JSON, norm_embedding) rows into a
+// map, shared by EmbeddingsForDocs and SampleEmbeddings so both stay
+// consistent about how the embedding column is deserialized. The norm is
+// read straight off its own column -- computed once at SaveDocument time
+// (or by the norm_embedding backfill) -- rather than recomputed here from
+// the deserialized vector.
+func scanEmbeddingRows(rows *sql.Rows) (map[string]domain.EmbeddedVector, error) {
+	out := make(map[string]domain.EmbeddedVector)
 	for rows.Next() {
 		var id, embJSON string
-		if err := rows.Scan(&id, &embJSON); err != nil {
+		var norm float64
+		if err := rows.Scan(&id, &embJSON, &norm); err != nil {
 			return nil, fmt.Errorf("scanning row: %w", err)
 		}
 		var vec []float32
 		if err := json.Unmarshal([]byte(embJSON), &vec); err != nil {
 			return nil, fmt.Errorf("deserializing embedding (%s): %w", id, err)
 		}
-		out[id] = vec
+		out[id] = domain.EmbeddedVector{Vector: vec, Norm: norm}
 	}
 	return out, rows.Err()
+}
+
+// EmbeddingsForDocs batch-fetches embeddings for exactly the given doc IDs
+// (a single "WHERE id IN (...)" query), so a search only ever deserializes
+// embeddings for documents it actually needs -- never the whole corpus.
+func (r *Repository) EmbeddingsForDocs(ctx context.Context, ids []string) (map[string]domain.EmbeddedVector, error) {
+	if len(ids) == 0 {
+		return map[string]domain.EmbeddedVector{}, nil
+	}
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	query := `SELECT id, embedding, norm_embedding FROM documents WHERE id IN (` + r.placeholderList(len(ids), 1) + `)`
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying embeddings for docs: %w", err)
+	}
+	defer rows.Close()
+	return scanEmbeddingRows(rows)
+}
+
+// SampleEmbeddings returns up to limit embeddings from across the corpus
+// (SQL-bounded via LIMIT, so the query cost never scales with corpus size),
+// used to fill out a search's semantic candidate pool beyond its BM25 hits.
+// A non-positive limit returns an empty map without touching the database.
+func (r *Repository) SampleEmbeddings(ctx context.Context, limit int) (map[string]domain.EmbeddedVector, error) {
+	if limit <= 0 {
+		return map[string]domain.EmbeddedVector{}, nil
+	}
+	query := r.ph(`SELECT id, embedding, norm_embedding FROM documents ORDER BY id LIMIT %s`, 1)
+	rows, err := r.db.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("sampling embeddings: %w", err)
+	}
+	defer rows.Close()
+	return scanEmbeddingRows(rows)
 }
 
 func (r *Repository) DocumentByID(ctx context.Context, docID string) (domain.Document, error) {
@@ -386,6 +616,126 @@ func (r *Repository) DocumentByID(ctx context.Context, docID string) (domain.Doc
 		doc.CrawledAt = t
 	}
 	return doc, nil
+}
+
+// DocumentsByIDs batch-fetches documents for the given IDs in a single
+// "WHERE id IN (...)" query, for callers (e.g. hybrid search's
+// constraint/boost/recency filtering) that would otherwise call
+// DocumentByID once per candidate -- an ID with no matching row is simply
+// absent from the result rather than an error, so a candidate whose
+// document was deleted concurrently is silently dropped by the caller
+// rather than failing the whole search.
+func (r *Repository) DocumentsByIDs(ctx context.Context, ids []string) (map[string]domain.Document, error) {
+	if len(ids) == 0 {
+		return map[string]domain.Document{}, nil
+	}
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	query := `SELECT id, url, title, text, crawled_at FROM documents WHERE id IN (` + r.placeholderList(len(ids), 1) + `)`
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying documents: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]domain.Document, len(ids))
+	for rows.Next() {
+		var doc domain.Document
+		var crawledAt string
+		if err := rows.Scan(&doc.ID, &doc.URL, &doc.Title, &doc.Text, &crawledAt); err != nil {
+			return nil, fmt.Errorf("scanning row: %w", err)
+		}
+		if t, err := time.Parse(crawledAtLayout, crawledAt); err == nil {
+			doc.CrawledAt = t
+		}
+		out[doc.ID] = doc
+	}
+	return out, rows.Err()
+}
+
+// DocumentsByIDsSortedByCrawledAt batch-fetches documents for the given IDs
+// exactly like DocumentsByIDs (an ID with no matching row is simply absent,
+// not an error), but returns them as a slice in descending crawled_at order
+// (ties broken by id ascending, for a deterministic order matching the
+// tie-break domain.SortByCrawledAt used to apply in Go) -- pushed down into
+// SQL and served by idx_documents_crawled_at, so the hybrid search
+// service's recency-sort path never needs an in-app sort.Slice over the
+// fetched candidates.
+func (r *Repository) DocumentsByIDsSortedByCrawledAt(ctx context.Context, ids []string) ([]domain.Document, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	query := `SELECT id, url, title, text, crawled_at FROM documents WHERE id IN (` + r.placeholderList(len(ids), 1) +
+		`) ORDER BY crawled_at DESC, id ASC`
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying documents sorted by crawled_at: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]domain.Document, 0, len(ids))
+	for rows.Next() {
+		var doc domain.Document
+		var crawledAt string
+		if err := rows.Scan(&doc.ID, &doc.URL, &doc.Title, &doc.Text, &crawledAt); err != nil {
+			return nil, fmt.Errorf("scanning row: %w", err)
+		}
+		if t, err := time.Parse(crawledAtLayout, crawledAt); err == nil {
+			doc.CrawledAt = t
+		}
+		out = append(out, doc)
+	}
+	return out, rows.Err()
+}
+
+// maxDocumentIDsByHost caps how many IDs a single site: filter can force
+// into the search candidate set -- a safety valve against an unbounded
+// fetch for a pathologically large single-domain crawl, well above the
+// default semantic candidate pool size since a site: query is scoped by
+// the user's own intent, not a general relevance sample.
+const maxDocumentIDsByHost = 5000
+
+// DocumentIDsByHost returns the IDs of documents whose host exactly
+// matches one of hosts, or is a subdomain of one (host = ? OR host LIKE
+// '%.'+?), mirroring domain.ParsedQuery.SiteAllowed's matching rule.
+// Served by idx_documents_host rather than a full table scan.
+func (r *Repository) DocumentIDsByHost(ctx context.Context, hosts []string) ([]string, error) {
+	if len(hosts) == 0 {
+		return nil, nil
+	}
+	conditions := make([]string, 0, len(hosts))
+	args := make([]interface{}, 0, len(hosts)*2)
+	pos := 1
+	for _, h := range hosts {
+		conditions = append(conditions, fmt.Sprintf("(host = %s OR host LIKE %s)", r.dialect.Placeholder(pos), r.dialect.Placeholder(pos+1)))
+		args = append(args, h, "%."+h)
+		pos += 2
+	}
+	query := `SELECT id FROM documents WHERE ` + strings.Join(conditions, " OR ") +
+		r.ph(` LIMIT %s`, pos)
+	args = append(args, maxDocumentIDsByHost)
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying document ids by host: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning row: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // DeleteDocument removes a document and every row that references it

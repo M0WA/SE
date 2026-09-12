@@ -18,6 +18,25 @@ type OperationalSettingsValues struct {
 	SessionTTL       time.Duration
 	CrawlDelayMs     int
 	MaxResponseBytes int
+	// SemanticCandidatePoolSize bounds how many documents ever get a
+	// semantic (cosine similarity) score computed and ranked per search,
+	// regardless of corpus size -- see hybridSearchService.Search. It's the
+	// union of every BM25-hit document (however many that is) plus a
+	// bounded sample of the rest of the corpus, so a purely semantic match
+	// (no BM25 hits at all) can still be found without scoring literally
+	// every stored document on every request.
+	SemanticCandidatePoolSize int
+	// DBMaxOpenConns and DBMaxIdleConns bound the SQL connection pool
+	// (sqlrepo.Repository.ConfigurePool), and DBConnMaxLifetime caps how
+	// long a pooled connection is reused before being recycled. Applied at
+	// startup with a dialect-aware default (Postgres/MySQL benefit from a
+	// real pool; SQLite's single-writer locking model means
+	// sqlrepo.Repository always clamps its own open-connection count to 1
+	// regardless of what's configured here), and re-applied live whenever
+	// an admin edit reaches this process via bootstrap.SyncSettings.
+	DBMaxOpenConns    int
+	DBMaxIdleConns    int
+	DBConnMaxLifetime time.Duration
 }
 
 // defaultUserAgent mimics a standard desktop Firefox so crawled sites treat
@@ -32,18 +51,36 @@ const defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Ge
 const (
 	defaultCrawlDelayMs     = 250
 	defaultMaxResponseBytes = 5 * 1024 * 1024
+	// defaultSemanticCandidatePoolSize keeps every search's semantic
+	// scoring/ranking/sorting step working over at most a few hundred
+	// candidates, whether the corpus holds a thousand documents or ten
+	// million.
+	defaultSemanticCandidatePoolSize = 200
+	// defaultDBMaxOpenConns/defaultDBMaxIdleConns/defaultDBConnMaxLifetime
+	// are sane defaults for a real connection pool (Postgres/MySQL);
+	// sqlrepo.Repository.ConfigurePool clamps SQLite down to a single
+	// connection regardless of these values, since SQLite serializes
+	// writers at the file level and a larger pool there just adds
+	// "database is locked" contention instead of concurrency.
+	defaultDBMaxOpenConns    = 25
+	defaultDBMaxIdleConns    = 25
+	defaultDBConnMaxLifetime = 5 * time.Minute
 )
 
 func defaultOperationalSettings() OperationalSettingsValues {
 	return OperationalSettingsValues{
-		FetchTimeout:     8 * time.Second,
-		UserAgent:        defaultUserAgent,
-		DefaultMaxPages:  20,
-		MinTextLength:    50,
-		DefaultTopK:      10,
-		SessionTTL:       12 * time.Hour,
-		CrawlDelayMs:     defaultCrawlDelayMs,
-		MaxResponseBytes: defaultMaxResponseBytes,
+		FetchTimeout:              8 * time.Second,
+		UserAgent:                 defaultUserAgent,
+		DefaultMaxPages:           20,
+		MinTextLength:             50,
+		DefaultTopK:               10,
+		SessionTTL:                12 * time.Hour,
+		CrawlDelayMs:              defaultCrawlDelayMs,
+		MaxResponseBytes:          defaultMaxResponseBytes,
+		SemanticCandidatePoolSize: defaultSemanticCandidatePoolSize,
+		DBMaxOpenConns:            defaultDBMaxOpenConns,
+		DBMaxIdleConns:            defaultDBMaxIdleConns,
+		DBConnMaxLifetime:         defaultDBConnMaxLifetime,
 	}
 }
 
@@ -111,6 +148,18 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 	}
 	if v.MaxResponseBytes <= 0 {
 		v.MaxResponseBytes = d.MaxResponseBytes
+	}
+	if v.SemanticCandidatePoolSize <= 0 {
+		v.SemanticCandidatePoolSize = d.SemanticCandidatePoolSize
+	}
+	if v.DBMaxOpenConns <= 0 {
+		v.DBMaxOpenConns = d.DBMaxOpenConns
+	}
+	if v.DBMaxIdleConns <= 0 {
+		v.DBMaxIdleConns = d.DBMaxIdleConns
+	}
+	if v.DBConnMaxLifetime <= 0 {
+		v.DBConnMaxLifetime = d.DBConnMaxLifetime
 	}
 
 	s.mu.Lock()

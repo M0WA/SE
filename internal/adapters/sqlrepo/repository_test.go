@@ -154,6 +154,89 @@ func TestNewWithDB_UsesGivenConnectionAndDialect(t *testing.T) {
 	}
 }
 
+// TestNew_AppliesDialectAwareDefaultPoolSettings confirms sqlrepo.New sets a
+// sane connection-pool baseline immediately at construction, before any
+// admin-configured value is ever loaded: SQLite (this test's default,
+// TEST_POSTGRES_DSN unset) is clamped to a single connection, since it
+// serializes writers at the file level; a real Postgres server (when
+// TEST_POSTGRES_DSN points the whole suite at one) gets the full default
+// pool instead.
+func TestNew_AppliesDialectAwareDefaultPoolSettings(t *testing.T) {
+	repo := newTestRepo(t)
+	stats := repo.PoolStats()
+	if os.Getenv(testPostgresDSNEnv) != "" {
+		if stats.MaxOpenConnections != 25 {
+			t.Errorf("expected the default of 25 max open connections against a real Postgres server, got %d", stats.MaxOpenConnections)
+		}
+		return
+	}
+	if stats.MaxOpenConnections != 1 {
+		t.Errorf("expected SQLite to default to a single open connection, got %d", stats.MaxOpenConnections)
+	}
+}
+
+// TestConfigurePool_SQLiteAlwaysClampsToOneConnection confirms that even an
+// admin (or test) requesting a large pool against a SQLite-backed
+// repository never actually gets more than one open connection -- SQLite's
+// single-writer locking model means a larger pool doesn't add concurrency
+// and only risks "database is locked" errors.
+func TestConfigurePool_SQLiteAlwaysClampsToOneConnection(t *testing.T) {
+	if os.Getenv(testPostgresDSNEnv) != "" {
+		t.Skip("this test specifically exercises the SQLite clamp")
+	}
+	repo := newTestRepo(t)
+	repo.ConfigurePool(50, 50, time.Hour)
+	stats := repo.PoolStats()
+	if stats.MaxOpenConnections != 1 {
+		t.Errorf("expected MaxOpenConnections clamped to 1 for sqlite regardless of the requested 50, got %d", stats.MaxOpenConnections)
+	}
+}
+
+// TestConfigurePool_NonSQLiteAppliesGivenValues exercises the clamping
+// logic itself against a repository constructed with a non-sqlite dialect
+// name (the underlying connection is still an in-memory SQLite database --
+// ConfigurePool only ever calls the stdlib pool-limit setters, never a
+// dialect-specific query, so this is a faithful unit test of the "not
+// sqlite" branch without needing a live Postgres/MySQL server).
+func TestConfigurePool_NonSQLiteAppliesGivenValues(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:testconfigurepool%d?mode=memory&cache=shared", n))
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := sqlrepo.NewWithDB(db, "postgres")
+	repo.ConfigurePool(7, 4, 90*time.Second)
+	stats := repo.PoolStats()
+	if stats.MaxOpenConnections != 7 {
+		t.Errorf("expected MaxOpenConnections=7 for a non-sqlite dialect, got %d", stats.MaxOpenConnections)
+	}
+}
+
+// TestNewWithDB_AppliesDefaultPoolSettings confirms NewWithDB (used by
+// callers that already have their own *sql.DB) applies the same
+// dialect-aware default pool baseline as New, not just an un-pooled
+// passthrough.
+func TestNewWithDB_AppliesDefaultPoolSettings(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:testnewwithdbpool%d?mode=memory&cache=shared", n))
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	repo := sqlrepo.NewWithDB(db, "sqlite")
+	if stats := repo.PoolStats(); stats.MaxOpenConnections != 1 {
+		t.Errorf("expected NewWithDB to default sqlite to a single open connection, got %d", stats.MaxOpenConnections)
+	}
+
+	pgRepo := sqlrepo.NewWithDB(db, "postgres")
+	if stats := pgRepo.PoolStats(); stats.MaxOpenConnections != 25 {
+		t.Errorf("expected NewWithDB to default a non-sqlite dialect to 25 max open connections, got %d", stats.MaxOpenConnections)
+	}
+}
+
 func TestSaveDocument_ThenRetrieveEverywhere(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
@@ -175,12 +258,35 @@ func TestSaveDocument_ThenRetrieveEverywhere(t *testing.T) {
 		t.Errorf("expected CrawledAt to be populated with a recent timestamp, got %v", got.CrawledAt)
 	}
 
-	embeddings, err := repo.AllEmbeddings(ctx)
+	embeddings, err := repo.EmbeddingsForDocs(ctx, []string{"doc-1"})
 	if err != nil {
 		t.Fatalf("unexpected error loading embeddings: %v", err)
 	}
-	if len(embeddings["doc-1"]) != 3 || embeddings["doc-1"][0] != 0.1 {
+	if len(embeddings["doc-1"].Vector) != 3 || embeddings["doc-1"].Vector[0] != 0.1 {
 		t.Errorf("expected saved embedding back, got %v", embeddings["doc-1"])
+	}
+	wantNorm := domain.VectorNorm(embedding)
+	if got := embeddings["doc-1"].Norm; got < wantNorm-1e-9 || got > wantNorm+1e-9 {
+		t.Errorf("expected precomputed norm %v, got %v", wantNorm, got)
+	}
+
+	sampled, err := repo.SampleEmbeddings(ctx, 10)
+	if err != nil {
+		t.Fatalf("unexpected error sampling embeddings: %v", err)
+	}
+	if len(sampled["doc-1"].Vector) != 3 || sampled["doc-1"].Vector[0] != 0.1 {
+		t.Errorf("expected saved embedding back from sample, got %v", sampled["doc-1"])
+	}
+	if got := sampled["doc-1"].Norm; got < wantNorm-1e-9 || got > wantNorm+1e-9 {
+		t.Errorf("expected precomputed norm %v from sample, got %v", wantNorm, got)
+	}
+
+	docsByID, err := repo.DocumentsByIDs(ctx, []string{"doc-1", "does-not-exist"})
+	if err != nil {
+		t.Fatalf("unexpected error batch-loading documents: %v", err)
+	}
+	if len(docsByID) != 1 || docsByID["doc-1"].Title != doc.Title {
+		t.Errorf("expected only the existing document back, got %+v", docsByID)
 	}
 
 	docs, err := repo.ListDocuments(ctx, 10, "")
@@ -295,6 +401,80 @@ func TestPostingsForTerm_AcrossMultipleDocuments(t *testing.T) {
 		if p.DocFreq != 2 {
 			t.Errorf("expected DocFreq=2 (term appears in 2 docs), got %d", p.DocFreq)
 		}
+	}
+}
+
+func TestPostingsForTerms_EmptyTermsReturnsEmptyWithoutQuerying(t *testing.T) {
+	repo := newTestRepo(t)
+	postings, err := repo.PostingsForTerms(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(postings) != 0 {
+		t.Errorf("expected an empty result for no terms, got %+v", postings)
+	}
+}
+
+func TestPostingsForTerms_NoMatches(t *testing.T) {
+	repo := newTestRepo(t)
+	postings, err := repo.PostingsForTerms(context.Background(), []string{"nonexistent"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(postings["nonexistent"]) != 0 {
+		t.Errorf("expected no postings for an unindexed term, got %+v", postings)
+	}
+}
+
+// TestPostingsForTerms_BatchesMultipleTermsInOneCall verifies the fix for
+// hybrid search's "one query per query term" problem: a single
+// PostingsForTerms call for several terms returns each term's own postings
+// (with per-term DocFreq computed from the returned rows), keyed
+// separately -- not conflated with each other, and without one query per
+// term.
+func TestPostingsForTerms_BatchesMultipleTermsInOneCall(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	docs := []domain.Document{
+		{ID: "doc-1", URL: "http://a", Title: "A", Text: "cats and dogs"},
+		{ID: "doc-2", URL: "http://b", Title: "B", Text: "cats everywhere, cats"},
+	}
+	for _, d := range docs {
+		if err := repo.SaveDocument(ctx, d, []float32{1}); err != nil {
+			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
+		}
+	}
+
+	postings, err := repo.PostingsForTerms(ctx, []string{"cats", "dogs", "nonexistent"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	catsPostings := postings["cats"]
+	if len(catsPostings) != 2 {
+		t.Fatalf("expected 'cats' postings from both documents, got %+v", catsPostings)
+	}
+	for _, p := range catsPostings {
+		if p.DocFreq != 2 {
+			t.Errorf("expected DocFreq=2 for 'cats' (appears in 2 docs), got %d", p.DocFreq)
+		}
+		if p.TotalDocs != 0 || p.AvgDocLen != 0 {
+			t.Errorf("expected PostingsForTerms to leave TotalDocs/AvgDocLen unset (caller fills them in from its own corpus-wide stats), got %+v", p)
+		}
+	}
+	for _, p := range catsPostings {
+		if p.DocID == "doc-2" && p.TermFreq != 2 {
+			t.Errorf("expected doc-2's 'cats' term_freq=2, got %d", p.TermFreq)
+		}
+	}
+
+	dogsPostings := postings["dogs"]
+	if len(dogsPostings) != 1 || dogsPostings[0].DocID != "doc-1" || dogsPostings[0].DocFreq != 1 {
+		t.Errorf("expected a single 'dogs' posting for doc-1 with DocFreq=1, got %+v", dogsPostings)
+	}
+
+	if len(postings["nonexistent"]) != 0 {
+		t.Errorf("expected no postings for an unindexed term, got %+v", postings["nonexistent"])
 	}
 }
 
@@ -445,8 +625,23 @@ func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 			t.Error("expected an error")
 		}
 	})
-	t.Run("AllEmbeddings", func(t *testing.T) {
-		if _, err := closedRepo(t).AllEmbeddings(ctx); err == nil {
+	t.Run("EmbeddingsForDocs", func(t *testing.T) {
+		if _, err := closedRepo(t).EmbeddingsForDocs(ctx, []string{"doc-1"}); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("SampleEmbeddings", func(t *testing.T) {
+		if _, err := closedRepo(t).SampleEmbeddings(ctx, 10); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("DocumentsByIDs", func(t *testing.T) {
+		if _, err := closedRepo(t).DocumentsByIDs(ctx, []string{"doc-1"}); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("DocumentsByIDsSortedByCrawledAt", func(t *testing.T) {
+		if _, err := closedRepo(t).DocumentsByIDsSortedByCrawledAt(ctx, []string{"doc-1"}); err == nil {
 			t.Error("expected an error")
 		}
 	})
@@ -457,6 +652,11 @@ func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 	})
 	t.Run("PostingsForTerm", func(t *testing.T) {
 		if _, err := closedRepo(t).PostingsForTerm(ctx, "term"); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("PostingsForTerms", func(t *testing.T) {
+		if _, err := closedRepo(t).PostingsForTerms(ctx, []string{"term"}); err == nil {
 			t.Error("expected an error")
 		}
 	})
@@ -554,14 +754,105 @@ func TestHostOf_InvalidURLReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestAllEmbeddings_EmptyWhenNoDocuments(t *testing.T) {
+func TestSampleEmbeddings_EmptyWhenNoDocuments(t *testing.T) {
 	repo := newTestRepo(t)
-	embeddings, err := repo.AllEmbeddings(context.Background())
+	embeddings, err := repo.SampleEmbeddings(context.Background(), 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(embeddings) != 0 {
 		t.Errorf("expected no embeddings, got %v", embeddings)
+	}
+}
+
+func TestSampleEmbeddings_ZeroLimitReturnsEmptyWithoutQuerying(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "some text"}, []float32{1}); err != nil {
+		t.Fatalf("unexpected error saving document: %v", err)
+	}
+	embeddings, err := repo.SampleEmbeddings(ctx, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(embeddings) != 0 {
+		t.Errorf("expected a non-positive limit to yield no embeddings, got %v", embeddings)
+	}
+}
+
+func TestSampleEmbeddings_BoundedByLimitRegardlessOfCorpusSize(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		id := fmt.Sprintf("doc-%d", i)
+		if err := repo.SaveDocument(ctx, domain.Document{ID: id, URL: "http://" + id, Title: "A", Text: "some text"}, []float32{float32(i)}); err != nil {
+			t.Fatalf("unexpected error saving document %s: %v", id, err)
+		}
+	}
+	embeddings, err := repo.SampleEmbeddings(ctx, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(embeddings) != 2 {
+		t.Errorf("expected exactly 2 sampled embeddings out of 5 saved documents, got %d: %v", len(embeddings), embeddings)
+	}
+}
+
+func TestEmbeddingsForDocs_OnlyReturnsRequestedIDs(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "some text"}, []float32{1}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-2", URL: "http://b", Title: "B", Text: "other text"}, []float32{2}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	embeddings, err := repo.EmbeddingsForDocs(ctx, []string{"doc-1", "does-not-exist"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(embeddings) != 1 || embeddings["doc-1"].Vector[0] != 1 {
+		t.Errorf("expected only doc-1's embedding, got %v", embeddings)
+	}
+}
+
+func TestEmbeddingsForDocs_EmptyIDsReturnsEmptyWithoutQuerying(t *testing.T) {
+	repo := newTestRepo(t)
+	embeddings, err := repo.EmbeddingsForDocs(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(embeddings) != 0 {
+		t.Errorf("expected no embeddings for an empty ID list, got %v", embeddings)
+	}
+}
+
+func TestDocumentsByIDs_EmptyIDsReturnsEmptyWithoutQuerying(t *testing.T) {
+	repo := newTestRepo(t)
+	docs, err := repo.DocumentsByIDs(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(docs) != 0 {
+		t.Errorf("expected no documents for an empty ID list, got %v", docs)
+	}
+}
+
+func TestDocumentsByIDs_MissingIDsAreOmittedNotErrored(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "some text"}, []float32{1}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	docs, err := repo.DocumentsByIDs(ctx, []string{"doc-1", "ghost-doc"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(docs) != 1 {
+		t.Errorf("expected only the existing document, got %+v", docs)
+	}
+	if _, ok := docs["ghost-doc"]; ok {
+		t.Errorf("expected a missing ID to be silently omitted, not present as a zero value")
 	}
 }
 
@@ -823,6 +1114,51 @@ func TestMigrateDocumentColumns_BackfillsHostOnPreExistingRows(t *testing.T) {
 	}
 }
 
+func TestMigrateDocumentColumns_BackfillsNormEmbeddingOnPreExistingRows(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testmigratenorm%d?mode=memory&cache=shared", n)
+
+	// Simulate a database created before norm_embedding existed, with a
+	// pre-existing row carrying a non-trivial embedding.
+	pre, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open pre-migration DB: %v", err)
+	}
+	if _, err := pre.Exec(`CREATE TABLE documents (
+		id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT, text TEXT,
+		doc_length INTEGER NOT NULL, embedding TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("failed to create legacy schema: %v", err)
+	}
+	if _, err := pre.Exec(`INSERT INTO documents (id, url, title, text, doc_length, embedding)
+	                       VALUES ('doc-1', 'https://old.example/page', 'Old', 'old text', 10, '[3,4]')`); err != nil {
+		t.Fatalf("failed to insert legacy row: %v", err)
+	}
+	// Keep pre open for the rest of the test: an in-memory sqlite database
+	// (even with cache=shared) is destroyed once every connection to it
+	// closes, and repo below opens its own separate connection pool to
+	// the same DSN.
+	t.Cleanup(func() { _ = pre.Close() })
+
+	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("expected New to migrate the legacy schema without error, got: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	embeddings, err := repo.EmbeddingsForDocs(context.Background(), []string{"doc-1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got, ok := embeddings["doc-1"]
+	if !ok {
+		t.Fatalf("expected the pre-existing row back, got %v", embeddings)
+	}
+	if got.Norm < 4.999 || got.Norm > 5.001 {
+		t.Errorf("expected the pre-existing row's norm_embedding to be backfilled to 5 (norm of [3,4]), got %v", got.Norm)
+	}
+}
+
 func TestSaveDocument_ClassifiesOutboundLinksInternalVsExternal(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
@@ -1016,5 +1352,201 @@ func TestSaveSetting_KeysAreIndependent(t *testing.T) {
 	}
 	if tuning != "tuning-value" || overrides != "overrides-value" {
 		t.Errorf("expected independent keys, got tuning=%q overrides=%q", tuning, overrides)
+	}
+}
+
+func TestDocumentsByIDsSortedByCrawledAt_EmptyIDsReturnsEmptyWithoutQuerying(t *testing.T) {
+	repo := newTestRepo(t)
+	docs, err := repo.DocumentsByIDsSortedByCrawledAt(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(docs) != 0 {
+		t.Errorf("expected no documents for an empty ID list, got %v", docs)
+	}
+}
+
+func TestDocumentsByIDsSortedByCrawledAt_MissingIDsAreOmittedNotErrored(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "some text"}, []float32{1}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	docs, err := repo.DocumentsByIDsSortedByCrawledAt(ctx, []string{"doc-1", "ghost-doc"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(docs) != 1 || docs[0].ID != "doc-1" {
+		t.Errorf("expected only the existing document, got %+v", docs)
+	}
+}
+
+// TestDocumentsByIDsSortedByCrawledAt_OrdersDescendingWithDeterministicTieBreak
+// proves the ordering is pushed down into SQL (idx_documents_crawled_at)
+// rather than left to an in-app sort: most-recently-crawled first, ties
+// broken by id ascending -- the same tie-break domain.SortByCrawledAt used
+// to apply in Go, now expected of the query itself.
+func TestDocumentsByIDsSortedByCrawledAt_OrdersDescendingWithDeterministicTieBreak(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testsortedcrawled%d?mode=memory&cache=shared", n)
+
+	raw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open raw connection: %v", err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+
+	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	ctx := context.Background()
+	for _, id := range []string{"a", "b", "c", "d"} {
+		if err := repo.SaveDocument(ctx, domain.Document{ID: id, URL: "http://" + id, Title: id, Text: "text " + id}, []float32{1}); err != nil {
+			t.Fatalf("unexpected error saving %s: %v", id, err)
+		}
+	}
+
+	set := func(id string, ts time.Time) {
+		if _, err := raw.ExecContext(ctx, `UPDATE documents SET crawled_at = ? WHERE id = ?`, ts.Format(time.RFC3339Nano), id); err != nil {
+			t.Fatalf("failed to set crawled_at for %s: %v", id, err)
+		}
+	}
+	newest := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	middle := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	oldest := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	set("a", middle)
+	set("b", newest)
+	set("c", oldest)
+	set("d", middle) // ties with "a" -- tie-break must be id ascending: a before d
+
+	docs, err := repo.DocumentsByIDsSortedByCrawledAt(ctx, []string{"a", "b", "c", "d", "ghost"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(docs) != 4 {
+		t.Fatalf("expected 4 documents (ghost omitted), got %d: %+v", len(docs), docs)
+	}
+	gotOrder := []string{docs[0].ID, docs[1].ID, docs[2].ID, docs[3].ID}
+	wantOrder := []string{"b", "a", "d", "c"}
+	for i := range wantOrder {
+		if gotOrder[i] != wantOrder[i] {
+			t.Errorf("expected order (crawled_at desc, ties broken by id asc) %v, got %v", wantOrder, gotOrder)
+			break
+		}
+	}
+}
+
+func TestDocumentIDsByHost_EmptyHostsReturnsEmptyWithoutQuerying(t *testing.T) {
+	repo := newTestRepo(t)
+	ids, err := repo.DocumentIDsByHost(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Errorf("expected no ids for an empty host list, got %v", ids)
+	}
+}
+
+// TestDocumentIDsByHost_MatchesExactAndSubdomainNotUnrelated guards the
+// exact bug that shipped to production: a site: filter must find every
+// document on the requested host(s) -- exact match or subdomain -- via a
+// direct lookup, regardless of whether those documents also happen to be a
+// BM25 hit or land in hybrid search's bounded semantic sample.
+func TestDocumentIDsByHost_MatchesExactAndSubdomainNotUnrelated(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	docs := []domain.Document{
+		{ID: "exact", URL: "https://example.com/a", Title: "t", Text: "some text"},
+		{ID: "subdomain", URL: "https://www.example.com/b", Title: "t", Text: "some text"},
+		{ID: "unrelated", URL: "https://notexample.com/c", Title: "t", Text: "some text"},
+		{ID: "other-site", URL: "https://other.test/d", Title: "t", Text: "some text"},
+	}
+	for _, d := range docs {
+		if err := repo.SaveDocument(ctx, d, []float32{1}); err != nil {
+			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
+		}
+	}
+
+	ids, err := repo.DocumentIDsByHost(ctx, []string{"example.com"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := map[string]bool{}
+	for _, id := range ids {
+		got[id] = true
+	}
+	if !got["exact"] || !got["subdomain"] {
+		t.Errorf("expected exact and subdomain matches, got %v", ids)
+	}
+	if got["unrelated"] || got["other-site"] {
+		t.Errorf("expected no unrelated hosts matched, got %v", ids)
+	}
+	if len(ids) != 2 {
+		t.Errorf("expected exactly 2 matches, got %d: %v", len(ids), ids)
+	}
+}
+
+// TestEnsureCrawledAtIndex_CreatedOnFreshDatabase verifies idx_documents_crawled_at
+// exists after a normal New() against a brand-new database.
+func TestEnsureCrawledAtIndex_CreatedOnFreshDatabase(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testcrawledidxfresh%d?mode=memory&cache=shared", n)
+
+	raw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open raw connection: %v", err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+
+	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	var name string
+	err = raw.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_documents_crawled_at'`).Scan(&name)
+	if err != nil {
+		t.Errorf("expected idx_documents_crawled_at to exist on a freshly migrated database: %v", err)
+	}
+}
+
+// TestEnsureCrawledAtIndex_BackstopCreatesIndexOnPreExistingDatabase mirrors
+// the existing host-index/backfill migration tests: a database that already
+// has every documents column (so migrateDocumentColumns has nothing to add)
+// but predates this optimization's index must still get it, via the
+// ensureCrawledAtIndex backstop that runs on every New() regardless of
+// whether the table was just created or already existed.
+func TestEnsureCrawledAtIndex_BackstopCreatesIndexOnPreExistingDatabase(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testcrawledidxlegacy%d?mode=memory&cache=shared", n)
+
+	pre, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open pre-migration DB: %v", err)
+	}
+	if _, err := pre.Exec(`CREATE TABLE documents (
+		id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT, text TEXT,
+		doc_length INTEGER NOT NULL, embedding TEXT NOT NULL,
+		norm_embedding REAL NOT NULL DEFAULT 0,
+		host TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1,
+		crawled_at TEXT NOT NULL DEFAULT ''
+	)`); err != nil {
+		t.Fatalf("failed to create legacy schema: %v", err)
+	}
+	t.Cleanup(func() { _ = pre.Close() })
+
+	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("expected New to add the missing index without error, got: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	var name string
+	if err := pre.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_documents_crawled_at'`).Scan(&name); err != nil {
+		t.Errorf("expected idx_documents_crawled_at to be backstopped onto a pre-existing database, got: %v", err)
 	}
 }

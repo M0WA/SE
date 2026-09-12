@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -49,7 +50,7 @@ func TestSyncSettings_AppliesStoredTuningOnStartup(t *testing.T) {
 	}
 
 	tuning := domain.NewTuningSettings(0.5, 1.2, 0.75)
-	bootstrap.SyncSettings(syncContext(t), repo, tuning, nil, nil)
+	bootstrap.SyncSettings(syncContext(t), repo, tuning, nil, nil, nil)
 
 	alpha, k1, b := tuning.Get()
 	if alpha != 0.9 || k1 != 2.0 || b != 0.3 {
@@ -69,7 +70,7 @@ func TestSyncSettings_AppliesStoredOperationalOnStartup(t *testing.T) {
 	}
 
 	op := domain.DefaultOperationalSettings()
-	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil)
+	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, nil)
 
 	got := op.Get()
 	if got.UserAgent != "stored-agent" || got.DefaultMaxPages != 42 || got.CrawlDelayMs != 10 {
@@ -86,7 +87,7 @@ func TestSyncSettings_AppliesStoredOverridesOnStartup(t *testing.T) {
 	}
 
 	overrides := domain.DefaultRankingOverrides()
-	bootstrap.SyncSettings(syncContext(t), repo, nil, nil, overrides)
+	bootstrap.SyncSettings(syncContext(t), repo, nil, nil, overrides, nil)
 
 	got := overrides.Get()
 	if len(got.BlockedTerms) != 1 || got.BlockedTerms[0] != "casino" {
@@ -100,7 +101,7 @@ func TestSyncSettings_LeavesDefaultsWhenNothingStored(t *testing.T) {
 	op := domain.DefaultOperationalSettings()
 	overrides := domain.DefaultRankingOverrides()
 
-	bootstrap.SyncSettings(syncContext(t), repo, tuning, op, overrides)
+	bootstrap.SyncSettings(syncContext(t), repo, tuning, op, overrides, nil)
 
 	alpha, k1, b := tuning.Get()
 	if alpha != 0.5 || k1 != 1.2 || b != 0.75 {
@@ -122,7 +123,78 @@ func TestSyncSettings_NilInstancesAreSkipped(t *testing.T) {
 	}
 	// Passing nil for every instance must not panic (e.g. crawl-server has
 	// no tuning/overrides instance at all).
-	bootstrap.SyncSettings(syncContext(t), repo, nil, nil, nil)
+	bootstrap.SyncSettings(syncContext(t), repo, nil, nil, nil, nil)
+}
+
+// fakePoolConfigurer records every ConfigurePool call it receives, so tests
+// can assert on the (maxOpen, maxIdle, lifetime) triple SyncSettings applied
+// without needing a real *sql.DB.
+type fakePoolConfigurer struct {
+	calls []poolConfigCall
+}
+
+type poolConfigCall struct {
+	maxOpenConns, maxIdleConns int
+	connMaxLifetime            time.Duration
+}
+
+func (f *fakePoolConfigurer) ConfigurePool(maxOpenConns, maxIdleConns int, connMaxLifetime time.Duration) {
+	f.calls = append(f.calls, poolConfigCall{maxOpenConns, maxIdleConns, connMaxLifetime})
+}
+
+func TestSyncSettings_AppliesPoolSettingsOnStartup(t *testing.T) {
+	repo := newTestRepo(t)
+	stored := domain.OperationalSettingsValues{
+		DefaultTopK: 3, DBMaxOpenConns: 7, DBMaxIdleConns: 4, DBConnMaxLifetime: 2 * time.Minute,
+	}
+	data, _ := json.Marshal(stored)
+	if err := repo.SaveSetting(context.Background(), ports.SettingsKeyOperational, string(data)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	op := domain.DefaultOperationalSettings()
+	pool := &fakePoolConfigurer{}
+	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, pool)
+
+	if len(pool.calls) != 1 {
+		t.Fatalf("expected exactly one ConfigurePool call, got %d", len(pool.calls))
+	}
+	got := pool.calls[0]
+	if got.maxOpenConns != 7 || got.maxIdleConns != 4 || got.connMaxLifetime != 2*time.Minute {
+		t.Errorf("expected pool configured with the stored values, got %+v", got)
+	}
+}
+
+func TestSyncSettings_ReappliesPoolSettingsOnLaterPoll(t *testing.T) {
+	repo := newTestRepo(t)
+	op := domain.DefaultOperationalSettings()
+	pool := &fakePoolConfigurer{}
+	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, pool)
+	if len(pool.calls) != 1 {
+		t.Fatalf("expected one ConfigurePool call after startup, got %d", len(pool.calls))
+	}
+
+	updated := domain.OperationalSettingsValues{DBMaxOpenConns: 12, DBMaxIdleConns: 6, DBConnMaxLifetime: 90 * time.Second}
+	data, _ := json.Marshal(updated)
+	if err := repo.SaveSetting(context.Background(), ports.SettingsKeyOperational, string(data)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, pool)
+
+	if len(pool.calls) != 2 {
+		t.Fatalf("expected a second ConfigurePool call simulating the next poll tick, got %d", len(pool.calls))
+	}
+	got := pool.calls[1]
+	if got.maxOpenConns != 12 || got.maxIdleConns != 6 || got.connMaxLifetime != 90*time.Second {
+		t.Errorf("expected the second call to carry the newly stored values, got %+v", got)
+	}
+}
+
+func TestSyncSettings_NilPoolConfigurerIsSkipped(t *testing.T) {
+	repo := newTestRepo(t)
+	op := domain.DefaultOperationalSettings()
+	// Must not panic when no pool is supplied.
+	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, nil)
 }
 
 func TestSyncSettings_ReReadsOnEachCall(t *testing.T) {
@@ -133,7 +205,7 @@ func TestSyncSettings_ReReadsOnEachCall(t *testing.T) {
 	if err := repo.SaveSetting(context.Background(), ports.SettingsKeyTuning, string(first)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	bootstrap.SyncSettings(syncContext(t), repo, tuning, nil, nil)
+	bootstrap.SyncSettings(syncContext(t), repo, tuning, nil, nil, nil)
 	if alpha, _, _ := tuning.Get(); alpha != 0.6 {
 		t.Fatalf("expected alpha 0.6 after first sync, got %v", alpha)
 	}
@@ -142,7 +214,7 @@ func TestSyncSettings_ReReadsOnEachCall(t *testing.T) {
 	if err := repo.SaveSetting(context.Background(), ports.SettingsKeyTuning, string(second)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	bootstrap.SyncSettings(syncContext(t), repo, tuning, nil, nil)
+	bootstrap.SyncSettings(syncContext(t), repo, tuning, nil, nil, nil)
 	if alpha, _, _ := tuning.Get(); alpha != 0.7 {
 		t.Errorf("expected a later SyncSettings call (simulating the next poll tick) to pick up the new value, got %v", alpha)
 	}

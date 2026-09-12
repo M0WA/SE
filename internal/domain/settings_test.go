@@ -80,17 +80,70 @@ func TestOperationalSettings_SetNegativeMaxResponseBytesFallsBackToDefault(t *te
 	}
 }
 
+func TestOperationalSettings_SetZeroSemanticCandidatePoolSizeFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{SemanticCandidatePoolSize: 0})
+	if v := s.Get(); v.SemanticCandidatePoolSize != 200 {
+		t.Errorf("expected a zero SemanticCandidatePoolSize to fall back to the default, got %d", v.SemanticCandidatePoolSize)
+	}
+}
+
+func TestOperationalSettings_SetPositiveSemanticCandidatePoolSizeIsPreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{SemanticCandidatePoolSize: 500})
+	if v := s.Get(); v.SemanticCandidatePoolSize != 500 {
+		t.Errorf("expected SemanticCandidatePoolSize=500 to be preserved, got %d", v.SemanticCandidatePoolSize)
+	}
+}
+
+func TestOperationalSettings_SetZeroDBPoolFieldsFallBackToDefaults(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{DBMaxOpenConns: 0, DBMaxIdleConns: 0, DBConnMaxLifetime: 0})
+	v := s.Get()
+	if v.DBMaxOpenConns != 25 {
+		t.Errorf("expected DBMaxOpenConns to fall back to the default 25, got %d", v.DBMaxOpenConns)
+	}
+	if v.DBMaxIdleConns != 25 {
+		t.Errorf("expected DBMaxIdleConns to fall back to the default 25, got %d", v.DBMaxIdleConns)
+	}
+	if v.DBConnMaxLifetime != 5*time.Minute {
+		t.Errorf("expected DBConnMaxLifetime to fall back to the default 5m, got %v", v.DBConnMaxLifetime)
+	}
+}
+
+func TestOperationalSettings_SetNegativeDBPoolFieldsFallBackToDefaults(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{DBMaxOpenConns: -1, DBMaxIdleConns: -1, DBConnMaxLifetime: -1})
+	v := s.Get()
+	if v.DBMaxOpenConns != 25 || v.DBMaxIdleConns != 25 || v.DBConnMaxLifetime != 5*time.Minute {
+		t.Errorf("expected negative DB pool fields to fall back to defaults, got %+v", v)
+	}
+}
+
+func TestOperationalSettings_SetPositiveDBPoolFieldsArePreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{DBMaxOpenConns: 7, DBMaxIdleConns: 4, DBConnMaxLifetime: 90 * time.Second})
+	v := s.Get()
+	if v.DBMaxOpenConns != 7 || v.DBMaxIdleConns != 4 || v.DBConnMaxLifetime != 90*time.Second {
+		t.Errorf("expected configured DB pool fields to be preserved, got %+v", v)
+	}
+}
+
 func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 	v := domain.DefaultOperationalSettings().Get()
 	want := domain.OperationalSettingsValues{
-		FetchTimeout:     8 * time.Second,
-		UserAgent:        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0",
-		DefaultMaxPages:  20,
-		MinTextLength:    50,
-		DefaultTopK:      10,
-		SessionTTL:       12 * time.Hour,
-		CrawlDelayMs:     250,
-		MaxResponseBytes: 5 * 1024 * 1024,
+		FetchTimeout:              8 * time.Second,
+		UserAgent:                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0",
+		DefaultMaxPages:           20,
+		MinTextLength:             50,
+		DefaultTopK:               10,
+		SessionTTL:                12 * time.Hour,
+		CrawlDelayMs:              250,
+		MaxResponseBytes:          5 * 1024 * 1024,
+		SemanticCandidatePoolSize: 200,
+		DBMaxOpenConns:            25,
+		DBMaxIdleConns:            25,
+		DBConnMaxLifetime:         5 * time.Minute,
 	}
 	if v != want {
 		t.Errorf("expected defaults %+v, got %+v", want, v)

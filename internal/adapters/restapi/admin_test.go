@@ -1152,7 +1152,7 @@ func TestSyncSettings_PicksUpAdminPersistedValues(t *testing.T) {
 	otherProcessSettings := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	syncCtx, cancelSync := context.WithCancel(context.Background())
 	t.Cleanup(cancelSync)
-	bootstrap.SyncSettings(syncCtx, repo, otherProcessSettings, nil, nil)
+	bootstrap.SyncSettings(syncCtx, repo, otherProcessSettings, nil, nil, nil)
 	alpha, k1, b := otherProcessSettings.Get()
 	if alpha != 0.42 || k1 != 1.5 || b != 0.6 {
 		t.Errorf("expected another process's settings to pick up the admin edit, got (%v, %v, %v)", alpha, k1, b)

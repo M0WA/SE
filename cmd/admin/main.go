@@ -24,9 +24,11 @@ func main() {
 	settings := domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B)
 	opSettings := domain.DefaultOperationalSettings()
 	overrides := domain.DefaultRankingOverrides()
-	bootstrap.SyncSettings(ctx, repo, settings, opSettings, overrides)
+	bootstrap.SyncSettings(ctx, repo, settings, opSettings, overrides, repo)
+	corpusStats := domain.NewCorpusStatsCache(0, 1)
+	bootstrap.SyncCorpusStats(ctx, repo, corpusStats)
 	embedder := hashembed.New(128)
-	debugSvc := application.NewHybridSearchService(repo, embedder, settings, overrides)
+	debugSvc := application.NewHybridSearchService(repo, embedder, settings, opSettings, overrides, corpusStats)
 
 	adminUser := bootstrap.GetEnv("ADMIN_USER", "")
 	adminPass := bootstrap.GetEnv("ADMIN_PASSWORD", "")

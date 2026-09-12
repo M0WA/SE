@@ -16,6 +16,16 @@ import (
 // overrides page tells the user to expect.
 const settingsPollInterval = 10 * time.Second
 
+// PoolConfigurer is the narrow slice of *sqlrepo.Repository that
+// SyncSettings needs to re-apply connection-pool limits -- kept as a local
+// interface rather than importing sqlrepo, since bootstrap's settings
+// syncing has no other reason to depend on that package. A nil
+// PoolConfigurer (e.g. a test, or a caller with no pool to manage) is
+// simply skipped.
+type PoolConfigurer interface {
+	ConfigurePool(maxOpenConns, maxIdleConns int, connMaxLifetime time.Duration)
+}
+
 // SyncSettings applies whatever tuning/operational/overrides blobs store
 // currently holds to the given instances immediately, then keeps
 // re-applying the latest stored values every ~10s for as long as ctx stays
@@ -24,9 +34,17 @@ const settingsPollInterval = 10 * time.Second
 // op and overrides may each be nil for a process that has no use for that
 // kind of setting (crawl-server has neither tuning nor overrides, for
 // instance); each one that's already been constructed with its hardcoded
-// default is simply left as-is when the store has no value for it yet.
-func SyncSettings(ctx context.Context, store ports.SettingsStore, tuning *domain.TuningSettings, op *domain.OperationalSettings, overrides *domain.RankingOverrides) {
-	applySettingsOnce(ctx, store, tuning, op, overrides)
+// default is simply left as-is when the store has no value for it yet. pool
+// (typically the same *sqlrepo.Repository the process opened via OpenDB)
+// has op's current DBMaxOpenConns/DBMaxIdleConns/DBConnMaxLifetime
+// re-applied to the live database connection on every call -- including
+// this first one, which is a harmless no-op re-application of whatever
+// sqlrepo.New already set at construction, but which also picks up any
+// admin-configured value at every later poll tick without needing its own
+// separate change-detection. pool may be nil for a caller with no
+// connection pool to manage (e.g. a test that only cares about tuning).
+func SyncSettings(ctx context.Context, store ports.SettingsStore, tuning *domain.TuningSettings, op *domain.OperationalSettings, overrides *domain.RankingOverrides, pool PoolConfigurer) {
+	applySettingsOnce(ctx, store, tuning, op, overrides, pool)
 	go func() {
 		ticker := time.NewTicker(settingsPollInterval)
 		defer ticker.Stop()
@@ -35,13 +53,13 @@ func SyncSettings(ctx context.Context, store ports.SettingsStore, tuning *domain
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				applySettingsOnce(ctx, store, tuning, op, overrides)
+				applySettingsOnce(ctx, store, tuning, op, overrides, pool)
 			}
 		}
 	}()
 }
 
-func applySettingsOnce(ctx context.Context, store ports.SettingsStore, tuning *domain.TuningSettings, op *domain.OperationalSettings, overrides *domain.RankingOverrides) {
+func applySettingsOnce(ctx context.Context, store ports.SettingsStore, tuning *domain.TuningSettings, op *domain.OperationalSettings, overrides *domain.RankingOverrides, pool PoolConfigurer) {
 	if tuning != nil {
 		var v domain.TuningValues
 		if loadSetting(ctx, store, ports.SettingsKeyTuning, &v) {
@@ -52,6 +70,10 @@ func applySettingsOnce(ctx context.Context, store ports.SettingsStore, tuning *d
 		var v domain.OperationalSettingsValues
 		if loadSetting(ctx, store, ports.SettingsKeyOperational, &v) {
 			op.Set(v)
+		}
+		if pool != nil {
+			cur := op.Get()
+			pool.ConfigurePool(cur.DBMaxOpenConns, cur.DBMaxIdleConns, cur.DBConnMaxLifetime)
 		}
 	}
 	if overrides != nil {

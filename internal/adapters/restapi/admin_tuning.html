@@ -80,7 +80,28 @@
         <label for="default-top-k">Default result count — used when a search doesn't specify one</label><br>
         <input id="default-top-k" class="field" type="number" step="1" min="1" required>
       </div>
-      <p class="tuning-hint">Default: 10 results.</p>
+      <div class="form-row">
+        <label for="semantic-pool-size">Semantic candidate pool size — max documents scored for semantic similarity per search, regardless of corpus size</label><br>
+        <input id="semantic-pool-size" class="field" type="number" step="1" min="1" required>
+      </div>
+      <p class="tuning-hint">Defaults: 10 results, 200 candidates. Every BM25 match is always scored too; this only bounds how many additional documents get sampled for a purely semantic match.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Database connection pool</h2>
+      <div class="form-row">
+        <label for="db-max-open-conns">Max open connections</label><br>
+        <input id="db-max-open-conns" class="field" type="number" step="1" min="1" required>
+      </div>
+      <div class="form-row">
+        <label for="db-max-idle-conns">Max idle connections — kept warm between requests instead of closed</label><br>
+        <input id="db-max-idle-conns" class="field" type="number" step="1" min="1" required>
+      </div>
+      <div class="form-row">
+        <label for="db-conn-max-lifetime">Connection max lifetime — minutes before a pooled connection is recycled</label><br>
+        <input id="db-conn-max-lifetime" class="field" type="number" step="1" min="1" required>
+      </div>
+      <p class="tuning-hint">Defaults: 25 open, 25 idle, 5 minute lifetime. SQLite always keeps a single connection regardless of these values, since it serializes writers at the file level; a running process re-reads and re-applies these within about 10 seconds of a save, but the effect on already-open connections is limited to pool bookkeeping (idle/lifetime), not an instant reconnect.</p>
     </section>
 
     <section class="panel">
@@ -111,6 +132,10 @@
   const crawlDelayEl = document.getElementById('crawl-delay');
   const maxResponseKBEl = document.getElementById('max-response-kb');
   const defaultTopKEl = document.getElementById('default-top-k');
+  const semanticPoolSizeEl = document.getElementById('semantic-pool-size');
+  const dbMaxOpenConnsEl = document.getElementById('db-max-open-conns');
+  const dbMaxIdleConnsEl = document.getElementById('db-max-idle-conns');
+  const dbConnMaxLifetimeEl = document.getElementById('db-conn-max-lifetime');
   const sessionTTLEl = document.getElementById('session-ttl');
   const status = document.getElementById('tuning-status');
 
@@ -125,6 +150,10 @@
     crawlDelayEl.value = s.operational.crawl_delay_ms;
     maxResponseKBEl.value = s.operational.max_response_kb;
     defaultTopKEl.value = s.operational.default_top_k;
+    semanticPoolSizeEl.value = s.operational.semantic_candidate_pool_size;
+    dbMaxOpenConnsEl.value = s.operational.db_max_open_conns;
+    dbMaxIdleConnsEl.value = s.operational.db_max_idle_conns;
+    dbConnMaxLifetimeEl.value = s.operational.db_conn_max_lifetime_minutes;
     sessionTTLEl.value = s.operational.session_ttl_hours;
   }
 
@@ -154,6 +183,10 @@
           crawl_delay_ms: parseInt(crawlDelayEl.value, 10),
           max_response_kb: parseInt(maxResponseKBEl.value, 10),
           default_top_k: parseInt(defaultTopKEl.value, 10),
+          semantic_candidate_pool_size: parseInt(semanticPoolSizeEl.value, 10),
+          db_max_open_conns: parseInt(dbMaxOpenConnsEl.value, 10),
+          db_max_idle_conns: parseInt(dbMaxIdleConnsEl.value, 10),
+          db_conn_max_lifetime_minutes: parseInt(dbConnMaxLifetimeEl.value, 10),
           session_ttl_hours: parseInt(sessionTTLEl.value, 10),
         },
       });

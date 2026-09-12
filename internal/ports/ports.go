@@ -59,11 +59,48 @@ type EmbeddingProvider interface {
 // SQLRepository is the port to the relational database.
 type SQLRepository interface {
 	SaveDocument(ctx context.Context, doc domain.Document, embedding []float32) error
-	PostingsForTerm(ctx context.Context, term string) ([]domain.PostingStats, error)
+	// PostingsForTerms batch-fetches postings for every given term in a
+	// single query (a "WHERE term IN (...)" join against documents), so a
+	// multi-term search issues one round trip regardless of how many unique
+	// terms it has -- rather than one query per term. Returned PostingStats
+	// carry TermFreq/DocLength/DocFreq only; TotalDocs/AvgDocLen are left
+	// zero for the caller to fill in from its own corpus-wide stats (see
+	// domain.CorpusStatsCache), since those don't vary per term and would
+	// otherwise be refetched redundantly for every term in the batch.
+	PostingsForTerms(ctx context.Context, terms []string) (map[string][]domain.PostingStats, error)
 	CorpusStats(ctx context.Context) (totalDocs int, avgDocLen float64, err error)
 	VocabularyStats(ctx context.Context, topN int) (vocabularySize int, topTerms []domain.TermStat, err error)
-	AllEmbeddings(ctx context.Context) (map[string][]float32, error)
+	// EmbeddingsForDocs batch-fetches embeddings for exactly the given doc
+	// IDs (typically a query's BM25-hit set), so scoring a candidate never
+	// requires a full-corpus scan. Each result carries its norm alongside
+	// its vector (see domain.EmbeddedVector) -- precomputed once, at
+	// SaveDocument time, rather than recomputed from scratch on every
+	// request that scores the document.
+	EmbeddingsForDocs(ctx context.Context, ids []string) (map[string]domain.EmbeddedVector, error)
+	// SampleEmbeddings returns up to limit embeddings from across the
+	// corpus, so a purely semantic match (no BM25 hits at all) can still be
+	// found -- bounded regardless of how large the corpus is, unlike a full
+	// "every document" scan.
+	SampleEmbeddings(ctx context.Context, limit int) (map[string]domain.EmbeddedVector, error)
 	DocumentByID(ctx context.Context, docID string) (domain.Document, error)
+	// DocumentsByIDs batch-fetches documents for the given IDs in one
+	// round trip (a missing ID is simply absent from the result, not an
+	// error), for callers that would otherwise call DocumentByID once per
+	// candidate.
+	DocumentsByIDs(ctx context.Context, ids []string) (map[string]domain.Document, error)
+	// DocumentsByIDsSortedByCrawledAt is DocumentsByIDs' counterpart for the
+	// recency-sort path: same batched "WHERE id IN (...)" fetch, but ordered
+	// by crawled_at descending (ties broken by id ascending) directly in
+	// SQL -- backed by idx_documents_crawled_at -- so the caller never needs
+	// to sort the fetched candidates itself.
+	DocumentsByIDsSortedByCrawledAt(ctx context.Context, ids []string) ([]domain.Document, error)
+	// DocumentIDsByHost returns the IDs of every document whose host exactly
+	// matches one of the given hosts, or is a subdomain of one (mirroring
+	// domain.ParsedQuery.SiteAllowed's matching rule), served by
+	// idx_documents_host. Used to force a query's site: matches into the
+	// search candidate set directly, since they otherwise have no guarantee
+	// of appearing in the BM25-hit set or the bounded semantic sample.
+	DocumentIDsByHost(ctx context.Context, hosts []string) ([]string, error)
 	ListDocuments(ctx context.Context, limit int, host string) ([]domain.IndexedDocument, error)
 	DeleteDocument(ctx context.Context, docID string) error
 }

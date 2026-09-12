@@ -365,39 +365,51 @@ type tuningValues struct {
 // format: durations as whole seconds/hours, which are friendlier for an
 // admin form (and JSON) than Go's time.Duration nanosecond encoding.
 type operationalValues struct {
-	FetchTimeoutSeconds int    `json:"fetch_timeout_seconds"`
-	UserAgent           string `json:"user_agent"`
-	DefaultMaxPages     int    `json:"default_max_pages"`
-	MinTextLength       int    `json:"min_text_length"`
-	DefaultTopK         int    `json:"default_top_k"`
-	SessionTTLHours     int    `json:"session_ttl_hours"`
-	CrawlDelayMs        int    `json:"crawl_delay_ms"`
-	MaxResponseKB       int    `json:"max_response_kb"`
+	FetchTimeoutSeconds       int    `json:"fetch_timeout_seconds"`
+	UserAgent                 string `json:"user_agent"`
+	DefaultMaxPages           int    `json:"default_max_pages"`
+	MinTextLength             int    `json:"min_text_length"`
+	DefaultTopK               int    `json:"default_top_k"`
+	SessionTTLHours           int    `json:"session_ttl_hours"`
+	CrawlDelayMs              int    `json:"crawl_delay_ms"`
+	MaxResponseKB             int    `json:"max_response_kb"`
+	SemanticCandidatePoolSize int    `json:"semantic_candidate_pool_size"`
+	DBMaxOpenConns            int    `json:"db_max_open_conns"`
+	DBMaxIdleConns            int    `json:"db_max_idle_conns"`
+	DBConnMaxLifetimeMinutes  int    `json:"db_conn_max_lifetime_minutes"`
 }
 
 func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 	return operationalValues{
-		FetchTimeoutSeconds: int(v.FetchTimeout / time.Second),
-		UserAgent:           v.UserAgent,
-		DefaultMaxPages:     v.DefaultMaxPages,
-		MinTextLength:       v.MinTextLength,
-		DefaultTopK:         v.DefaultTopK,
-		SessionTTLHours:     int(v.SessionTTL / time.Hour),
-		CrawlDelayMs:        v.CrawlDelayMs,
-		MaxResponseKB:       v.MaxResponseBytes / 1024,
+		FetchTimeoutSeconds:       int(v.FetchTimeout / time.Second),
+		UserAgent:                 v.UserAgent,
+		DefaultMaxPages:           v.DefaultMaxPages,
+		MinTextLength:             v.MinTextLength,
+		DefaultTopK:               v.DefaultTopK,
+		SessionTTLHours:           int(v.SessionTTL / time.Hour),
+		CrawlDelayMs:              v.CrawlDelayMs,
+		MaxResponseKB:             v.MaxResponseBytes / 1024,
+		SemanticCandidatePoolSize: v.SemanticCandidatePoolSize,
+		DBMaxOpenConns:            v.DBMaxOpenConns,
+		DBMaxIdleConns:            v.DBMaxIdleConns,
+		DBConnMaxLifetimeMinutes:  int(v.DBConnMaxLifetime / time.Minute),
 	}
 }
 
 func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 	return domain.OperationalSettingsValues{
-		FetchTimeout:     time.Duration(o.FetchTimeoutSeconds) * time.Second,
-		UserAgent:        o.UserAgent,
-		DefaultMaxPages:  o.DefaultMaxPages,
-		MinTextLength:    o.MinTextLength,
-		DefaultTopK:      o.DefaultTopK,
-		SessionTTL:       time.Duration(o.SessionTTLHours) * time.Hour,
-		CrawlDelayMs:     o.CrawlDelayMs,
-		MaxResponseBytes: o.MaxResponseKB * 1024,
+		FetchTimeout:              time.Duration(o.FetchTimeoutSeconds) * time.Second,
+		UserAgent:                 o.UserAgent,
+		DefaultMaxPages:           o.DefaultMaxPages,
+		MinTextLength:             o.MinTextLength,
+		DefaultTopK:               o.DefaultTopK,
+		SessionTTL:                time.Duration(o.SessionTTLHours) * time.Hour,
+		CrawlDelayMs:              o.CrawlDelayMs,
+		MaxResponseBytes:          o.MaxResponseKB * 1024,
+		SemanticCandidatePoolSize: o.SemanticCandidatePoolSize,
+		DBMaxOpenConns:            o.DBMaxOpenConns,
+		DBMaxIdleConns:            o.DBMaxIdleConns,
+		DBConnMaxLifetime:         time.Duration(o.DBConnMaxLifetimeMinutes) * time.Minute,
 	}
 }
 

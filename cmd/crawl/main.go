@@ -58,7 +58,7 @@ func main() {
 	defer repo.Close()
 
 	opSettings := domain.DefaultOperationalSettings()
-	bootstrap.SyncSettings(ctx, repo, nil, opSettings, nil)
+	bootstrap.SyncSettings(ctx, repo, nil, opSettings, nil, repo)
 	embedder := hashembed.New(128)
 	fetcher := httpfetcher.New(opSettings)
 	robotsChecker := robots.New(fetcher)
