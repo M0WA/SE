@@ -110,7 +110,19 @@ jobs:
       - name: Smoke test
         run: |
           dpkg -s searchengine
+          # The public search page now requires a signed-in session (the
+          # same admin account /admin uses) -- start admin-server alongside
+          # search-server, sharing the same DB file, log in against it, and
+          # reuse that session's cookie against search-server, the same way
+          # a real deployment's shared "sessions" table lets one login work
+          # across both processes.
           DB_DRIVER=sqlite DB_DSN='file:/tmp/smoke.db?cache=shared' \
-            timeout 3 /usr/bin/searchengine-search &
+            timeout 5 /usr/bin/searchengine-search &
+          DB_DRIVER=sqlite DB_DSN='file:/tmp/smoke.db?cache=shared' \
+            ADMIN_USER=smoke ADMIN_PASSWORD=smoke-password \
+            timeout 5 /usr/bin/searchengine-admin &
           sleep 1
-          curl -sf 'http://127.0.0.1:8080/search?q=test' | grep -q '"query"'
+          curl -sf -c /tmp/smoke.jar -X POST -H 'Content-Type: application/json' \
+            -d '{"username":"smoke","password":"smoke-password"}' \
+            http://127.0.0.1:8081/login > /dev/null
+          curl -sf -b /tmp/smoke.jar 'http://127.0.0.1:8080/search?q=test' | grep -q '"query"'
