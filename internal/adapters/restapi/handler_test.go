@@ -555,6 +555,58 @@ func TestHandleAdminCrawl_PassesOffDomainAndSitemapOptionsThrough(t *testing.T) 
 	}
 }
 
+// TestHandleAdminCrawl_PassesPerCrawlSettingOverridesThrough verifies the
+// previously-global-only settings (fetch timeout, min text length, crawl
+// delay, max response size) and the prioritize-unindexed flag all reach
+// ports.CrawlOptions from the admin API's JSON body.
+func TestHandleAdminCrawl_PassesPerCrawlSettingOverridesThrough(t *testing.T) {
+	fj := &fakeJobService{jobID: "job-42"}
+	h, cookie := authedHandler(t, &fakeSearch{}, fj)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"seed_urls":             []string{"http://a"},
+		"fetch_timeout_seconds": 45, "min_text_length": 100,
+		"crawl_delay_ms": 500, "max_response_kb": 2048,
+		"prioritize_unindexed": true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	got := fj.gotOptions
+	if got.FetchTimeoutSeconds != 45 || got.MinTextLength != 100 || got.CrawlDelayMs != 500 ||
+		got.MaxResponseKB != 2048 || !got.PrioritizeUnindexed {
+		t.Errorf("expected per-crawl setting overrides to pass through, got %+v", got)
+	}
+}
+
+// TestHandleAdminCrawl_PerCrawlSettingOverridesDefaultZero verifies an
+// admin API request that omits these fields leaves them at their
+// "use the global default" zero value, not some other default.
+func TestHandleAdminCrawl_PerCrawlSettingOverridesDefaultZero(t *testing.T) {
+	fj := &fakeJobService{jobID: "job-42"}
+	h, cookie := authedHandler(t, &fakeSearch{}, fj)
+
+	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	got := fj.gotOptions
+	if got.FetchTimeoutSeconds != 0 || got.MinTextLength != 0 || got.CrawlDelayMs != 0 ||
+		got.MaxResponseKB != 0 || got.PrioritizeUnindexed {
+		t.Errorf("expected per-crawl setting overrides to default to zero/false, got %+v", got)
+	}
+}
+
 func TestHandleAdminCrawl_OffDomainAndSitemapOptionsDefaultFalse(t *testing.T) {
 	fj := &fakeJobService{jobID: "job-42"}
 	h, cookie := authedHandler(t, &fakeSearch{}, fj)

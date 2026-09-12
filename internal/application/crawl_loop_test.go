@@ -63,7 +63,7 @@ func TestCrawlLoop_PassesAuthOptionsToFetcher(t *testing.T) {
 		BasicAuthPass: "secret",
 	}
 
-	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil)
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestCrawlLoop_NoAuthOptionsMeansEmptyFetchOptions(t *testing.T) {
 	save := func(ctx context.Context, doc domain.Document) error { return nil }
 
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5}
-	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil); err != nil {
+	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got := fetcher.gotOptions[0]
@@ -104,7 +104,7 @@ func TestCrawlLoop_PassesUserAgentToFetcher(t *testing.T) {
 	save := func(ctx context.Context, doc domain.Document) error { return nil }
 
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5, UserAgent: "custom-bot/1.0"}
-	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil); err != nil {
+	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if fetcher.gotOptions[0].UserAgent != "custom-bot/1.0" {
@@ -125,7 +125,7 @@ func TestCrawlLoop_RobotsDisallowedOnlyWhenRespectRobotsSet(t *testing.T) {
 
 	// Default: robots.txt ignored, so the disallowed page still gets crawled.
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5}
-	count, err := crawlLoop(context.Background(), fetcher, robots, parse, nil, opts, save, onPage)
+	count, err := crawlLoop(context.Background(), fetcher, robots, parse, nil, opts, nil, save, onPage)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestCrawlLoop_RobotsDisallowedWhenRespectRobotsIsSet(t *testing.T) {
 	onPage := func(ev domain.CrawlPageEvent) { events = append(events, ev) }
 
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5, RespectRobots: true}
-	count, err := crawlLoop(context.Background(), fetcher, robots, parse, nil, opts, save, onPage)
+	count, err := crawlLoop(context.Background(), fetcher, robots, parse, nil, opts, nil, save, onPage)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestCrawlLoop_FetchFailureIncludesErrorDetail(t *testing.T) {
 	onPage := func(ev domain.CrawlPageEvent) { events = append(events, ev) }
 
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5}
-	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, onPage); err != nil {
+	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, onPage); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(events) != 1 || events[0].Status != domain.CrawlPageFetchFailed {
@@ -178,6 +178,174 @@ func TestCrawlLoop_FetchFailureIncludesErrorDetail(t *testing.T) {
 	}
 	if events[0].Error != "dial tcp: connection refused" {
 		t.Errorf("expected the underlying error message, got %q", events[0].Error)
+	}
+}
+
+// TestCrawlLoop_PerCrawlMinTextLengthOverridesGlobalDefault proves
+// opts.MinTextLength (positive) wins over the global operational default --
+// a page too short for this crawl's own tighter threshold is rejected even
+// though it would have passed the global one.
+func TestCrawlLoop_PerCrawlMinTextLengthOverridesGlobalDefault(t *testing.T) {
+	fetcher := &recordingFetcher{html: "<html>ok</html>"}
+	parse := func(html, pageURL string) (string, string, []string) { return "T", "twelve chars", nil }
+	save := func(ctx context.Context, doc domain.Document) error { return nil }
+
+	var events []domain.CrawlPageEvent
+	onPage := func(ev domain.CrawlPageEvent) { events = append(events, ev) }
+
+	// Global default (5) would happily accept "twelve chars" (12 chars);
+	// the per-crawl override (50) must not.
+	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{MinTextLength: 5})
+	opts := ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5, MinTextLength: 50}
+	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, settings, opts, nil, save, onPage); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(events) != 1 || events[0].Status != domain.CrawlPageThinContent {
+		t.Fatalf("expected the per-crawl MinTextLength override to reject this page, got %+v", events)
+	}
+}
+
+// TestCrawlLoop_PerCrawlCrawlDelayOverridesGlobalDefault proves
+// opts.CrawlDelayMs (positive) wins over the global operational default.
+func TestCrawlLoop_PerCrawlCrawlDelayOverridesGlobalDefault(t *testing.T) {
+	fetcher := &scopedFetcher{pages: map[string]string{
+		"http://a/1": "<html>a</html>",
+		"http://a/2": "<html>b</html>",
+	}}
+	parse := func(html, pageURL string) (string, string, []string) {
+		if pageURL == "http://a/1" {
+			return "T", "genuegend inhalt text fuer diese seite bitte danke", []string{"http://a/2"}
+		}
+		return "T2", "genuegend inhalt text fuer diese andere seite bitte danke", nil
+	}
+	save := func(ctx context.Context, doc domain.Document) error { return nil }
+	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{CrawlDelayMs: 0})
+
+	opts := ports.CrawlOptions{SeedURLs: []string{"http://a/1"}, MaxPages: 5, CrawlDelayMs: 30}
+	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, settings, opts, nil, save, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gap := fetcher.times[1].Sub(fetcher.times[0]); gap < 25*time.Millisecond {
+		t.Errorf("expected the per-crawl CrawlDelayMs override to apply (~30ms), got %v", gap)
+	}
+}
+
+// TestCrawlLoop_PerCrawlFetchOptionsOverridesReachFetcher proves
+// FetchTimeoutSeconds and MaxResponseKB reach the fetcher's FetchOptions,
+// converted appropriately (KB to bytes).
+func TestCrawlLoop_PerCrawlFetchOptionsOverridesReachFetcher(t *testing.T) {
+	fetcher := &recordingFetcher{html: "<html>ok</html>"}
+	parse := func(html, pageURL string) (string, string, []string) {
+		return "T", "genuegend inhalt text fuer diese seite bitte danke", nil
+	}
+	save := func(ctx context.Context, doc domain.Document) error { return nil }
+
+	opts := ports.CrawlOptions{
+		SeedURLs: []string{"http://a"}, MaxPages: 5,
+		FetchTimeoutSeconds: 45, MaxResponseKB: 10,
+	}
+	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := fetcher.gotOptions[0]
+	if got.FetchTimeoutSeconds != 45 {
+		t.Errorf("expected FetchTimeoutSeconds=45 to reach the fetcher, got %d", got.FetchTimeoutSeconds)
+	}
+	if got.MaxResponseBytes != 10*1024 {
+		t.Errorf("expected MaxResponseKB=10 converted to 10240 bytes, got %d", got.MaxResponseBytes)
+	}
+}
+
+// TestCrawlLoop_PrioritizeUnindexedFetchesFreshURLsFirst proves the
+// two-tier queue: with PrioritizeUnindexed set and an isIndexed predicate
+// reporting one of two seeds as already indexed, the not-yet-indexed seed
+// is fetched first regardless of queue order, and a budget of 1 page
+// spends itself on the fresh one.
+func TestCrawlLoop_PrioritizeUnindexedFetchesFreshURLsFirst(t *testing.T) {
+	fetcher := &scopedFetcher{pages: map[string]string{
+		"http://a/known": "<html>known</html>",
+		"http://a/fresh": "<html>fresh</html>",
+	}}
+	parse := func(html, pageURL string) (string, string, []string) {
+		return "T", "genuegend inhalt text fuer diese seite bitte danke", nil
+	}
+	save := func(ctx context.Context, doc domain.Document) error { return nil }
+	isIndexed := func(u string) bool { return u == "http://a/known" }
+
+	// "known" listed first in SeedURLs, but with prioritization on and a
+	// budget of only 1 page, "fresh" (not yet indexed) must be the one
+	// actually fetched.
+	opts := ports.CrawlOptions{
+		SeedURLs: []string{"http://a/known", "http://a/fresh"}, MaxPages: 1,
+		PrioritizeUnindexed: true,
+	}
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, isIndexed, save, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly 1 page crawled, got %d", count)
+	}
+	if len(fetcher.urls) != 1 || fetcher.urls[0] != "http://a/fresh" {
+		t.Errorf("expected the not-yet-indexed URL fetched first, got %v", fetcher.urls)
+	}
+}
+
+// TestCrawlLoop_PrioritizeUnindexedStillCoversKnownURLsWhenBudgetAllows
+// proves prioritization only reorders, never drops, coverage: with enough
+// budget for both, the already-indexed URL still gets crawled after the
+// fresh one.
+func TestCrawlLoop_PrioritizeUnindexedStillCoversKnownURLsWhenBudgetAllows(t *testing.T) {
+	fetcher := &scopedFetcher{pages: map[string]string{
+		"http://a/known": "<html>known</html>",
+		"http://a/fresh": "<html>fresh</html>",
+	}}
+	parse := func(html, pageURL string) (string, string, []string) {
+		return "T", "genuegend inhalt text fuer diese seite bitte danke", nil
+	}
+	save := func(ctx context.Context, doc domain.Document) error { return nil }
+	isIndexed := func(u string) bool { return u == "http://a/known" }
+
+	opts := ports.CrawlOptions{
+		SeedURLs: []string{"http://a/known", "http://a/fresh"}, MaxPages: 5,
+		PrioritizeUnindexed: true,
+	}
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, isIndexed, save, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected both pages eventually crawled, got %d", count)
+	}
+	if len(fetcher.urls) != 2 || fetcher.urls[0] != "http://a/fresh" || fetcher.urls[1] != "http://a/known" {
+		t.Errorf("expected fresh URL fetched before the known one, got %v", fetcher.urls)
+	}
+}
+
+// TestCrawlLoop_PrioritizeUnindexedWithNilIsIndexedBehavesAsPlainFIFO
+// proves the "asked for it but can't tell fresh from known" fallback (e.g.
+// the DocumentIDsByHost lookup failed): with isIndexed nil, order stays
+// exactly the plain FIFO queue order, matching PrioritizeUnindexed=false.
+func TestCrawlLoop_PrioritizeUnindexedWithNilIsIndexedBehavesAsPlainFIFO(t *testing.T) {
+	fetcher := &scopedFetcher{pages: map[string]string{
+		"http://a/1": "<html>a</html>",
+		"http://a/2": "<html>b</html>",
+	}}
+	parse := func(html, pageURL string) (string, string, []string) {
+		return "T", "genuegend inhalt text fuer diese seite bitte danke", nil
+	}
+	save := func(ctx context.Context, doc domain.Document) error { return nil }
+
+	opts := ports.CrawlOptions{
+		SeedURLs: []string{"http://a/1", "http://a/2"}, MaxPages: 1,
+		PrioritizeUnindexed: true,
+	}
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 || len(fetcher.urls) != 1 || fetcher.urls[0] != "http://a/1" {
+		t.Errorf("expected plain FIFO order (http://a/1 first) when isIndexed is nil, got %v", fetcher.urls)
 	}
 }
 
@@ -191,7 +359,7 @@ func TestCrawlLoop_ThinContentIncludesLengthDetail(t *testing.T) {
 
 	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{MinTextLength: 50})
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5}
-	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, settings, opts, save, onPage); err != nil {
+	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, settings, opts, nil, save, onPage); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(events) != 1 || events[0].Status != domain.CrawlPageThinContent {
@@ -214,7 +382,7 @@ func TestCrawlLoop_IndexedEventIncludesDiagnosticDetail(t *testing.T) {
 
 	before := time.Now()
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a/"}, MaxPages: 1}
-	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, onPage); err != nil {
+	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, onPage); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	after := time.Now()
@@ -247,7 +415,7 @@ func TestCrawlLoop_RobotsDisallowedEventHasNoDuration(t *testing.T) {
 	onPage := func(ev domain.CrawlPageEvent) { events = append(events, ev) }
 
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a/"}, MaxPages: 1, RespectRobots: true}
-	if _, err := crawlLoop(context.Background(), fetcher, robots, parse, nil, opts, save, onPage); err != nil {
+	if _, err := crawlLoop(context.Background(), fetcher, robots, parse, nil, opts, nil, save, onPage); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(events) != 1 || events[0].DurationMs != 0 {
@@ -286,10 +454,10 @@ func TestCrawlLoop_RecrawlingSameURLReusesSameDocumentID(t *testing.T) {
 	}
 
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 1}
-	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil); err != nil {
+	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil); err != nil {
 		t.Fatalf("unexpected error on first crawl: %v", err)
 	}
-	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil); err != nil {
+	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil); err != nil {
 		t.Fatalf("unexpected error on second crawl: %v", err)
 	}
 
@@ -312,7 +480,7 @@ func TestCrawlLoop_StaysOnSeedDomainByDefault(t *testing.T) {
 	save := func(ctx context.Context, doc domain.Document) error { return nil }
 
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a.example/start"}, MaxPages: 10}
-	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil)
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -341,7 +509,7 @@ func TestCrawlLoop_AllowOffDomainLinksFollowsOtherDomains(t *testing.T) {
 	save := func(ctx context.Context, doc domain.Document) error { return nil }
 
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a.example/start"}, MaxPages: 10, AllowOffDomainLinks: true}
-	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil)
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -361,7 +529,7 @@ func TestCrawlLoop_MultipleSeedsAllCountAsOnDomain(t *testing.T) {
 	save := func(ctx context.Context, doc domain.Document) error { return nil }
 
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a.example/start", "http://b.example/start"}, MaxPages: 10}
-	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil)
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -385,7 +553,7 @@ func TestCrawlLoop_WaitsCrawlDelayBetweenFetches(t *testing.T) {
 	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{CrawlDelayMs: 30})
 
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a/1"}, MaxPages: 5}
-	count, err := crawlLoop(context.Background(), fetcher, nil, parse, settings, opts, save, nil)
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, settings, opts, nil, save, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -416,7 +584,7 @@ func TestCrawlLoop_ZeroCrawlDelayMeansNoWait(t *testing.T) {
 
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a/1"}, MaxPages: 5}
 	start := time.Now()
-	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, settings, opts, save, nil); err != nil {
+	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, settings, opts, nil, save, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > 20*time.Millisecond {
@@ -446,7 +614,7 @@ func TestCrawlLoop_CancelledContextDuringDelayStopsTheCrawl(t *testing.T) {
 	}()
 
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a/1"}, MaxPages: 5}
-	count, err := crawlLoop(ctx, fetcher, nil, parse, settings, opts, save, nil)
+	count, err := crawlLoop(ctx, fetcher, nil, parse, settings, opts, nil, save, nil)
 	if err == nil {
 		t.Fatal("expected the cancelled context to surface as an error")
 	}
@@ -470,7 +638,7 @@ func TestCrawlLoop_UseSitemapEnqueuesDiscoveredURLs(t *testing.T) {
 	save := func(ctx context.Context, doc domain.Document) error { return nil }
 
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a.example/start"}, MaxPages: 10, UseSitemap: true}
-	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil)
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -491,7 +659,7 @@ func TestCrawlLoop_SitemapURLsRespectOffDomainRule(t *testing.T) {
 	save := func(ctx context.Context, doc domain.Document) error { return nil }
 
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a.example/start"}, MaxPages: 10, UseSitemap: true}
-	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil)
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -511,7 +679,7 @@ func TestCrawlLoop_SitemapNotFetchedWhenUseSitemapIsFalse(t *testing.T) {
 	save := func(ctx context.Context, doc domain.Document) error { return nil }
 
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a.example/start"}, MaxPages: 10}
-	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil)
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -536,7 +704,7 @@ func TestCrawlLoop_MissingSitemapIsSkippedSilently(t *testing.T) {
 	save := func(ctx context.Context, doc domain.Document) error { return nil }
 
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a.example/start"}, MaxPages: 10, UseSitemap: true}
-	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil)
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -556,7 +724,7 @@ func TestCrawlLoop_UnparseableSitemapIsSkippedSilently(t *testing.T) {
 	save := func(ctx context.Context, doc domain.Document) error { return nil }
 
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a.example/start"}, MaxPages: 10, UseSitemap: true}
-	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil)
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -610,7 +778,7 @@ func TestCrawlLoop_NonPositiveMaxPagesUsesOperationalDefault(t *testing.T) {
 	save := func(context.Context, domain.Document) error { return nil }
 
 	opts := ports.CrawlOptions{SeedURLs: []string{"http://a/1"}, MaxPages: 0}
-	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil)
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -632,7 +800,7 @@ func TestCrawlLoop_NonHTTPSeedIsSkippedEntirely(t *testing.T) {
 	save := func(context.Context, domain.Document) error { return nil }
 
 	opts := ports.CrawlOptions{SeedURLs: []string{"ftp://example.com/"}, MaxPages: 5, UseSitemap: true}
-	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, save, nil)
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

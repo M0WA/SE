@@ -67,6 +67,16 @@ type CrawlJobRequest struct {
 	UserAgent           string   `json:"user_agent,omitempty"`
 	AllowOffDomainLinks bool     `json:"allow_off_domain_links"`
 	UseSitemap          bool     `json:"use_sitemap"`
+	// FetchTimeoutSeconds/MinTextLength/CrawlDelayMs/MaxResponseKB are 0
+	// when this job used the global operational default for that setting,
+	// non-zero when it overrode it -- see ports.CrawlOptions' doc comment.
+	// None of these are secrets, unlike Cookie/BasicAuth above, so (unlike
+	// those) they're carried here as their actual values, not booleans.
+	FetchTimeoutSeconds int  `json:"fetch_timeout_seconds,omitempty"`
+	MinTextLength       int  `json:"min_text_length,omitempty"`
+	CrawlDelayMs        int  `json:"crawl_delay_ms,omitempty"`
+	MaxResponseKB       int  `json:"max_response_kb,omitempty"`
+	PrioritizeUnindexed bool `json:"prioritize_unindexed,omitempty"`
 }
 
 // CrawlJob is one triggered crawl's full state, including every page event

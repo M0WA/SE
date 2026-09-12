@@ -656,6 +656,14 @@ type crawlRequest struct {
 	UserAgent           string   `json:"user_agent"`
 	AllowOffDomainLinks bool     `json:"allow_off_domain_links"`
 	UseSitemap          bool     `json:"use_sitemap"`
+	// FetchTimeoutSeconds/MinTextLength/CrawlDelayMs/MaxResponseKB let this
+	// crawl override the same-named global operational defaults; 0 means
+	// "use the global default" (see ports.CrawlOptions' doc comment).
+	FetchTimeoutSeconds int  `json:"fetch_timeout_seconds"`
+	MinTextLength       int  `json:"min_text_length"`
+	CrawlDelayMs        int  `json:"crawl_delay_ms"`
+	MaxResponseKB       int  `json:"max_response_kb"`
+	PrioritizeUnindexed bool `json:"prioritize_unindexed"`
 }
 
 type startCrawlResponse struct {
@@ -689,6 +697,11 @@ func (h *Handler) handleAdminCrawl(w http.ResponseWriter, r *http.Request) {
 		UserAgent:           req.UserAgent,
 		AllowOffDomainLinks: req.AllowOffDomainLinks,
 		UseSitemap:          req.UseSitemap,
+		FetchTimeoutSeconds: req.FetchTimeoutSeconds,
+		MinTextLength:       req.MinTextLength,
+		CrawlDelayMs:        req.CrawlDelayMs,
+		MaxResponseKB:       req.MaxResponseKB,
+		PrioritizeUnindexed: req.PrioritizeUnindexed,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

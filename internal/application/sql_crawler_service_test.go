@@ -83,6 +83,55 @@ func TestSQLCrawlerService_Crawl_HappyPath(t *testing.T) {
 	}
 }
 
+// TestSQLCrawlerService_Crawl_PrioritizeUnindexedConsultsDocumentIDsByHost
+// proves the wiring between CrawlOptions.PrioritizeUnindexed and the
+// repository: when set, Crawl looks up the seed's already-indexed
+// documents via DocumentIDsByHost before crawling (crawlLoop's own tests
+// cover the resulting fetch-order behavior in detail; this proves
+// sqlCrawlerService actually builds and passes that lookup through).
+func TestSQLCrawlerService_Crawl_PrioritizeUnindexedConsultsDocumentIDsByHost(t *testing.T) {
+	fetcher := &fakeFetcher{pages: map[string]string{"http://a/": "<html>a</html>"}}
+	robots := &fakeRobots{}
+	repo := &recordingSQLRepo{}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+	parse := func(html, pageURL string) (string, string, []string) {
+		return "A", "genuegend inhalt text fuer die seite a hier bitte danke", nil
+	}
+
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedder, parse, nil)
+	_, err := svc.Crawl(context.Background(), ports.CrawlOptions{
+		SeedURLs: []string{"http://a/"}, MaxPages: 5, PrioritizeUnindexed: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.documentIDsByHostCalls != 1 {
+		t.Errorf("expected PrioritizeUnindexed to trigger exactly one DocumentIDsByHost lookup, got %d", repo.documentIDsByHostCalls)
+	}
+}
+
+// TestSQLCrawlerService_Crawl_PrioritizeUnindexedFalseSkipsTheLookup
+// proves the lookup is only ever done when actually asked for -- no wasted
+// query on the common (non-recrawl) path.
+func TestSQLCrawlerService_Crawl_PrioritizeUnindexedFalseSkipsTheLookup(t *testing.T) {
+	fetcher := &fakeFetcher{pages: map[string]string{"http://a/": "<html>a</html>"}}
+	robots := &fakeRobots{}
+	repo := &recordingSQLRepo{}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+	parse := func(html, pageURL string) (string, string, []string) {
+		return "A", "genuegend inhalt text fuer die seite a hier bitte danke", nil
+	}
+
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedder, parse, nil)
+	_, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a/"}, MaxPages: 5}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.documentIDsByHostCalls != 0 {
+		t.Errorf("expected no DocumentIDsByHost lookup when PrioritizeUnindexed is false, got %d calls", repo.documentIDsByHostCalls)
+	}
+}
+
 func TestSQLCrawlerService_Crawl_RespectsRobots(t *testing.T) {
 	fetcher := &fakeFetcher{pages: map[string]string{"http://a": "<html>a</html>"}}
 	robots := &fakeRobots{disallowed: map[string]bool{"http://a": true}}

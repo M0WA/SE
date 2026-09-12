@@ -26,6 +26,7 @@ func crawlLoop(
 	parseHTML func(html, pageURL string) (title, text string, links []string),
 	settings *domain.OperationalSettings,
 	opts ports.CrawlOptions,
+	isIndexed func(url string) bool,
 	save func(ctx context.Context, doc domain.Document) error,
 	onPage func(domain.CrawlPageEvent),
 ) (int, error) {
@@ -34,9 +35,21 @@ func crawlLoop(
 	if maxPages <= 0 {
 		maxPages = v.DefaultMaxPages
 	}
+	minTextLength := v.MinTextLength
+	if opts.MinTextLength > 0 {
+		minTextLength = opts.MinTextLength
+	}
+	crawlDelayMs := v.CrawlDelayMs
+	if opts.CrawlDelayMs > 0 {
+		crawlDelayMs = opts.CrawlDelayMs
+	}
+	maxResponseBytes := 0
+	if opts.MaxResponseKB > 0 {
+		maxResponseBytes = opts.MaxResponseKB * 1024
+	}
 	fetchOpts := ports.FetchOptions{
 		Cookie: opts.Cookie, BasicAuthUser: opts.BasicAuthUser, BasicAuthPass: opts.BasicAuthPass,
-		UserAgent: opts.UserAgent,
+		UserAgent: opts.UserAgent, FetchTimeoutSeconds: opts.FetchTimeoutSeconds, MaxResponseBytes: maxResponseBytes,
 	}
 
 	emit := func(ev domain.CrawlPageEvent) {
@@ -46,17 +59,52 @@ func crawlLoop(
 	}
 
 	hosts := seedHosts(opts.SeedURLs)
-	enqueue := func(queue []string, links []string) []string {
-		for _, l := range links {
-			if opts.AllowOffDomainLinks || onDomain(l, hosts) {
-				queue = append(queue, l)
+
+	// prioritize is true only when the caller both asked for it
+	// (opts.PrioritizeUnindexed) and can actually tell fresh from
+	// already-indexed URLs (isIndexed != nil, backed by a real repository
+	// lookup -- see sqlCrawlerService.Crawl). freshQueue/knownQueue split
+	// discovery in two: fresh URLs are always dequeued first, known ones
+	// only once no fresh URL is left, so a bounded maxPages budget spends
+	// itself on new content before refreshing what's already indexed.
+	// When prioritize is false, every URL lands in freshQueue and this is
+	// byte-for-byte the single FIFO queue this crawl loop always had.
+	prioritize := opts.PrioritizeUnindexed && isIndexed != nil
+	var freshQueue, knownQueue []string
+	classify := func(urls []string) {
+		for _, u := range urls {
+			if prioritize && isIndexed(u) {
+				knownQueue = append(knownQueue, u)
+			} else {
+				freshQueue = append(freshQueue, u)
 			}
 		}
-		return queue
+	}
+	dequeue := func() (string, bool) {
+		if len(freshQueue) > 0 {
+			u := freshQueue[0]
+			freshQueue = freshQueue[1:]
+			return u, true
+		}
+		if len(knownQueue) > 0 {
+			u := knownQueue[0]
+			knownQueue = knownQueue[1:]
+			return u, true
+		}
+		return "", false
+	}
+	enqueue := func(links []string) {
+		var allowed []string
+		for _, l := range links {
+			if opts.AllowOffDomainLinks || onDomain(l, hosts) {
+				allowed = append(allowed, l)
+			}
+		}
+		classify(allowed)
 	}
 
 	visited := make(map[string]bool)
-	queue := append([]string{}, opts.SeedURLs...)
+	classify(opts.SeedURLs)
 
 	if opts.UseSitemap {
 		for _, seed := range opts.SeedURLs {
@@ -68,16 +116,18 @@ func crawlLoop(
 			if err != nil {
 				continue
 			}
-			queue = enqueue(queue, parseSitemap(body))
+			enqueue(parseSitemap(body))
 		}
 	}
 
 	crawled := 0
 	fetchCount := 0
 
-	for len(queue) > 0 && crawled < maxPages {
-		u := queue[0]
-		queue = queue[1:]
+	for crawled < maxPages {
+		u, ok := dequeue()
+		if !ok {
+			break
+		}
 
 		if visited[u] || !isHTTP(u) {
 			continue
@@ -90,9 +140,9 @@ func crawlLoop(
 			continue
 		}
 
-		if fetchCount > 0 && v.CrawlDelayMs > 0 {
+		if fetchCount > 0 && crawlDelayMs > 0 {
 			select {
-			case <-time.After(time.Duration(v.CrawlDelayMs) * time.Millisecond):
+			case <-time.After(time.Duration(crawlDelayMs) * time.Millisecond):
 			case <-ctx.Done():
 				return crawled, ctx.Err()
 			}
@@ -112,10 +162,10 @@ func crawlLoop(
 
 		title, text, links := parseHTML(html, u)
 		trimmed := strings.TrimSpace(text)
-		if len(trimmed) < v.MinTextLength {
+		if len(trimmed) < minTextLength {
 			emit(domain.CrawlPageEvent{
 				URL: u, Status: domain.CrawlPageThinContent,
-				Error:     fmt.Sprintf("%d characters, need at least %d", len(trimmed), v.MinTextLength),
+				Error:     fmt.Sprintf("%d characters, need at least %d", len(trimmed), minTextLength),
 				DocLength: len(trimmed),
 				FetchedAt: attemptedAt, DurationMs: durationMs,
 			})
@@ -133,7 +183,7 @@ func crawlLoop(
 			FetchedAt: attemptedAt, DurationMs: durationMs,
 		})
 
-		queue = enqueue(queue, links)
+		enqueue(links)
 	}
 	return crawled, nil
 }

@@ -26,6 +26,13 @@ type FetchOptions struct {
 	BasicAuthUser string
 	BasicAuthPass string
 	UserAgent     string
+	// FetchTimeoutSeconds and MaxResponseBytes override the operational
+	// defaults (domain.OperationalSettingsValues' FetchTimeout/
+	// MaxResponseBytes) for this fetch alone when positive; zero means "use
+	// the global default," the same convention UserAgent's empty-string
+	// case already uses above.
+	FetchTimeoutSeconds int
+	MaxResponseBytes    int
 }
 
 // AuthFetcher is a Fetcher that also accepts per-request credentials.
@@ -233,6 +240,26 @@ type CrawlOptions struct {
 	UserAgent           string
 	AllowOffDomainLinks bool `json:"allow_off_domain_links"`
 	UseSitemap          bool `json:"use_sitemap"`
+	// FetchTimeoutSeconds, MinTextLength, CrawlDelayMs and MaxResponseKB
+	// override the same-named operational defaults for this crawl alone
+	// when positive; zero means "use the global default" -- the same
+	// convention MaxPages<=0 and UserAgent=="" already use above. Every
+	// operational setting that's actually crawl-specific (as opposed to
+	// search- or database-related) is overridable here, so a crawl is
+	// never stuck with the global default for a site that needs a gentler
+	// delay, a longer timeout, or a larger page.
+	FetchTimeoutSeconds int `json:"fetch_timeout_seconds"`
+	MinTextLength       int `json:"min_text_length"`
+	CrawlDelayMs        int `json:"crawl_delay_ms"`
+	MaxResponseKB       int `json:"max_response_kb"`
+	// PrioritizeUnindexed reorders discovery so URLs not already in the
+	// index are fetched before ones that are, within the same MaxPages
+	// budget -- useful when recrawling a large, already-mostly-indexed
+	// site and the goal is to find new pages rather than spend the budget
+	// refreshing old ones. Already-indexed pages still get crawled once
+	// every not-yet-indexed one has been attempted; this only changes
+	// order, never coverage.
+	PrioritizeUnindexed bool `json:"prioritize_unindexed"`
 }
 
 // CrawlerService actually executes a crawl. onPage, when non-nil, is

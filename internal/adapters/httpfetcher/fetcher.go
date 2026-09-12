@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
@@ -29,7 +30,11 @@ func (f *Fetcher) Fetch(ctx context.Context, rawURL string) (string, error) {
 
 func (f *Fetcher) FetchWithOptions(ctx context.Context, rawURL string, opts ports.FetchOptions) (string, error) {
 	v := f.settings.Get()
-	ctx, cancel := context.WithTimeout(ctx, v.FetchTimeout)
+	timeout := v.FetchTimeout
+	if opts.FetchTimeoutSeconds > 0 {
+		timeout = time.Duration(opts.FetchTimeoutSeconds) * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -62,7 +67,11 @@ func (f *Fetcher) FetchWithOptions(ctx context.Context, rawURL string, opts port
 		return "", fmt.Errorf("fetch %s: unsupported content-type %q", rawURL, ct)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(v.MaxResponseBytes)))
+	maxResponseBytes := v.MaxResponseBytes
+	if opts.MaxResponseBytes > 0 {
+		maxResponseBytes = opts.MaxResponseBytes
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxResponseBytes)))
 	if err != nil {
 		return "", fmt.Errorf("reading body: %w", err)
 	}

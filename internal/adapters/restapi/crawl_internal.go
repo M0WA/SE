@@ -77,6 +77,11 @@ func (h *Handler) TriggerCrawl(ctx context.Context, opts ports.CrawlOptions) (st
 		UserAgent:           opts.UserAgent,
 		AllowOffDomainLinks: opts.AllowOffDomainLinks,
 		UseSitemap:          opts.UseSitemap,
+		FetchTimeoutSeconds: opts.FetchTimeoutSeconds,
+		MinTextLength:       opts.MinTextLength,
+		CrawlDelayMs:        opts.CrawlDelayMs,
+		MaxResponseKB:       opts.MaxResponseKB,
+		PrioritizeUnindexed: opts.PrioritizeUnindexed,
 	})
 	if err != nil {
 		return "", err

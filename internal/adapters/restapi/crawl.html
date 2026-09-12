@@ -53,6 +53,13 @@
       </label>
       <p class="tuning-hint">Off by default — when checked, /sitemap.xml is fetched from the seed's domain and every URL it lists is queued too.</p>
     </div>
+    <div class="form-row form-row-check">
+      <label for="crawl-prioritize-unindexed">
+        <input id="crawl-prioritize-unindexed" type="checkbox">
+        Prioritize pages not yet indexed
+      </label>
+      <p class="tuning-hint">Off by default — when checked, newly discovered pages are fetched before re-fetching ones already in the index, so a limited page budget goes toward new content first on a mostly-indexed site. Already-indexed pages are still crawled once every new one has been attempted.</p>
+    </div>
     <div class="form-row">
       <label for="crawl-user-agent">User-Agent</label><br>
       <input id="crawl-user-agent" class="field" type="text" placeholder="Default: standard Firefox">
@@ -70,6 +77,23 @@
       <input id="crawl-basic-pass" class="field" type="password" autocomplete="off">
     </div>
     <p class="tuning-hint">Applies only to this crawl — nothing is stored.</p>
+    <div class="form-row">
+      <label for="crawl-fetch-timeout">Fetch timeout (seconds)</label><br>
+      <input id="crawl-fetch-timeout" class="field" type="number" min="1" placeholder="Default: global setting">
+    </div>
+    <div class="form-row">
+      <label for="crawl-min-text-length">Minimum text length</label><br>
+      <input id="crawl-min-text-length" class="field" type="number" min="0" placeholder="Default: global setting">
+    </div>
+    <div class="form-row">
+      <label for="crawl-delay">Delay between fetches (ms)</label><br>
+      <input id="crawl-delay" class="field" type="number" min="0" placeholder="Default: global setting">
+    </div>
+    <div class="form-row">
+      <label for="crawl-max-response">Max response size (KB)</label><br>
+      <input id="crawl-max-response" class="field" type="number" min="1" placeholder="Default: global setting">
+    </div>
+    <p class="tuning-hint">These four override the site-wide crawl defaults (set on the Tuning page) for this crawl alone — leave blank to use whatever's currently configured there.</p>
   </details>
   <div id="crawl-status"></div>
 
@@ -113,7 +137,12 @@
   const crawlRespectRobots = document.getElementById('crawl-respect-robots');
   const crawlAllowOffDomain = document.getElementById('crawl-allow-off-domain');
   const crawlUseSitemap = document.getElementById('crawl-use-sitemap');
+  const crawlPrioritizeUnindexed = document.getElementById('crawl-prioritize-unindexed');
   const crawlUserAgent = document.getElementById('crawl-user-agent');
+  const crawlFetchTimeout = document.getElementById('crawl-fetch-timeout');
+  const crawlMinTextLength = document.getElementById('crawl-min-text-length');
+  const crawlDelay = document.getElementById('crawl-delay');
+  const crawlMaxResponse = document.getElementById('crawl-max-response');
   const crawlStatus = document.getElementById('crawl-status');
   const recrawlForm = document.getElementById('recrawl-search-form');
   const recrawlQ = document.getElementById('recrawl-q');
@@ -221,6 +250,11 @@
     parts.push(request.user_agent ? 'custom User-Agent' : 'default User-Agent');
     parts.push(request.allow_off_domain_links ? 'allows other domains' : 'stays on seed domain');
     if (request.use_sitemap) parts.push('uses sitemap.xml');
+    if (request.prioritize_unindexed) parts.push('prioritizes unindexed pages');
+    if (request.fetch_timeout_seconds) parts.push('fetch timeout ' + request.fetch_timeout_seconds + 's');
+    if (request.min_text_length) parts.push('min text length ' + request.min_text_length);
+    if (request.crawl_delay_ms) parts.push('delay ' + request.crawl_delay_ms + 'ms');
+    if (request.max_response_kb) parts.push('max response ' + request.max_response_kb + 'KB');
     return parts.join(', ');
   }
 
@@ -427,6 +461,11 @@
         user_agent: crawlUserAgent.value,
         allow_off_domain_links: crawlAllowOffDomain.checked,
         use_sitemap: crawlUseSitemap.checked,
+        prioritize_unindexed: crawlPrioritizeUnindexed.checked,
+        fetch_timeout_seconds: parseInt(crawlFetchTimeout.value, 10) || 0,
+        min_text_length: parseInt(crawlMinTextLength.value, 10) || 0,
+        crawl_delay_ms: parseInt(crawlDelay.value, 10) || 0,
+        max_response_kb: parseInt(crawlMaxResponse.value, 10) || 0,
       });
       crawlStatus.textContent = 'Job started.';
       await loadJobs();
@@ -436,8 +475,27 @@
     }
   });
 
+  // showCurrentDefaults fills each per-crawl override's placeholder with
+  // the actual value it would fall back to (rather than a generic "global
+  // setting" string), so leaving a field blank has a visible, concrete
+  // meaning. Failure here is silent -- the generic placeholder text
+  // already in the HTML is a perfectly fine fallback.
+  async function showCurrentDefaults() {
+    try {
+      const s = await getJSON('/admin/api/settings');
+      const op = s.operational;
+      crawlFetchTimeout.placeholder = 'Default: ' + op.fetch_timeout_seconds + 's';
+      crawlMinTextLength.placeholder = 'Default: ' + op.min_text_length;
+      crawlDelay.placeholder = 'Default: ' + op.crawl_delay_ms + 'ms';
+      crawlMaxResponse.placeholder = 'Default: ' + op.max_response_kb + 'KB';
+    } catch (err) {
+      // Leave the generic placeholders in place.
+    }
+  }
+
   wireSignOut();
   loadJobs();
+  showCurrentDefaults();
 </script>
 </body>
 </html>

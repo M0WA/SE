@@ -116,6 +116,27 @@ func TestFetcher_FetchWithOptions_UsesSettingsTimeout(t *testing.T) {
 	}
 }
 
+// TestFetcher_FetchWithOptions_PerRequestTimeoutOverridesSettings proves a
+// positive opts.FetchTimeoutSeconds wins over the global setting: a
+// generous global timeout alone would let the slow handler succeed, but a
+// tight per-request override (expressed in whole seconds, the smallest
+// unit FetchTimeoutSeconds carries) must still time it out first.
+func TestFetcher_FetchWithOptions_PerRequestTimeoutOverridesSettings(t *testing.T) {
+	blockUntilTimeout := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-blockUntilTimeout // never write a response before the client gives up
+	}))
+	defer func() { close(blockUntilTimeout); srv.Close() }()
+
+	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
+		FetchTimeout: time.Hour,
+	})
+	f := httpfetcher.New(settings)
+	if _, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{FetchTimeoutSeconds: 1}); err == nil {
+		t.Error("expected the per-request timeout override to fire despite the hour-long global default")
+	}
+}
+
 func TestFetcher_FetchWithOptions_UsesSettingsUserAgent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("User-Agent"); got != "custom-agent/9.0" {
@@ -218,6 +239,25 @@ func TestFetcher_FetchWithOptions_TruncatesBodyAtMaxResponseBytes(t *testing.T) 
 	}
 	if body != "0123" {
 		t.Errorf("expected the body truncated to 4 bytes, got %q", body)
+	}
+}
+
+// TestFetcher_FetchWithOptions_PerRequestMaxResponseBytesOverridesSettings
+// proves a positive opts.MaxResponseBytes wins over the global setting.
+func TestFetcher_FetchWithOptions_PerRequestMaxResponseBytesOverridesSettings(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("0123456789"))
+	}))
+	defer srv.Close()
+
+	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{MaxResponseBytes: 1024})
+	f := httpfetcher.New(settings)
+	body, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{MaxResponseBytes: 4})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if body != "0123" {
+		t.Errorf("expected the per-request override to truncate to 4 bytes despite a generous global default, got %q", body)
 	}
 }
 
