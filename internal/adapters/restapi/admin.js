@@ -205,12 +205,12 @@ function wireVocabularySearch() {
   let searchTimer = null;
   input.addEventListener('input', () => {
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => loadVocabulary(input.value.trim()), 200);
+    searchTimer = setTimeout(() => loadVocabulary(input.value.trim().toLowerCase()), 200);
   });
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     clearTimeout(searchTimer);
-    loadVocabulary(input.value.trim());
+    loadVocabulary(input.value.trim().toLowerCase());
   });
   loadVocabulary('');
 }

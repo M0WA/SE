@@ -72,15 +72,27 @@
       }
       status.textContent = (results.length === 1 ? '1 match' : results.length + ' matches') + correctionSuffix;
       const table = buildTable(
-        [{ label: 'title' }, { label: 'excerpt' }, { label: 'bm25', num: true }, { label: 'semantic', num: true }, { label: 'final', num: true }],
+        [{ label: 'title' }, { label: 'excerpt' }, { label: 'bm25', num: true }, { label: 'semantic', num: true }, { label: 'pagerank', num: true }, { label: 'final', num: true }],
         results,
-        (r) => [
-          textCell(r.title || r.url),
-          snippetCell(r.snippet),
-          textCell(r.bm25_score.toFixed(3), { num: true }),
-          textCell(r.semantic_sim.toFixed(3), { num: true }),
-          textCell(r.final_score.toFixed(3), { num: true }),
-        ],
+        (r) => {
+          const detailHref = '/admin/search/result?doc_id=' + encodeURIComponent(r.doc_id) +
+            '&q=' + encodeURIComponent(q) + '&sort=' + encodeURIComponent(sort);
+          const link = document.createElement('a');
+          link.href = detailHref;
+          link.style.color = 'var(--ink)';
+          link.textContent = r.title || r.url;
+          link.title = 'See the full score breakdown for this result';
+          const titleTd = document.createElement('td');
+          titleTd.appendChild(link);
+          return [
+            titleTd,
+            snippetCell(r.snippet),
+            textCell(r.bm25_score.toFixed(3), { num: true }),
+            textCell(r.semantic_sim.toFixed(3), { num: true }),
+            textCell(r.pagerank.toFixed(4), { num: true }),
+            textCell(r.final_score.toFixed(3), { num: true }),
+          ];
+        },
       );
       result.appendChild(table);
     } catch (err) {

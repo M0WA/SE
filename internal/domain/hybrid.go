@@ -23,11 +23,16 @@ type CorrectedTerm struct {
 // term either matched something or had no close-enough vocabulary term to
 // substitute.
 type HybridResult struct {
-	DocID       string
-	URL         string
-	Title       string
-	Snippet     string
-	BM25Score   float64
+	DocID     string
+	URL       string
+	Title     string
+	Snippet   string
+	BM25Score float64
+	// NormBM25 is BM25Score normalized against this search's own candidate
+	// batch's max BM25Score (set by CombineScores) -- the actual fraction
+	// blended into FinalScore's BM25 half, since raw BM25Score alone doesn't
+	// say what share of the batch's top score it represents.
+	NormBM25    float64
 	SemanticSim float64
 	// PageRank is this document's raw (unnormalized) link-authority score
 	// (see domain.PageRank and sqlrepo's documents.pagerank column) --
@@ -35,10 +40,30 @@ type HybridResult struct {
 	// can normalize it against the candidate batch's own max and blend it
 	// into FinalScore. Not itself part of the wire-format admin debug view;
 	// see FinalScore for the blended result.
-	PageRank       float64
-	FinalScore     float64
-	CrawledAt      time.Time
-	CorrectedTerms []CorrectedTerm
+	PageRank float64
+	// NormalizedPageRank is PageRank normalized against this batch's own max
+	// (set by hybridSearchService.Search) -- the actual value blended into
+	// FinalScore's PageRank component. Zero whenever PageRankWeight is 0 or
+	// every candidate in the batch has a zero PageRank.
+	NormalizedPageRank float64
+	FinalScore         float64
+	CrawledAt          time.Time
+	CorrectedTerms     []CorrectedTerm
+	// BM25Terms breaks BM25Score down by query term -- empty whenever the
+	// query had no BM25 hits for this document at all (a purely semantic
+	// match). Populated by hybridSearchService.Search, not CombineScores,
+	// since it isn't needed for scoring itself, only for the admin debug
+	// view.
+	BM25Terms []TermScore
+	// Alpha, K1, B and PageRankWeight are the tuning parameters actually
+	// used to produce this result -- identical across every result of one
+	// Search call (like CorrectedTerms), carried here so the admin debug
+	// view can show them without a second round trip to the tuning
+	// settings.
+	Alpha          float64
+	K1             float64
+	B              float64
+	PageRankWeight float64
 }
 
 // CombineScores blends BM25 and cosine similarity into a final score.
@@ -65,6 +90,7 @@ func CombineScores(candidates []HybridResult, alpha float64) []HybridResult {
 		if maxBM25 > 0 {
 			normBM25 = result[i].BM25Score / maxBM25
 		}
+		result[i].NormBM25 = normBM25
 		semantic := result[i].SemanticSim
 		if semantic < 0 {
 			semantic = 0

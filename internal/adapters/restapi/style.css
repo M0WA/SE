@@ -715,6 +715,161 @@ textarea.field {
   margin: 0.35rem 0 0;
 }
 
+.result-detail-head {
+  margin-bottom: 0.5rem;
+}
+
+.result-detail-head h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.result-detail-head a { color: var(--ink); text-decoration: none; }
+
+.result-detail-head a:hover { text-decoration: underline; }
+
+.result-detail-url {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 0.82rem;
+  color: var(--ink-muted);
+  word-break: break-all;
+  margin: 0.2rem 0 0;
+}
+
+.result-detail-score {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 1.6rem;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.result-detail-score .k {
+  display: block;
+  font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+
+.result-detail-snippet {
+  margin: 1.25rem 0;
+  font-size: 0.97rem;
+  line-height: 1.6;
+}
+
+.result-detail-snippet mark {
+  background: var(--accent-soft);
+  color: var(--ink);
+  padding: 0 0.15em;
+  border-radius: 2px;
+}
+
+/* Every bar in the score-breakdown panels shares one visual language --
+   the same single accent hue used throughout the admin UI's charts (see
+   .domain-chart, .age-bar), never a second hue -- so composition, term and
+   gauge bars all read as one family. */
+.composition-track {
+  height: 14px;
+  background: var(--rule);
+  border-radius: 2px;
+  overflow: hidden;
+  display: flex;
+}
+
+.composition-seg { height: 100%; background: var(--accent); }
+.composition-seg.seg-bm25 { opacity: 1; }
+.composition-seg.seg-semantic { opacity: 0.62; }
+.composition-seg.seg-pagerank { opacity: 0.3; }
+
+.composition-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.5rem;
+  margin-top: 0.6rem;
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+}
+
+.composition-legend .swatch {
+  display: inline-block;
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 1px;
+  background: var(--accent);
+  margin-right: 0.4rem;
+  vertical-align: middle;
+}
+
+.composition-legend .swatch.seg-bm25 { opacity: 1; }
+.composition-legend .swatch.seg-semantic { opacity: 0.62; }
+.composition-legend .swatch.seg-pagerank { opacity: 0.3; }
+
+.composition-legend .v {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color: var(--ink);
+}
+
+.composition-note {
+  margin-top: 0.6rem;
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+  font-style: italic;
+}
+
+.bar-row {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.bar-row:last-child { border-bottom: none; }
+
+.bar-row .bar-label {
+  flex: 0 0 auto;
+  width: 7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 0.85rem;
+}
+
+.bar-track {
+  flex: 1;
+  min-width: 0;
+  height: 10px;
+  background: var(--accent-soft);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.bar-fill { height: 100%; background: var(--accent); }
+
+.bar-row .bar-meta {
+  flex: 0 0 auto;
+  width: 7.5rem;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+  text-align: right;
+}
+
+.bar-row .bar-value {
+  flex: 0 0 auto;
+  width: 4.5rem;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 0.85rem;
+  text-align: right;
+}
+
+.tuning-caption {
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+  margin: -0.5rem 0 1rem;
+}
+
 @media (prefers-reduced-motion: no-preference) {
   main { animation: rise 0.4s ease-out; }
 }
@@ -727,4 +882,8 @@ textarea.field {
 @media (max-width: 480px) {
   body { padding-top: 8vh; }
   .result-head { flex-wrap: wrap; }
+  .bar-row { flex-wrap: wrap; }
+  .bar-row .bar-label { width: auto; }
+  .bar-row .bar-track { flex-basis: 100%; order: 3; }
+  .bar-row .bar-meta { width: auto; }
 }

@@ -96,6 +96,11 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 
 	totalDocs, avgDocLen := s.corpusStats.Get()
 	bm25PerDoc := make(map[string][]domain.PostingStats)
+	// bm25TermsPerDoc parallels bm25PerDoc index-for-index (same doc, same
+	// append order) -- PostingStats itself carries no term label, so this is
+	// the only place that association exists, and it's needed later to
+	// build each topK result's domain.TermScore breakdown.
+	bm25TermsPerDoc := make(map[string][]string)
 	for _, term := range uniqueTerms {
 		lookupTerm := term
 		if corrected, ok := scoringTerm[term]; ok {
@@ -105,6 +110,7 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 			p.TotalDocs = totalDocs
 			p.AvgDocLen = avgDocLen
 			bm25PerDoc[p.DocID] = append(bm25PerDoc[p.DocID], p)
+			bm25TermsPerDoc[p.DocID] = append(bm25TermsPerDoc[p.DocID], lookupTerm)
 		}
 	}
 
@@ -254,6 +260,7 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 	}
 
 	alpha, k1, b := s.settings.Get()
+	pageRankWeight := s.settings.PageRankWeight()
 
 	candidates := make([]domain.HybridResult, 0, len(candidateIDs))
 	for id := range candidateIDs {
@@ -263,6 +270,7 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 		candidates = append(candidates, domain.HybridResult{
 			DocID: id, BM25Score: bm25, SemanticSim: semantic, PageRank: ev.PageRank,
 			CrawledAt: docCache[id].CrawledAt, CorrectedTerms: correctedTerms,
+			Alpha: alpha, K1: k1, B: b, PageRankWeight: pageRankWeight,
 		})
 	}
 
@@ -288,7 +296,7 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 	// max so it's comparable in scale to the existing [0,1]-ish scores,
 	// then blended additively -- a weight of 1 makes FinalScore driven
 	// entirely by normalized PageRank, 0 leaves it untouched.
-	if pageRankWeight := s.settings.PageRankWeight(); pageRankWeight > 0 {
+	if pageRankWeight > 0 {
 		maxPageRank := 0.0
 		for i := range ranked {
 			if ranked[i].PageRank > maxPageRank {
@@ -298,6 +306,7 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 		if maxPageRank > 0 {
 			for i := range ranked {
 				normalizedPageRank := ranked[i].PageRank / maxPageRank
+				ranked[i].NormalizedPageRank = normalizedPageRank
 				ranked[i].FinalScore = ranked[i].FinalScore*(1-pageRankWeight) + normalizedPageRank*pageRankWeight
 			}
 			domain.SortByFinalScore(ranked)
@@ -346,7 +355,9 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 		}
 	}
 	for i := range ranked {
-		doc, ok := docCache[ranked[i].DocID]
+		id := ranked[i].DocID
+		ranked[i].BM25Terms = domain.BM25TermScores(bm25TermsPerDoc[id], bm25PerDoc[id], k1, b)
+		doc, ok := docCache[id]
 		if !ok {
 			continue
 		}

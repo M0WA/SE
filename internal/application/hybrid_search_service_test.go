@@ -249,6 +249,93 @@ func TestHybridSearch_CombinesBM25AndSemantic(t *testing.T) {
 	}
 }
 
+// TestHybridSearch_ResultsCarryTuningParamsAndBM25Breakdown verifies the
+// admin score-breakdown diagnostics (Alpha/K1/B, NormBM25, and the per-term
+// BM25Terms) actually reach the returned HybridResult, not just FinalScore.
+func TestHybridSearch_ResultsCarryTuningParamsAndBM25Breakdown(t *testing.T) {
+	repo := &fakeSQLRepo{
+		postings: map[string][]domain.PostingStats{
+			"katzen": {{DocID: "1", TermFreq: 5, DocLength: 10, DocFreq: 1, TotalDocs: 2, AvgDocLen: 10}},
+		},
+		embeddings: map[string][]float32{"1": {1, 0}, "2": {0, 1}},
+		docs: map[string]domain.Document{
+			"1": {ID: "1", URL: "http://a", Title: "Katzen", Text: "Katzen sind toll"},
+			"2": {ID: "2", URL: "http://b", Title: "Hunde", Text: "Hunde sind toll"},
+		},
+	}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+	settings := domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B)
+	svc := application.NewHybridSearchService(repo, embedder, settings, nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
+
+	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) == 0 || results[0].DocID != "1" {
+		t.Fatalf("expected doc 1 first, got %+v", results)
+	}
+	got := results[0]
+	if got.Alpha != 0.5 || got.K1 != domain.DefaultBM25K1 || got.B != domain.DefaultBM25B {
+		t.Errorf("expected the tuning params in effect carried onto the result, got %+v", got)
+	}
+	if got.NormBM25 != 1.0 {
+		t.Errorf("expected NormBM25=1.0 for the batch's only BM25 hit, got %v", got.NormBM25)
+	}
+	if len(got.BM25Terms) != 1 || got.BM25Terms[0].Term != "katzen" || got.BM25Terms[0].TermFreq != 5 {
+		t.Errorf("expected a 1-term BM25 breakdown for 'katzen', got %+v", got.BM25Terms)
+	}
+	// doc 2 never matched any query term via BM25 -- a purely semantic
+	// candidate, so its breakdown must be empty rather than fabricated.
+	for _, r := range results {
+		if r.DocID == "2" && len(r.BM25Terms) != 0 {
+			t.Errorf("expected doc 2 (no BM25 hits) to have an empty breakdown, got %+v", r.BM25Terms)
+		}
+	}
+}
+
+// TestHybridSearch_PageRankWeightSetsNormalizedPageRankOnResults verifies
+// NormalizedPageRank (surfaced to the admin debug view) reflects the actual
+// per-batch normalization the blend itself uses, not just PageRank's raw
+// value carried through untouched.
+func TestHybridSearch_PageRankWeightSetsNormalizedPageRankOnResults(t *testing.T) {
+	repo := &fakeSQLRepo{
+		postings: map[string][]domain.PostingStats{
+			"katzen": {
+				{DocID: "1", TermFreq: 5, DocLength: 10, DocFreq: 1, TotalDocs: 2, AvgDocLen: 10},
+				{DocID: "2", TermFreq: 5, DocLength: 10, DocFreq: 1, TotalDocs: 2, AvgDocLen: 10},
+			},
+		},
+		embeddings: map[string][]float32{"1": {1, 0}, "2": {1, 0}},
+		pageranks:  map[string]float64{"1": 0.8, "2": 0.4},
+		docs: map[string]domain.Document{
+			"1": {ID: "1", URL: "http://a", Title: "Katzen", Text: "Katzen sind toll"},
+			"2": {ID: "2", URL: "http://b", Title: "Katzen 2", Text: "Katzen sind toll"},
+		},
+	}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+	settings := domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B)
+	settings.SetPageRankWeight(0.3)
+	svc := application.NewHybridSearchService(repo, embedder, settings, nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
+
+	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	byID := make(map[string]domain.HybridResult, len(results))
+	for _, r := range results {
+		byID[r.DocID] = r
+	}
+	if byID["1"].NormalizedPageRank != 1.0 {
+		t.Errorf("expected doc 1 (this batch's max PageRank) normalized to 1.0, got %v", byID["1"].NormalizedPageRank)
+	}
+	if byID["2"].NormalizedPageRank != 0.5 {
+		t.Errorf("expected doc 2 (half the batch's max) normalized to 0.5, got %v", byID["2"].NormalizedPageRank)
+	}
+	if byID["1"].PageRankWeight != 0.3 || byID["2"].PageRankWeight != 0.3 {
+		t.Errorf("expected the configured PageRankWeight carried onto every result, got %+v", results)
+	}
+}
+
 // TestHybridSearch_NonPositiveTopKDefaultsToTen proves Search's own
 // internal fallback (independent of the HTTP layer's intQueryParam
 // default): a caller passing TopK<=0 directly still gets a sane result

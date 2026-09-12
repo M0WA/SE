@@ -248,6 +248,21 @@ func TestHandleAdminVocabulary_PassesSearchParamThrough(t *testing.T) {
 	}
 }
 
+func TestHandleAdminVocabulary_SearchParamIsLowercased(t *testing.T) {
+	repo := &fakeAdminRepo{vocabularySize: 1}
+	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/vocabulary?search=CaT", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if repo.gotSearch != "cat" {
+		t.Errorf("expected search=CaT to reach VocabularyStats lowercased as \"cat\", got %q", repo.gotSearch)
+	}
+}
+
 func TestHandleAdminVocabulary_AbsentSearchParamIsEmptyString(t *testing.T) {
 	repo := &fakeAdminRepo{vocabularySize: 1}
 	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
@@ -707,6 +722,60 @@ func TestHandleAdminSearch_SurfacesCorrectedTerms(t *testing.T) {
 	}
 }
 
+// TestHandleAdminSearch_SurfacesScoreBreakdown verifies the per-result
+// diagnostic fields the result-detail subpage depends on (normalized
+// scores, per-term BM25 breakdown, and the tuning parameters used) all
+// reach the wire response -- not just the three original score fields.
+func TestHandleAdminSearch_SurfacesScoreBreakdown(t *testing.T) {
+	results := []domain.HybridResult{{
+		DocID: "doc-0", URL: "http://a", Title: "A",
+		BM25Score: 1.2, NormBM25: 0.8, SemanticSim: 0.5,
+		PageRank: 0.002, NormalizedPageRank: 0.4, FinalScore: 0.9,
+		BM25Terms: []domain.TermScore{{Term: "cats", TermFreq: 3, DocFreq: 10, DocLength: 200, Score: 1.2}},
+		Alpha:     0.6, K1: 1.2, B: 0.75, PageRankWeight: 0.1,
+	}}
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{results: results})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/search?q=cats", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var resp []struct {
+		NormBM25           float64 `json:"norm_bm25"`
+		PageRank           float64 `json:"pagerank"`
+		NormalizedPageRank float64 `json:"normalized_pagerank"`
+		Alpha              float64 `json:"alpha"`
+		K1                 float64 `json:"k1"`
+		B                  float64 `json:"b"`
+		PageRankWeight     float64 `json:"pagerank_weight"`
+		BM25Terms          []struct {
+			Term      string  `json:"term"`
+			TermFreq  int     `json:"term_freq"`
+			DocFreq   int     `json:"doc_freq"`
+			DocLength int     `json:"doc_length"`
+			Score     float64 `json:"score"`
+		} `json:"bm25_terms"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(resp) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(resp))
+	}
+	r := resp[0]
+	if r.NormBM25 != 0.8 || r.PageRank != 0.002 || r.NormalizedPageRank != 0.4 ||
+		r.Alpha != 0.6 || r.K1 != 1.2 || r.B != 0.75 || r.PageRankWeight != 0.1 {
+		t.Errorf("unexpected score-breakdown fields: %+v", r)
+	}
+	if len(r.BM25Terms) != 1 || r.BM25Terms[0].Term != "cats" || r.BM25Terms[0].TermFreq != 3 ||
+		r.BM25Terms[0].DocFreq != 10 || r.BM25Terms[0].DocLength != 200 || r.BM25Terms[0].Score != 1.2 {
+		t.Errorf("unexpected bm25_terms: %+v", r.BM25Terms)
+	}
+}
+
 func TestHandleAdminSearch_RespectsTopKParam(t *testing.T) {
 	fd := &fakeDebugSearch{}
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, fd)
@@ -793,7 +862,7 @@ func TestHandleAdminSearch_MethodNotAllowed(t *testing.T) {
 
 func TestHandleAdminSubpages_RequireAuth(t *testing.T) {
 	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
-	for _, path := range []string{"/admin/documents", "/admin/crawl", "/admin/tuning", "/admin/search", "/admin/overrides"} {
+	for _, path := range []string{"/admin/documents", "/admin/crawl", "/admin/tuning", "/admin/search", "/admin/search/result", "/admin/overrides"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		h.RoutesAdmin().ServeHTTP(rec, req)
@@ -805,7 +874,7 @@ func TestHandleAdminSubpages_RequireAuth(t *testing.T) {
 
 func TestHandleAdminSubpages_ServeWhenAuthenticated(t *testing.T) {
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
-	for _, path := range []string{"/admin/documents", "/admin/crawl", "/admin/tuning", "/admin/search", "/admin/overrides"} {
+	for _, path := range []string{"/admin/documents", "/admin/crawl", "/admin/tuning", "/admin/search", "/admin/search/result", "/admin/overrides"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.AddCookie(cookie)
 		rec := httptest.NewRecorder()

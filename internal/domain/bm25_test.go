@@ -66,3 +66,43 @@ func TestBM25Score_ZeroDocFreqNoNaN(t *testing.T) {
 		t.Error("expected finite score even with df=0")
 	}
 }
+
+func TestBM25TermScores_EmptyTermsReturnsNil(t *testing.T) {
+	if got := domain.BM25TermScores(nil, nil, domain.DefaultBM25K1, domain.DefaultBM25B); got != nil {
+		t.Errorf("expected nil for no terms, got %+v", got)
+	}
+}
+
+// TestBM25TermScores_SumsToBM25ScoreDocument verifies the breakdown is a
+// genuine decomposition of BM25ScoreDocument's total, not an independent
+// computation that could drift from it.
+func TestBM25TermScores_SumsToBM25ScoreDocument(t *testing.T) {
+	terms := []string{"cats", "dogs"}
+	stats := []domain.PostingStats{
+		{TermFreq: 2, DocLength: 100, DocFreq: 10, TotalDocs: 1000, AvgDocLen: 100},
+		{TermFreq: 1, DocLength: 100, DocFreq: 50, TotalDocs: 1000, AvgDocLen: 100},
+	}
+	total := domain.BM25ScoreDocument(stats, domain.DefaultBM25K1, domain.DefaultBM25B)
+	breakdown := domain.BM25TermScores(terms, stats, domain.DefaultBM25K1, domain.DefaultBM25B)
+	if len(breakdown) != 2 {
+		t.Fatalf("expected 2 term scores, got %+v", breakdown)
+	}
+	sum := breakdown[0].Score + breakdown[1].Score
+	if math.Abs(sum-total) > 1e-9 {
+		t.Errorf("expected breakdown to sum to BM25ScoreDocument's total %v, got %v", total, sum)
+	}
+}
+
+// TestBM25TermScores_SortedByDescendingScore verifies the strongest
+// contributor leads, since the admin UI renders these bars top-to-bottom.
+func TestBM25TermScores_SortedByDescendingScore(t *testing.T) {
+	terms := []string{"common", "rare"}
+	stats := []domain.PostingStats{
+		{TermFreq: 1, DocLength: 100, DocFreq: 900, TotalDocs: 1000, AvgDocLen: 100}, // low IDF
+		{TermFreq: 1, DocLength: 100, DocFreq: 2, TotalDocs: 1000, AvgDocLen: 100},   // high IDF
+	}
+	breakdown := domain.BM25TermScores(terms, stats, domain.DefaultBM25K1, domain.DefaultBM25B)
+	if len(breakdown) != 2 || breakdown[0].Term != "rare" {
+		t.Errorf("expected 'rare' (higher IDF) to lead, got %+v", breakdown)
+	}
+}

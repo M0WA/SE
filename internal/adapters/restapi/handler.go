@@ -33,6 +33,9 @@ var adminTuningHTML []byte
 //go:embed admin_search.html
 var adminSearchHTML []byte
 
+//go:embed admin_search_result.html
+var adminSearchResultHTML []byte
+
 //go:embed admin_overrides.html
 var adminOverridesHTML []byte
 
@@ -160,6 +163,7 @@ func (h *Handler) RoutesAdmin() *http.ServeMux {
 	mux.HandleFunc("/admin/crawl", h.requireAuthPage(h.handleAdminCrawlPage))
 	mux.HandleFunc("/admin/tuning", h.requireAuthPage(h.handleAdminTuningPage))
 	mux.HandleFunc("/admin/search", h.requireAuthPage(h.handleAdminSearchPage))
+	mux.HandleFunc("/admin/search/result", h.requireAuthPage(h.handleAdminSearchResultPage))
 	mux.HandleFunc("/admin/overrides", h.requireAuthPage(h.handleAdminOverridesPage))
 	mux.HandleFunc("/admin/schedules", h.requireAuthPage(h.handleAdminSchedulesPage))
 

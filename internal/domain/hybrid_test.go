@@ -60,6 +60,36 @@ func TestCombineScores_EmptyMaxBM25NoDivisionByZero(t *testing.T) {
 	}
 }
 
+// TestCombineScores_SetsNormBM25 verifies each result's NormBM25 is its
+// BM25Score as a fraction of the batch's own max -- the value the admin
+// score-composition view relies on, not just an internal that only
+// FinalScore reflects.
+func TestCombineScores_SetsNormBM25(t *testing.T) {
+	in := []domain.HybridResult{
+		{DocID: "a", BM25Score: 10, SemanticSim: 0},
+		{DocID: "b", BM25Score: 5, SemanticSim: 0},
+	}
+	out := domain.CombineScores(in, 1.0)
+	byID := make(map[string]domain.HybridResult, len(out))
+	for _, r := range out {
+		byID[r.DocID] = r
+	}
+	if byID["a"].NormBM25 != 1.0 {
+		t.Errorf("expected the batch max to normalize to 1.0, got %v", byID["a"].NormBM25)
+	}
+	if byID["b"].NormBM25 != 0.5 {
+		t.Errorf("expected half the batch max to normalize to 0.5, got %v", byID["b"].NormBM25)
+	}
+}
+
+func TestCombineScores_NormBM25ZeroWhenMaxBM25Zero(t *testing.T) {
+	in := []domain.HybridResult{{DocID: "a", BM25Score: 0, SemanticSim: 0.5}}
+	out := domain.CombineScores(in, 0.5)
+	if out[0].NormBM25 != 0 {
+		t.Errorf("expected NormBM25=0 when every candidate's BM25Score is 0, got %v", out[0].NormBM25)
+	}
+}
+
 func TestCombineScores_DeterministicTieBreak(t *testing.T) {
 	in := []domain.HybridResult{
 		{DocID: "z", BM25Score: 5, SemanticSim: 0.5},

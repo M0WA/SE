@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"searchengine/internal/domain"
@@ -90,6 +91,20 @@ func (h *Handler) handleAdminSearchPage(w http.ResponseWriter, r *http.Request) 
 	serveStatic(w, r, "text/html; charset=utf-8", adminSearchHTML)
 }
 
+// handleAdminSearchResultPage serves the per-result score-breakdown
+// subpage template. It carries no server-side parameters -- like
+// handleAdminDomainPage, the same static page works for every result,
+// since the JS reads the query and doc ID it needs back out of its own
+// URL's querystring and re-runs /admin/api/search to find that one result.
+// Re-running the whole search (rather than a narrower "score just this
+// document" endpoint) is deliberate: every score here is normalized against
+// its search's own candidate batch (see domain.HybridResult.NormBM25/
+// NormalizedPageRank), so there's no way to reproduce it correctly except by
+// recomputing that same batch.
+func (h *Handler) handleAdminSearchResultPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminSearchResultHTML)
+}
+
 func (h *Handler) handleAdminOverridesPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/html; charset=utf-8", adminOverridesHTML)
 }
@@ -142,7 +157,10 @@ func (h *Handler) handleAdminVocabulary(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	limit := intQueryParam(r, "limit", defaultVocabularyTopTermsLimit, true)
-	search := r.URL.Query().Get("search")
+	// Indexed terms are always lowercased at tokenize time (see
+	// domain.Tokenize), so a mixed-case search would otherwise silently miss
+	// every match.
+	search := strings.ToLower(r.URL.Query().Get("search"))
 	vocabSize, topTerms, err := h.admin.VocabularyStats(r.Context(), limit, search)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -332,14 +350,38 @@ func (h *Handler) handleAdminPostings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// adminTermScore is domain.TermScore's wire shape -- one query term's BM25
+// contribution to a single result, for the per-result debug detail view.
+type adminTermScore struct {
+	Term      string  `json:"term"`
+	TermFreq  int     `json:"term_freq"`
+	DocFreq   int     `json:"doc_freq"`
+	DocLength int     `json:"doc_length"`
+	Score     float64 `json:"score"`
+}
+
 type adminDebugResult struct {
 	DocID       string  `json:"doc_id"`
 	URL         string  `json:"url"`
 	Title       string  `json:"title"`
 	Snippet     string  `json:"snippet"`
 	BM25Score   float64 `json:"bm25_score"`
+	NormBM25    float64 `json:"norm_bm25"`
 	SemanticSim float64 `json:"semantic_sim"`
-	FinalScore  float64 `json:"final_score"`
+	PageRank    float64 `json:"pagerank"`
+	// NormalizedPageRank is 0 whenever PageRankWeight is 0 or every result
+	// in the batch has a zero PageRank -- see domain.HybridResult's field
+	// doc comment.
+	NormalizedPageRank float64          `json:"normalized_pagerank"`
+	FinalScore         float64          `json:"final_score"`
+	BM25Terms          []adminTermScore `json:"bm25_terms,omitempty"`
+	// Alpha/K1/B/PageRankWeight are the tuning parameters that actually
+	// produced this result -- identical across every result of one search,
+	// like CorrectedTerms below.
+	Alpha          float64 `json:"alpha"`
+	K1             float64 `json:"k1"`
+	B              float64 `json:"b"`
+	PageRankWeight float64 `json:"pagerank_weight"`
 	// CorrectedTerms describes the query, not this particular result -- it
 	// is identical across every result of one search (see
 	// domain.HybridResult.CorrectedTerms) -- and is present here so the
@@ -361,9 +403,16 @@ func (h *Handler) handleAdminSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]adminDebugResult, len(results))
 	for i, res := range results {
+		terms := make([]adminTermScore, len(res.BM25Terms))
+		for j, t := range res.BM25Terms {
+			terms[j] = adminTermScore{Term: t.Term, TermFreq: t.TermFreq, DocFreq: t.DocFreq, DocLength: t.DocLength, Score: t.Score}
+		}
 		out[i] = adminDebugResult{
 			DocID: res.DocID, URL: res.URL, Title: res.Title, Snippet: res.Snippet,
-			BM25Score: res.BM25Score, SemanticSim: res.SemanticSim, FinalScore: res.FinalScore,
+			BM25Score: res.BM25Score, NormBM25: res.NormBM25, SemanticSim: res.SemanticSim,
+			PageRank: res.PageRank, NormalizedPageRank: res.NormalizedPageRank, FinalScore: res.FinalScore,
+			BM25Terms: terms,
+			Alpha:     res.Alpha, K1: res.K1, B: res.B, PageRankWeight: res.PageRankWeight,
 			CorrectedTerms: res.CorrectedTerms,
 		}
 	}
