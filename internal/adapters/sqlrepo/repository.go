@@ -1029,12 +1029,26 @@ func (r *Repository) UpdatePageRanks(ctx context.Context, scores map[string]floa
 // updatePageRankBatch runs one UPDATE documents SET pagerank = CASE id
 // WHEN ... THEN ... END WHERE id IN (...) statement for the given ids.
 func (r *Repository) updatePageRankBatch(ctx context.Context, tx *sql.Tx, ids []string, scores map[string]float64) error {
+	// thenCast: Postgres infers a CASE expression's result type from its
+	// THEN branches, and with every WHEN/THEN pair sent as an untyped
+	// extended-protocol parameter, it resolves the whole CASE to text
+	// rather than double precision, then refuses to assign that text
+	// result to the double-precision pagerank column ("column "pagerank"
+	// is of type double precision but expression is of type text"). An
+	// explicit cast on each THEN parameter settles the type unambiguously.
+	// SQLite (dynamically typed) and MySQL (which infers numeric literals
+	// fine here) need no such cast.
+	thenCast := "%s"
+	if r.dialect.Name() == "postgres" {
+		thenCast = "CAST(%s AS DOUBLE PRECISION)"
+	}
+
 	var stmt strings.Builder
 	stmt.WriteString("UPDATE documents SET pagerank = CASE id ")
 	args := make([]interface{}, 0, len(ids)*3)
 	pos := 1
 	for _, id := range ids {
-		stmt.WriteString("WHEN " + r.dialect.Placeholder(pos) + " THEN " + r.dialect.Placeholder(pos+1) + " ")
+		stmt.WriteString("WHEN " + r.dialect.Placeholder(pos) + " THEN " + fmt.Sprintf(thenCast, r.dialect.Placeholder(pos+1)) + " ")
 		args = append(args, id, scores[id])
 		pos += 2
 	}
