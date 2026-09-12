@@ -395,6 +395,11 @@ type adminPostingsResponse struct {
 // here reads the same as everywhere else in the admin UI.
 const postingsSnippetMaxLen = 200
 
+// defaultPostingsLimit bounds the vocabulary term-detail view's page list --
+// PostingsForTerm otherwise has no inherent bound, unlike the other admin
+// list endpoints, since a term can appear in every indexed document.
+const defaultPostingsLimit = 500
+
 func (h *Handler) handleAdminPostings(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
 		return
@@ -404,7 +409,8 @@ func (h *Handler) handleAdminPostings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "term must not be empty", http.StatusBadRequest)
 		return
 	}
-	postings, err := h.admin.PostingsForTerm(r.Context(), term)
+	limit := intQueryParam(r, "limit", defaultPostingsLimit, true)
+	postings, err := h.admin.PostingsForTerm(r.Context(), term, limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

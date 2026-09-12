@@ -1,0 +1,921 @@
+openapi: 3.0.3
+info:
+  title: searchengine API
+  version: "1.0"
+  description: |
+    A self-hosted hybrid (BM25 + semantic) search engine, deployed as three
+    independent Go binaries that share one SQL database:
+
+    - **search-server** (public, internet-facing): the index page and the
+      public `/search` API. Requires a signed-in session (see `/login`).
+    - **admin-server** (internal, reached only via nginx `/admin`, `/login`,
+      `/logout`): every `/admin/api/*` endpoint. Talks to crawl-server over
+      the network to start/inspect crawl jobs.
+    - **crawl-server** (internal only, never exposed by nginx): executes
+      crawls and tracks their job state. Its `/crawl` and `/jobs*` endpoints
+      are called exclusively by admin-server, via
+      `internal/adapters/crawlclient`.
+
+    All three sit behind one nginx host: `/login`, `/logout` and `/admin*`
+    proxy to admin-server, everything else (including `/style.css` and
+    `/search`) proxies to search-server. Session cookies are valid across
+    all of them (sessions are stored in a shared `sessions` table, not
+    in-process memory), so one login unlocks both the public site and the
+    admin backend.
+
+    This document covers every JSON REST endpoint across all three
+    processes. Plain HTML page routes (e.g. `GET /admin/crawl`, which just
+    serves a static template) are omitted -- they carry no API contract of
+    their own; their pages call the JSON endpoints documented here.
+  license:
+    name: UNLICENSED
+servers:
+  - url: https://se.mo-sys.de
+    description: Dev/test deployment (nginx fronts all three binaries)
+  - url: http://localhost:8080
+    description: Local development
+tags:
+  - name: search
+    description: Public search (search-server)
+  - name: auth
+    description: Session login/logout (shared, proxied to admin-server)
+  - name: admin
+    description: Admin diagnostics, tuning, and content management (admin-server)
+  - name: crawl-internal
+    description: >-
+      Crawl execution and job tracking (crawl-server). Never reachable from
+      the internet -- admin-server is the only caller.
+  - name: health
+    description: Liveness checks (identical on all three processes)
+
+security:
+  - sessionCookie: []
+
+paths:
+  # ---------------------------------------------------------------- search
+  /search:
+    get:
+      tags: [search]
+      summary: Run a hybrid search
+      description: >-
+        Blends BM25 and semantic (embedding cosine-similarity) scoring.
+        Query syntax supports `+required`, `-excluded`, `"exact phrase"`,
+        and `site:host` terms, combinable in one query.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+          example: "raft consensus algorithm"
+        - name: top_k
+          in: query
+          schema: { type: integer, default: 10 }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [relevance, recency], default: relevance }
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  query: { type: string }
+                  results:
+                    type: array
+                    items: { $ref: "#/components/schemas/SearchResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ------------------------------------------------------------------ auth
+  /login:
+    post:
+      tags: [auth]
+      summary: Sign in
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string, format: password }
+                next:
+                  type: string
+                  description: >-
+                    Path to redirect to after a successful login. Anything
+                    not starting with a single `/` (an absolute URL, or a
+                    protocol-relative `//`) is ignored in favor of `/admin`,
+                    to prevent an open-redirect via this field.
+      responses:
+        "200":
+          description: Signed in; a `se_session` cookie is set.
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  redirect: { type: string, example: /admin }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401":
+          description: Incorrect username or password.
+          content:
+            text/plain: { schema: { type: string } }
+  /logout:
+    post:
+      tags: [auth]
+      summary: Sign out
+      description: Revokes the session named by the `se_session` cookie, if any.
+      responses:
+        "200":
+          description: Signed out (idempotent -- succeeds even with no active session).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean } }
+
+  # ----------------------------------------------------------------- admin
+  /admin/api/stats:
+    get:
+      tags: [admin]
+      summary: Corpus-wide index stats
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  driver: { type: string, example: postgres }
+                  total_docs: { type: integer }
+                  avg_doc_len: { type: number }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/vocabulary:
+    get:
+      tags: [admin]
+      summary: Top terms by document frequency, optionally filtered
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20 }
+        - name: search
+          in: query
+          description: Case-insensitive substring filter on the term.
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  vocabulary_size:
+                    type: integer
+                    description: Total distinct terms corpus-wide (unaffected by `search`).
+                  top_terms:
+                    type: array
+                    items: { $ref: "#/components/schemas/TermStat" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/postings:
+    get:
+      tags: [admin]
+      summary: Every page containing one term, with a match excerpt
+      parameters:
+        - name: term
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          description: >-
+            Caps how many postings are returned, strongest matches (highest
+            term frequency) first; doc_freq in the response still reflects
+            every matching document even when the list is truncated.
+          schema: { type: integer, default: 500 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  term: { type: string }
+                  doc_freq: { type: integer }
+                  postings:
+                    type: array
+                    items: { $ref: "#/components/schemas/Posting" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/documents:
+    get:
+      tags: [admin]
+      summary: List indexed documents, optionally narrowed to one domain
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100 }
+        - name: domain
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Document" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    delete:
+      tags: [admin]
+      summary: Remove every document in one domain
+      description: >-
+        Fire-and-forget: looks up the domain's document IDs, then queues
+        their deletion on a background goroutine (detached from this
+        request, so it keeps running even after the client disconnects)
+        and returns immediately with the count queued.
+      parameters:
+        - name: domain
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "202":
+          description: Accepted; deletion is running in the background.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { queued: { type: integer } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/documents/overview:
+    get:
+      tags: [admin]
+      summary: Summary charts for the Documents page (top domains, age buckets)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  top_domains:
+                    type: array
+                    items: { $ref: "#/components/schemas/DomainSummary" }
+                  age_buckets:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        label: { type: string, example: "last 24h" }
+                        count: { type: integer }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/documents/{id}:
+    delete:
+      tags: [admin]
+      summary: Remove one document
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/documents/{id}/versions:
+    get:
+      tags: [admin]
+      summary: A document's superseded prior versions
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK (an empty array means it's never been re-crawled with different content)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    version: { type: integer }
+                    title: { type: string }
+                    doc_length: { type: integer }
+                    crawled_at: { type: string, format: date-time }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/domains:
+    get:
+      tags: [admin]
+      summary: Search crawled domains by name
+      description: An empty or missing `q` returns an empty list by design.
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/DomainSummary" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/search:
+    get:
+      tags: [admin]
+      summary: "Debug a query: unblended BM25/semantic scores and their full breakdown"
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+        - name: top_k
+          in: query
+          schema: { type: integer }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [relevance, recency] }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/DebugResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/settings:
+    get:
+      tags: [admin]
+      summary: Current tuning + operational settings
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Settings" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    post:
+      tags: [admin]
+      summary: Replace tuning + operational settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Settings" }
+      responses:
+        "200":
+          description: OK -- the settings as saved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Settings" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/overrides:
+    get:
+      tags: [admin]
+      summary: Current ranking overrides (blocked/boosted terms and domains)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Overrides" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    post:
+      tags: [admin]
+      summary: Replace ranking overrides
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Overrides" }
+      responses:
+        "200":
+          description: OK -- the overrides as saved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Overrides" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/crawl:
+    post:
+      tags: [admin]
+      summary: Start a crawl job
+      description: >-
+        Registers the job and returns its ID immediately; the crawl itself
+        runs in the background on crawl-server. Poll
+        `/admin/api/crawl/jobs/{id}` for progress.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CrawlRequest" }
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { job_id: { type: string } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/crawl/jobs:
+    get:
+      tags: [admin]
+      summary: List every crawl job (most recent first)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CrawlJobSummary" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/crawl/jobs/{id}:
+    get:
+      tags: [admin]
+      summary: One crawl job's full detail, including every page event
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CrawlJob" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/schedules:
+    get:
+      tags: [admin]
+      summary: List recurring crawl schedules
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ScheduledCrawl" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    post:
+      tags: [admin]
+      summary: Create a recurring crawl schedule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ScheduledCrawlRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScheduledCrawl" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/schedules/{id}:
+    patch:
+      tags: [admin]
+      summary: Replace a schedule's editable fields
+      description: >-
+        Reschedules it: `next_run_at` becomes `interval_minutes` from now,
+        same as a freshly created schedule.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ScheduledCrawlRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    delete:
+      tags: [admin]
+      summary: Delete a recurring crawl schedule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  # --------------------------------------------------------- crawl-internal
+  /crawl:
+    post:
+      tags: [crawl-internal]
+      summary: Start a crawl job (crawl-server's own entrypoint)
+      description: >-
+        Called only by admin-server (`POST /admin/api/crawl` proxies to
+        this). Never reachable from the internet.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CrawlRequest" }
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { job_id: { type: string } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /jobs:
+    get:
+      tags: [crawl-internal]
+      summary: List every crawl job tracked by this crawl-server
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CrawlJobSummary" }
+  /jobs/{id}:
+    get:
+      tags: [crawl-internal]
+      summary: One crawl job's full detail
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CrawlJob" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ---------------------------------------------------------------- health
+  /healthz:
+    get:
+      tags: [health]
+      summary: Liveness check
+      description: >-
+        Identical on all three processes. Unauthenticated by design, so
+        automated monitoring never needs to sign in. Reports 503 the
+        instant the underlying DB ping fails.
+      security: []
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string, example: ok } }
+        "503":
+          description: Unhealthy (DB unreachable)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string, example: unavailable } }
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: se_session
+      description: >-
+        Set by POST /login. Backed by a shared "sessions" table (not
+        process-local memory), so a session created via admin-server is
+        also honored by search-server, and vice versa.
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        text/plain: { schema: { type: string } }
+    Unauthorized:
+      description: No valid session
+      content:
+        text/plain: { schema: { type: string, example: "authentication required" } }
+    NotFound:
+      description: No resource with that ID
+      content:
+        text/plain: { schema: { type: string } }
+    NotConfigured:
+      description: This process wasn't wired up with the dependency this endpoint needs
+      content:
+        text/plain: { schema: { type: string } }
+
+  schemas:
+    SearchResult:
+      type: object
+      properties:
+        url: { type: string }
+        title: { type: string }
+        snippet:
+          type: string
+          description: HTML excerpt with `<mark>` around matched terms.
+        score: { type: number }
+        bm25_score: { type: number }
+        semantic_sim: { type: number }
+        corrected_terms:
+          type: array
+          items: { $ref: "#/components/schemas/CorrectedTerm" }
+
+    CorrectedTerm:
+      type: object
+      properties:
+        original: { type: string }
+        corrected: { type: string }
+
+    TermStat:
+      type: object
+      properties:
+        term: { type: string }
+        doc_freq: { type: integer }
+        total_freq: { type: integer }
+
+    Posting:
+      type: object
+      properties:
+        doc_id: { type: string }
+        url: { type: string }
+        title: { type: string }
+        snippet: { type: string }
+        term_freq: { type: integer }
+        doc_length: { type: integer }
+
+    Document:
+      type: object
+      properties:
+        id: { type: string }
+        url: { type: string }
+        host: { type: string }
+        title: { type: string }
+        doc_length: { type: integer }
+        version: { type: integer }
+        crawled_at: { type: string, format: date-time }
+        internal_links: { type: integer }
+        external_links: { type: integer }
+        backlinks: { type: integer }
+        pagerank: { type: number }
+
+    DomainSummary:
+      type: object
+      properties:
+        host: { type: string }
+        doc_count: { type: integer }
+
+    DebugResult:
+      description: >-
+        The unblended score breakdown behind one search-debug result --
+        every component that fed FinalScore, plus the tuning parameters
+        that were actually in effect.
+      type: object
+      properties:
+        doc_id: { type: string }
+        url: { type: string }
+        title: { type: string }
+        snippet: { type: string }
+        bm25_score: { type: number }
+        norm_bm25:
+          type: number
+          description: bm25_score normalized against this search's own candidate batch.
+        semantic_sim: { type: number }
+        pagerank: { type: number, description: Raw (unnormalized) link-authority score. }
+        normalized_pagerank: { type: number }
+        final_score: { type: number }
+        bm25_terms:
+          type: array
+          items:
+            type: object
+            properties:
+              term: { type: string }
+              term_freq: { type: integer }
+              doc_freq: { type: integer }
+              doc_length: { type: integer }
+              score: { type: number }
+        alpha: { type: number }
+        k1: { type: number }
+        b: { type: number }
+        pagerank_weight: { type: number }
+        corrected_terms:
+          type: array
+          items: { $ref: "#/components/schemas/CorrectedTerm" }
+
+    Settings:
+      type: object
+      properties:
+        tuning:
+          type: object
+          properties:
+            alpha: { type: number, description: "BM25 (1.0) vs. semantic (0.0) blend weight." }
+            k1: { type: number }
+            b: { type: number }
+            pagerank_weight: { type: number }
+        operational:
+          type: object
+          properties:
+            fetch_timeout_seconds: { type: integer }
+            user_agent: { type: string }
+            default_max_pages: { type: integer }
+            min_text_length: { type: integer }
+            default_top_k: { type: integer }
+            session_ttl_hours: { type: integer }
+            crawl_delay_ms: { type: integer }
+            max_response_kb: { type: integer }
+            semantic_candidate_pool_size: { type: integer }
+            db_max_open_conns: { type: integer }
+            db_max_idle_conns: { type: integer }
+            db_conn_max_lifetime_minutes: { type: integer }
+            fuzzy_match_enabled: { type: boolean }
+            fuzzy_max_edit_distance: { type: integer }
+            pagerank_recompute_interval_minutes: { type: integer }
+            ann_search_enabled: { type: boolean }
+            max_retained_crawl_jobs: { type: integer }
+
+    Overrides:
+      type: object
+      properties:
+        blocked_terms: { type: array, items: { type: string } }
+        boosted_terms:
+          type: object
+          additionalProperties: { type: number }
+        blocked_domains: { type: array, items: { type: string } }
+        boosted_domains:
+          type: object
+          additionalProperties: { type: number }
+
+    CrawlRequest:
+      type: object
+      required: [seed_urls]
+      properties:
+        seed_urls: { type: array, items: { type: string }, minItems: 1 }
+        max_pages: { type: integer }
+        cookie:
+          type: string
+          description: Applied only to this crawl -- never persisted.
+        basic_auth_user: { type: string, description: Applied only to this crawl -- never persisted. }
+        basic_auth_pass: { type: string, description: Applied only to this crawl -- never persisted. }
+        respect_robots: { type: boolean, default: false }
+        user_agent: { type: string }
+        allow_off_domain_links: { type: boolean, default: false }
+        use_sitemap: { type: boolean, default: false }
+        fetch_timeout_seconds:
+          type: integer
+          description: Overrides the global default for this crawl alone; 0 means "use the global default."
+        min_text_length:
+          type: integer
+          description: Overrides the global default for this crawl alone; 0 means "use the global default."
+        crawl_delay_ms:
+          type: integer
+          description: Overrides the global default for this crawl alone; 0 means "use the global default."
+        max_response_kb:
+          type: integer
+          description: Overrides the global default for this crawl alone; 0 means "use the global default."
+        prioritize_unindexed:
+          type: boolean
+          default: false
+          description: >-
+            Fetch not-yet-indexed URLs before re-fetching ones already
+            indexed, within the same max_pages budget. Reorders discovery
+            only -- it never skips already-indexed pages.
+
+    CrawlJobRequest:
+      description: A redacted summary of the request that started a job -- HasCookie/HasBasicAuth booleans, never the actual credentials.
+      type: object
+      properties:
+        seed_urls: { type: array, items: { type: string } }
+        max_pages: { type: integer }
+        has_cookie: { type: boolean }
+        has_basic_auth: { type: boolean }
+        respect_robots: { type: boolean }
+        user_agent: { type: string }
+        allow_off_domain_links: { type: boolean }
+        use_sitemap: { type: boolean }
+        fetch_timeout_seconds: { type: integer }
+        min_text_length: { type: integer }
+        crawl_delay_ms: { type: integer }
+        max_response_kb: { type: integer }
+        prioritize_unindexed: { type: boolean }
+
+    CrawlPageEvent:
+      type: object
+      properties:
+        url: { type: string }
+        status:
+          type: string
+          enum: [indexed, thin_content, fetch_failed, robots_disallowed]
+        title: { type: string }
+        error: { type: string }
+        doc_length: { type: integer }
+        links_found: { type: integer }
+        duration_ms: { type: integer }
+        fetched_at: { type: string, format: date-time }
+
+    CrawlJobSummary:
+      type: object
+      properties:
+        id: { type: string }
+        request: { $ref: "#/components/schemas/CrawlJobRequest" }
+        status: { type: string, enum: [queued, running, done, failed] }
+        pages_crawled: { type: integer }
+        error: { type: string }
+        created_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+
+    CrawlJob:
+      allOf:
+        - $ref: "#/components/schemas/CrawlJobSummary"
+        - type: object
+          properties:
+            pages:
+              type: array
+              items: { $ref: "#/components/schemas/CrawlPageEvent" }
+
+    ScheduledCrawlRequest:
+      description: No cookie/Basic-auth fields -- a recurring schedule never stores credentials at rest.
+      type: object
+      required: [seed_urls, interval_minutes]
+      properties:
+        seed_urls: { type: array, items: { type: string }, minItems: 1 }
+        max_pages: { type: integer }
+        respect_robots: { type: boolean }
+        user_agent: { type: string }
+        allow_off_domain_links: { type: boolean }
+        use_sitemap: { type: boolean }
+        interval_minutes: { type: integer, minimum: 1 }
+        enabled: { type: boolean }
+
+    ScheduledCrawl:
+      allOf:
+        - $ref: "#/components/schemas/ScheduledCrawlRequest"
+        - type: object
+          properties:
+            id: { type: string }
+            last_run_at: { type: string, format: date-time, nullable: true }
+            next_run_at: { type: string, format: date-time }
+            created_at: { type: string, format: date-time }

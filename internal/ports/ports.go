@@ -189,7 +189,10 @@ type AdminRepository interface {
 	SearchDomains(ctx context.Context, q string, limit int) ([]domain.DomainSummary, error)
 	DocumentVersions(ctx context.Context, docID string) ([]domain.DocumentVersion, error)
 	DocumentsOverview(ctx context.Context, topDomains int) (domain.DocumentsOverview, error)
-	PostingsForTerm(ctx context.Context, term string) ([]domain.PostingStats, error)
+	// PostingsForTerm returns at most limit postings for term, ordered by
+	// term frequency descending, so a limited result still surfaces the
+	// strongest matches rather than an arbitrary subset.
+	PostingsForTerm(ctx context.Context, term string, limit int) ([]domain.PostingStats, error)
 	// DocumentsByIDs backs the vocabulary term-detail view: given
 	// PostingsForTerm's doc IDs, fetch each document's URL/title/text so a
 	// match excerpt can be built for it.

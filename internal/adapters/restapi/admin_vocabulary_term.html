@@ -38,17 +38,23 @@
   titleEl.textContent = term || '(no term given)';
 
   function renderPostings(data) {
+    const truncated = data.postings.length < data.doc_freq;
     tailEl.appendChild((() => {
       const span = document.createElement('span');
       span.className = 'domain-metrics';
       span.textContent = data.postings.length + (data.postings.length === 1 ? ' page' : ' pages') +
-        ' · appears in ' + data.doc_freq + (data.doc_freq === 1 ? ' document' : ' documents') + ' total';
+        (truncated ? ' shown of ' : ' · appears in ') +
+        data.doc_freq + (data.doc_freq === 1 ? ' document' : ' documents') + ' total';
       return span;
     })());
 
     if (data.postings.length === 0) {
       statusEl.textContent = 'No pages contain “' + term + '”.';
       return;
+    }
+
+    if (truncated) {
+      statusEl.textContent = 'Showing the ' + data.postings.length + ' strongest matches — refine the term to narrow further.';
     }
 
     // Highest term frequency first -- the strongest matches for this term

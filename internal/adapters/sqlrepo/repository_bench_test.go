@@ -131,7 +131,7 @@ func BenchmarkPostingsFetch(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			for _, term := range terms {
-				if _, err := repo.PostingsForTerm(ctx, term); err != nil {
+				if _, err := repo.PostingsForTerm(ctx, term, corpusSize); err != nil {
 					b.Fatalf("PostingsForTerm(%s): %v", term, err)
 				}
 			}

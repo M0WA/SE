@@ -110,6 +110,8 @@
     <h2>Jobs</h2>
     <p class="lede" style="margin: 0 0 1rem;">Every crawl triggered on this instance, most recent first. Up to three run at once; the rest wait their turn.</p>
     <div id="jobs-status" class="panel-status"></div>
+    <input id="jobs-filter" class="field" type="text" placeholder="Filter jobs (regex) — matches seed or status" hidden>
+    <div id="jobs-filter-error" class="error-text"></div>
     <div id="jobs-table"></div>
   </section>
 
@@ -148,6 +150,8 @@
   const recrawlQ = document.getElementById('recrawl-q');
   const recrawlResultsEl = document.getElementById('recrawl-results');
   const jobsStatusEl = document.getElementById('jobs-status');
+  const jobsFilterEl = document.getElementById('jobs-filter');
+  const jobsFilterErrorEl = document.getElementById('jobs-filter-error');
   const jobsTableEl = document.getElementById('jobs-table');
   const jobDetailHeading = document.getElementById('job-detail-heading');
   const jobDetailSummaryEl = document.getElementById('job-detail-summary');
@@ -166,6 +170,8 @@
   let jobDetailPages = [];
   let jobDetailFilterText = '';
   let jobDetailPageNum = 1;
+  let allJobs = [];
+  let jobsFilterText = '';
 
   const prefillURL = new URLSearchParams(window.location.search).get('url');
   if (prefillURL) {
@@ -201,16 +207,42 @@
     return td;
   }
 
+  // filterJobs applies the admin's regex (matched against the seed URLs
+  // summary and status, case-insensitive) client-side -- the API already
+  // returned every retained job, so filtering here just narrows what's
+  // displayed. An invalid pattern shows a message instead of silently
+  // discarding it, same convention as the job-detail page filter below.
+  function filterJobs(jobs, pattern) {
+    if (!pattern) {
+      jobsFilterErrorEl.textContent = '';
+      return jobs;
+    }
+    try {
+      const re = new RegExp(pattern, 'i');
+      jobsFilterErrorEl.textContent = '';
+      return jobs.filter((j) => re.test(seedSummary(j.request.seed_urls)) || re.test(j.status));
+    } catch (err) {
+      jobsFilterErrorEl.textContent = 'Invalid regex: ' + err.message;
+      return jobs;
+    }
+  }
+
   function renderJobs(jobs) {
+    jobsFilterEl.hidden = jobs.length === 0;
+    const filtered = filterJobs(jobs, jobsFilterText);
     clear(jobsTableEl);
     if (jobs.length === 0) {
       jobsStatusEl.textContent = 'No crawls triggered yet.';
       return;
     }
+    if (filtered.length === 0) {
+      jobsStatusEl.textContent = 'No jobs match that filter.';
+      return;
+    }
     jobsStatusEl.textContent = '';
     const table = buildTable(
       [{ label: 'seed' }, { label: 'status' }, { label: 'pages', num: true }, { label: 'duration' }, { label: '' }],
-      jobs,
+      filtered,
       (j) => [
         urlCell(seedSummary(j.request.seed_urls)),
         textCell(capitalize(j.status)),
@@ -222,9 +254,15 @@
     jobsTableEl.appendChild(table);
   }
 
+  jobsFilterEl.addEventListener('input', () => {
+    jobsFilterText = jobsFilterEl.value.trim();
+    renderJobs(allJobs);
+  });
+
   async function loadJobs() {
     try {
       const jobs = await getJSON('/admin/api/crawl/jobs');
+      allJobs = jobs;
       renderJobs(jobs);
       if (selectedJobID && jobs.some((j) => j.id === selectedJobID && ACTIVE_STATUSES.includes(j.status))) {
         loadJobDetail(selectedJobID);

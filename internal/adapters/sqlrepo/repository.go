@@ -490,7 +490,7 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 	return tx.Commit()
 }
 
-func (r *Repository) PostingsForTerm(ctx context.Context, term string) ([]domain.PostingStats, error) {
+func (r *Repository) PostingsForTerm(ctx context.Context, term string, limit int) ([]domain.PostingStats, error) {
 	totalDocs, avgDocLen, err := r.CorpusStats(ctx)
 	if err != nil {
 		return nil, err
@@ -507,8 +507,8 @@ func (r *Repository) PostingsForTerm(ctx context.Context, term string) ([]domain
 
 	query := r.ph(`SELECT p.doc_id, p.term_freq, d.doc_length
 	               FROM postings p JOIN documents d ON d.id = p.doc_id
-	               WHERE p.term = %s`, 1)
-	rows, err := r.db.QueryContext(ctx, query, term)
+	               WHERE p.term = %s ORDER BY p.term_freq DESC LIMIT %s`, 1, 2)
+	rows, err := r.db.QueryContext(ctx, query, term, limit)
 	if err != nil {
 		return nil, fmt.Errorf("querying postings: %w", err)
 	}

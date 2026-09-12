@@ -301,7 +301,7 @@ func TestSaveDocument_ThenRetrieveEverywhere(t *testing.T) {
 		t.Errorf("expected the saved document in the listing, got %+v", docs)
 	}
 
-	postings, err := repo.PostingsForTerm(ctx, "cats")
+	postings, err := repo.PostingsForTerm(ctx, "cats", 100)
 	if err != nil {
 		t.Fatalf("unexpected error querying postings: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestSaveDocument_UpsertReplacesPostings(t *testing.T) {
 		t.Fatalf("unexpected error on upsert save: %v", err)
 	}
 
-	catsPostings, err := repo.PostingsForTerm(ctx, "cats")
+	catsPostings, err := repo.PostingsForTerm(ctx, "cats", 100)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestSaveDocument_UpsertReplacesPostings(t *testing.T) {
 		t.Errorf("expected the old 'cats' posting to be gone after upsert, got %+v", catsPostings)
 	}
 
-	dogsPostings, err := repo.PostingsForTerm(ctx, "dogs")
+	dogsPostings, err := repo.PostingsForTerm(ctx, "dogs", 100)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -364,7 +364,7 @@ func TestSaveDocument_UpsertReplacesPostings(t *testing.T) {
 
 func TestPostingsForTerm_NoMatches(t *testing.T) {
 	repo := newTestRepo(t)
-	postings, err := repo.PostingsForTerm(context.Background(), "nonexistent")
+	postings, err := repo.PostingsForTerm(context.Background(), "nonexistent", 100)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -386,7 +386,7 @@ func TestPostingsForTerm_AcrossMultipleDocuments(t *testing.T) {
 		}
 	}
 
-	postings, err := repo.PostingsForTerm(ctx, "shared")
+	postings, err := repo.PostingsForTerm(ctx, "shared", 100)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -397,6 +397,40 @@ func TestPostingsForTerm_AcrossMultipleDocuments(t *testing.T) {
 		if p.DocFreq != 2 {
 			t.Errorf("expected DocFreq=2 (term appears in 2 docs), got %d", p.DocFreq)
 		}
+	}
+}
+
+// TestPostingsForTerm_RespectsLimitAndOrdering verifies a limit narrower than
+// the term's true doc_freq still returns the strongest matches (highest
+// term_freq first), not an arbitrary subset -- otherwise the vocabulary
+// term-detail view's default limit would silently hide the very pages an
+// admin would want to see first.
+func TestPostingsForTerm_RespectsLimitAndOrdering(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	docs := []domain.Document{
+		{ID: "doc-weak", URL: "http://a", Title: "A", Text: "shared once"},
+		{ID: "doc-strong", URL: "http://b", Title: "B", Text: "shared shared shared shared"},
+		{ID: "doc-mid", URL: "http://c", Title: "C", Text: "shared shared"},
+	}
+	for _, d := range docs {
+		if err := repo.SaveDocument(ctx, d, []float32{1}); err != nil {
+			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
+		}
+	}
+
+	postings, err := repo.PostingsForTerm(ctx, "shared", 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(postings) != 2 {
+		t.Fatalf("expected the limit to cap the result at 2, got %+v", postings)
+	}
+	if postings[0].DocID != "doc-strong" || postings[1].DocID != "doc-mid" {
+		t.Errorf("expected the two highest-term_freq postings in descending order, got %+v", postings)
+	}
+	if postings[0].DocFreq != 3 {
+		t.Errorf("expected DocFreq to reflect all 3 matching docs regardless of the limit, got %d", postings[0].DocFreq)
 	}
 }
 
@@ -630,7 +664,7 @@ func TestDeleteDocument_Success(t *testing.T) {
 	if docs, err := repo.DocumentsByIDs(ctx, []string{"doc-1"}); err != nil || len(docs) != 0 {
 		t.Errorf("expected the document to be gone after delete, got docs=%+v err=%v", docs, err)
 	}
-	postings, err := repo.PostingsForTerm(ctx, "cats")
+	postings, err := repo.PostingsForTerm(ctx, "cats", 100)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -744,7 +778,7 @@ func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 		}
 	})
 	t.Run("PostingsForTerm", func(t *testing.T) {
-		if _, err := closedRepo(t).PostingsForTerm(ctx, "term"); err == nil {
+		if _, err := closedRepo(t).PostingsForTerm(ctx, "term", 100); err == nil {
 			t.Error("expected an error")
 		}
 	})

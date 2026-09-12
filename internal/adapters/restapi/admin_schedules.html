@@ -77,6 +77,8 @@
   <section class="panel">
     <h2>Schedules</h2>
     <div id="schedules-status" class="panel-status"></div>
+    <input id="schedules-filter" class="field" type="text" placeholder="Filter schedules (regex) — matches seed" hidden>
+    <div id="schedules-filter-error" class="error-text"></div>
     <div id="schedules-table"></div>
   </section>
 </main>
@@ -93,6 +95,27 @@
   const formStatus = document.getElementById('schedule-form-status');
   const schedulesStatusEl = document.getElementById('schedules-status');
   const schedulesTableEl = document.getElementById('schedules-table');
+  const schedulesFilterEl = document.getElementById('schedules-filter');
+  const schedulesFilterErrorEl = document.getElementById('schedules-filter-error');
+
+  let allSchedules = [];
+  let schedulesFilterText = '';
+
+  // filterSchedules mirrors the job-detail page's filterPages pattern: a
+  // case-insensitive regex matched against the seed URLs, with invalid
+  // patterns reported rather than thrown.
+  function filterSchedules(schedules, pattern) {
+    schedulesFilterErrorEl.textContent = '';
+    if (!pattern) return schedules;
+    let re;
+    try {
+      re = new RegExp(pattern, 'i');
+    } catch (err) {
+      schedulesFilterErrorEl.textContent = 'Invalid pattern: ' + err.message;
+      return schedules;
+    }
+    return schedules.filter((s) => (s.seed_urls || []).some((u) => re.test(u)));
+  }
 
   function parseLines(text) {
     return text.split('\n').map((s) => normalizeURL(s)).filter(Boolean);
@@ -157,7 +180,9 @@
   function renderSchedules(schedules) {
     clear(schedulesTableEl);
     if (schedules.length === 0) {
-      schedulesStatusEl.textContent = 'No schedules yet — create one above.';
+      schedulesStatusEl.textContent = schedulesFilterText
+        ? 'No schedules match that filter.'
+        : 'No schedules yet — create one above.';
       return;
     }
     schedulesStatusEl.textContent = '';
@@ -178,11 +203,18 @@
 
   async function loadSchedules() {
     try {
-      renderSchedules(await getJSON('/admin/api/schedules'));
+      allSchedules = await getJSON('/admin/api/schedules');
+      schedulesFilterEl.hidden = allSchedules.length === 0;
+      renderSchedules(filterSchedules(allSchedules, schedulesFilterText));
     } catch (err) {
       schedulesStatusEl.textContent = 'Could not load schedules: ' + err.message;
     }
   }
+
+  schedulesFilterEl.addEventListener('input', () => {
+    schedulesFilterText = schedulesFilterEl.value.trim();
+    renderSchedules(filterSchedules(allSchedules, schedulesFilterText));
+  });
 
   scheduleForm.addEventListener('submit', async (e) => {
     e.preventDefault();

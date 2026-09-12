@@ -86,7 +86,8 @@ func (f *fakeAdminRepo) DeleteDocument(_ context.Context, id string) error {
 	f.mu.Unlock()
 	return f.deleteErr
 }
-func (f *fakeAdminRepo) PostingsForTerm(context.Context, string) ([]domain.PostingStats, error) {
+func (f *fakeAdminRepo) PostingsForTerm(_ context.Context, _ string, limit int) ([]domain.PostingStats, error) {
+	f.gotLimit = limit
 	return f.postings, f.err
 }
 func (f *fakeAdminRepo) DocumentsByIDs(context.Context, []string) (map[string]domain.Document, error) {
@@ -672,6 +673,29 @@ func TestHandleAdminPostings_Success(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if resp.Term != "katzen" || resp.DocFreq != 1 || len(resp.Postings) != 1 || resp.Postings[0].TermFreq != 3 {
 		t.Errorf("unexpected postings response: %+v", resp)
+	}
+}
+
+// TestHandleAdminPostings_Limit verifies the ?limit= override reaches
+// PostingsForTerm, and that a missing/non-numeric value falls back to
+// defaultPostingsLimit -- the same convention as the vocabulary and
+// document-list endpoints' ?limit= handling.
+func TestHandleAdminPostings_Limit(t *testing.T) {
+	repo := &fakeAdminRepo{postings: []domain.PostingStats{{DocID: "doc-0"}}}
+	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/postings?term=katzen&limit=5", nil)
+	req.AddCookie(cookie)
+	h.RoutesAdmin().ServeHTTP(httptest.NewRecorder(), req)
+	if repo.gotLimit != 5 {
+		t.Errorf("expected limit=5 to reach PostingsForTerm, got %d", repo.gotLimit)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/admin/api/postings?term=katzen", nil)
+	req.AddCookie(cookie)
+	h.RoutesAdmin().ServeHTTP(httptest.NewRecorder(), req)
+	if repo.gotLimit != 500 {
+		t.Errorf("expected the built-in default limit (500), got %d", repo.gotLimit)
 	}
 }
 

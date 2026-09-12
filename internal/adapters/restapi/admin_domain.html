@@ -25,6 +25,8 @@
   <p id="delete-all-status" class="panel-status"></p>
   <div id="domain-status" class="panel-status"></div>
   <div id="domain-chart"></div>
+  <input id="domain-filter" class="field" type="text" placeholder="Filter pages (regex) — matches title or URL" hidden>
+  <div id="domain-filter-error" class="error-text"></div>
   <div id="domain-table"></div>
 
   <section class="panel" id="history-panel" hidden>
@@ -42,6 +44,8 @@
   const statusEl = document.getElementById('domain-status');
   const chartEl = document.getElementById('domain-chart');
   const tableEl = document.getElementById('domain-table');
+  const filterEl = document.getElementById('domain-filter');
+  const filterErrorEl = document.getElementById('domain-filter-error');
   const deleteAllBtn = document.getElementById('delete-all');
   const deleteAllStatusEl = document.getElementById('delete-all-status');
   const historyPanel = document.getElementById('history-panel');
@@ -49,6 +53,25 @@
   const historyBody = document.getElementById('history-body');
 
   titleEl.textContent = host;
+
+  let allDocs = [];
+  let domainFilterText = '';
+
+  // filterDocs mirrors the job-detail page's filterPages / crawl.html's
+  // filterJobs pattern: a case-insensitive regex matched against title and
+  // URL, with invalid patterns reported rather than thrown.
+  function filterDocs(docs, pattern) {
+    filterErrorEl.textContent = '';
+    if (!pattern) return docs;
+    let re;
+    try {
+      re = new RegExp(pattern, 'i');
+    } catch (err) {
+      filterErrorEl.textContent = 'Invalid pattern: ' + err.message;
+      return docs;
+    }
+    return docs.filter((d) => re.test(d.title || '') || re.test(d.url || ''));
+  }
 
   function buildChart(docs) {
     const maxLen = Math.max.apply(null, docs.map((d) => d.doc_length).concat([1]));
@@ -83,6 +106,7 @@
     btn.disabled = true;
     try {
       await deleteRequest('/admin/api/documents/' + encodeURIComponent(id));
+      allDocs = allDocs.filter((d) => d.id !== id);
       btn.closest('tr').remove();
     } catch (err) {
       btn.disabled = false;
@@ -167,6 +191,19 @@
 
     chartEl.appendChild(buildChart(docs));
 
+    filterEl.hidden = false;
+    renderTable(filterDocs(docs, domainFilterText));
+
+    deleteAllBtn.hidden = false;
+    deleteAllBtn.addEventListener('click', () => deleteAllInDomain(docs.length));
+  }
+
+  function renderTable(docs) {
+    clear(tableEl);
+    if (docs.length === 0) {
+      tableEl.textContent = 'No pages match that filter.';
+      return;
+    }
     const table = buildTable(
       [
         { label: 'title' }, { label: 'length', num: true },
@@ -229,14 +266,17 @@
       },
     );
     tableEl.appendChild(table);
-
-    deleteAllBtn.hidden = false;
-    deleteAllBtn.addEventListener('click', () => deleteAllInDomain(docs.length));
   }
+
+  filterEl.addEventListener('input', () => {
+    domainFilterText = filterEl.value.trim();
+    renderTable(filterDocs(allDocs, domainFilterText));
+  });
 
   async function load() {
     try {
       const docs = await getJSON('/admin/api/documents?domain=' + encodeURIComponent(host) + '&limit=1000');
+      allDocs = docs;
       renderDocs(docs);
     } catch (err) {
       statusEl.textContent = 'Could not load documents: ' + err.message;
