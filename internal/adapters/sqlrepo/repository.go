@@ -26,6 +26,10 @@ func hostOf(rawURL string) string {
 type Repository struct {
 	db      *sql.DB
 	dialect Dialect
+	// ann tracks whether Postgres pgvector-backed approximate
+	// nearest-neighbor semantic search is available for this process --
+	// see EnableANN, ANNAvailable and TopSemanticMatches in ann.go.
+	ann annState
 }
 
 func New(ctx context.Context, driverName, dsn string) (*Repository, error) {
@@ -194,10 +198,16 @@ func (r *Repository) migrateDocumentColumns(ctx context.Context) error {
 	if err := addColumn("norm_embedding", "norm_embedding REAL NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	if err := addColumn("pagerank", "pagerank REAL NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	if err := r.backfillHost(ctx); err != nil {
 		return err
 	}
-	return r.backfillNormEmbedding(ctx)
+	if err := r.backfillNormEmbedding(ctx); err != nil {
+		return err
+	}
+	return r.backfillPageRank(ctx)
 }
 
 // existingColumns introspects which columns a table actually has, so
@@ -320,6 +330,30 @@ func (r *Repository) backfillNormEmbedding(ctx context.Context) error {
 	return nil
 }
 
+// backfillPageRank fills in pagerank for any row saved before that column
+// existed (it defaults to 0) with a neutral 1/N score rather than leaving
+// it at 0 -- a bare 0 would unfairly rank every pre-existing document dead
+// last on PageRank the moment an admin turns on PageRankWeight, before
+// application.RunPageRankJob has ever had a chance to compute a real
+// score. A real PageRank score is always strictly positive (see
+// domain.PageRank's base (1-d)/N term, added unconditionally every
+// iteration), so "pagerank = 0" unambiguously means "never assigned",
+// exactly like backfillNormEmbedding's use of 0 for "never computed".
+func (r *Repository) backfillPageRank(ctx context.Context) error {
+	var totalDocs int
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM documents`).Scan(&totalDocs); err != nil {
+		return fmt.Errorf("counting documents for pagerank backfill: %w", err)
+	}
+	if totalDocs == 0 {
+		return nil
+	}
+	neutral := 1.0 / float64(totalDocs)
+	if _, err := r.db.ExecContext(ctx, r.ph(`UPDATE documents SET pagerank = %s WHERE pagerank = %s`, 1, 2), neutral, 0); err != nil {
+		return fmt.Errorf("backfilling pagerank: %w", err)
+	}
+	return nil
+}
+
 func (r *Repository) Close() error { return r.db.Close() }
 
 // Ping confirms the database connection is alive, for GET /healthz -- a
@@ -355,16 +389,30 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 	defer tx.Rollback()
 
 	version := 1
+	var pagerank float64
 	var existingVersion int
 	var existingText string
-	selectSQL := r.ph(`SELECT version, text FROM documents WHERE id = %s`, 1)
-	switch selectErr := tx.QueryRowContext(ctx, selectSQL, doc.ID).Scan(&existingVersion, &existingText); {
+	var existingPageRank float64
+	selectSQL := r.ph(`SELECT version, text, pagerank FROM documents WHERE id = %s`, 1)
+	switch selectErr := tx.QueryRowContext(ctx, selectSQL, doc.ID).Scan(&existingVersion, &existingText, &existingPageRank); {
 	case selectErr == sql.ErrNoRows:
-		// new document: version stays 1, nothing to archive
+		// New document: version stays 1, nothing to archive. Give it a
+		// neutral 1/N pagerank (N counting the row about to be inserted)
+		// rather than the column's bare-0 default, so it isn't unfairly
+		// ranked dead last on link authority before the next
+		// application.RunPageRankJob run ever gets a chance to score it --
+		// see backfillPageRank for the same reasoning applied to
+		// pre-existing rows.
+		var totalDocs int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM documents`).Scan(&totalDocs); err != nil {
+			return fmt.Errorf("counting documents for pagerank default: %w", err)
+		}
+		pagerank = 1.0 / float64(totalDocs+1)
 	case selectErr != nil:
 		return fmt.Errorf("checking existing document: %w", selectErr)
 	case existingText == doc.Text:
 		version = existingVersion // unchanged content: not a new version
+		pagerank = existingPageRank
 	default:
 		archiveSQL := r.ph(`INSERT INTO document_versions (doc_id, version, title, text, doc_length, crawled_at)
 		                     SELECT id, version, title, text, doc_length, crawled_at FROM documents WHERE id = %s`, 1)
@@ -372,12 +420,28 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 			return fmt.Errorf("archiving previous version: %w", err)
 		}
 		version = existingVersion + 1
+		pagerank = existingPageRank
 	}
 
 	if _, err := tx.ExecContext(ctx, r.dialect.UpsertDocumentSQL(),
-		doc.ID, doc.URL, doc.Title, doc.Text, len(tokens), string(embJSON), normEmbedding, host, version, now,
+		doc.ID, doc.URL, doc.Title, doc.Text, len(tokens), string(embJSON), normEmbedding, pagerank, host, version, now,
 	); err != nil {
 		return fmt.Errorf("saving document: %w", err)
+	}
+
+	// Also populate the pgvector column used by the ANN path (see ann.go),
+	// alongside (never instead of) the JSON embedding column above -- that
+	// column stays the source of truth for SQLite/MySQL, and is a harmless
+	// duplicate on Postgres. A plain UPDATE right after the upsert rather
+	// than folding it into UpsertDocumentSQL, since that statement is
+	// shared verbatim across all three dialects and embedding_vector only
+	// exists (and only ever should be written to) on Postgres once
+	// EnableANN has actually succeeded for this process.
+	if r.ann.isAvailable() {
+		vecSQL := r.ph(`UPDATE documents SET embedding_vector = %s::vector WHERE id = %s`, 1, 2)
+		if _, err := tx.ExecContext(ctx, vecSQL, formatPgVectorLiteral(embedding), doc.ID); err != nil {
+			return fmt.Errorf("saving embedding vector: %w", err)
+		}
 	}
 
 	if _, err := tx.ExecContext(ctx, r.ph(`DELETE FROM postings WHERE doc_id = %s`, 1), doc.ID); err != nil {
@@ -544,25 +608,50 @@ func (r *Repository) VocabularyStats(ctx context.Context, topN int) (int, []doma
 	return vocabSize, out, rows.Err()
 }
 
-// scanEmbeddingRows reads (id, embedding-JSON, norm_embedding) rows into a
-// map, shared by EmbeddingsForDocs and SampleEmbeddings so both stay
-// consistent about how the embedding column is deserialized. The norm is
-// read straight off its own column -- computed once at SaveDocument time
-// (or by the norm_embedding backfill) -- rather than recomputed here from
-// the deserialized vector.
+// AllTerms returns every distinct term in the postings table with its
+// doc/total frequency -- the same shape as VocabularyStats' topN listing,
+// but unbounded, since domain.VocabularyCache/domain.NearestTerm need the
+// whole vocabulary to check a mistyped query term against, not just the
+// most frequent terms.
+func (r *Repository) AllTerms(ctx context.Context) ([]domain.TermStat, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT term, COUNT(*) AS doc_freq, SUM(term_freq) AS total_freq
+	               FROM postings GROUP BY term`)
+	if err != nil {
+		return nil, fmt.Errorf("querying all terms: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.TermStat
+	for rows.Next() {
+		var s domain.TermStat
+		if err := rows.Scan(&s.Term, &s.DocFreq, &s.TotalFreq); err != nil {
+			return nil, fmt.Errorf("scanning row: %w", err)
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// scanEmbeddingRows reads (id, embedding-JSON, norm_embedding, pagerank)
+// rows into a map, shared by EmbeddingsForDocs and SampleEmbeddings so both
+// stay consistent about how the embedding column is deserialized. The norm
+// and pagerank are read straight off their own columns -- computed once at
+// SaveDocument time (or by the norm_embedding/pagerank backfills, or --
+// for pagerank -- a later application.RunPageRankJob run) -- rather than
+// recomputed here from the deserialized vector.
 func scanEmbeddingRows(rows *sql.Rows) (map[string]domain.EmbeddedVector, error) {
 	out := make(map[string]domain.EmbeddedVector)
 	for rows.Next() {
 		var id, embJSON string
-		var norm float64
-		if err := rows.Scan(&id, &embJSON, &norm); err != nil {
+		var norm, pagerank float64
+		if err := rows.Scan(&id, &embJSON, &norm, &pagerank); err != nil {
 			return nil, fmt.Errorf("scanning row: %w", err)
 		}
 		var vec []float32
 		if err := json.Unmarshal([]byte(embJSON), &vec); err != nil {
 			return nil, fmt.Errorf("deserializing embedding (%s): %w", id, err)
 		}
-		out[id] = domain.EmbeddedVector{Vector: vec, Norm: norm}
+		out[id] = domain.EmbeddedVector{Vector: vec, Norm: norm, PageRank: pagerank}
 	}
 	return out, rows.Err()
 }
@@ -578,7 +667,7 @@ func (r *Repository) EmbeddingsForDocs(ctx context.Context, ids []string) (map[s
 	for i, id := range ids {
 		args[i] = id
 	}
-	query := `SELECT id, embedding, norm_embedding FROM documents WHERE id IN (` + r.placeholderList(len(ids), 1) + `)`
+	query := `SELECT id, embedding, norm_embedding, pagerank FROM documents WHERE id IN (` + r.placeholderList(len(ids), 1) + `)`
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying embeddings for docs: %w", err)
@@ -595,7 +684,7 @@ func (r *Repository) SampleEmbeddings(ctx context.Context, limit int) (map[strin
 	if limit <= 0 {
 		return map[string]domain.EmbeddedVector{}, nil
 	}
-	query := r.ph(`SELECT id, embedding, norm_embedding FROM documents ORDER BY id LIMIT %s`, 1)
+	query := r.ph(`SELECT id, embedding, norm_embedding, pagerank FROM documents ORDER BY id LIMIT %s`, 1)
 	rows, err := r.db.QueryContext(ctx, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("sampling embeddings: %w", err)
@@ -784,11 +873,11 @@ func (r *Repository) ListDocuments(ctx context.Context, limit int, host string) 
 	var query string
 	var args []interface{}
 	if host != "" {
-		query = r.ph(`SELECT id, url, host, title, doc_length, version, crawled_at
+		query = r.ph(`SELECT id, url, host, title, doc_length, version, crawled_at, pagerank
 		               FROM documents WHERE host = %s ORDER BY id LIMIT %s`, 1, 2)
 		args = []interface{}{host, limit}
 	} else {
-		query = r.ph(`SELECT id, url, host, title, doc_length, version, crawled_at
+		query = r.ph(`SELECT id, url, host, title, doc_length, version, crawled_at, pagerank
 		               FROM documents ORDER BY id LIMIT %s`, 1)
 		args = []interface{}{limit}
 	}
@@ -802,7 +891,7 @@ func (r *Repository) ListDocuments(ctx context.Context, limit int, host string) 
 	for rows.Next() {
 		var d domain.IndexedDocument
 		var crawledAt string
-		if err := rows.Scan(&d.ID, &d.URL, &d.Host, &d.Title, &d.DocLength, &d.Version, &crawledAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.URL, &d.Host, &d.Title, &d.DocLength, &d.Version, &crawledAt, &d.PageRank); err != nil {
 			return nil, fmt.Errorf("scanning row: %w", err)
 		}
 		if t, err := time.Parse(crawledAtLayout, crawledAt); err == nil {
@@ -884,6 +973,62 @@ func (r *Repository) attachLinkStats(ctx context.Context, docs []domain.IndexedD
 		}
 	}
 	return backlinkRows.Err()
+}
+
+// LinkGraph loads the entire crawled link graph as an adjacency map: each
+// document's ID to the IDs of every other indexed document it links to.
+// links only stores each outbound link's raw target URL (to_url), not a
+// document ID -- a link whose target was never crawled/indexed has no
+// document ID to report, so this join against documents.url on to_url
+// naturally omits it. Self-links are already excluded at SaveDocument time
+// (a link back to doc.URL itself is skipped there), but a document ID
+// pair could still coincide here if two distinct source URLs happened to
+// resolve to the same document ID; guarded against defensively anyway,
+// since a self-loop is meaningless for PageRank. Loaded in one query
+// rather than one row at a time.
+func (r *Repository) LinkGraph(ctx context.Context) (map[string][]string, error) {
+	query := `SELECT l.from_id, d.id FROM links l JOIN documents d ON d.url = l.to_url`
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("querying link graph: %w", err)
+	}
+	defer rows.Close()
+
+	graph := make(map[string][]string)
+	for rows.Next() {
+		var from, to string
+		if err := rows.Scan(&from, &to); err != nil {
+			return nil, fmt.Errorf("scanning link graph row: %w", err)
+		}
+		if from == to {
+			continue
+		}
+		graph[from] = append(graph[from], to)
+	}
+	return graph, rows.Err()
+}
+
+// UpdatePageRanks batch-writes every given document ID's freshly computed
+// PageRank score to documents.pagerank, one UPDATE per ID within a single
+// transaction. A document ID not present in scores is left untouched --
+// see application.RunPageRankJob and ports.PageRankRepository.
+func (r *Repository) UpdatePageRanks(ctx context.Context, scores map[string]float64) error {
+	if len(scores) == 0 {
+		return nil
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	updateSQL := r.ph(`UPDATE documents SET pagerank = %s WHERE id = %s`, 1, 2)
+	for id, score := range scores {
+		if _, err := tx.ExecContext(ctx, updateSQL, score, id); err != nil {
+			return fmt.Errorf("updating pagerank for %s: %w", id, err)
+		}
+	}
+	return tx.Commit()
 }
 
 // placeholderList builds n comma-separated placeholders starting at

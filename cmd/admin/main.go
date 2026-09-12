@@ -27,8 +27,13 @@ func main() {
 	bootstrap.SyncSettings(ctx, repo, settings, opSettings, overrides, repo)
 	corpusStats := domain.NewCorpusStatsCache(0, 1)
 	bootstrap.SyncCorpusStats(ctx, repo, corpusStats)
+	vocabulary := domain.NewVocabularyCache(nil)
+	bootstrap.SyncVocabulary(ctx, repo, vocabulary)
 	embedder := hashembed.New(128)
-	debugSvc := application.NewHybridSearchService(repo, embedder, settings, opSettings, overrides, corpusStats)
+	// See cmd/search's identical call: enables Postgres pgvector ANN
+	// search for this process when available, never fatal otherwise.
+	repo.EnableANN(ctx, embedder.Dimensions())
+	debugSvc := application.NewHybridSearchService(repo, embedder, settings, opSettings, overrides, corpusStats, vocabulary)
 
 	adminUser := bootstrap.GetEnv("ADMIN_USER", "")
 	adminPass := bootstrap.GetEnv("ADMIN_PASSWORD", "")

@@ -256,6 +256,41 @@ func TestHandleSearch_Success(t *testing.T) {
 	}
 }
 
+// TestHandleSearch_SurfacesCorrectedTerms verifies a fuzzy correction made
+// by the search service reaches the public /search JSON response, so a
+// caller/UI can show it transparently rather than the query being silently
+// rewritten.
+func TestHandleSearch_SurfacesCorrectedTerms(t *testing.T) {
+	fs := &fakeSearch{results: []domain.SearchResult{{
+		URL: "http://a", Score: 1,
+		CorrectedTerms: []domain.CorrectedTerm{{Original: "katzn", Corrected: "katzen"}},
+	}}}
+	h := restapi.New(restapi.Config{Search: fs})
+
+	req := httptest.NewRequest(http.MethodGet, "/search?q=katzn", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Results []struct {
+			CorrectedTerms []struct {
+				Original  string `json:"original"`
+				Corrected string `json:"corrected"`
+			} `json:"corrected_terms"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(resp.Results) != 1 || len(resp.Results[0].CorrectedTerms) != 1 ||
+		resp.Results[0].CorrectedTerms[0].Original != "katzn" || resp.Results[0].CorrectedTerms[0].Corrected != "katzen" {
+		t.Errorf("expected corrected_terms katzn->katzen surfaced in the JSON response, got %+v", resp)
+	}
+}
+
 func TestHandleSearch_DefaultTopK(t *testing.T) {
 	fs := &fakeSearch{}
 	h := restapi.New(restapi.Config{Search: fs})

@@ -39,6 +39,7 @@
   </details>
 
   <div id="status"></div>
+  <div id="correction-note" class="correction-note" hidden></div>
   <div id="results"></div>
 
   <div class="footer-link">
@@ -49,7 +50,25 @@
   const form = document.getElementById('search-form');
   const input = document.getElementById('q');
   const status = document.getElementById('status');
+  const correctionNote = document.getElementById('correction-note');
   const results = document.getElementById('results');
+
+  // renderCorrectionNote shows a quiet, transparent note when the search
+  // service fuzzy-corrected a misspelled query term (see corrected_terms on
+  // each result) -- the displayed query itself is never silently rewritten,
+  // this just says which term(s) were substituted for scoring.
+  function renderCorrectionNote(list) {
+    const corrected = (list[0] && list[0].corrected_terms) || [];
+    if (corrected.length === 0) {
+      correctionNote.hidden = true;
+      correctionNote.textContent = '';
+      return;
+    }
+    correctionNote.textContent = 'Showing results for ' +
+      corrected.map((c) => '“' + c.corrected + '”').join(', ') +
+      ' instead of ' + corrected.map((c) => '“' + c.original + '”').join(', ') + '.';
+    correctionNote.hidden = false;
+  }
 
   function clear(el) {
     while (el.firstChild) el.removeChild(el.firstChild);
@@ -71,6 +90,7 @@
 
   function renderResults(query, list) {
     clear(results);
+    renderCorrectionNote(list);
     if (list.length === 0) {
       status.textContent = 'No matches for “' + query + '”.';
       return;
@@ -128,6 +148,7 @@
 
   async function runSearch(query, sort) {
     clear(results);
+    correctionNote.hidden = true;
     status.textContent = 'Searching…';
     try {
       const resp = await fetch('/search?q=' + encodeURIComponent(query) + '&sort=' + encodeURIComponent(sort));
@@ -151,6 +172,7 @@
     if (!query) {
       status.textContent = 'Type something to search for.';
       clear(results);
+      correctionNote.hidden = true;
       return;
     }
     runSearch(query, sortSelect.value);

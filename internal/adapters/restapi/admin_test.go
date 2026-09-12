@@ -280,7 +280,7 @@ func TestHandleAdminDocuments_Success(t *testing.T) {
 func TestHandleAdminDocuments_IncludesLinkStats(t *testing.T) {
 	docs := []domain.IndexedDocument{{
 		ID: "doc-0", URL: "http://a", Title: "A", DocLength: 10,
-		InternalLinks: 3, ExternalLinks: 2, Backlinks: 5,
+		InternalLinks: 3, ExternalLinks: 2, Backlinks: 5, PageRank: 0.125,
 	}}
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{docs: docs}, &fakeDebugSearch{})
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/documents", nil)
@@ -295,6 +295,9 @@ func TestHandleAdminDocuments_IncludesLinkStats(t *testing.T) {
 	}
 	if resp[0]["internal_links"] != float64(3) || resp[0]["external_links"] != float64(2) || resp[0]["backlinks"] != float64(5) {
 		t.Errorf("expected link stats to pass through, got %v", resp[0])
+	}
+	if resp[0]["pagerank"] != 0.125 {
+		t.Errorf("expected pagerank to pass through, got %v", resp[0])
 	}
 }
 
@@ -617,6 +620,38 @@ func TestHandleAdminSearch_Success(t *testing.T) {
 	}
 }
 
+// TestHandleAdminSearch_SurfacesCorrectedTerms verifies a fuzzy correction
+// made by the search service is passed through to the debug JSON response,
+// so the admin UI can show it.
+func TestHandleAdminSearch_SurfacesCorrectedTerms(t *testing.T) {
+	results := []domain.HybridResult{{
+		DocID: "doc-0", URL: "http://a", Title: "A", BM25Score: 1.2, SemanticSim: 0.5, FinalScore: 0.9,
+		CorrectedTerms: []domain.CorrectedTerm{{Original: "katzn", Corrected: "katzen"}},
+	}}
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{results: results})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/search?q=katzn", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var resp []struct {
+		CorrectedTerms []struct {
+			Original  string `json:"original"`
+			Corrected string `json:"corrected"`
+		} `json:"corrected_terms"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(resp) != 1 || len(resp[0].CorrectedTerms) != 1 ||
+		resp[0].CorrectedTerms[0].Original != "katzn" || resp[0].CorrectedTerms[0].Corrected != "katzen" {
+		t.Errorf("expected corrected_terms katzn->katzen surfaced, got %+v", resp)
+	}
+}
+
 func TestHandleAdminSearch_RespectsTopKParam(t *testing.T) {
 	fd := &fakeDebugSearch{}
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, fd)
@@ -860,6 +895,192 @@ func TestHandleAdminSettings_PostUpdatesValues(t *testing.T) {
 		ov.MinTextLength != 10 || ov.DefaultTopK != 20 || ov.SessionTTL != 2*time.Hour ||
 		ov.CrawlDelayMs != 100 || ov.MaxResponseBytes != 1024*1024 {
 		t.Errorf("expected operational settings to be updated, got %+v", ov)
+	}
+}
+
+// TestHandleAdminSettings_FuzzyFieldsRoundTrip verifies the two new
+// admin-configurable fuzzy-matching knobs round-trip through the settings
+// JSON: GET reports whatever's currently set, and a POST updates both.
+func TestHandleAdminSettings_FuzzyFieldsRoundTrip(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{FuzzyMatchEnabled: true, FuzzyMaxEditDistance: 2})
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", getRec.Code)
+	}
+	var getResp struct {
+		Operational struct {
+			FuzzyMatchEnabled    bool `json:"fuzzy_match_enabled"`
+			FuzzyMaxEditDistance int  `json:"fuzzy_max_edit_distance"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decoding GET response: %v", err)
+	}
+	if !getResp.Operational.FuzzyMatchEnabled || getResp.Operational.FuzzyMaxEditDistance != 2 {
+		t.Errorf("expected GET to report fuzzy_match_enabled=true, fuzzy_max_edit_distance=2, got %+v", getResp.Operational)
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
+			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
+			"fuzzy_match_enabled": false, "fuzzy_max_edit_distance": 1,
+		},
+	})
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	postReq.AddCookie(cookie)
+	postRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
+	}
+
+	ov := opSettings.Get()
+	if ov.FuzzyMatchEnabled {
+		t.Errorf("expected fuzzy_match_enabled=false to be applied, got %+v", ov)
+	}
+	if ov.FuzzyMaxEditDistance != 1 {
+		t.Errorf("expected fuzzy_max_edit_distance=1 to be applied, got %d", ov.FuzzyMaxEditDistance)
+	}
+
+	var postResp struct {
+		Operational struct {
+			FuzzyMatchEnabled    bool `json:"fuzzy_match_enabled"`
+			FuzzyMaxEditDistance int  `json:"fuzzy_max_edit_distance"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(postRec.Body.Bytes(), &postResp); err != nil {
+		t.Fatalf("decoding POST response: %v", err)
+	}
+	if postResp.Operational.FuzzyMatchEnabled || postResp.Operational.FuzzyMaxEditDistance != 1 {
+		t.Errorf("expected the POST response to echo back fuzzy_match_enabled=false, fuzzy_max_edit_distance=1, got %+v", postResp.Operational)
+	}
+}
+
+// TestHandleAdminSettings_PageRankFieldsRoundTrip mirrors
+// TestHandleAdminSettings_FuzzyFieldsRoundTrip for the two new PageRank
+// admin knobs: GET reports whatever's currently set, and a POST updates
+// both the tuning weight and the operational recompute interval.
+func TestHandleAdminSettings_PageRankFieldsRoundTrip(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	settings.SetPageRankWeight(0.3)
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{PageRankRecomputeIntervalMinutes: 90})
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", getRec.Code)
+	}
+	var getResp struct {
+		Tuning struct {
+			PageRankWeight float64 `json:"pagerank_weight"`
+		} `json:"tuning"`
+		Operational struct {
+			PageRankRecomputeIntervalMinutes int `json:"pagerank_recompute_interval_minutes"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decoding GET response: %v", err)
+	}
+	if getResp.Tuning.PageRankWeight != 0.3 {
+		t.Errorf("expected GET to report pagerank_weight=0.3, got %+v", getResp.Tuning)
+	}
+	if getResp.Operational.PageRankRecomputeIntervalMinutes != 90 {
+		t.Errorf("expected GET to report pagerank_recompute_interval_minutes=90, got %+v", getResp.Operational)
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75, "pagerank_weight": 0.6},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
+			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
+			"pagerank_recompute_interval_minutes": 30,
+		},
+	})
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	postReq.AddCookie(cookie)
+	postRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
+	}
+
+	if w := settings.PageRankWeight(); w != 0.6 {
+		t.Errorf("expected pagerank_weight=0.6 to be applied, got %v", w)
+	}
+	if ov := opSettings.Get(); ov.PageRankRecomputeIntervalMinutes != 30 {
+		t.Errorf("expected pagerank_recompute_interval_minutes=30 to be applied, got %d", ov.PageRankRecomputeIntervalMinutes)
+	}
+}
+
+// TestHandleAdminSettings_ANNSearchEnabledFieldRoundTrips mirrors
+// TestHandleAdminSettings_FuzzyFieldsRoundTrip for the new
+// ann_search_enabled troubleshooting knob: GET reports whatever's
+// currently set, and a POST updates it.
+func TestHandleAdminSettings_ANNSearchEnabledFieldRoundTrips(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{ANNSearchEnabled: true})
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", getRec.Code)
+	}
+	var getResp struct {
+		Operational struct {
+			ANNSearchEnabled bool `json:"ann_search_enabled"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decoding GET response: %v", err)
+	}
+	if !getResp.Operational.ANNSearchEnabled {
+		t.Errorf("expected GET to report ann_search_enabled=true, got %+v", getResp.Operational)
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
+			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
+			"ann_search_enabled": false,
+		},
+	})
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	postReq.AddCookie(cookie)
+	postRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
+	}
+
+	if ov := opSettings.Get(); ov.ANNSearchEnabled {
+		t.Errorf("expected ann_search_enabled=false to be applied, got %+v", ov)
+	}
+
+	var postResp struct {
+		Operational struct {
+			ANNSearchEnabled bool `json:"ann_search_enabled"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(postRec.Body.Bytes(), &postResp); err != nil {
+		t.Fatalf("decoding POST response: %v", err)
+	}
+	if postResp.Operational.ANNSearchEnabled {
+		t.Errorf("expected the POST response to echo back ann_search_enabled=false, got %+v", postResp.Operational)
 	}
 }
 

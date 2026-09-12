@@ -129,21 +129,89 @@ func TestOperationalSettings_SetPositiveDBPoolFieldsArePreserved(t *testing.T) {
 	}
 }
 
+func TestOperationalSettings_SetZeroFuzzyMaxEditDistanceFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{FuzzyMaxEditDistance: 0})
+	if v := s.Get(); v.FuzzyMaxEditDistance != 2 {
+		t.Errorf("expected a zero FuzzyMaxEditDistance to fall back to the default 2, got %d", v.FuzzyMaxEditDistance)
+	}
+}
+
+func TestOperationalSettings_SetFuzzyMaxEditDistanceClampsAboveTwo(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{FuzzyMaxEditDistance: 9})
+	if v := s.Get(); v.FuzzyMaxEditDistance != 2 {
+		t.Errorf("expected FuzzyMaxEditDistance clamped to 2, got %d", v.FuzzyMaxEditDistance)
+	}
+}
+
+func TestOperationalSettings_SetFuzzyMaxEditDistanceOnePreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{FuzzyMaxEditDistance: 1})
+	if v := s.Get(); v.FuzzyMaxEditDistance != 1 {
+		t.Errorf("expected FuzzyMaxEditDistance=1 to be preserved, got %d", v.FuzzyMaxEditDistance)
+	}
+}
+
+func TestOperationalSettings_SetFuzzyMatchEnabledFalseIsPreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{FuzzyMatchEnabled: false, FuzzyMaxEditDistance: 2})
+	if v := s.Get(); v.FuzzyMatchEnabled {
+		t.Errorf("expected FuzzyMatchEnabled=false to be preserved (not forced back to true), got %+v", v)
+	}
+}
+
+func TestOperationalSettings_SetZeroPageRankIntervalFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{PageRankRecomputeIntervalMinutes: 0})
+	if v := s.Get(); v.PageRankRecomputeIntervalMinutes != 60 {
+		t.Errorf("expected a zero PageRankRecomputeIntervalMinutes to fall back to the default 60, got %d", v.PageRankRecomputeIntervalMinutes)
+	}
+}
+
+func TestOperationalSettings_SetPageRankIntervalClampsToMinimum(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{PageRankRecomputeIntervalMinutes: 1})
+	if v := s.Get(); v.PageRankRecomputeIntervalMinutes != 5 {
+		t.Errorf("expected PageRankRecomputeIntervalMinutes clamped to the minimum 5, got %d", v.PageRankRecomputeIntervalMinutes)
+	}
+}
+
+func TestOperationalSettings_SetPageRankIntervalAboveMinimumPreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{PageRankRecomputeIntervalMinutes: 120})
+	if v := s.Get(); v.PageRankRecomputeIntervalMinutes != 120 {
+		t.Errorf("expected PageRankRecomputeIntervalMinutes=120 to be preserved, got %d", v.PageRankRecomputeIntervalMinutes)
+	}
+}
+
+func TestOperationalSettings_SetANNSearchEnabledFalseIsPreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{ANNSearchEnabled: false})
+	if v := s.Get(); v.ANNSearchEnabled {
+		t.Errorf("expected ANNSearchEnabled=false to be preserved (not forced back to true), got %+v", v)
+	}
+}
+
 func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 	v := domain.DefaultOperationalSettings().Get()
 	want := domain.OperationalSettingsValues{
-		FetchTimeout:              8 * time.Second,
-		UserAgent:                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0",
-		DefaultMaxPages:           20,
-		MinTextLength:             50,
-		DefaultTopK:               10,
-		SessionTTL:                12 * time.Hour,
-		CrawlDelayMs:              250,
-		MaxResponseBytes:          5 * 1024 * 1024,
-		SemanticCandidatePoolSize: 200,
-		DBMaxOpenConns:            25,
-		DBMaxIdleConns:            25,
-		DBConnMaxLifetime:         5 * time.Minute,
+		FetchTimeout:                     8 * time.Second,
+		UserAgent:                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0",
+		DefaultMaxPages:                  20,
+		MinTextLength:                    50,
+		DefaultTopK:                      10,
+		SessionTTL:                       12 * time.Hour,
+		CrawlDelayMs:                     250,
+		MaxResponseBytes:                 5 * 1024 * 1024,
+		SemanticCandidatePoolSize:        200,
+		DBMaxOpenConns:                   25,
+		DBMaxIdleConns:                   25,
+		DBConnMaxLifetime:                5 * time.Minute,
+		FuzzyMatchEnabled:                true,
+		FuzzyMaxEditDistance:             2,
+		PageRankRecomputeIntervalMinutes: 60,
+		ANNSearchEnabled:                 true,
 	}
 	if v != want {
 		t.Errorf("expected defaults %+v, got %+v", want, v)

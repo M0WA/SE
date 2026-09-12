@@ -35,3 +35,35 @@ func TestIsIndexAlreadyExistsError(t *testing.T) {
 		})
 	}
 }
+
+// TestIsMissingExtensionError guards against the exact production incident
+// EnableANN is designed around: "CREATE EXTENSION vector" failing because
+// pgvector isn't installed at the OS/server level at all (distinct from a
+// permission problem, which is a plain "permission denied" error and
+// should be classified/logged differently) must be recognized so EnableANN
+// can log a specific, actionable warning -- and, either way, never crash
+// the process (see TestEnableANN_NonFatalWhenCreateExtensionFails in
+// ann_test.go for that half of the contract).
+func TestIsMissingExtensionError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{"unrelated error", errors.New("connection refused"), false},
+		{"permission denied is a distinct class, not this one", errors.New("permission denied to create extension \"vector\""), false},
+		{
+			"missing extension control file",
+			errors.New(`pq: could not open extension control file "/usr/share/postgresql/16/extension/vector.control": No such file or directory`),
+			true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isMissingExtensionError(tc.err); got != tc.want {
+				t.Errorf("isMissingExtensionError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}

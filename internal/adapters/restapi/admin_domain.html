@@ -157,6 +157,7 @@
       [
         { label: 'title' }, { label: 'length', num: true },
         { label: 'internal', num: true }, { label: 'external', num: true }, { label: 'backlinks', num: true },
+        { label: 'pagerank', num: true },
         { label: 'version' }, { label: '' },
       ],
       docs,
@@ -180,6 +181,9 @@
         externalCell.title = 'Links from this page to a different domain';
         const backlinksCell = textCell(String(d.backlinks), { num: true });
         backlinksCell.title = 'Other indexed pages linking to this one';
+
+        const pageRankCell = textCell(d.pagerank.toFixed(4), { num: true });
+        pageRankCell.title = 'Link authority score (see the Tuning page’s PageRank weight)';
 
         const versionTd = document.createElement('td');
         if (d.version > 1) {
@@ -205,7 +209,7 @@
 
         return [
           titleTd, textCell(String(d.doc_length), { num: true }),
-          internalCell, externalCell, backlinksCell,
+          internalCell, externalCell, backlinksCell, pageRankCell,
           versionTd, actionTd,
         ];
       },

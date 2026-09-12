@@ -63,16 +63,20 @@
     status.textContent = 'Running…';
     try {
       const results = await getJSON('/admin/api/search?q=' + encodeURIComponent(q) + '&sort=' + encodeURIComponent(sort));
+      const corrected = (results[0] && results[0].corrected_terms) || [];
+      const correctionSuffix = corrected.length === 0 ? '' :
+        ' (corrected ' + corrected.map((c) => '"' + c.original + '"→"' + c.corrected + '"').join(', ') + ')';
       if (results.length === 0) {
-        status.textContent = 'No matches for “' + q + '”.';
+        status.textContent = 'No matches for “' + q + '”.' + correctionSuffix;
         return;
       }
-      status.textContent = results.length === 1 ? '1 match' : results.length + ' matches';
+      status.textContent = (results.length === 1 ? '1 match' : results.length + ' matches') + correctionSuffix;
       const table = buildTable(
-        [{ label: 'title' }, { label: 'bm25', num: true }, { label: 'semantic', num: true }, { label: 'final', num: true }],
+        [{ label: 'title' }, { label: 'excerpt' }, { label: 'bm25', num: true }, { label: 'semantic', num: true }, { label: 'final', num: true }],
         results,
         (r) => [
           textCell(r.title || r.url),
+          snippetCell(r.snippet),
           textCell(r.bm25_score.toFixed(3), { num: true }),
           textCell(r.semantic_sim.toFixed(3), { num: true }),
           textCell(r.final_score.toFixed(3), { num: true }),

@@ -60,6 +60,7 @@ type Handler struct {
 	settingsStore   ports.SettingsStore
 	scheduledCrawls ports.ScheduledCrawlStore
 	health          ports.HealthChecker
+	onCrawlComplete func()
 	dbDriver        string
 	adminUser       string
 	adminPass       string
@@ -83,7 +84,13 @@ type Handler struct {
 // admin-server only (backing the schedules admin API) -- crawl-server's own
 // scheduler ticker talks to the same store directly, not through Handler.
 // Health is set on every process to back GET /healthz; without it, /healthz
-// always reports healthy (no DB connection to check).
+// always reports healthy (no DB connection to check). OnCrawlComplete, when
+// set (crawl-server only), is called synchronously right after a crawl job
+// finishes successfully -- e.g. to trigger a PageRank recompute, since a
+// completed crawl is exactly when the link graph changes. A caller that
+// wants this to run without delaying the job's reported completion (or the
+// concurrency semaphore's release -- see runCrawlJob) should spawn its own
+// goroutine inside the callback; Handler itself makes no such decision.
 type Config struct {
 	Search          ports.SearchService
 	Crawler         ports.CrawlerService
@@ -97,6 +104,7 @@ type Config struct {
 	SettingsStore   ports.SettingsStore
 	ScheduledCrawls ports.ScheduledCrawlStore
 	Health          ports.HealthChecker
+	OnCrawlComplete func()
 	DBDriver        string
 	AdminUser       string
 	AdminPass       string
@@ -117,6 +125,7 @@ func New(cfg Config) *Handler {
 		settingsStore:   cfg.SettingsStore,
 		scheduledCrawls: cfg.ScheduledCrawls,
 		health:          cfg.Health,
+		onCrawlComplete: cfg.OnCrawlComplete,
 		dbDriver:        cfg.DBDriver,
 		adminUser:       cfg.AdminUser,
 		adminPass:       cfg.AdminPass,

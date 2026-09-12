@@ -48,6 +48,12 @@ func (r *benchHybridRepo) VocabularyStats(context.Context, int) (int, []domain.T
 	return 0, nil, nil
 }
 
+// AllTerms is unused by this benchmark (fuzzy correction is never
+// exercised here) -- a no-op stub only to satisfy ports.SQLRepository.
+func (r *benchHybridRepo) AllTerms(context.Context) ([]domain.TermStat, error) {
+	return nil, nil
+}
+
 func (r *benchHybridRepo) EmbeddingsForDocs(_ context.Context, ids []string) (map[string]domain.EmbeddedVector, error) {
 	out := make(map[string]domain.EmbeddedVector, len(ids))
 	for _, id := range ids {
@@ -103,6 +109,14 @@ func (r *benchHybridRepo) DocumentsByIDsSortedByCrawledAt(_ context.Context, ids
 // benchmarked here) -- a no-op stub only to satisfy ports.SQLRepository.
 func (r *benchHybridRepo) DocumentIDsByHost(context.Context, []string) ([]string, error) {
 	return nil, nil
+}
+
+// TopSemanticMatches always reports ANN unavailable -- this benchmark
+// exists to measure the bounded brute-force SampleEmbeddings path
+// (benchHybridRepo's whole point, see its doc comment above), not the ANN
+// path, so it must never divert to anything but SampleEmbeddings.
+func (r *benchHybridRepo) TopSemanticMatches(context.Context, []float32, int) (map[string]domain.EmbeddedVector, bool, error) {
+	return nil, false, nil
 }
 
 func (r *benchHybridRepo) ListDocuments(context.Context, int, string) ([]domain.IndexedDocument, error) {
@@ -187,7 +201,7 @@ func BenchmarkHybridSearch_Combine(b *testing.B) {
 
 		for _, c := range cases {
 			opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{SemanticCandidatePoolSize: c.size(n)})
-			svc := application.NewHybridSearchService(repo, embedder, settings, opSettings, nil, corpusStats)
+			svc := application.NewHybridSearchService(repo, embedder, settings, opSettings, nil, corpusStats, nil)
 			b.Run(fmt.Sprintf("Docs=%d/%s", n, c.label), func(b *testing.B) {
 				ctx := context.Background()
 				b.ReportAllocs()

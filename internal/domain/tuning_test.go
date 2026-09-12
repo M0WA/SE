@@ -56,6 +56,52 @@ func TestTuningSettings_SetValuesUpdatesAndClamps(t *testing.T) {
 	}
 }
 
+func TestTuningSettings_PageRankWeightDefaultsToZero(t *testing.T) {
+	s := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	if w := s.PageRankWeight(); w != 0 {
+		t.Errorf("expected PageRankWeight to default to 0, got %v", w)
+	}
+}
+
+func TestTuningSettings_SetPageRankWeightClampsToUnitRange(t *testing.T) {
+	s := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	s.SetPageRankWeight(1.5)
+	if w := s.PageRankWeight(); w != 1 {
+		t.Errorf("expected PageRankWeight clamped to 1, got %v", w)
+	}
+	s.SetPageRankWeight(-0.5)
+	if w := s.PageRankWeight(); w != 0 {
+		t.Errorf("expected negative PageRankWeight clamped to 0, got %v", w)
+	}
+	s.SetPageRankWeight(0.3)
+	if w := s.PageRankWeight(); w != 0.3 {
+		t.Errorf("expected PageRankWeight=0.3 to be preserved, got %v", w)
+	}
+}
+
+func TestTuningSettings_SetDoesNotAffectPageRankWeight(t *testing.T) {
+	s := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	s.SetPageRankWeight(0.4)
+	s.Set(0.9, 2.0, 0.1)
+	if w := s.PageRankWeight(); w != 0.4 {
+		t.Errorf("expected Set(alpha,k1,b) to leave PageRankWeight untouched, got %v", w)
+	}
+}
+
+func TestTuningSettings_ValuesAndSetValuesRoundTripPageRankWeight(t *testing.T) {
+	s := domain.NewTuningSettings(0, 0, 0)
+	s.SetValues(domain.TuningValues{Alpha: 0.5, K1: 1.2, B: 0.75, PageRankWeight: 0.25})
+	v := s.Values()
+	if v.PageRankWeight != 0.25 {
+		t.Errorf("expected PageRankWeight=0.25 to round-trip through SetValues/Values, got %v", v.PageRankWeight)
+	}
+	// Out-of-range values are clamped the same way SetPageRankWeight clamps.
+	s.SetValues(domain.TuningValues{Alpha: 0.5, K1: 1.2, B: 0.75, PageRankWeight: 5})
+	if v := s.Values(); v.PageRankWeight != 1 {
+		t.Errorf("expected an out-of-range PageRankWeight to clamp to 1 via SetValues, got %v", v.PageRankWeight)
+	}
+}
+
 func TestTuningSettings_ConcurrentAccess(t *testing.T) {
 	s := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	var wg sync.WaitGroup

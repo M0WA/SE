@@ -138,6 +138,7 @@ type adminDocument struct {
 	InternalLinks int       `json:"internal_links"`
 	ExternalLinks int       `json:"external_links"`
 	Backlinks     int       `json:"backlinks"`
+	PageRank      float64   `json:"pagerank"`
 }
 
 // handleAdminDocuments lists indexed pages, optionally narrowed to one
@@ -164,6 +165,7 @@ func (h *Handler) handleAdminDocuments(w http.ResponseWriter, r *http.Request) {
 			ID: d.ID, URL: d.URL, Host: d.Host, Title: d.Title,
 			DocLength: d.DocLength, Version: d.Version, CrawledAt: d.CrawledAt,
 			InternalLinks: d.InternalLinks, ExternalLinks: d.ExternalLinks, Backlinks: d.Backlinks,
+			PageRank: d.PageRank,
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -327,6 +329,12 @@ type adminDebugResult struct {
 	BM25Score   float64 `json:"bm25_score"`
 	SemanticSim float64 `json:"semantic_sim"`
 	FinalScore  float64 `json:"final_score"`
+	// CorrectedTerms describes the query, not this particular result -- it
+	// is identical across every result of one search (see
+	// domain.HybridResult.CorrectedTerms) -- and is present here so the
+	// debug UI's raw JSON view can show a fuzzy-matched query term
+	// transparently.
+	CorrectedTerms []domain.CorrectedTerm `json:"corrected_terms,omitempty"`
 }
 
 func (h *Handler) handleAdminSearch(w http.ResponseWriter, r *http.Request) {
@@ -350,6 +358,7 @@ func (h *Handler) handleAdminSearch(w http.ResponseWriter, r *http.Request) {
 		out[i] = adminDebugResult{
 			DocID: res.DocID, URL: res.URL, Title: res.Title, Snippet: res.Snippet,
 			BM25Score: res.BM25Score, SemanticSim: res.SemanticSim, FinalScore: res.FinalScore,
+			CorrectedTerms: res.CorrectedTerms,
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -359,6 +368,10 @@ type tuningValues struct {
 	Alpha float64 `json:"alpha"`
 	K1    float64 `json:"k1"`
 	B     float64 `json:"b"`
+	// PageRankWeight blends a document's normalized link-authority score
+	// into ranking (see hybridSearchService.Search) -- 0 (the default)
+	// means no influence at all.
+	PageRankWeight float64 `json:"pagerank_weight"`
 }
 
 // operationalValues mirrors domain.OperationalSettingsValues for the wire
@@ -377,39 +390,57 @@ type operationalValues struct {
 	DBMaxOpenConns            int    `json:"db_max_open_conns"`
 	DBMaxIdleConns            int    `json:"db_max_idle_conns"`
 	DBConnMaxLifetimeMinutes  int    `json:"db_conn_max_lifetime_minutes"`
+	FuzzyMatchEnabled         bool   `json:"fuzzy_match_enabled"`
+	FuzzyMaxEditDistance      int    `json:"fuzzy_max_edit_distance"`
+	// PageRankRecomputeIntervalMinutes is how often cmd/crawl's ticker
+	// recomputes every document's PageRank score (see
+	// domain.OperationalSettingsValues for the full doc comment).
+	PageRankRecomputeIntervalMinutes int `json:"pagerank_recompute_interval_minutes"`
+	// ANNSearchEnabled forces the brute-force semantic fallback path even
+	// when Postgres pgvector ANN is available, when set false (see
+	// domain.OperationalSettingsValues for the full doc comment).
+	ANNSearchEnabled bool `json:"ann_search_enabled"`
 }
 
 func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 	return operationalValues{
-		FetchTimeoutSeconds:       int(v.FetchTimeout / time.Second),
-		UserAgent:                 v.UserAgent,
-		DefaultMaxPages:           v.DefaultMaxPages,
-		MinTextLength:             v.MinTextLength,
-		DefaultTopK:               v.DefaultTopK,
-		SessionTTLHours:           int(v.SessionTTL / time.Hour),
-		CrawlDelayMs:              v.CrawlDelayMs,
-		MaxResponseKB:             v.MaxResponseBytes / 1024,
-		SemanticCandidatePoolSize: v.SemanticCandidatePoolSize,
-		DBMaxOpenConns:            v.DBMaxOpenConns,
-		DBMaxIdleConns:            v.DBMaxIdleConns,
-		DBConnMaxLifetimeMinutes:  int(v.DBConnMaxLifetime / time.Minute),
+		FetchTimeoutSeconds:              int(v.FetchTimeout / time.Second),
+		UserAgent:                        v.UserAgent,
+		DefaultMaxPages:                  v.DefaultMaxPages,
+		MinTextLength:                    v.MinTextLength,
+		DefaultTopK:                      v.DefaultTopK,
+		SessionTTLHours:                  int(v.SessionTTL / time.Hour),
+		CrawlDelayMs:                     v.CrawlDelayMs,
+		MaxResponseKB:                    v.MaxResponseBytes / 1024,
+		SemanticCandidatePoolSize:        v.SemanticCandidatePoolSize,
+		DBMaxOpenConns:                   v.DBMaxOpenConns,
+		DBMaxIdleConns:                   v.DBMaxIdleConns,
+		DBConnMaxLifetimeMinutes:         int(v.DBConnMaxLifetime / time.Minute),
+		FuzzyMatchEnabled:                v.FuzzyMatchEnabled,
+		FuzzyMaxEditDistance:             v.FuzzyMaxEditDistance,
+		PageRankRecomputeIntervalMinutes: v.PageRankRecomputeIntervalMinutes,
+		ANNSearchEnabled:                 v.ANNSearchEnabled,
 	}
 }
 
 func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 	return domain.OperationalSettingsValues{
-		FetchTimeout:              time.Duration(o.FetchTimeoutSeconds) * time.Second,
-		UserAgent:                 o.UserAgent,
-		DefaultMaxPages:           o.DefaultMaxPages,
-		MinTextLength:             o.MinTextLength,
-		DefaultTopK:               o.DefaultTopK,
-		SessionTTL:                time.Duration(o.SessionTTLHours) * time.Hour,
-		CrawlDelayMs:              o.CrawlDelayMs,
-		MaxResponseBytes:          o.MaxResponseKB * 1024,
-		SemanticCandidatePoolSize: o.SemanticCandidatePoolSize,
-		DBMaxOpenConns:            o.DBMaxOpenConns,
-		DBMaxIdleConns:            o.DBMaxIdleConns,
-		DBConnMaxLifetime:         time.Duration(o.DBConnMaxLifetimeMinutes) * time.Minute,
+		FetchTimeout:                     time.Duration(o.FetchTimeoutSeconds) * time.Second,
+		UserAgent:                        o.UserAgent,
+		DefaultMaxPages:                  o.DefaultMaxPages,
+		MinTextLength:                    o.MinTextLength,
+		DefaultTopK:                      o.DefaultTopK,
+		SessionTTL:                       time.Duration(o.SessionTTLHours) * time.Hour,
+		CrawlDelayMs:                     o.CrawlDelayMs,
+		MaxResponseBytes:                 o.MaxResponseKB * 1024,
+		SemanticCandidatePoolSize:        o.SemanticCandidatePoolSize,
+		DBMaxOpenConns:                   o.DBMaxOpenConns,
+		DBMaxIdleConns:                   o.DBMaxIdleConns,
+		DBConnMaxLifetime:                time.Duration(o.DBConnMaxLifetimeMinutes) * time.Minute,
+		FuzzyMatchEnabled:                o.FuzzyMatchEnabled,
+		FuzzyMaxEditDistance:             o.FuzzyMaxEditDistance,
+		PageRankRecomputeIntervalMinutes: o.PageRankRecomputeIntervalMinutes,
+		ANNSearchEnabled:                 o.ANNSearchEnabled,
 	}
 }
 
@@ -441,7 +472,7 @@ func (h *Handler) persistSetting(ctx context.Context, key string, v interface{})
 func (h *Handler) currentSettings() settingsResponse {
 	alpha, k1, b := h.settings.Get()
 	return settingsResponse{
-		Tuning:      tuningValues{Alpha: alpha, K1: k1, B: b},
+		Tuning:      tuningValues{Alpha: alpha, K1: k1, B: b, PageRankWeight: h.settings.PageRankWeight()},
 		Operational: toOperationalValues(h.opSettings.Get()),
 	}
 }
@@ -460,6 +491,7 @@ func (h *Handler) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.settings.Set(req.Tuning.Alpha, req.Tuning.K1, req.Tuning.B)
+		h.settings.SetPageRankWeight(req.Tuning.PageRankWeight)
 		h.opSettings.Set(req.Operational.toSettingsValues())
 		h.persistSetting(r.Context(), ports.SettingsKeyTuning, h.settings.Values())
 		h.persistSetting(r.Context(), ports.SettingsKeyOperational, h.opSettings.Get())

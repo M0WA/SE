@@ -51,8 +51,12 @@ func CosineSimilarityWithNorms(a, b []float32, normA, normB float64) float64 {
 // norm (see VectorNorm), so repository callers that load embeddings for
 // scoring never need to recompute a document's norm from scratch on every
 // request -- it's computed once, at the point the embedding itself is
-// produced or persisted, and carried alongside it from then on.
+// produced or persisted, and carried alongside it from then on. PageRank
+// is the document's current link-authority score (documents.pagerank),
+// fetched alongside the embedding since both are read together for every
+// hybrid search candidate -- see hybridSearchService.Search.
 type EmbeddedVector struct {
-	Vector []float32
-	Norm   float64
+	Vector   []float32
+	Norm     float64
+	PageRank float64
 }

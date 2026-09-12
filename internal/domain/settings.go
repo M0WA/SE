@@ -37,6 +37,41 @@ type OperationalSettingsValues struct {
 	DBMaxOpenConns    int
 	DBMaxIdleConns    int
 	DBConnMaxLifetime time.Duration
+	// FuzzyMatchEnabled turns on typo-tolerant query matching: a query term
+	// with zero postings hits is looked up against the corpus vocabulary
+	// for a near-miss term within FuzzyMaxEditDistance edits (Levenshtein)
+	// and substituted into BM25 scoring for that term alone -- see
+	// hybridSearchService.Search and domain.NearestTerm. A term that
+	// already matched something is never touched. When false, search
+	// behaves exactly as if this feature didn't exist.
+	FuzzyMatchEnabled bool
+	// FuzzyMaxEditDistance bounds how many edits (insertions, deletions,
+	// substitutions) a substituted vocabulary term may be from the
+	// original query term. Clamped to 1 or 2: 1 catches a single
+	// typo/transposition-as-two-edits case conservatively, 2 is more
+	// forgiving but risks matching an unrelated short word.
+	FuzzyMaxEditDistance int
+	// PageRankRecomputeIntervalMinutes is how often cmd/crawl's periodic
+	// ticker recomputes every document's PageRank score from the current
+	// link graph (see application.RunPageRankJob) -- in addition to that,
+	// a recompute always runs once right after a crawl job completes
+	// successfully, since that's when the graph actually changes. Clamped
+	// to a minimum of 5 minutes so an overly aggressive setting can't spin
+	// the recompute in a tight loop.
+	PageRankRecomputeIntervalMinutes int
+	// ANNSearchEnabled controls whether a search's semantic candidate pool
+	// (see hybridSearchService.Search) is filled via Postgres pgvector's
+	// approximate-nearest-neighbor index (repo.TopSemanticMatches) rather
+	// than the bounded brute-force SampleEmbeddings sample it otherwise
+	// falls back to. Defaults to true so ANN is used automatically
+	// wherever it's actually available for this process (Postgres, the
+	// pgvector extension installed, and sqlrepo.Repository.EnableANN
+	// having succeeded at startup) -- it has zero effect either way on
+	// SQLite/MySQL or a Postgres server without the extension, since those
+	// never report ANN as available regardless of this setting. Set false
+	// to force the brute-force fallback path even when ANN is available,
+	// e.g. to troubleshoot a ranking difference between the two paths.
+	ANNSearchEnabled bool
 }
 
 // defaultUserAgent mimics a standard desktop Firefox so crawled sites treat
@@ -65,22 +100,36 @@ const (
 	defaultDBMaxOpenConns    = 25
 	defaultDBMaxIdleConns    = 25
 	defaultDBConnMaxLifetime = 5 * time.Minute
+	// defaultFuzzyMaxEditDistance allows up to a 2-edit typo (e.g. two
+	// substitutions, or one insertion plus one substitution) to still
+	// resolve to the intended vocabulary term.
+	defaultFuzzyMaxEditDistance = 2
+	// defaultPageRankRecomputeIntervalMinutes and
+	// minPageRankRecomputeIntervalMinutes bound how often the link graph
+	// is re-scored: hourly by default, never more often than every 5
+	// minutes even if an admin asks for tighter.
+	defaultPageRankRecomputeIntervalMinutes = 60
+	minPageRankRecomputeIntervalMinutes     = 5
 )
 
 func defaultOperationalSettings() OperationalSettingsValues {
 	return OperationalSettingsValues{
-		FetchTimeout:              8 * time.Second,
-		UserAgent:                 defaultUserAgent,
-		DefaultMaxPages:           20,
-		MinTextLength:             50,
-		DefaultTopK:               10,
-		SessionTTL:                12 * time.Hour,
-		CrawlDelayMs:              defaultCrawlDelayMs,
-		MaxResponseBytes:          defaultMaxResponseBytes,
-		SemanticCandidatePoolSize: defaultSemanticCandidatePoolSize,
-		DBMaxOpenConns:            defaultDBMaxOpenConns,
-		DBMaxIdleConns:            defaultDBMaxIdleConns,
-		DBConnMaxLifetime:         defaultDBConnMaxLifetime,
+		FetchTimeout:                     8 * time.Second,
+		UserAgent:                        defaultUserAgent,
+		DefaultMaxPages:                  20,
+		MinTextLength:                    50,
+		DefaultTopK:                      10,
+		SessionTTL:                       12 * time.Hour,
+		CrawlDelayMs:                     defaultCrawlDelayMs,
+		MaxResponseBytes:                 defaultMaxResponseBytes,
+		SemanticCandidatePoolSize:        defaultSemanticCandidatePoolSize,
+		DBMaxOpenConns:                   defaultDBMaxOpenConns,
+		DBMaxIdleConns:                   defaultDBMaxIdleConns,
+		DBConnMaxLifetime:                defaultDBConnMaxLifetime,
+		FuzzyMatchEnabled:                true,
+		FuzzyMaxEditDistance:             defaultFuzzyMaxEditDistance,
+		PageRankRecomputeIntervalMinutes: defaultPageRankRecomputeIntervalMinutes,
+		ANNSearchEnabled:                 true,
 	}
 }
 
@@ -160,6 +209,16 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 	}
 	if v.DBConnMaxLifetime <= 0 {
 		v.DBConnMaxLifetime = d.DBConnMaxLifetime
+	}
+	if v.FuzzyMaxEditDistance <= 0 {
+		v.FuzzyMaxEditDistance = d.FuzzyMaxEditDistance
+	} else if v.FuzzyMaxEditDistance > 2 {
+		v.FuzzyMaxEditDistance = 2
+	}
+	if v.PageRankRecomputeIntervalMinutes <= 0 {
+		v.PageRankRecomputeIntervalMinutes = d.PageRankRecomputeIntervalMinutes
+	} else if v.PageRankRecomputeIntervalMinutes < minPageRankRecomputeIntervalMinutes {
+		v.PageRankRecomputeIntervalMinutes = minPageRankRecomputeIntervalMinutes
 	}
 
 	s.mu.Lock()

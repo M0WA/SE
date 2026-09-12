@@ -81,10 +81,17 @@
         <input id="default-top-k" class="field" type="number" step="1" min="1" required>
       </div>
       <div class="form-row">
-        <label for="semantic-pool-size">Semantic candidate pool size — max documents scored for semantic similarity per search, regardless of corpus size</label><br>
+        <label for="semantic-pool-size">Semantic candidate pool size — max documents scored for semantic similarity per search, regardless of corpus size (also the ANN top-K below, when active)</label><br>
         <input id="semantic-pool-size" class="field" type="number" step="1" min="1" required>
       </div>
-      <p class="tuning-hint">Defaults: 10 results, 200 candidates. Every BM25 match is always scored too; this only bounds how many additional documents get sampled for a purely semantic match.</p>
+      <div class="form-row form-row-check">
+        <label for="ann-search-enabled">
+          <input id="ann-search-enabled" type="checkbox">
+          Use approximate nearest-neighbor (ANN) search when available
+        </label>
+        <p class="tuning-hint">On Postgres with the pgvector extension installed, fills the semantic candidate pool from a real nearest-neighbor index instead of a bounded brute-force sample. Has no effect on SQLite/MySQL, or a Postgres server without the extension -- those always use the brute-force sample regardless of this setting. Uncheck to force the brute-force path for troubleshooting even when ANN is available.</p>
+      </div>
+      <p class="tuning-hint">Defaults: 10 results, 200 candidates, ANN enabled. Every BM25 match is always scored too; the pool size only bounds how many additional documents get sampled/searched for a purely semantic match.</p>
     </section>
 
     <section class="panel">
@@ -102,6 +109,35 @@
         <input id="db-conn-max-lifetime" class="field" type="number" step="1" min="1" required>
       </div>
       <p class="tuning-hint">Defaults: 25 open, 25 idle, 5 minute lifetime. SQLite always keeps a single connection regardless of these values, since it serializes writers at the file level; a running process re-reads and re-applies these within about 10 seconds of a save, but the effect on already-open connections is limited to pool bookkeeping (idle/lifetime), not an instant reconnect.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Fuzzy matching</h2>
+      <div class="form-row form-row-check">
+        <label for="fuzzy-enabled">
+          <input id="fuzzy-enabled" type="checkbox">
+          Correct misspelled query terms
+        </label>
+        <p class="tuning-hint">When a query term has no matches at all, look it up against the index's vocabulary for a near-miss (within the edit distance below) and use that instead for scoring -- the displayed query is never rewritten, only what's used behind the scenes.</p>
+      </div>
+      <div class="form-row">
+        <label for="fuzzy-max-edit-distance">Max edit distance — how many typos (insert/delete/substitute) a correction may be off by</label><br>
+        <input id="fuzzy-max-edit-distance" class="field" type="number" step="1" min="1" max="2" required>
+      </div>
+      <p class="tuning-hint">Defaults: enabled, distance 2. A term that already matches something is never touched.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Link authority</h2>
+      <div class="form-row">
+        <label for="pagerank-weight">PageRank weight — how much link authority influences ranking (0 = no effect, 1 = ranking driven entirely by link authority)</label><br>
+        <input id="pagerank-weight" class="field" type="number" step="0.05" min="0" max="1" required>
+      </div>
+      <div class="form-row">
+        <label for="pagerank-interval">Recompute interval — minutes between automatic PageRank recomputations</label><br>
+        <input id="pagerank-interval" class="field" type="number" step="1" min="5" required>
+      </div>
+      <p class="tuning-hint">Defaults: weight 0 (no effect on ranking until raised), 60 minute interval (minimum 5). A recompute also always runs right after a crawl finishes, since that's when the link graph actually changes.</p>
     </section>
 
     <section class="panel">
@@ -133,9 +169,14 @@
   const maxResponseKBEl = document.getElementById('max-response-kb');
   const defaultTopKEl = document.getElementById('default-top-k');
   const semanticPoolSizeEl = document.getElementById('semantic-pool-size');
+  const annSearchEnabledEl = document.getElementById('ann-search-enabled');
   const dbMaxOpenConnsEl = document.getElementById('db-max-open-conns');
   const dbMaxIdleConnsEl = document.getElementById('db-max-idle-conns');
   const dbConnMaxLifetimeEl = document.getElementById('db-conn-max-lifetime');
+  const fuzzyEnabledEl = document.getElementById('fuzzy-enabled');
+  const fuzzyMaxEditDistanceEl = document.getElementById('fuzzy-max-edit-distance');
+  const pageRankWeightEl = document.getElementById('pagerank-weight');
+  const pageRankIntervalEl = document.getElementById('pagerank-interval');
   const sessionTTLEl = document.getElementById('session-ttl');
   const status = document.getElementById('tuning-status');
 
@@ -151,9 +192,14 @@
     maxResponseKBEl.value = s.operational.max_response_kb;
     defaultTopKEl.value = s.operational.default_top_k;
     semanticPoolSizeEl.value = s.operational.semantic_candidate_pool_size;
+    annSearchEnabledEl.checked = s.operational.ann_search_enabled;
     dbMaxOpenConnsEl.value = s.operational.db_max_open_conns;
     dbMaxIdleConnsEl.value = s.operational.db_max_idle_conns;
     dbConnMaxLifetimeEl.value = s.operational.db_conn_max_lifetime_minutes;
+    fuzzyEnabledEl.checked = s.operational.fuzzy_match_enabled;
+    fuzzyMaxEditDistanceEl.value = s.operational.fuzzy_max_edit_distance;
+    pageRankWeightEl.value = s.tuning.pagerank_weight;
+    pageRankIntervalEl.value = s.operational.pagerank_recompute_interval_minutes;
     sessionTTLEl.value = s.operational.session_ttl_hours;
   }
 
@@ -174,6 +220,7 @@
           alpha: parseFloat(alphaEl.value),
           k1: parseFloat(k1El.value),
           b: parseFloat(bEl.value),
+          pagerank_weight: parseFloat(pageRankWeightEl.value),
         },
         operational: {
           fetch_timeout_seconds: parseInt(fetchTimeoutEl.value, 10),
@@ -184,9 +231,13 @@
           max_response_kb: parseInt(maxResponseKBEl.value, 10),
           default_top_k: parseInt(defaultTopKEl.value, 10),
           semantic_candidate_pool_size: parseInt(semanticPoolSizeEl.value, 10),
+          ann_search_enabled: annSearchEnabledEl.checked,
           db_max_open_conns: parseInt(dbMaxOpenConnsEl.value, 10),
           db_max_idle_conns: parseInt(dbMaxIdleConnsEl.value, 10),
           db_conn_max_lifetime_minutes: parseInt(dbConnMaxLifetimeEl.value, 10),
+          fuzzy_match_enabled: fuzzyEnabledEl.checked,
+          fuzzy_max_edit_distance: parseInt(fuzzyMaxEditDistanceEl.value, 10),
+          pagerank_recompute_interval_minutes: parseInt(pageRankIntervalEl.value, 10),
           session_ttl_hours: parseInt(sessionTTLEl.value, 10),
         },
       });

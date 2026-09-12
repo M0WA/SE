@@ -81,6 +81,44 @@ func TestHandleCrawlInternal_Success(t *testing.T) {
 	}
 }
 
+func TestHandleCrawlInternal_CallsOnCrawlCompleteOnSuccess(t *testing.T) {
+	fc := &fakeCrawler{count: 1}
+	called := make(chan struct{}, 1)
+	h := restapi.New(restapi.Config{
+		Crawler:         fc,
+		CrawlJobs:       domain.NewCrawlJobStore(),
+		OnCrawlComplete: func() { called <- struct{}{} },
+	})
+
+	jobID := startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"http://a"}})
+	waitForJob(t, h, jobID)
+
+	select {
+	case <-called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected OnCrawlComplete to be called after a successful crawl")
+	}
+}
+
+func TestHandleCrawlInternal_DoesNotCallOnCrawlCompleteOnFailure(t *testing.T) {
+	fc := &fakeCrawler{err: errors.New("boom")}
+	called := make(chan struct{}, 1)
+	h := restapi.New(restapi.Config{
+		Crawler:         fc,
+		CrawlJobs:       domain.NewCrawlJobStore(),
+		OnCrawlComplete: func() { called <- struct{}{} },
+	})
+
+	jobID := startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"http://a"}})
+	waitForJob(t, h, jobID)
+
+	select {
+	case <-called:
+		t.Fatal("expected OnCrawlComplete not to be called after a failed crawl")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestHandleCrawlInternal_RecordsRespectRobotsAndUserAgentOnTheJob(t *testing.T) {
 	fc := &fakeCrawler{count: 1}
 	h := newCrawlServerHandler(fc)

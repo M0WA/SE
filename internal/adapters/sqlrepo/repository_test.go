@@ -522,6 +522,57 @@ func TestVocabularyStats_ReportsSizeAndTopTermsByDocFreq(t *testing.T) {
 	}
 }
 
+func TestAllTerms_EmptyCorpus(t *testing.T) {
+	repo := newTestRepo(t)
+	terms, err := repo.AllTerms(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(terms) != 0 {
+		t.Errorf("expected an empty vocabulary, got %+v", terms)
+	}
+}
+
+// TestAllTerms_ReturnsEveryTermUnbounded verifies AllTerms reports the whole
+// vocabulary -- unlike VocabularyStats' topN-bounded listing, every distinct
+// term appears regardless of how many there are, since domain.NearestTerm
+// needs the full vocabulary to check a mistyped query term against.
+func TestAllTerms_ReturnsEveryTermUnbounded(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	docs := []domain.Document{
+		{ID: "doc-1", URL: "http://a", Title: "A", Text: "shared common rare"},
+		{ID: "doc-2", URL: "http://b", Title: "B", Text: "shared common common"},
+		{ID: "doc-3", URL: "http://c", Title: "C", Text: "shared unique"},
+	}
+	for _, d := range docs {
+		if err := repo.SaveDocument(ctx, d, []float32{1}); err != nil {
+			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
+		}
+	}
+
+	terms, err := repo.AllTerms(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	byTerm := make(map[string]domain.TermStat, len(terms))
+	for _, s := range terms {
+		byTerm[s.Term] = s
+	}
+	if len(byTerm) != 4 {
+		t.Fatalf("expected all 4 distinct terms, got %+v", terms)
+	}
+	if s := byTerm["shared"]; s.DocFreq != 3 || s.TotalFreq != 3 {
+		t.Errorf("expected 'shared' doc_freq=3, total_freq=3, got %+v", s)
+	}
+	if s := byTerm["common"]; s.DocFreq != 2 || s.TotalFreq != 3 {
+		t.Errorf("expected 'common' doc_freq=2, total_freq=3, got %+v", s)
+	}
+	if s, ok := byTerm["rare"]; !ok || s.DocFreq != 1 || s.TotalFreq != 1 {
+		t.Errorf("expected 'rare' (a bottom-frequency term VocabularyStats' topN would omit) doc_freq=1, total_freq=1, got %+v (present=%v)", s, ok)
+	}
+}
+
 func TestDeleteDocument_Success(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
@@ -1548,5 +1599,247 @@ func TestEnsureCrawledAtIndex_BackstopCreatesIndexOnPreExistingDatabase(t *testi
 	var name string
 	if err := pre.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_documents_crawled_at'`).Scan(&name); err != nil {
 		t.Errorf("expected idx_documents_crawled_at to be backstopped onto a pre-existing database, got: %v", err)
+	}
+}
+
+func TestSaveDocument_NewDocumentGetsNeutralPageRankDefault(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+
+	first := domain.Document{ID: "doc-1", URL: "https://a.example/", Title: "A", Text: "text one"}
+	if err := repo.SaveDocument(ctx, first, []float32{1}); err != nil {
+		t.Fatalf("unexpected error saving first doc: %v", err)
+	}
+	second := domain.Document{ID: "doc-2", URL: "https://b.example/", Title: "B", Text: "text two"}
+	if err := repo.SaveDocument(ctx, second, []float32{1}); err != nil {
+		t.Fatalf("unexpected error saving second doc: %v", err)
+	}
+
+	docs, err := repo.ListDocuments(ctx, 10, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	byID := map[string]domain.IndexedDocument{}
+	for _, d := range docs {
+		byID[d.ID] = d
+	}
+	// Neither document has any incoming/outgoing links at all, but each
+	// should still land on a sane, strictly positive default -- never the
+	// bare 0 the pagerank column itself defaults to.
+	if byID["doc-1"].PageRank <= 0 {
+		t.Errorf("expected doc-1 to have a positive default pagerank, got %v", byID["doc-1"].PageRank)
+	}
+	if byID["doc-2"].PageRank <= 0 {
+		t.Errorf("expected doc-2 to have a positive default pagerank, got %v", byID["doc-2"].PageRank)
+	}
+}
+
+func TestSaveDocument_ResavingUnchangedContentPreservesPageRank(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	doc := domain.Document{ID: "doc-1", URL: "https://a.example/", Title: "A", Text: "text"}
+	if err := repo.SaveDocument(ctx, doc, []float32{1}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := repo.UpdatePageRanks(ctx, map[string]float64{"doc-1": 0.42}); err != nil {
+		t.Fatalf("unexpected error updating pagerank: %v", err)
+	}
+	// Re-save with identical content (a re-crawl that found nothing new):
+	// unchanged-content path should preserve the pagerank set above, never
+	// reset it back to a neutral default.
+	if err := repo.SaveDocument(ctx, doc, []float32{1}); err != nil {
+		t.Fatalf("unexpected error re-saving: %v", err)
+	}
+	docs, err := repo.ListDocuments(ctx, 10, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(docs) != 1 || docs[0].PageRank != 0.42 {
+		t.Errorf("expected pagerank 0.42 preserved across an unchanged-content re-save, got %+v", docs)
+	}
+}
+
+func TestSaveDocument_ResavingChangedContentPreservesPageRank(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	doc := domain.Document{ID: "doc-1", URL: "https://a.example/", Title: "A", Text: "text one"}
+	if err := repo.SaveDocument(ctx, doc, []float32{1}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := repo.UpdatePageRanks(ctx, map[string]float64{"doc-1": 0.77}); err != nil {
+		t.Fatalf("unexpected error updating pagerank: %v", err)
+	}
+	changed := domain.Document{ID: "doc-1", URL: "https://a.example/", Title: "A", Text: "text two, now different"}
+	if err := repo.SaveDocument(ctx, changed, []float32{1}); err != nil {
+		t.Fatalf("unexpected error re-saving changed content: %v", err)
+	}
+	docs, err := repo.ListDocuments(ctx, 10, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(docs) != 1 || docs[0].Version != 2 {
+		t.Fatalf("expected a new version to have been archived, got %+v", docs)
+	}
+	if docs[0].PageRank != 0.77 {
+		t.Errorf("expected pagerank 0.77 preserved across a changed-content re-save, got %v", docs[0].PageRank)
+	}
+}
+
+// TestRepository_LinkGraph verifies LinkGraph builds a doc-ID adjacency map
+// by joining links.to_url against documents.url -- a link whose target was
+// never crawled/indexed (no matching document row) is simply omitted,
+// since it has no document ID to report.
+func TestRepository_LinkGraph(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	docs := []domain.Document{
+		{ID: "doc-a", URL: "https://a.example/", Title: "A", Text: "text",
+			Links: []string{"https://c.example/target", "https://nowhere.example/unindexed"}},
+		{ID: "doc-b", URL: "https://b.example/", Title: "B", Text: "text",
+			Links: []string{"https://c.example/target"}},
+		{ID: "doc-c", URL: "https://c.example/target", Title: "C", Text: "text"},
+	}
+	for _, d := range docs {
+		if err := repo.SaveDocument(ctx, d, []float32{1}); err != nil {
+			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
+		}
+	}
+
+	graph, err := repo.LinkGraph(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(graph["doc-a"]) != 1 || graph["doc-a"][0] != "doc-c" {
+		t.Errorf("expected doc-a -> [doc-c] (the unindexed link omitted), got %v", graph["doc-a"])
+	}
+	if len(graph["doc-b"]) != 1 || graph["doc-b"][0] != "doc-c" {
+		t.Errorf("expected doc-b -> [doc-c], got %v", graph["doc-b"])
+	}
+	if _, ok := graph["doc-c"]; ok {
+		t.Errorf("expected doc-c (no outbound links) to have no adjacency entry, got %v", graph["doc-c"])
+	}
+}
+
+func TestRepository_LinkGraph_EmptyWhenNoLinks(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-1", URL: "https://a.example/", Title: "A", Text: "text"}, []float32{1}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	graph, err := repo.LinkGraph(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(graph) != 0 {
+		t.Errorf("expected an empty graph when nothing links to anything, got %v", graph)
+	}
+}
+
+// TestRepository_UpdatePageRanks_RoundTrips verifies scores written via
+// UpdatePageRanks come back through ListDocuments/EmbeddingsForDocs, and
+// that a document ID left out of the batch keeps its prior value rather
+// than being reset.
+func TestRepository_UpdatePageRanks_RoundTrips(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	for _, id := range []string{"doc-1", "doc-2"} {
+		doc := domain.Document{ID: id, URL: "https://example.com/" + id, Title: id, Text: "text " + id}
+		if err := repo.SaveDocument(ctx, doc, []float32{1}); err != nil {
+			t.Fatalf("unexpected error saving %s: %v", id, err)
+		}
+	}
+	before, err := repo.ListDocuments(ctx, 10, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	byID := map[string]domain.IndexedDocument{}
+	for _, d := range before {
+		byID[d.ID] = d
+	}
+	doc2Before := byID["doc-2"].PageRank
+
+	if err := repo.UpdatePageRanks(ctx, map[string]float64{"doc-1": 0.9}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	after, err := repo.ListDocuments(ctx, 10, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	byID = map[string]domain.IndexedDocument{}
+	for _, d := range after {
+		byID[d.ID] = d
+	}
+	if byID["doc-1"].PageRank != 0.9 {
+		t.Errorf("expected doc-1's pagerank updated to 0.9, got %v", byID["doc-1"].PageRank)
+	}
+	if byID["doc-2"].PageRank != doc2Before {
+		t.Errorf("expected doc-2 (left out of the batch) to keep its prior pagerank %v, got %v", doc2Before, byID["doc-2"].PageRank)
+	}
+
+	// EmbeddingsForDocs is the path hybrid search actually reads pagerank
+	// through -- verify it reflects the same updated value.
+	embeddings, err := repo.EmbeddingsForDocs(ctx, []string{"doc-1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if embeddings["doc-1"].PageRank != 0.9 {
+		t.Errorf("expected EmbeddingsForDocs to report the updated pagerank 0.9, got %v", embeddings["doc-1"].PageRank)
+	}
+}
+
+func TestRepository_UpdatePageRanks_EmptyIsNoop(t *testing.T) {
+	repo := newTestRepo(t)
+	if err := repo.UpdatePageRanks(context.Background(), map[string]float64{}); err != nil {
+		t.Errorf("expected an empty batch to be a no-op, got error: %v", err)
+	}
+}
+
+// TestMigrateDocumentColumns_BackfillsPageRankOnPreExistingRows mirrors the
+// existing norm_embedding backfill test: a database created before the
+// pagerank column existed must have every pre-existing row backfilled to a
+// neutral 1/N score, not left at the column's bare 0 default.
+func TestMigrateDocumentColumns_BackfillsPageRankOnPreExistingRows(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testmigratepagerank%d?mode=memory&cache=shared", n)
+
+	pre, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open pre-migration DB: %v", err)
+	}
+	if _, err := pre.Exec(`CREATE TABLE documents (
+		id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT, text TEXT,
+		doc_length INTEGER NOT NULL, embedding TEXT NOT NULL,
+		norm_embedding REAL NOT NULL DEFAULT 0,
+		host TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1,
+		crawled_at TEXT NOT NULL DEFAULT ''
+	)`); err != nil {
+		t.Fatalf("failed to create legacy schema: %v", err)
+	}
+	for _, id := range []string{"doc-1", "doc-2"} {
+		if _, err := pre.Exec(`INSERT INTO documents (id, url, title, text, doc_length, embedding)
+		                       VALUES (?, ?, 'Old', 'old text', 10, '[]')`, id, "https://old.example/"+id); err != nil {
+			t.Fatalf("failed to insert legacy row %s: %v", id, err)
+		}
+	}
+	t.Cleanup(func() { _ = pre.Close() })
+
+	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("expected New to migrate the legacy schema without error, got: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	docs, err := repo.ListDocuments(context.Background(), 10, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(docs) != 2 {
+		t.Fatalf("expected 2 documents, got %d", len(docs))
+	}
+	for _, d := range docs {
+		if d.PageRank != 0.5 {
+			t.Errorf("expected pre-existing row %s backfilled to 1/2 = 0.5, got %v", d.ID, d.PageRank)
+		}
 	}
 }

@@ -13,12 +13,12 @@ type sqliteDialect struct{}
 func (sqliteDialect) Name() string             { return "sqlite" }
 func (sqliteDialect) Placeholder(_ int) string { return "?" }
 func (sqliteDialect) UpsertDocumentSQL() string {
-	return `INSERT INTO documents (id, url, title, text, doc_length, embedding, norm_embedding, host, version, crawled_at)
-	        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	return `INSERT INTO documents (id, url, title, text, doc_length, embedding, norm_embedding, pagerank, host, version, crawled_at)
+	        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	        ON CONFLICT(id) DO UPDATE SET
 	          url=excluded.url, title=excluded.title, text=excluded.text,
 	          doc_length=excluded.doc_length, embedding=excluded.embedding,
-	          norm_embedding=excluded.norm_embedding,
+	          norm_embedding=excluded.norm_embedding, pagerank=excluded.pagerank,
 	          host=excluded.host, version=excluded.version, crawled_at=excluded.crawled_at`
 }
 func (sqliteDialect) UpsertSettingSQL() string {
@@ -31,6 +31,7 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT, text TEXT,
 			doc_length INTEGER NOT NULL, embedding TEXT NOT NULL,
 			norm_embedding REAL NOT NULL DEFAULT 0,
+			pagerank REAL NOT NULL DEFAULT 0,
 			host TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1,
 			crawled_at TEXT NOT NULL DEFAULT ''
 		)`,
@@ -69,12 +70,12 @@ type mysqlDialect struct{}
 func (mysqlDialect) Name() string             { return "mysql" }
 func (mysqlDialect) Placeholder(_ int) string { return "?" }
 func (mysqlDialect) UpsertDocumentSQL() string {
-	return `INSERT INTO documents (id, url, title, text, doc_length, embedding, norm_embedding, host, version, crawled_at)
-	        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	return `INSERT INTO documents (id, url, title, text, doc_length, embedding, norm_embedding, pagerank, host, version, crawled_at)
+	        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	        ON DUPLICATE KEY UPDATE
 	          url=VALUES(url), title=VALUES(title), text=VALUES(text),
 	          doc_length=VALUES(doc_length), embedding=VALUES(embedding),
-	          norm_embedding=VALUES(norm_embedding),
+	          norm_embedding=VALUES(norm_embedding), pagerank=VALUES(pagerank),
 	          host=VALUES(host), version=VALUES(version), crawled_at=VALUES(crawled_at)`
 }
 func (mysqlDialect) UpsertSettingSQL() string {
@@ -87,6 +88,7 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			id VARCHAR(64) PRIMARY KEY, url TEXT NOT NULL, title TEXT, text LONGTEXT,
 			doc_length INT NOT NULL, embedding LONGTEXT NOT NULL,
 			norm_embedding DOUBLE NOT NULL DEFAULT 0,
+			pagerank DOUBLE NOT NULL DEFAULT 0,
 			host VARCHAR(255) NOT NULL DEFAULT '', version INT NOT NULL DEFAULT 1,
 			crawled_at VARCHAR(64) NOT NULL DEFAULT ''
 		) ENGINE=InnoDB`,
@@ -128,12 +130,12 @@ func (postgresDialect) Placeholder(pos int) string {
 	return "$" + itoa(pos)
 }
 func (postgresDialect) UpsertDocumentSQL() string {
-	return `INSERT INTO documents (id, url, title, text, doc_length, embedding, norm_embedding, host, version, crawled_at)
-	        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	return `INSERT INTO documents (id, url, title, text, doc_length, embedding, norm_embedding, pagerank, host, version, crawled_at)
+	        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	        ON CONFLICT (id) DO UPDATE SET
 	          url=EXCLUDED.url, title=EXCLUDED.title, text=EXCLUDED.text,
 	          doc_length=EXCLUDED.doc_length, embedding=EXCLUDED.embedding,
-	          norm_embedding=EXCLUDED.norm_embedding,
+	          norm_embedding=EXCLUDED.norm_embedding, pagerank=EXCLUDED.pagerank,
 	          host=EXCLUDED.host, version=EXCLUDED.version, crawled_at=EXCLUDED.crawled_at`
 }
 func (postgresDialect) UpsertSettingSQL() string {
@@ -146,6 +148,7 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT, text TEXT,
 			doc_length INT NOT NULL, embedding TEXT NOT NULL,
 			norm_embedding DOUBLE PRECISION NOT NULL DEFAULT 0,
+			pagerank DOUBLE PRECISION NOT NULL DEFAULT 0,
 			host TEXT NOT NULL DEFAULT '', version INT NOT NULL DEFAULT 1,
 			crawled_at TEXT NOT NULL DEFAULT ''
 		)`,

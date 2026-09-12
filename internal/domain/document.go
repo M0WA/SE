@@ -17,13 +17,17 @@ type Document struct {
 // SearchResult is a single ranked result returned to the caller. BM25Score
 // and SemanticSim are the unblended components behind Score -- omitted
 // when a backend (e.g. the plain in-memory index) has no such breakdown.
+// CorrectedTerms describes the query, not this particular document -- see
+// HybridResult.CorrectedTerms -- and is identical across every result of one
+// search.
 type SearchResult struct {
-	URL         string  `json:"url"`
-	Title       string  `json:"title"`
-	Snippet     string  `json:"snippet"`
-	Score       float64 `json:"score"`
-	BM25Score   float64 `json:"bm25_score,omitempty"`
-	SemanticSim float64 `json:"semantic_sim,omitempty"`
+	URL            string          `json:"url"`
+	Title          string          `json:"title"`
+	Snippet        string          `json:"snippet"`
+	Score          float64         `json:"score"`
+	BM25Score      float64         `json:"bm25_score,omitempty"`
+	SemanticSim    float64         `json:"semantic_sim,omitempty"`
+	CorrectedTerms []CorrectedTerm `json:"corrected_terms,omitempty"`
 }
 
 // IndexedDocument is a lightweight summary of a document held in the SQL
@@ -41,6 +45,11 @@ type IndexedDocument struct {
 	InternalLinks int
 	ExternalLinks int
 	Backlinks     int
+	// PageRank is this document's current link-authority score
+	// (documents.pagerank), last written by application.RunPageRankJob --
+	// a neutral 1/N default before the first run ever computes it (see
+	// sqlrepo's backfillPageRank/SaveDocument), never a bare 0.
+	PageRank float64
 }
 
 // DocumentVersion is one prior, superseded version of a document, kept so

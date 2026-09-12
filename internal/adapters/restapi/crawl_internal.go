@@ -94,6 +94,12 @@ func (h *Handler) runCrawlJob(jobID string, opts ports.CrawlOptions) {
 		return
 	}
 	h.crawlJobs.MarkDone(jobID)
+	// A crawl just changed the link graph -- give the caller (cmd/crawl, to
+	// trigger a PageRank recompute) a chance to react. See Config's
+	// OnCrawlComplete doc comment for why this is deliberately synchronous.
+	if h.onCrawlComplete != nil {
+		h.onCrawlComplete()
+	}
 }
 
 func (h *Handler) handleListCrawlJobs(w http.ResponseWriter, r *http.Request) {

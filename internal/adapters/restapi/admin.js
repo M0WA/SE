@@ -69,6 +69,17 @@ function textCell(text, opts) {
   return td;
 }
 
+// snippetCell builds a <td> for a server-rendered search excerpt, which
+// carries <mark> tags around the matched terms (see domain.Snippet) --
+// rendered via innerHTML, same as the public search page's result-snippet,
+// so the highlighting actually shows rather than the raw markup as text.
+function snippetCell(html) {
+  const td = document.createElement('td');
+  td.className = 'excerpt';
+  td.innerHTML = html || '';
+  return td;
+}
+
 // buildTable assembles a <table> from a header spec ({label, num?}[]) and
 // one or more data rows, delegating each row's <td> cells to cellsForRow
 // so callers can mix textCell with richer custom cells (links, buttons).

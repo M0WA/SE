@@ -5,9 +5,23 @@ import (
 	"time"
 )
 
+// CorrectedTerm records that a query term had zero postings hits and was
+// fuzzy-matched to a near-miss vocabulary term (within a bounded edit
+// distance) for BM25 scoring purposes -- see hybridSearchService.Search and
+// domain.NearestTerm. Surfaced to callers/UI so a correction is always shown
+// transparently rather than silently rewriting the displayed query.
+type CorrectedTerm struct {
+	Original  string `json:"original"`
+	Corrected string `json:"corrected"`
+}
+
 // HybridResult is a ranked match with a broken-down score. CrawledAt is
 // populated only when the caller needs it for recency sorting -- it's the
-// zero time otherwise.
+// zero time otherwise. CorrectedTerms is the same for every result of a
+// given Search call (it describes the query, not this particular
+// document) -- empty when fuzzy correction is disabled, or when every query
+// term either matched something or had no close-enough vocabulary term to
+// substitute.
 type HybridResult struct {
 	DocID       string
 	URL         string
@@ -15,8 +29,16 @@ type HybridResult struct {
 	Snippet     string
 	BM25Score   float64
 	SemanticSim float64
-	FinalScore  float64
-	CrawledAt   time.Time
+	// PageRank is this document's raw (unnormalized) link-authority score
+	// (see domain.PageRank and sqlrepo's documents.pagerank column) --
+	// carried alongside the other components so hybridSearchService.Search
+	// can normalize it against the candidate batch's own max and blend it
+	// into FinalScore. Not itself part of the wire-format admin debug view;
+	// see FinalScore for the blended result.
+	PageRank       float64
+	FinalScore     float64
+	CrawledAt      time.Time
+	CorrectedTerms []CorrectedTerm
 }
 
 // CombineScores blends BM25 and cosine similarity into a final score.

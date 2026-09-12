@@ -26,8 +26,16 @@ func main() {
 	bootstrap.SyncSettings(ctx, repo, settings, opSettings, overrides, repo)
 	corpusStats := domain.NewCorpusStatsCache(0, 1)
 	bootstrap.SyncCorpusStats(ctx, repo, corpusStats)
+	vocabulary := domain.NewVocabularyCache(nil)
+	bootstrap.SyncVocabulary(ctx, repo, vocabulary)
 	embedder := hashembed.New(128)
-	searchSvc := application.NewHybridAsSearchService(repo, embedder, settings, opSettings, overrides, corpusStats)
+	// Attempt to enable Postgres pgvector-backed ANN semantic search once at
+	// startup -- a no-op on SQLite/MySQL, and never fatal even on Postgres
+	// without the extension installed (see sqlrepo.Repository.EnableANN):
+	// this process just keeps using the brute-force SampleEmbeddings
+	// fallback either way.
+	repo.EnableANN(ctx, embedder.Dimensions())
+	searchSvc := application.NewHybridAsSearchService(repo, embedder, settings, opSettings, overrides, corpusStats, vocabulary)
 
 	handler := restapi.New(restapi.Config{
 		Search:     searchSvc,
