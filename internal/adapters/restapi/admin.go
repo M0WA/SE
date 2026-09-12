@@ -400,6 +400,10 @@ type operationalValues struct {
 	// when Postgres pgvector ANN is available, when set false (see
 	// domain.OperationalSettingsValues for the full doc comment).
 	ANNSearchEnabled bool `json:"ann_search_enabled"`
+	// MaxRetainedCrawlJobs bounds crawl-server's persistent crawl job
+	// history -- see domain.OperationalSettingsValues for the full doc
+	// comment.
+	MaxRetainedCrawlJobs int `json:"max_retained_crawl_jobs"`
 }
 
 func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
@@ -420,6 +424,7 @@ func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 		FuzzyMaxEditDistance:             v.FuzzyMaxEditDistance,
 		PageRankRecomputeIntervalMinutes: v.PageRankRecomputeIntervalMinutes,
 		ANNSearchEnabled:                 v.ANNSearchEnabled,
+		MaxRetainedCrawlJobs:             v.MaxRetainedCrawlJobs,
 	}
 }
 
@@ -441,6 +446,7 @@ func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 		FuzzyMaxEditDistance:             o.FuzzyMaxEditDistance,
 		PageRankRecomputeIntervalMinutes: o.PageRankRecomputeIntervalMinutes,
 		ANNSearchEnabled:                 o.ANNSearchEnabled,
+		MaxRetainedCrawlJobs:             o.MaxRetainedCrawlJobs,
 	}
 }
 

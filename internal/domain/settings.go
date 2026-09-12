@@ -72,6 +72,13 @@ type OperationalSettingsValues struct {
 	// to force the brute-force fallback path even when ANN is available,
 	// e.g. to troubleshoot a ranking difference between the two paths.
 	ANNSearchEnabled bool
+	// MaxRetainedCrawlJobs bounds how many crawl jobs (and their full
+	// per-page event history) crawl-server's persistent store keeps --
+	// cmd/crawl periodically prunes the oldest beyond this limit. Unlike
+	// the old in-memory-only store's hard-coded 200-job cap, this is
+	// admin-configurable now that history survives in the database rather
+	// than being bounded only by process memory.
+	MaxRetainedCrawlJobs int
 }
 
 // defaultUserAgent mimics a standard desktop Firefox so crawled sites treat
@@ -110,6 +117,11 @@ const (
 	// minutes even if an admin asks for tighter.
 	defaultPageRankRecomputeIntervalMinutes = 60
 	minPageRankRecomputeIntervalMinutes     = 5
+	// defaultMaxRetainedCrawlJobs matches the old in-memory store's
+	// hard-coded cap, kept as the default now that it's just a starting
+	// point rather than a hard limit -- persistent storage can comfortably
+	// hold far more history if an admin raises it.
+	defaultMaxRetainedCrawlJobs = 200
 )
 
 func defaultOperationalSettings() OperationalSettingsValues {
@@ -130,6 +142,7 @@ func defaultOperationalSettings() OperationalSettingsValues {
 		FuzzyMaxEditDistance:             defaultFuzzyMaxEditDistance,
 		PageRankRecomputeIntervalMinutes: defaultPageRankRecomputeIntervalMinutes,
 		ANNSearchEnabled:                 true,
+		MaxRetainedCrawlJobs:             defaultMaxRetainedCrawlJobs,
 	}
 }
 
@@ -219,6 +232,9 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 		v.PageRankRecomputeIntervalMinutes = d.PageRankRecomputeIntervalMinutes
 	} else if v.PageRankRecomputeIntervalMinutes < minPageRankRecomputeIntervalMinutes {
 		v.PageRankRecomputeIntervalMinutes = minPageRankRecomputeIntervalMinutes
+	}
+	if v.MaxRetainedCrawlJobs <= 0 {
+		v.MaxRetainedCrawlJobs = d.MaxRetainedCrawlJobs
 	}
 
 	s.mu.Lock()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"searchengine/internal/domain"
@@ -43,7 +44,7 @@ func (h *Handler) handleCrawl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobID, err := h.TriggerCrawl(opts)
+	jobID, err := h.TriggerCrawl(r.Context(), opts)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -57,13 +58,17 @@ func (h *Handler) handleCrawl(w http.ResponseWriter, r *http.Request) {
 // caller on crawl-server goes through -- handleCrawl for a manually
 // triggered crawl, and the scheduler ticker in cmd/crawl/main.go for a
 // scheduled crawl that just came due -- so both get identical job
-// tracking, concurrency limiting (h.crawlSem) and progress reporting.
-func (h *Handler) TriggerCrawl(opts ports.CrawlOptions) (string, error) {
+// tracking, concurrency limiting (h.crawlSem) and progress reporting. ctx
+// only scopes the Create call itself (persisting the new job record); the
+// crawl that follows always runs against context.Background(), since it
+// must keep running after the triggering request (or scheduler tick)
+// returns.
+func (h *Handler) TriggerCrawl(ctx context.Context, opts ports.CrawlOptions) (string, error) {
 	if len(opts.SeedURLs) == 0 {
 		return "", errors.New("seed_urls must not be empty")
 	}
 
-	job := h.crawlJobs.Create(domain.CrawlJobRequest{
+	job, err := h.crawlJobs.Create(ctx, domain.CrawlJobRequest{
 		SeedURLs:            opts.SeedURLs,
 		MaxPages:            opts.MaxPages,
 		HasCookie:           opts.Cookie != "",
@@ -73,6 +78,9 @@ func (h *Handler) TriggerCrawl(opts ports.CrawlOptions) (string, error) {
 		AllowOffDomainLinks: opts.AllowOffDomainLinks,
 		UseSitemap:          opts.UseSitemap,
 	})
+	if err != nil {
+		return "", err
+	}
 	go h.runCrawlJob(job.ID, opts)
 
 	return job.ID, nil
@@ -81,19 +89,31 @@ func (h *Handler) TriggerCrawl(opts ports.CrawlOptions) (string, error) {
 // runCrawlJob executes opts in the background against job.ID's tracked
 // state. It uses context.Background(), not the triggering request's
 // context, since the crawl must keep running after that request returns.
+// A store error along the way (the persistent store is unreachable, say)
+// is logged rather than aborting the crawl itself -- losing this job's
+// history is far less harmful than silently losing already-crawled pages.
 func (h *Handler) runCrawlJob(jobID string, opts ports.CrawlOptions) {
 	h.crawlSem <- struct{}{}
 	defer func() { <-h.crawlSem }()
 
-	h.crawlJobs.MarkRunning(jobID)
-	_, err := h.crawler.Crawl(context.Background(), opts, func(ev domain.CrawlPageEvent) {
-		h.crawlJobs.AppendPage(jobID, ev)
+	ctx := context.Background()
+	if err := h.crawlJobs.MarkRunning(ctx, jobID); err != nil {
+		log.Printf("crawl job %s: marking running: %v", jobID, err)
+	}
+	_, err := h.crawler.Crawl(ctx, opts, func(ev domain.CrawlPageEvent) {
+		if err := h.crawlJobs.AppendPage(ctx, jobID, ev); err != nil {
+			log.Printf("crawl job %s: appending page event: %v", jobID, err)
+		}
 	})
 	if err != nil {
-		h.crawlJobs.MarkFailed(jobID, err)
+		if markErr := h.crawlJobs.MarkFailed(ctx, jobID, err); markErr != nil {
+			log.Printf("crawl job %s: marking failed: %v", jobID, markErr)
+		}
 		return
 	}
-	h.crawlJobs.MarkDone(jobID)
+	if err := h.crawlJobs.MarkDone(ctx, jobID); err != nil {
+		log.Printf("crawl job %s: marking done: %v", jobID, err)
+	}
 	// A crawl just changed the link graph -- give the caller (cmd/crawl, to
 	// trigger a PageRank recompute) a chance to react. See Config's
 	// OnCrawlComplete doc comment for why this is deliberately synchronous.
@@ -103,13 +123,22 @@ func (h *Handler) runCrawlJob(jobID string, opts ports.CrawlOptions) {
 }
 
 func (h *Handler) handleListCrawlJobs(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, h.crawlJobs.List())
+	jobs, err := h.crawlJobs.List(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, jobs)
 }
 
 func (h *Handler) handleGetCrawlJob(w http.ResponseWriter, r *http.Request) {
-	job, ok := h.crawlJobs.Get(r.PathValue("id"))
-	if !ok {
+	job, err := h.crawlJobs.Get(r.Context(), r.PathValue("id"))
+	if errors.Is(err, domain.ErrCrawlJobNotFound) {
 		http.Error(w, "crawl job not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, job)

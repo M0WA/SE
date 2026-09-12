@@ -212,8 +212,33 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 		FuzzyMaxEditDistance:             2,
 		PageRankRecomputeIntervalMinutes: 60,
 		ANNSearchEnabled:                 true,
+		MaxRetainedCrawlJobs:             200,
 	}
 	if v != want {
 		t.Errorf("expected defaults %+v, got %+v", want, v)
+	}
+}
+
+func TestOperationalSettings_SetZeroMaxRetainedCrawlJobsFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{MaxRetainedCrawlJobs: 0})
+	if v := s.Get(); v.MaxRetainedCrawlJobs != 200 {
+		t.Errorf("expected a zero MaxRetainedCrawlJobs to fall back to the default 200, got %d", v.MaxRetainedCrawlJobs)
+	}
+}
+
+func TestOperationalSettings_SetNegativeMaxRetainedCrawlJobsFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{MaxRetainedCrawlJobs: -5})
+	if v := s.Get(); v.MaxRetainedCrawlJobs != 200 {
+		t.Errorf("expected a negative MaxRetainedCrawlJobs to fall back to the default 200, got %d", v.MaxRetainedCrawlJobs)
+	}
+}
+
+func TestOperationalSettings_SetPositiveMaxRetainedCrawlJobsPreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{MaxRetainedCrawlJobs: 1000})
+	if v := s.Get(); v.MaxRetainedCrawlJobs != 1000 {
+		t.Errorf("expected MaxRetainedCrawlJobs=1000 to be preserved, got %d", v.MaxRetainedCrawlJobs)
 	}
 }

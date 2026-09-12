@@ -1084,6 +1084,67 @@ func TestHandleAdminSettings_ANNSearchEnabledFieldRoundTrips(t *testing.T) {
 	}
 }
 
+// TestHandleAdminSettings_MaxRetainedCrawlJobsFieldRoundTrips mirrors
+// TestHandleAdminSettings_ANNSearchEnabledFieldRoundTrips for the new
+// max_retained_crawl_jobs knob: GET reports whatever's currently set, and
+// a POST updates it.
+func TestHandleAdminSettings_MaxRetainedCrawlJobsFieldRoundTrips(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{MaxRetainedCrawlJobs: 200})
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", getRec.Code)
+	}
+	var getResp struct {
+		Operational struct {
+			MaxRetainedCrawlJobs int `json:"max_retained_crawl_jobs"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decoding GET response: %v", err)
+	}
+	if getResp.Operational.MaxRetainedCrawlJobs != 200 {
+		t.Errorf("expected GET to report max_retained_crawl_jobs=200, got %+v", getResp.Operational)
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
+			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
+			"max_retained_crawl_jobs": 1000,
+		},
+	})
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	postReq.AddCookie(cookie)
+	postRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
+	}
+
+	if ov := opSettings.Get(); ov.MaxRetainedCrawlJobs != 1000 {
+		t.Errorf("expected max_retained_crawl_jobs=1000 to be applied, got %+v", ov)
+	}
+
+	var postResp struct {
+		Operational struct {
+			MaxRetainedCrawlJobs int `json:"max_retained_crawl_jobs"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(postRec.Body.Bytes(), &postResp); err != nil {
+		t.Fatalf("decoding POST response: %v", err)
+	}
+	if postResp.Operational.MaxRetainedCrawlJobs != 1000 {
+		t.Errorf("expected the POST response to echo back max_retained_crawl_jobs=1000, got %+v", postResp.Operational)
+	}
+}
+
 func TestHandleAdminSettings_NotConfigured(t *testing.T) {
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)

@@ -18,7 +18,7 @@ import (
 // A trigger failure for one schedule is logged and skipped, not fatal: its
 // next_run_at is left untouched, so the next tick retries it rather than
 // silently losing that schedule's recurrence.
-func TriggerDueCrawls(ctx context.Context, store ports.ScheduledCrawlStore, trigger func(ports.CrawlOptions) (string, error), now time.Time) (int, error) {
+func TriggerDueCrawls(ctx context.Context, store ports.ScheduledCrawlStore, trigger func(context.Context, ports.CrawlOptions) (string, error), now time.Time) (int, error) {
 	due, err := store.DueScheduledCrawls(ctx, now)
 	if err != nil {
 		return 0, err
@@ -26,7 +26,7 @@ func TriggerDueCrawls(ctx context.Context, store ports.ScheduledCrawlStore, trig
 
 	triggered := 0
 	for _, s := range due {
-		jobID, err := trigger(scheduledCrawlOptions(s))
+		jobID, err := trigger(ctx, scheduledCrawlOptions(s))
 		if err != nil {
 			log.Printf("triggering scheduled crawl %s: %v", s.ID, err)
 			continue

@@ -81,7 +81,7 @@ func TestTriggerDueCrawls_TriggersOnlyDueEnabledSchedules(t *testing.T) {
 	store := newFakeScheduledCrawlStore(due, notYetDue, disabled)
 
 	var triggeredIDs []string
-	trigger := func(opts ports.CrawlOptions) (string, error) {
+	trigger := func(_ context.Context, opts ports.CrawlOptions) (string, error) {
 		triggeredIDs = append(triggeredIDs, opts.SeedURLs[0])
 		return "job-1", nil
 	}
@@ -103,7 +103,7 @@ func TestTriggerDueCrawls_AdvancesNextRunAtByInterval(t *testing.T) {
 	s := domain.ScheduledCrawl{ID: "sched-1", SeedURLs: []string{"http://a"}, IntervalMinutes: 45, Enabled: true, NextRunAt: now.Add(-time.Minute)}
 	store := newFakeScheduledCrawlStore(s)
 
-	trigger := func(ports.CrawlOptions) (string, error) { return "job-1", nil }
+	trigger := func(context.Context, ports.CrawlOptions) (string, error) { return "job-1", nil }
 	if _, err := application.TriggerDueCrawls(context.Background(), store, trigger, now); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestTriggerDueCrawls_PassesScheduleOptionsThrough(t *testing.T) {
 	store := newFakeScheduledCrawlStore(s)
 
 	var gotOpts ports.CrawlOptions
-	trigger := func(opts ports.CrawlOptions) (string, error) {
+	trigger := func(_ context.Context, opts ports.CrawlOptions) (string, error) {
 		gotOpts = opts
 		return "job-1", nil
 	}
@@ -152,7 +152,7 @@ func TestTriggerDueCrawls_NoScheduleDue(t *testing.T) {
 	})
 
 	called := false
-	trigger := func(ports.CrawlOptions) (string, error) {
+	trigger := func(context.Context, ports.CrawlOptions) (string, error) {
 		called = true
 		return "job-1", nil
 	}
@@ -169,7 +169,7 @@ func TestTriggerDueCrawls_DueScheduledCrawlsErrorPropagates(t *testing.T) {
 	store := newFakeScheduledCrawlStore()
 	store.dueErr = errors.New("db down")
 
-	_, err := application.TriggerDueCrawls(context.Background(), store, func(ports.CrawlOptions) (string, error) { return "", nil }, time.Now())
+	_, err := application.TriggerDueCrawls(context.Background(), store, func(context.Context, ports.CrawlOptions) (string, error) { return "", nil }, time.Now())
 	if err == nil {
 		t.Error("expected the DueScheduledCrawls error to propagate")
 	}
@@ -181,7 +181,7 @@ func TestTriggerDueCrawls_TriggerErrorSkipsThatScheduleButContinues(t *testing.T
 	ok := domain.ScheduledCrawl{ID: "ok", SeedURLs: []string{"http://b"}, IntervalMinutes: 30, Enabled: true, NextRunAt: now.Add(-time.Minute)}
 	store := newFakeScheduledCrawlStore(failing, ok)
 
-	trigger := func(opts ports.CrawlOptions) (string, error) {
+	trigger := func(_ context.Context, opts ports.CrawlOptions) (string, error) {
 		if opts.SeedURLs[0] == "http://a" {
 			return "", errors.New("crawl-server unreachable")
 		}
@@ -206,7 +206,7 @@ func TestTriggerDueCrawls_MarkRunErrorSkipsCountingThatSchedule(t *testing.T) {
 	store := newFakeScheduledCrawlStore(s)
 	store.markErr = errors.New("db down")
 
-	n, err := application.TriggerDueCrawls(context.Background(), store, func(ports.CrawlOptions) (string, error) { return "job-1", nil }, now)
+	n, err := application.TriggerDueCrawls(context.Background(), store, func(context.Context, ports.CrawlOptions) (string, error) { return "job-1", nil }, now)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

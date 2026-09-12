@@ -62,6 +62,21 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			enabled BOOLEAN NOT NULL DEFAULT true, last_run_at TEXT,
 			next_run_at TEXT NOT NULL, created_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS crawl_jobs (
+			id TEXT PRIMARY KEY, request TEXT NOT NULL, status TEXT NOT NULL,
+			pages_crawled INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_crawl_jobs_created_at ON crawl_jobs(created_at)`,
+		`CREATE TABLE IF NOT EXISTS crawl_job_pages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			job_id TEXT NOT NULL REFERENCES crawl_jobs(id) ON DELETE CASCADE,
+			url TEXT NOT NULL, status TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '', doc_length INTEGER NOT NULL DEFAULT 0,
+			links_found INTEGER NOT NULL DEFAULT 0, duration_ms INTEGER NOT NULL DEFAULT 0,
+			fetched_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_crawl_job_pages_job_id ON crawl_job_pages(job_id)`,
 	}
 }
 
@@ -120,6 +135,21 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			enabled BOOLEAN NOT NULL DEFAULT true, last_run_at VARCHAR(64),
 			next_run_at VARCHAR(64) NOT NULL, created_at VARCHAR(64) NOT NULL
 		) ENGINE=InnoDB`,
+		`CREATE TABLE IF NOT EXISTS crawl_jobs (
+			id VARCHAR(64) PRIMARY KEY, request LONGTEXT NOT NULL, status VARCHAR(32) NOT NULL,
+			pages_crawled INT NOT NULL DEFAULT 0, error TEXT NOT NULL,
+			created_at VARCHAR(64) NOT NULL, started_at VARCHAR(64), finished_at VARCHAR(64)
+		) ENGINE=InnoDB`,
+		`CREATE INDEX idx_crawl_jobs_created_at ON crawl_jobs(created_at)`,
+		`CREATE TABLE IF NOT EXISTS crawl_job_pages (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			job_id VARCHAR(64) NOT NULL, url TEXT NOT NULL, status VARCHAR(32) NOT NULL,
+			title TEXT NOT NULL, error TEXT NOT NULL, doc_length INT NOT NULL DEFAULT 0,
+			links_found INT NOT NULL DEFAULT 0, duration_ms BIGINT NOT NULL DEFAULT 0,
+			fetched_at VARCHAR(64) NOT NULL,
+			FOREIGN KEY (job_id) REFERENCES crawl_jobs(id) ON DELETE CASCADE
+		) ENGINE=InnoDB`,
+		`CREATE INDEX idx_crawl_job_pages_job_id ON crawl_job_pages(job_id)`,
 	}
 }
 
@@ -179,6 +209,21 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			enabled BOOLEAN NOT NULL DEFAULT true, last_run_at TEXT,
 			next_run_at TEXT NOT NULL, created_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS crawl_jobs (
+			id TEXT PRIMARY KEY, request TEXT NOT NULL, status TEXT NOT NULL,
+			pages_crawled INT NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_crawl_jobs_created_at ON crawl_jobs(created_at)`,
+		`CREATE TABLE IF NOT EXISTS crawl_job_pages (
+			id BIGSERIAL PRIMARY KEY,
+			job_id TEXT NOT NULL REFERENCES crawl_jobs(id) ON DELETE CASCADE,
+			url TEXT NOT NULL, status TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '', doc_length INT NOT NULL DEFAULT 0,
+			links_found INT NOT NULL DEFAULT 0, duration_ms BIGINT NOT NULL DEFAULT 0,
+			fetched_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_crawl_job_pages_job_id ON crawl_job_pages(job_id)`,
 	}
 }
 

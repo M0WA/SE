@@ -71,7 +71,11 @@
         <label for="max-response-kb">Max response size — kilobytes read from a page before truncating</label><br>
         <input id="max-response-kb" class="field" type="number" step="1" min="1" required>
       </div>
-      <p class="tuning-hint">Defaults: 8s timeout, 20 pages, 50 characters minimum, 250ms delay, 5120 KB (5 MB) response cap.</p>
+      <div class="form-row">
+        <label for="max-retained-crawl-jobs">Crawl history retention — number of past crawl jobs (with full per-page detail) kept before the oldest are deleted</label><br>
+        <input id="max-retained-crawl-jobs" class="field" type="number" step="1" min="1" required>
+      </div>
+      <p class="tuning-hint">Defaults: 8s timeout, 20 pages, 50 characters minimum, 250ms delay, 5120 KB (5 MB) response cap, 200 retained crawl jobs.</p>
     </section>
 
     <section class="panel">
@@ -167,6 +171,7 @@
   const minTextLengthEl = document.getElementById('min-text-length');
   const crawlDelayEl = document.getElementById('crawl-delay');
   const maxResponseKBEl = document.getElementById('max-response-kb');
+  const maxRetainedCrawlJobsEl = document.getElementById('max-retained-crawl-jobs');
   const defaultTopKEl = document.getElementById('default-top-k');
   const semanticPoolSizeEl = document.getElementById('semantic-pool-size');
   const annSearchEnabledEl = document.getElementById('ann-search-enabled');
@@ -190,6 +195,7 @@
     minTextLengthEl.value = s.operational.min_text_length;
     crawlDelayEl.value = s.operational.crawl_delay_ms;
     maxResponseKBEl.value = s.operational.max_response_kb;
+    maxRetainedCrawlJobsEl.value = s.operational.max_retained_crawl_jobs;
     defaultTopKEl.value = s.operational.default_top_k;
     semanticPoolSizeEl.value = s.operational.semantic_candidate_pool_size;
     annSearchEnabledEl.checked = s.operational.ann_search_enabled;
@@ -229,6 +235,7 @@
           min_text_length: parseInt(minTextLengthEl.value, 10),
           crawl_delay_ms: parseInt(crawlDelayEl.value, 10),
           max_response_kb: parseInt(maxResponseKBEl.value, 10),
+          max_retained_crawl_jobs: parseInt(maxRetainedCrawlJobsEl.value, 10),
           default_top_k: parseInt(defaultTopKEl.value, 10),
           semantic_candidate_pool_size: parseInt(semanticPoolSizeEl.value, 10),
           ann_search_enabled: annSearchEnabledEl.checked,

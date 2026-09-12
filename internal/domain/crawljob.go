@@ -1,11 +1,21 @@
 package domain
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// ErrCrawlJobNotFound is returned by CrawlJobStore.Get when no job with the
+// given ID exists (or is no longer retained). Deliberately a domain-level
+// sentinel rather than reusing ports.ErrCrawlJobNotFound (a separate error,
+// for a separate interface: ports.CrawlJobService, the admin-server-to-
+// crawl-server network client) -- domain can never import ports, and this
+// error needs to be producible by an in-memory, domain-only implementation.
+var ErrCrawlJobNotFound = errors.New("crawl job not found")
 
 // CrawlJobStatus is where a triggered crawl currently stands.
 type CrawlJobStatus string
@@ -102,6 +112,14 @@ const maxRetainedCrawlJobs = 200
 // CrawlJobStore holds every crawl job triggered on this process, safe for
 // concurrent use by the HTTP handler goroutine that creates a job and the
 // background goroutine that runs it and reports progress.
+//
+// This is purely in-memory -- lost on process restart -- and exists today
+// only as a lightweight ports.CrawlJobStore implementation for tests; the
+// real crawl-server process uses sqlrepo's DB-backed implementation
+// instead, so crawl history survives restarts. Every method takes a
+// context.Context and returns an error purely to satisfy that same
+// interface (a real DB-backed implementation can genuinely fail); this
+// in-memory version never actually errors except Get's not-found case.
 type CrawlJobStore struct {
 	mu    sync.RWMutex
 	jobs  map[string]*CrawlJob
@@ -119,7 +137,7 @@ func newCrawlJobID() string {
 }
 
 // Create registers a new job in CrawlJobQueued status and returns it.
-func (s *CrawlJobStore) Create(req CrawlJobRequest) *CrawlJob {
+func (s *CrawlJobStore) Create(_ context.Context, req CrawlJobRequest) (CrawlJob, error) {
 	job := &CrawlJob{ID: newCrawlJobID(), Request: req, Status: CrawlJobQueued, CreatedAt: time.Now()}
 
 	s.mu.Lock()
@@ -130,10 +148,10 @@ func (s *CrawlJobStore) Create(req CrawlJobRequest) *CrawlJob {
 		delete(s.jobs, s.order[0])
 		s.order = s.order[1:]
 	}
-	return job
+	return *job, nil
 }
 
-func (s *CrawlJobStore) MarkRunning(id string) {
+func (s *CrawlJobStore) MarkRunning(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if j, ok := s.jobs[id]; ok {
@@ -141,24 +159,26 @@ func (s *CrawlJobStore) MarkRunning(id string) {
 		now := time.Now()
 		j.StartedAt = &now
 	}
+	return nil
 }
 
 // AppendPage records one page's outcome and, for an indexed page, advances
 // PagesCrawled.
-func (s *CrawlJobStore) AppendPage(id string, ev CrawlPageEvent) {
+func (s *CrawlJobStore) AppendPage(_ context.Context, id string, ev CrawlPageEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	j, ok := s.jobs[id]
 	if !ok {
-		return
+		return nil
 	}
 	j.Pages = append(j.Pages, ev)
 	if ev.Status == CrawlPageIndexed {
 		j.PagesCrawled++
 	}
+	return nil
 }
 
-func (s *CrawlJobStore) MarkDone(id string) {
+func (s *CrawlJobStore) MarkDone(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if j, ok := s.jobs[id]; ok {
@@ -166,41 +186,43 @@ func (s *CrawlJobStore) MarkDone(id string) {
 		now := time.Now()
 		j.FinishedAt = &now
 	}
+	return nil
 }
 
-func (s *CrawlJobStore) MarkFailed(id string, err error) {
+func (s *CrawlJobStore) MarkFailed(_ context.Context, id string, failErr error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if j, ok := s.jobs[id]; ok {
 		j.Status = CrawlJobFailed
-		j.Error = err.Error()
+		j.Error = failErr.Error()
 		now := time.Now()
 		j.FinishedAt = &now
 	}
+	return nil
 }
 
 // Get returns a snapshot of the job (its Pages slice copied) so a caller
 // reading it concurrently with AppendPage never races or sees a slice that
-// mutates under it.
-func (s *CrawlJobStore) Get(id string) (CrawlJob, bool) {
+// mutates under it. Returns ErrCrawlJobNotFound if id isn't retained.
+func (s *CrawlJobStore) Get(_ context.Context, id string) (CrawlJob, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	j, ok := s.jobs[id]
 	if !ok {
-		return CrawlJob{}, false
+		return CrawlJob{}, ErrCrawlJobNotFound
 	}
 	cp := *j
 	cp.Pages = append([]CrawlPageEvent{}, j.Pages...)
-	return cp, true
+	return cp, nil
 }
 
 // List returns every retained job's summary, most recently created first.
-func (s *CrawlJobStore) List() []CrawlJobSummary {
+func (s *CrawlJobStore) List(_ context.Context) ([]CrawlJobSummary, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]CrawlJobSummary, 0, len(s.order))
 	for i := len(s.order) - 1; i >= 0; i-- {
 		out = append(out, s.jobs[s.order[i]].summary())
 	}
-	return out
+	return out, nil
 }

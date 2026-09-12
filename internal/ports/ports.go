@@ -235,6 +235,24 @@ type CrawlJobService interface {
 	GetCrawlJob(ctx context.Context, jobID string) (domain.CrawlJob, error)
 }
 
+// CrawlJobStore is crawl-server's own persistence for crawl jobs and their
+// per-page event history -- distinct from CrawlJobService, which is the
+// network contract admin-server's client uses to talk to crawl-server.
+// domain.CrawlJobStore (in-memory, lost on restart) satisfies this
+// structurally for tests; sqlrepo.Repository's DB-backed implementation is
+// what crawl-server actually runs in production, so a job's full history
+// survives a restart instead of disappearing with it. Get returns
+// domain.ErrCrawlJobNotFound if no job with that ID is retained.
+type CrawlJobStore interface {
+	Create(ctx context.Context, req domain.CrawlJobRequest) (domain.CrawlJob, error)
+	MarkRunning(ctx context.Context, id string) error
+	AppendPage(ctx context.Context, id string, ev domain.CrawlPageEvent) error
+	MarkDone(ctx context.Context, id string) error
+	MarkFailed(ctx context.Context, id string, failErr error) error
+	Get(ctx context.Context, id string) (domain.CrawlJob, error)
+	List(ctx context.Context) ([]domain.CrawlJobSummary, error)
+}
+
 // DebugSearchService exposes the raw, unblended hybrid search results
 // (BM25/semantic/final score breakdown) for admin diagnostics.
 type DebugSearchService interface {

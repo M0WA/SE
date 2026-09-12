@@ -49,7 +49,7 @@ var adminJS []byte
 type Handler struct {
 	search          ports.SearchService
 	crawler         ports.CrawlerService
-	crawlJobs       *domain.CrawlJobStore
+	crawlJobs       ports.CrawlJobStore
 	crawlSem        chan struct{}
 	jobs            ports.CrawlJobService
 	debug           ports.DebugSearchService
@@ -94,7 +94,7 @@ type Handler struct {
 type Config struct {
 	Search          ports.SearchService
 	Crawler         ports.CrawlerService
-	CrawlJobs       *domain.CrawlJobStore
+	CrawlJobs       ports.CrawlJobStore
 	Jobs            ports.CrawlJobService
 	Debug           ports.DebugSearchService
 	Admin           ports.AdminRepository

@@ -30,6 +30,12 @@ const schedulerPollInterval = 60 * time.Second
 // is independent of any individual scheduled crawl's own interval.
 const pageRankPollInterval = 60 * time.Second
 
+// crawlJobPrunePollInterval is how often runCrawlJobPruner deletes crawl
+// jobs beyond the admin-configured retention limit -- infrequent, since
+// unlike the old in-memory store's per-Create trim, persistent storage
+// doesn't need pruning to happen the instant the limit is crossed.
+const crawlJobPrunePollInterval = 5 * time.Minute
+
 // runPageRankScheduler recomputes every document's PageRank score once
 // immediately (so a fresh process doesn't run with a stale link graph for a
 // full interval), then again every time at least
@@ -114,6 +120,38 @@ func runScheduler(ctx context.Context, store ports.ScheduledCrawlStore, handler 
 	}
 }
 
+// crawlJobPruner is satisfied by *sqlrepo.Repository's PruneCrawlJobs --
+// called directly on the concrete repo (like EnableANN), not through a
+// ports interface, since pruning is a maintenance concern internal to
+// crawl-server rather than part of the CrawlJobStore contract handlers use.
+type crawlJobPruner interface {
+	PruneCrawlJobs(ctx context.Context, maxRetained int) error
+}
+
+// runCrawlJobPruner deletes crawl jobs beyond opSettings' current
+// MaxRetainedCrawlJobs on every tick, once immediately and then on the
+// fixed poll interval for as long as ctx stays alive -- an admin raising
+// or lowering the limit takes effect within one poll tick either way.
+func runCrawlJobPruner(ctx context.Context, pruner crawlJobPruner, opSettings *domain.OperationalSettings) {
+	prune := func() {
+		if err := pruner.PruneCrawlJobs(ctx, opSettings.Get().MaxRetainedCrawlJobs); err != nil {
+			log.Printf("pruning crawl jobs: %v", err)
+		}
+	}
+	prune()
+
+	ticker := time.NewTicker(crawlJobPrunePollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			prune()
+		}
+	}
+}
+
 func main() {
 	ctx := context.Background()
 	repo, driver, err := bootstrap.OpenDB(ctx)
@@ -140,7 +178,7 @@ func main() {
 
 	handler := restapi.New(restapi.Config{
 		Crawler:   crawlerSvc,
-		CrawlJobs: domain.NewCrawlJobStore(),
+		CrawlJobs: repo,
 		Health:    repo,
 		// A crawl just changed the link graph -- recompute right away
 		// (in the background, so a slow recompute never delays the crawl
@@ -150,6 +188,7 @@ func main() {
 	})
 
 	go runScheduler(ctx, repo, handler)
+	go runCrawlJobPruner(ctx, repo, opSettings)
 
 	addr := bootstrap.GetEnv("CRAWL_LISTEN_ADDR", "127.0.0.1:8082")
 	log.Printf("Crawl server running on %s (DB: %s)", addr, driver)
