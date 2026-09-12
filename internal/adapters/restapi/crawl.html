@@ -74,6 +74,15 @@
   <div id="crawl-status"></div>
 
   <section class="panel">
+    <h2>Recrawl an existing domain</h2>
+    <p class="lede" style="margin: 0 0 1rem;">Search domains already in the index to queue a fresh crawl of one, using the options above.</p>
+    <form id="recrawl-search-form" class="crawl-form" style="margin-bottom: 0.5rem;">
+      <input id="recrawl-q" class="field" type="text" placeholder="Find a domain…" autocomplete="off">
+    </form>
+    <div id="recrawl-results"></div>
+  </section>
+
+  <section class="panel">
     <h2>Jobs</h2>
     <p class="lede" style="margin: 0 0 1rem;">Every crawl triggered on this instance, most recent first. Up to three run at once; the rest wait their turn.</p>
     <div id="jobs-status" class="panel-status"></div>
@@ -106,6 +115,9 @@
   const crawlUseSitemap = document.getElementById('crawl-use-sitemap');
   const crawlUserAgent = document.getElementById('crawl-user-agent');
   const crawlStatus = document.getElementById('crawl-status');
+  const recrawlForm = document.getElementById('recrawl-search-form');
+  const recrawlQ = document.getElementById('recrawl-q');
+  const recrawlResultsEl = document.getElementById('recrawl-results');
   const jobsStatusEl = document.getElementById('jobs-status');
   const jobsTableEl = document.getElementById('jobs-table');
   const jobDetailHeading = document.getElementById('job-detail-heading');
@@ -332,6 +344,68 @@
       jobDetailFilterEl.hidden = true;
     }
   }
+
+  // recrawlButtonCell's click handler fills the crawl form with the
+  // existing domain (as https://<host>, since that's all a domain listing
+  // ever carries -- no remembered seed path) and submits it exactly as if
+  // the admin had typed it in, so every option currently set above (max
+  // pages, robots.txt, sitemap, credentials) applies to the recrawl too.
+  function recrawlButtonCell(host) {
+    const td = document.createElement('td');
+    td.className = 'actions';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'text-button';
+    btn.textContent = 'Recrawl';
+    btn.addEventListener('click', () => {
+      crawlURL.value = 'https://' + host;
+      crawlForm.requestSubmit();
+      crawlForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    td.appendChild(btn);
+    return td;
+  }
+
+  function renderRecrawlResults(domains, q) {
+    clear(recrawlResultsEl);
+    if (q === '') return;
+    if (domains.length === 0) {
+      recrawlResultsEl.textContent = 'No indexed domain matches “' + q + '”.';
+      return;
+    }
+    const table = buildTable(
+      [{ label: 'domain' }, { label: 'pages', num: true }, { label: '' }],
+      domains,
+      (d) => [urlCell(d.host), textCell(String(d.doc_count), { num: true }), recrawlButtonCell(d.host)],
+    );
+    recrawlResultsEl.appendChild(table);
+  }
+
+  let recrawlSearchTimer = null;
+
+  async function searchRecrawlDomains() {
+    const q = recrawlQ.value.trim();
+    if (q === '') {
+      clear(recrawlResultsEl);
+      return;
+    }
+    try {
+      const domains = await getJSON('/admin/api/domains?q=' + encodeURIComponent(q));
+      renderRecrawlResults(domains, q);
+    } catch (err) {
+      recrawlResultsEl.textContent = 'Could not search domains: ' + err.message;
+    }
+  }
+
+  recrawlQ.addEventListener('input', () => {
+    clearTimeout(recrawlSearchTimer);
+    recrawlSearchTimer = setTimeout(searchRecrawlDomains, 200);
+  });
+  recrawlForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    clearTimeout(recrawlSearchTimer);
+    searchRecrawlDomains();
+  });
 
   crawlForm.addEventListener('submit', async (e) => {
     e.preventDefault();
