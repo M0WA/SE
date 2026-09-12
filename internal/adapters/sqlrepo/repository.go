@@ -43,6 +43,21 @@ func New(ctx context.Context, driverName, dsn string) (*Repository, error) {
 
 	repo := &Repository{db: db, dialect: NewDialect(driverName)}
 	repo.applyDefaultPoolSettings()
+	// search-server, admin-server and crawl-server each open (and migrate)
+	// the same SQLite file independently at startup, with no coordination
+	// between them -- SQLite's own file-level locking, not this process,
+	// is what has to serialize their concurrent CREATE TABLE/INDEX
+	// statements. Without a busy timeout, SQLite fails a migration outright
+	// the instant it finds the file locked (SQLITE_BUSY) rather than
+	// waiting the few milliseconds another process's migration actually
+	// takes; the isIndexAlreadyExistsError handling elsewhere only covers
+	// one specific step of that same race, not the table-creation
+	// statements that run first. This is a no-op for every other dialect.
+	if repo.dialect.Name() == "sqlite" {
+		if _, err := db.ExecContext(ctx, "PRAGMA busy_timeout = 5000"); err != nil {
+			return nil, fmt.Errorf("setting busy_timeout (sqlite): %w", err)
+		}
+	}
 	if err := repo.migrate(ctx); err != nil {
 		return nil, err
 	}
