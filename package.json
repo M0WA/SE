@@ -1,0 +1,15 @@
+{
+  "name": "searchengine-js",
+  "private": true,
+  "description": "Test tooling for the admin/search UI's JavaScript (internal/adapters/restapi/*.js) -- never shipped, the Go binaries embed those files directly via go:embed.",
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "scripts": {
+    "test": "node --test internal/adapters/restapi/*.test.js",
+    "test:coverage": "node scripts/js-test-coverage.js"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.1"
+  }
+}

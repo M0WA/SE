@@ -33,6 +33,8 @@ an actual error is not.)
 - `go test ./... -race -count=1` must pass. Prefer `-race` even for quick checks —
   this codebase has genuine concurrency (fire-and-forget background goroutines,
   concurrent crawl workers).
+- `npm test` (run `npm install` once first) must pass for any change touching
+  `internal/adapters/restapi/*.js` — see "Test coverage" below.
 - Push, then watch CI to a genuinely green run before deploying.
 - Commits end with:
   ```
@@ -55,15 +57,52 @@ path, not-configured/empty-input edge cases).
   status code/branch (success, not-configured/503, service-error/500,
   method-not-allowed/405, and any handler-specific branch like a partial
   failure or an empty-result case).
-- **JavaScript** (`internal/adapters/restapi/*.js` and the inline `<script>`
-  in `admin_*.html`/`crawl.html`): there's no automated JS test runner in this
-  repo yet. Until one exists, "tested" means actually exercised, not just
-  read: build the binaries, run them locally (or verify against
-  `se.mo-sys.de` post-deploy) and drive the change through a real browser —
-  headless Chromium over the DevTools Protocol works well for this
-  (`Page.navigate`, then `Runtime.evaluate` to click/type and read back DOM
-  state, then `Page.captureScreenshot`). Never report a JS/HTML change as
-  working without having actually run it this way.
+- **JavaScript** (`internal/adapters/restapi/*.js` — every admin/search page's
+  script now lives in its own external file, e.g. `crawl.js`/`admin_schedule.js`,
+  loaded via `<script src="...">` rather than inline; `admin.js` holds the
+  helpers every page shares): a real test runner exists — Node's built-in
+  `node:test`, no framework dependency beyond `jsdom` (the one `devDependency`
+  in the root `package.json`, installed with `npm install`). Run the suite
+  with `npm test`; run it with a coverage report via `npm run test:coverage`
+  (uses `node --test-coverage-include`/`--test-coverage-exclude` to scope the
+  report to this project's own files when the local Node is new enough —
+  Node ≥20.1 — and falls back to the unscoped report otherwise; either way,
+  the tests themselves run the same on any Node ≥18.17).
+  - Test files are colocated as `<name>.test.js` next to the script they
+    cover (e.g. `admin.test.js`, `crawl.test.js`) — `node --test`'s default
+    discovery pattern, and safely excluded from every `//go:embed` directive
+    in `handler.go` (which names exact files, never a glob) so a `.test.js`
+    file is never accidentally shipped in a binary.
+  - `admin.js`/`crawl.js`/etc. are still plain scripts meant for a `<script>`
+    tag, not CommonJS modules — each ends with `if (typeof module !== 'undefined'
+    && module.exports) { module.exports = {...} }`, a no-op in a browser
+    (`typeof module` is undefined there) that lets a test `require()` the
+    file directly. `internal/adapters/restapi/dom_helper.test_util.js`
+    provides `setupDOM()`/`teardownDOM()` (a fresh jsdom Document assigned to
+    `global.document`/`global.window` before each test) and `requireFresh()`
+    (bypasses `require`'s module cache, since a script that runs
+    `document.getElementById(...)` at top level — as several page scripts do
+    — must see *this* test's fixture DOM, not one cached from an earlier
+    test). A page script that expects `admin.js`'s helpers as ambient
+    globals (the same way loading `<script src="/admin.js">` before its own
+    `<script>` tag works in the real page) needs those assigned onto
+    `global` before it's required — see `crawl.test.js`'s `loadFixture()`
+    for the pattern, including using the real `crawl.html` as the jsdom
+    fixture so the test never drifts from the actual page structure.
+  - Keep coverage close to 100% here the same way as Go — for a change, not
+    as a mandate to retroactively backfill every historical page's script in
+    one sitting. `admin.js` (the shared helpers) is fully covered; treat
+    that, and `crawl.test.js`, as the reference pattern for a new page's
+    tests.
+  - Unit tests check logic (parsing, filtering, formatting, DOM structure
+    built from given data) in isolation. They don't replace actually
+    exercising a change end-to-end in a real browser for anything that
+    depends on real browser/network behavior, layout, or a full page's
+    wiring — headless Chromium over the DevTools Protocol still works well
+    for that (`Page.navigate`, then `Runtime.evaluate` to click/type and read
+    back DOM state, then `Page.captureScreenshot`). Never report a JS/HTML
+    change as working from unit tests alone if it touches anything a unit
+    test can't see.
 
 ## Deployment
 
@@ -80,9 +119,10 @@ actual correctness bugs.
   context being cancelled by client disconnect/navigation. Never use `r.Context()`
   for detached background work — it cancels the instant the client disconnects.
 - **Admin list-view search filters**: client-side, case-insensitive regex against
-  an already-fetched in-memory array (see `filterPages`/`filterJobs`/`filterDocs`/
-  `filterSchedules` in `internal/adapters/restapi/*.html`). Reuse this pattern for
-  any new unbounded-feeling admin list rather than inventing a new one.
+  an already-fetched in-memory array (see `filterPages`/`filterJobs`/`filterCrawls`
+  in `internal/adapters/restapi/crawl.js`, `filterDocs` in `admin_domain.js`).
+  Reuse this pattern for any new unbounded-feeling admin list rather than
+  inventing a new one.
 - **Backend list endpoints** take a `?limit=` query param via the shared
   `intQueryParam` helper (`internal/adapters/restapi/admin.go`) with a sane
   default constant — every admin list endpoint should have one.
