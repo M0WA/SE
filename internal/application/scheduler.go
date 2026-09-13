@@ -86,5 +86,6 @@ func scheduledCrawlOptions(s domain.ScheduledCrawl) ports.CrawlOptions {
 		CrawlDelayMs:        s.CrawlDelayMs,
 		MaxResponseKB:       s.MaxResponseKB,
 		PrioritizeUnindexed: s.PrioritizeUnindexed,
+		Renderer:            s.Renderer,
 	}
 }

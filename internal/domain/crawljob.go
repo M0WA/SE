@@ -78,6 +78,11 @@ type CrawlJobRequest struct {
 	CrawlDelayMs        int  `json:"crawl_delay_ms,omitempty"`
 	MaxResponseKB       int  `json:"max_response_kb,omitempty"`
 	PrioritizeUnindexed bool `json:"prioritize_unindexed,omitempty"`
+	// Renderer is "" when this job used the Tuning page's global default
+	// rendering mode, or an explicit override ("none"/"chromium"/
+	// "firefox") otherwise -- not a secret, so (like the fields above,
+	// unlike Cookie/BasicAuth) it's the actual value, not a boolean.
+	Renderer string `json:"renderer,omitempty"`
 }
 
 // CrawlJob is one triggered crawl's full state, including every page event

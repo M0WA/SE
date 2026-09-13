@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"searchengine/internal/adapters/browserfetcher"
 	"searchengine/internal/adapters/hashembed"
 	"searchengine/internal/adapters/htmlparser"
 	"searchengine/internal/adapters/httpfetcher"
@@ -182,12 +183,27 @@ func main() {
 		repo.EnableANN(ctx, embedder.Dimensions())
 	}()
 	wg.Wait()
+	// fetcher does plain HTTP; wrapping it in RenderAwareFetcher adds an
+	// opt-in real-browser rendering path (see internal/adapters/
+	// browserfetcher) on top, chosen per-crawl or by the Tuning page's
+	// global default -- with rendering left off (the default), this is
+	// byte-for-byte the same plain-HTTP behavior as before the feature
+	// existed. Neither browser engine actually starts a process until a
+	// crawl first asks for it.
 	fetcher := httpfetcher.New(opSettings)
-	robotsChecker := robots.New(fetcher)
+	renderingFetcher := &application.RenderAwareFetcher{
+		Base:       fetcher,
+		OpSettings: opSettings,
+		Renderers: map[string]ports.Renderer{
+			domain.RendererChromium: browserfetcher.New(domain.RendererChromium),
+			domain.RendererFirefox:  browserfetcher.New(domain.RendererFirefox),
+		},
+	}
+	robotsChecker := robots.New(renderingFetcher)
 	parseHTML := func(html, pageURL string) (string, string, []string) {
 		return htmlparser.Parse(strings.NewReader(html), pageURL)
 	}
-	crawlerSvc := application.NewSQLCrawlerService(fetcher, robotsChecker, repo, embedder, parseHTML, opSettings)
+	crawlerSvc := application.NewSQLCrawlerService(renderingFetcher, robotsChecker, repo, embedder, parseHTML, opSettings)
 
 	pageRank := runPageRankScheduler(ctx, repo, repo, opSettings)
 

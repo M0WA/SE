@@ -213,6 +213,7 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 		PageRankRecomputeIntervalMinutes: 60,
 		ANNSearchEnabled:                 true,
 		MaxRetainedCrawlJobs:             200,
+		DefaultRenderer:                  domain.RendererNone,
 	}
 	if v != want {
 		t.Errorf("expected defaults %+v, got %+v", want, v)
@@ -240,5 +241,47 @@ func TestOperationalSettings_SetPositiveMaxRetainedCrawlJobsPreserved(t *testing
 	s.Set(domain.OperationalSettingsValues{MaxRetainedCrawlJobs: 1000})
 	if v := s.Get(); v.MaxRetainedCrawlJobs != 1000 {
 		t.Errorf("expected MaxRetainedCrawlJobs=1000 to be preserved, got %d", v.MaxRetainedCrawlJobs)
+	}
+}
+
+func TestOperationalSettings_SetBlankDefaultRendererFallsBackToNone(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{DefaultRenderer: ""})
+	if v := s.Get(); v.DefaultRenderer != domain.RendererNone {
+		t.Errorf("expected a blank DefaultRenderer to fall back to RendererNone, got %q", v.DefaultRenderer)
+	}
+}
+
+func TestOperationalSettings_SetInvalidDefaultRendererFallsBackToNone(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{DefaultRenderer: "internet-explorer"})
+	if v := s.Get(); v.DefaultRenderer != domain.RendererNone {
+		t.Errorf("expected an unrecognized DefaultRenderer to fall back to RendererNone, got %q", v.DefaultRenderer)
+	}
+}
+
+func TestOperationalSettings_SetValidDefaultRendererPreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{DefaultRenderer: domain.RendererChromium})
+	if v := s.Get(); v.DefaultRenderer != domain.RendererChromium {
+		t.Errorf("expected DefaultRenderer=chromium to be preserved, got %q", v.DefaultRenderer)
+	}
+}
+
+func TestValidRenderer(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{domain.RendererDefault, true},
+		{domain.RendererNone, true},
+		{domain.RendererChromium, true},
+		{domain.RendererFirefox, true},
+		{"internet-explorer", false},
+	}
+	for _, tc := range cases {
+		if got := domain.ValidRenderer(tc.name); got != tc.want {
+			t.Errorf("ValidRenderer(%q) = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

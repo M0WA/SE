@@ -37,11 +37,16 @@ type scopedFetcher struct {
 	errs  map[string]error
 	urls  []string
 	times []time.Time
+	opts  map[string]ports.FetchOptions
 }
 
-func (f *scopedFetcher) FetchWithOptions(_ context.Context, url string, _ ports.FetchOptions) (string, error) {
+func (f *scopedFetcher) FetchWithOptions(_ context.Context, url string, opts ports.FetchOptions) (string, error) {
 	f.urls = append(f.urls, url)
 	f.times = append(f.times, time.Now())
+	if f.opts == nil {
+		f.opts = make(map[string]ports.FetchOptions)
+	}
+	f.opts[url] = opts
 	if err, ok := f.errs[url]; ok {
 		return "", err
 	}
@@ -672,6 +677,49 @@ func TestCrawlLoop_UseSitemapEnqueuesDiscoveredURLs(t *testing.T) {
 	}
 	if count != 2 {
 		t.Errorf("expected the seed plus the sitemap-discovered URL crawled, got %d", count)
+	}
+}
+
+// TestCrawlLoop_SitemapFetchForcesNoRender proves the sitemap.xml fetch
+// always sets NoRender, regardless of this crawl's own Renderer -- a
+// render-aware fetcher (see application.RenderAwareFetcher) must never
+// hand XML to a real browser, which would corrupt it before
+// parseSitemap ever sees it.
+func TestCrawlLoop_SitemapFetchForcesNoRender(t *testing.T) {
+	fetcher := &scopedFetcher{pages: map[string]string{
+		"http://a.example/start":       "<html>start</html>",
+		"http://a.example/sitemap.xml": `<?xml version="1.0"?><urlset></urlset>`,
+	}}
+	parse := func(html, pageURL string) (string, string, []string) {
+		return "T", "genuegend inhalt text fuer diese seite bitte danke", nil
+	}
+	save := func(ctx context.Context, doc domain.Document) error { return nil }
+
+	opts := ports.CrawlOptions{
+		SeedURLs: []string{"http://a.example/start"}, MaxPages: 10, UseSitemap: true,
+		Renderer: domain.RendererChromium,
+	}
+	if _, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	sitemapOpts, ok := fetcher.opts["http://a.example/sitemap.xml"]
+	if !ok {
+		t.Fatal("expected the sitemap URL to have been fetched")
+	}
+	if !sitemapOpts.NoRender {
+		t.Error("expected the sitemap fetch to set NoRender, regardless of the crawl's own Renderer")
+	}
+
+	pageOpts, ok := fetcher.opts["http://a.example/start"]
+	if !ok {
+		t.Fatal("expected the seed page to have been fetched")
+	}
+	if pageOpts.NoRender {
+		t.Error("expected the ordinary page fetch to NOT set NoRender")
+	}
+	if pageOpts.Renderer != domain.RendererChromium {
+		t.Errorf("expected the ordinary page fetch to carry the crawl's Renderer, got %q", pageOpts.Renderer)
 	}
 }
 

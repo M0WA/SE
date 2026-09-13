@@ -50,7 +50,14 @@ func crawlLoop(
 	fetchOpts := ports.FetchOptions{
 		Cookie: opts.Cookie, BasicAuthUser: opts.BasicAuthUser, BasicAuthPass: opts.BasicAuthPass,
 		UserAgent: opts.UserAgent, FetchTimeoutSeconds: opts.FetchTimeoutSeconds, MaxResponseBytes: maxResponseBytes,
+		Renderer: opts.Renderer,
 	}
+	// A sitemap is XML, never a page to render -- NoRender forces the
+	// plain HTTP path regardless of this crawl's own Renderer or the
+	// Tuning page's global default, so a rendering-aware fetcher (see
+	// application.RenderAwareFetcher) never hands it to a real browser.
+	sitemapFetchOpts := fetchOpts
+	sitemapFetchOpts.NoRender = true
 
 	emit := func(ev domain.CrawlPageEvent) {
 		if onPage != nil {
@@ -112,7 +119,7 @@ func crawlLoop(
 			if !ok {
 				continue
 			}
-			body, err := fetcher.FetchWithOptions(ctx, sitemap, fetchOpts)
+			body, err := fetcher.FetchWithOptions(ctx, sitemap, sitemapFetchOpts)
 			if err != nil {
 				continue
 			}

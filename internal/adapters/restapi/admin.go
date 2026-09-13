@@ -545,6 +545,10 @@ type operationalValues struct {
 	// history -- see domain.OperationalSettingsValues for the full doc
 	// comment.
 	MaxRetainedCrawlJobs int `json:"max_retained_crawl_jobs"`
+	// DefaultRenderer is the crawler's global default rendering mode
+	// (domain.RendererNone/RendererChromium/RendererFirefox) -- a
+	// scheduled/one-off crawl's own renderer overrides this when set.
+	DefaultRenderer string `json:"default_renderer"`
 }
 
 func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
@@ -566,6 +570,7 @@ func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 		PageRankRecomputeIntervalMinutes: v.PageRankRecomputeIntervalMinutes,
 		ANNSearchEnabled:                 v.ANNSearchEnabled,
 		MaxRetainedCrawlJobs:             v.MaxRetainedCrawlJobs,
+		DefaultRenderer:                  v.DefaultRenderer,
 	}
 }
 
@@ -588,6 +593,7 @@ func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 		PageRankRecomputeIntervalMinutes: o.PageRankRecomputeIntervalMinutes,
 		ANNSearchEnabled:                 o.ANNSearchEnabled,
 		MaxRetainedCrawlJobs:             o.MaxRetainedCrawlJobs,
+		DefaultRenderer:                  o.DefaultRenderer,
 	}
 }
 
@@ -768,8 +774,12 @@ type scheduledCrawlRequest struct {
 	// disabling itself; 0 (the default) means unlimited. Meaningless when
 	// IntervalMinutes is 0 (a one-off crawl already stops after its one
 	// run).
-	MaxRuns int  `json:"max_runs"`
-	Enabled bool `json:"enabled"`
+	MaxRuns int `json:"max_runs"`
+	// Renderer overrides the Tuning page's global default rendering mode
+	// for this crawl alone -- "" (domain.RendererDefault) means "inherit
+	// the global default"; "none"/"chromium"/"firefox" choose explicitly.
+	Renderer string `json:"renderer"`
+	Enabled  bool   `json:"enabled"`
 }
 
 type scheduledCrawlResponse struct {
@@ -792,6 +802,7 @@ type scheduledCrawlResponse struct {
 	IntervalMinutes     int        `json:"interval_minutes"`
 	MaxRuns             int        `json:"max_runs"`
 	RunCount            int        `json:"run_count"`
+	Renderer            string     `json:"renderer"`
 	Enabled             bool       `json:"enabled"`
 	LastRunAt           *time.Time `json:"last_run_at,omitempty"`
 	NextRunAt           time.Time  `json:"next_run_at"`
@@ -807,7 +818,8 @@ func toScheduledCrawlResponse(s domain.ScheduledCrawl) scheduledCrawlResponse {
 		FetchTimeoutSeconds: s.FetchTimeoutSeconds, MinTextLength: s.MinTextLength,
 		CrawlDelayMs: s.CrawlDelayMs, MaxResponseKB: s.MaxResponseKB,
 		PrioritizeUnindexed: s.PrioritizeUnindexed, Recurring: s.Recurring,
-		IntervalMinutes: s.IntervalMinutes, MaxRuns: s.MaxRuns, RunCount: s.RunCount, Enabled: s.Enabled,
+		IntervalMinutes: s.IntervalMinutes, MaxRuns: s.MaxRuns, RunCount: s.RunCount,
+		Renderer: s.Renderer, Enabled: s.Enabled,
 		LastRunAt: s.LastRunAt, NextRunAt: s.NextRunAt, CreatedAt: s.CreatedAt,
 	}
 }
@@ -839,7 +851,8 @@ func (req scheduledCrawlRequest) toScheduledCrawl(id string, enabled bool, now t
 		FetchTimeoutSeconds: req.FetchTimeoutSeconds, MinTextLength: req.MinTextLength,
 		CrawlDelayMs: req.CrawlDelayMs, MaxResponseKB: req.MaxResponseKB,
 		PrioritizeUnindexed: req.PrioritizeUnindexed, Recurring: recurring,
-		IntervalMinutes: req.IntervalMinutes, MaxRuns: req.MaxRuns, Enabled: enabled,
+		IntervalMinutes: req.IntervalMinutes, MaxRuns: req.MaxRuns,
+		Renderer: req.Renderer, Enabled: enabled,
 		NextRunAt: next,
 		CreatedAt: now,
 	}
@@ -856,6 +869,10 @@ func validateScheduledCrawlRequest(w http.ResponseWriter, req scheduledCrawlRequ
 	}
 	if req.MaxRuns < 0 {
 		http.Error(w, "max_runs must not be negative", http.StatusBadRequest)
+		return false
+	}
+	if !domain.ValidRenderer(req.Renderer) {
+		http.Error(w, "renderer must be one of: (blank), none, chromium, firefox", http.StatusBadRequest)
 		return false
 	}
 	return true

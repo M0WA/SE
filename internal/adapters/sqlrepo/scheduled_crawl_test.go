@@ -30,6 +30,7 @@ func newScheduledCrawl(id string, intervalMinutes int, nextRunAt time.Time) doma
 		Recurring:           true,
 		IntervalMinutes:     intervalMinutes,
 		MaxRuns:             10,
+		Renderer:            domain.RendererChromium,
 		Enabled:             true,
 		NextRunAt:           nextRunAt,
 		CreatedAt:           time.Now().UTC(),
@@ -71,6 +72,9 @@ func TestCreateScheduledCrawl_ThenListRoundTrips(t *testing.T) {
 	}
 	if g.MaxRuns != 10 || g.RunCount != 0 {
 		t.Errorf("expected MaxRuns to round trip and a fresh RunCount of 0, got %+v", g)
+	}
+	if g.Renderer != domain.RendererChromium {
+		t.Errorf("expected Renderer to round trip, got %q", g.Renderer)
 	}
 	if g.LastRunAt != nil {
 		t.Errorf("expected a freshly created schedule to have no LastRunAt, got %v", g.LastRunAt)
@@ -126,6 +130,7 @@ func TestUpdateScheduledCrawl_ReplacesEditableFields(t *testing.T) {
 	updated.Recurring = false
 	updated.IntervalMinutes = 15
 	updated.MaxRuns = 25
+	updated.Renderer = domain.RendererFirefox
 	updated.Enabled = false
 	updated.NextRunAt = now.Add(15 * time.Minute)
 
@@ -155,6 +160,9 @@ func TestUpdateScheduledCrawl_ReplacesEditableFields(t *testing.T) {
 	}
 	if g.RunCount != 3 {
 		t.Errorf("expected RunCount to be preserved across an edit (not user-editable), got %d", g.RunCount)
+	}
+	if g.Renderer != domain.RendererFirefox {
+		t.Errorf("expected Renderer to be editable, got %q", g.Renderer)
 	}
 }
 

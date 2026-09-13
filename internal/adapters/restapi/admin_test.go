@@ -1460,6 +1460,53 @@ func TestHandleAdminSettings_PageRankFieldsRoundTrip(t *testing.T) {
 	}
 }
 
+// TestHandleAdminSettings_DefaultRendererFieldRoundTrips mirrors
+// TestHandleAdminSettings_FuzzyFieldsRoundTrip for the new
+// default_renderer Tuning page knob: GET reports whatever's currently
+// set, and a POST updates it.
+func TestHandleAdminSettings_DefaultRendererFieldRoundTrips(t *testing.T) {
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{DefaultRenderer: domain.RendererChromium})
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, domain.NewTuningSettings(0.5, 1.2, 0.75), opSettings)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", getRec.Code)
+	}
+	var getResp struct {
+		Operational struct {
+			DefaultRenderer string `json:"default_renderer"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decoding GET response: %v", err)
+	}
+	if getResp.Operational.DefaultRenderer != domain.RendererChromium {
+		t.Errorf("expected GET to report default_renderer=chromium, got %+v", getResp.Operational)
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
+			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
+			"default_renderer": "firefox",
+		},
+	})
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	postReq.AddCookie(cookie)
+	postRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
+	}
+	if ov := opSettings.Get(); ov.DefaultRenderer != domain.RendererFirefox {
+		t.Errorf("expected default_renderer=firefox to be applied, got %q", ov.DefaultRenderer)
+	}
+}
+
 // TestHandleAdminSettings_ANNSearchEnabledFieldRoundTrips mirrors
 // TestHandleAdminSettings_FuzzyFieldsRoundTrip for the new
 // ann_search_enabled troubleshooting knob: GET reports whatever's

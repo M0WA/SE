@@ -79,6 +79,12 @@ type OperationalSettingsValues struct {
 	// admin-configurable now that history survives in the database rather
 	// than being bounded only by process memory.
 	MaxRetainedCrawlJobs int
+	// DefaultRenderer is the crawler's global default page-rendering mode
+	// (see Renderer* constants): RendererNone (plain HTTP fetch) unless an
+	// admin turns on real browser rendering. A crawl's own Renderer
+	// (ScheduledCrawl.Renderer / ports.CrawlOptions.Renderer) overrides
+	// this when set to anything other than RendererDefault ("").
+	DefaultRenderer string
 }
 
 // defaultUserAgent mimics a standard desktop Firefox so crawled sites treat
@@ -143,6 +149,7 @@ func defaultOperationalSettings() OperationalSettingsValues {
 		PageRankRecomputeIntervalMinutes: defaultPageRankRecomputeIntervalMinutes,
 		ANNSearchEnabled:                 true,
 		MaxRetainedCrawlJobs:             defaultMaxRetainedCrawlJobs,
+		DefaultRenderer:                  RendererNone,
 	}
 }
 
@@ -235,6 +242,13 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 	}
 	if v.MaxRetainedCrawlJobs <= 0 {
 		v.MaxRetainedCrawlJobs = d.MaxRetainedCrawlJobs
+	}
+	// RendererDefault ("") isn't a valid global default -- there's nothing
+	// for the global setting itself to inherit from -- so an empty or
+	// unrecognized value falls back to RendererNone, same self-healing
+	// convention as every other field above.
+	if v.DefaultRenderer == RendererDefault || !ValidRenderer(v.DefaultRenderer) {
+		v.DefaultRenderer = RendererNone
 	}
 
 	s.mu.Lock()

@@ -43,6 +43,16 @@
       <input id="crawl-max-runs" class="field" type="number" min="0">
       <p class="tuning-hint">Only used when repeating. Leave blank for unlimited — the schedule disables itself automatically after this many runs.</p>
     </div>
+    <div class="form-row">
+      <label for="crawl-renderer">Rendering</label><br>
+      <select id="crawl-renderer" class="field">
+        <option value="">Use site default</option>
+        <option value="none">None — plain HTTP fetch</option>
+        <option value="chromium">Chromium — real headless browser, runs the page's JavaScript</option>
+        <option value="firefox">Firefox — real headless browser, runs the page's JavaScript</option>
+      </select>
+      <p class="tuning-hint">"Use site default" follows whatever the Tuning page has set. Rendering a page in a real browser is much slower than a plain fetch and downloads that browser engine the first time it's ever used on this server.</p>
+    </div>
     <div class="form-row form-row-check">
       <label for="crawl-respect-robots">
         <input id="crawl-respect-robots" type="checkbox">
@@ -153,6 +163,7 @@
   const crawlPrioritizeUnindexed = document.getElementById('crawl-prioritize-unindexed');
   const crawlInterval = document.getElementById('crawl-interval');
   const crawlMaxRuns = document.getElementById('crawl-max-runs');
+  const crawlRenderer = document.getElementById('crawl-renderer');
   const crawlUserAgent = document.getElementById('crawl-user-agent');
   const crawlFetchTimeout = document.getElementById('crawl-fetch-timeout');
   const crawlMinTextLength = document.getElementById('crawl-min-text-length');
@@ -584,6 +595,7 @@
       crawl_delay_ms: s.crawl_delay_ms, max_response_kb: s.max_response_kb,
       prioritize_unindexed: s.prioritize_unindexed,
       interval_minutes: s.interval_minutes, max_runs: s.max_runs,
+      renderer: s.renderer,
       enabled: s.enabled,
     };
   }
@@ -644,6 +656,7 @@
         max_response_kb: parseInt(crawlMaxResponse.value, 10) || 0,
         interval_minutes: interval,
         max_runs: maxRuns,
+        renderer: crawlRenderer.value,
       });
       crawlStatus.textContent = recurring
         ? 'Scheduled — repeats every ' + interval + ' minutes' + (maxRuns > 0 ? ' (up to ' + maxRuns + ' times)' : '') + '.'

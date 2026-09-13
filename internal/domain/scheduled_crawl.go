@@ -43,8 +43,14 @@ type ScheduledCrawl struct {
 	// after its one run -- 0 means unlimited (repeats forever until an
 	// admin disables or deletes it). Meaningless for a non-recurring entry,
 	// which already stops after run 1 regardless of this value.
-	MaxRuns   int
-	RunCount  int
+	MaxRuns  int
+	RunCount int
+	// Renderer overrides the Tuning page's global default rendering mode
+	// for this crawl alone -- "" (domain.RendererDefault) means "use the
+	// global default"; RendererNone/RendererChromium/RendererFirefox
+	// choose explicitly. See ports.CrawlOptions.Renderer (the same field,
+	// carried through by application.scheduledCrawlOptions).
+	Renderer  string
 	Enabled   bool
 	LastRunAt *time.Time
 	NextRunAt time.Time

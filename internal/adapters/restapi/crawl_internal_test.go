@@ -196,6 +196,23 @@ func TestHandleCrawlInternal_RecordsRespectRobotsAndUserAgentOnTheJob(t *testing
 	}
 }
 
+func TestHandleCrawlInternal_RecordsRendererOnTheJob(t *testing.T) {
+	fc := &fakeCrawler{count: 1}
+	h := newCrawlServerHandler(fc)
+
+	jobID := startCrawl(t, h, ports.CrawlOptions{
+		SeedURLs: []string{"http://a"}, Renderer: domain.RendererChromium,
+	})
+	job := waitForJob(t, h, jobID)
+
+	if job.Request.Renderer != domain.RendererChromium {
+		t.Errorf("expected the job to record renderer=chromium, got %+v", job.Request)
+	}
+	if fc.gotOptions.Renderer != domain.RendererChromium {
+		t.Errorf("expected the crawler to receive renderer=chromium, got %+v", fc.gotOptions)
+	}
+}
+
 func TestHandleCrawlInternal_RecordsOffDomainAndSitemapOptionsOnTheJob(t *testing.T) {
 	fc := &fakeCrawler{count: 1}
 	h := newCrawlServerHandler(fc)

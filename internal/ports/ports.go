@@ -34,6 +34,20 @@ type FetchOptions struct {
 	// case already uses above.
 	FetchTimeoutSeconds int
 	MaxResponseBytes    int
+	// Renderer selects how this one fetch should be done: "" (the zero
+	// value, domain.RendererDefault) defers to whatever renderer the
+	// caller would otherwise use (typically the Tuning page's global
+	// default); domain.RendererNone/RendererChromium/RendererFirefox
+	// override it explicitly for this fetch. Consulted only by a
+	// render-aware AuthFetcher (see application.RenderAwareFetcher) --
+	// httpfetcher.Fetcher itself ignores it entirely, since it only ever
+	// does plain HTTP.
+	Renderer string
+	// NoRender forces the plain HTTP path regardless of Renderer or any
+	// configured default -- set by crawlLoop's own sitemap.xml fetch,
+	// which must never go through a real browser (its response is XML,
+	// not a page to render, and a browser's XML viewer would corrupt it).
+	NoRender bool
 }
 
 // AuthFetcher is a Fetcher that also accepts per-request credentials.
@@ -41,6 +55,17 @@ type FetchOptions struct {
 // the robots-checker, which never needs credentials).
 type AuthFetcher interface {
 	FetchWithOptions(ctx context.Context, url string, opts FetchOptions) (string, error)
+}
+
+// Renderer executes a page in a real (headless) browser -- running its
+// JavaScript and waiting for it to finish loading -- before returning its
+// final rendered HTML, for a site whose real content only exists after
+// client-side rendering. Implemented by internal/adapters/browserfetcher,
+// one instance per browser engine (Chromium, Firefox); application.
+// RenderAwareFetcher dispatches to the right one based on FetchOptions.
+// Renderer / the Tuning page's configured default.
+type Renderer interface {
+	Render(ctx context.Context, url string, opts FetchOptions) (string, error)
 }
 
 type RobotsChecker interface {
@@ -277,6 +302,12 @@ type CrawlOptions struct {
 	// every not-yet-indexed one has been attempted; this only changes
 	// order, never coverage.
 	PrioritizeUnindexed bool `json:"prioritize_unindexed"`
+	// Renderer overrides the Tuning page's global default rendering mode
+	// for this crawl alone -- "" (domain.RendererDefault) means "use the
+	// global default," same convention as every other override above;
+	// domain.RendererNone/RendererChromium/RendererFirefox choose
+	// explicitly. See domain.Renderer* and ports.Renderer.
+	Renderer string `json:"renderer"`
 }
 
 // CrawlerService actually executes a crawl. onPage, when non-nil, is

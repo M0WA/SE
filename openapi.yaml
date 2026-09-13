@@ -854,6 +854,15 @@ components:
             pagerank_recompute_interval_minutes: { type: integer }
             ann_search_enabled: { type: boolean }
             max_retained_crawl_jobs: { type: integer }
+            default_renderer:
+              type: string
+              enum: [none, chromium, firefox]
+              description: >-
+                The crawler's global default rendering mode -- a plain HTTP
+                fetch ("none", the default) or a real headless browser that
+                executes the page's JavaScript and waits for it to load
+                ("chromium"/"firefox"). A schedule's own renderer overrides
+                this when set.
 
     Overrides:
       type: object
@@ -944,6 +953,10 @@ components:
         crawl_delay_ms: { type: integer }
         max_response_kb: { type: integer }
         prioritize_unindexed: { type: boolean }
+        renderer:
+          type: string
+          enum: ["", none, chromium, firefox]
+          description: '"" means this job used the Tuning page''s global default rendering mode.'
 
     CrawlPageEvent:
       type: object
@@ -1038,6 +1051,14 @@ components:
             itself; 0 (default) means unlimited. Meaningless when
             interval_minutes is 0 (a one-off crawl already stops after its
             one run).
+        renderer:
+          type: string
+          enum: ["", none, chromium, firefox]
+          default: ""
+          description: >-
+            "" (default): inherit the Tuning page's global default
+            rendering mode. "none"/"chromium"/"firefox": override it
+            explicitly for this crawl alone.
         enabled: { type: boolean }
 
     ScheduledCrawl:

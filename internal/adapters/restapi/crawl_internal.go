@@ -80,6 +80,7 @@ func (h *Handler) createCrawlJob(ctx context.Context, opts ports.CrawlOptions) (
 		CrawlDelayMs:        opts.CrawlDelayMs,
 		MaxResponseKB:       opts.MaxResponseKB,
 		PrioritizeUnindexed: opts.PrioritizeUnindexed,
+		Renderer:            opts.Renderer,
 	})
 }
 

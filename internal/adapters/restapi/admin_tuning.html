@@ -76,7 +76,15 @@
         <label for="max-retained-crawl-jobs">Crawl history retention — number of past crawl jobs (with full per-page detail) kept before the oldest are deleted</label><br>
         <input id="max-retained-crawl-jobs" class="field" type="number" step="1" min="1" required>
       </div>
-      <p class="tuning-hint">Defaults: 8s timeout, 20 pages, 50 characters minimum, 250ms delay, 5120 KB (5 MB) response cap, 200 retained crawl jobs.</p>
+      <div class="form-row">
+        <label for="default-renderer">Rendering — how a crawl fetches each page, unless it overrides this itself</label><br>
+        <select id="default-renderer" class="field">
+          <option value="none">None — plain HTTP fetch (fastest, no JavaScript)</option>
+          <option value="chromium">Chromium — real headless browser, runs the page's JavaScript</option>
+          <option value="firefox">Firefox — real headless browser, runs the page's JavaScript</option>
+        </select>
+      </div>
+      <p class="tuning-hint">Defaults: 8s timeout, 20 pages, 50 characters minimum, 250ms delay, 5120 KB (5 MB) response cap, 200 retained crawl jobs, no rendering. Rendering a page in a real browser is much slower than a plain fetch (each page opens its own browser tab) and downloads that browser engine the first time it's ever used -- turn it on only for sites whose real content needs JavaScript to appear.</p>
     </section>
 
     <section class="panel">
@@ -173,6 +181,7 @@
   const crawlDelayEl = document.getElementById('crawl-delay');
   const maxResponseKBEl = document.getElementById('max-response-kb');
   const maxRetainedCrawlJobsEl = document.getElementById('max-retained-crawl-jobs');
+  const defaultRendererEl = document.getElementById('default-renderer');
   const defaultTopKEl = document.getElementById('default-top-k');
   const semanticPoolSizeEl = document.getElementById('semantic-pool-size');
   const annSearchEnabledEl = document.getElementById('ann-search-enabled');
@@ -197,6 +206,7 @@
     crawlDelayEl.value = s.operational.crawl_delay_ms;
     maxResponseKBEl.value = s.operational.max_response_kb;
     maxRetainedCrawlJobsEl.value = s.operational.max_retained_crawl_jobs;
+    defaultRendererEl.value = s.operational.default_renderer || 'none';
     defaultTopKEl.value = s.operational.default_top_k;
     semanticPoolSizeEl.value = s.operational.semantic_candidate_pool_size;
     annSearchEnabledEl.checked = s.operational.ann_search_enabled;
@@ -237,6 +247,7 @@
           crawl_delay_ms: parseInt(crawlDelayEl.value, 10),
           max_response_kb: parseInt(maxResponseKBEl.value, 10),
           max_retained_crawl_jobs: parseInt(maxRetainedCrawlJobsEl.value, 10),
+          default_renderer: defaultRendererEl.value,
           default_top_k: parseInt(defaultTopKEl.value, 10),
           semantic_candidate_pool_size: parseInt(semanticPoolSizeEl.value, 10),
           ann_search_enabled: annSearchEnabledEl.checked,

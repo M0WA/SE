@@ -343,6 +343,59 @@ func TestHandleAdminSchedules_PostMaxRunsPassesThrough(t *testing.T) {
 	}
 }
 
+// TestHandleAdminSchedules_PostRendererPassesThrough proves an explicit
+// per-crawl renderer override is stored as-is.
+func TestHandleAdminSchedules_PostRendererPassesThrough(t *testing.T) {
+	store := &fakeScheduledCrawlStore{}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	body, _ := json.Marshal(map[string]interface{}{
+		"seed_urls": []string{"http://a"}, "renderer": "chromium",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.created.Renderer != "chromium" {
+		t.Errorf("expected renderer=chromium, got %q", store.created.Renderer)
+	}
+}
+
+// TestHandleAdminSchedules_PostBlankRendererMeansInherit proves omitting
+// renderer entirely (the zero value) is valid -- it means "inherit the
+// Tuning page's global default," not an error.
+func TestHandleAdminSchedules_PostBlankRendererMeansInherit(t *testing.T) {
+	store := &fakeScheduledCrawlStore{}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.created.Renderer != "" {
+		t.Errorf("expected an empty Renderer to mean inherit, got %q", store.created.Renderer)
+	}
+}
+
+func TestHandleAdminSchedules_PostInvalidRendererRejected(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithSchedules(t, &fakeScheduledCrawlStore{})
+	body, _ := json.Marshal(map[string]interface{}{
+		"seed_urls": []string{"http://a"}, "renderer": "internet-explorer",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
 func TestHandleAdminSchedules_PostInvalidJSON(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithSchedules(t, &fakeScheduledCrawlStore{})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader([]byte("not json")))
