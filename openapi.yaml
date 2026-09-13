@@ -870,8 +870,8 @@ components:
                 The crawler's global default for how far a crawl follows
                 discovered links -- "domain" (the default: the seed's
                 registrable domain, including subdomains), "host" (the
-                exact seed host only), "tld" (the seed's domain name under
-                any top-level domain, plus subdomains), or "any" (no
+                exact seed host only), "tld" (the same domain, any
+                subdomain, any top-level domain), or "any" (no
                 restriction). A schedule's own link_scope overrides this
                 when set.
 
@@ -1038,10 +1038,10 @@ components:
             seed host only. "domain": the seed's registrable domain,
             including subdomains (e.g. a seed of www.example.com also
             follows blog.example.com and example.com, but not
-            example.org). "tld": the seed's domain name under any
-            top-level domain, plus subdomains (e.g. a seed of example.com
-            also follows example.org and www.example.de, but not
-            other.com). "any": no restriction.
+            example.org). "tld": the same domain, any subdomain, any
+            top-level domain (e.g. a seed of example.com also follows
+            example.org and www.example.de, but not other.com). "any": no
+            restriction.
         use_sitemap: { type: boolean }
         fetch_timeout_seconds:
           type: integer

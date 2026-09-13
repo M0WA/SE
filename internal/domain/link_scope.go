@@ -8,12 +8,12 @@ package domain
 //     as well as that bare domain itself (e.g. a seed of www.example.com
 //     also follows links to blog.example.com and example.com, but not
 //     example.org or other.com).
-//   - LinkScopeTLD: the seed's domain name under any top-level domain, plus
-//     any of its subdomains (e.g. a seed of www.example.com also follows
-//     links to example.com, blog.example.com, example.org, and
-//     www.example.co.uk, but not other.com). Broader than LinkScopeDomain
-//     only in that it no longer requires the same TLD -- it's still "stay
-//     on the same site," just across that site's TLD variants.
+//   - LinkScopeTLD: the same domain, any subdomain, any top-level domain
+//     (e.g. a seed of www.example.com also follows links to example.com,
+//     blog.example.com, example.org, and www.example.co.uk, but not
+//     other.com). Broader than LinkScopeDomain only in that it no longer
+//     requires the same TLD -- it's still "stay on the same site," just
+//     across that site's TLD variants.
 //   - LinkScopeAny: anywhere at all.
 //
 // LinkScopeDefault ("") is distinct from all four: as a per-crawl override
