@@ -1,0 +1,3 @@
+  loadStats();
+  wireVocabularySearch();
+  wireSignOut();

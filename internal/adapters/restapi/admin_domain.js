@@ -1,0 +1,312 @@
+  const host = decodeURIComponent(window.location.pathname.split('/').pop());
+  document.title = 'se. — ' + host;
+
+  const titleEl = document.getElementById('domain-title');
+  const tailEl = document.getElementById('domain-tail');
+  const statusEl = document.getElementById('domain-status');
+  const chartEl = document.getElementById('domain-chart');
+  const tableEl = document.getElementById('domain-table');
+  const filterEl = document.getElementById('domain-filter');
+  const filterErrorEl = document.getElementById('domain-filter-error');
+  const deleteAllBtn = document.getElementById('delete-all');
+  const deleteAllStatusEl = document.getElementById('delete-all-status');
+  const historyPanel = document.getElementById('history-panel');
+  const historyHeading = document.getElementById('history-heading');
+  const historyBody = document.getElementById('history-body');
+
+  titleEl.textContent = host;
+
+  let allDocs = [];
+  let domainFilterText = '';
+
+  // filterDocs mirrors the job-detail page's filterPages / crawl.html's
+  // filterJobs pattern: a case-insensitive regex matched against title and
+  // URL, with invalid patterns reported rather than thrown.
+  function filterDocs(docs, pattern) {
+    filterErrorEl.textContent = '';
+    if (!pattern) return docs;
+    let re;
+    try {
+      re = new RegExp(pattern, 'i');
+    } catch (err) {
+      filterErrorEl.textContent = 'Invalid pattern: ' + err.message;
+      return docs;
+    }
+    return docs.filter((d) => re.test(d.title || '') || re.test(d.url || ''));
+  }
+
+  function buildChart(docs) {
+    const maxLen = Math.max.apply(null, docs.map((d) => d.doc_length).concat([1]));
+    const barWidth = 8;
+    const gap = 3;
+    const height = 56;
+    const width = docs.length * (barWidth + gap);
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 ' + Math.max(width, 1) + ' ' + height);
+    svg.setAttribute('width', width);
+    svg.setAttribute('height', height);
+    svg.classList.add('domain-chart');
+
+    docs.forEach((d, i) => {
+      const h = Math.max(2, (d.doc_length / maxLen) * height);
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rect.setAttribute('x', String(i * (barWidth + gap)));
+      rect.setAttribute('y', String(height - h));
+      rect.setAttribute('width', String(barWidth));
+      rect.setAttribute('height', String(h));
+      const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+      title.textContent = (d.title || d.url) + ' — ' + d.doc_length + ' tokens indexed';
+      rect.appendChild(title);
+      svg.appendChild(rect);
+    });
+    return svg;
+  }
+
+  async function deleteDocument(id, btn) {
+    if (!window.confirm('Remove this page from the index?')) return;
+    btn.disabled = true;
+    try {
+      await deleteRequest('/admin/api/documents/' + encodeURIComponent(id));
+      allDocs = allDocs.filter((d) => d.id !== id);
+      btn.closest('tr').remove();
+    } catch (err) {
+      btn.disabled = false;
+      window.alert('Could not delete: ' + err.message);
+    }
+  }
+
+  let deleteProgressTimer = null;
+
+  function stopDeleteProgressPolling() {
+    if (deleteProgressTimer) {
+      clearInterval(deleteProgressTimer);
+      deleteProgressTimer = null;
+    }
+  }
+
+  // pollDeleteProgress re-fetches this domain's document list every couple
+  // of seconds and re-renders from it -- the same view a manual reload
+  // would produce, just without one -- so the count and table visibly
+  // shrink as the background goroutine works through the queue. Stops once
+  // every page is gone, or once the remaining count holds steady for a
+  // few ticks in a row (some deletions failed and logged server-side
+  // rather than the batch stalling forever).
+  function pollDeleteProgress(initialCount) {
+    stopDeleteProgressPolling();
+    let lastRemaining = initialCount;
+    let steadyTicks = 0;
+    deleteProgressTimer = setInterval(async () => {
+      let docs;
+      try {
+        docs = await getJSON('/admin/api/documents?domain=' + encodeURIComponent(host) + '&limit=1000');
+      } catch (err) {
+        return; // transient error -- try again next tick rather than giving up.
+      }
+      allDocs = docs;
+      renderDocs(docs);
+
+      const remaining = docs.length;
+      const removed = Math.max(0, initialCount - remaining);
+      if (remaining === 0) {
+        deleteAllStatusEl.textContent = 'Done — all ' + initialCount + (initialCount === 1 ? ' page' : ' pages') + ' removed.';
+        stopDeleteProgressPolling();
+        return;
+      }
+      steadyTicks = remaining === lastRemaining ? steadyTicks + 1 : 0;
+      lastRemaining = remaining;
+      if (steadyTicks >= 5) {
+        deleteAllStatusEl.textContent = removed + ' of ' + initialCount + ' removed — the rest appear stuck (check the server log); ' + remaining + ' remaining.';
+        deleteAllBtn.disabled = false;
+        stopDeleteProgressPolling();
+        return;
+      }
+      deleteAllStatusEl.textContent = 'Removing in the background — ' + removed + ' of ' + initialCount + ' removed, ' + remaining + ' remaining…';
+    }, 1500);
+  }
+
+  // deleteAllInDomain fires one request and returns -- the server queues
+  // every page's removal in its own background goroutine (detached from
+  // this request, so it isn't tied to this tab staying open) and responds
+  // immediately, rather than this page driving N individual DELETE calls
+  // itself. That old approach was fetch() calls the browser would simply
+  // abort the moment the admin navigated away or closed the tab mid-batch,
+  // silently leaving the domain half-deleted with no way to know or
+  // resume -- leaving this page (or closing it) can never interrupt the
+  // removal now. Progress while staying on the page comes from
+  // pollDeleteProgress re-fetching the list, not from this response.
+  async function deleteAllInDomain(count) {
+    if (!window.confirm('Remove all ' + count + ' pages in this domain from the index?')) return;
+    deleteAllBtn.disabled = true;
+    deleteAllStatusEl.textContent = 'Starting…';
+    try {
+      const resp = await deleteRequest('/admin/api/documents?domain=' + encodeURIComponent(host));
+      deleteAllStatusEl.textContent = 'Removing ' + resp.queued + (resp.queued === 1 ? ' page' : ' pages') +
+        ' in the background — safe to leave this page.';
+      pollDeleteProgress(resp.queued);
+    } catch (err) {
+      deleteAllBtn.disabled = false;
+      deleteAllStatusEl.textContent = 'Could not start the removal: ' + err.message;
+    }
+  }
+
+  async function showHistory(doc) {
+    historyPanel.hidden = false;
+    historyHeading.textContent = 'History — ' + (doc.title || doc.url);
+    clear(historyBody);
+    historyBody.textContent = 'Loading…';
+    try {
+      const versions = await getJSON('/admin/api/documents/' + encodeURIComponent(doc.id) + '/versions');
+      clear(historyBody);
+      if (versions.length === 0) {
+        historyBody.textContent = 'No prior versions — this page has only been crawled once.';
+        return;
+      }
+      const table = buildTable(
+        [{ label: 'version', num: true }, { label: 'title' }, { label: 'length', num: true }, { label: 'crawled' }],
+        versions,
+        (v) => [
+          textCell('v' + v.version, { num: true }),
+          textCell(v.title || '(untitled)'),
+          textCell(String(v.doc_length), { num: true }),
+          textCell(new Date(v.crawled_at).toLocaleString()),
+        ],
+      );
+      historyBody.appendChild(table);
+    } catch (err) {
+      historyBody.textContent = 'Could not load history: ' + err.message;
+    }
+  }
+
+  function renderDocs(docs) {
+    clear(tailEl);
+    clear(chartEl);
+    clear(tableEl);
+    statusEl.textContent = '';
+
+    const totalLen = docs.reduce((sum, d) => sum + d.doc_length, 0);
+    const avgLen = docs.length ? totalLen / docs.length : 0;
+    const totalInternal = docs.reduce((sum, d) => sum + d.internal_links, 0);
+    const totalExternal = docs.reduce((sum, d) => sum + d.external_links, 0);
+    const totalBacklinks = docs.reduce((sum, d) => sum + d.backlinks, 0);
+    const metrics = document.createElement('span');
+    metrics.className = 'domain-metrics';
+    metrics.textContent = docs.length + (docs.length === 1 ? ' page' : ' pages') +
+      ' · avg ' + avgLen.toFixed(0) + ' · total ' + totalLen +
+      ' · ' + totalInternal + ' internal · ' + totalExternal + ' external · ' + totalBacklinks + ' backlinks';
+    tailEl.appendChild(metrics);
+
+    const crawlLink = document.createElement('a');
+    crawlLink.className = 'domain-crawl-link';
+    crawlLink.href = '/admin/crawl?url=' + encodeURIComponent(docs.length ? new URL(docs[0].url).origin : 'https://' + host);
+    crawlLink.textContent = 'Crawl';
+    tailEl.appendChild(crawlLink);
+
+    if (docs.length === 0) {
+      statusEl.textContent = 'No pages indexed for this domain.';
+      filterEl.hidden = true;
+      deleteAllBtn.hidden = true;
+      return;
+    }
+
+    chartEl.appendChild(buildChart(docs));
+
+    filterEl.hidden = false;
+    renderTable(filterDocs(docs, domainFilterText));
+
+    deleteAllBtn.hidden = false;
+  }
+
+  function renderTable(docs) {
+    clear(tableEl);
+    if (docs.length === 0) {
+      tableEl.textContent = 'No pages match that filter.';
+      return;
+    }
+    const table = buildTable(
+      [
+        { label: 'title' }, { label: 'length', num: true },
+        { label: 'internal', num: true }, { label: 'external', num: true }, { label: 'backlinks', num: true },
+        { label: 'pagerank', num: true },
+        { label: 'version' }, { label: '' },
+      ],
+      docs,
+      (d) => {
+        const link = document.createElement('a');
+        link.href = d.url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.style.color = 'var(--ink)';
+        link.textContent = d.title || d.url;
+        const urlDiv = document.createElement('div');
+        urlDiv.className = 'url';
+        urlDiv.textContent = d.url;
+        const titleTd = document.createElement('td');
+        titleTd.appendChild(link);
+        titleTd.appendChild(urlDiv);
+
+        const internalCell = textCell(String(d.internal_links), { num: true });
+        internalCell.title = 'Links from this page to the same domain';
+        const externalCell = textCell(String(d.external_links), { num: true });
+        externalCell.title = 'Links from this page to a different domain';
+        const backlinksCell = textCell(String(d.backlinks), { num: true });
+        backlinksCell.title = 'Other indexed pages linking to this one';
+
+        const pageRankCell = textCell(d.pagerank.toFixed(4), { num: true });
+        pageRankCell.title = 'Link authority score (see the Tuning page’s PageRank weight)';
+
+        const versionTd = document.createElement('td');
+        if (d.version > 1) {
+          const histBtn = document.createElement('button');
+          histBtn.type = 'button';
+          histBtn.className = 'text-button';
+          histBtn.textContent = 'v' + d.version;
+          histBtn.title = 'See prior versions';
+          histBtn.addEventListener('click', () => showHistory(d));
+          versionTd.appendChild(histBtn);
+        } else {
+          versionTd.textContent = 'v1';
+        }
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'text-button';
+        delBtn.type = 'button';
+        delBtn.textContent = 'Delete';
+        delBtn.addEventListener('click', () => deleteDocument(d.id, delBtn));
+        const actionTd = document.createElement('td');
+        actionTd.className = 'actions';
+        actionTd.appendChild(delBtn);
+
+        return [
+          titleTd, textCell(String(d.doc_length), { num: true }),
+          internalCell, externalCell, backlinksCell, pageRankCell,
+          versionTd, actionTd,
+        ];
+      },
+    );
+    tableEl.appendChild(table);
+  }
+
+  filterEl.addEventListener('input', () => {
+    domainFilterText = filterEl.value.trim();
+    renderTable(filterDocs(allDocs, domainFilterText));
+  });
+
+  // Wired once here rather than inside renderDocs, which now re-runs on
+  // every delete-progress poll tick -- re-registering a listener there on
+  // each call would fire deleteAllInDomain once per accumulated listener
+  // per click.
+  deleteAllBtn.addEventListener('click', () => deleteAllInDomain(allDocs.length));
+
+  async function load() {
+    try {
+      const docs = await getJSON('/admin/api/documents?domain=' + encodeURIComponent(host) + '&limit=1000');
+      allDocs = docs;
+      renderDocs(docs);
+    } catch (err) {
+      statusEl.textContent = 'Could not load documents: ' + err.message;
+    }
+  }
+
+  wireSignOut();
+  load();

@@ -59,6 +59,53 @@ var styleCSS []byte
 //go:embed admin.js
 var adminJS []byte
 
+// Every other admin_*.js/*.js below is a page's own script, extracted from
+// what used to be an inline <script> block in its matching .html file --
+// admin.js above is the one shared-helpers file every admin page loads
+// alongside its own.
+
+//go:embed admin_page.js
+var adminPageJS []byte
+
+//go:embed admin_database.js
+var adminDatabaseJS []byte
+
+//go:embed admin_documents.js
+var adminDocumentsJS []byte
+
+//go:embed admin_domain.js
+var adminDomainJS []byte
+
+//go:embed admin_overrides.js
+var adminOverridesJS []byte
+
+//go:embed admin_pagerank.js
+var adminPageRankJS []byte
+
+//go:embed admin_schedule.js
+var adminScheduleJS []byte
+
+//go:embed admin_search.js
+var adminSearchJS []byte
+
+//go:embed admin_search_result.js
+var adminSearchResultJS []byte
+
+//go:embed admin_tuning.js
+var adminTuningJS []byte
+
+//go:embed admin_vocabulary_term.js
+var adminVocabularyTermJS []byte
+
+//go:embed crawl.js
+var crawlJS []byte
+
+//go:embed index.js
+var indexJS []byte
+
+//go:embed login.js
+var loginJS []byte
+
 type Handler struct {
 	search          ports.SearchService
 	crawler         ports.CrawlerService
@@ -180,6 +227,7 @@ func (h *Handler) RoutesSearch() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.requireAuthPage(h.handleIndex))
 	mux.HandleFunc("/style.css", h.handleStyle)
+	mux.HandleFunc("/index.js", h.handleIndexJS)
 	mux.HandleFunc("/search", h.requireAuthAPI(h.handleSearch))
 	mux.HandleFunc("/healthz", h.handleHealthz)
 	return mux
@@ -192,21 +240,34 @@ func (h *Handler) RoutesAdmin() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/admin.js", h.handleAdminJS)
 	mux.HandleFunc("/login", h.handleLoginRoute)
+	mux.HandleFunc("/login.js", h.handleLoginJS)
 	mux.HandleFunc("/logout", h.handleLogout)
 	mux.HandleFunc("/healthz", h.handleHealthz)
 
 	mux.HandleFunc("/admin", h.requireAuthPage(h.handleAdminPage))
+	mux.HandleFunc("/admin_page.js", h.handleAdminPageJS)
 	mux.HandleFunc("/admin/documents", h.requireAuthPage(h.handleAdminDocumentsPage))
+	mux.HandleFunc("/admin_documents.js", h.handleAdminDocumentsJS)
 	mux.HandleFunc("/admin/documents/{host}", h.requireAuthPage(h.handleAdminDomainPage))
+	mux.HandleFunc("/admin_domain.js", h.handleAdminDomainJS)
 	mux.HandleFunc("/admin/vocabulary/term", h.requireAuthPage(h.handleAdminVocabularyTermPage))
+	mux.HandleFunc("/admin_vocabulary_term.js", h.handleAdminVocabularyTermJS)
 	mux.HandleFunc("/admin/crawl", h.requireAuthPage(h.handleAdminCrawlPage))
+	mux.HandleFunc("/crawl.js", h.handleCrawlJS)
 	mux.HandleFunc("/admin/schedule/{id}", h.requireAuthPage(h.handleAdminSchedulePage))
+	mux.HandleFunc("/admin_schedule.js", h.handleAdminScheduleJS)
 	mux.HandleFunc("/admin/tuning", h.requireAuthPage(h.handleAdminTuningPage))
+	mux.HandleFunc("/admin_tuning.js", h.handleAdminTuningJS)
 	mux.HandleFunc("/admin/search", h.requireAuthPage(h.handleAdminSearchPage))
+	mux.HandleFunc("/admin_search.js", h.handleAdminSearchJS)
 	mux.HandleFunc("/admin/search/result", h.requireAuthPage(h.handleAdminSearchResultPage))
+	mux.HandleFunc("/admin_search_result.js", h.handleAdminSearchResultJS)
 	mux.HandleFunc("/admin/overrides", h.requireAuthPage(h.handleAdminOverridesPage))
+	mux.HandleFunc("/admin_overrides.js", h.handleAdminOverridesJS)
 	mux.HandleFunc("/admin/pagerank", h.requireAuthPage(h.handleAdminPageRankPage))
+	mux.HandleFunc("/admin_pagerank.js", h.handleAdminPageRankJS)
 	mux.HandleFunc("/admin/database", h.requireAuthPage(h.handleAdminDatabasePage))
+	mux.HandleFunc("/admin_database.js", h.handleAdminDatabaseJS)
 
 	mux.HandleFunc("/admin/api/stats", h.requireAuthAPI(h.handleAdminStats))
 	mux.HandleFunc("/admin/api/vocabulary", h.requireAuthAPI(h.handleAdminVocabulary))
@@ -256,6 +317,62 @@ func (h *Handler) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	serveStatic(w, r, "text/html; charset=utf-8", indexHTML)
+}
+
+func (h *Handler) handleIndexJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", indexJS)
+}
+
+func (h *Handler) handleLoginJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", loginJS)
+}
+
+func (h *Handler) handleAdminPageJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminPageJS)
+}
+
+func (h *Handler) handleAdminDatabaseJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminDatabaseJS)
+}
+
+func (h *Handler) handleAdminDocumentsJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminDocumentsJS)
+}
+
+func (h *Handler) handleAdminDomainJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminDomainJS)
+}
+
+func (h *Handler) handleAdminOverridesJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminOverridesJS)
+}
+
+func (h *Handler) handleAdminPageRankJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminPageRankJS)
+}
+
+func (h *Handler) handleAdminScheduleJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminScheduleJS)
+}
+
+func (h *Handler) handleAdminSearchJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminSearchJS)
+}
+
+func (h *Handler) handleAdminSearchResultJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminSearchResultJS)
+}
+
+func (h *Handler) handleAdminTuningJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminTuningJS)
+}
+
+func (h *Handler) handleAdminVocabularyTermJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminVocabularyTermJS)
+}
+
+func (h *Handler) handleCrawlJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", crawlJS)
 }
 
 // serveStatic answers a GET/HEAD request with a fixed, embedded payload --

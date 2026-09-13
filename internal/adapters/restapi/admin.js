@@ -122,6 +122,18 @@ function seedSummary(seedURLs) {
   return urls.length === 1 ? urls[0] : urls[0] + ' +' + (urls.length - 1) + ' more';
 }
 
+// linesToText/parseLines round-trip a one-value-per-line <textarea> (seed
+// URLs, allow/block domain lists, ...) against the string array a JSON
+// request/response actually carries -- shared by every page with one of
+// these fields (see crawl.html, admin_schedule.html, admin_overrides.html).
+function linesToText(lines) {
+  return (lines || []).join('\n');
+}
+
+function parseLines(text) {
+  return text.split('\n').map((s) => s.trim()).filter(Boolean);
+}
+
 // formatTimestamp renders an ISO timestamp for display, or an em-dash for
 // an empty/missing one. opts.timeOnly renders just the time (for a
 // same-page list of events that's already scoped to one job); otherwise
@@ -246,4 +258,17 @@ function wireVocabularySearch() {
     loadVocabulary(input.value.trim().toLowerCase());
   });
   loadVocabulary('');
+}
+
+// Exports for the Node test runner only -- `typeof module` is undefined in
+// a browser's <script> tag, so this is a no-op there. See
+// internal/adapters/restapi/admin.test.js.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    clear, setButtonLoading, normalizeURL, kvRow, checkResponse,
+    getJSON, postJSON, deleteRequest, patchJSON,
+    textCell, snippetCell, urlCell, seedSummary, formatTimestamp, buildTable,
+    linesToText, parseLines,
+    wireSignOut, loadStats, loadVocabulary, wireVocabularySearch,
+  };
 }
