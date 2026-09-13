@@ -162,7 +162,7 @@ func (r *Repository) ANNAvailable() bool {
 // enabled either way).
 func (r *Repository) enablePgVectorExtension(ctx context.Context) error {
 	_, err := r.db.ExecContext(ctx, `CREATE EXTENSION IF NOT EXISTS vector`)
-	if err != nil && !isIndexAlreadyExistsError(err) {
+	if err != nil && !isAlreadyExistsError(err) {
 		return err
 	}
 	return nil
@@ -179,7 +179,7 @@ func (r *Repository) enablePgVectorExtension(ctx context.Context) error {
 // ensureHostIndex/ensureCrawledAtIndex guard against.
 func (r *Repository) ensureVectorColumn(ctx context.Context, dims int) error {
 	ddl := fmt.Sprintf(`ALTER TABLE documents ADD COLUMN IF NOT EXISTS %s vector(%d)`, vectorColumnName, dims)
-	if _, err := r.db.ExecContext(ctx, ddl); err != nil && !isIndexAlreadyExistsError(err) {
+	if _, err := r.db.ExecContext(ctx, ddl); err != nil && !isAlreadyExistsError(err) {
 		return err
 	}
 	return nil
@@ -190,11 +190,11 @@ func (r *Repository) ensureVectorColumn(ctx context.Context, dims int) error {
 // search, run after ensureVectorColumn the same way ensureHostIndex runs
 // after migrateDocumentColumns adds the host column it indexes -- a column
 // an index is built over must exist first. "CREATE INDEX IF NOT EXISTS"
-// plus isIndexAlreadyExistsError tolerates the identical concurrent-startup
+// plus isAlreadyExistsError tolerates the identical concurrent-startup
 // race ensureHostIndex/ensureCrawledAtIndex already tolerate.
 func (r *Repository) ensureVectorIndex(ctx context.Context) error {
 	ddl := fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON documents USING hnsw (%s vector_cosine_ops)`, vectorIndexName, vectorColumnName)
-	if _, err := r.db.ExecContext(ctx, ddl); err != nil && !isIndexAlreadyExistsError(err) {
+	if _, err := r.db.ExecContext(ctx, ddl); err != nil && !isAlreadyExistsError(err) {
 		return err
 	}
 	return nil

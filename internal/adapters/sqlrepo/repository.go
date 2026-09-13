@@ -50,7 +50,7 @@ func New(ctx context.Context, driverName, dsn string) (*Repository, error) {
 	// statements. Without a busy timeout, SQLite fails a migration outright
 	// the instant it finds the file locked (SQLITE_BUSY) rather than
 	// waiting the few milliseconds another process's migration actually
-	// takes; the isIndexAlreadyExistsError handling elsewhere only covers
+	// takes; the isAlreadyExistsError handling elsewhere only covers
 	// one specific step of that same race, not the table-creation
 	// statements that run first. This is a no-op for every other dialect.
 	if repo.dialect.Name() == "sqlite" {
@@ -149,7 +149,7 @@ func (r *Repository) migrateScheduledCrawlColumns(ctx context.Context) error {
 		if existing[name] {
 			return nil
 		}
-		if _, err := r.db.ExecContext(ctx, "ALTER TABLE scheduled_crawls ADD COLUMN "+ddl); err != nil {
+		if _, err := r.db.ExecContext(ctx, "ALTER TABLE scheduled_crawls ADD COLUMN "+ddl); err != nil && !isAlreadyExistsError(err) {
 			return fmt.Errorf("adding %s column: %w", name, err)
 		}
 		return nil
@@ -195,7 +195,7 @@ func (r *Repository) migrateScheduledCrawlColumns(ctx context.Context) error {
 // lack of CREATE INDEX IF NOT EXISTS (a best-effort statement whose
 // "already exists" error is expected and ignored on every startup after
 // the first) and the concurrent-migration race on Postgres/SQLite
-// (isIndexAlreadyExistsError).
+// (isAlreadyExistsError).
 func (r *Repository) ensureHostIndex(ctx context.Context) error {
 	return r.ensureIndex(ctx, "idx_documents_host", "host")
 }
@@ -208,28 +208,34 @@ func (r *Repository) ensureCrawledAtIndex(ctx context.Context) error {
 // doesn't already exist, tolerating both MySQL's lack of IF NOT EXISTS and
 // the benign concurrent-creation race the other dialects can hit when
 // search/admin/crawl all migrate on startup at once (see
-// isIndexAlreadyExistsError).
+// isAlreadyExistsError).
 func (r *Repository) ensureIndex(ctx context.Context, indexName, column string) error {
 	if r.dialect.Name() == "mysql" {
 		_, _ = r.db.ExecContext(ctx, "CREATE INDEX "+indexName+" ON documents("+column+")")
 		return nil
 	}
-	if _, err := r.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS "+indexName+" ON documents("+column+")"); err != nil && !isIndexAlreadyExistsError(err) {
+	if _, err := r.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS "+indexName+" ON documents("+column+")"); err != nil && !isAlreadyExistsError(err) {
 		return fmt.Errorf("creating %s: %w", indexName, err)
 	}
 	return nil
 }
 
-// isIndexAlreadyExistsError reports whether err is Postgres's benign race
-// where CREATE INDEX IF NOT EXISTS is run concurrently by more than one
-// process (as happens when search/admin/crawl all migrate on startup at
-// once): the existence check and the catalog insert aren't atomic across
-// sessions, so the loser gets a unique-violation on the system catalog
-// instead of a clean no-op, even though the index ends up created either
-// way. Without this, that race crashes the losing process outright.
-func isIndexAlreadyExistsError(err error) bool {
+// isAlreadyExistsError reports whether err is the benign race where two of
+// search/admin/crawl migrate the same not-yet-upgraded table at once (each
+// opens its own DB connection and migrates on startup): both see a column
+// or index missing, both try to add it, and the loser gets an
+// already-exists/duplicate error from the database instead of a clean
+// no-op, even though the column/index ends up created either way. Without
+// tolerating this, that race crashes the losing process outright. Covers
+// Postgres ("already exists" for both CREATE INDEX and ADD COLUMN, plus
+// the unique-violation phrasing CREATE INDEX CONCURRENTLY's catalog race
+// can produce) and MySQL (which phrases a duplicate column as "Duplicate
+// column name" rather than "already exists").
+func isAlreadyExistsError(err error) bool {
 	msg := err.Error()
-	return strings.Contains(msg, "already exists") || strings.Contains(msg, "duplicate key value violates unique constraint")
+	return strings.Contains(msg, "already exists") ||
+		strings.Contains(msg, "duplicate key value violates unique constraint") ||
+		strings.Contains(msg, "Duplicate column name")
 }
 
 // migrateDocumentColumns adds host/version/crawled_at/norm_embedding to a
@@ -245,7 +251,7 @@ func (r *Repository) migrateDocumentColumns(ctx context.Context) error {
 		if existing[name] {
 			return nil
 		}
-		if _, err := r.db.ExecContext(ctx, "ALTER TABLE documents ADD COLUMN "+ddl); err != nil {
+		if _, err := r.db.ExecContext(ctx, "ALTER TABLE documents ADD COLUMN "+ddl); err != nil && !isAlreadyExistsError(err) {
 			return fmt.Errorf("adding %s column: %w", name, err)
 		}
 		return nil
