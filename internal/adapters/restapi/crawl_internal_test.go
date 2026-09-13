@@ -1,7 +1,6 @@
 package restapi_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -81,28 +80,25 @@ func (e *erroringCrawlJobStore) List(ctx context.Context) ([]domain.CrawlJobSumm
 	return e.CrawlJobStore.List(ctx)
 }
 
+// startCrawl calls TriggerScheduledCrawl directly -- crawl-server's own
+// scheduler ticker is the only real caller now (there's no more
+// admin-facing "just start a crawl directly" HTTP path -- see
+// application.TriggerDueCrawls), so tests exercise the same entry point.
 func startCrawl(t *testing.T, h *restapi.Handler, opts ports.CrawlOptions) string {
 	t.Helper()
-	body, _ := json.Marshal(opts)
-	req := httptest.NewRequest(http.MethodPost, "/crawl", bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-	h.RoutesCrawlInternal().ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	jobID, err := h.TriggerScheduledCrawl(context.Background(), opts, nil)
+	if err != nil {
+		t.Fatalf("unexpected error starting crawl: %v", err)
 	}
-	var resp map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decoding response: %v", err)
-	}
-	if resp["job_id"] == "" {
+	if jobID == "" {
 		t.Fatal("expected a non-empty job_id")
 	}
-	return resp["job_id"]
+	return jobID
 }
 
 // waitForJob polls GET /jobs/{id} through the real handler until the job
 // reaches a terminal status, since the crawl itself runs in a background
-// goroutine started by handleCrawl.
+// goroutine started by TriggerScheduledCrawl.
 func waitForJob(t *testing.T, h *restapi.Handler, jobID string) domain.CrawlJob {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -216,27 +212,6 @@ func TestHandleCrawlInternal_RecordsOffDomainAndSitemapOptionsOnTheJob(t *testin
 	}
 }
 
-func TestHandleCrawlInternal_InvalidJSON(t *testing.T) {
-	h := newCrawlServerHandler(&fakeCrawler{})
-	req := httptest.NewRequest(http.MethodPost, "/crawl", bytes.NewReader([]byte("{ungültig")))
-	rec := httptest.NewRecorder()
-	h.RoutesCrawlInternal().ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d", rec.Code)
-	}
-}
-
-func TestHandleCrawlInternal_EmptySeedURLs(t *testing.T) {
-	h := newCrawlServerHandler(&fakeCrawler{})
-	body, _ := json.Marshal(ports.CrawlOptions{SeedURLs: []string{}})
-	req := httptest.NewRequest(http.MethodPost, "/crawl", bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-	h.RoutesCrawlInternal().ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d", rec.Code)
-	}
-}
-
 func TestHandleCrawlInternal_ServiceError(t *testing.T) {
 	fc := &fakeCrawler{err: errors.New("crawl failed")}
 	h := newCrawlServerHandler(fc)
@@ -249,16 +224,6 @@ func TestHandleCrawlInternal_ServiceError(t *testing.T) {
 	}
 	if job.Error != "crawl failed" {
 		t.Errorf("expected error message recorded, got %q", job.Error)
-	}
-}
-
-func TestHandleCrawlInternal_MethodNotAllowed(t *testing.T) {
-	h := newCrawlServerHandler(&fakeCrawler{})
-	req := httptest.NewRequest(http.MethodGet, "/crawl", nil)
-	rec := httptest.NewRecorder()
-	h.RoutesCrawlInternal().ServeHTTP(rec, req)
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Errorf("expected 405, got %d", rec.Code)
 	}
 }
 
@@ -446,17 +411,12 @@ func TestTriggerScheduledCrawl_EmptySeedURLsErrors(t *testing.T) {
 	}
 }
 
-func TestTriggerCrawl_StoreCreateErrorPropagates(t *testing.T) {
+func TestTriggerScheduledCrawl_StoreCreateErrorPropagates(t *testing.T) {
 	store := &erroringCrawlJobStore{CrawlJobStore: domain.NewCrawlJobStore(), createErr: errors.New("db unavailable")}
 	h := restapi.New(restapi.Config{Crawler: &fakeCrawler{}, CrawlJobs: store})
 
-	body, _ := json.Marshal(ports.CrawlOptions{SeedURLs: []string{"http://a"}})
-	req := httptest.NewRequest(http.MethodPost, "/crawl", bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-	h.RoutesCrawlInternal().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 when the store fails to create a job, got %d: %s", rec.Code, rec.Body.String())
+	if _, err := h.TriggerScheduledCrawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}}, nil); err == nil {
+		t.Error("expected the store's Create error to propagate")
 	}
 	if atomic.LoadInt32(&store.createCalls) != 1 {
 		t.Errorf("expected exactly 1 Create call, got %d", atomic.LoadInt32(&store.createCalls))

@@ -19,10 +19,13 @@ import (
 	"searchengine/internal/ports"
 )
 
-// schedulerPollInterval is how often crawl-server checks for scheduled
-// crawls that have come due -- frequent enough that a schedule fires
-// close to its intended time without polling the database constantly.
-const schedulerPollInterval = 60 * time.Second
+// schedulerPollInterval is how often crawl-server checks for crawls that
+// have come due. Short enough that a one-off crawl (due immediately --
+// see domain.ScheduledCrawl.Recurring) starts within a few seconds of the
+// admin creating it, rather than waiting up to a full recurring-schedule
+// interval; a single cheap query on this cadence is negligible load for a
+// self-hosted, single-admin instance.
+const schedulerPollInterval = 3 * time.Second
 
 // pageRankPollInterval is how often runPageRankScheduler checks whether the
 // admin-configured recompute interval has elapsed -- independent of (and

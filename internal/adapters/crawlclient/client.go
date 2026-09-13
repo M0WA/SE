@@ -26,37 +26,6 @@ func New(baseURL string) *Client {
 	return &Client{BaseURL: baseURL, HTTP: &http.Client{}}
 }
 
-type startJobResponse struct {
-	JobID string `json:"job_id"`
-}
-
-func (c *Client) StartCrawlJob(ctx context.Context, opts ports.CrawlOptions) (string, error) {
-	body, err := json.Marshal(opts)
-	if err != nil {
-		return "", fmt.Errorf("encoding crawl request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/crawl", bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("building crawl request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	respBody, status, err := c.do(req)
-	if err != nil {
-		return "", err
-	}
-	if status != http.StatusAccepted {
-		return "", fmt.Errorf("crawl server returned %d: %s", status, bytes.TrimSpace(respBody))
-	}
-
-	var out startJobResponse
-	if err := json.Unmarshal(respBody, &out); err != nil {
-		return "", fmt.Errorf("decoding crawl server response: %w", err)
-	}
-	return out.JobID, nil
-}
-
 func (c *Client) ListCrawlJobs(ctx context.Context) ([]domain.CrawlJobSummary, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/jobs", nil)
 	if err != nil {

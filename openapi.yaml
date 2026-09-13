@@ -474,30 +474,6 @@ paths:
               schema: { $ref: "#/components/schemas/DatabaseDiagnostics" }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
-  /admin/api/crawl:
-    post:
-      tags: [admin]
-      summary: Start a crawl job
-      description: >-
-        Registers the job and returns its ID immediately; the crawl itself
-        runs in the background on crawl-server. Poll
-        `/admin/api/crawl/jobs/{id}` for progress.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/CrawlRequest" }
-      responses:
-        "202":
-          description: Accepted
-          content:
-            application/json:
-              schema:
-                type: object
-                properties: { job_id: { type: string } }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "503": { $ref: "#/components/responses/NotConfigured" }
-
   /admin/api/crawl/jobs:
     get:
       tags: [admin]
@@ -533,7 +509,14 @@ paths:
   /admin/api/schedules:
     get:
       tags: [admin]
-      summary: List recurring crawl schedules
+      summary: List every crawl (one-off and recurring)
+      description: >-
+        There's no separate "just start a crawl" endpoint -- every crawl,
+        whether it runs once or repeats, is one of these (see
+        ScheduledCrawl.recurring). crawl-server's scheduler ticker picks up
+        anything due (a one-off entry is due immediately) and executes it,
+        creating the CrawlJob this list's entries don't themselves track --
+        see /admin/api/crawl/jobs for that.
       responses:
         "200":
           description: OK
@@ -545,7 +528,11 @@ paths:
         "503": { $ref: "#/components/responses/NotConfigured" }
     post:
       tags: [admin]
-      summary: Create a recurring crawl schedule
+      summary: Create a crawl (one-off or recurring)
+      description: >-
+        `recurring: false` (the default) runs once, at `next_run_at`
+        (immediately); `recurring: true` requires a positive
+        `interval_minutes` and repeats forever until disabled.
       requestBody:
         required: true
         content:
@@ -563,10 +550,13 @@ paths:
   /admin/api/schedules/{id}:
     patch:
       tags: [admin]
-      summary: Replace a schedule's editable fields
+      summary: Replace a crawl's editable fields
       description: >-
-        Reschedules it: `next_run_at` becomes `interval_minutes` from now,
-        same as a freshly created schedule.
+        Full replace, not a merge -- every field (credentials included) must
+        be resent, or it's cleared. Reschedules it: `next_run_at` becomes
+        `interval_minutes` from now for a recurring entry (immediately for
+        a one-off one), same as a freshly created entry. Flipping `enabled`
+        back on for an already-run one-off entry queues it to run once more.
       parameters:
         - name: id
           in: path
@@ -588,7 +578,7 @@ paths:
         "503": { $ref: "#/components/responses/NotConfigured" }
     delete:
       tags: [admin]
-      summary: Delete a recurring crawl schedule
+      summary: Delete a crawl
       parameters:
         - name: id
           in: path
@@ -604,27 +594,10 @@ paths:
         "503": { $ref: "#/components/responses/NotConfigured" }
 
   # --------------------------------------------------------- crawl-internal
-  /crawl:
-    post:
-      tags: [crawl-internal]
-      summary: Start a crawl job (crawl-server's own entrypoint)
-      description: >-
-        Called only by admin-server (`POST /admin/api/crawl` proxies to
-        this). Never reachable from the internet.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/CrawlRequest" }
-      responses:
-        "202":
-          description: Accepted
-          content:
-            application/json:
-              schema:
-                type: object
-                properties: { job_id: { type: string } }
-        "400": { $ref: "#/components/responses/BadRequest" }
+  # crawl-server has no HTTP entrypoint to start a crawl -- the only caller
+  # is its own in-process scheduler ticker (application.TriggerDueCrawls),
+  # which calls Handler.TriggerScheduledCrawl directly. /jobs* below is
+  # read-only, for admin-server to poll progress on jobs the ticker started.
   /jobs:
     get:
       tags: [crawl-internal]
@@ -895,41 +868,6 @@ components:
           description: Row count per schema table, keyed by table name.
           additionalProperties: { type: integer }
 
-    CrawlRequest:
-      type: object
-      required: [seed_urls]
-      properties:
-        seed_urls: { type: array, items: { type: string }, minItems: 1 }
-        max_pages: { type: integer }
-        cookie:
-          type: string
-          description: Applied only to this crawl -- never persisted.
-        basic_auth_user: { type: string, description: Applied only to this crawl -- never persisted. }
-        basic_auth_pass: { type: string, description: Applied only to this crawl -- never persisted. }
-        respect_robots: { type: boolean, default: false }
-        user_agent: { type: string }
-        allow_off_domain_links: { type: boolean, default: false }
-        use_sitemap: { type: boolean, default: false }
-        fetch_timeout_seconds:
-          type: integer
-          description: Overrides the global default for this crawl alone; 0 means "use the global default."
-        min_text_length:
-          type: integer
-          description: Overrides the global default for this crawl alone; 0 means "use the global default."
-        crawl_delay_ms:
-          type: integer
-          description: Overrides the global default for this crawl alone; 0 means "use the global default."
-        max_response_kb:
-          type: integer
-          description: Overrides the global default for this crawl alone; 0 means "use the global default."
-        prioritize_unindexed:
-          type: boolean
-          default: false
-          description: >-
-            Fetch not-yet-indexed URLs before re-fetching ones already
-            indexed, within the same max_pages budget. Reorders discovery
-            only -- it never skips already-indexed pages.
-
     CrawlJobRequest:
       description: A redacted summary of the request that started a job -- HasCookie/HasBasicAuth booleans, never the actual credentials.
       type: object
@@ -984,16 +922,51 @@ components:
               items: { $ref: "#/components/schemas/CrawlPageEvent" }
 
     ScheduledCrawlRequest:
-      description: No cookie/Basic-auth fields -- a recurring schedule never stores credentials at rest.
+      description: >-
+        The one request shape for creating or replacing any crawl -- a
+        one-off run and a recurring schedule differ only in `recurring`
+        and `interval_minutes`, not in which fields are available.
+        `interval_minutes` must be positive when `recurring` is true;
+        otherwise it's unused.
       type: object
-      required: [seed_urls, interval_minutes]
+      required: [seed_urls]
       properties:
         seed_urls: { type: array, items: { type: string }, minItems: 1 }
         max_pages: { type: integer }
         respect_robots: { type: boolean }
         user_agent: { type: string }
+        cookie:
+          type: string
+          description: Stored and reused on every run, like any other option.
+        basic_auth_user: { type: string }
+        basic_auth_pass: { type: string, description: "Stored and reused on every run, like any other option." }
         allow_off_domain_links: { type: boolean }
         use_sitemap: { type: boolean }
+        fetch_timeout_seconds:
+          type: integer
+          description: Overrides the global default for this crawl alone; 0 means "use the global default."
+        min_text_length:
+          type: integer
+          description: Overrides the global default for this crawl alone; 0 means "use the global default."
+        crawl_delay_ms:
+          type: integer
+          description: Overrides the global default for this crawl alone; 0 means "use the global default."
+        max_response_kb:
+          type: integer
+          description: Overrides the global default for this crawl alone; 0 means "use the global default."
+        prioritize_unindexed:
+          type: boolean
+          default: false
+          description: >-
+            Fetch not-yet-indexed URLs before re-fetching ones already
+            indexed, within the same max_pages budget. Reorders discovery
+            only -- it never skips already-indexed pages.
+        recurring:
+          type: boolean
+          default: false
+          description: >-
+            false (default): run once, at next_run_at (immediately on
+            create). true: repeat every interval_minutes until disabled.
         interval_minutes: { type: integer, minimum: 1 }
         enabled: { type: boolean }
 

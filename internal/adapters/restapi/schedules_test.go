@@ -47,7 +47,7 @@ func (f *fakeScheduledCrawlStore) DeleteScheduledCrawl(_ context.Context, id str
 func (f *fakeScheduledCrawlStore) DueScheduledCrawls(context.Context, time.Time) ([]domain.ScheduledCrawl, error) {
 	return nil, nil
 }
-func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(context.Context, string, time.Time, time.Time) error {
+func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(context.Context, string, time.Time, time.Time, bool) error {
 	return nil
 }
 
@@ -67,27 +67,6 @@ func adminAuthedHandlerWithSchedules(t *testing.T, schedules ports.ScheduledCraw
 		t.Fatalf("login failed: %d %s", rec.Code, rec.Body.String())
 	}
 	return h, rec.Result().Cookies()[0]
-}
-
-func TestHandleAdminSchedulesPage_RequiresAuth(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
-	req := httptest.NewRequest(http.MethodGet, "/admin/schedules", nil)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusSeeOther {
-		t.Errorf("expected 303 redirect, got %d", rec.Code)
-	}
-}
-
-func TestHandleAdminSchedulesPage_ServesWhenAuthenticated(t *testing.T) {
-	h, cookie := adminAuthedHandlerWithSchedules(t, &fakeScheduledCrawlStore{})
-	req := httptest.NewRequest(http.MethodGet, "/admin/schedules", nil)
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", rec.Code)
-	}
 }
 
 func TestHandleAdminSchedules_GetListsSchedules(t *testing.T) {
@@ -152,12 +131,12 @@ func TestHandleAdminSchedules_Unauthenticated(t *testing.T) {
 	}
 }
 
-func TestHandleAdminSchedules_PostCreatesSchedule(t *testing.T) {
+func TestHandleAdminSchedules_PostCreatesRecurringCrawl(t *testing.T) {
 	store := &fakeScheduledCrawlStore{}
 	h, cookie := adminAuthedHandlerWithSchedules(t, store)
 	body, _ := json.Marshal(map[string]interface{}{
 		"seed_urls": []string{"http://a.example"}, "max_pages": 15,
-		"interval_minutes": 20, "respect_robots": true, "use_sitemap": true,
+		"recurring": true, "interval_minutes": 20, "respect_robots": true, "use_sitemap": true,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
 	req.AddCookie(cookie)
@@ -177,10 +156,10 @@ func TestHandleAdminSchedules_PostCreatesSchedule(t *testing.T) {
 		t.Errorf("expected options to pass through, got %+v", store.created)
 	}
 	if !store.created.Enabled {
-		t.Error("expected a freshly created schedule to be enabled")
+		t.Error("expected a freshly created entry to be enabled")
 	}
-	if store.created.IntervalMinutes != 20 {
-		t.Errorf("expected interval_minutes 20, got %d", store.created.IntervalMinutes)
+	if !store.created.Recurring || store.created.IntervalMinutes != 20 {
+		t.Errorf("expected a recurring entry with interval_minutes 20, got %+v", store.created)
 	}
 	wantNext := store.created.CreatedAt.Add(20 * time.Minute)
 	if store.created.NextRunAt.Sub(wantNext).Abs() > time.Second {
@@ -188,9 +167,38 @@ func TestHandleAdminSchedules_PostCreatesSchedule(t *testing.T) {
 	}
 }
 
+// TestHandleAdminSchedules_PostCreatesOneOffCrawl proves a non-recurring
+// entry (the "just crawl this once" case -- see domain.ScheduledCrawl's doc
+// comment) needs no interval and is due immediately, not interval_minutes
+// from now.
+func TestHandleAdminSchedules_PostCreatesOneOffCrawl(t *testing.T) {
+	store := &fakeScheduledCrawlStore{}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	body, _ := json.Marshal(map[string]interface{}{
+		"seed_urls": []string{"http://a.example"}, "max_pages": 15, "recurring": false,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.created.Recurring {
+		t.Error("expected a non-recurring entry")
+	}
+	if !store.created.Enabled {
+		t.Error("expected a freshly created entry to be enabled (so the scheduler's next tick actually runs it)")
+	}
+	if store.created.NextRunAt.Sub(store.created.CreatedAt).Abs() > time.Second {
+		t.Errorf("expected a non-recurring entry to be due immediately, got NextRunAt=%v CreatedAt=%v", store.created.NextRunAt, store.created.CreatedAt)
+	}
+}
+
 func TestHandleAdminSchedules_PostEmptySeedURLs(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithSchedules(t, &fakeScheduledCrawlStore{})
-	body, _ := json.Marshal(map[string]interface{}{"interval_minutes": 20})
+	body, _ := json.Marshal(map[string]interface{}{"recurring": true, "interval_minutes": 20})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
@@ -200,15 +208,30 @@ func TestHandleAdminSchedules_PostEmptySeedURLs(t *testing.T) {
 	}
 }
 
-func TestHandleAdminSchedules_PostZeroInterval(t *testing.T) {
+func TestHandleAdminSchedules_PostRecurringWithZeroInterval(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithSchedules(t, &fakeScheduledCrawlStore{})
-	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}})
+	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}, "recurring": true})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+// TestHandleAdminSchedules_PostNonRecurringIgnoresZeroInterval proves a
+// non-recurring entry never needs interval_minutes -- the validation that
+// requires it only applies when recurring is true.
+func TestHandleAdminSchedules_PostNonRecurringIgnoresZeroInterval(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithSchedules(t, &fakeScheduledCrawlStore{})
+	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}, "recurring": false})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Errorf("expected 201, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

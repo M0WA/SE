@@ -17,8 +17,17 @@ func newScheduledCrawl(id string, intervalMinutes int, nextRunAt time.Time) doma
 		MaxPages:            20,
 		RespectRobots:       true,
 		UserAgent:           "test-agent",
+		Cookie:              "session=abc123",
+		BasicAuthUser:       "admin",
+		BasicAuthPass:       "hunter2",
 		AllowOffDomainLinks: false,
 		UseSitemap:          true,
+		FetchTimeoutSeconds: 10,
+		MinTextLength:       100,
+		CrawlDelayMs:        500,
+		MaxResponseKB:       2048,
+		PrioritizeUnindexed: true,
+		Recurring:           true,
 		IntervalMinutes:     intervalMinutes,
 		Enabled:             true,
 		NextRunAt:           nextRunAt,
@@ -49,8 +58,15 @@ func TestCreateScheduledCrawl_ThenListRoundTrips(t *testing.T) {
 	if g.MaxPages != 20 || !g.RespectRobots || g.UserAgent != "test-agent" || g.AllowOffDomainLinks || !g.UseSitemap {
 		t.Errorf("unexpected option round trip: %+v", g)
 	}
-	if g.IntervalMinutes != 30 || !g.Enabled {
-		t.Errorf("unexpected interval/enabled round trip: %+v", g)
+	if g.Cookie != "session=abc123" || g.BasicAuthUser != "admin" || g.BasicAuthPass != "hunter2" {
+		t.Errorf("expected credentials to round trip like any other option, got %+v", g)
+	}
+	if g.FetchTimeoutSeconds != 10 || g.MinTextLength != 100 || g.CrawlDelayMs != 500 ||
+		g.MaxResponseKB != 2048 || !g.PrioritizeUnindexed {
+		t.Errorf("unexpected per-crawl override round trip: %+v", g)
+	}
+	if g.IntervalMinutes != 30 || !g.Enabled || !g.Recurring {
+		t.Errorf("unexpected interval/enabled/recurring round trip: %+v", g)
 	}
 	if g.LastRunAt != nil {
 		t.Errorf("expected a freshly created schedule to have no LastRunAt, got %v", g.LastRunAt)
@@ -94,6 +110,10 @@ func TestUpdateScheduledCrawl_ReplacesEditableFields(t *testing.T) {
 	updated.SeedURLs = []string{"http://changed.example"}
 	updated.MaxPages = 99
 	updated.RespectRobots = false
+	updated.Cookie = "session=changed"
+	updated.BasicAuthPass = "changed"
+	updated.PrioritizeUnindexed = false
+	updated.Recurring = false
 	updated.IntervalMinutes = 15
 	updated.Enabled = false
 	updated.NextRunAt = now.Add(15 * time.Minute)
@@ -115,6 +135,9 @@ func TestUpdateScheduledCrawl_ReplacesEditableFields(t *testing.T) {
 	}
 	if g.MaxPages != 99 || g.RespectRobots || g.IntervalMinutes != 15 || g.Enabled {
 		t.Errorf("expected updated fields, got %+v", g)
+	}
+	if g.Cookie != "session=changed" || g.BasicAuthPass != "changed" || g.PrioritizeUnindexed || g.Recurring {
+		t.Errorf("expected updated credentials/override/recurring fields, got %+v", g)
 	}
 }
 
@@ -190,7 +213,7 @@ func TestMarkScheduledCrawlRun_AdvancesLastAndNextRun(t *testing.T) {
 	}
 
 	nextRun := now.Add(30 * time.Minute)
-	if err := repo.MarkScheduledCrawlRun(ctx, "sched-1", now, nextRun); err != nil {
+	if err := repo.MarkScheduledCrawlRun(ctx, "sched-1", now, nextRun, true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -218,9 +241,35 @@ func TestMarkScheduledCrawlRun_AdvancesLastAndNextRun(t *testing.T) {
 	}
 }
 
+// TestMarkScheduledCrawlRun_PersistsEnabled proves the enabled param is
+// actually written, not just last_run_at/next_run_at -- what a one-off
+// (non-recurring) entry relies on to take itself out of contention right
+// at trigger time (see application.TriggerDueCrawls).
+func TestMarkScheduledCrawlRun_PersistsEnabled(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	s := newScheduledCrawl("once", 0, now)
+	if err := repo.CreateScheduledCrawl(ctx, s); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := repo.MarkScheduledCrawlRun(ctx, "once", now, now, false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := repo.ListScheduledCrawls(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || got[0].Enabled {
+		t.Errorf("expected the entry to be disabled after MarkScheduledCrawlRun(enabled=false), got %+v", got)
+	}
+}
+
 func TestMarkScheduledCrawlRun_NotFound(t *testing.T) {
 	repo := newTestRepo(t)
-	err := repo.MarkScheduledCrawlRun(context.Background(), "missing", time.Now(), time.Now())
+	err := repo.MarkScheduledCrawlRun(context.Background(), "missing", time.Now(), time.Now(), true)
 	if !errors.Is(err, ports.ErrScheduledCrawlNotFound) {
 		t.Errorf("expected ErrScheduledCrawlNotFound, got %v", err)
 	}

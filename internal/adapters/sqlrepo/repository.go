@@ -124,10 +124,64 @@ func (r *Repository) migrate(ctx context.Context) error {
 	if err := r.migrateDocumentColumns(ctx); err != nil {
 		return err
 	}
+	if err := r.migrateScheduledCrawlColumns(ctx); err != nil {
+		return err
+	}
 	if err := r.ensureHostIndex(ctx); err != nil {
 		return err
 	}
 	return r.ensureCrawledAtIndex(ctx)
+}
+
+// migrateScheduledCrawlColumns adds the per-crawl override columns (fetch
+// timeout, minimum text length, crawl delay, max response size,
+// prioritize-unindexed) to a scheduled_crawls table that predates them --
+// CREATE TABLE IF NOT EXISTS above only shapes a fresh table. A
+// pre-existing schedule defaults to 0/false for all five, same as a
+// one-off crawl leaving them blank: "use whatever's configured on the
+// Tuning page."
+func (r *Repository) migrateScheduledCrawlColumns(ctx context.Context) error {
+	existing, err := r.existingColumns(ctx, "scheduled_crawls")
+	if err != nil {
+		return err
+	}
+	addColumn := func(name, ddl string) error {
+		if existing[name] {
+			return nil
+		}
+		if _, err := r.db.ExecContext(ctx, "ALTER TABLE scheduled_crawls ADD COLUMN "+ddl); err != nil {
+			return fmt.Errorf("adding %s column: %w", name, err)
+		}
+		return nil
+	}
+	if err := addColumn("fetch_timeout_seconds", "fetch_timeout_seconds INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := addColumn("min_text_length", "min_text_length INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := addColumn("crawl_delay_ms", "crawl_delay_ms INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := addColumn("max_response_kb", "max_response_kb INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := addColumn("prioritize_unindexed", "prioritize_unindexed BOOLEAN NOT NULL DEFAULT false"); err != nil {
+		return err
+	}
+	if err := addColumn("cookie", "cookie TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := addColumn("basic_auth_user", "basic_auth_user TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := addColumn("basic_auth_pass", "basic_auth_pass TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// Recurring defaults to true for a pre-existing row -- every schedule
+	// that predates this column really was a recurring one; the
+	// run-once-then-disable shape is new.
+	return addColumn("recurring", "recurring BOOLEAN NOT NULL DEFAULT true")
 }
 
 // ensureHostIndex and ensureCrawledAtIndex both run after
@@ -1295,21 +1349,28 @@ func (r *Repository) GetSetting(ctx context.Context, key string) (value string, 
 // scheduled_crawls SELECT below scans, shared with the INSERT/UPDATE
 // statements so all four stay in sync.
 const scheduledCrawlColumns = `id, seed_urls, max_pages, respect_robots, user_agent,
-	allow_off_domain_links, use_sitemap, interval_minutes, enabled, last_run_at, next_run_at, created_at`
+	cookie, basic_auth_user, basic_auth_pass,
+	allow_off_domain_links, use_sitemap, fetch_timeout_seconds, min_text_length,
+	crawl_delay_ms, max_response_kb, prioritize_unindexed, recurring,
+	interval_minutes, enabled, last_run_at, next_run_at, created_at`
 
-// CreateScheduledCrawl inserts a new recurring crawl schedule. Deliberately
-// carries no credentials to persist -- ScheduledCrawl has none.
+// CreateScheduledCrawl inserts a new crawl definition -- the one
+// representation of a crawl the admin sets up, whether it recurs or (see
+// s.Recurring) just runs once.
 func (r *Repository) CreateScheduledCrawl(ctx context.Context, s domain.ScheduledCrawl) error {
 	seedJSON, err := json.Marshal(s.SeedURLs)
 	if err != nil {
 		return fmt.Errorf("encoding seed urls: %w", err)
 	}
 	insertSQL := r.ph(`INSERT INTO scheduled_crawls (`+scheduledCrawlColumns+`)
-	                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`,
-		1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+	                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`,
+		1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21)
 	_, err = r.db.ExecContext(ctx, insertSQL,
 		s.ID, string(seedJSON), s.MaxPages, s.RespectRobots, s.UserAgent,
-		s.AllowOffDomainLinks, s.UseSitemap, s.IntervalMinutes, s.Enabled,
+		s.Cookie, s.BasicAuthUser, s.BasicAuthPass,
+		s.AllowOffDomainLinks, s.UseSitemap, s.FetchTimeoutSeconds, s.MinTextLength,
+		s.CrawlDelayMs, s.MaxResponseKB, s.PrioritizeUnindexed, s.Recurring,
+		s.IntervalMinutes, s.Enabled,
 		nullableTimeString(s.LastRunAt), s.NextRunAt.UTC().Format(crawledAtLayout), s.CreatedAt.UTC().Format(crawledAtLayout),
 	)
 	if err != nil {
@@ -1347,12 +1408,18 @@ func (r *Repository) UpdateScheduledCrawl(ctx context.Context, s domain.Schedule
 	}
 	updateSQL := r.ph(`UPDATE scheduled_crawls SET
 	                      seed_urls = %s, max_pages = %s, respect_robots = %s, user_agent = %s,
-	                      allow_off_domain_links = %s, use_sitemap = %s, interval_minutes = %s,
+	                      cookie = %s, basic_auth_user = %s, basic_auth_pass = %s,
+	                      allow_off_domain_links = %s, use_sitemap = %s, fetch_timeout_seconds = %s,
+	                      min_text_length = %s, crawl_delay_ms = %s, max_response_kb = %s,
+	                      prioritize_unindexed = %s, recurring = %s, interval_minutes = %s,
 	                      enabled = %s, next_run_at = %s
-	                    WHERE id = %s`, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+	                    WHERE id = %s`, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19)
 	res, err := r.db.ExecContext(ctx, updateSQL,
 		string(seedJSON), s.MaxPages, s.RespectRobots, s.UserAgent,
-		s.AllowOffDomainLinks, s.UseSitemap, s.IntervalMinutes, s.Enabled,
+		s.Cookie, s.BasicAuthUser, s.BasicAuthPass,
+		s.AllowOffDomainLinks, s.UseSitemap, s.FetchTimeoutSeconds,
+		s.MinTextLength, s.CrawlDelayMs, s.MaxResponseKB,
+		s.PrioritizeUnindexed, s.Recurring, s.IntervalMinutes, s.Enabled,
 		s.NextRunAt.UTC().Format(crawledAtLayout), s.ID,
 	)
 	if err != nil {
@@ -1405,13 +1472,18 @@ func (r *Repository) DueScheduledCrawls(ctx context.Context, now time.Time) ([]d
 	return out, rows.Err()
 }
 
-// MarkScheduledCrawlRun records that a schedule was just triggered, so the
-// next tick's DueScheduledCrawls call doesn't pick it up again until its
-// interval has actually elapsed.
-func (r *Repository) MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time) error {
-	updateSQL := r.ph(`UPDATE scheduled_crawls SET last_run_at = %s, next_run_at = %s WHERE id = %s`, 1, 2, 3)
+// MarkScheduledCrawlRun records that a schedule was just triggered (or just
+// finished -- see application.TriggerDueCrawls, which calls this twice per
+// run: once immediately with a provisional nextRunAt, once more when the
+// crawl actually completes, correcting nextRunAt to reflect the real
+// finish time). enabled lets a one-off (non-recurring) entry take itself
+// out of contention for DueScheduledCrawls immediately, rather than
+// waiting to be corrected at completion -- a recurring entry just passes
+// its own already-true Enabled through unchanged.
+func (r *Repository) MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time, enabled bool) error {
+	updateSQL := r.ph(`UPDATE scheduled_crawls SET last_run_at = %s, next_run_at = %s, enabled = %s WHERE id = %s`, 1, 2, 3, 4)
 	res, err := r.db.ExecContext(ctx, updateSQL,
-		lastRunAt.UTC().Format(crawledAtLayout), nextRunAt.UTC().Format(crawledAtLayout), id)
+		lastRunAt.UTC().Format(crawledAtLayout), nextRunAt.UTC().Format(crawledAtLayout), enabled, id)
 	if err != nil {
 		return fmt.Errorf("marking scheduled crawl run (%s): %w", id, err)
 	}
@@ -1460,7 +1532,10 @@ func scanScheduledCrawl(row scanner) (domain.ScheduledCrawl, error) {
 	var lastRunAt sql.NullString
 	var nextRunAt, createdAt string
 	if err := row.Scan(&s.ID, &seedJSON, &s.MaxPages, &s.RespectRobots, &s.UserAgent,
-		&s.AllowOffDomainLinks, &s.UseSitemap, &s.IntervalMinutes, &s.Enabled,
+		&s.Cookie, &s.BasicAuthUser, &s.BasicAuthPass,
+		&s.AllowOffDomainLinks, &s.UseSitemap, &s.FetchTimeoutSeconds, &s.MinTextLength,
+		&s.CrawlDelayMs, &s.MaxResponseKB, &s.PrioritizeUnindexed, &s.Recurring,
+		&s.IntervalMinutes, &s.Enabled,
 		&lastRunAt, &nextRunAt, &createdAt); err != nil {
 		return domain.ScheduledCrawl{}, err
 	}

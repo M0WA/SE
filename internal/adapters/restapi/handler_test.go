@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"searchengine/internal/adapters/restapi"
@@ -30,34 +31,37 @@ func (f *fakeSearch) Search(_ context.Context, q string, opts ports.SearchQuery)
 // fakeCrawler is used by crawl-server-side tests (RoutesCrawlInternal, in
 // crawl_internal_test.go) -- the real, synchronous crawl executor.
 type fakeCrawler struct {
-	count      int
-	err        error
+	count int
+	err   error
+
+	// mu guards gotOptions, since a single fakeCrawler shared across
+	// several concurrently-triggered crawls (see
+	// TestHandleCrawlInternal_ConcurrentJobsAllComplete) gets Crawl called
+	// from more than one runCrawlJob goroutine at once. Every test that
+	// reads gotOptions back only ever does so after waitForJob confirms
+	// that crawl's own job finished, which already happens-after the one
+	// write it cares about via the job store's own locking -- this mutex
+	// exists only to keep the write itself race-free under the race
+	// detector, not to make gotOptions safe to read concurrently with more
+	// crawls still in flight.
+	mu         sync.Mutex
 	gotOptions ports.CrawlOptions
 }
 
 func (f *fakeCrawler) Crawl(_ context.Context, opts ports.CrawlOptions, onPage func(domain.CrawlPageEvent)) (int, error) {
+	f.mu.Lock()
 	f.gotOptions = opts
+	f.mu.Unlock()
 	return f.count, f.err
 }
 
 // fakeJobService is used by admin-server-side tests -- the HTTP client
 // admin-server would otherwise use to reach crawl-server.
 type fakeJobService struct {
-	jobID      string
-	startErr   error
-	jobs       []domain.CrawlJobSummary
-	listErr    error
-	job        domain.CrawlJob
-	getErr     error
-	gotOptions ports.CrawlOptions
-}
-
-func (f *fakeJobService) StartCrawlJob(_ context.Context, opts ports.CrawlOptions) (string, error) {
-	f.gotOptions = opts
-	if f.startErr != nil {
-		return "", f.startErr
-	}
-	return f.jobID, nil
+	jobs    []domain.CrawlJobSummary
+	listErr error
+	job     domain.CrawlJob
+	getErr  error
 }
 
 func (f *fakeJobService) ListCrawlJobs(_ context.Context) ([]domain.CrawlJobSummary, error) {
@@ -484,17 +488,6 @@ func TestHandleAdminCrawlPage_Unauthenticated_Redirects(t *testing.T) {
 	}
 }
 
-func TestHandleAdminCrawl_Unauthenticated_PostReturns401(t *testing.T) {
-	h := restapi.New(restapi.Config{Search: &fakeSearch{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader([]byte(`{}`)))
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401, got %d", rec.Code)
-	}
-}
-
 func TestHandleAdminCrawlPage_NoAdminConfigured_AlwaysUnauthenticated(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: &fakeSearch{}})
 	req := httptest.NewRequest(http.MethodGet, "/admin/crawl", nil)
@@ -503,125 +496,6 @@ func TestHandleAdminCrawlPage_NoAdminConfigured_AlwaysUnauthenticated(t *testing
 
 	if rec.Code != http.StatusSeeOther {
 		t.Errorf("expected redirect to login when no admin account is configured, got %d", rec.Code)
-	}
-}
-
-func TestHandleAdminCrawl_Success(t *testing.T) {
-	fj := &fakeJobService{jobID: "job-42"}
-	h, cookie := authedHandler(t, &fakeSearch{}, fj)
-
-	body, _ := json.Marshal(map[string]interface{}{
-		"seed_urls": []string{"http://a"}, "max_pages": 5,
-		"respect_robots": true, "user_agent": "custom-bot/1.0",
-	})
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader(body))
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
-	}
-	var resp map[string]string
-	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
-	if resp["job_id"] != "job-42" {
-		t.Errorf("expected job_id=job-42, got %v", resp)
-	}
-	if len(fj.gotOptions.SeedURLs) != 1 || fj.gotOptions.SeedURLs[0] != "http://a" || fj.gotOptions.MaxPages != 5 {
-		t.Errorf("unexpected options passed to job service: %+v", fj.gotOptions)
-	}
-	if !fj.gotOptions.RespectRobots || fj.gotOptions.UserAgent != "custom-bot/1.0" {
-		t.Errorf("expected respect_robots/user_agent to pass through, got %+v", fj.gotOptions)
-	}
-}
-
-func TestHandleAdminCrawl_PassesOffDomainAndSitemapOptionsThrough(t *testing.T) {
-	fj := &fakeJobService{jobID: "job-42"}
-	h, cookie := authedHandler(t, &fakeSearch{}, fj)
-
-	body, _ := json.Marshal(map[string]interface{}{
-		"seed_urls": []string{"http://a"}, "allow_off_domain_links": true, "use_sitemap": true,
-	})
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader(body))
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if !fj.gotOptions.AllowOffDomainLinks || !fj.gotOptions.UseSitemap {
-		t.Errorf("expected allow_off_domain_links/use_sitemap to pass through, got %+v", fj.gotOptions)
-	}
-}
-
-// TestHandleAdminCrawl_PassesPerCrawlSettingOverridesThrough verifies the
-// previously-global-only settings (fetch timeout, min text length, crawl
-// delay, max response size) and the prioritize-unindexed flag all reach
-// ports.CrawlOptions from the admin API's JSON body.
-func TestHandleAdminCrawl_PassesPerCrawlSettingOverridesThrough(t *testing.T) {
-	fj := &fakeJobService{jobID: "job-42"}
-	h, cookie := authedHandler(t, &fakeSearch{}, fj)
-
-	body, _ := json.Marshal(map[string]interface{}{
-		"seed_urls":             []string{"http://a"},
-		"fetch_timeout_seconds": 45, "min_text_length": 100,
-		"crawl_delay_ms": 500, "max_response_kb": 2048,
-		"prioritize_unindexed": true,
-	})
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader(body))
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
-	}
-	got := fj.gotOptions
-	if got.FetchTimeoutSeconds != 45 || got.MinTextLength != 100 || got.CrawlDelayMs != 500 ||
-		got.MaxResponseKB != 2048 || !got.PrioritizeUnindexed {
-		t.Errorf("expected per-crawl setting overrides to pass through, got %+v", got)
-	}
-}
-
-// TestHandleAdminCrawl_PerCrawlSettingOverridesDefaultZero verifies an
-// admin API request that omits these fields leaves them at their
-// "use the global default" zero value, not some other default.
-func TestHandleAdminCrawl_PerCrawlSettingOverridesDefaultZero(t *testing.T) {
-	fj := &fakeJobService{jobID: "job-42"}
-	h, cookie := authedHandler(t, &fakeSearch{}, fj)
-
-	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}})
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader(body))
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
-	}
-	got := fj.gotOptions
-	if got.FetchTimeoutSeconds != 0 || got.MinTextLength != 0 || got.CrawlDelayMs != 0 ||
-		got.MaxResponseKB != 0 || got.PrioritizeUnindexed {
-		t.Errorf("expected per-crawl setting overrides to default to zero/false, got %+v", got)
-	}
-}
-
-func TestHandleAdminCrawl_OffDomainAndSitemapOptionsDefaultFalse(t *testing.T) {
-	fj := &fakeJobService{jobID: "job-42"}
-	h, cookie := authedHandler(t, &fakeSearch{}, fj)
-
-	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}})
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader(body))
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if fj.gotOptions.AllowOffDomainLinks || fj.gotOptions.UseSitemap {
-		t.Errorf("expected allow_off_domain_links/use_sitemap to default false, got %+v", fj.gotOptions)
 	}
 }
 
@@ -666,65 +540,6 @@ func TestHandleAdminCrawlPage_MethodNotAllowed(t *testing.T) {
 	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405, got %d", rec.Code)
-	}
-}
-
-func TestHandleAdminCrawl_MethodNotAllowed(t *testing.T) {
-	h, cookie := authedHandler(t, &fakeSearch{}, &fakeJobService{})
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/crawl", nil)
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Errorf("expected 405, got %d", rec.Code)
-	}
-}
-
-func TestHandleAdminCrawl_InvalidJSON(t *testing.T) {
-	h, cookie := authedHandler(t, &fakeSearch{}, &fakeJobService{})
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader([]byte("{ungültig")))
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d", rec.Code)
-	}
-}
-
-func TestHandleAdminCrawl_EmptySeedURLs(t *testing.T) {
-	h, cookie := authedHandler(t, &fakeSearch{}, &fakeJobService{})
-	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{}})
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader(body))
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d", rec.Code)
-	}
-}
-
-func TestHandleAdminCrawl_ServiceError(t *testing.T) {
-	fj := &fakeJobService{startErr: errors.New("crawl failed")}
-	h, cookie := authedHandler(t, &fakeSearch{}, fj)
-	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}})
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader(body))
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("expected 500, got %d", rec.Code)
-	}
-}
-
-func TestHandleAdminCrawl_NotConfigured(t *testing.T) {
-	h, cookie := authedHandler(t, &fakeSearch{}, nil)
-	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}})
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/crawl", bytes.NewReader(body))
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("expected 503 when no job service is configured, got %d", rec.Code)
 	}
 }
 

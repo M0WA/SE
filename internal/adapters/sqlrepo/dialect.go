@@ -59,8 +59,13 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 		)`,
 		`CREATE TABLE IF NOT EXISTS scheduled_crawls (
 			id TEXT PRIMARY KEY, seed_urls TEXT NOT NULL, max_pages INTEGER NOT NULL,
-			respect_robots BOOLEAN, user_agent TEXT, allow_off_domain_links BOOLEAN,
+			respect_robots BOOLEAN, user_agent TEXT,
+			cookie TEXT NOT NULL DEFAULT '', basic_auth_user TEXT NOT NULL DEFAULT '', basic_auth_pass TEXT NOT NULL DEFAULT '',
+			allow_off_domain_links BOOLEAN,
 			use_sitemap BOOLEAN, interval_minutes INTEGER NOT NULL,
+			fetch_timeout_seconds INTEGER NOT NULL DEFAULT 0, min_text_length INTEGER NOT NULL DEFAULT 0,
+			crawl_delay_ms INTEGER NOT NULL DEFAULT 0, max_response_kb INTEGER NOT NULL DEFAULT 0,
+			prioritize_unindexed BOOLEAN NOT NULL DEFAULT false, recurring BOOLEAN NOT NULL DEFAULT true,
 			enabled BOOLEAN NOT NULL DEFAULT true, last_run_at TEXT,
 			next_run_at TEXT NOT NULL, created_at TEXT NOT NULL
 		)`,
@@ -136,8 +141,13 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 		) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS scheduled_crawls (
 			id VARCHAR(64) PRIMARY KEY, seed_urls TEXT NOT NULL, max_pages INT NOT NULL,
-			respect_robots BOOLEAN, user_agent VARCHAR(255), allow_off_domain_links BOOLEAN,
+			respect_robots BOOLEAN, user_agent VARCHAR(255),
+			cookie TEXT, basic_auth_user VARCHAR(255) NOT NULL DEFAULT '', basic_auth_pass VARCHAR(255) NOT NULL DEFAULT '',
+			allow_off_domain_links BOOLEAN,
 			use_sitemap BOOLEAN, interval_minutes INT NOT NULL,
+			fetch_timeout_seconds INT NOT NULL DEFAULT 0, min_text_length INT NOT NULL DEFAULT 0,
+			crawl_delay_ms INT NOT NULL DEFAULT 0, max_response_kb INT NOT NULL DEFAULT 0,
+			prioritize_unindexed BOOLEAN NOT NULL DEFAULT false, recurring BOOLEAN NOT NULL DEFAULT true,
 			enabled BOOLEAN NOT NULL DEFAULT true, last_run_at VARCHAR(64),
 			next_run_at VARCHAR(64) NOT NULL, created_at VARCHAR(64) NOT NULL
 		) ENGINE=InnoDB`,
@@ -214,8 +224,13 @@ func (postgresDialect) CreateSchemaSQL() []string {
 		)`,
 		`CREATE TABLE IF NOT EXISTS scheduled_crawls (
 			id TEXT PRIMARY KEY, seed_urls TEXT NOT NULL, max_pages INT NOT NULL,
-			respect_robots BOOLEAN, user_agent TEXT, allow_off_domain_links BOOLEAN,
+			respect_robots BOOLEAN, user_agent TEXT,
+			cookie TEXT NOT NULL DEFAULT '', basic_auth_user TEXT NOT NULL DEFAULT '', basic_auth_pass TEXT NOT NULL DEFAULT '',
+			allow_off_domain_links BOOLEAN,
 			use_sitemap BOOLEAN, interval_minutes INT NOT NULL,
+			fetch_timeout_seconds INT NOT NULL DEFAULT 0, min_text_length INT NOT NULL DEFAULT 0,
+			crawl_delay_ms INT NOT NULL DEFAULT 0, max_response_kb INT NOT NULL DEFAULT 0,
+			prioritize_unindexed BOOLEAN NOT NULL DEFAULT false, recurring BOOLEAN NOT NULL DEFAULT true,
 			enabled BOOLEAN NOT NULL DEFAULT true, last_run_at TEXT,
 			next_run_at TEXT NOT NULL, created_at TEXT NOT NULL
 		)`,

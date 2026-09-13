@@ -90,7 +90,8 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 	// way it would in production: over HTTP, via crawlclient.
 	handler := restapi.New(restapi.Config{
 		Search: searchSvc, OpSettings: opSettings, Jobs: crawlclient.New(crawlServer.URL),
-		AdminUser: "admin", AdminPass: "test-password",
+		ScheduledCrawls: repo,
+		AdminUser:       "admin", AdminPass: "test-password",
 	})
 	searchAPI := httptest.NewServer(handler.RoutesSearch())
 	defer searchAPI.Close()
@@ -113,28 +114,43 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 		t.Fatalf("expected 200 from /login, got %d", loginResp.StatusCode)
 	}
 
+	// Every crawl -- one-off or recurring -- is created the same way: a
+	// scheduled_crawls entry (see domain.ScheduledCrawl). "recurring: false"
+	// is a plain one-off crawl, due immediately; crawl-server's scheduler
+	// ticker (application.TriggerDueCrawls, run here directly rather than
+	// waiting on cmd/crawl/main.go's real polling loop) is what actually
+	// executes it, exactly as production does.
 	crawlBody, _ := json.Marshal(map[string]interface{}{
 		"seed_urls":      []string{site.URL + "/"},
 		"max_pages":      10,
 		"respect_robots": true,
+		"recurring":      false,
 	})
-	resp, err := client.Post(adminAPI.URL+"/admin/api/crawl", "application/json", bytes.NewReader(crawlBody))
+	resp, err := client.Post(adminAPI.URL+"/admin/api/schedules", "application/json", bytes.NewReader(crawlBody))
 	if err != nil {
 		t.Fatalf("crawl request failed: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("expected 202 from /admin/api/crawl, got %d", resp.StatusCode)
-	}
-	var startResp struct {
-		JobID string `json:"job_id"`
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&startResp)
-	if startResp.JobID == "" {
-		t.Fatal("expected a non-empty job_id")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 from /admin/api/schedules, got %d", resp.StatusCode)
 	}
 
-	job := waitForCrawlJob(t, client, adminAPI.URL, startResp.JobID)
+	if _, err := application.TriggerDueCrawls(ctx, repo, crawlHandler.TriggerScheduledCrawl, time.Now()); err != nil {
+		t.Fatalf("triggering due crawls: %v", err)
+	}
+
+	jobsResp, err := client.Get(adminAPI.URL + "/admin/api/crawl/jobs")
+	if err != nil {
+		t.Fatalf("listing crawl jobs failed: %v", err)
+	}
+	var jobs []domain.CrawlJobSummary
+	_ = json.NewDecoder(jobsResp.Body).Decode(&jobs)
+	jobsResp.Body.Close()
+	if len(jobs) != 1 {
+		t.Fatalf("expected exactly 1 crawl job, got %d: %+v", len(jobs), jobs)
+	}
+
+	job := waitForCrawlJob(t, client, adminAPI.URL, jobs[0].ID)
 	if job.Status != domain.CrawlJobDone {
 		t.Fatalf("expected job done, got %s (err=%s)", job.Status, job.Error)
 	}

@@ -19,7 +19,6 @@
     <a href="/admin">Overview</a>
     <a href="/admin/documents">Documents</a>
     <a href="/admin/crawl" aria-current="page">Crawl</a>
-    <a href="/admin/schedules">Schedules</a>
     <a href="/admin/tuning">Tuning</a>
     <a href="/admin/search">Search</a>
     <a href="/admin/overrides">Overrides</a>
@@ -34,6 +33,18 @@
   </form>
   <details class="crawl-advanced">
     <summary>Advanced options for this crawl</summary>
+    <div class="form-row form-row-check">
+      <label for="crawl-recurring">
+        <input id="crawl-recurring" type="checkbox">
+        Repeat this crawl automatically
+      </label>
+      <p class="tuning-hint">Off by default — runs once. When checked, it repeats on the interval below (see it, pause it, or delete it under Crawls further down) until you disable it.</p>
+    </div>
+    <div class="form-row">
+      <label for="crawl-interval">Interval — minutes between runs</label><br>
+      <input id="crawl-interval" class="field" type="number" min="1" value="60">
+      <p class="tuning-hint">Only used when repeating.</p>
+    </div>
     <div class="form-row form-row-check">
       <label for="crawl-respect-robots">
         <input id="crawl-respect-robots" type="checkbox">
@@ -72,11 +83,11 @@
     </div>
     <div class="form-row">
       <label for="crawl-basic-user">Basic auth username</label><br>
-      <input id="crawl-basic-user" class="field" type="text" autocomplete="off">
+      <input id="crawl-basic-user" class="field" type="text" autocomplete="off" readonly>
     </div>
     <div class="form-row">
       <label for="crawl-basic-pass">Basic auth password</label><br>
-      <input id="crawl-basic-pass" class="field" type="password" autocomplete="off">
+      <input id="crawl-basic-pass" class="field" type="password" autocomplete="new-password" readonly>
     </div>
     <p class="tuning-hint">Applies only to this crawl — nothing is stored.</p>
     <div class="form-row">
@@ -98,6 +109,15 @@
     <p class="tuning-hint">These four override the site-wide crawl defaults (set on the Tuning page) for this crawl alone — leave blank to use whatever's currently configured there.</p>
   </details>
   <div id="crawl-status"></div>
+
+  <section class="panel">
+    <h2>Crawls</h2>
+    <p class="lede" style="margin: 0 0 1rem;">Every crawl set up on this instance, one-off or repeating, with its options saved for reuse. Uncheck one to pause it; check a finished one-off crawl again to re-run it once more.</p>
+    <div id="crawls-status" class="panel-status"></div>
+    <input id="crawls-filter" class="field" type="text" placeholder="Filter crawls (regex) — matches seed" hidden>
+    <div id="crawls-filter-error" class="error-text"></div>
+    <div id="crawls-table"></div>
+  </section>
 
   <section class="panel">
     <h2>Jobs</h2>
@@ -133,6 +153,8 @@
   const crawlAllowOffDomain = document.getElementById('crawl-allow-off-domain');
   const crawlUseSitemap = document.getElementById('crawl-use-sitemap');
   const crawlPrioritizeUnindexed = document.getElementById('crawl-prioritize-unindexed');
+  const crawlRecurring = document.getElementById('crawl-recurring');
+  const crawlInterval = document.getElementById('crawl-interval');
   const crawlUserAgent = document.getElementById('crawl-user-agent');
   const crawlFetchTimeout = document.getElementById('crawl-fetch-timeout');
   const crawlMinTextLength = document.getElementById('crawl-min-text-length');
@@ -140,6 +162,10 @@
   const crawlMaxResponse = document.getElementById('crawl-max-response');
   const crawlStatus = document.getElementById('crawl-status');
   const crawlSubmitBtn = crawlForm.querySelector('button[type="submit"]');
+  const crawlsStatusEl = document.getElementById('crawls-status');
+  const crawlsFilterEl = document.getElementById('crawls-filter');
+  const crawlsFilterErrorEl = document.getElementById('crawls-filter-error');
+  const crawlsTableEl = document.getElementById('crawls-table');
   const jobsStatusEl = document.getElementById('jobs-status');
   const jobsFilterEl = document.getElementById('jobs-filter');
   const jobsFilterErrorEl = document.getElementById('jobs-filter-error');
@@ -163,6 +189,15 @@
   let jobDetailPageNum = 1;
   let allJobs = [];
   let jobsFilterText = '';
+  let allCrawls = [];
+  let crawlsFilterText = '';
+  // awaitingNewJobUntil keeps loadJobs polling for a short window right
+  // after creating a one-off crawl, even though no job exists yet -- it's
+  // only created once crawl-server's scheduler ticker (application.
+  // TriggerDueCrawls) next runs, not synchronously with this page's
+  // request. Without this, loadJobs' own poll-only-while-something-is-
+  // active logic would never notice the new job appear.
+  let awaitingNewJobUntil = 0;
 
   const prefillURL = new URLSearchParams(window.location.search).get('url');
   if (prefillURL) {
@@ -172,6 +207,23 @@
   crawlURL.addEventListener('blur', () => {
     if (crawlURL.value.trim() !== '') crawlURL.value = normalizeURL(crawlURL.value);
   });
+
+  // The Basic auth fields start readonly and only become editable on
+  // focus -- a browser won't offer to autofill a saved login into a field
+  // that's readonly when the page loads, which "autocomplete=off" alone
+  // no longer reliably stops in most browsers. This is a one-time crawl
+  // credential, not a saved login, so there's nothing to fill in anyway.
+  for (const el of [crawlBasicUser, crawlBasicPass]) {
+    el.addEventListener('focus', () => el.removeAttribute('readonly'), { once: true });
+  }
+
+  // The submit button's label says exactly what it's about to do -- a
+  // one-off crawl reads "Crawl", a repeating one reads "Schedule".
+  function updateSubmitLabel() {
+    crawlSubmitBtn.textContent = crawlRecurring.checked ? 'Schedule' : 'Crawl';
+  }
+  crawlRecurring.addEventListener('change', updateSubmitLabel);
+  updateSubmitLabel();
 
   function capitalize(s) {
     return s.charAt(0).toUpperCase() + s.slice(1);
@@ -258,7 +310,7 @@
       if (selectedJobID && jobs.some((j) => j.id === selectedJobID && ACTIVE_STATUSES.includes(j.status))) {
         loadJobDetail(selectedJobID);
       }
-      if (jobs.some((j) => ACTIVE_STATUSES.includes(j.status))) {
+      if (jobs.some((j) => ACTIVE_STATUSES.includes(j.status)) || Date.now() < awaitingNewJobUntil) {
         scheduleNextPoll();
       }
     } catch (err) {
@@ -408,6 +460,136 @@
     }
   }
 
+  // filterCrawls mirrors filterJobs/filterPages -- a case-insensitive regex
+  // against the seed URLs, client-side over the already-fetched list.
+  function filterCrawls(crawls, pattern) {
+    if (!pattern) {
+      crawlsFilterErrorEl.textContent = '';
+      return crawls;
+    }
+    try {
+      const re = new RegExp(pattern, 'i');
+      crawlsFilterErrorEl.textContent = '';
+      return crawls.filter((s) => re.test(seedSummary(s.seed_urls)));
+    } catch (err) {
+      crawlsFilterErrorEl.textContent = 'Invalid regex: ' + err.message;
+      return crawls;
+    }
+  }
+
+  function crawlRecurrenceCell(s) {
+    return textCell(s.recurring ? s.interval_minutes + ' min' : 'once');
+  }
+
+  function crawlEnabledCell(s) {
+    const td = document.createElement('td');
+    const label = document.createElement('label');
+    label.className = 'form-row-check';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = s.enabled;
+    checkbox.addEventListener('change', () => toggleCrawlEnabled(s));
+    label.appendChild(checkbox);
+    td.appendChild(label);
+    return td;
+  }
+
+  function crawlActionsCell(s) {
+    const td = document.createElement('td');
+    td.className = 'actions';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'text-button';
+    btn.textContent = 'Delete';
+    btn.addEventListener('click', () => deleteCrawl(s.id));
+    td.appendChild(btn);
+    return td;
+  }
+
+  function renderCrawls(crawls) {
+    crawlsFilterEl.hidden = crawls.length === 0;
+    const filtered = filterCrawls(crawls, crawlsFilterText);
+    clear(crawlsTableEl);
+    if (crawls.length === 0) {
+      crawlsStatusEl.textContent = 'No crawls set up yet -- use the form above.';
+      return;
+    }
+    if (filtered.length === 0) {
+      crawlsStatusEl.textContent = 'No crawls match that filter.';
+      return;
+    }
+    crawlsStatusEl.textContent = '';
+    const table = buildTable(
+      [{ label: 'seed' }, { label: 'repeats' }, { label: 'next run' }, { label: 'last run' }, { label: 'enabled' }, { label: '' }],
+      filtered,
+      (s) => [
+        urlCell(seedSummary(s.seed_urls)),
+        crawlRecurrenceCell(s),
+        textCell(formatTimestamp(s.next_run_at)),
+        textCell(formatTimestamp(s.last_run_at)),
+        crawlEnabledCell(s),
+        crawlActionsCell(s),
+      ],
+    );
+    crawlsTableEl.appendChild(table);
+  }
+
+  crawlsFilterEl.addEventListener('input', () => {
+    crawlsFilterText = crawlsFilterEl.value.trim();
+    renderCrawls(allCrawls);
+  });
+
+  async function loadCrawls() {
+    try {
+      allCrawls = await getJSON('/admin/api/schedules');
+      renderCrawls(allCrawls);
+    } catch (err) {
+      crawlsStatusEl.textContent = 'Could not load crawls: ' + err.message;
+    }
+  }
+
+  // requestBodyFor round-trips every field a crawl carries -- toggling
+  // "enabled" (the only edit this page's table itself makes) must resend
+  // the rest unchanged, credentials included, or PATCH's full-replace
+  // semantics would silently blank them out.
+  function requestBodyFor(s) {
+    return {
+      seed_urls: s.seed_urls, max_pages: s.max_pages,
+      respect_robots: s.respect_robots, user_agent: s.user_agent,
+      cookie: s.cookie, basic_auth_user: s.basic_auth_user, basic_auth_pass: s.basic_auth_pass,
+      allow_off_domain_links: s.allow_off_domain_links, use_sitemap: s.use_sitemap,
+      fetch_timeout_seconds: s.fetch_timeout_seconds, min_text_length: s.min_text_length,
+      crawl_delay_ms: s.crawl_delay_ms, max_response_kb: s.max_response_kb,
+      prioritize_unindexed: s.prioritize_unindexed,
+      recurring: s.recurring, interval_minutes: s.interval_minutes,
+      enabled: s.enabled,
+    };
+  }
+
+  async function toggleCrawlEnabled(s) {
+    try {
+      await patchJSON('/admin/api/schedules/' + encodeURIComponent(s.id), requestBodyFor({ ...s, enabled: !s.enabled }));
+      await loadCrawls();
+    } catch (err) {
+      window.alert('Could not update: ' + err.message);
+    }
+  }
+
+  async function deleteCrawl(id) {
+    try {
+      await deleteRequest('/admin/api/schedules/' + encodeURIComponent(id));
+      await loadCrawls();
+    } catch (err) {
+      window.alert('Could not delete: ' + err.message);
+    }
+  }
+
+  // Every crawl -- one-off or repeating -- is created the same way: a
+  // crawl definition (POST /admin/api/schedules) with every option this
+  // form carries. A one-off crawl (recurring unchecked) is due right away;
+  // crawl-server's scheduler ticker picks it up within a few seconds and
+  // creates the Job this page's Jobs table then tracks -- there's no
+  // separate "just run this now" path anymore.
   crawlForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const url = normalizeURL(crawlURL.value);
@@ -416,10 +598,13 @@
       return;
     }
     const pages = parseInt(maxPages.value, 10) || 20;
-    crawlStatus.textContent = 'Starting…';
-    setButtonLoading(crawlSubmitBtn, true, 'Starting…');
+    const recurring = crawlRecurring.checked;
+    const interval = parseInt(crawlInterval.value, 10) || 60;
+    const startingLabel = recurring ? 'Scheduling…' : 'Starting…';
+    crawlStatus.textContent = startingLabel;
+    setButtonLoading(crawlSubmitBtn, true, startingLabel);
     try {
-      const data = await postJSON('/admin/api/crawl', {
+      await postJSON('/admin/api/schedules', {
         seed_urls: [url],
         max_pages: pages,
         cookie: crawlCookie.value,
@@ -434,12 +619,19 @@
         min_text_length: parseInt(crawlMinTextLength.value, 10) || 0,
         crawl_delay_ms: parseInt(crawlDelay.value, 10) || 0,
         max_response_kb: parseInt(crawlMaxResponse.value, 10) || 0,
+        recurring: recurring,
+        interval_minutes: recurring ? interval : 0,
       });
-      crawlStatus.textContent = 'Job started.';
+      crawlStatus.textContent = recurring
+        ? 'Scheduled — repeats every ' + interval + ' minutes.'
+        : 'Queued — starting within a few seconds.';
+      await loadCrawls();
+      if (!recurring) {
+        awaitingNewJobUntil = Date.now() + 15000;
+      }
       await loadJobs();
-      if (data.job_id) loadJobDetail(data.job_id);
     } catch (err) {
-      crawlStatus.textContent = 'Crawl failed: ' + err.message;
+      crawlStatus.textContent = 'Could not start: ' + err.message;
     } finally {
       setButtonLoading(crawlSubmitBtn, false);
     }
@@ -465,6 +657,7 @@
   }
 
   wireSignOut();
+  loadCrawls();
   loadJobs();
   showCurrentDefaults();
 </script>

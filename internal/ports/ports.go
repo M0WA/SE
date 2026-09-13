@@ -290,10 +290,11 @@ type CrawlerService interface {
 // job with the given ID exists (or is no longer retained).
 var ErrCrawlJobNotFound = errors.New("crawl job not found")
 
-// CrawlJobService lets a caller trigger a crawl asynchronously and poll its
-// progress, without blocking on the crawl itself completing.
+// CrawlJobService lets admin-server poll crawl-server's job progress --
+// every job is started by crawl-server's own scheduler ticker (see
+// application.TriggerDueCrawls), never by admin-server directly, so this
+// is read-only.
 type CrawlJobService interface {
-	StartCrawlJob(ctx context.Context, opts CrawlOptions) (jobID string, err error)
 	ListCrawlJobs(ctx context.Context) ([]domain.CrawlJobSummary, error)
 	GetCrawlJob(ctx context.Context, jobID string) (domain.CrawlJob, error)
 }
@@ -357,7 +358,9 @@ type ScheduledCrawlStore interface {
 	// DueScheduledCrawls lists every enabled schedule whose NextRunAt is at
 	// or before now.
 	DueScheduledCrawls(ctx context.Context, now time.Time) ([]domain.ScheduledCrawl, error)
-	// MarkScheduledCrawlRun records that a schedule was just triggered,
-	// advancing it to its next run.
-	MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time) error
+	// MarkScheduledCrawlRun records that a schedule was just triggered (or
+	// just finished), advancing it to its next run and setting whether it
+	// stays enabled -- a one-off (non-recurring) entry passes false so it's
+	// never picked up again.
+	MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time, enabled bool) error
 }

@@ -856,7 +856,7 @@ func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 		}
 	})
 	t.Run("MarkScheduledCrawlRun", func(t *testing.T) {
-		if err := closedRepo(t).MarkScheduledCrawlRun(ctx, "sched-1", time.Now(), time.Now()); err == nil {
+		if err := closedRepo(t).MarkScheduledCrawlRun(ctx, "sched-1", time.Now(), time.Now(), true); err == nil {
 			t.Error("expected an error")
 		}
 	})

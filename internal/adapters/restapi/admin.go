@@ -122,10 +122,6 @@ func (h *Handler) handleAdminCrawlPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/html; charset=utf-8", crawlHTML)
 }
 
-func (h *Handler) handleAdminSchedulesPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminSchedulesHTML)
-}
-
 type adminStatsResponse struct {
 	Driver    string  `json:"driver"`
 	TotalDocs int     `json:"total_docs"`
@@ -705,70 +701,6 @@ func (h *Handler) handleAdminOverrides(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-type crawlRequest struct {
-	SeedURLs            []string `json:"seed_urls"`
-	MaxPages            int      `json:"max_pages"`
-	Cookie              string   `json:"cookie"`
-	BasicAuthUser       string   `json:"basic_auth_user"`
-	BasicAuthPass       string   `json:"basic_auth_pass"`
-	RespectRobots       bool     `json:"respect_robots"`
-	UserAgent           string   `json:"user_agent"`
-	AllowOffDomainLinks bool     `json:"allow_off_domain_links"`
-	UseSitemap          bool     `json:"use_sitemap"`
-	// FetchTimeoutSeconds/MinTextLength/CrawlDelayMs/MaxResponseKB let this
-	// crawl override the same-named global operational defaults; 0 means
-	// "use the global default" (see ports.CrawlOptions' doc comment).
-	FetchTimeoutSeconds int  `json:"fetch_timeout_seconds"`
-	MinTextLength       int  `json:"min_text_length"`
-	CrawlDelayMs        int  `json:"crawl_delay_ms"`
-	MaxResponseKB       int  `json:"max_response_kb"`
-	PrioritizeUnindexed bool `json:"prioritize_unindexed"`
-}
-
-type startCrawlResponse struct {
-	JobID string `json:"job_id"`
-}
-
-// handleAdminCrawl starts a crawl job on crawl-server and returns
-// immediately with its ID -- it does not wait for the crawl to finish.
-// Progress is polled via handleAdminCrawlJobs/handleAdminCrawlJob.
-func (h *Handler) handleAdminCrawl(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.jobs != nil, "crawl jobs") {
-		return
-	}
-	var req crawlRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
-		return
-	}
-	if len(req.SeedURLs) == 0 {
-		http.Error(w, "seed_urls must not be empty", http.StatusBadRequest)
-		return
-	}
-
-	jobID, err := h.jobs.StartCrawlJob(r.Context(), ports.CrawlOptions{
-		SeedURLs:            req.SeedURLs,
-		MaxPages:            req.MaxPages,
-		Cookie:              req.Cookie,
-		BasicAuthUser:       req.BasicAuthUser,
-		BasicAuthPass:       req.BasicAuthPass,
-		RespectRobots:       req.RespectRobots,
-		UserAgent:           req.UserAgent,
-		AllowOffDomainLinks: req.AllowOffDomainLinks,
-		UseSitemap:          req.UseSitemap,
-		FetchTimeoutSeconds: req.FetchTimeoutSeconds,
-		MinTextLength:       req.MinTextLength,
-		CrawlDelayMs:        req.CrawlDelayMs,
-		MaxResponseKB:       req.MaxResponseKB,
-		PrioritizeUnindexed: req.PrioritizeUnindexed,
-	})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusAccepted, startCrawlResponse{JobID: jobID})
-}
-
 func (h *Handler) handleAdminCrawlJobs(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.jobs != nil, "crawl jobs") {
 		return
@@ -789,17 +721,26 @@ func (h *Handler) handleAdminCrawlJob(w http.ResponseWriter, r *http.Request) {
 	respondOrNotFound(w, err, ports.ErrCrawlJobNotFound, "crawl job not found", job)
 }
 
-// scheduledCrawlRequest is the wire shape for both creating a schedule
-// (POST /admin/api/schedules) and replacing one's editable fields
-// (PATCH /admin/api/schedules/{id}) -- deliberately no cookie/basic-auth
-// fields, since a recurring schedule never stores credentials at rest.
+// scheduledCrawlRequest is the wire shape for creating a crawl
+// (POST /admin/api/schedules) and replacing an existing one's editable
+// fields (PATCH /admin/api/schedules/{id}) -- there's no separate ad-hoc
+// "just run this once" request shape; Recurring false is that case.
 type scheduledCrawlRequest struct {
 	SeedURLs            []string `json:"seed_urls"`
 	MaxPages            int      `json:"max_pages"`
 	RespectRobots       bool     `json:"respect_robots"`
 	UserAgent           string   `json:"user_agent"`
+	Cookie              string   `json:"cookie"`
+	BasicAuthUser       string   `json:"basic_auth_user"`
+	BasicAuthPass       string   `json:"basic_auth_pass"`
 	AllowOffDomainLinks bool     `json:"allow_off_domain_links"`
 	UseSitemap          bool     `json:"use_sitemap"`
+	FetchTimeoutSeconds int      `json:"fetch_timeout_seconds"`
+	MinTextLength       int      `json:"min_text_length"`
+	CrawlDelayMs        int      `json:"crawl_delay_ms"`
+	MaxResponseKB       int      `json:"max_response_kb"`
+	PrioritizeUnindexed bool     `json:"prioritize_unindexed"`
+	Recurring           bool     `json:"recurring"`
 	IntervalMinutes     int      `json:"interval_minutes"`
 	Enabled             bool     `json:"enabled"`
 }
@@ -810,8 +751,17 @@ type scheduledCrawlResponse struct {
 	MaxPages            int        `json:"max_pages"`
 	RespectRobots       bool       `json:"respect_robots"`
 	UserAgent           string     `json:"user_agent"`
+	Cookie              string     `json:"cookie"`
+	BasicAuthUser       string     `json:"basic_auth_user"`
+	BasicAuthPass       string     `json:"basic_auth_pass"`
 	AllowOffDomainLinks bool       `json:"allow_off_domain_links"`
 	UseSitemap          bool       `json:"use_sitemap"`
+	FetchTimeoutSeconds int        `json:"fetch_timeout_seconds"`
+	MinTextLength       int        `json:"min_text_length"`
+	CrawlDelayMs        int        `json:"crawl_delay_ms"`
+	MaxResponseKB       int        `json:"max_response_kb"`
+	PrioritizeUnindexed bool       `json:"prioritize_unindexed"`
+	Recurring           bool       `json:"recurring"`
 	IntervalMinutes     int        `json:"interval_minutes"`
 	Enabled             bool       `json:"enabled"`
 	LastRunAt           *time.Time `json:"last_run_at,omitempty"`
@@ -823,27 +773,42 @@ func toScheduledCrawlResponse(s domain.ScheduledCrawl) scheduledCrawlResponse {
 	return scheduledCrawlResponse{
 		ID: s.ID, SeedURLs: s.SeedURLs, MaxPages: s.MaxPages,
 		RespectRobots: s.RespectRobots, UserAgent: s.UserAgent,
+		Cookie: s.Cookie, BasicAuthUser: s.BasicAuthUser, BasicAuthPass: s.BasicAuthPass,
 		AllowOffDomainLinks: s.AllowOffDomainLinks, UseSitemap: s.UseSitemap,
+		FetchTimeoutSeconds: s.FetchTimeoutSeconds, MinTextLength: s.MinTextLength,
+		CrawlDelayMs: s.CrawlDelayMs, MaxResponseKB: s.MaxResponseKB,
+		PrioritizeUnindexed: s.PrioritizeUnindexed, Recurring: s.Recurring,
 		IntervalMinutes: s.IntervalMinutes, Enabled: s.Enabled,
 		LastRunAt: s.LastRunAt, NextRunAt: s.NextRunAt, CreatedAt: s.CreatedAt,
 	}
 }
 
 // toScheduledCrawl builds the domain.ScheduledCrawl req describes -- shared
-// by handleAdminSchedules' POST (a new schedule) and
-// handleAdminUpdateSchedule (replacing an existing one's editable fields),
-// since both otherwise build the identical seven fields from req by hand.
-// next_run_at is always interval_minutes from now, the same rule a freshly
-// created and a just-edited schedule both follow; created_at is only
-// meaningful for a new schedule (UpdateScheduledCrawl's SQL never touches
-// that column, so passing "now" there too is harmless).
+// by handleAdminSchedules' POST (a new crawl) and handleAdminUpdateSchedule
+// (replacing an existing one's editable fields), since both otherwise
+// build the identical fields from req by hand. A recurring entry's first
+// run is interval_minutes from now, same rule a freshly created and a
+// just-edited one both follow; a non-recurring (one-off) entry is due
+// right now instead, since there's no interval to wait out -- the
+// scheduler's own next tick runs it once, then disables it (see
+// application.TriggerDueCrawls). created_at is only meaningful for a new
+// entry (UpdateScheduledCrawl's SQL never touches that column, so passing
+// "now" there too is harmless).
 func (req scheduledCrawlRequest) toScheduledCrawl(id string, enabled bool, now time.Time) domain.ScheduledCrawl {
+	next := now
+	if req.Recurring {
+		next = now.Add(time.Duration(req.IntervalMinutes) * time.Minute)
+	}
 	return domain.ScheduledCrawl{
 		ID: id, SeedURLs: req.SeedURLs, MaxPages: req.MaxPages,
 		RespectRobots: req.RespectRobots, UserAgent: req.UserAgent,
+		Cookie: req.Cookie, BasicAuthUser: req.BasicAuthUser, BasicAuthPass: req.BasicAuthPass,
 		AllowOffDomainLinks: req.AllowOffDomainLinks, UseSitemap: req.UseSitemap,
+		FetchTimeoutSeconds: req.FetchTimeoutSeconds, MinTextLength: req.MinTextLength,
+		CrawlDelayMs: req.CrawlDelayMs, MaxResponseKB: req.MaxResponseKB,
+		PrioritizeUnindexed: req.PrioritizeUnindexed, Recurring: req.Recurring,
 		IntervalMinutes: req.IntervalMinutes, Enabled: enabled,
-		NextRunAt: now.Add(time.Duration(req.IntervalMinutes) * time.Minute),
+		NextRunAt: next,
 		CreatedAt: now,
 	}
 }
@@ -853,17 +818,19 @@ func validateScheduledCrawlRequest(w http.ResponseWriter, req scheduledCrawlRequ
 		http.Error(w, "seed_urls must not be empty", http.StatusBadRequest)
 		return false
 	}
-	if req.IntervalMinutes <= 0 {
-		http.Error(w, "interval_minutes must be positive", http.StatusBadRequest)
+	if req.Recurring && req.IntervalMinutes <= 0 {
+		http.Error(w, "interval_minutes must be positive for a recurring crawl", http.StatusBadRequest)
 		return false
 	}
 	return true
 }
 
-// handleAdminSchedules lists (GET) or creates (POST) recurring crawl
-// schedules. A freshly created schedule is always enabled, with its first
-// run interval_minutes from now -- the same rule editing an existing
-// schedule's options applies (see handleAdminUpdateSchedule).
+// handleAdminSchedules lists (GET) or creates (POST) crawls -- every crawl
+// an admin triggers, one-off or recurring, is one of these. A freshly
+// created entry is always enabled; a recurring one's first run is
+// interval_minutes from now (same rule editing an existing entry's options
+// applies -- see handleAdminUpdateSchedule), a non-recurring one's is
+// right now.
 func (h *Handler) handleAdminSchedules(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.scheduledCrawls != nil, "scheduled crawls") {
 		return

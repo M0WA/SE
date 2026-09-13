@@ -60,7 +60,7 @@ func (f *fakeScheduledCrawlStore) DueScheduledCrawls(_ context.Context, now time
 	return due, nil
 }
 
-func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(_ context.Context, id string, lastRunAt, nextRunAt time.Time) error {
+func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(_ context.Context, id string, lastRunAt, nextRunAt time.Time, enabled bool) error {
 	f.markCalls++
 	if f.markErr != nil {
 		return f.markErr
@@ -74,6 +74,7 @@ func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(_ context.Context, id st
 	}
 	s.LastRunAt = &lastRunAt
 	s.NextRunAt = nextRunAt
+	s.Enabled = enabled
 	f.schedules[id] = s
 	return nil
 }
@@ -82,8 +83,8 @@ var _ ports.ScheduledCrawlStore = (*fakeScheduledCrawlStore)(nil)
 
 func TestTriggerDueCrawls_TriggersOnlyDueEnabledSchedules(t *testing.T) {
 	now := time.Now().UTC()
-	due := domain.ScheduledCrawl{ID: "due", SeedURLs: []string{"http://a"}, IntervalMinutes: 30, Enabled: true, NextRunAt: now.Add(-time.Minute)}
-	notYetDue := domain.ScheduledCrawl{ID: "not-yet-due", SeedURLs: []string{"http://b"}, IntervalMinutes: 30, Enabled: true, NextRunAt: now.Add(time.Hour)}
+	due := domain.ScheduledCrawl{ID: "due", SeedURLs: []string{"http://a"}, IntervalMinutes: 30, Recurring: true, Enabled: true, NextRunAt: now.Add(-time.Minute)}
+	notYetDue := domain.ScheduledCrawl{ID: "not-yet-due", SeedURLs: []string{"http://b"}, IntervalMinutes: 30, Recurring: true, Enabled: true, NextRunAt: now.Add(time.Hour)}
 	disabled := domain.ScheduledCrawl{ID: "disabled", SeedURLs: []string{"http://c"}, IntervalMinutes: 30, Enabled: false, NextRunAt: now.Add(-time.Minute)}
 	store := newFakeScheduledCrawlStore(due, notYetDue, disabled)
 
@@ -107,7 +108,7 @@ func TestTriggerDueCrawls_TriggersOnlyDueEnabledSchedules(t *testing.T) {
 
 func TestTriggerDueCrawls_AdvancesNextRunAtByInterval(t *testing.T) {
 	now := time.Now().UTC()
-	s := domain.ScheduledCrawl{ID: "sched-1", SeedURLs: []string{"http://a"}, IntervalMinutes: 45, Enabled: true, NextRunAt: now.Add(-time.Minute)}
+	s := domain.ScheduledCrawl{ID: "sched-1", SeedURLs: []string{"http://a"}, IntervalMinutes: 45, Recurring: true, Enabled: true, NextRunAt: now.Add(-time.Minute)}
 	store := newFakeScheduledCrawlStore(s)
 
 	trigger := func(context.Context, ports.CrawlOptions, func()) (string, error) { return "job-1", nil }
@@ -135,7 +136,7 @@ func TestTriggerDueCrawls_AdvancesNextRunAtByInterval(t *testing.T) {
 // longer than a tick.
 func TestTriggerDueCrawls_OnDoneCorrectsNextRunAtToFinishPlusInterval(t *testing.T) {
 	now := time.Now().UTC()
-	s := domain.ScheduledCrawl{ID: "sched-1", SeedURLs: []string{"http://a"}, IntervalMinutes: 30, Enabled: true, NextRunAt: now.Add(-time.Minute)}
+	s := domain.ScheduledCrawl{ID: "sched-1", SeedURLs: []string{"http://a"}, IntervalMinutes: 30, Recurring: true, Enabled: true, NextRunAt: now.Add(-time.Minute)}
 	store := newFakeScheduledCrawlStore(s)
 
 	var onDone func()
@@ -170,7 +171,7 @@ func TestTriggerDueCrawls_OnDoneCorrectsNextRunAtToFinishPlusInterval(t *testing
 // since returned.
 func TestTriggerDueCrawls_OnDoneMarkErrorIsLoggedNotFatal(t *testing.T) {
 	now := time.Now().UTC()
-	s := domain.ScheduledCrawl{ID: "sched-1", SeedURLs: []string{"http://a"}, IntervalMinutes: 30, Enabled: true, NextRunAt: now.Add(-time.Minute)}
+	s := domain.ScheduledCrawl{ID: "sched-1", SeedURLs: []string{"http://a"}, IntervalMinutes: 30, Recurring: true, Enabled: true, NextRunAt: now.Add(-time.Minute)}
 	store := newFakeScheduledCrawlStore(s)
 	store.markErrOnCall = 2 // 1st call is the trigger-time placeholder; 2nd is onDone's correction.
 
@@ -190,8 +191,10 @@ func TestTriggerDueCrawls_PassesScheduleOptionsThrough(t *testing.T) {
 	now := time.Now().UTC()
 	s := domain.ScheduledCrawl{
 		ID: "sched-1", SeedURLs: []string{"http://a", "http://b"}, MaxPages: 42,
-		RespectRobots: true, UserAgent: "custom-agent", AllowOffDomainLinks: true, UseSitemap: true,
-		IntervalMinutes: 30, Enabled: true, NextRunAt: now.Add(-time.Minute),
+		RespectRobots: true, UserAgent: "custom-agent",
+		Cookie: "session=abc", BasicAuthUser: "admin", BasicAuthPass: "hunter2",
+		AllowOffDomainLinks: true, UseSitemap: true,
+		IntervalMinutes: 30, Recurring: true, Enabled: true, NextRunAt: now.Add(-time.Minute),
 	}
 	store := newFakeScheduledCrawlStore(s)
 
@@ -208,15 +211,58 @@ func TestTriggerDueCrawls_PassesScheduleOptionsThrough(t *testing.T) {
 		gotOpts.UserAgent != "custom-agent" || !gotOpts.AllowOffDomainLinks || !gotOpts.UseSitemap {
 		t.Errorf("expected the schedule's options to pass through untouched, got %+v", gotOpts)
 	}
-	if gotOpts.Cookie != "" || gotOpts.BasicAuthUser != "" || gotOpts.BasicAuthPass != "" {
-		t.Errorf("expected no credentials on a scheduled crawl's options, got %+v", gotOpts)
+	if gotOpts.Cookie != "session=abc" || gotOpts.BasicAuthUser != "admin" || gotOpts.BasicAuthPass != "hunter2" {
+		t.Errorf("expected the schedule's stored credentials to pass through like any other option, got %+v", gotOpts)
+	}
+}
+
+// TestTriggerDueCrawls_NonRecurringDisablesItselfAtTriggerTime proves a
+// one-off entry (Recurring false) is taken out of contention the instant
+// it's triggered, not left enabled with a meaningless next_run_at that the
+// very next tick would treat as due all over again.
+func TestTriggerDueCrawls_NonRecurringDisablesItselfAtTriggerTime(t *testing.T) {
+	now := time.Now().UTC()
+	s := domain.ScheduledCrawl{ID: "once", SeedURLs: []string{"http://a"}, Recurring: false, Enabled: true, NextRunAt: now.Add(-time.Minute)}
+	store := newFakeScheduledCrawlStore(s)
+
+	trigger := func(context.Context, ports.CrawlOptions, func()) (string, error) { return "job-1", nil }
+	if _, err := application.TriggerDueCrawls(context.Background(), store, trigger, now); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if store.schedules["once"].Enabled {
+		t.Error("expected a non-recurring entry to disable itself immediately at trigger time")
+	}
+}
+
+// TestTriggerDueCrawls_NonRecurringStaysDisabledOnDone proves onDone's
+// completion-time correction re-affirms disabled for a one-off entry
+// rather than re-enabling it (which the recurring path's onDone does, via
+// s.Recurring being true there instead).
+func TestTriggerDueCrawls_NonRecurringStaysDisabledOnDone(t *testing.T) {
+	now := time.Now().UTC()
+	s := domain.ScheduledCrawl{ID: "once", SeedURLs: []string{"http://a"}, Recurring: false, Enabled: true, NextRunAt: now.Add(-time.Minute)}
+	store := newFakeScheduledCrawlStore(s)
+
+	var onDone func()
+	trigger := func(_ context.Context, _ ports.CrawlOptions, done func()) (string, error) {
+		onDone = done
+		return "job-1", nil
+	}
+	if _, err := application.TriggerDueCrawls(context.Background(), store, trigger, now); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	onDone()
+
+	if store.schedules["once"].Enabled {
+		t.Error("expected a non-recurring entry to stay disabled after onDone")
 	}
 }
 
 func TestTriggerDueCrawls_NoScheduleDue(t *testing.T) {
 	now := time.Now().UTC()
 	store := newFakeScheduledCrawlStore(domain.ScheduledCrawl{
-		ID: "sched-1", SeedURLs: []string{"http://a"}, IntervalMinutes: 30, Enabled: true, NextRunAt: now.Add(time.Hour),
+		ID: "sched-1", SeedURLs: []string{"http://a"}, IntervalMinutes: 30, Recurring: true, Enabled: true, NextRunAt: now.Add(time.Hour),
 	})
 
 	called := false
@@ -245,8 +291,8 @@ func TestTriggerDueCrawls_DueScheduledCrawlsErrorPropagates(t *testing.T) {
 
 func TestTriggerDueCrawls_TriggerErrorSkipsThatScheduleButContinues(t *testing.T) {
 	now := time.Now().UTC()
-	failing := domain.ScheduledCrawl{ID: "failing", SeedURLs: []string{"http://a"}, IntervalMinutes: 30, Enabled: true, NextRunAt: now.Add(-time.Minute)}
-	ok := domain.ScheduledCrawl{ID: "ok", SeedURLs: []string{"http://b"}, IntervalMinutes: 30, Enabled: true, NextRunAt: now.Add(-time.Minute)}
+	failing := domain.ScheduledCrawl{ID: "failing", SeedURLs: []string{"http://a"}, IntervalMinutes: 30, Recurring: true, Enabled: true, NextRunAt: now.Add(-time.Minute)}
+	ok := domain.ScheduledCrawl{ID: "ok", SeedURLs: []string{"http://b"}, IntervalMinutes: 30, Recurring: true, Enabled: true, NextRunAt: now.Add(-time.Minute)}
 	store := newFakeScheduledCrawlStore(failing, ok)
 
 	trigger := func(_ context.Context, opts ports.CrawlOptions, _ func()) (string, error) {
@@ -270,7 +316,7 @@ func TestTriggerDueCrawls_TriggerErrorSkipsThatScheduleButContinues(t *testing.T
 
 func TestTriggerDueCrawls_MarkRunErrorSkipsCountingThatSchedule(t *testing.T) {
 	now := time.Now().UTC()
-	s := domain.ScheduledCrawl{ID: "sched-1", SeedURLs: []string{"http://a"}, IntervalMinutes: 30, Enabled: true, NextRunAt: now.Add(-time.Minute)}
+	s := domain.ScheduledCrawl{ID: "sched-1", SeedURLs: []string{"http://a"}, IntervalMinutes: 30, Recurring: true, Enabled: true, NextRunAt: now.Add(-time.Minute)}
 	store := newFakeScheduledCrawlStore(s)
 	store.markErr = errors.New("db down")
 

@@ -2,7 +2,6 @@ package restapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -18,69 +17,31 @@ import (
 const maxConcurrentCrawls = 3
 
 // RoutesCrawlInternal serves the endpoints the crawl-server binary
-// exposes: POST /crawl starts a job and returns immediately, GET /jobs and
-// GET /jobs/{id} report progress. None of this is ever reachable from
-// nginx or the internet -- admin-server is the only caller, over the
-// network via internal/adapters/crawlclient.
+// exposes: GET /jobs and GET /jobs/{id} report progress on jobs the
+// scheduler ticker (cmd/crawl/main.go) has started. None of this is ever
+// reachable from nginx or the internet -- admin-server is the only caller,
+// over the network via internal/adapters/crawlclient.
 func (h *Handler) RoutesCrawlInternal() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /crawl", h.handleCrawl)
 	mux.HandleFunc("GET /jobs", h.handleListCrawlJobs)
 	mux.HandleFunc("GET /jobs/{id}", h.handleGetCrawlJob)
 	mux.HandleFunc("/healthz", h.handleHealthz)
 	return mux
 }
 
-type startJobResponse struct {
-	JobID string `json:"job_id"`
-}
-
-// handleCrawl registers the job and returns its ID immediately; the crawl
-// itself runs in the background, tracked in h.crawlJobs.
-func (h *Handler) handleCrawl(w http.ResponseWriter, r *http.Request) {
-	var opts ports.CrawlOptions
-	if err := json.NewDecoder(r.Body).Decode(&opts); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
-		return
-	}
-
-	jobID, err := h.TriggerCrawl(r.Context(), opts)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	writeJSON(w, http.StatusAccepted, startJobResponse{JobID: jobID})
-}
-
-// TriggerCrawl registers a new crawl job and starts it in the background,
-// returning its ID immediately. This is the one job-creation path every
-// caller on crawl-server goes through -- handleCrawl for a manually
-// triggered crawl, and the scheduler ticker in cmd/crawl/main.go for a
-// scheduled crawl that just came due -- so both get identical job
-// tracking, concurrency limiting (h.crawlSem) and progress reporting. ctx
+// TriggerScheduledCrawl registers a new crawl job and starts it in the
+// background, returning its ID immediately, and calls onDone exactly once
+// when the job actually finishes (success or failure). This is the one
+// job-creation path crawl-server has -- called only by the scheduler
+// ticker in cmd/crawl/main.go for a crawl (recurring or one-off; see
+// domain.ScheduledCrawl.Recurring) that just came due. onDone lets
+// application.TriggerDueCrawls know the crawl has truly finished before it
+// advances that entry's next_run_at, rather than assuming completion the
+// moment the job starts -- a crawl that runs longer than its own interval
+// would otherwise have its next run triggered while it's still going. ctx
 // only scopes the Create call itself (persisting the new job record); the
 // crawl that follows always runs against context.Background(), since it
-// must keep running after the triggering request (or scheduler tick)
-// returns.
-func (h *Handler) TriggerCrawl(ctx context.Context, opts ports.CrawlOptions) (string, error) {
-	job, err := h.createCrawlJob(ctx, opts)
-	if err != nil {
-		return "", err
-	}
-	go h.runCrawlJob(job.ID, opts)
-
-	return job.ID, nil
-}
-
-// TriggerScheduledCrawl behaves exactly like TriggerCrawl, but also calls
-// onDone exactly once when the resulting job actually finishes (success or
-// failure) -- used only by the scheduler ticker (see
-// application.TriggerDueCrawls), which needs to know a scheduled crawl has
-// truly finished before it advances that schedule's next_run_at, rather
-// than assuming completion the moment the job starts. A crawl that runs
-// longer than its own schedule's interval would otherwise have its next
-// run triggered while it's still going.
+// must keep running after the triggering scheduler tick returns.
 func (h *Handler) TriggerScheduledCrawl(ctx context.Context, opts ports.CrawlOptions, onDone func()) (string, error) {
 	job, err := h.createCrawlJob(ctx, opts)
 	if err != nil {
@@ -96,10 +57,9 @@ func (h *Handler) TriggerScheduledCrawl(ctx context.Context, opts ports.CrawlOpt
 	return job.ID, nil
 }
 
-// createCrawlJob persists a new job record for opts -- the shared first
-// step of TriggerCrawl and TriggerScheduledCrawl, which differ only in
-// whether/how they're notified once the job (started right after, in its
-// own goroutine) finishes.
+// createCrawlJob persists a new job record for opts -- TriggerScheduledCrawl's
+// shared first step with ResumeCrawlJob's "existing job, no new record"
+// counterpart below.
 func (h *Handler) createCrawlJob(ctx context.Context, opts ports.CrawlOptions) (domain.CrawlJob, error) {
 	if len(opts.SeedURLs) == 0 {
 		return domain.CrawlJob{}, errors.New("seed_urls must not be empty")
