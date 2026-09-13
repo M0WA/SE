@@ -107,6 +107,12 @@ func (r *benchHybridRepo) DocumentIDsByHost(context.Context, []string) ([]string
 	return nil, nil
 }
 
+// HostsIndexed is unused by this benchmark (no crawling happens here) --
+// a no-op stub only to satisfy ports.SQLRepository.
+func (r *benchHybridRepo) HostsIndexed(context.Context, []string) (map[string]bool, error) {
+	return nil, nil
+}
+
 // TopSemanticMatches always reports ANN unavailable -- this benchmark
 // exists to measure the bounded brute-force SampleEmbeddings path
 // (benchHybridRepo's whole point, see its doc comment above), not the ANN

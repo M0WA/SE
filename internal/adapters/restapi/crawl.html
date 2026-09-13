@@ -71,6 +71,23 @@
       </select>
       <p class="tuning-hint">"Use site default" follows whatever the Tuning page has set. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org. "Same domain, any subdomain, any top-level domain" is broader still — from a seed of example.com it also follows example.org and www.example.de (the same domain name, any subdomain, under any TLD), but not other.com.</p>
     </div>
+    <div class="form-row">
+      <label for="crawl-allowed-domains">Allowed domains (optional) — one domain per line</label><br>
+      <textarea id="crawl-allowed-domains" class="field" rows="3" placeholder="partner.example"></textarea>
+      <p class="tuning-hint">Always followed, even where "How far to follow links" above would otherwise reject them — widens link scope, on top of it, rather than replacing it.</p>
+    </div>
+    <div class="form-row">
+      <label for="crawl-blocked-domains">Blocked domains (optional) — one domain per line</label><br>
+      <textarea id="crawl-blocked-domains" class="field" rows="3" placeholder="spammy.example"></textarea>
+      <p class="tuning-hint">Never followed, even where link scope or allowed domains above would otherwise allow them — blocked domains always win.</p>
+    </div>
+    <div class="form-row form-row-check">
+      <label for="crawl-follow-indexed">
+        <input id="crawl-follow-indexed" type="checkbox">
+        Follow domains already in the index
+      </label>
+      <p class="tuning-hint">Off by default — when checked, a discovered link is also followed if its domain already has at least one indexed page, even outside link scope. Blocked domains above still override this.</p>
+    </div>
     <div class="form-row form-row-check">
       <label for="crawl-use-sitemap">
         <input id="crawl-use-sitemap" type="checkbox">
@@ -164,6 +181,9 @@
   const crawlBasicPass = document.getElementById('crawl-basic-pass');
   const crawlRespectRobots = document.getElementById('crawl-respect-robots');
   const crawlLinkScope = document.getElementById('crawl-link-scope');
+  const crawlAllowedDomains = document.getElementById('crawl-allowed-domains');
+  const crawlBlockedDomains = document.getElementById('crawl-blocked-domains');
+  const crawlFollowIndexed = document.getElementById('crawl-follow-indexed');
   const crawlUseSitemap = document.getElementById('crawl-use-sitemap');
   const crawlPrioritizeUnindexed = document.getElementById('crawl-prioritize-unindexed');
   const crawlInterval = document.getElementById('crawl-interval');
@@ -362,6 +382,17 @@
     }, 1500);
   }
 
+  // linesToText/parseLines mirror admin_overrides.html's blocked/boosted
+  // domain textareas -- one domain (or URL, normalized server-side) per
+  // line, blank lines dropped.
+  function linesToText(lines) {
+    return (lines || []).join('\n');
+  }
+
+  function parseLines(text) {
+    return text.split('\n').map((s) => s.trim()).filter(Boolean);
+  }
+
   const LINK_SCOPE_LABELS = { '': 'Site default', host: 'Exact seed host only', domain: 'Seed domain + subdomains', tld: 'Same domain, any subdomain, any TLD', any: 'Any domain' };
   const RENDERER_LABELS = { '': 'Site default', none: 'None (plain HTTP)', chromium: 'Chromium', firefox: 'Firefox' };
 
@@ -377,6 +408,9 @@
     kvRow(container, 'Respect robots.txt', request.respect_robots ? 'Yes' : 'No');
     kvRow(container, 'User-Agent', request.user_agent || 'Default');
     kvRow(container, 'Link scope', LINK_SCOPE_LABELS[request.link_scope || ''] || request.link_scope);
+    kvRow(container, 'Allowed domains', (request.allowed_domains || []).join(', ') || 'None');
+    kvRow(container, 'Blocked domains', (request.blocked_domains || []).join(', ') || 'None');
+    kvRow(container, 'Follow indexed domains', request.follow_indexed_domains ? 'Yes' : 'No');
     kvRow(container, 'Renderer', RENDERER_LABELS[request.renderer || ''] || request.renderer);
     kvRow(container, 'Discover via sitemap.xml', request.use_sitemap ? 'Yes' : 'No');
     kvRow(container, 'Prioritize unindexed pages', request.prioritize_unindexed ? 'Yes' : 'No');
@@ -613,6 +647,8 @@
       respect_robots: s.respect_robots, user_agent: s.user_agent,
       cookie: s.cookie, basic_auth_user: s.basic_auth_user, basic_auth_pass: s.basic_auth_pass,
       link_scope: s.link_scope, use_sitemap: s.use_sitemap,
+      allowed_domains: s.allowed_domains, blocked_domains: s.blocked_domains,
+      follow_indexed_domains: s.follow_indexed_domains,
       fetch_timeout_seconds: s.fetch_timeout_seconds, min_text_length: s.min_text_length,
       crawl_delay_ms: s.crawl_delay_ms, max_response_kb: s.max_response_kb,
       prioritize_unindexed: s.prioritize_unindexed,
@@ -670,6 +706,9 @@
         respect_robots: crawlRespectRobots.checked,
         user_agent: crawlUserAgent.value,
         link_scope: crawlLinkScope.value,
+        allowed_domains: parseLines(crawlAllowedDomains.value),
+        blocked_domains: parseLines(crawlBlockedDomains.value),
+        follow_indexed_domains: crawlFollowIndexed.checked,
         use_sitemap: crawlUseSitemap.checked,
         prioritize_unindexed: crawlPrioritizeUnindexed.checked,
         fetch_timeout_seconds: parseInt(crawlFetchTimeout.value, 10) || 0,

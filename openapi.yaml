@@ -962,6 +962,26 @@ components:
           type: string
           enum: ["", host, domain, tld, any]
           description: '"" means this job used the Tuning page''s global default link scope.'
+        allowed_domains:
+          type: array
+          items: { type: string }
+          description: >-
+            Domains (or any of their subdomains) always followed, even where
+            link_scope alone would reject them.
+        blocked_domains:
+          type: array
+          items: { type: string }
+          description: >-
+            Domains (or any of their subdomains) never followed, even where
+            link_scope or allowed_domains would otherwise allow them --
+            blocked_domains always wins.
+        follow_indexed_domains:
+          type: boolean
+          description: >-
+            Also follows a discovered link whose domain already has at
+            least one indexed document, even where link_scope/
+            allowed_domains wouldn't otherwise allow it. blocked_domains
+            still overrides this.
         use_sitemap: { type: boolean }
         fetch_timeout_seconds: { type: integer }
         min_text_length: { type: integer }
@@ -1042,6 +1062,28 @@ components:
             top-level domain (e.g. a seed of example.com also follows
             example.org and www.example.de, but not other.com). "any": no
             restriction.
+        allowed_domains:
+          type: array
+          items: { type: string }
+          description: >-
+            Domains (or any of their subdomains) always followed, even
+            where link_scope alone would reject them -- widens scope, on
+            top of link_scope, rather than replacing it.
+        blocked_domains:
+          type: array
+          items: { type: string }
+          description: >-
+            Domains (or any of their subdomains) never followed, even
+            where link_scope or allowed_domains would otherwise allow
+            them -- blocked_domains always wins.
+        follow_indexed_domains:
+          type: boolean
+          default: false
+          description: >-
+            Also follows a discovered link whose domain already has at
+            least one indexed document, even where link_scope/
+            allowed_domains wouldn't otherwise allow it. blocked_domains
+            still overrides this.
         use_sitemap: { type: boolean }
         fetch_timeout_seconds:
           type: integer

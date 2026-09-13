@@ -69,8 +69,15 @@ type CrawlJobRequest struct {
 	// LinkScope is "" when this job used the Tuning page's global default
 	// (see domain.LinkScope*), or an explicit override otherwise -- not a
 	// secret, so it's the actual value, not a boolean.
-	LinkScope  string `json:"link_scope,omitempty"`
-	UseSitemap bool   `json:"use_sitemap"`
+	LinkScope string `json:"link_scope,omitempty"`
+	// AllowedDomains/BlockedDomains/FollowIndexedDomains aren't secrets
+	// either, so (like LinkScope) they're the actual values this job ran
+	// with -- see ports.CrawlOptions' doc comment for the exact allow/block
+	// precedence between them and LinkScope.
+	AllowedDomains       []string `json:"allowed_domains,omitempty"`
+	BlockedDomains       []string `json:"blocked_domains,omitempty"`
+	FollowIndexedDomains bool     `json:"follow_indexed_domains,omitempty"`
+	UseSitemap           bool     `json:"use_sitemap"`
 	// FetchTimeoutSeconds/MinTextLength/CrawlDelayMs/MaxResponseKB are 0
 	// when this job used the global operational default for that setting,
 	// non-zero when it overrode it -- see ports.CrawlOptions' doc comment.

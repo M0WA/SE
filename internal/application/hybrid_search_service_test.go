@@ -58,6 +58,15 @@ type fakeSQLRepo struct {
 	// BM25/semantic candidate set, which -- pre-fix -- could silently miss a
 	// site: match that wasn't a strong BM25/semantic hit).
 	documentIDsByHostCalls int
+	// hostsIndexedResult backs HostsIndexed's return value; hostsIndexedErr
+	// lets a test drive its error path; hostsIndexedCalls counts how many
+	// times it was actually called (and, cumulatively, with how many hosts)
+	// so a test can assert FollowIndexedDomains only looks up what it
+	// hasn't already cached.
+	hostsIndexedResult map[string]bool
+	hostsIndexedErr    error
+	hostsIndexedCalls  int
+	hostsIndexedArgs   [][]string
 
 	// annOK/annMatches/annErr let a test drive TopSemanticMatches' three
 	// possible outcomes -- ANN unavailable (annOK false, the zero value),
@@ -212,6 +221,23 @@ func (r *fakeSQLRepo) DocumentIDsByHost(_ context.Context, hosts []string) ([]st
 		}
 	}
 	return ids, nil
+}
+
+// HostsIndexed mimics the real repository's exact-or-subdomain host match
+// (same rule as DocumentIDsByHost above), backed by hostsIndexedResult
+// rather than r.docs, so a test can drive a specific result independent of
+// whatever documents it also set up.
+func (r *fakeSQLRepo) HostsIndexed(_ context.Context, hosts []string) (map[string]bool, error) {
+	r.hostsIndexedCalls++
+	r.hostsIndexedArgs = append(r.hostsIndexedArgs, hosts)
+	if r.hostsIndexedErr != nil {
+		return nil, r.hostsIndexedErr
+	}
+	result := make(map[string]bool, len(hosts))
+	for _, h := range hosts {
+		result[h] = r.hostsIndexedResult[h]
+	}
+	return result, nil
 }
 
 func (r *fakeSQLRepo) ListDocuments(context.Context, int, string) ([]domain.IndexedDocument, error) {

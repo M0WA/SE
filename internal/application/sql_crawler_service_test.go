@@ -132,6 +132,64 @@ func TestSQLCrawlerService_Crawl_PrioritizeUnindexedFalseSkipsTheLookup(t *testi
 	}
 }
 
+// TestSQLCrawlerService_Crawl_FollowIndexedDomainsConsultsHostsIndexed
+// proves the wiring between CrawlOptions.FollowIndexedDomains and the
+// repository: when set, Crawl follows an out-of-scope link whose host
+// HostsIndexed reports as already indexed (crawlLoop's own tests cover the
+// resulting allow/reject decision in detail; this proves sqlCrawlerService
+// actually builds and passes that lookup through).
+func TestSQLCrawlerService_Crawl_FollowIndexedDomainsConsultsHostsIndexed(t *testing.T) {
+	fetcher := &fakeFetcher{pages: map[string]string{
+		"http://a/":            "<html>a</html>",
+		"http://indexed.test/": "<html>b</html>",
+	}}
+	robots := &fakeRobots{}
+	repo := &recordingSQLRepo{fakeSQLRepo: fakeSQLRepo{hostsIndexedResult: map[string]bool{"indexed.test": true}}}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+	parse := func(html, pageURL string) (string, string, []string) {
+		if pageURL == "http://a/" {
+			return "A", "genuegend inhalt text fuer die seite a hier bitte danke", []string{"http://indexed.test/"}
+		}
+		return "B", "genuegend inhalt text fuer die seite b hier auch danke", nil
+	}
+
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedder, parse, nil)
+	count, err := svc.Crawl(context.Background(), ports.CrawlOptions{
+		SeedURLs: []string{"http://a/"}, MaxPages: 5, LinkScope: domain.LinkScopeHost, FollowIndexedDomains: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected the already-indexed out-of-scope domain followed, got count=%d", count)
+	}
+	if repo.hostsIndexedCalls != 1 {
+		t.Errorf("expected exactly one HostsIndexed lookup, got %d", repo.hostsIndexedCalls)
+	}
+}
+
+// TestSQLCrawlerService_Crawl_FollowIndexedDomainsFalseSkipsTheLookup
+// proves the lookup is only ever done when actually asked for -- no wasted
+// query on the common (FollowIndexedDomains off) path.
+func TestSQLCrawlerService_Crawl_FollowIndexedDomainsFalseSkipsTheLookup(t *testing.T) {
+	fetcher := &fakeFetcher{pages: map[string]string{"http://a/": "<html>a</html>"}}
+	robots := &fakeRobots{}
+	repo := &recordingSQLRepo{}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+	parse := func(html, pageURL string) (string, string, []string) {
+		return "A", "genuegend inhalt text fuer die seite a hier bitte danke", nil
+	}
+
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedder, parse, nil)
+	_, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a/"}, MaxPages: 5}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.hostsIndexedCalls != 0 {
+		t.Errorf("expected no HostsIndexed lookup when FollowIndexedDomains is false, got %d calls", repo.hostsIndexedCalls)
+	}
+}
+
 func TestSQLCrawlerService_Crawl_RespectsRobots(t *testing.T) {
 	fetcher := &fakeFetcher{pages: map[string]string{"http://a": "<html>a</html>"}}
 	robots := &fakeRobots{disallowed: map[string]bool{"http://a": true}}

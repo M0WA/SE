@@ -435,6 +435,58 @@ func TestHandleAdminSchedules_PostBlankLinkScopeMeansInherit(t *testing.T) {
 	}
 }
 
+// TestHandleAdminSchedules_PostAllowBlockDomainsAndFollowIndexedPassThrough
+// proves the new per-crawl allow/block domain lists and FollowIndexedDomains
+// are stored as-is, mirroring the existing link_scope/renderer pass-through
+// tests.
+func TestHandleAdminSchedules_PostAllowBlockDomainsAndFollowIndexedPassThrough(t *testing.T) {
+	store := &fakeScheduledCrawlStore{}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	body, _ := json.Marshal(map[string]interface{}{
+		"seed_urls":              []string{"http://a"},
+		"allowed_domains":        []string{"allowed.example"},
+		"blocked_domains":        []string{"blocked.example"},
+		"follow_indexed_domains": true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(store.created.AllowedDomains) != 1 || store.created.AllowedDomains[0] != "allowed.example" {
+		t.Errorf("expected allowed_domains to pass through, got %+v", store.created.AllowedDomains)
+	}
+	if len(store.created.BlockedDomains) != 1 || store.created.BlockedDomains[0] != "blocked.example" {
+		t.Errorf("expected blocked_domains to pass through, got %+v", store.created.BlockedDomains)
+	}
+	if !store.created.FollowIndexedDomains {
+		t.Error("expected follow_indexed_domains=true to pass through")
+	}
+}
+
+// TestHandleAdminSchedules_PostAllowBlockDomainsDefaultToEmpty proves
+// omitting the new fields entirely is valid -- no allow/block list and
+// FollowIndexedDomains false, not an error.
+func TestHandleAdminSchedules_PostAllowBlockDomainsDefaultToEmpty(t *testing.T) {
+	store := &fakeScheduledCrawlStore{}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(store.created.AllowedDomains) != 0 || len(store.created.BlockedDomains) != 0 || store.created.FollowIndexedDomains {
+		t.Errorf("expected empty allow/block lists and FollowIndexedDomains false by default, got %+v", store.created)
+	}
+}
+
 func TestHandleAdminSchedules_PostInvalidLinkScopeRejected(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithSchedules(t, &fakeScheduledCrawlStore{})
 	body, _ := json.Marshal(map[string]interface{}{

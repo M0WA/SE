@@ -195,7 +195,9 @@ func TestTriggerDueCrawls_PassesScheduleOptionsThrough(t *testing.T) {
 		RespectRobots: true, UserAgent: "custom-agent",
 		Cookie: "session=abc", BasicAuthUser: "admin", BasicAuthPass: "hunter2",
 		LinkScope: domain.LinkScopeAny, UseSitemap: true,
-		IntervalMinutes: 30, Recurring: true, Enabled: true, NextRunAt: now.Add(-time.Minute),
+		AllowedDomains: []string{"allowed.example"}, BlockedDomains: []string{"blocked.example"},
+		FollowIndexedDomains: true,
+		IntervalMinutes:      30, Recurring: true, Enabled: true, NextRunAt: now.Add(-time.Minute),
 	}
 	store := newFakeScheduledCrawlStore(s)
 
@@ -214,6 +216,10 @@ func TestTriggerDueCrawls_PassesScheduleOptionsThrough(t *testing.T) {
 	}
 	if gotOpts.Cookie != "session=abc" || gotOpts.BasicAuthUser != "admin" || gotOpts.BasicAuthPass != "hunter2" {
 		t.Errorf("expected the schedule's stored credentials to pass through like any other option, got %+v", gotOpts)
+	}
+	if len(gotOpts.AllowedDomains) != 1 || gotOpts.AllowedDomains[0] != "allowed.example" ||
+		len(gotOpts.BlockedDomains) != 1 || gotOpts.BlockedDomains[0] != "blocked.example" || !gotOpts.FollowIndexedDomains {
+		t.Errorf("expected the schedule's allow/block domain lists and FollowIndexedDomains to pass through, got %+v", gotOpts)
 	}
 }
 

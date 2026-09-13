@@ -208,7 +208,20 @@ func (r *Repository) migrateScheduledCrawlColumns(ctx context.Context) error {
 	// change for any schedule that predates this column, same tradeoff as
 	// every other breaking change in this app: downwards compatibility
 	// isn't a concern here.
-	return addColumn("link_scope", "link_scope TEXT NOT NULL DEFAULT ''")
+	if err := addColumn("link_scope", "link_scope TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// allowed_domains/blocked_domains default to '[]' (no list -- LinkScope
+	// alone decides scope, same as a freshly created schedule that never
+	// set either) for a pre-existing row; follow_indexed_domains defaults
+	// to false, same as every other boolean override added before it.
+	if err := addColumn("allowed_domains", "allowed_domains TEXT NOT NULL DEFAULT '[]'"); err != nil {
+		return err
+	}
+	if err := addColumn("blocked_domains", "blocked_domains TEXT NOT NULL DEFAULT '[]'"); err != nil {
+		return err
+	}
+	return addColumn("follow_indexed_domains", "follow_indexed_domains BOOLEAN NOT NULL DEFAULT false")
 }
 
 // ensureHostIndex and ensureCrawledAtIndex both run after
@@ -995,6 +1008,61 @@ func (r *Repository) DeleteDocument(ctx context.Context, docID string) error {
 // ListDocuments lists indexed pages, most recent ID first, optionally
 // narrowed to a single host (used by the per-domain admin subpage so it
 // doesn't need to fetch and filter the whole corpus client-side).
+// maxHostsIndexedBatch bounds how many hosts a single FollowIndexedDomains
+// lookup batches per query -- a safety valve consistent with
+// maxDocumentIDsByHost, since a crawl could otherwise discover an
+// unbounded number of distinct off-scope hosts across its own pages' links.
+const maxHostsIndexedBatch = 500
+
+// HostsIndexed reports, for each of hosts, whether any document is already
+// indexed for it (exact host match or a subdomain of it -- host = ? OR
+// host LIKE '%.'+?, the same rule as DocumentIDsByHost), served by
+// idx_documents_host. A host absent from the result was not found indexed.
+func (r *Repository) HostsIndexed(ctx context.Context, hosts []string) (map[string]bool, error) {
+	result := make(map[string]bool, len(hosts))
+	if len(hosts) == 0 {
+		return result, nil
+	}
+	if len(hosts) > maxHostsIndexedBatch {
+		hosts = hosts[:maxHostsIndexedBatch]
+	}
+	conditions := make([]string, 0, len(hosts))
+	args := make([]interface{}, 0, len(hosts)*2)
+	pos := 1
+	for _, h := range hosts {
+		conditions = append(conditions, fmt.Sprintf("(host = %s OR host LIKE %s)", r.dialect.Placeholder(pos), r.dialect.Placeholder(pos+1)))
+		args = append(args, h, "%."+h)
+		pos += 2
+	}
+	query := `SELECT DISTINCT host FROM documents WHERE ` + strings.Join(conditions, " OR ")
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying hosts indexed: %w", err)
+	}
+	defer rows.Close()
+
+	var matched []string
+	for rows.Next() {
+		var host string
+		if err := rows.Scan(&host); err != nil {
+			return nil, fmt.Errorf("scanning host: %w", err)
+		}
+		matched = append(matched, host)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, h := range hosts {
+		for _, m := range matched {
+			if m == h || strings.HasSuffix(m, "."+h) {
+				result[h] = true
+				break
+			}
+		}
+	}
+	return result, nil
+}
+
 func (r *Repository) ListDocuments(ctx context.Context, limit int, host string) ([]domain.IndexedDocument, error) {
 	var query string
 	var args []interface{}
@@ -1383,7 +1451,8 @@ func (r *Repository) GetSetting(ctx context.Context, key string) (value string, 
 // statements so all four stay in sync.
 const scheduledCrawlColumns = `id, seed_urls, max_pages, respect_robots, user_agent,
 	cookie, basic_auth_user, basic_auth_pass,
-	link_scope, use_sitemap, fetch_timeout_seconds, min_text_length,
+	link_scope, allowed_domains, blocked_domains, follow_indexed_domains,
+	use_sitemap, fetch_timeout_seconds, min_text_length,
 	crawl_delay_ms, max_response_kb, prioritize_unindexed, recurring,
 	interval_minutes, max_runs, run_count, renderer, enabled, last_run_at, next_run_at, created_at`
 
@@ -1395,13 +1464,22 @@ func (r *Repository) CreateScheduledCrawl(ctx context.Context, s domain.Schedule
 	if err != nil {
 		return fmt.Errorf("encoding seed urls: %w", err)
 	}
+	allowedJSON, err := json.Marshal(s.AllowedDomains)
+	if err != nil {
+		return fmt.Errorf("encoding allowed domains: %w", err)
+	}
+	blockedJSON, err := json.Marshal(s.BlockedDomains)
+	if err != nil {
+		return fmt.Errorf("encoding blocked domains: %w", err)
+	}
 	insertSQL := r.ph(`INSERT INTO scheduled_crawls (`+scheduledCrawlColumns+`)
-	                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`,
-		1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24)
+	                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`,
+		1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27)
 	_, err = r.db.ExecContext(ctx, insertSQL,
 		s.ID, string(seedJSON), s.MaxPages, s.RespectRobots, s.UserAgent,
 		s.Cookie, s.BasicAuthUser, s.BasicAuthPass,
-		s.LinkScope, s.UseSitemap, s.FetchTimeoutSeconds, s.MinTextLength,
+		s.LinkScope, string(allowedJSON), string(blockedJSON), s.FollowIndexedDomains,
+		s.UseSitemap, s.FetchTimeoutSeconds, s.MinTextLength,
 		s.CrawlDelayMs, s.MaxResponseKB, s.PrioritizeUnindexed, s.Recurring,
 		s.IntervalMinutes, s.MaxRuns, s.RunCount, s.Renderer, s.Enabled,
 		nullableTimeString(s.LastRunAt), s.NextRunAt.UTC().Format(crawledAtLayout), s.CreatedAt.UTC().Format(crawledAtLayout),
@@ -1441,18 +1519,28 @@ func (r *Repository) UpdateScheduledCrawl(ctx context.Context, s domain.Schedule
 	if err != nil {
 		return fmt.Errorf("encoding seed urls: %w", err)
 	}
+	allowedJSON, err := json.Marshal(s.AllowedDomains)
+	if err != nil {
+		return fmt.Errorf("encoding allowed domains: %w", err)
+	}
+	blockedJSON, err := json.Marshal(s.BlockedDomains)
+	if err != nil {
+		return fmt.Errorf("encoding blocked domains: %w", err)
+	}
 	updateSQL := r.ph(`UPDATE scheduled_crawls SET
 	                      seed_urls = %s, max_pages = %s, respect_robots = %s, user_agent = %s,
 	                      cookie = %s, basic_auth_user = %s, basic_auth_pass = %s,
-	                      link_scope = %s, use_sitemap = %s, fetch_timeout_seconds = %s,
+	                      link_scope = %s, allowed_domains = %s, blocked_domains = %s, follow_indexed_domains = %s,
+	                      use_sitemap = %s, fetch_timeout_seconds = %s,
 	                      min_text_length = %s, crawl_delay_ms = %s, max_response_kb = %s,
 	                      prioritize_unindexed = %s, recurring = %s, interval_minutes = %s, max_runs = %s,
 	                      renderer = %s, enabled = %s, next_run_at = %s
-	                    WHERE id = %s`, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21)
+	                    WHERE id = %s`, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24)
 	res, err := r.db.ExecContext(ctx, updateSQL,
 		string(seedJSON), s.MaxPages, s.RespectRobots, s.UserAgent,
 		s.Cookie, s.BasicAuthUser, s.BasicAuthPass,
-		s.LinkScope, s.UseSitemap, s.FetchTimeoutSeconds,
+		s.LinkScope, string(allowedJSON), string(blockedJSON), s.FollowIndexedDomains,
+		s.UseSitemap, s.FetchTimeoutSeconds,
 		s.MinTextLength, s.CrawlDelayMs, s.MaxResponseKB,
 		s.PrioritizeUnindexed, s.Recurring, s.IntervalMinutes, s.MaxRuns, s.Renderer, s.Enabled,
 		s.NextRunAt.UTC().Format(crawledAtLayout), s.ID,
@@ -1565,11 +1653,13 @@ type scanner interface {
 func scanScheduledCrawl(row scanner) (domain.ScheduledCrawl, error) {
 	var s domain.ScheduledCrawl
 	var seedJSON string
+	var allowedJSON, blockedJSON sql.NullString
 	var lastRunAt sql.NullString
 	var nextRunAt, createdAt string
 	if err := row.Scan(&s.ID, &seedJSON, &s.MaxPages, &s.RespectRobots, &s.UserAgent,
 		&s.Cookie, &s.BasicAuthUser, &s.BasicAuthPass,
-		&s.LinkScope, &s.UseSitemap, &s.FetchTimeoutSeconds, &s.MinTextLength,
+		&s.LinkScope, &allowedJSON, &blockedJSON, &s.FollowIndexedDomains,
+		&s.UseSitemap, &s.FetchTimeoutSeconds, &s.MinTextLength,
 		&s.CrawlDelayMs, &s.MaxResponseKB, &s.PrioritizeUnindexed, &s.Recurring,
 		&s.IntervalMinutes, &s.MaxRuns, &s.RunCount, &s.Renderer, &s.Enabled,
 		&lastRunAt, &nextRunAt, &createdAt); err != nil {
@@ -1577,6 +1667,17 @@ func scanScheduledCrawl(row scanner) (domain.ScheduledCrawl, error) {
 	}
 	if err := json.Unmarshal([]byte(seedJSON), &s.SeedURLs); err != nil {
 		return domain.ScheduledCrawl{}, fmt.Errorf("decoding seed urls: %w", err)
+	}
+	// allowed_domains/blocked_domains predate this feature on a database
+	// that hasn't been migrated past it yet -- a NULL, empty, or malformed
+	// value there just means "no list set" rather than a reason to fail the
+	// whole row, same tolerant convention parseCrawledAt already uses for a
+	// malformed timestamp.
+	if allowedJSON.Valid && allowedJSON.String != "" {
+		_ = json.Unmarshal([]byte(allowedJSON.String), &s.AllowedDomains)
+	}
+	if blockedJSON.Valid && blockedJSON.String != "" {
+		_ = json.Unmarshal([]byte(blockedJSON.String), &s.BlockedDomains)
 	}
 	s.LastRunAt = parseNullableCrawledAt(lastRunAt)
 	s.NextRunAt = parseCrawledAt(nextRunAt)

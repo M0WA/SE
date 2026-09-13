@@ -67,20 +67,23 @@ func (h *Handler) createCrawlJob(ctx context.Context, opts ports.CrawlOptions) (
 	}
 
 	return h.crawlJobs.Create(ctx, domain.CrawlJobRequest{
-		SeedURLs:            opts.SeedURLs,
-		MaxPages:            opts.MaxPages,
-		HasCookie:           opts.Cookie != "",
-		HasBasicAuth:        opts.BasicAuthUser != "" || opts.BasicAuthPass != "",
-		RespectRobots:       opts.RespectRobots,
-		UserAgent:           opts.UserAgent,
-		LinkScope:           opts.LinkScope,
-		UseSitemap:          opts.UseSitemap,
-		FetchTimeoutSeconds: opts.FetchTimeoutSeconds,
-		MinTextLength:       opts.MinTextLength,
-		CrawlDelayMs:        opts.CrawlDelayMs,
-		MaxResponseKB:       opts.MaxResponseKB,
-		PrioritizeUnindexed: opts.PrioritizeUnindexed,
-		Renderer:            opts.Renderer,
+		SeedURLs:             opts.SeedURLs,
+		MaxPages:             opts.MaxPages,
+		HasCookie:            opts.Cookie != "",
+		HasBasicAuth:         opts.BasicAuthUser != "" || opts.BasicAuthPass != "",
+		RespectRobots:        opts.RespectRobots,
+		UserAgent:            opts.UserAgent,
+		LinkScope:            opts.LinkScope,
+		AllowedDomains:       opts.AllowedDomains,
+		BlockedDomains:       opts.BlockedDomains,
+		FollowIndexedDomains: opts.FollowIndexedDomains,
+		UseSitemap:           opts.UseSitemap,
+		FetchTimeoutSeconds:  opts.FetchTimeoutSeconds,
+		MinTextLength:        opts.MinTextLength,
+		CrawlDelayMs:         opts.CrawlDelayMs,
+		MaxResponseKB:        opts.MaxResponseKB,
+		PrioritizeUnindexed:  opts.PrioritizeUnindexed,
+		Renderer:             opts.Renderer,
 	})
 }
 

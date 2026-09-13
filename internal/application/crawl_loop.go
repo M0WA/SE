@@ -29,6 +29,12 @@ func crawlLoop(
 	settings *domain.OperationalSettings,
 	opts ports.CrawlOptions,
 	isIndexed func(url string) bool,
+	// isDomainIndexed batch-checks whether any of the given hosts already
+	// has an indexed document (see ports.SQLRepository.HostsIndexed), for
+	// opts.FollowIndexedDomains -- nil when that option is off, or the
+	// caller has no such lookup available (same nil-safety convention as
+	// isIndexed above).
+	isDomainIndexed func(hosts []string) map[string]bool,
 	save func(ctx context.Context, doc domain.Document) error,
 	onPage func(domain.CrawlPageEvent),
 ) (int, error) {
@@ -72,6 +78,8 @@ func crawlLoop(
 		linkScope = v.LinkScope
 	}
 	scope := newLinkScopeMatcher(opts.SeedURLs)
+	allowlist := newDomainListMatcher(opts.AllowedDomains)
+	blocklist := newDomainListMatcher(opts.BlockedDomains)
 
 	// prioritize is true only when the caller both asked for it
 	// (opts.PrioritizeUnindexed) and can actually tell fresh from
@@ -106,11 +114,48 @@ func crawlLoop(
 		}
 		return "", false
 	}
+	// enqueue decides which of a page's discovered links actually get
+	// queued, in this precedence: BlockedDomains always rejects, regardless
+	// of anything else below; then LinkScope or AllowedDomains allows (an
+	// explicitly allowed domain is followed even where LinkScope alone
+	// would reject it); finally, when nothing above allowed a link but
+	// isDomainIndexed is available (opts.FollowIndexedDomains), a link
+	// whose host already has an indexed document is allowed too --
+	// FollowIndexedDomains widens scope, it never narrows what LinkScope/
+	// AllowedDomains already allowed. isDomainIndexed is called at most
+	// once per enqueue batch, over every distinct not-yet-decided host,
+	// rather than once per link.
 	enqueue := func(links []string) {
 		var allowed []string
+		var undecided []string
 		for _, l := range links {
-			if scope.allows(l, linkScope) {
+			host := domain.HostOf(l)
+			if host == "" || blocklist.matches(host) {
+				continue
+			}
+			if allowlist.matches(host) || scope.allows(l, linkScope) {
 				allowed = append(allowed, l)
+				continue
+			}
+			if isDomainIndexed != nil {
+				undecided = append(undecided, l)
+			}
+		}
+		if len(undecided) > 0 {
+			hostSeen := make(map[string]bool, len(undecided))
+			hosts := make([]string, 0, len(undecided))
+			for _, l := range undecided {
+				h := domain.HostOf(l)
+				if !hostSeen[h] {
+					hostSeen[h] = true
+					hosts = append(hosts, h)
+				}
+			}
+			indexed := isDomainIndexed(hosts)
+			for _, l := range undecided {
+				if indexed[domain.HostOf(l)] {
+					allowed = append(allowed, l)
+				}
 			}
 		}
 		classify(allowed)
@@ -296,6 +341,35 @@ func domainName(host string) string {
 		}
 	}
 	return reg
+}
+
+// domainListMatcher checks a discovered link's host against a per-crawl
+// allow/block list of domains (opts.AllowedDomains/BlockedDomains) --
+// registrable-domain-based, the same rule as linkScopeMatcher's "domain"
+// tier, so listing "example.com" also matches any of its subdomains. An
+// empty list (the common case: most crawls set neither) never matches
+// anything.
+type domainListMatcher struct {
+	domains map[string]bool
+}
+
+func newDomainListMatcher(raw []string) domainListMatcher {
+	m := domainListMatcher{domains: make(map[string]bool, len(raw))}
+	for _, d := range raw {
+		d = strings.ToLower(strings.TrimSpace(d))
+		if d == "" {
+			continue
+		}
+		m.domains[registrableDomain(d)] = true
+	}
+	return m
+}
+
+func (m domainListMatcher) matches(host string) bool {
+	if len(m.domains) == 0 || host == "" {
+		return false
+	}
+	return m.domains[registrableDomain(strings.ToLower(host))]
 }
 
 // sitemapURL builds the /sitemap.xml URL at a seed's origin, discarding any

@@ -781,6 +781,12 @@ type scheduledCrawlRequest struct {
 	// means "inherit the global default"; "host"/"domain"/"any" choose
 	// explicitly.
 	LinkScope string `json:"link_scope"`
+	// AllowedDomains/BlockedDomains/FollowIndexedDomains mirror
+	// ports.CrawlOptions' fields of the same name -- see its doc comment
+	// for the exact allow/block precedence against LinkScope.
+	AllowedDomains       []string `json:"allowed_domains"`
+	BlockedDomains       []string `json:"blocked_domains"`
+	FollowIndexedDomains bool     `json:"follow_indexed_domains"`
 	// MaxRuns caps how many times a recurring crawl repeats before
 	// disabling itself; 0 (the default) means unlimited. Meaningless when
 	// IntervalMinutes is 0 (a one-off crawl already stops after its one
@@ -794,30 +800,33 @@ type scheduledCrawlRequest struct {
 }
 
 type scheduledCrawlResponse struct {
-	ID                  string     `json:"id"`
-	SeedURLs            []string   `json:"seed_urls"`
-	MaxPages            int        `json:"max_pages"`
-	RespectRobots       bool       `json:"respect_robots"`
-	UserAgent           string     `json:"user_agent"`
-	Cookie              string     `json:"cookie"`
-	BasicAuthUser       string     `json:"basic_auth_user"`
-	BasicAuthPass       string     `json:"basic_auth_pass"`
-	LinkScope           string     `json:"link_scope"`
-	UseSitemap          bool       `json:"use_sitemap"`
-	FetchTimeoutSeconds int        `json:"fetch_timeout_seconds"`
-	MinTextLength       int        `json:"min_text_length"`
-	CrawlDelayMs        int        `json:"crawl_delay_ms"`
-	MaxResponseKB       int        `json:"max_response_kb"`
-	PrioritizeUnindexed bool       `json:"prioritize_unindexed"`
-	Recurring           bool       `json:"recurring"`
-	IntervalMinutes     int        `json:"interval_minutes"`
-	MaxRuns             int        `json:"max_runs"`
-	RunCount            int        `json:"run_count"`
-	Renderer            string     `json:"renderer"`
-	Enabled             bool       `json:"enabled"`
-	LastRunAt           *time.Time `json:"last_run_at,omitempty"`
-	NextRunAt           time.Time  `json:"next_run_at"`
-	CreatedAt           time.Time  `json:"created_at"`
+	ID                   string     `json:"id"`
+	SeedURLs             []string   `json:"seed_urls"`
+	MaxPages             int        `json:"max_pages"`
+	RespectRobots        bool       `json:"respect_robots"`
+	UserAgent            string     `json:"user_agent"`
+	Cookie               string     `json:"cookie"`
+	BasicAuthUser        string     `json:"basic_auth_user"`
+	BasicAuthPass        string     `json:"basic_auth_pass"`
+	LinkScope            string     `json:"link_scope"`
+	AllowedDomains       []string   `json:"allowed_domains"`
+	BlockedDomains       []string   `json:"blocked_domains"`
+	FollowIndexedDomains bool       `json:"follow_indexed_domains"`
+	UseSitemap           bool       `json:"use_sitemap"`
+	FetchTimeoutSeconds  int        `json:"fetch_timeout_seconds"`
+	MinTextLength        int        `json:"min_text_length"`
+	CrawlDelayMs         int        `json:"crawl_delay_ms"`
+	MaxResponseKB        int        `json:"max_response_kb"`
+	PrioritizeUnindexed  bool       `json:"prioritize_unindexed"`
+	Recurring            bool       `json:"recurring"`
+	IntervalMinutes      int        `json:"interval_minutes"`
+	MaxRuns              int        `json:"max_runs"`
+	RunCount             int        `json:"run_count"`
+	Renderer             string     `json:"renderer"`
+	Enabled              bool       `json:"enabled"`
+	LastRunAt            *time.Time `json:"last_run_at,omitempty"`
+	NextRunAt            time.Time  `json:"next_run_at"`
+	CreatedAt            time.Time  `json:"created_at"`
 }
 
 func toScheduledCrawlResponse(s domain.ScheduledCrawl) scheduledCrawlResponse {
@@ -826,7 +835,9 @@ func toScheduledCrawlResponse(s domain.ScheduledCrawl) scheduledCrawlResponse {
 		RespectRobots: s.RespectRobots, UserAgent: s.UserAgent,
 		Cookie: s.Cookie, BasicAuthUser: s.BasicAuthUser, BasicAuthPass: s.BasicAuthPass,
 		LinkScope: s.LinkScope, UseSitemap: s.UseSitemap,
-		FetchTimeoutSeconds: s.FetchTimeoutSeconds, MinTextLength: s.MinTextLength,
+		AllowedDomains: s.AllowedDomains, BlockedDomains: s.BlockedDomains,
+		FollowIndexedDomains: s.FollowIndexedDomains,
+		FetchTimeoutSeconds:  s.FetchTimeoutSeconds, MinTextLength: s.MinTextLength,
 		CrawlDelayMs: s.CrawlDelayMs, MaxResponseKB: s.MaxResponseKB,
 		PrioritizeUnindexed: s.PrioritizeUnindexed, Recurring: s.Recurring,
 		IntervalMinutes: s.IntervalMinutes, MaxRuns: s.MaxRuns, RunCount: s.RunCount,
@@ -859,7 +870,9 @@ func (req scheduledCrawlRequest) toScheduledCrawl(id string, enabled bool, now t
 		RespectRobots: req.RespectRobots, UserAgent: req.UserAgent,
 		Cookie: req.Cookie, BasicAuthUser: req.BasicAuthUser, BasicAuthPass: req.BasicAuthPass,
 		LinkScope: req.LinkScope, UseSitemap: req.UseSitemap,
-		FetchTimeoutSeconds: req.FetchTimeoutSeconds, MinTextLength: req.MinTextLength,
+		AllowedDomains: req.AllowedDomains, BlockedDomains: req.BlockedDomains,
+		FollowIndexedDomains: req.FollowIndexedDomains,
+		FetchTimeoutSeconds:  req.FetchTimeoutSeconds, MinTextLength: req.MinTextLength,
 		CrawlDelayMs: req.CrawlDelayMs, MaxResponseKB: req.MaxResponseKB,
 		PrioritizeUnindexed: req.PrioritizeUnindexed, Recurring: recurring,
 		IntervalMinutes: req.IntervalMinutes, MaxRuns: req.MaxRuns,

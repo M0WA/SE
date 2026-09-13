@@ -41,13 +41,49 @@ func (c *sqlCrawlerService) Crawl(ctx context.Context, opts ports.CrawlOptions, 
 		// prioritization optimization -- not a reason to fail the crawl
 		// itself.
 	}
-	return crawlLoop(ctx, c.fetcher, c.robots, c.parseHTML, c.settings, opts, isIndexed, func(ctx context.Context, doc domain.Document) error {
+	var isDomainIndexed func([]string) map[string]bool
+	if opts.FollowIndexedDomains {
+		isDomainIndexed = c.buildDomainIndexed(ctx)
+	}
+	return crawlLoop(ctx, c.fetcher, c.robots, c.parseHTML, c.settings, opts, isIndexed, isDomainIndexed, func(ctx context.Context, doc domain.Document) error {
 		embedding, err := c.embedder.Embed(ctx, doc.Title+" "+doc.Text)
 		if err != nil {
 			return err
 		}
 		return c.repo.SaveDocument(ctx, doc, embedding)
 	}, onPage)
+}
+
+// buildDomainIndexed returns a closure crawlLoop calls, at most once per
+// enqueue batch, to check whether any already-indexed document exists for
+// a discovered link's host -- backing opts.FollowIndexedDomains. Memoizes
+// per host across the whole crawl (a per-instance cache, safe for
+// crawlLoop's single-goroutine call pattern), so a domain seen repeatedly
+// across many pages' links is only ever looked up once. A failed lookup
+// for a given host is cached as "not indexed" rather than retried -- same
+// tradeoff as buildIsIndexed's own failure handling: proceed without the
+// optimization rather than fail the crawl or hammer a failing repository.
+func (c *sqlCrawlerService) buildDomainIndexed(ctx context.Context) func([]string) map[string]bool {
+	cache := make(map[string]bool)
+	return func(hosts []string) map[string]bool {
+		var missing []string
+		for _, h := range hosts {
+			if _, ok := cache[h]; !ok {
+				missing = append(missing, h)
+			}
+		}
+		if len(missing) > 0 {
+			indexed, err := c.repo.HostsIndexed(ctx, missing)
+			for _, h := range missing {
+				cache[h] = err == nil && indexed[h]
+			}
+		}
+		result := make(map[string]bool, len(hosts))
+		for _, h := range hosts {
+			result[h] = cache[h]
+		}
+		return result
+	}
 }
 
 // buildIsIndexed fetches every already-indexed document ID for seeds'

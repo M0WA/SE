@@ -151,6 +151,13 @@ type SQLRepository interface {
 	// search candidate set directly, since they otherwise have no guarantee
 	// of appearing in the BM25-hit set or the bounded semantic sample.
 	DocumentIDsByHost(ctx context.Context, hosts []string) ([]string, error)
+	// HostsIndexed reports, for each of hosts, whether any document is
+	// already indexed for it (exact host match or a subdomain of it, same
+	// matching rule as DocumentIDsByHost) -- used by a crawl's
+	// FollowIndexedDomains option to widen its link scope to any domain the
+	// corpus already has content for, without needing every document ID.
+	// A host absent from the result was not found indexed.
+	HostsIndexed(ctx context.Context, hosts []string) (map[string]bool, error)
 	ListDocuments(ctx context.Context, limit int, host string) ([]domain.IndexedDocument, error)
 	DeleteDocument(ctx context.Context, docID string) error
 }
@@ -282,8 +289,25 @@ type CrawlOptions struct {
 	// means "use the global default," same convention Renderer already
 	// uses; domain.LinkScopeHost/LinkScopeDomain/LinkScopeAny choose
 	// explicitly. See domain.LinkScope* and crawlLoop's onDomain.
-	LinkScope  string `json:"link_scope"`
-	UseSitemap bool   `json:"use_sitemap"`
+	LinkScope string `json:"link_scope"`
+	// AllowedDomains/BlockedDomains are a per-crawl allow/block list of
+	// domains to follow discovered links to, on top of LinkScope: a domain
+	// (or any of its subdomains) in BlockedDomains is never followed, even
+	// if LinkScope or AllowedDomains would otherwise allow it -- BlockedDomains
+	// always wins. A domain in AllowedDomains is followed even if LinkScope
+	// itself would reject it, widening scope rather than narrowing it. Both
+	// nil/empty (the default) leave LinkScope as the only scope check.
+	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	BlockedDomains []string `json:"blocked_domains,omitempty"`
+	// FollowIndexedDomains additionally follows a discovered link whose
+	// domain already has at least one indexed document (see
+	// ports.SQLRepository.HostsIndexed), even if LinkScope/AllowedDomains
+	// wouldn't otherwise allow it -- useful for a crawl that should keep
+	// refreshing any site already in the corpus without having to name
+	// every one of them in AllowedDomains. BlockedDomains still overrides
+	// this, same as it overrides LinkScope/AllowedDomains.
+	FollowIndexedDomains bool `json:"follow_indexed_domains,omitempty"`
+	UseSitemap           bool `json:"use_sitemap"`
 	// FetchTimeoutSeconds, MinTextLength, CrawlDelayMs and MaxResponseKB
 	// override the same-named operational defaults for this crawl alone
 	// when positive; zero means "use the global default" -- the same

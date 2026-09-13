@@ -1700,6 +1700,78 @@ func TestDocumentIDsByHost_MatchesExactAndSubdomainNotUnrelated(t *testing.T) {
 	}
 }
 
+func TestHostsIndexed_EmptyHostsReturnsEmptyWithoutQuerying(t *testing.T) {
+	repo := newTestRepo(t)
+	result, err := repo.HostsIndexed(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("expected an empty result for an empty host list, got %v", result)
+	}
+}
+
+// TestHostsIndexed_MatchesExactAndSubdomainNotUnrelated mirrors
+// TestDocumentIDsByHost_MatchesExactAndSubdomainNotUnrelated's matching
+// rule (exact host or a subdomain of it), proving HostsIndexed reports
+// true/false per requested host rather than per document.
+func TestHostsIndexed_MatchesExactAndSubdomainNotUnrelated(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	docs := []domain.Document{
+		{ID: "exact", URL: "https://example.com/a", Title: "t", Text: "some text"},
+		{ID: "subdomain", URL: "https://www.other.example/b", Title: "t", Text: "some text"},
+	}
+	for _, d := range docs {
+		if err := repo.SaveDocument(ctx, d, []float32{1}); err != nil {
+			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
+		}
+	}
+
+	result, err := repo.HostsIndexed(ctx, []string{"example.com", "other.example", "never-crawled.example"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result["example.com"] {
+		t.Errorf("expected example.com (exact match) reported indexed, got %v", result)
+	}
+	if !result["other.example"] {
+		t.Errorf("expected other.example (subdomain match via www.other.example) reported indexed, got %v", result)
+	}
+	if result["never-crawled.example"] {
+		t.Errorf("expected never-crawled.example not reported indexed, got %v", result)
+	}
+}
+
+// TestHostsIndexed_TruncatesToMaxBatch proves an oversized host list is
+// capped at maxHostsIndexedBatch rather than building an unbounded query --
+// a host beyond the cap is silently absent from the result (not indexed),
+// same "safety valve, not an error" tradeoff as maxDocumentIDsByHost.
+func TestHostsIndexed_TruncatesToMaxBatch(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "d1", URL: "https://kept.example/a", Title: "t", Text: "some text"}, []float32{1}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	hosts := make([]string, 0, 501)
+	hosts = append(hosts, "kept.example")
+	for i := 0; i < 500; i++ {
+		hosts = append(hosts, fmt.Sprintf("filler-%d.example", i))
+	}
+	// "kept.example" is truncated away (only the first 500 of 501 hosts are
+	// queried), so it must NOT be reported indexed despite having a document.
+	hosts = append(hosts[1:], hosts[0])
+
+	result, err := repo.HostsIndexed(ctx, hosts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result["kept.example"] {
+		t.Error("expected the 501st host to be truncated away, not looked up")
+	}
+}
+
 // TestEnsureCrawledAtIndex_CreatedOnFreshDatabase verifies idx_documents_crawled_at
 // exists after a normal New() against a brand-new database.
 func TestEnsureCrawledAtIndex_CreatedOnFreshDatabase(t *testing.T) {

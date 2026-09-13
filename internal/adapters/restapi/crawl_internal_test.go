@@ -230,6 +230,33 @@ func TestHandleCrawlInternal_RecordsLinkScopeAndSitemapOptionsOnTheJob(t *testin
 	}
 }
 
+// TestHandleCrawlInternal_RecordsAllowBlockDomainsAndFollowIndexedOnTheJob
+// mirrors TestHandleCrawlInternal_RecordsLinkScopeAndSitemapOptionsOnTheJob
+// for the new allow/block domain lists and FollowIndexedDomains.
+func TestHandleCrawlInternal_RecordsAllowBlockDomainsAndFollowIndexedOnTheJob(t *testing.T) {
+	fc := &fakeCrawler{count: 1}
+	h := newCrawlServerHandler(fc)
+
+	jobID := startCrawl(t, h, ports.CrawlOptions{
+		SeedURLs:             []string{"http://a"},
+		AllowedDomains:       []string{"allowed.example"},
+		BlockedDomains:       []string{"blocked.example"},
+		FollowIndexedDomains: true,
+	})
+	job := waitForJob(t, h, jobID)
+
+	if len(job.Request.AllowedDomains) != 1 || job.Request.AllowedDomains[0] != "allowed.example" ||
+		len(job.Request.BlockedDomains) != 1 || job.Request.BlockedDomains[0] != "blocked.example" ||
+		!job.Request.FollowIndexedDomains {
+		t.Errorf("expected the job to record allowed_domains/blocked_domains/follow_indexed_domains, got %+v", job.Request)
+	}
+	if len(fc.gotOptions.AllowedDomains) != 1 || fc.gotOptions.AllowedDomains[0] != "allowed.example" ||
+		len(fc.gotOptions.BlockedDomains) != 1 || fc.gotOptions.BlockedDomains[0] != "blocked.example" ||
+		!fc.gotOptions.FollowIndexedDomains {
+		t.Errorf("expected the crawler to receive allowed_domains/blocked_domains/follow_indexed_domains, got %+v", fc.gotOptions)
+	}
+}
+
 func TestHandleCrawlInternal_ServiceError(t *testing.T) {
 	fc := &fakeCrawler{err: errors.New("crawl failed")}
 	h := newCrawlServerHandler(fc)

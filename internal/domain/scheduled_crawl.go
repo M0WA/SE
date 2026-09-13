@@ -29,8 +29,14 @@ type ScheduledCrawl struct {
 	// means "use the global default"; LinkScopeHost/LinkScopeDomain/
 	// LinkScopeAny choose explicitly. See ports.CrawlOptions.LinkScope
 	// (the same field, carried through by application.scheduledCrawlOptions).
-	LinkScope  string
-	UseSitemap bool
+	LinkScope string
+	// AllowedDomains/BlockedDomains/FollowIndexedDomains mirror
+	// ports.CrawlOptions' fields of the same name -- see their doc comments
+	// there for the exact allow/block precedence.
+	AllowedDomains       []string
+	BlockedDomains       []string
+	FollowIndexedDomains bool
+	UseSitemap           bool
 	// FetchTimeoutSeconds, MinTextLength, CrawlDelayMs, MaxResponseKB and
 	// PrioritizeUnindexed mirror ports.CrawlOptions' per-crawl overrides --
 	// a scheduled crawl accepts every option a one-off crawl does (0 means

@@ -12,28 +12,31 @@ import (
 
 func newScheduledCrawl(id string, intervalMinutes int, nextRunAt time.Time) domain.ScheduledCrawl {
 	return domain.ScheduledCrawl{
-		ID:                  id,
-		SeedURLs:            []string{"http://a.example", "http://b.example"},
-		MaxPages:            20,
-		RespectRobots:       true,
-		UserAgent:           "test-agent",
-		Cookie:              "session=abc123",
-		BasicAuthUser:       "admin",
-		BasicAuthPass:       "hunter2",
-		LinkScope:           domain.LinkScopeHost,
-		UseSitemap:          true,
-		FetchTimeoutSeconds: 10,
-		MinTextLength:       100,
-		CrawlDelayMs:        500,
-		MaxResponseKB:       2048,
-		PrioritizeUnindexed: true,
-		Recurring:           true,
-		IntervalMinutes:     intervalMinutes,
-		MaxRuns:             10,
-		Renderer:            domain.RendererChromium,
-		Enabled:             true,
-		NextRunAt:           nextRunAt,
-		CreatedAt:           time.Now().UTC(),
+		ID:                   id,
+		SeedURLs:             []string{"http://a.example", "http://b.example"},
+		MaxPages:             20,
+		RespectRobots:        true,
+		UserAgent:            "test-agent",
+		Cookie:               "session=abc123",
+		BasicAuthUser:        "admin",
+		BasicAuthPass:        "hunter2",
+		LinkScope:            domain.LinkScopeHost,
+		AllowedDomains:       []string{"allowed.example"},
+		BlockedDomains:       []string{"blocked.example"},
+		FollowIndexedDomains: true,
+		UseSitemap:           true,
+		FetchTimeoutSeconds:  10,
+		MinTextLength:        100,
+		CrawlDelayMs:         500,
+		MaxResponseKB:        2048,
+		PrioritizeUnindexed:  true,
+		Recurring:            true,
+		IntervalMinutes:      intervalMinutes,
+		MaxRuns:              10,
+		Renderer:             domain.RendererChromium,
+		Enabled:              true,
+		NextRunAt:            nextRunAt,
+		CreatedAt:            time.Now().UTC(),
 	}
 }
 
@@ -59,6 +62,10 @@ func TestCreateScheduledCrawl_ThenListRoundTrips(t *testing.T) {
 	}
 	if g.MaxPages != 20 || !g.RespectRobots || g.UserAgent != "test-agent" || g.LinkScope != domain.LinkScopeHost || !g.UseSitemap {
 		t.Errorf("unexpected option round trip: %+v", g)
+	}
+	if len(g.AllowedDomains) != 1 || g.AllowedDomains[0] != "allowed.example" ||
+		len(g.BlockedDomains) != 1 || g.BlockedDomains[0] != "blocked.example" || !g.FollowIndexedDomains {
+		t.Errorf("unexpected allow/block domain list round trip: %+v", g)
 	}
 	if g.Cookie != "session=abc123" || g.BasicAuthUser != "admin" || g.BasicAuthPass != "hunter2" {
 		t.Errorf("expected credentials to round trip like any other option, got %+v", g)
@@ -127,6 +134,9 @@ func TestUpdateScheduledCrawl_ReplacesEditableFields(t *testing.T) {
 	updated.Cookie = "session=changed"
 	updated.BasicAuthPass = "changed"
 	updated.PrioritizeUnindexed = false
+	updated.AllowedDomains = []string{"changed-allowed.example"}
+	updated.BlockedDomains = []string{"changed-blocked.example"}
+	updated.FollowIndexedDomains = false
 	updated.Recurring = false
 	updated.IntervalMinutes = 15
 	updated.MaxRuns = 25
@@ -154,6 +164,10 @@ func TestUpdateScheduledCrawl_ReplacesEditableFields(t *testing.T) {
 	}
 	if g.Cookie != "session=changed" || g.BasicAuthPass != "changed" || g.PrioritizeUnindexed || g.Recurring {
 		t.Errorf("expected updated credentials/override/recurring fields, got %+v", g)
+	}
+	if len(g.AllowedDomains) != 1 || g.AllowedDomains[0] != "changed-allowed.example" ||
+		len(g.BlockedDomains) != 1 || g.BlockedDomains[0] != "changed-blocked.example" || g.FollowIndexedDomains {
+		t.Errorf("expected updated allow/block domain lists, got %+v", g)
 	}
 	if g.MaxRuns != 25 {
 		t.Errorf("expected MaxRuns to be editable, got %d", g.MaxRuns)
