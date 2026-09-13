@@ -64,10 +64,15 @@ path, not-configured/empty-input edge cases).
   `node:test`, no framework dependency beyond `jsdom` (the one `devDependency`
   in the root `package.json`, installed with `npm install`). Run the suite
   with `npm test`; run it with a coverage report via `npm run test:coverage`
-  (uses `node --test-coverage-include`/`--test-coverage-exclude` to scope the
-  report to this project's own files when the local Node is new enough —
-  Node ≥20.1 — and falls back to the unscoped report otherwise; either way,
-  the tests themselves run the same on any Node ≥18.17).
+  (plain `--experimental-test-coverage` — Node's own
+  `--test-coverage-include`/`--test-coverage-exclude` flags, which would
+  scope the report to just this project's files, turned out not to exist
+  on either Node 18.19 or 20.20 despite being documented, so don't rely on
+  them without checking the actual installed Node first. The report as-is
+  can include a couple of unrelated node_modules-of-node_modules rows the
+  test runner's own reporter loads for terminal color detection
+  (`has-flag`/`supports-color`) — noise, not a real gap in this project's
+  own `internal/adapters/restapi/*.js` coverage).
   - Test files are colocated as `<name>.test.js` next to the script they
     cover (e.g. `admin.test.js`, `crawl.test.js`) — `node --test`'s default
     discovery pattern, and safely excluded from every `//go:embed` directive
