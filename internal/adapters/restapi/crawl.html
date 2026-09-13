@@ -66,10 +66,10 @@
         <option value="">Use site default</option>
         <option value="host">Exact seed host only</option>
         <option value="domain">Seed's domain, including subdomains</option>
-        <option value="tld">Any domain under the seed's top-level domain</option>
+        <option value="tld">Same domain name, any top-level domain</option>
         <option value="any">Any domain</option>
       </select>
-      <p class="tuning-hint">"Use site default" follows whatever the Tuning page has set. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org. "Any domain under the seed's top-level domain" is broader still — from a seed of example.com it also follows other.com (any ".com" site), but not example.org.</p>
+      <p class="tuning-hint">"Use site default" follows whatever the Tuning page has set. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org. "Same domain name, any top-level domain" is broader still — from a seed of example.com it also follows example.org and www.example.de (the same site's other TLDs and their subdomains), but not other.com.</p>
     </div>
     <div class="form-row form-row-check">
       <label for="crawl-use-sitemap">
@@ -362,7 +362,7 @@
     }, 1500);
   }
 
-  const LINK_SCOPE_LABELS = { '': 'Site default', host: 'Exact seed host only', domain: 'Seed domain + subdomains', tld: 'Any domain, same top-level domain', any: 'Any domain' };
+  const LINK_SCOPE_LABELS = { '': 'Site default', host: 'Exact seed host only', domain: 'Seed domain + subdomains', tld: 'Same domain name, any TLD', any: 'Any domain' };
   const RENDERER_LABELS = { '': 'Site default', none: 'None (plain HTTP)', chromium: 'Chromium', firefox: 'Firefox' };
 
   // renderRequestOptions shows every option this job actually ran with --

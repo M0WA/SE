@@ -582,20 +582,20 @@ func TestCrawlLoop_LinkScopeDomainAllowsSameRegistrableDomainSubdomain(t *testin
 	}
 }
 
-// TestCrawlLoop_LinkScopeTLDAllowsDifferentDomainSameSuffix proves
-// LinkScopeTLD is broader than LinkScopeDomain -- it follows a link to a
-// completely different registrable domain, as long as it shares the
-// seed's public suffix (here, ".com"), but still rejects a domain under a
-// different suffix.
-func TestCrawlLoop_LinkScopeTLDAllowsDifferentDomainSameSuffix(t *testing.T) {
+// TestCrawlLoop_LinkScopeTLDAllowsSameNameDifferentTLD proves LinkScopeTLD
+// is broader than LinkScopeDomain -- it follows a link to the same domain
+// name under a completely different TLD (and a subdomain of it), but still
+// rejects a different domain name that happens to share the seed's TLD.
+func TestCrawlLoop_LinkScopeTLDAllowsSameNameDifferentTLD(t *testing.T) {
 	fetcher := &scopedFetcher{pages: map[string]string{
 		"http://www.example.com/start": "<html>start</html>",
-		"http://other.com/x":           "<html>x</html>",
-		"http://other.org/y":           "<html>y</html>",
+		"http://example.org/x":         "<html>x</html>",
+		"http://blog.example.de/y":     "<html>y</html>",
+		"http://other.com/z":           "<html>z</html>",
 	}}
 	parse := func(html, pageURL string) (string, string, []string) {
 		if pageURL == "http://www.example.com/start" {
-			return "T", "genuegend inhalt text fuer diese seite bitte danke", []string{"http://other.com/x", "http://other.org/y"}
+			return "T", "genuegend inhalt text fuer diese seite bitte danke", []string{"http://example.org/x", "http://blog.example.de/y", "http://other.com/z"}
 		}
 		return "T2", "genuegend inhalt text fuer diese andere seite bitte danke", nil
 	}
@@ -606,28 +606,28 @@ func TestCrawlLoop_LinkScopeTLDAllowsDifferentDomainSameSuffix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if count != 2 {
-		t.Errorf("expected the different .com domain crawled but the .org domain rejected, got count=%d", count)
+	if count != 3 {
+		t.Errorf("expected both same-name TLD variants crawled but the different-name domain rejected, got count=%d", count)
 	}
 	for _, u := range fetcher.urls {
-		if u == "http://other.org/y" {
-			t.Error("expected a domain under a different public suffix not to be fetched under link_scope=tld")
+		if u == "http://other.com/z" {
+			t.Error("expected a different domain name to not be fetched under link_scope=tld, even sharing the seed's TLD")
 		}
 	}
 }
 
-// TestCrawlLoop_LinkScopeTLDRejectsUnrelatedDomainUnderLinkScopeDomain
-// proves LinkScopeDomain (the stricter, default tier) rejects exactly the
-// cross-domain-same-suffix link that LinkScopeTLD allows -- the two tiers
+// TestCrawlLoop_LinkScopeDomainRejectsSameNameDifferentTLD proves
+// LinkScopeDomain (the stricter, default tier) rejects exactly the
+// different-TLD-same-name link that LinkScopeTLD allows -- the two tiers
 // genuinely differ, not just in name.
-func TestCrawlLoop_LinkScopeTLDRejectsUnrelatedDomainUnderLinkScopeDomain(t *testing.T) {
+func TestCrawlLoop_LinkScopeDomainRejectsSameNameDifferentTLD(t *testing.T) {
 	fetcher := &scopedFetcher{pages: map[string]string{
 		"http://www.example.com/start": "<html>start</html>",
-		"http://other.com/x":           "<html>x</html>",
+		"http://example.org/x":         "<html>x</html>",
 	}}
 	parse := func(html, pageURL string) (string, string, []string) {
 		if pageURL == "http://www.example.com/start" {
-			return "T", "genuegend inhalt text fuer diese seite bitte danke", []string{"http://other.com/x"}
+			return "T", "genuegend inhalt text fuer diese seite bitte danke", []string{"http://example.org/x"}
 		}
 		return "T2", "genuegend inhalt text fuer diese andere seite bitte danke", nil
 	}
@@ -639,7 +639,7 @@ func TestCrawlLoop_LinkScopeTLDRejectsUnrelatedDomainUnderLinkScopeDomain(t *tes
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if count != 1 {
-		t.Errorf("expected the different .com domain rejected under link_scope=domain, got count=%d", count)
+		t.Errorf("expected the different-TLD domain rejected under link_scope=domain, got count=%d", count)
 	}
 }
 
@@ -994,17 +994,25 @@ func TestRegistrableDomain_FallsBackToHostForIPsAndLocalhost(t *testing.T) {
 	}
 }
 
-func TestTopLevelDomain_FallsBackToHostForIPsAndLocalhost(t *testing.T) {
+func TestDomainName_FallsBackToHostForIPsAndLocalhost(t *testing.T) {
 	for _, host := range []string{"localhost", "127.0.0.1"} {
-		if got := topLevelDomain(host); got != host {
-			t.Errorf("topLevelDomain(%q) = %q, want %q (fallback to the host itself)", host, got, host)
+		if got := domainName(host); got != host {
+			t.Errorf("domainName(%q) = %q, want %q (fallback to the host itself)", host, got, host)
 		}
 	}
 }
 
-func TestTopLevelDomain_HandlesMultiPartSuffix(t *testing.T) {
-	if got := topLevelDomain("www.example.co.uk"); got != "co.uk" {
-		t.Errorf(`topLevelDomain("www.example.co.uk") = %q, want "co.uk"`, got)
+func TestDomainName_HandlesMultiPartSuffix(t *testing.T) {
+	if got := domainName("www.example.co.uk"); got != "example" {
+		t.Errorf(`domainName("www.example.co.uk") = %q, want "example"`, got)
+	}
+}
+
+func TestDomainName_IgnoresSubdomainAndTLD(t *testing.T) {
+	for _, host := range []string{"example.com", "www.example.com", "example.org", "blog.example.de"} {
+		if got := domainName(host); got != "example" {
+			t.Errorf("domainName(%q) = %q, want %q", host, got, "example")
+		}
 	}
 }
 

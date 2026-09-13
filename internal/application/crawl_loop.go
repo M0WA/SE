@@ -209,19 +209,20 @@ func crawlLoop(
 // crawl, relative to its seed URL(s) -- see domain.LinkScope*. hosts holds
 // every seed's exact host (for domain.LinkScopeHost); domains holds every
 // seed host's registrable domain, i.e. its effective-TLD-plus-one (for
-// domain.LinkScopeDomain); tlds holds every seed host's public suffix /
-// effective TLD (for domain.LinkScopeTLD).
+// domain.LinkScopeDomain); names holds every seed host's domain name with
+// its public suffix stripped off (for domain.LinkScopeTLD), so matching
+// ignores which TLD a link uses.
 type linkScopeMatcher struct {
 	hosts   map[string]bool
 	domains map[string]bool
-	tlds    map[string]bool
+	names   map[string]bool
 }
 
 func newLinkScopeMatcher(seeds []string) linkScopeMatcher {
 	m := linkScopeMatcher{
 		hosts:   make(map[string]bool, len(seeds)),
 		domains: make(map[string]bool, len(seeds)),
-		tlds:    make(map[string]bool, len(seeds)),
+		names:   make(map[string]bool, len(seeds)),
 	}
 	for _, s := range seeds {
 		u, err := url.Parse(s)
@@ -231,7 +232,7 @@ func newLinkScopeMatcher(seeds []string) linkScopeMatcher {
 		host := strings.ToLower(u.Host)
 		m.hosts[host] = true
 		m.domains[registrableDomain(host)] = true
-		m.tlds[topLevelDomain(host)] = true
+		m.names[domainName(host)] = true
 	}
 	return m
 }
@@ -242,10 +243,10 @@ func newLinkScopeMatcher(seeds []string) linkScopeMatcher {
 // allows; domain.LinkScopeHost requires an exact match against a seed's own
 // host; domain.LinkScopeDomain (the default) allows any host that shares a
 // seed's registrable domain -- covering that seed's own host, any of its
-// subdomains, and its bare registrable domain; domain.LinkScopeTLD is
-// broader still, allowing any host sharing a seed's public suffix / eTLD
-// (e.g. any ".com" site from a ".com" seed) regardless of the rest of the
-// domain.
+// subdomains, and its bare registrable domain; domain.LinkScopeTLD allows
+// any host whose domain name matches a seed's, regardless of subdomain or
+// which TLD it uses (e.g. a seed of example.com also allows example.org and
+// www.example.co.uk, but not other.com).
 func (m linkScopeMatcher) allows(rawURL, scope string) bool {
 	if scope == domain.LinkScopeAny {
 		return true
@@ -259,7 +260,7 @@ func (m linkScopeMatcher) allows(rawURL, scope string) bool {
 	case domain.LinkScopeHost:
 		return m.hosts[host]
 	case domain.LinkScopeTLD:
-		return m.tlds[topLevelDomain(host)]
+		return m.names[domainName(host)]
 	default:
 		return m.domains[registrableDomain(host)]
 	}
@@ -280,15 +281,21 @@ func registrableDomain(host string) string {
 	return etld1
 }
 
-// topLevelDomain returns host's public suffix / effective TLD (e.g.
-// "blog.example.co.uk" -> "co.uk"). Unlike registrableDomain/
-// EffectiveTLDPlusOne, PublicSuffix never errors -- it falls back to
-// returning host itself for anything not in the list (a bare IP address,
-// "localhost", or an already-bare public suffix), so that host still only
-// ever matches itself under LinkScopeTLD, never anything else.
-func topLevelDomain(host string) string {
-	suffix, _ := publicsuffix.PublicSuffix(host)
-	return suffix
+// domainName returns host's registrable domain with its public suffix
+// stripped off (e.g. "blog.example.co.uk" -> "example"), for
+// domain.LinkScopeTLD: comparing this ignores both subdomains and which TLD
+// a link uses. Falls back to registrableDomain's own fallback (host itself)
+// for anything PublicSuffix can't strip a recognized suffix from (a bare IP
+// address, "localhost", or an already-bare public suffix), so such a host
+// still only ever matches itself.
+func domainName(host string) string {
+	reg := registrableDomain(host)
+	if suffix, _ := publicsuffix.PublicSuffix(host); suffix != "" {
+		if name, ok := strings.CutSuffix(reg, "."+suffix); ok {
+			return name
+		}
+	}
+	return reg
 }
 
 // sitemapURL builds the /sitemap.xml URL at a seed's origin, discarding any
