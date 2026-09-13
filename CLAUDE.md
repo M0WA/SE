@@ -58,7 +58,7 @@ path, not-configured/empty-input edge cases).
   method-not-allowed/405, and any handler-specific branch like a partial
   failure or an empty-result case).
 - **JavaScript** (`internal/adapters/restapi/*.js` — every admin/search page's
-  script now lives in its own external file, e.g. `crawl.js`/`admin_schedule.js`,
+  script now lives in its own external file, e.g. `admin_crawl.js`/`admin_schedule.js`,
   loaded via `<script src="...">` rather than inline; `admin.js` holds the
   helpers every page shares): a real test runner exists — Node's built-in
   `node:test`, no framework dependency beyond `jsdom` (the one `devDependency`
@@ -74,11 +74,11 @@ path, not-configured/empty-input edge cases).
   (`has-flag`/`supports-color`) — noise, not a real gap in this project's
   own `internal/adapters/restapi/*.js` coverage).
   - Test files are colocated as `<name>.test.js` next to the script they
-    cover (e.g. `admin.test.js`, `crawl.test.js`) — `node --test`'s default
+    cover (e.g. `admin.test.js`, `admin_crawl.test.js`) — `node --test`'s default
     discovery pattern, and safely excluded from every `//go:embed` directive
     in `handler.go` (which names exact files, never a glob) so a `.test.js`
     file is never accidentally shipped in a binary.
-  - `admin.js`/`crawl.js`/etc. are still plain scripts meant for a `<script>`
+  - `admin.js`/`admin_crawl.js`/etc. are still plain scripts meant for a `<script>`
     tag, not CommonJS modules — each ends with `if (typeof module !== 'undefined'
     && module.exports) { module.exports = {...} }`, a no-op in a browser
     (`typeof module` is undefined there) that lets a test `require()` the
@@ -91,13 +91,13 @@ path, not-configured/empty-input edge cases).
     test). A page script that expects `admin.js`'s helpers as ambient
     globals (the same way loading `<script src="/admin.js">` before its own
     `<script>` tag works in the real page) needs those assigned onto
-    `global` before it's required — see `crawl.test.js`'s `loadFixture()`
+    `global` before it's required — see `admin_crawl.test.js`'s `loadFixture()`
     for the pattern, including using the real `crawl.html` as the jsdom
     fixture so the test never drifts from the actual page structure.
   - Keep coverage close to 100% here the same way as Go — for a change, not
     as a mandate to retroactively backfill every historical page's script in
     one sitting. `admin.js` (the shared helpers) is fully covered; treat
-    that, and `crawl.test.js`, as the reference pattern for a new page's
+    that, and `admin_crawl.test.js`, as the reference pattern for a new page's
     tests.
   - Unit tests check logic (parsing, filtering, formatting, DOM structure
     built from given data) in isolation. They don't replace actually
@@ -125,7 +125,7 @@ actual correctness bugs.
   for detached background work — it cancels the instant the client disconnects.
 - **Admin list-view search filters**: client-side, case-insensitive regex against
   an already-fetched in-memory array (see `filterPages`/`filterJobs`/`filterCrawls`
-  in `internal/adapters/restapi/crawl.js`, `filterDocs` in `admin_domain.js`).
+  in `internal/adapters/restapi/admin_crawl.js`, `filterDocs` in `admin_domain.js`).
   Reuse this pattern for any new unbounded-feeling admin list rather than
   inventing a new one.
 - **Backend list endpoints** take a `?limit=` query param via the shared

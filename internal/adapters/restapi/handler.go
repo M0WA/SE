@@ -97,8 +97,8 @@ var adminTuningJS []byte
 //go:embed admin_vocabulary_term.js
 var adminVocabularyTermJS []byte
 
-//go:embed crawl.js
-var crawlJS []byte
+//go:embed admin_crawl.js
+var adminCrawlJS []byte
 
 //go:embed index.js
 var indexJS []byte
@@ -253,7 +253,7 @@ func (h *Handler) RoutesAdmin() *http.ServeMux {
 	mux.HandleFunc("/admin/vocabulary/term", h.requireAuthPage(h.handleAdminVocabularyTermPage))
 	mux.HandleFunc("/admin_vocabulary_term.js", h.handleAdminVocabularyTermJS)
 	mux.HandleFunc("/admin/crawl", h.requireAuthPage(h.handleAdminCrawlPage))
-	mux.HandleFunc("/crawl.js", h.handleCrawlJS)
+	mux.HandleFunc("/admin_crawl.js", h.handleAdminCrawlJS)
 	mux.HandleFunc("/admin/schedule/{id}", h.requireAuthPage(h.handleAdminSchedulePage))
 	mux.HandleFunc("/admin_schedule.js", h.handleAdminScheduleJS)
 	mux.HandleFunc("/admin/tuning", h.requireAuthPage(h.handleAdminTuningPage))
@@ -371,8 +371,8 @@ func (h *Handler) handleAdminVocabularyTermJS(w http.ResponseWriter, r *http.Req
 	serveStatic(w, r, "text/javascript; charset=utf-8", adminVocabularyTermJS)
 }
 
-func (h *Handler) handleCrawlJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", crawlJS)
+func (h *Handler) handleAdminCrawlJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminCrawlJS)
 }
 
 // serveStatic answers a GET/HEAD request with a fixed, embedded payload --

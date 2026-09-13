@@ -3,7 +3,7 @@
 // directory. Named without a .test.js suffix so node's test runner never
 // tries to execute it as a test file itself.
 //
-// The admin/search JS files (admin.js, crawl.js, ...) are plain scripts
+// The admin/search JS files (admin.js, admin_crawl.js, ...) are plain scripts
 // meant for a <script> tag, not CommonJS modules -- they read/write
 // document/window as ambient globals. setupDOM() points those globals at a
 // fresh jsdom Document before each test requires the file under test, so

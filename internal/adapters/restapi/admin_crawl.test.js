@@ -7,7 +7,7 @@ const { setupDOM, teardownDOM, requireFresh } = require('./dom_helper.test_util'
 
 const CRAWL_HTML = fs.readFileSync(path.join(__dirname, 'crawl.html'), 'utf8');
 
-// crawl.js is a plain page script, not a module -- it expects admin.js's
+// admin_crawl.js is a plain page script, not a module -- it expects admin.js's
 // helpers (kvRow, textCell, urlCell, seedSummary, buildTable, clear,
 // setButtonLoading, getJSON/postJSON/deleteRequest/patchJSON, linesToText,
 // parseLines) as ambient globals, the same way <script src="/admin.js">
@@ -28,7 +28,7 @@ function loadFixture() {
     }
     return { ok: true, json: async () => ({}) };
   };
-  return requireFresh('./crawl.js');
+  return requireFresh('./admin_crawl.js');
 }
 
 test.beforeEach(() => {});

@@ -612,7 +612,7 @@
 
   // Exports for the Node test runner only -- `typeof module` is undefined
   // in a browser's <script> tag, so this is a no-op there. See
-  // internal/adapters/restapi/crawl.test.js. Requiring this file still
+  // internal/adapters/restapi/admin_crawl.test.js. Requiring this file still
   // runs the four bootstrap calls just above (same as loading the real
   // page would) -- the test file's fetch mock has to tolerate that.
   if (typeof module !== 'undefined' && module.exports) {
