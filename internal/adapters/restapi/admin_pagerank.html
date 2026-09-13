@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — pagerank</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<main>
+  <div class="page-header">
+    <a class="mark" href="/">se.</a>
+    <button id="sign-out" class="text-button" type="button">Sign out</button>
+  </div>
+  <nav class="admin-nav">
+    <a href="/admin">Overview</a>
+    <a href="/admin/documents">Documents</a>
+    <a href="/admin/crawl">Crawl</a>
+    <a href="/admin/schedules">Schedules</a>
+    <a href="/admin/tuning">Tuning</a>
+    <a href="/admin/search">Search</a>
+    <a href="/admin/overrides">Overrides</a>
+    <a href="/admin/pagerank" aria-current="page">PageRank</a>
+    <a href="/admin/database">Database</a>
+  </nav>
+
+  <p class="lede" style="margin: 0 0 1.5rem;">Link-authority scores, recomputed from the crawled link graph on the interval set in Tuning, or right after every crawl finishes. Force a recompute here to see the result immediately.</p>
+
+  <section class="panel">
+    <h2>Current distribution</h2>
+    <div id="pagerank-stats"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Algorithm</h2>
+    <div id="pagerank-config"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Force recalculation</h2>
+    <p class="tuning-hint">Recomputes every document's PageRank score from the current link graph right now, instead of waiting for the next scheduled or post-crawl run.</p>
+    <button id="recompute-btn" class="text-button" type="button">Recompute now</button>
+    <div id="recompute-status" class="panel-status"></div>
+    <div id="recompute-result"></div>
+  </section>
+</main>
+<script src="/admin.js"></script>
+<script>
+  const statsEl = document.getElementById('pagerank-stats');
+  const configEl = document.getElementById('pagerank-config');
+  const recomputeBtn = document.getElementById('recompute-btn');
+  const recomputeStatusEl = document.getElementById('recompute-status');
+  const recomputeResultEl = document.getElementById('recompute-result');
+
+  function renderStats(s) {
+    clear(statsEl);
+    kvRow(statsEl, 'Documents', String(s.total_docs));
+    kvRow(statsEl, 'Min', s.min_pagerank.toFixed(6));
+    kvRow(statsEl, 'Max', s.max_pagerank.toFixed(6));
+    kvRow(statsEl, 'Average', s.avg_pagerank.toFixed(6));
+
+    clear(configEl);
+    kvRow(configEl, 'Damping factor', String(s.damping));
+    kvRow(configEl, 'Max iterations', String(s.max_iterations));
+    kvRow(configEl, 'Convergence epsilon', String(s.epsilon));
+    kvRow(configEl, 'Blend weight (Tuning)', String(s.pagerank_weight));
+    kvRow(configEl, 'Recompute interval (Tuning)', s.recompute_interval_minutes + ' min');
+  }
+
+  async function load() {
+    try {
+      renderStats(await getJSON('/admin/api/pagerank'));
+    } catch (err) {
+      statsEl.textContent = 'Could not load PageRank stats: ' + err.message;
+    }
+  }
+
+  recomputeBtn.addEventListener('click', async () => {
+    recomputeBtn.disabled = true;
+    recomputeStatusEl.textContent = 'Recomputing…';
+    clear(recomputeResultEl);
+    try {
+      const r = await postJSON('/admin/api/pagerank/recompute', {});
+      recomputeStatusEl.textContent = 'Done in ' + r.duration_ms + ' ms.';
+      kvRow(recomputeResultEl, 'Documents scored', String(r.documents));
+      kvRow(recomputeResultEl, 'Iterations run', String(r.iterations));
+      kvRow(recomputeResultEl, 'Final convergence delta', r.final_delta.toExponential(3));
+      kvRow(recomputeResultEl, 'New min', r.min_pagerank.toFixed(6));
+      kvRow(recomputeResultEl, 'New max', r.max_pagerank.toFixed(6));
+      kvRow(recomputeResultEl, 'New average', r.avg_pagerank.toFixed(6));
+      await load();
+    } catch (err) {
+      recomputeStatusEl.textContent = 'Could not recompute: ' + err.message;
+    } finally {
+      recomputeBtn.disabled = false;
+    }
+  });
+
+  wireSignOut();
+  load();
+</script>
+</body>
+</html>

@@ -12,9 +12,32 @@ func almostEqual(a, b, tol float64) bool {
 }
 
 func TestPageRank_Empty(t *testing.T) {
-	scores := domain.PageRank(map[string][]string{})
+	scores, info := domain.PageRank(map[string][]string{})
 	if len(scores) != 0 {
 		t.Errorf("expected empty result for empty graph, got %+v", scores)
+	}
+	if info != (domain.PageRankRunInfo{}) {
+		t.Errorf("expected a zero PageRankRunInfo for an empty graph (no iteration needed), got %+v", info)
+	}
+}
+
+// TestPageRank_RunInfoReportsIterationsAndConvergence verifies the run
+// info returned alongside the scores: iterations run is positive and
+// capped at PageRankMaxIterations, and the final delta is small enough to
+// have actually triggered the early-exit convergence check on this trivial
+// graph (which settles in well under the max).
+func TestPageRank_RunInfoReportsIterationsAndConvergence(t *testing.T) {
+	adjacency := map[string][]string{
+		"a": {"b"},
+		"b": {"c"},
+		"c": {"a"},
+	}
+	_, info := domain.PageRank(adjacency)
+	if info.Iterations <= 0 || info.Iterations > domain.PageRankMaxIterations {
+		t.Errorf("expected 1..%d iterations, got %d", domain.PageRankMaxIterations, info.Iterations)
+	}
+	if info.FinalDelta >= domain.PageRankEpsilon {
+		t.Errorf("expected this simple graph to converge below epsilon (%g), got final delta %g", domain.PageRankEpsilon, info.FinalDelta)
 	}
 }
 
@@ -27,7 +50,7 @@ func TestPageRank_ThreeNodeCycle(t *testing.T) {
 		"b": {"c"},
 		"c": {"a"},
 	}
-	scores := domain.PageRank(adjacency)
+	scores, _ := domain.PageRank(adjacency)
 	if len(scores) != 3 {
 		t.Fatalf("expected 3 scored nodes, got %d: %+v", len(scores), scores)
 	}
@@ -56,7 +79,7 @@ func TestPageRank_WellLinkedNodeScoresHigherThanIsolated(t *testing.T) {
 		"hub":      {"p1"},
 		"isolated": {},
 	}
-	scores := domain.PageRank(adjacency)
+	scores, _ := domain.PageRank(adjacency)
 	for _, node := range []string{"p1", "p2", "p3", "hub", "isolated"} {
 		if scores[node] <= 0 {
 			t.Errorf("expected node %s to have a positive score, got %f", node, scores[node])
@@ -79,7 +102,7 @@ func TestPageRank_DanglingNodeGetsNoIncomingContribution(t *testing.T) {
 		"a": {"sink"},
 		// "sink" has no outgoing links of its own.
 	}
-	scores := domain.PageRank(adjacency)
+	scores, _ := domain.PageRank(adjacency)
 	if len(scores) != 2 {
 		t.Fatalf("expected 2 nodes (a, sink), got %+v", scores)
 	}
@@ -104,8 +127,8 @@ func TestPageRank_Deterministic(t *testing.T) {
 		"c": {"a", "b"},
 		"d": {"a"},
 	}
-	first := domain.PageRank(adjacency)
-	second := domain.PageRank(adjacency)
+	first, _ := domain.PageRank(adjacency)
+	second, _ := domain.PageRank(adjacency)
 	for node, v := range first {
 		if second[node] != v {
 			t.Errorf("expected deterministic output for node %s: %f vs %f", node, v, second[node])

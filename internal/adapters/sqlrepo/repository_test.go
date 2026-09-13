@@ -787,6 +787,16 @@ func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 			t.Error("expected an error")
 		}
 	})
+	t.Run("PageRankDistribution", func(t *testing.T) {
+		if _, _, _, err := closedRepo(t).PageRankDistribution(ctx); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("TableRowCounts", func(t *testing.T) {
+		if _, err := closedRepo(t).TableRowCounts(ctx); err == nil {
+			t.Error("expected an error")
+		}
+	})
 	t.Run("DeleteDocument", func(t *testing.T) {
 		if err := closedRepo(t).DeleteDocument(ctx, "doc-1"); err == nil {
 			t.Error("expected an error")
@@ -1986,6 +1996,75 @@ func TestRepository_UpdatePageRanks_SpansMultipleBatches(t *testing.T) {
 	for id, want := range scores {
 		if got := embeddings[id].PageRank; got != want {
 			t.Errorf("expected %s's pagerank updated to %v, got %v", id, want, got)
+		}
+	}
+}
+
+func TestPageRankDistribution_EmptyCorpus(t *testing.T) {
+	repo := newTestRepo(t)
+	min, max, avg, err := repo.PageRankDistribution(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if min != 0 || max != 0 || avg != 0 {
+		t.Errorf("expected min=max=avg=0 for an empty corpus, got min=%v max=%v avg=%v", min, max, avg)
+	}
+}
+
+func TestPageRankDistribution_ReflectsUpdatedScores(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	for _, id := range []string{"doc-1", "doc-2", "doc-3"} {
+		doc := domain.Document{ID: id, URL: "https://example.com/" + id, Title: id, Text: "text " + id}
+		if err := repo.SaveDocument(ctx, doc, []float32{1}); err != nil {
+			t.Fatalf("unexpected error saving %s: %v", id, err)
+		}
+	}
+	if err := repo.UpdatePageRanks(ctx, map[string]float64{"doc-1": 0.1, "doc-2": 0.5, "doc-3": 0.9}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	min, max, avg, err := repo.PageRankDistribution(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if min != 0.1 {
+		t.Errorf("expected min=0.1, got %v", min)
+	}
+	if max != 0.9 {
+		t.Errorf("expected max=0.9, got %v", max)
+	}
+	wantAvg := (0.1 + 0.5 + 0.9) / 3
+	if diff := avg - wantAvg; diff > 1e-9 || diff < -1e-9 {
+		t.Errorf("expected avg=%v, got %v", wantAvg, avg)
+	}
+}
+
+func TestTableRowCounts_ReflectsSavedDocuments(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	for _, id := range []string{"doc-1", "doc-2"} {
+		doc := domain.Document{ID: id, URL: "https://example.com/" + id, Title: id, Text: "shared term"}
+		if err := repo.SaveDocument(ctx, doc, []float32{1}); err != nil {
+			t.Fatalf("unexpected error saving %s: %v", id, err)
+		}
+	}
+
+	counts, err := repo.TableRowCounts(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if counts["documents"] != 2 {
+		t.Errorf("expected 2 documents, got %d (%+v)", counts["documents"], counts)
+	}
+	if counts["postings"] == 0 {
+		t.Errorf("expected postings rows for the saved documents' terms, got %+v", counts)
+	}
+	// Every table the schema creates should be present, even if empty --
+	// the admin database diagnostics page shows all of them.
+	for _, table := range []string{"documents", "postings", "document_versions", "links", "app_settings", "scheduled_crawls", "crawl_jobs", "crawl_job_pages", "sessions"} {
+		if _, ok := counts[table]; !ok {
+			t.Errorf("expected a row count entry for table %q, got %+v", table, counts)
 		}
 	}
 }

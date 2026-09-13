@@ -2,6 +2,7 @@ package ports
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
@@ -198,6 +199,19 @@ type AdminRepository interface {
 	// match excerpt can be built for it.
 	DocumentsByIDs(ctx context.Context, ids []string) (map[string]domain.Document, error)
 	DeleteDocument(ctx context.Context, docID string) error
+	// PageRankDistribution reports the min, max and average
+	// documents.pagerank value across the whole corpus -- the admin
+	// PageRank debug page's headline numbers. All three are 0 for an empty
+	// corpus.
+	PageRankDistribution(ctx context.Context) (min, max, avg float64, err error)
+	// TableRowCounts reports how many rows each of the schema's tables
+	// currently holds, keyed by table name -- the admin database
+	// diagnostics page's per-table breakdown.
+	TableRowCounts(ctx context.Context) (map[string]int64, error)
+	// PoolStats reports the live DB connection pool's current limits and
+	// usage (see sqlrepo.Repository.PoolStats) -- the admin database
+	// diagnostics page's connection-pool panel.
+	PoolStats() sql.DBStats
 }
 
 // --- Primary (driving) ports ---

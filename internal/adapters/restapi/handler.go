@@ -45,6 +45,12 @@ var adminOverridesHTML []byte
 //go:embed admin_schedules.html
 var adminSchedulesHTML []byte
 
+//go:embed admin_pagerank.html
+var adminPageRankHTML []byte
+
+//go:embed admin_database.html
+var adminDatabaseHTML []byte
+
 //go:embed style.css
 var styleCSS []byte
 
@@ -59,6 +65,7 @@ type Handler struct {
 	jobs            ports.CrawlJobService
 	debug           ports.DebugSearchService
 	admin           ports.AdminRepository
+	pageRank        ports.PageRankRepository
 	settings        *domain.TuningSettings
 	opSettings      *domain.OperationalSettings
 	overrides       *domain.RankingOverrides
@@ -88,6 +95,11 @@ type Handler struct {
 // persisted for any other process to pick up. ScheduledCrawls is set on
 // admin-server only (backing the schedules admin API) -- crawl-server's own
 // scheduler ticker talks to the same store directly, not through Handler.
+// PageRank, when set (admin-server only, its own *sqlrepo.Repository -- no
+// need to proxy through crawl-server the way crawl-triggering does, since
+// admin-server already has direct DB access), backs the PageRank debug
+// page's "force recalculation" button; without it, that endpoint reports
+// itself unavailable, same as the other optional dependencies.
 // Health is set on every process to back GET /healthz; without it, /healthz
 // always reports healthy (no DB connection to check). Sessions, when set
 // (every production process passes its own *sqlrepo.Repository, which
@@ -109,6 +121,7 @@ type Config struct {
 	Jobs            ports.CrawlJobService
 	Debug           ports.DebugSearchService
 	Admin           ports.AdminRepository
+	PageRank        ports.PageRankRepository
 	Settings        *domain.TuningSettings
 	OpSettings      *domain.OperationalSettings
 	Overrides       *domain.RankingOverrides
@@ -135,6 +148,7 @@ func New(cfg Config) *Handler {
 		jobs:            cfg.Jobs,
 		debug:           cfg.Debug,
 		admin:           cfg.Admin,
+		pageRank:        cfg.PageRank,
 		settings:        cfg.Settings,
 		opSettings:      cfg.OpSettings,
 		overrides:       cfg.Overrides,
@@ -186,6 +200,8 @@ func (h *Handler) RoutesAdmin() *http.ServeMux {
 	mux.HandleFunc("/admin/search/result", h.requireAuthPage(h.handleAdminSearchResultPage))
 	mux.HandleFunc("/admin/overrides", h.requireAuthPage(h.handleAdminOverridesPage))
 	mux.HandleFunc("/admin/schedules", h.requireAuthPage(h.handleAdminSchedulesPage))
+	mux.HandleFunc("/admin/pagerank", h.requireAuthPage(h.handleAdminPageRankPage))
+	mux.HandleFunc("/admin/database", h.requireAuthPage(h.handleAdminDatabasePage))
 
 	mux.HandleFunc("/admin/api/stats", h.requireAuthAPI(h.handleAdminStats))
 	mux.HandleFunc("/admin/api/vocabulary", h.requireAuthAPI(h.handleAdminVocabulary))
@@ -205,6 +221,9 @@ func (h *Handler) RoutesAdmin() *http.ServeMux {
 	mux.HandleFunc("/admin/api/schedules", h.requireAuthAPI(h.handleAdminSchedules))
 	mux.HandleFunc("DELETE /admin/api/schedules/{id}", h.requireAuthAPI(h.handleAdminDeleteSchedule))
 	mux.HandleFunc("PATCH /admin/api/schedules/{id}", h.requireAuthAPI(h.handleAdminUpdateSchedule))
+	mux.HandleFunc("GET /admin/api/pagerank", h.requireAuthAPI(h.handleAdminPageRank))
+	mux.HandleFunc("POST /admin/api/pagerank/recompute", h.requireAuthAPI(h.handleAdminPageRankRecompute))
+	mux.HandleFunc("GET /admin/api/database", h.requireAuthAPI(h.handleAdminDatabase))
 	return mux
 }
 

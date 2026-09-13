@@ -39,7 +39,8 @@ func TestRunPageRankJob_ComputesAndWritesScores(t *testing.T) {
 			"b": {"a"},
 		},
 	}
-	if err := application.RunPageRankJob(context.Background(), repo); err != nil {
+	result, err := application.RunPageRankJob(context.Background(), repo)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if repo.updateCalls != 1 {
@@ -51,11 +52,17 @@ func TestRunPageRankJob_ComputesAndWritesScores(t *testing.T) {
 	if repo.updated["a"] <= 0 || repo.updated["b"] <= 0 {
 		t.Errorf("expected both nodes to get a positive score, got %+v", repo.updated)
 	}
+	if result.Documents != 2 {
+		t.Errorf("expected result.Documents=2, got %d", result.Documents)
+	}
+	if result.Iterations <= 0 {
+		t.Errorf("expected a positive iteration count, got %d", result.Iterations)
+	}
 }
 
 func TestRunPageRankJob_EmptyGraphSkipsUpdate(t *testing.T) {
 	repo := &fakePageRankRepo{graph: map[string][]string{}}
-	if err := application.RunPageRankJob(context.Background(), repo); err != nil {
+	if _, err := application.RunPageRankJob(context.Background(), repo); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if repo.updateCalls != 0 {
@@ -66,7 +73,7 @@ func TestRunPageRankJob_EmptyGraphSkipsUpdate(t *testing.T) {
 func TestRunPageRankJob_PropagatesLinkGraphError(t *testing.T) {
 	wantErr := errors.New("boom")
 	repo := &fakePageRankRepo{linkGraphErr: wantErr}
-	if err := application.RunPageRankJob(context.Background(), repo); !errors.Is(err, wantErr) {
+	if _, err := application.RunPageRankJob(context.Background(), repo); !errors.Is(err, wantErr) {
 		t.Errorf("expected LinkGraph error to propagate, got %v", err)
 	}
 	if repo.updateCalls != 0 {
@@ -80,7 +87,7 @@ func TestRunPageRankJob_PropagatesUpdateError(t *testing.T) {
 		graph:             map[string][]string{"a": {"b"}},
 		updatePageRankErr: wantErr,
 	}
-	if err := application.RunPageRankJob(context.Background(), repo); !errors.Is(err, wantErr) {
+	if _, err := application.RunPageRankJob(context.Background(), repo); !errors.Is(err, wantErr) {
 		t.Errorf("expected UpdatePageRanks error to propagate, got %v", err)
 	}
 }

@@ -60,6 +60,7 @@ func main() {
 		Jobs:            jobs,
 		Debug:           debugSvc,
 		Admin:           repo,
+		PageRank:        repo,
 		Settings:        settings,
 		OpSettings:      opSettings,
 		Overrides:       overrides,

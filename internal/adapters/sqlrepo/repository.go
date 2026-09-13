@@ -591,6 +591,43 @@ func (r *Repository) CorpusStats(ctx context.Context) (int, float64, error) {
 	return totalDocs, avgLen.Float64, nil
 }
 
+// PageRankDistribution reports the min, max and average documents.pagerank
+// value across the whole corpus, for the admin PageRank debug page. All
+// three are 0 for an empty corpus (MIN/MAX/AVG over zero rows are all
+// NULL, which the COALESCE turns into 0).
+func (r *Repository) PageRankDistribution(ctx context.Context) (min, max, avg float64, err error) {
+	query := `SELECT COALESCE(MIN(pagerank), 0), COALESCE(MAX(pagerank), 0), COALESCE(AVG(pagerank), 0) FROM documents`
+	if err := r.db.QueryRowContext(ctx, query).Scan(&min, &max, &avg); err != nil {
+		return 0, 0, 0, fmt.Errorf("querying pagerank distribution: %w", err)
+	}
+	return min, max, avg, nil
+}
+
+// diagnosticsTables lists every table the schema creates (see each
+// dialect's CreateSchemaSQL), in the order the admin database diagnostics
+// page shows them.
+var diagnosticsTables = []string{
+	"documents", "postings", "document_versions", "links",
+	"app_settings", "scheduled_crawls", "crawl_jobs", "crawl_job_pages", "sessions",
+}
+
+// TableRowCounts reports how many rows each of diagnosticsTables currently
+// holds, for the admin database diagnostics page. Table names are a fixed
+// internal list, never user input, so building each query by concatenation
+// (rather than a bound parameter, which SQL doesn't allow for identifiers)
+// carries no injection risk.
+func (r *Repository) TableRowCounts(ctx context.Context) (map[string]int64, error) {
+	counts := make(map[string]int64, len(diagnosticsTables))
+	for _, table := range diagnosticsTables {
+		var n int64
+		if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&n); err != nil {
+			return nil, fmt.Errorf("counting %s: %w", table, err)
+		}
+		counts[table] = n
+	}
+	return counts, nil
+}
+
 // VocabularyStats reports the total number of distinct indexed terms plus
 // the topN terms by document frequency (ties broken by total frequency). When
 // search is non-empty, the topN listing is restricted to terms containing it

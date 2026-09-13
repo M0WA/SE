@@ -3,6 +3,7 @@ package restapi_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -39,6 +40,13 @@ type fakeAdminRepo struct {
 	deletedID      string
 	gotLimit       int
 	gotSearch      string
+
+	pageRankMin    float64
+	pageRankMax    float64
+	pageRankAvg    float64
+	pageRankErr    error
+	tableRowCounts map[string]int64
+	poolStats      sql.DBStats
 
 	// mu guards deletedIDs, written from handleAdminDeleteDomainDocuments'
 	// own background goroutine and read back from a test's polling
@@ -92,6 +100,18 @@ func (f *fakeAdminRepo) PostingsForTerm(_ context.Context, _ string, limit int) 
 }
 func (f *fakeAdminRepo) DocumentsByIDs(context.Context, []string) (map[string]domain.Document, error) {
 	return f.postingsDocs, f.err
+}
+func (f *fakeAdminRepo) PageRankDistribution(context.Context) (float64, float64, float64, error) {
+	if f.pageRankErr != nil {
+		return 0, 0, 0, f.pageRankErr
+	}
+	return f.pageRankMin, f.pageRankMax, f.pageRankAvg, f.err
+}
+func (f *fakeAdminRepo) TableRowCounts(context.Context) (map[string]int64, error) {
+	return f.tableRowCounts, f.err
+}
+func (f *fakeAdminRepo) PoolStats() sql.DBStats {
+	return f.poolStats
 }
 
 type fakeDebugSearch struct {
@@ -1890,5 +1910,342 @@ func TestSyncSettings_PicksUpAdminPersistedValues(t *testing.T) {
 	alpha, k1, b := otherProcessSettings.Get()
 	if alpha != 0.42 || k1 != 1.5 || b != 0.6 {
 		t.Errorf("expected another process's settings to pick up the admin edit, got (%v, %v, %v)", alpha, k1, b)
+	}
+}
+
+// fakePageRankRepo mirrors application package's own test fake -- a
+// minimal ports.PageRankRepository the admin recompute handler tests can
+// inject errors into independently of fakeAdminRepo.
+type fakePageRankRepo struct {
+	graph        map[string][]string
+	linkGraphErr error
+	updated      map[string]float64
+	updateErr    error
+}
+
+func (f *fakePageRankRepo) LinkGraph(context.Context) (map[string][]string, error) {
+	if f.linkGraphErr != nil {
+		return nil, f.linkGraphErr
+	}
+	return f.graph, nil
+}
+
+func (f *fakePageRankRepo) UpdatePageRanks(_ context.Context, scores map[string]float64) error {
+	if f.updateErr != nil {
+		return f.updateErr
+	}
+	f.updated = scores
+	return nil
+}
+
+// adminAuthedHandlerWithPageRank mirrors adminAuthedHandlerWithOverrides,
+// adding the PageRank dependency the other helpers don't carry.
+func adminAuthedHandlerWithPageRank(t *testing.T, admin ports.AdminRepository, pageRank ports.PageRankRepository, settings *domain.TuningSettings, opSettings *domain.OperationalSettings) (*restapi.Handler, *http.Cookie) {
+	t.Helper()
+	h := restapi.New(restapi.Config{
+		Admin: admin, PageRank: pageRank, Settings: settings, OpSettings: opSettings, DBDriver: "pgx",
+		AdminUser: testAdminUser, AdminPass: testAdminPass,
+	})
+	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
+	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login failed: %d %s", rec.Code, rec.Body.String())
+	}
+	return h, rec.Result().Cookies()[0]
+}
+
+func TestHandleAdminPageRankPage_GetServesPage(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/pagerank", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+		t.Errorf("expected html content type, got %q", ct)
+	}
+}
+
+func TestHandleAdminPageRankPage_Unauthenticated_Redirects(t *testing.T) {
+	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	req := httptest.NewRequest(http.MethodGet, "/admin/pagerank", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Errorf("expected 303 redirect, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminPageRank_Success(t *testing.T) {
+	repo := &fakeAdminRepo{totalDocs: 5, pageRankMin: 0.1, pageRankMax: 0.9, pageRankAvg: 0.5}
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	settings.SetPageRankWeight(0.3)
+	opSettings := domain.DefaultOperationalSettings()
+	h, cookie := adminAuthedHandlerWithPageRank(t, repo, nil, settings, opSettings)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/pagerank", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		TotalDocs                int     `json:"total_docs"`
+		MinPageRank              float64 `json:"min_pagerank"`
+		MaxPageRank              float64 `json:"max_pagerank"`
+		AvgPageRank              float64 `json:"avg_pagerank"`
+		Damping                  float64 `json:"damping"`
+		MaxIterations            int     `json:"max_iterations"`
+		Epsilon                  float64 `json:"epsilon"`
+		PageRankWeight           float64 `json:"pagerank_weight"`
+		RecomputeIntervalMinutes int     `json:"recompute_interval_minutes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.TotalDocs != 5 || resp.MinPageRank != 0.1 || resp.MaxPageRank != 0.9 || resp.AvgPageRank != 0.5 {
+		t.Errorf("unexpected distribution in response: %+v", resp)
+	}
+	if resp.Damping != domain.PageRankDamping || resp.MaxIterations != domain.PageRankMaxIterations || resp.Epsilon != domain.PageRankEpsilon {
+		t.Errorf("expected the domain package's own algorithm constants echoed back, got %+v", resp)
+	}
+	if resp.PageRankWeight != 0.3 {
+		t.Errorf("expected pagerank_weight=0.3 from tuning settings, got %v", resp.PageRankWeight)
+	}
+	if resp.RecomputeIntervalMinutes != opSettings.Get().PageRankRecomputeIntervalMinutes {
+		t.Errorf("expected the operational settings' recompute interval, got %d", resp.RecomputeIntervalMinutes)
+	}
+}
+
+func TestHandleAdminPageRank_NoTuningSettingsConfigured(t *testing.T) {
+	repo := &fakeAdminRepo{}
+	h, cookie := adminAuthedHandlerWithPageRank(t, repo, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/pagerank", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 even without tuning settings configured, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleAdminPageRank_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithPageRank(t, nil, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/pagerank", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when admin repo isn't configured, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminPageRank_ServiceError(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithPageRank(t, &fakeAdminRepo{err: errors.New("boom")}, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/pagerank", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminPageRank_PageRankDistributionError(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithPageRank(t, &fakeAdminRepo{pageRankErr: errors.New("boom")}, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/pagerank", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 when PageRankDistribution fails (even though CorpusStats succeeded), got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminPageRank_MethodNotAllowed(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithPageRank(t, &fakeAdminRepo{}, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/pagerank", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminPageRankRecompute_Success(t *testing.T) {
+	prRepo := &fakePageRankRepo{graph: map[string][]string{"a": {"b"}, "b": {"a"}}}
+	adminRepo := &fakeAdminRepo{pageRankMin: 0.2, pageRankMax: 0.8, pageRankAvg: 0.5}
+	h, cookie := adminAuthedHandlerWithPageRank(t, adminRepo, prRepo, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/pagerank/recompute", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Documents   int     `json:"documents"`
+		Iterations  int     `json:"iterations"`
+		FinalDelta  float64 `json:"final_delta"`
+		DurationMS  int64   `json:"duration_ms"`
+		MinPageRank float64 `json:"min_pagerank"`
+		MaxPageRank float64 `json:"max_pagerank"`
+		AvgPageRank float64 `json:"avg_pagerank"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.Documents != 2 {
+		t.Errorf("expected 2 documents scored, got %d", resp.Documents)
+	}
+	if resp.Iterations <= 0 {
+		t.Errorf("expected a positive iteration count, got %d", resp.Iterations)
+	}
+	if resp.DurationMS < 0 {
+		t.Errorf("expected a non-negative duration, got %d", resp.DurationMS)
+	}
+	if resp.MinPageRank != 0.2 || resp.MaxPageRank != 0.8 || resp.AvgPageRank != 0.5 {
+		t.Errorf("expected the post-recompute distribution from the admin repo, got %+v", resp)
+	}
+	if len(prRepo.updated) != 2 {
+		t.Errorf("expected UpdatePageRanks called with both nodes' scores, got %+v", prRepo.updated)
+	}
+}
+
+func TestHandleAdminPageRankRecompute_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithPageRank(t, &fakeAdminRepo{}, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/pagerank/recompute", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when pagerank isn't configured, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminPageRankRecompute_LinkGraphError(t *testing.T) {
+	prRepo := &fakePageRankRepo{linkGraphErr: errors.New("boom")}
+	h, cookie := adminAuthedHandlerWithPageRank(t, &fakeAdminRepo{}, prRepo, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/pagerank/recompute", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminPageRankRecompute_MethodNotAllowed(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithPageRank(t, &fakeAdminRepo{}, &fakePageRankRepo{}, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/pagerank/recompute", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDatabasePage_GetServesPage(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/database", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+		t.Errorf("expected html content type, got %q", ct)
+	}
+}
+
+func TestHandleAdminDatabasePage_Unauthenticated_Redirects(t *testing.T) {
+	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	req := httptest.NewRequest(http.MethodGet, "/admin/database", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Errorf("expected 303 redirect, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDatabase_Success(t *testing.T) {
+	repo := &fakeAdminRepo{
+		tableRowCounts: map[string]int64{"documents": 3, "postings": 12},
+		poolStats:      sql.DBStats{MaxOpenConnections: 25, OpenConnections: 2, InUse: 1, Idle: 1, WaitCount: 4, WaitDuration: 5 * time.Millisecond},
+	}
+	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/database", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Driver string `json:"driver"`
+		Pool   struct {
+			MaxOpenConnections int   `json:"max_open_connections"`
+			OpenConnections    int   `json:"open_connections"`
+			InUse              int   `json:"in_use"`
+			Idle               int   `json:"idle"`
+			WaitCount          int64 `json:"wait_count"`
+			WaitDurationMS     int64 `json:"wait_duration_ms"`
+		} `json:"pool"`
+		TableRows map[string]int64 `json:"table_rows"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.Driver != "pgx" {
+		t.Errorf("expected driver echoed back, got %q", resp.Driver)
+	}
+	if resp.Pool.MaxOpenConnections != 25 || resp.Pool.OpenConnections != 2 || resp.Pool.InUse != 1 || resp.Pool.Idle != 1 || resp.Pool.WaitCount != 4 || resp.Pool.WaitDurationMS != 5 {
+		t.Errorf("unexpected pool stats: %+v", resp.Pool)
+	}
+	if resp.TableRows["documents"] != 3 || resp.TableRows["postings"] != 12 {
+		t.Errorf("expected table row counts passed through, got %+v", resp.TableRows)
+	}
+}
+
+func TestHandleAdminDatabase_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, nil, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/database", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when admin repo isn't configured, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDatabase_ServiceError(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{err: errors.New("boom")}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/database", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDatabase_MethodNotAllowed(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/database", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
 	}
 }

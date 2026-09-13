@@ -433,6 +433,47 @@ paths:
               schema: { $ref: "#/components/schemas/Overrides" }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
+  /admin/api/pagerank:
+    get:
+      tags: [admin]
+      summary: PageRank distribution and algorithm configuration
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PageRankStats" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/pagerank/recompute:
+    post:
+      tags: [admin]
+      summary: Force an immediate PageRank recomputation
+      description: >-
+        Runs synchronously (unlike the bulk document delete, which is
+        fire-and-forget) -- an admin clicking "force recalculation" is
+        waiting to see this specific run's result, not just whether it
+        errored.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PageRankRecomputeResult" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/database:
+    get:
+      tags: [admin]
+      summary: Database connection, pool, and per-table row-count diagnostics
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DatabaseDiagnostics" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
   /admin/api/crawl:
     post:
       tags: [admin]
@@ -807,6 +848,52 @@ components:
         boosted_domains:
           type: object
           additionalProperties: { type: number }
+
+    PageRankStats:
+      type: object
+      properties:
+        total_docs: { type: integer }
+        min_pagerank: { type: number }
+        max_pagerank: { type: number }
+        avg_pagerank: { type: number }
+        damping: { type: number, description: "Fixed algorithm constant (domain.PageRankDamping), not configurable." }
+        max_iterations: { type: integer, description: "Fixed algorithm constant (domain.PageRankMaxIterations)." }
+        epsilon: { type: number, description: "Fixed convergence threshold (domain.PageRankEpsilon)." }
+        pagerank_weight: { type: number, description: "The Tuning page's blend weight -- how much this feeds into search ranking." }
+        recompute_interval_minutes: { type: integer, description: "The Tuning page's automatic recompute interval." }
+
+    PageRankRecomputeResult:
+      type: object
+      properties:
+        documents: { type: integer, description: "How many documents got a freshly computed score." }
+        iterations: { type: integer, description: "How many iterations this run actually took." }
+        final_delta: { type: number, description: "Total absolute score change on the final iteration." }
+        duration_ms: { type: integer }
+        min_pagerank: { type: number }
+        max_pagerank: { type: number }
+        avg_pagerank: { type: number }
+
+    DatabaseDiagnostics:
+      type: object
+      properties:
+        driver: { type: string }
+        pool:
+          type: object
+          description: sql.DBStats, with its one duration field in milliseconds.
+          properties:
+            max_open_connections: { type: integer }
+            open_connections: { type: integer }
+            in_use: { type: integer }
+            idle: { type: integer }
+            wait_count: { type: integer }
+            wait_duration_ms: { type: integer }
+            max_idle_closed: { type: integer }
+            max_idle_time_closed: { type: integer }
+            max_lifetime_closed: { type: integer }
+        table_rows:
+          type: object
+          description: Row count per schema table, keyed by table name.
+          additionalProperties: { type: integer }
 
     CrawlRequest:
       type: object

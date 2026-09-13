@@ -60,7 +60,7 @@ func BenchmarkPageRank(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				scores := domain.PageRank(graph)
+				scores, _ := domain.PageRank(graph)
 				if len(scores) != n {
 					b.Fatalf("expected %d scored nodes, got %d", n, len(scores))
 				}

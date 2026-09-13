@@ -80,7 +80,7 @@ type pageRankRecomputer struct {
 }
 
 func (p *pageRankRecomputer) recompute() {
-	if err := application.RunPageRankJob(p.ctx, p.repo); err != nil {
+	if _, err := application.RunPageRankJob(p.ctx, p.repo); err != nil {
 		log.Printf("recomputing pagerank: %v", err)
 	}
 	p.mu.Lock()

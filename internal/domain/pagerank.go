@@ -17,6 +17,16 @@ const PageRankMaxIterations = 50
 // this, the scores are considered settled and iteration stops early.
 const PageRankEpsilon = 1e-6
 
+// PageRankRunInfo reports how a PageRank computation actually ran --
+// how many iterations it took and how far the final iteration still was
+// from full convergence. Neither number is observable from the returned
+// scores alone, and both are useful diagnostics for the admin PageRank
+// debug page after a forced recompute.
+type PageRankRunInfo struct {
+	Iterations int
+	FinalDelta float64
+}
+
 // PageRank computes classic iterative PageRank scores over a directed
 // graph: adjacency maps each node (a document ID) to the IDs of every
 // node it links to. A node that only ever appears as a link target (never
@@ -31,11 +41,12 @@ const PageRankEpsilon = 1e-6
 // absolute change across every node's score (from the previous round)
 // drops below PageRankEpsilon.
 //
-// An empty adjacency (no nodes at all) returns an empty map. A node with
-// outdegree 0 contributes nothing to any other node's score (it simply
-// isn't -- and can't be -- any other node's incoming link), matching the
-// formula literally rather than redistributing its mass across the graph.
-func PageRank(adjacency map[string][]string) map[string]float64 {
+// An empty adjacency (no nodes at all) returns an empty map and a zero
+// PageRankRunInfo (no iteration was needed). A node with outdegree 0
+// contributes nothing to any other node's score (it simply isn't -- and
+// can't be -- any other node's incoming link), matching the formula
+// literally rather than redistributing its mass across the graph.
+func PageRank(adjacency map[string][]string) (map[string]float64, PageRankRunInfo) {
 	nodes := make(map[string]bool)
 	for from, tos := range adjacency {
 		nodes[from] = true
@@ -45,7 +56,7 @@ func PageRank(adjacency map[string][]string) map[string]float64 {
 	}
 	n := len(nodes)
 	if n == 0 {
-		return map[string]float64{}
+		return map[string]float64{}, PageRankRunInfo{}
 	}
 
 	outdegree := make(map[string]int, len(adjacency))
@@ -73,6 +84,7 @@ func PageRank(adjacency map[string][]string) map[string]float64 {
 	// edge) since every edge out of u carries the identical
 	// scores[u]/outdegree[u] share.
 	contribution := make(map[string]float64, len(outdegree))
+	info := PageRankRunInfo{}
 	for iter := 0; iter < PageRankMaxIterations; iter++ {
 		for u, deg := range outdegree {
 			if deg > 0 {
@@ -91,9 +103,11 @@ func PageRank(adjacency map[string][]string) map[string]float64 {
 			delta += math.Abs(v - scores[node])
 		}
 		scores = next
+		info.Iterations = iter + 1
+		info.FinalDelta = delta
 		if delta < PageRankEpsilon {
 			break
 		}
 	}
-	return scores
+	return scores, info
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"searchengine/internal/application"
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
 )
@@ -927,4 +928,145 @@ func (h *Handler) handleAdminDeleteSchedule(w http.ResponseWriter, r *http.Reque
 	}
 	err := h.scheduledCrawls.DeleteScheduledCrawl(r.Context(), r.PathValue("id"))
 	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, "scheduled crawl not found", map[string]bool{"ok": true})
+}
+
+func (h *Handler) handleAdminPageRankPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminPageRankHTML)
+}
+
+type adminPageRankResponse struct {
+	TotalDocs   int     `json:"total_docs"`
+	MinPageRank float64 `json:"min_pagerank"`
+	MaxPageRank float64 `json:"max_pagerank"`
+	AvgPageRank float64 `json:"avg_pagerank"`
+	// Damping/MaxIterations/Epsilon are domain.PageRank's fixed algorithm
+	// constants -- not configurable, but worth showing on the debug page
+	// alongside the values they actually produced.
+	Damping                  float64 `json:"damping"`
+	MaxIterations            int     `json:"max_iterations"`
+	Epsilon                  float64 `json:"epsilon"`
+	PageRankWeight           float64 `json:"pagerank_weight"`
+	RecomputeIntervalMinutes int     `json:"recompute_interval_minutes"`
+}
+
+func (h *Handler) handleAdminPageRank(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+		return
+	}
+	totalDocs, _, err := h.admin.CorpusStats(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	min, max, avg, err := h.admin.PageRankDistribution(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	resp := adminPageRankResponse{
+		TotalDocs:                totalDocs,
+		MinPageRank:              min,
+		MaxPageRank:              max,
+		AvgPageRank:              avg,
+		Damping:                  domain.PageRankDamping,
+		MaxIterations:            domain.PageRankMaxIterations,
+		Epsilon:                  domain.PageRankEpsilon,
+		RecomputeIntervalMinutes: h.opSettings.Get().PageRankRecomputeIntervalMinutes,
+	}
+	if h.settings != nil {
+		resp.PageRankWeight = h.settings.PageRankWeight()
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+type adminPageRankRecomputeResponse struct {
+	Documents   int     `json:"documents"`
+	Iterations  int     `json:"iterations"`
+	FinalDelta  float64 `json:"final_delta"`
+	DurationMS  int64   `json:"duration_ms"`
+	MinPageRank float64 `json:"min_pagerank"`
+	MaxPageRank float64 `json:"max_pagerank"`
+	AvgPageRank float64 `json:"avg_pagerank"`
+}
+
+// handleAdminPageRankRecompute runs a full PageRank recompute synchronously
+// and reports exactly what it did -- documents scored, iterations run,
+// final convergence delta, and wall-clock duration -- rather than the
+// fire-and-forget pattern the bulk document delete uses. An admin clicking
+// "force recalculation" is explicitly waiting to see the result of this
+// specific run, so there's nothing to gain from returning early.
+func (h *Handler) handleAdminPageRankRecompute(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.pageRank != nil, "pagerank") {
+		return
+	}
+	start := time.Now()
+	result, err := application.RunPageRankJob(r.Context(), h.pageRank)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	resp := adminPageRankRecomputeResponse{
+		Documents:  result.Documents,
+		Iterations: result.Iterations,
+		FinalDelta: result.FinalDelta,
+		DurationMS: time.Since(start).Milliseconds(),
+	}
+	if h.admin != nil {
+		if min, max, avg, err := h.admin.PageRankDistribution(r.Context()); err == nil {
+			resp.MinPageRank, resp.MaxPageRank, resp.AvgPageRank = min, max, avg
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) handleAdminDatabasePage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminDatabaseHTML)
+}
+
+// adminDBPoolStats is sql.DBStats' wire shape, with its one time.Duration
+// field converted to milliseconds -- JSON has no native duration type, and
+// milliseconds reads more directly than a raw nanosecond count.
+type adminDBPoolStats struct {
+	MaxOpenConnections int   `json:"max_open_connections"`
+	OpenConnections    int   `json:"open_connections"`
+	InUse              int   `json:"in_use"`
+	Idle               int   `json:"idle"`
+	WaitCount          int64 `json:"wait_count"`
+	WaitDurationMS     int64 `json:"wait_duration_ms"`
+	MaxIdleClosed      int64 `json:"max_idle_closed"`
+	MaxIdleTimeClosed  int64 `json:"max_idle_time_closed"`
+	MaxLifetimeClosed  int64 `json:"max_lifetime_closed"`
+}
+
+type adminDatabaseResponse struct {
+	Driver    string           `json:"driver"`
+	Pool      adminDBPoolStats `json:"pool"`
+	TableRows map[string]int64 `json:"table_rows"`
+}
+
+func (h *Handler) handleAdminDatabase(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+		return
+	}
+	counts, err := h.admin.TableRowCounts(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	stats := h.admin.PoolStats()
+	writeJSON(w, http.StatusOK, adminDatabaseResponse{
+		Driver: h.dbDriver,
+		Pool: adminDBPoolStats{
+			MaxOpenConnections: stats.MaxOpenConnections,
+			OpenConnections:    stats.OpenConnections,
+			InUse:              stats.InUse,
+			Idle:               stats.Idle,
+			WaitCount:          stats.WaitCount,
+			WaitDurationMS:     stats.WaitDuration.Milliseconds(),
+			MaxIdleClosed:      stats.MaxIdleClosed,
+			MaxIdleTimeClosed:  stats.MaxIdleTimeClosed,
+			MaxLifetimeClosed:  stats.MaxLifetimeClosed,
+		},
+		TableRows: counts,
+	})
 }
