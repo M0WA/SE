@@ -11,7 +11,10 @@
 </head>
 <body>
 <main>
-  <p class="mark">se.</p>
+  <div class="page-header">
+    <p class="mark">se.</p>
+    <button id="sign-out" class="text-button" type="button">Sign out</button>
+  </div>
   <form id="search-form" autocomplete="off">
     <input id="q" class="field" name="q" type="text" placeholder="Search the index…" autofocus>
     <select id="sort" class="field" name="sort" aria-label="Sort order">
@@ -176,6 +179,18 @@
       return;
     }
     runSearch(query, sortSelect.value);
+  });
+
+  // Mirrors admin.js's wireSignOut -- this page doesn't load admin.js (it's
+  // the public site, not the admin backend), so the same few lines are
+  // inlined here rather than pulling in the whole admin script for one
+  // function.
+  document.getElementById('sign-out').addEventListener('click', async () => {
+    try {
+      await fetch('/logout', { method: 'POST' });
+    } finally {
+      window.location = '/';
+    }
   });
 </script>
 </body>

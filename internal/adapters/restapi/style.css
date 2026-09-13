@@ -87,7 +87,7 @@ form {
   flex: 1;
   min-width: 0;
   font: inherit;
-  font-size: 1.2rem;
+  font-size: 1.05rem;
   color: var(--ink);
   background: transparent;
   border: none;
@@ -358,7 +358,7 @@ button:focus-visible {
 
 .form-row { border-bottom: 1px solid var(--rule-strong); padding-bottom: 0.5rem; }
 
-.form-row .field { width: 100%; font-size: 1.05rem; }
+.form-row .field { width: 100%; }
 
 .form-actions {
   display: flex;
