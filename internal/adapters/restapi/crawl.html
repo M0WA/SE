@@ -454,6 +454,7 @@
     try {
       const s = await getJSON('/admin/api/settings');
       const op = s.operational;
+      crawlUserAgent.placeholder = 'Default: ' + op.user_agent;
       crawlFetchTimeout.placeholder = 'Default: ' + op.fetch_timeout_seconds + 's';
       crawlMinTextLength.placeholder = 'Default: ' + op.min_text_length;
       crawlDelay.placeholder = 'Default: ' + op.crawl_delay_ms + 'ms';

@@ -64,11 +64,48 @@ func (h *Handler) handleCrawl(w http.ResponseWriter, r *http.Request) {
 // must keep running after the triggering request (or scheduler tick)
 // returns.
 func (h *Handler) TriggerCrawl(ctx context.Context, opts ports.CrawlOptions) (string, error) {
+	job, err := h.createCrawlJob(ctx, opts)
+	if err != nil {
+		return "", err
+	}
+	go h.runCrawlJob(job.ID, opts)
+
+	return job.ID, nil
+}
+
+// TriggerScheduledCrawl behaves exactly like TriggerCrawl, but also calls
+// onDone exactly once when the resulting job actually finishes (success or
+// failure) -- used only by the scheduler ticker (see
+// application.TriggerDueCrawls), which needs to know a scheduled crawl has
+// truly finished before it advances that schedule's next_run_at, rather
+// than assuming completion the moment the job starts. A crawl that runs
+// longer than its own schedule's interval would otherwise have its next
+// run triggered while it's still going.
+func (h *Handler) TriggerScheduledCrawl(ctx context.Context, opts ports.CrawlOptions, onDone func()) (string, error) {
+	job, err := h.createCrawlJob(ctx, opts)
+	if err != nil {
+		return "", err
+	}
+	go func() {
+		h.runCrawlJob(job.ID, opts)
+		if onDone != nil {
+			onDone()
+		}
+	}()
+
+	return job.ID, nil
+}
+
+// createCrawlJob persists a new job record for opts -- the shared first
+// step of TriggerCrawl and TriggerScheduledCrawl, which differ only in
+// whether/how they're notified once the job (started right after, in its
+// own goroutine) finishes.
+func (h *Handler) createCrawlJob(ctx context.Context, opts ports.CrawlOptions) (domain.CrawlJob, error) {
 	if len(opts.SeedURLs) == 0 {
-		return "", errors.New("seed_urls must not be empty")
+		return domain.CrawlJob{}, errors.New("seed_urls must not be empty")
 	}
 
-	job, err := h.crawlJobs.Create(ctx, domain.CrawlJobRequest{
+	return h.crawlJobs.Create(ctx, domain.CrawlJobRequest{
 		SeedURLs:            opts.SeedURLs,
 		MaxPages:            opts.MaxPages,
 		HasCookie:           opts.Cookie != "",
@@ -83,12 +120,6 @@ func (h *Handler) TriggerCrawl(ctx context.Context, opts ports.CrawlOptions) (st
 		MaxResponseKB:       opts.MaxResponseKB,
 		PrioritizeUnindexed: opts.PrioritizeUnindexed,
 	})
-	if err != nil {
-		return "", err
-	}
-	go h.runCrawlJob(job.ID, opts)
-
-	return job.ID, nil
 }
 
 // ResumeCrawlJob re-runs an existing job (jobID, already in the store) in

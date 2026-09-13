@@ -376,6 +376,76 @@ func TestResumeCrawlJob_RunsUnderTheSameExistingJobID(t *testing.T) {
 	}
 }
 
+// TestTriggerScheduledCrawl_CallsOnDoneAfterSuccess proves the scheduler's
+// completion callback fires only once the job actually finishes (not the
+// instant it's started) -- application.TriggerDueCrawls relies on this to
+// correct a schedule's next_run_at to reflect the real finish time.
+func TestTriggerScheduledCrawl_CallsOnDoneAfterSuccess(t *testing.T) {
+	store := domain.NewCrawlJobStore()
+	h := restapi.New(restapi.Config{Crawler: &fakeCrawler{count: 3}, CrawlJobs: store})
+
+	done := make(chan struct{})
+	jobID, err := h.TriggerScheduledCrawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}}, func() { close(done) })
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for onDone to be called")
+	}
+
+	job, err := store.Get(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("unexpected error fetching job: %v", err)
+	}
+	if job.Status != domain.CrawlJobDone {
+		t.Errorf("expected the job done by the time onDone fires, got %s", job.Status)
+	}
+}
+
+// TestTriggerScheduledCrawl_CallsOnDoneAfterFailure proves onDone fires
+// even when the crawl itself fails -- a schedule must still reschedule
+// (rather than getting stuck retrying every tick forever) when the site
+// it crawls starts erroring.
+func TestTriggerScheduledCrawl_CallsOnDoneAfterFailure(t *testing.T) {
+	store := domain.NewCrawlJobStore()
+	h := restapi.New(restapi.Config{Crawler: &fakeCrawler{err: errors.New("fetch failed")}, CrawlJobs: store})
+
+	done := make(chan struct{})
+	jobID, err := h.TriggerScheduledCrawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}}, func() { close(done) })
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for onDone to be called")
+	}
+
+	job, err := store.Get(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("unexpected error fetching job: %v", err)
+	}
+	if job.Status != domain.CrawlJobFailed {
+		t.Errorf("expected the job failed by the time onDone fires, got %s", job.Status)
+	}
+}
+
+func TestTriggerScheduledCrawl_EmptySeedURLsErrors(t *testing.T) {
+	h := restapi.New(restapi.Config{Crawler: &fakeCrawler{}, CrawlJobs: domain.NewCrawlJobStore()})
+	called := false
+	_, err := h.TriggerScheduledCrawl(context.Background(), ports.CrawlOptions{}, func() { called = true })
+	if err == nil {
+		t.Fatal("expected an error for empty seed_urls")
+	}
+	if called {
+		t.Error("expected onDone not to be called when no job was ever created")
+	}
+}
+
 func TestTriggerCrawl_StoreCreateErrorPropagates(t *testing.T) {
 	store := &erroringCrawlJobStore{CrawlJobStore: domain.NewCrawlJobStore(), createErr: errors.New("db unavailable")}
 	h := restapi.New(restapi.Config{Crawler: &fakeCrawler{}, CrawlJobs: store})

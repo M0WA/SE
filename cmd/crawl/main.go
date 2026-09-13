@@ -97,12 +97,13 @@ func (p *pageRankRecomputer) lastRun() time.Time {
 // runScheduler triggers every scheduled crawl that's due, once immediately
 // (so a schedule that came due while the process was down isn't stuck
 // waiting a full poll interval) and then again on every tick for as long
-// as ctx stays alive. It calls handler.TriggerCrawl -- the exact same
-// job-creation path handleCrawl uses for a manually triggered crawl -- so
-// a scheduled run gets identical job tracking and concurrency limiting.
+// as ctx stays alive. It calls handler.TriggerScheduledCrawl -- the same
+// job-creation path handleCrawl uses for a manually triggered crawl, plus
+// a completion callback so TriggerDueCrawls can correct next_run_at to
+// reflect when the crawl actually finished, not just when it started.
 func runScheduler(ctx context.Context, store ports.ScheduledCrawlStore, handler *restapi.Handler) {
 	triggerDue := func() {
-		if _, err := application.TriggerDueCrawls(ctx, store, handler.TriggerCrawl, time.Now()); err != nil {
+		if _, err := application.TriggerDueCrawls(ctx, store, handler.TriggerScheduledCrawl, time.Now()); err != nil {
 			log.Printf("checking scheduled crawls: %v", err)
 		}
 	}

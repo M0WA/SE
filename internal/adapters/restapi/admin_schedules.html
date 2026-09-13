@@ -245,8 +245,23 @@
     }
   });
 
+  // showCurrentDefaults fills the User-Agent placeholder with the actual
+  // value a schedule would fall back to (set on the Tuning page), rather
+  // than a generic description -- same convention as crawl.html's own
+  // showCurrentDefaults. Failure here is silent -- the generic placeholder
+  // text already in the HTML is a perfectly fine fallback.
+  async function showCurrentDefaults() {
+    try {
+      const s = await getJSON('/admin/api/settings');
+      userAgentEl.placeholder = 'Default: ' + s.operational.user_agent;
+    } catch (err) {
+      // Leave the generic placeholder in place.
+    }
+  }
+
   wireSignOut();
   loadSchedules();
+  showCurrentDefaults();
 </script>
 </body>
 </html>
