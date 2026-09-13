@@ -7,6 +7,7 @@ on:
 
 env:
   GO_VERSION: "1.25"
+  NODE_VERSION: "20"
   PKG_VERSION: "1.0.0"
 
 jobs:
@@ -32,6 +33,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
       - run: go build ./...
       - run: go vet ./...
       - name: gofmt check
@@ -42,9 +46,53 @@ jobs:
             echo "gofmt found unformatted files (run 'gofmt -w .')"
             exit 1
           fi
+      # internal/adapters/browserfetcher's real-Chromium tests (SE_BROWSER_TESTS
+      # below) need Playwright's own downloaded driver+browser (cached here,
+      # keyed on the pinned playwright-go version in go.sum so a version bump
+      # invalidates it) plus the shared libraries Chromium links against
+      # (playwright-go's own dependency installer doesn't reliably recognize
+      # every distro, so these are listed explicitly -- names matching Ubuntu
+      # 24.04 "noble", ubuntu-latest's current base).
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/.cache/ms-playwright-go
+          key: playwright-${{ runner.os }}-${{ hashFiles('go.sum') }}
+      - name: Install Chromium runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libnspr4 libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 \
+            libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
+            libxrandr2 libgbm1 libasound2t64 libatspi2.0-0t64 libpango-1.0-0 \
+            libxshmfence1
+      # Renderer.ensureBrowser deliberately launches Chromium with its own
+      # sandbox enabled (see internal/adapters/browserfetcher/renderer.go),
+      # which needs unprivileged user namespaces -- blocked by default on
+      # Ubuntu 23.10+ (including this runner's image). GitHub-hosted Linux
+      # runners give the job user passwordless sudo, so this is liftable
+      # here (unlike some other dev/CI sandboxes, where it stays blocked --
+      # see skipIfNoUsableSandbox in renderer_test.go for that fallback).
+      - name: Allow unprivileged user namespaces (needed for Chromium's own sandbox)
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
       - run: go test ./... -v
         env:
           TEST_POSTGRES_DSN: postgres://searchengine:searchengine@localhost:5432/searchengine_test?sslmode=disable
+          # Actually run internal/adapters/browserfetcher's real-browser
+          # tests here rather than skipping them (see requireBrowserTests'
+          # doc comment) -- CI is exactly the "network-dependent, slow on
+          # first run" cost that gate exists to spare a plain local
+          # `go test ./...` from paying by default.
+          SE_BROWSER_TESTS: "1"
+      - name: npm ci
+        run: npm ci
+      - name: JS unit tests (with coverage)
+        run: npm run test:coverage
 
   package-debian:
     name: Build .deb (Debian)
