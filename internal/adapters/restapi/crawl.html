@@ -142,6 +142,7 @@
   <section class="panel">
     <h2 id="job-detail-heading" hidden>Job detail</h2>
     <div id="job-detail-summary"></div>
+    <div id="job-detail-options"></div>
     <input id="job-detail-filter" class="field" type="text" placeholder="Filter pages (regex) — matches URL, status, or title" hidden>
     <div id="job-detail-filter-error" class="error-text"></div>
     <div id="job-detail-table" class="table-scroll"></div>
@@ -184,6 +185,7 @@
   const jobsTableEl = document.getElementById('jobs-table');
   const jobDetailHeading = document.getElementById('job-detail-heading');
   const jobDetailSummaryEl = document.getElementById('job-detail-summary');
+  const jobDetailOptionsEl = document.getElementById('job-detail-options');
   const jobDetailFilterEl = document.getElementById('job-detail-filter');
   const jobDetailFilterErrorEl = document.getElementById('job-detail-filter-error');
   const jobDetailTableEl = document.getElementById('job-detail-table');
@@ -359,18 +361,30 @@
     }, 1500);
   }
 
-  function requestOptionsSummary(request) {
-    const parts = [request.respect_robots ? 'respects robots.txt' : 'ignores robots.txt'];
-    parts.push(request.user_agent ? 'custom User-Agent' : 'default User-Agent');
-    const linkScopeLabels = { host: 'exact seed host only', domain: 'seed domain + subdomains', any: 'any domain' };
-    parts.push(linkScopeLabels[request.link_scope] || 'site default link scope');
-    if (request.use_sitemap) parts.push('uses sitemap.xml');
-    if (request.prioritize_unindexed) parts.push('prioritizes unindexed pages');
-    if (request.fetch_timeout_seconds) parts.push('fetch timeout ' + request.fetch_timeout_seconds + 's');
-    if (request.min_text_length) parts.push('min text length ' + request.min_text_length);
-    if (request.crawl_delay_ms) parts.push('delay ' + request.crawl_delay_ms + 'ms');
-    if (request.max_response_kb) parts.push('max response ' + request.max_response_kb + 'KB');
-    return parts.join(', ');
+  const LINK_SCOPE_LABELS = { '': 'Site default', host: 'Exact seed host only', domain: 'Seed domain + subdomains', any: 'Any domain' };
+  const RENDERER_LABELS = { '': 'Site default', none: 'None (plain HTTP)', chromium: 'Chromium', firefox: 'Firefox' };
+
+  // renderRequestOptions shows every option this job actually ran with --
+  // the full domain.CrawlJobRequest, not just a hand-picked subset -- so
+  // "what exactly did this crawl do" is always answerable from the job
+  // detail view alone, without having to go find (or guess at) the
+  // schedule that originally triggered it.
+  function renderRequestOptions(container, request) {
+    clear(container);
+    kvRow(container, 'Seed URLs', (request.seed_urls || []).join(', '));
+    kvRow(container, 'Max pages', String(request.max_pages));
+    kvRow(container, 'Respect robots.txt', request.respect_robots ? 'Yes' : 'No');
+    kvRow(container, 'User-Agent', request.user_agent || 'Default');
+    kvRow(container, 'Link scope', LINK_SCOPE_LABELS[request.link_scope || ''] || request.link_scope);
+    kvRow(container, 'Renderer', RENDERER_LABELS[request.renderer || ''] || request.renderer);
+    kvRow(container, 'Discover via sitemap.xml', request.use_sitemap ? 'Yes' : 'No');
+    kvRow(container, 'Prioritize unindexed pages', request.prioritize_unindexed ? 'Yes' : 'No');
+    kvRow(container, 'Fetch timeout', request.fetch_timeout_seconds ? request.fetch_timeout_seconds + 's' : 'Default');
+    kvRow(container, 'Minimum text length', request.min_text_length ? String(request.min_text_length) : 'Default');
+    kvRow(container, 'Crawl delay', request.crawl_delay_ms ? request.crawl_delay_ms + 'ms' : 'Default');
+    kvRow(container, 'Max response size', request.max_response_kb ? request.max_response_kb + 'KB' : 'Default');
+    kvRow(container, 'Cookie header', request.has_cookie ? 'Set' : 'Not set');
+    kvRow(container, 'Basic auth', request.has_basic_auth ? 'Set' : 'Not set');
   }
 
   function formatMs(ms) {
@@ -464,10 +478,7 @@
       (job.error ? ': ' + job.error : '');
     jobDetailSummaryEl.appendChild(summary);
 
-    const options = document.createElement('p');
-    options.className = 'panel-status';
-    options.textContent = requestOptionsSummary(job.request);
-    jobDetailSummaryEl.appendChild(options);
+    renderRequestOptions(jobDetailOptionsEl, job.request);
 
     jobDetailPages = job.pages || [];
     jobDetailFilterEl.hidden = jobDetailPages.length === 0;
@@ -488,6 +499,7 @@
       jobDetailHeading.hidden = false;
       clear(jobDetailSummaryEl);
       jobDetailSummaryEl.textContent = 'Could not load job: ' + err.message;
+      clear(jobDetailOptionsEl);
       clear(jobDetailTableEl);
       jobDetailPagerEl.hidden = true;
       jobDetailFilterEl.hidden = true;
