@@ -1024,6 +1024,33 @@ func (h *Handler) handleAdminDeleteSchedule(w http.ResponseWriter, r *http.Reque
 	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, "scheduled crawl not found", map[string]bool{"ok": true})
 }
 
+// handleAdminGetSchedule backs the schedule-detail/edit subpage's initial
+// load -- a single schedule's full options, the same shape ListScheduledCrawls'
+// entries already have.
+func (h *Handler) handleAdminGetSchedule(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.scheduledCrawls != nil, "scheduled crawls") {
+		return
+	}
+	s, err := h.scheduledCrawls.GetScheduledCrawl(r.Context(), r.PathValue("id"))
+	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, "scheduled crawl not found", toScheduledCrawlResponse(s))
+}
+
+// handleAdminRunScheduleNow marks a schedule due immediately -- crawl-server's
+// own scheduler ticker picks it up on its next tick and creates the actual
+// CrawlJob, the same path a freshly created one-off crawl already goes
+// through -- so this handler itself never talks to crawl-server directly.
+func (h *Handler) handleAdminRunScheduleNow(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.scheduledCrawls != nil, "scheduled crawls") {
+		return
+	}
+	err := h.scheduledCrawls.RunScheduledCrawlNow(r.Context(), r.PathValue("id"), time.Now().UTC())
+	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, "scheduled crawl not found", map[string]bool{"ok": true})
+}
+
+func (h *Handler) handleAdminSchedulePage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminScheduleHTML)
+}
+
 func (h *Handler) handleAdminPageRankPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/html; charset=utf-8", adminPageRankHTML)
 }

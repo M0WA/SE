@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — schedule</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<main>
+  <div class="page-header">
+    <a class="mark" href="/">se.</a>
+    <button id="sign-out" class="text-button" type="button">Sign out</button>
+  </div>
+  <a class="back" href="/admin/crawl">Back to Crawl</a>
+
+  <h2 id="schedule-title">Loading…</h2>
+  <p id="schedule-meta" class="panel-status"></p>
+  <p id="schedule-status" class="panel-status"></p>
+
+  <form id="schedule-form" class="crawl-form" hidden>
+    <div class="form-row">
+      <label for="schedule-seed-urls">Seed URLs — one per line</label><br>
+      <textarea id="schedule-seed-urls" class="field" rows="3" required></textarea>
+    </div>
+    <div class="form-row">
+      <label for="schedule-max-pages">Max pages</label><br>
+      <input id="schedule-max-pages" class="field" type="number" min="1">
+    </div>
+    <div class="form-row form-row-check">
+      <label for="schedule-respect-robots">
+        <input id="schedule-respect-robots" type="checkbox">
+        Respect robots.txt
+      </label>
+    </div>
+    <div class="form-row">
+      <label for="schedule-link-scope">How far to follow links</label><br>
+      <select id="schedule-link-scope" class="field">
+        <option value="">Use site default</option>
+        <option value="host">Exact seed host only</option>
+        <option value="domain">Seed's domain, including subdomains</option>
+        <option value="tld">Same domain, any subdomain, any top-level domain</option>
+        <option value="any">Any domain</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label for="schedule-allowed-domains">Allowed domains — one domain per line</label><br>
+      <textarea id="schedule-allowed-domains" class="field" rows="3"></textarea>
+      <p class="tuning-hint">Always followed, even where link scope above would otherwise reject them.</p>
+    </div>
+    <div class="form-row">
+      <label for="schedule-blocked-domains">Blocked domains — one domain per line</label><br>
+      <textarea id="schedule-blocked-domains" class="field" rows="3"></textarea>
+      <p class="tuning-hint">Never followed, even where link scope or allowed domains above would otherwise allow them.</p>
+    </div>
+    <div class="form-row form-row-check">
+      <label for="schedule-follow-indexed">
+        <input id="schedule-follow-indexed" type="checkbox">
+        Follow domains already in the index
+      </label>
+    </div>
+    <div class="form-row form-row-check">
+      <label for="schedule-use-sitemap">
+        <input id="schedule-use-sitemap" type="checkbox">
+        Discover pages via sitemap.xml
+      </label>
+    </div>
+    <div class="form-row form-row-check">
+      <label for="schedule-prioritize-unindexed">
+        <input id="schedule-prioritize-unindexed" type="checkbox">
+        Prioritize pages not yet indexed
+      </label>
+    </div>
+    <div class="form-row">
+      <label for="schedule-renderer">Rendering</label><br>
+      <select id="schedule-renderer" class="field">
+        <option value="">Use site default</option>
+        <option value="none">None — plain HTTP fetch</option>
+        <option value="chromium">Chromium — real headless browser, runs the page's JavaScript</option>
+        <option value="firefox">Firefox — real headless browser, runs the page's JavaScript</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label for="schedule-user-agent">User-Agent</label><br>
+      <input id="schedule-user-agent" class="field" type="text" placeholder="Default: standard Firefox">
+    </div>
+    <div class="form-row">
+      <label for="schedule-cookie">Cookie header</label><br>
+      <input id="schedule-cookie" class="field" type="text" placeholder="session=abc123">
+    </div>
+    <div class="form-row">
+      <label for="schedule-basic-user">Basic auth username</label><br>
+      <input id="schedule-basic-user" class="field" type="text" autocomplete="off">
+    </div>
+    <div class="form-row">
+      <label for="schedule-basic-pass">Basic auth password</label><br>
+      <input id="schedule-basic-pass" class="field" type="password" autocomplete="new-password">
+    </div>
+    <div class="form-row">
+      <label for="schedule-fetch-timeout">Fetch timeout (seconds)</label><br>
+      <input id="schedule-fetch-timeout" class="field" type="number" min="1" placeholder="Default: global setting">
+    </div>
+    <div class="form-row">
+      <label for="schedule-min-text-length">Minimum text length</label><br>
+      <input id="schedule-min-text-length" class="field" type="number" min="0" placeholder="Default: global setting">
+    </div>
+    <div class="form-row">
+      <label for="schedule-delay">Delay between fetches (ms)</label><br>
+      <input id="schedule-delay" class="field" type="number" min="0" placeholder="Default: global setting">
+    </div>
+    <div class="form-row">
+      <label for="schedule-max-response">Max response size (KB)</label><br>
+      <input id="schedule-max-response" class="field" type="number" min="1" placeholder="Default: global setting">
+    </div>
+    <div class="form-row">
+      <label for="schedule-interval">Interval — minutes between runs (0 = run once)</label><br>
+      <input id="schedule-interval" class="field" type="number" min="0">
+    </div>
+    <div class="form-row">
+      <label for="schedule-max-runs">Max runs (0 = unlimited)</label><br>
+      <input id="schedule-max-runs" class="field" type="number" min="0">
+    </div>
+    <div class="form-row form-row-check">
+      <label for="schedule-enabled">
+        <input id="schedule-enabled" type="checkbox">
+        Enabled
+      </label>
+    </div>
+    <div class="form-row">
+      <button id="schedule-save-btn" type="submit">Save</button>
+      <button id="schedule-run-now-btn" type="button">Run now</button>
+      <button id="schedule-delete-btn" type="button" class="text-button">Delete</button>
+    </div>
+  </form>
+</main>
+<script src="/admin.js"></script>
+<script>
+  const id = decodeURIComponent(window.location.pathname.split('/').pop());
+
+  const titleEl = document.getElementById('schedule-title');
+  const metaEl = document.getElementById('schedule-meta');
+  const statusEl = document.getElementById('schedule-status');
+  const form = document.getElementById('schedule-form');
+  const seedURLsEl = document.getElementById('schedule-seed-urls');
+  const maxPagesEl = document.getElementById('schedule-max-pages');
+  const respectRobotsEl = document.getElementById('schedule-respect-robots');
+  const linkScopeEl = document.getElementById('schedule-link-scope');
+  const allowedDomainsEl = document.getElementById('schedule-allowed-domains');
+  const blockedDomainsEl = document.getElementById('schedule-blocked-domains');
+  const followIndexedEl = document.getElementById('schedule-follow-indexed');
+  const useSitemapEl = document.getElementById('schedule-use-sitemap');
+  const prioritizeUnindexedEl = document.getElementById('schedule-prioritize-unindexed');
+  const rendererEl = document.getElementById('schedule-renderer');
+  const userAgentEl = document.getElementById('schedule-user-agent');
+  const cookieEl = document.getElementById('schedule-cookie');
+  const basicUserEl = document.getElementById('schedule-basic-user');
+  const basicPassEl = document.getElementById('schedule-basic-pass');
+  const fetchTimeoutEl = document.getElementById('schedule-fetch-timeout');
+  const minTextLengthEl = document.getElementById('schedule-min-text-length');
+  const delayEl = document.getElementById('schedule-delay');
+  const maxResponseEl = document.getElementById('schedule-max-response');
+  const intervalEl = document.getElementById('schedule-interval');
+  const maxRunsEl = document.getElementById('schedule-max-runs');
+  const enabledEl = document.getElementById('schedule-enabled');
+  const saveBtn = document.getElementById('schedule-save-btn');
+  const runNowBtn = document.getElementById('schedule-run-now-btn');
+  const deleteBtn = document.getElementById('schedule-delete-btn');
+
+  // linesToText/parseLines mirror crawl.html's allow/block-domain textareas
+  // -- one entry per line, blank lines dropped.
+  function linesToText(lines) {
+    return (lines || []).join('\n');
+  }
+
+  function parseLines(text) {
+    return text.split('\n').map((s) => s.trim()).filter(Boolean);
+  }
+
+  function applySchedule(s) {
+    titleEl.textContent = seedSummary(s.seed_urls);
+    document.title = 'se. — ' + seedSummary(s.seed_urls);
+    metaEl.textContent = 'Created ' + new Date(s.created_at).toLocaleString() +
+      ' · Runs so far: ' + s.run_count +
+      ' · Next run: ' + (s.next_run_at ? new Date(s.next_run_at).toLocaleString() : '—') +
+      ' · Last run: ' + (s.last_run_at ? new Date(s.last_run_at).toLocaleString() : 'never');
+
+    seedURLsEl.value = linesToText(s.seed_urls);
+    maxPagesEl.value = s.max_pages;
+    respectRobotsEl.checked = s.respect_robots;
+    linkScopeEl.value = s.link_scope || '';
+    allowedDomainsEl.value = linesToText(s.allowed_domains);
+    blockedDomainsEl.value = linesToText(s.blocked_domains);
+    followIndexedEl.checked = s.follow_indexed_domains;
+    useSitemapEl.checked = s.use_sitemap;
+    prioritizeUnindexedEl.checked = s.prioritize_unindexed;
+    rendererEl.value = s.renderer || '';
+    userAgentEl.value = s.user_agent || '';
+    cookieEl.value = s.cookie || '';
+    basicUserEl.value = s.basic_auth_user || '';
+    basicPassEl.value = s.basic_auth_pass || '';
+    fetchTimeoutEl.value = s.fetch_timeout_seconds || '';
+    minTextLengthEl.value = s.min_text_length || '';
+    delayEl.value = s.crawl_delay_ms || '';
+    maxResponseEl.value = s.max_response_kb || '';
+    intervalEl.value = s.interval_minutes || '';
+    maxRunsEl.value = s.max_runs || '';
+    enabledEl.checked = s.enabled;
+
+    form.hidden = false;
+  }
+
+  // requestBody mirrors crawl.html's scheduledCrawlRequest construction --
+  // PATCH is a full replace, so every field is resent, credentials
+  // included, or they'd silently be cleared.
+  function requestBody() {
+    return {
+      seed_urls: parseLines(seedURLsEl.value),
+      max_pages: parseInt(maxPagesEl.value, 10) || 20,
+      respect_robots: respectRobotsEl.checked,
+      user_agent: userAgentEl.value,
+      cookie: cookieEl.value,
+      basic_auth_user: basicUserEl.value,
+      basic_auth_pass: basicPassEl.value,
+      link_scope: linkScopeEl.value,
+      allowed_domains: parseLines(allowedDomainsEl.value),
+      blocked_domains: parseLines(blockedDomainsEl.value),
+      follow_indexed_domains: followIndexedEl.checked,
+      use_sitemap: useSitemapEl.checked,
+      prioritize_unindexed: prioritizeUnindexedEl.checked,
+      fetch_timeout_seconds: parseInt(fetchTimeoutEl.value, 10) || 0,
+      min_text_length: parseInt(minTextLengthEl.value, 10) || 0,
+      crawl_delay_ms: parseInt(delayEl.value, 10) || 0,
+      max_response_kb: parseInt(maxResponseEl.value, 10) || 0,
+      interval_minutes: parseInt(intervalEl.value, 10) || 0,
+      max_runs: parseInt(maxRunsEl.value, 10) || 0,
+      renderer: rendererEl.value,
+      enabled: enabledEl.checked,
+    };
+  }
+
+  async function load() {
+    try {
+      const s = await getJSON('/admin/api/schedules/' + encodeURIComponent(id));
+      applySchedule(s);
+    } catch (err) {
+      titleEl.textContent = 'Not found';
+      statusEl.textContent = 'Could not load this crawl: ' + err.message;
+    }
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    setButtonLoading(saveBtn, true, 'Saving…');
+    statusEl.textContent = '';
+    try {
+      await patchJSON('/admin/api/schedules/' + encodeURIComponent(id), requestBody());
+      statusEl.textContent = 'Saved.';
+      await load();
+    } catch (err) {
+      statusEl.textContent = 'Could not save: ' + err.message;
+    } finally {
+      setButtonLoading(saveBtn, false);
+    }
+  });
+
+  runNowBtn.addEventListener('click', async () => {
+    setButtonLoading(runNowBtn, true, 'Starting…');
+    statusEl.textContent = '';
+    try {
+      await postJSON('/admin/api/schedules/' + encodeURIComponent(id) + '/run', {});
+      statusEl.textContent = 'Queued — starting within a few seconds. See Jobs on the Crawl page.';
+      await load();
+    } catch (err) {
+      statusEl.textContent = 'Could not start: ' + err.message;
+    } finally {
+      setButtonLoading(runNowBtn, false);
+    }
+  });
+
+  deleteBtn.addEventListener('click', async () => {
+    if (!window.confirm('Delete this crawl schedule?')) return;
+    deleteBtn.disabled = true;
+    try {
+      await deleteRequest('/admin/api/schedules/' + encodeURIComponent(id));
+      window.location.href = '/admin/crawl';
+    } catch (err) {
+      deleteBtn.disabled = false;
+      window.alert('Could not delete: ' + err.message);
+    }
+  });
+
+  wireSignOut();
+  load();
+</script>
+</body>
+</html>

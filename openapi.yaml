@@ -571,6 +571,23 @@ paths:
         "503": { $ref: "#/components/responses/NotConfigured" }
 
   /admin/api/schedules/{id}:
+    get:
+      tags: [admin]
+      summary: Get one crawl's full options
+      description: Backs the admin schedule-detail/edit subpage's initial load.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScheduledCrawl" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
     patch:
       tags: [admin]
       summary: Replace a crawl's editable fields
@@ -602,6 +619,33 @@ paths:
     delete:
       tags: [admin]
       summary: Delete a crawl
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/schedules/{id}/run:
+    post:
+      tags: [admin]
+      summary: Run a crawl now, outside its normal schedule
+      description: >-
+        Marks the schedule due immediately (`next_run_at` = now) and
+        re-enables it if it was paused, without touching any other stored
+        field (recurring/interval/run count/options all stay exactly as
+        they were). crawl-server's own scheduler ticker picks it up on its
+        next tick and creates the actual crawl job -- the same path a
+        freshly created one-off crawl already goes through -- so the job
+        doesn't exist yet the instant this call returns; poll
+        /admin/api/crawl/jobs for it.
       parameters:
         - name: id
           in: path

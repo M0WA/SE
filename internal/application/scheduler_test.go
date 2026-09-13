@@ -37,6 +37,9 @@ func newFakeScheduledCrawlStore(schedules ...domain.ScheduledCrawl) *fakeSchedul
 func (f *fakeScheduledCrawlStore) CreateScheduledCrawl(context.Context, domain.ScheduledCrawl) error {
 	return errors.New("not implemented")
 }
+func (f *fakeScheduledCrawlStore) GetScheduledCrawl(context.Context, string) (domain.ScheduledCrawl, error) {
+	return domain.ScheduledCrawl{}, errors.New("not implemented")
+}
 func (f *fakeScheduledCrawlStore) ListScheduledCrawls(context.Context) ([]domain.ScheduledCrawl, error) {
 	return nil, errors.New("not implemented")
 }
@@ -78,6 +81,10 @@ func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(_ context.Context, id st
 	s.RunCount = runCount
 	f.schedules[id] = s
 	return nil
+}
+
+func (f *fakeScheduledCrawlStore) RunScheduledCrawlNow(context.Context, string, time.Time) error {
+	return errors.New("not implemented")
 }
 
 var _ ports.ScheduledCrawlStore = (*fakeScheduledCrawlStore)(nil)

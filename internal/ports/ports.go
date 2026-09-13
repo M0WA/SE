@@ -425,6 +425,11 @@ var ErrScheduledCrawlNotFound = errors.New("scheduled crawl not found")
 // round-trip to reach each other.
 type ScheduledCrawlStore interface {
 	CreateScheduledCrawl(ctx context.Context, s domain.ScheduledCrawl) error
+	// GetScheduledCrawl returns one schedule by ID, or
+	// ErrScheduledCrawlNotFound if none exists -- used by the admin
+	// schedule-detail/edit subpage to load a single entry's current
+	// options without fetching every schedule.
+	GetScheduledCrawl(ctx context.Context, id string) (domain.ScheduledCrawl, error)
 	ListScheduledCrawls(ctx context.Context) ([]domain.ScheduledCrawl, error)
 	UpdateScheduledCrawl(ctx context.Context, s domain.ScheduledCrawl) error
 	DeleteScheduledCrawl(ctx context.Context, id string) error
@@ -437,4 +442,12 @@ type ScheduledCrawlStore interface {
 	// one-off (non-recurring) entry, or one that just reached its MaxRuns
 	// cap, passes false so it's never picked up again.
 	MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time, enabled bool, runCount int) error
+	// RunScheduledCrawlNow marks a schedule due immediately -- sets
+	// NextRunAt to now and re-enables it if it was paused -- without
+	// touching any other field (recurring/interval/run count/options all
+	// stay exactly as they were). crawl-server's own scheduler ticker
+	// (TriggerDueCrawls) picks it up on its next tick, the same path a
+	// freshly created one-off crawl already goes through. Returns
+	// ErrScheduledCrawlNotFound if id doesn't exist.
+	RunScheduledCrawlNow(ctx context.Context, id string, now time.Time) error
 }

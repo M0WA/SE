@@ -91,6 +91,72 @@ func TestCreateScheduledCrawl_ThenListRoundTrips(t *testing.T) {
 	}
 }
 
+func TestGetScheduledCrawl_ReturnsMatchingSchedule(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	s := newScheduledCrawl("sched-1", 30, time.Now().UTC().Add(30*time.Minute))
+	if err := repo.CreateScheduledCrawl(ctx, s); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := repo.GetScheduledCrawl(ctx, "sched-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.ID != "sched-1" || got.MaxPages != 20 || len(got.SeedURLs) != 2 {
+		t.Errorf("unexpected schedule: %+v", got)
+	}
+}
+
+func TestGetScheduledCrawl_NotFound(t *testing.T) {
+	repo := newTestRepo(t)
+	_, err := repo.GetScheduledCrawl(context.Background(), "missing")
+	if !errors.Is(err, ports.ErrScheduledCrawlNotFound) {
+		t.Errorf("expected ErrScheduledCrawlNotFound, got %v", err)
+	}
+}
+
+// TestRunScheduledCrawlNow_SetsNextRunAtAndReEnablesWithoutTouchingOptions
+// proves RunScheduledCrawlNow only ever changes next_run_at/enabled --
+// every other stored field (recurring, interval, options) stays exactly as
+// it was, so "run now" can't silently reset a schedule's configuration.
+func TestRunScheduledCrawlNow_SetsNextRunAtAndReEnablesWithoutTouchingOptions(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	s := newScheduledCrawl("sched-1", 30, time.Now().UTC().Add(2*time.Hour))
+	s.Enabled = false
+	if err := repo.CreateScheduledCrawl(ctx, s); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := repo.RunScheduledCrawlNow(ctx, "sched-1", now); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := repo.GetScheduledCrawl(ctx, "sched-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !got.Enabled {
+		t.Error("expected RunScheduledCrawlNow to re-enable a paused schedule")
+	}
+	if got.NextRunAt.Sub(now).Abs() > time.Second {
+		t.Errorf("expected NextRunAt ~%v, got %v", now, got.NextRunAt)
+	}
+	if got.IntervalMinutes != 30 || got.MaxPages != 20 || got.LinkScope != domain.LinkScopeHost {
+		t.Errorf("expected every other option untouched, got %+v", got)
+	}
+}
+
+func TestRunScheduledCrawlNow_NotFound(t *testing.T) {
+	repo := newTestRepo(t)
+	err := repo.RunScheduledCrawlNow(context.Background(), "missing", time.Now())
+	if !errors.Is(err, ports.ErrScheduledCrawlNotFound) {
+		t.Errorf("expected ErrScheduledCrawlNotFound, got %v", err)
+	}
+}
+
 func TestListScheduledCrawls_OrdersBySoonestNextRun(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()

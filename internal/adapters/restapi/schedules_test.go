@@ -27,11 +27,30 @@ type fakeScheduledCrawlStore struct {
 
 	deletedID string
 	deleteErr error
+
+	getErr error
+
+	runNowIDs []string
+	runNowErr error
 }
 
 func (f *fakeScheduledCrawlStore) CreateScheduledCrawl(_ context.Context, s domain.ScheduledCrawl) error {
 	f.created = s
 	return f.createErr
+}
+
+// GetScheduledCrawl finds by ID in f.schedules -- the same slice ListScheduledCrawls
+// already serves, so a test can drive both from one seeded list.
+func (f *fakeScheduledCrawlStore) GetScheduledCrawl(_ context.Context, id string) (domain.ScheduledCrawl, error) {
+	if f.getErr != nil {
+		return domain.ScheduledCrawl{}, f.getErr
+	}
+	for _, s := range f.schedules {
+		if s.ID == id {
+			return s, nil
+		}
+	}
+	return domain.ScheduledCrawl{}, ports.ErrScheduledCrawlNotFound
 }
 func (f *fakeScheduledCrawlStore) ListScheduledCrawls(context.Context) ([]domain.ScheduledCrawl, error) {
 	return f.schedules, f.listErr
@@ -49,6 +68,15 @@ func (f *fakeScheduledCrawlStore) DueScheduledCrawls(context.Context, time.Time)
 }
 func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(context.Context, string, time.Time, time.Time, bool, int) error {
 	return nil
+}
+
+// RunScheduledCrawlNow records which ID(s) it was asked to run, so a test
+// can assert the handler called through with the right ID, and errors when
+// runNowErr is set -- ErrScheduledCrawlNotFound flows through respondOrNotFound
+// as a 404 like any other not-found error.
+func (f *fakeScheduledCrawlStore) RunScheduledCrawlNow(_ context.Context, id string, _ time.Time) error {
+	f.runNowIDs = append(f.runNowIDs, id)
+	return f.runNowErr
 }
 
 var _ ports.ScheduledCrawlStore = (*fakeScheduledCrawlStore)(nil)
@@ -638,5 +666,126 @@ func TestHandleAdminDeleteSchedule_NotConfigured(t *testing.T) {
 	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminGetSchedule_Success(t *testing.T) {
+	store := &fakeScheduledCrawlStore{schedules: []domain.ScheduledCrawl{
+		{ID: "sched-1", SeedURLs: []string{"http://a"}, MaxPages: 10, LinkScope: domain.LinkScopeHost},
+	}}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/schedules/sched-1", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		ID        string `json:"id"`
+		MaxPages  int    `json:"max_pages"`
+		LinkScope string `json:"link_scope"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if out.ID != "sched-1" || out.MaxPages != 10 || out.LinkScope != domain.LinkScopeHost {
+		t.Errorf("unexpected schedule response: %+v", out)
+	}
+}
+
+func TestHandleAdminGetSchedule_NotFound(t *testing.T) {
+	store := &fakeScheduledCrawlStore{}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/schedules/missing", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminGetSchedule_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithSchedules(t, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/schedules/sched-1", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminRunScheduleNow_Success(t *testing.T) {
+	store := &fakeScheduledCrawlStore{}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules/sched-1/run", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(store.runNowIDs) != 1 || store.runNowIDs[0] != "sched-1" {
+		t.Errorf("expected RunScheduledCrawlNow called with sched-1, got %+v", store.runNowIDs)
+	}
+}
+
+func TestHandleAdminRunScheduleNow_NotFound(t *testing.T) {
+	store := &fakeScheduledCrawlStore{runNowErr: ports.ErrScheduledCrawlNotFound}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules/missing/run", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminRunScheduleNow_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithSchedules(t, nil)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules/sched-1/run", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminRunScheduleNow_ServiceError(t *testing.T) {
+	store := &fakeScheduledCrawlStore{runNowErr: errors.New("db unavailable")}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules/sched-1/run", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminSchedulePage_GetServesPage(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithSchedules(t, &fakeScheduledCrawlStore{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/schedule/sched-1", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminSchedulePage_Unauthenticated_Redirects(t *testing.T) {
+	h := restapi.New(restapi.Config{ScheduledCrawls: &fakeScheduledCrawlStore{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
+	req := httptest.NewRequest(http.MethodGet, "/admin/schedule/sched-1", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Errorf("expected 303 redirect to login, got %d", rec.Code)
 	}
 }

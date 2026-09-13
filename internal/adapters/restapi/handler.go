@@ -29,6 +29,9 @@ var adminDocumentsHTML []byte
 //go:embed admin_domain.html
 var adminDomainHTML []byte
 
+//go:embed admin_schedule.html
+var adminScheduleHTML []byte
+
 //go:embed admin_tuning.html
 var adminTuningHTML []byte
 
@@ -197,6 +200,7 @@ func (h *Handler) RoutesAdmin() *http.ServeMux {
 	mux.HandleFunc("/admin/documents/{host}", h.requireAuthPage(h.handleAdminDomainPage))
 	mux.HandleFunc("/admin/vocabulary/term", h.requireAuthPage(h.handleAdminVocabularyTermPage))
 	mux.HandleFunc("/admin/crawl", h.requireAuthPage(h.handleAdminCrawlPage))
+	mux.HandleFunc("/admin/schedule/{id}", h.requireAuthPage(h.handleAdminSchedulePage))
 	mux.HandleFunc("/admin/tuning", h.requireAuthPage(h.handleAdminTuningPage))
 	mux.HandleFunc("/admin/search", h.requireAuthPage(h.handleAdminSearchPage))
 	mux.HandleFunc("/admin/search/result", h.requireAuthPage(h.handleAdminSearchResultPage))
@@ -220,8 +224,10 @@ func (h *Handler) RoutesAdmin() *http.ServeMux {
 	mux.HandleFunc("GET /admin/api/crawl/jobs/{id}", h.requireAuthAPI(h.handleAdminCrawlJob))
 	mux.HandleFunc("POST /admin/api/crawl/jobs/{id}/cancel", h.requireAuthAPI(h.handleAdminCancelCrawlJob))
 	mux.HandleFunc("/admin/api/schedules", h.requireAuthAPI(h.handleAdminSchedules))
+	mux.HandleFunc("GET /admin/api/schedules/{id}", h.requireAuthAPI(h.handleAdminGetSchedule))
 	mux.HandleFunc("DELETE /admin/api/schedules/{id}", h.requireAuthAPI(h.handleAdminDeleteSchedule))
 	mux.HandleFunc("PATCH /admin/api/schedules/{id}", h.requireAuthAPI(h.handleAdminUpdateSchedule))
+	mux.HandleFunc("POST /admin/api/schedules/{id}/run", h.requireAuthAPI(h.handleAdminRunScheduleNow))
 	mux.HandleFunc("GET /admin/api/pagerank", h.requireAuthAPI(h.handleAdminPageRank))
 	mux.HandleFunc("POST /admin/api/pagerank/recompute", h.requireAuthAPI(h.handleAdminPageRankRecompute))
 	mux.HandleFunc("GET /admin/api/database", h.requireAuthAPI(h.handleAdminDatabase))

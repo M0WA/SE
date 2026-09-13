@@ -582,9 +582,44 @@
     return td;
   }
 
+  // runScheduleNow marks a schedule due immediately (POST .../run) -- the
+  // actual CrawlJob is created by crawl-server's own scheduler ticker on
+  // its next tick, same as a freshly submitted one-off crawl, so this just
+  // gives the same "starting within a few seconds" feedback and starts the
+  // Jobs table polling for it.
+  async function runScheduleNow(s, btn) {
+    setButtonLoading(btn, true, 'Starting…');
+    try {
+      await postJSON('/admin/api/schedules/' + encodeURIComponent(s.id) + '/run', {});
+      awaitingNewJobUntil = Date.now() + 15000;
+      // loadCrawls() re-renders #crawls-status itself (clearing it, or
+      // reporting a filter/empty state) -- setting this feedback after
+      // that reload, not before, is what keeps it from being immediately
+      // overwritten.
+      await loadCrawls();
+      await loadJobs();
+      crawlsStatusEl.textContent = 'Queued — starting within a few seconds.';
+    } catch (err) {
+      window.alert('Could not start: ' + err.message);
+    } finally {
+      setButtonLoading(btn, false);
+    }
+  }
+
   function crawlActionsCell(s) {
     const td = document.createElement('td');
     td.className = 'actions';
+    const runBtn = document.createElement('button');
+    runBtn.type = 'button';
+    runBtn.className = 'text-button';
+    runBtn.textContent = 'Run now';
+    runBtn.addEventListener('click', () => runScheduleNow(s, runBtn));
+    td.appendChild(runBtn);
+    const editLink = document.createElement('a');
+    editLink.className = 'text-button';
+    editLink.href = '/admin/schedule/' + encodeURIComponent(s.id);
+    editLink.textContent = 'Edit';
+    td.appendChild(editLink);
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'text-button';

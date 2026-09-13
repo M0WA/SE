@@ -1490,6 +1490,21 @@ func (r *Repository) CreateScheduledCrawl(ctx context.Context, s domain.Schedule
 	return nil
 }
 
+// GetScheduledCrawl returns the single schedule with the given id, or
+// ports.ErrScheduledCrawlNotFound if none exists -- backs the admin
+// schedule-detail/edit subpage's initial load.
+func (r *Repository) GetScheduledCrawl(ctx context.Context, id string) (domain.ScheduledCrawl, error) {
+	row := r.db.QueryRowContext(ctx, r.ph(`SELECT `+scheduledCrawlColumns+` FROM scheduled_crawls WHERE id = %s`, 1), id)
+	s, err := scanScheduledCrawl(row)
+	if err == sql.ErrNoRows {
+		return domain.ScheduledCrawl{}, ports.ErrScheduledCrawlNotFound
+	}
+	if err != nil {
+		return domain.ScheduledCrawl{}, fmt.Errorf("querying scheduled crawl (%s): %w", id, err)
+	}
+	return s, nil
+}
+
 // ListScheduledCrawls lists every schedule, soonest next run first.
 func (r *Repository) ListScheduledCrawls(ctx context.Context) ([]domain.ScheduledCrawl, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT `+scheduledCrawlColumns+` FROM scheduled_crawls ORDER BY next_run_at ASC`)
@@ -1610,6 +1625,21 @@ func (r *Repository) MarkScheduledCrawlRun(ctx context.Context, id string, lastR
 		lastRunAt.UTC().Format(crawledAtLayout), nextRunAt.UTC().Format(crawledAtLayout), enabled, runCount, id)
 	if err != nil {
 		return fmt.Errorf("marking scheduled crawl run (%s): %w", id, err)
+	}
+	return requireRowsAffected(res, id)
+}
+
+// RunScheduledCrawlNow marks a schedule due immediately -- next_run_at =
+// now, enabled = true -- without touching last_run_at, run_count, or any
+// crawl option. crawl-server's own scheduler ticker (application.
+// TriggerDueCrawls) discovers it on its next tick, the same as a freshly
+// created one-off crawl already does; that tick is what actually calls
+// MarkScheduledCrawlRun once the triggered job finishes.
+func (r *Repository) RunScheduledCrawlNow(ctx context.Context, id string, now time.Time) error {
+	updateSQL := r.ph(`UPDATE scheduled_crawls SET next_run_at = %s, enabled = %s WHERE id = %s`, 1, 2, 3)
+	res, err := r.db.ExecContext(ctx, updateSQL, now.UTC().Format(crawledAtLayout), true, id)
+	if err != nil {
+		return fmt.Errorf("running scheduled crawl now (%s): %w", id, err)
 	}
 	return requireRowsAffected(res, id)
 }
