@@ -33,7 +33,7 @@ func (v RankingOverridesValues) Blocked(doc Document) bool {
 // tokenized the document (see TokenSet) for some other reason.
 func (v RankingOverridesValues) BlockedTokens(url string, tokens map[string]bool) bool {
 	if len(v.BlockedDomains) > 0 {
-		host := hostOf(url)
+		host := HostOf(url)
 		for _, d := range v.BlockedDomains {
 			if d == host {
 				return true
@@ -62,7 +62,7 @@ func (v RankingOverridesValues) BoostFactor(doc Document) float64 {
 func (v RankingOverridesValues) BoostFactorTokens(url string, tokens map[string]bool) float64 {
 	factor := 1.0
 	if len(v.BoostedDomains) > 0 {
-		if f, ok := v.BoostedDomains[hostOf(url)]; ok {
+		if f, ok := v.BoostedDomains[HostOf(url)]; ok {
 			factor *= f
 		}
 	}
@@ -90,7 +90,10 @@ func TokenSet(title, text string) map[string]bool {
 	return set
 }
 
-func hostOf(rawURL string) string {
+// HostOf extracts the lowercased hostname from a URL, or "" if it does not
+// parse -- shared by ranking overrides (domain block/boost), site: filters,
+// and (from restapi) scheduled-crawl domain dedup.
+func HostOf(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return ""

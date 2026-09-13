@@ -196,6 +196,76 @@ func TestHandleAdminSchedules_PostCreatesOneOffCrawl(t *testing.T) {
 	}
 }
 
+// TestHandleAdminSchedules_PostReusesExistingScheduleForSameDomain guards
+// against a real duplication bug: submitting the crawl form again for a
+// domain that already has a schedule must update that schedule in place,
+// not insert a second one racing it for the same site.
+func TestHandleAdminSchedules_PostReusesExistingScheduleForSameDomain(t *testing.T) {
+	store := &fakeScheduledCrawlStore{schedules: []domain.ScheduledCrawl{
+		{ID: "sched-1", SeedURLs: []string{"http://a.example/old-path"}, MaxPages: 10, Enabled: false},
+	}}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	body, _ := json.Marshal(map[string]interface{}{
+		"seed_urls": []string{"http://a.example/new-path"}, "max_pages": 30, "recurring": true, "interval_minutes": 45,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 (updated existing), got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.created.ID != "" {
+		t.Errorf("expected no new schedule created, got %+v", store.created)
+	}
+	if store.updated.ID != "sched-1" {
+		t.Errorf("expected existing schedule sched-1 to be updated, got %+v", store.updated)
+	}
+	if store.updated.MaxPages != 30 || store.updated.SeedURLs[0] != "http://a.example/new-path" {
+		t.Errorf("expected the existing schedule's options replaced, got %+v", store.updated)
+	}
+	if !store.updated.Enabled {
+		t.Error("expected re-submitting a crawl to re-enable its schedule")
+	}
+}
+
+func TestHandleAdminSchedules_PostDifferentDomainCreatesNewSchedule(t *testing.T) {
+	store := &fakeScheduledCrawlStore{schedules: []domain.ScheduledCrawl{
+		{ID: "sched-1", SeedURLs: []string{"http://a.example"}, MaxPages: 10},
+	}}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	body, _ := json.Marshal(map[string]interface{}{
+		"seed_urls": []string{"http://b.example"}, "max_pages": 10, "recurring": false,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 (new domain, new schedule), got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.created.ID == "" || store.created.SeedURLs[0] != "http://b.example" {
+		t.Errorf("expected a new schedule for the new domain, got %+v", store.created)
+	}
+}
+
+func TestHandleAdminSchedules_PostDomainLookupServiceError(t *testing.T) {
+	store := &fakeScheduledCrawlStore{listErr: errors.New("boom")}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	body, _ := json.Marshal(map[string]interface{}{
+		"seed_urls": []string{"http://a.example"}, "max_pages": 10, "recurring": false,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
 func TestHandleAdminSchedules_PostEmptySeedURLs(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithSchedules(t, &fakeScheduledCrawlStore{})
 	body, _ := json.Marshal(map[string]interface{}{"recurring": true, "interval_minutes": 20})

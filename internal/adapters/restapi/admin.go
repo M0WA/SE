@@ -831,6 +831,12 @@ func validateScheduledCrawlRequest(w http.ResponseWriter, req scheduledCrawlRequ
 // interval_minutes from now (same rule editing an existing entry's options
 // applies -- see handleAdminUpdateSchedule), a non-recurring one's is
 // right now.
+//
+// POST enforces at most one schedule per domain: a submission whose first
+// seed URL's host matches an existing schedule's first seed URL's host
+// replaces that schedule's options in place (same ID, re-enabled, next run
+// recomputed) instead of inserting a second row -- crawling a domain that's
+// already scheduled is "update the schedule," not "add a competing one."
 func (h *Handler) handleAdminSchedules(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.scheduledCrawls != nil, "scheduled crawls") {
 		return
@@ -856,6 +862,20 @@ func (h *Handler) handleAdminSchedules(w http.ResponseWriter, r *http.Request) {
 		if !validateScheduledCrawlRequest(w, req) {
 			return
 		}
+		existingID, err := h.scheduledCrawlIDForSameDomain(r.Context(), req.SeedURLs)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if existingID != "" {
+			s := req.toScheduledCrawl(existingID, true, time.Now().UTC())
+			if err := h.scheduledCrawls.UpdateScheduledCrawl(r.Context(), s); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, http.StatusOK, toScheduledCrawlResponse(s))
+			return
+		}
 		s := req.toScheduledCrawl(domain.NewScheduledCrawlID(), true, time.Now().UTC())
 		if err := h.scheduledCrawls.CreateScheduledCrawl(r.Context(), s); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -865,6 +885,32 @@ func (h *Handler) handleAdminSchedules(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// scheduledCrawlIDForSameDomain returns the ID of an already-existing
+// schedule whose first seed URL shares a host with seedURLs' first entry,
+// or "" if there is none (including when seedURLs is empty or unparseable
+// -- never treated as a match). Used by handleAdminSchedules' POST to keep
+// "one schedule per domain" true instead of relying on every caller to
+// check first.
+func (h *Handler) scheduledCrawlIDForSameDomain(ctx context.Context, seedURLs []string) (string, error) {
+	if len(seedURLs) == 0 {
+		return "", nil
+	}
+	host := domain.HostOf(seedURLs[0])
+	if host == "" {
+		return "", nil
+	}
+	existing, err := h.scheduledCrawls.ListScheduledCrawls(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, s := range existing {
+		if len(s.SeedURLs) > 0 && domain.HostOf(s.SeedURLs[0]) == host {
+			return s.ID, nil
+		}
+	}
+	return "", nil
 }
 
 // handleAdminUpdateSchedule replaces a schedule's editable fields --

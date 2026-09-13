@@ -94,7 +94,7 @@ func (q ParsedQuery) SiteAllowed(doc Document) bool {
 	if len(q.Sites) == 0 {
 		return true
 	}
-	host := hostOf(doc.URL)
+	host := HostOf(doc.URL)
 	for _, site := range q.Sites {
 		if host == site || strings.HasSuffix(host, "."+site) {
 			return true
