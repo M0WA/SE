@@ -146,6 +146,23 @@ func TestRepository_CrawlJobMarkFailedRecordsError(t *testing.T) {
 	}
 }
 
+func TestRepository_CrawlJobMarkCancelledSetsFinishedAt(t *testing.T) {
+	ctx := context.Background()
+	repo := newTestRepo(t)
+	job, _ := repo.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://a"}})
+	_ = repo.MarkRunning(ctx, job.ID)
+	if err := repo.MarkCancelled(ctx, job.ID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got, _ := repo.Get(ctx, job.ID)
+	if got.Status != domain.CrawlJobCancelled {
+		t.Errorf("expected cancelled, got %s", got.Status)
+	}
+	if got.FinishedAt == nil {
+		t.Error("expected FinishedAt to be set on cancellation too")
+	}
+}
+
 func TestRepository_GetCrawlJobUnknownIDReportsNotFound(t *testing.T) {
 	repo := newTestRepo(t)
 	if _, err := repo.Get(context.Background(), "does-not-exist"); !errors.Is(err, domain.ErrCrawlJobNotFound) {

@@ -506,6 +506,29 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
+  /admin/api/crawl/jobs/{id}/cancel:
+    post:
+      tags: [admin]
+      summary: Cancel a queued or running crawl job
+      description: >-
+        Stops a job that hasn't finished yet -- a job already done, failed,
+        or already cancelled has nothing left to cancel.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The job exists but isn't currently queued or running.
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
   /admin/api/schedules:
     get:
       tags: [admin]
@@ -626,6 +649,28 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/CrawlJob" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  /jobs/{id}/cancel:
+    post:
+      tags: [crawl-internal]
+      summary: Cancel a queued or running crawl job
+      description: >-
+        Called only by admin-server's crawlclient.Client, never directly
+        reachable from the internet.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The job exists but isn't currently queued or running.
 
   # ---------------------------------------------------------------- health
   /healthz:
@@ -905,7 +950,7 @@ components:
       properties:
         id: { type: string }
         request: { $ref: "#/components/schemas/CrawlJobRequest" }
-        status: { type: string, enum: [queued, running, done, failed] }
+        status: { type: string, enum: [queued, running, done, failed, cancelled] }
         pages_crawled: { type: integer }
         error: { type: string }
         created_at: { type: string, format: date-time }
@@ -924,10 +969,11 @@ components:
     ScheduledCrawlRequest:
       description: >-
         The one request shape for creating or replacing any crawl -- a
-        one-off run and a recurring schedule differ only in `recurring`
-        and `interval_minutes`, not in which fields are available.
-        `interval_minutes` must be positive when `recurring` is true;
-        otherwise it's unused.
+        one-off run and a recurring schedule differ only in
+        `interval_minutes`, not in which fields are available. There's no
+        separate "recurring" flag: `interval_minutes` 0 (the default, left
+        blank) means "run once, immediately"; a positive value means
+        "repeat on this cadence" until disabled or `max_runs` is reached.
       type: object
       required: [seed_urls]
       properties:
@@ -961,13 +1007,23 @@ components:
             Fetch not-yet-indexed URLs before re-fetching ones already
             indexed, within the same max_pages budget. Reorders discovery
             only -- it never skips already-indexed pages.
-        recurring:
-          type: boolean
-          default: false
+        interval_minutes:
+          type: integer
+          minimum: 0
+          default: 0
           description: >-
-            false (default): run once, at next_run_at (immediately on
-            create). true: repeat every interval_minutes until disabled.
-        interval_minutes: { type: integer, minimum: 1 }
+            0 (default): run once, at next_run_at (immediately on create).
+            A positive value: repeat every interval_minutes until disabled
+            or max_runs is reached.
+        max_runs:
+          type: integer
+          minimum: 0
+          default: 0
+          description: >-
+            Caps how many times a recurring crawl repeats before disabling
+            itself; 0 (default) means unlimited. Meaningless when
+            interval_minutes is 0 (a one-off crawl already stops after its
+            one run).
         enabled: { type: boolean }
 
     ScheduledCrawl:
@@ -976,6 +1032,12 @@ components:
         - type: object
           properties:
             id: { type: string }
+            recurring:
+              type: boolean
+              description: Derived from interval_minutes > 0 -- not settable directly.
+            run_count:
+              type: integer
+              description: How many times this schedule has run so far.
             last_run_at: { type: string, format: date-time, nullable: true }
             next_run_at: { type: string, format: date-time }
             created_at: { type: string, format: date-time }

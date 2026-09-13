@@ -721,10 +721,33 @@ func (h *Handler) handleAdminCrawlJob(w http.ResponseWriter, r *http.Request) {
 	respondOrNotFound(w, err, ports.ErrCrawlJobNotFound, "crawl job not found", job)
 }
 
+func (h *Handler) handleAdminCancelCrawlJob(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.jobs != nil, "crawl jobs") {
+		return
+	}
+	err := h.jobs.CancelCrawlJob(r.Context(), r.PathValue("id"))
+	if errors.Is(err, ports.ErrCrawlJobNotFound) {
+		http.Error(w, "crawl job not found", http.StatusNotFound)
+		return
+	}
+	if errors.Is(err, ports.ErrCrawlJobNotRunning) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 // scheduledCrawlRequest is the wire shape for creating a crawl
 // (POST /admin/api/schedules) and replacing an existing one's editable
 // fields (PATCH /admin/api/schedules/{id}) -- there's no separate ad-hoc
-// "just run this once" request shape; Recurring false is that case.
+// "just run this once" request shape, and no explicit "recurring" flag
+// either: IntervalMinutes 0 (the default, left blank) means "run once";
+// a positive IntervalMinutes means "repeat on this cadence" -- see
+// toScheduledCrawl.
 type scheduledCrawlRequest struct {
 	SeedURLs            []string `json:"seed_urls"`
 	MaxPages            int      `json:"max_pages"`
@@ -740,9 +763,13 @@ type scheduledCrawlRequest struct {
 	CrawlDelayMs        int      `json:"crawl_delay_ms"`
 	MaxResponseKB       int      `json:"max_response_kb"`
 	PrioritizeUnindexed bool     `json:"prioritize_unindexed"`
-	Recurring           bool     `json:"recurring"`
 	IntervalMinutes     int      `json:"interval_minutes"`
-	Enabled             bool     `json:"enabled"`
+	// MaxRuns caps how many times a recurring crawl repeats before
+	// disabling itself; 0 (the default) means unlimited. Meaningless when
+	// IntervalMinutes is 0 (a one-off crawl already stops after its one
+	// run).
+	MaxRuns int  `json:"max_runs"`
+	Enabled bool `json:"enabled"`
 }
 
 type scheduledCrawlResponse struct {
@@ -763,6 +790,8 @@ type scheduledCrawlResponse struct {
 	PrioritizeUnindexed bool       `json:"prioritize_unindexed"`
 	Recurring           bool       `json:"recurring"`
 	IntervalMinutes     int        `json:"interval_minutes"`
+	MaxRuns             int        `json:"max_runs"`
+	RunCount            int        `json:"run_count"`
 	Enabled             bool       `json:"enabled"`
 	LastRunAt           *time.Time `json:"last_run_at,omitempty"`
 	NextRunAt           time.Time  `json:"next_run_at"`
@@ -778,7 +807,7 @@ func toScheduledCrawlResponse(s domain.ScheduledCrawl) scheduledCrawlResponse {
 		FetchTimeoutSeconds: s.FetchTimeoutSeconds, MinTextLength: s.MinTextLength,
 		CrawlDelayMs: s.CrawlDelayMs, MaxResponseKB: s.MaxResponseKB,
 		PrioritizeUnindexed: s.PrioritizeUnindexed, Recurring: s.Recurring,
-		IntervalMinutes: s.IntervalMinutes, Enabled: s.Enabled,
+		IntervalMinutes: s.IntervalMinutes, MaxRuns: s.MaxRuns, RunCount: s.RunCount, Enabled: s.Enabled,
 		LastRunAt: s.LastRunAt, NextRunAt: s.NextRunAt, CreatedAt: s.CreatedAt,
 	}
 }
@@ -786,7 +815,9 @@ func toScheduledCrawlResponse(s domain.ScheduledCrawl) scheduledCrawlResponse {
 // toScheduledCrawl builds the domain.ScheduledCrawl req describes -- shared
 // by handleAdminSchedules' POST (a new crawl) and handleAdminUpdateSchedule
 // (replacing an existing one's editable fields), since both otherwise
-// build the identical fields from req by hand. A recurring entry's first
+// build the identical fields from req by hand. Recurring is derived from
+// IntervalMinutes rather than a separate request field -- a positive
+// interval means "repeat," 0 means "run once." A recurring entry's first
 // run is interval_minutes from now, same rule a freshly created and a
 // just-edited one both follow; a non-recurring (one-off) entry is due
 // right now instead, since there's no interval to wait out -- the
@@ -795,8 +826,9 @@ func toScheduledCrawlResponse(s domain.ScheduledCrawl) scheduledCrawlResponse {
 // entry (UpdateScheduledCrawl's SQL never touches that column, so passing
 // "now" there too is harmless).
 func (req scheduledCrawlRequest) toScheduledCrawl(id string, enabled bool, now time.Time) domain.ScheduledCrawl {
+	recurring := req.IntervalMinutes > 0
 	next := now
-	if req.Recurring {
+	if recurring {
 		next = now.Add(time.Duration(req.IntervalMinutes) * time.Minute)
 	}
 	return domain.ScheduledCrawl{
@@ -806,8 +838,8 @@ func (req scheduledCrawlRequest) toScheduledCrawl(id string, enabled bool, now t
 		AllowOffDomainLinks: req.AllowOffDomainLinks, UseSitemap: req.UseSitemap,
 		FetchTimeoutSeconds: req.FetchTimeoutSeconds, MinTextLength: req.MinTextLength,
 		CrawlDelayMs: req.CrawlDelayMs, MaxResponseKB: req.MaxResponseKB,
-		PrioritizeUnindexed: req.PrioritizeUnindexed, Recurring: req.Recurring,
-		IntervalMinutes: req.IntervalMinutes, Enabled: enabled,
+		PrioritizeUnindexed: req.PrioritizeUnindexed, Recurring: recurring,
+		IntervalMinutes: req.IntervalMinutes, MaxRuns: req.MaxRuns, Enabled: enabled,
 		NextRunAt: next,
 		CreatedAt: now,
 	}
@@ -818,8 +850,12 @@ func validateScheduledCrawlRequest(w http.ResponseWriter, req scheduledCrawlRequ
 		http.Error(w, "seed_urls must not be empty", http.StatusBadRequest)
 		return false
 	}
-	if req.Recurring && req.IntervalMinutes <= 0 {
-		http.Error(w, "interval_minutes must be positive for a recurring crawl", http.StatusBadRequest)
+	if req.IntervalMinutes < 0 {
+		http.Error(w, "interval_minutes must not be negative", http.StatusBadRequest)
+		return false
+	}
+	if req.MaxRuns < 0 {
+		http.Error(w, "max_runs must not be negative", http.StatusBadRequest)
 		return false
 	}
 	return true

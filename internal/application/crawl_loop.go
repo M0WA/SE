@@ -124,6 +124,10 @@ func crawlLoop(
 	fetchCount := 0
 
 	for crawled < maxPages {
+		if err := ctx.Err(); err != nil {
+			return crawled, err
+		}
+
 		u, ok := dequeue()
 		if !ok {
 			break

@@ -290,14 +290,24 @@ type CrawlerService interface {
 // job with the given ID exists (or is no longer retained).
 var ErrCrawlJobNotFound = errors.New("crawl job not found")
 
-// CrawlJobService lets admin-server poll crawl-server's job progress --
-// every job is started by crawl-server's own scheduler ticker (see
-// application.TriggerDueCrawls), never by admin-server directly, so this
-// is read-only.
+// CrawlJobService lets admin-server poll crawl-server's job progress, and
+// cancel one -- every job is started by crawl-server's own scheduler ticker
+// (see application.TriggerDueCrawls), never by admin-server directly, so
+// aside from CancelCrawlJob this is read-only.
 type CrawlJobService interface {
 	ListCrawlJobs(ctx context.Context) ([]domain.CrawlJobSummary, error)
 	GetCrawlJob(ctx context.Context, jobID string) (domain.CrawlJob, error)
+	// CancelCrawlJob asks crawl-server to stop a queued or running job.
+	// Returns ports.ErrCrawlJobNotFound if no such job exists, and
+	// ErrCrawlJobNotRunning if it exists but already finished (done, failed,
+	// or already cancelled) -- there's nothing left to cancel.
+	CancelCrawlJob(ctx context.Context, jobID string) error
 }
+
+// ErrCrawlJobNotRunning is returned by CrawlJobService.CancelCrawlJob (and
+// crawl-server's own cancel handler) when the job exists but isn't
+// currently queued or running, so there's nothing to cancel.
+var ErrCrawlJobNotRunning = errors.New("crawl job is not currently running")
 
 // CrawlJobStore is crawl-server's own persistence for crawl jobs and their
 // per-page event history -- distinct from CrawlJobService, which is the
@@ -313,6 +323,7 @@ type CrawlJobStore interface {
 	AppendPage(ctx context.Context, id string, ev domain.CrawlPageEvent) error
 	MarkDone(ctx context.Context, id string) error
 	MarkFailed(ctx context.Context, id string, failErr error) error
+	MarkCancelled(ctx context.Context, id string) error
 	Get(ctx context.Context, id string) (domain.CrawlJob, error)
 	List(ctx context.Context) ([]domain.CrawlJobSummary, error)
 }
@@ -359,8 +370,9 @@ type ScheduledCrawlStore interface {
 	// or before now.
 	DueScheduledCrawls(ctx context.Context, now time.Time) ([]domain.ScheduledCrawl, error)
 	// MarkScheduledCrawlRun records that a schedule was just triggered (or
-	// just finished), advancing it to its next run and setting whether it
-	// stays enabled -- a one-off (non-recurring) entry passes false so it's
-	// never picked up again.
-	MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time, enabled bool) error
+	// just finished), advancing it to its next run, storing runCount (how
+	// many times it has now run), and setting whether it stays enabled -- a
+	// one-off (non-recurring) entry, or one that just reached its MaxRuns
+	// cap, passes false so it's never picked up again.
+	MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time, enabled bool, runCount int) error
 }

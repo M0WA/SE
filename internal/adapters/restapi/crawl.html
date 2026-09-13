@@ -33,17 +33,15 @@
   </form>
   <details class="crawl-advanced">
     <summary>Advanced options for this crawl</summary>
-    <div class="form-row form-row-check">
-      <label for="crawl-recurring">
-        <input id="crawl-recurring" type="checkbox">
-        Repeat this crawl automatically
-      </label>
-      <p class="tuning-hint">Off by default — runs once. When checked, it repeats on the interval below (see it, pause it, or delete it under Crawls further down) until you disable it.</p>
+    <div class="form-row">
+      <label for="crawl-interval">Interval — minutes between runs (optional)</label><br>
+      <input id="crawl-interval" class="field" type="number" min="0" value="360">
+      <p class="tuning-hint">Leave blank (or 0) to run once. A positive value repeats this crawl on that interval — see it, pause it, or delete it under Crawls further down — until disabled or its max runs (below) is reached.</p>
     </div>
     <div class="form-row">
-      <label for="crawl-interval">Interval — minutes between runs</label><br>
-      <input id="crawl-interval" class="field" type="number" min="1" value="60">
-      <p class="tuning-hint">Only used when repeating.</p>
+      <label for="crawl-max-runs">Max runs (optional)</label><br>
+      <input id="crawl-max-runs" class="field" type="number" min="0">
+      <p class="tuning-hint">Only used when repeating. Leave blank for unlimited — the schedule disables itself automatically after this many runs.</p>
     </div>
     <div class="form-row form-row-check">
       <label for="crawl-respect-robots">
@@ -153,8 +151,8 @@
   const crawlAllowOffDomain = document.getElementById('crawl-allow-off-domain');
   const crawlUseSitemap = document.getElementById('crawl-use-sitemap');
   const crawlPrioritizeUnindexed = document.getElementById('crawl-prioritize-unindexed');
-  const crawlRecurring = document.getElementById('crawl-recurring');
   const crawlInterval = document.getElementById('crawl-interval');
+  const crawlMaxRuns = document.getElementById('crawl-max-runs');
   const crawlUserAgent = document.getElementById('crawl-user-agent');
   const crawlFetchTimeout = document.getElementById('crawl-fetch-timeout');
   const crawlMinTextLength = document.getElementById('crawl-min-text-length');
@@ -218,11 +216,12 @@
   }
 
   // The submit button's label says exactly what it's about to do -- a
-  // one-off crawl reads "Crawl", a repeating one reads "Schedule".
+  // one-off crawl (interval left blank/0) reads "Crawl", a repeating one
+  // (positive interval) reads "Schedule".
   function updateSubmitLabel() {
-    crawlSubmitBtn.textContent = crawlRecurring.checked ? 'Schedule' : 'Crawl';
+    crawlSubmitBtn.textContent = (parseInt(crawlInterval.value, 10) || 0) > 0 ? 'Schedule' : 'Crawl';
   }
-  crawlRecurring.addEventListener('change', updateSubmitLabel);
+  crawlInterval.addEventListener('input', updateSubmitLabel);
   updateSubmitLabel();
 
   function capitalize(s) {
@@ -238,16 +237,36 @@
     return Math.floor(secs / 60) + 'm ' + Math.round(secs % 60) + 's';
   }
 
-  function viewButtonCell(jobID) {
+  function viewButtonCell(job) {
     const td = document.createElement('td');
     td.className = 'actions';
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'text-button';
-    btn.textContent = 'View';
-    btn.addEventListener('click', () => loadJobDetail(jobID));
-    td.appendChild(btn);
+    const viewBtn = document.createElement('button');
+    viewBtn.type = 'button';
+    viewBtn.className = 'text-button';
+    viewBtn.textContent = 'View';
+    viewBtn.addEventListener('click', () => loadJobDetail(job.id));
+    td.appendChild(viewBtn);
+    if (ACTIVE_STATUSES.includes(job.status)) {
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.className = 'text-button';
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.addEventListener('click', () => cancelJob(job.id, cancelBtn));
+      td.appendChild(cancelBtn);
+    }
     return td;
+  }
+
+  async function cancelJob(jobID, btn) {
+    setButtonLoading(btn, true, 'Cancelling…');
+    try {
+      await postJSON('/admin/api/crawl/jobs/' + encodeURIComponent(jobID) + '/cancel', {});
+      await loadJobs();
+    } catch (err) {
+      window.alert('Could not cancel: ' + err.message);
+    } finally {
+      setButtonLoading(btn, false);
+    }
   }
 
   // filterJobs applies the admin's regex (matched against the seed URLs
@@ -291,7 +310,7 @@
         textCell(capitalize(j.status)),
         textCell(String(j.pages_crawled), { num: true }),
         textCell(formatDuration(j.started_at, j.finished_at)),
-        viewButtonCell(j.id),
+        viewButtonCell(j),
       ],
     );
     jobsTableEl.appendChild(table);
@@ -478,7 +497,10 @@
   }
 
   function crawlRecurrenceCell(s) {
-    return textCell(s.recurring ? s.interval_minutes + ' min' : 'once');
+    if (!s.recurring) return textCell('once');
+    let label = s.interval_minutes + ' min';
+    if (s.max_runs > 0) label += ' (' + s.run_count + '/' + s.max_runs + ' runs)';
+    return textCell(label);
   }
 
   function crawlEnabledCell(s) {
@@ -561,7 +583,7 @@
       fetch_timeout_seconds: s.fetch_timeout_seconds, min_text_length: s.min_text_length,
       crawl_delay_ms: s.crawl_delay_ms, max_response_kb: s.max_response_kb,
       prioritize_unindexed: s.prioritize_unindexed,
-      recurring: s.recurring, interval_minutes: s.interval_minutes,
+      interval_minutes: s.interval_minutes, max_runs: s.max_runs,
       enabled: s.enabled,
     };
   }
@@ -598,8 +620,9 @@
       return;
     }
     const pages = parseInt(maxPages.value, 10) || 20;
-    const recurring = crawlRecurring.checked;
-    const interval = parseInt(crawlInterval.value, 10) || 60;
+    const interval = parseInt(crawlInterval.value, 10) || 0;
+    const recurring = interval > 0;
+    const maxRuns = parseInt(crawlMaxRuns.value, 10) || 0;
     const startingLabel = recurring ? 'Scheduling…' : 'Starting…';
     crawlStatus.textContent = startingLabel;
     setButtonLoading(crawlSubmitBtn, true, startingLabel);
@@ -619,11 +642,11 @@
         min_text_length: parseInt(crawlMinTextLength.value, 10) || 0,
         crawl_delay_ms: parseInt(crawlDelay.value, 10) || 0,
         max_response_kb: parseInt(crawlMaxResponse.value, 10) || 0,
-        recurring: recurring,
-        interval_minutes: recurring ? interval : 0,
+        interval_minutes: interval,
+        max_runs: maxRuns,
       });
       crawlStatus.textContent = recurring
-        ? 'Scheduled — repeats every ' + interval + ' minutes.'
+        ? 'Scheduled — repeats every ' + interval + ' minutes' + (maxRuns > 0 ? ' (up to ' + maxRuns + ' times)' : '') + '.'
         : 'Queued — starting within a few seconds.';
       await loadCrawls();
       if (!recurring) {

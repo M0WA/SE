@@ -65,7 +65,7 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			use_sitemap BOOLEAN, interval_minutes INTEGER NOT NULL,
 			fetch_timeout_seconds INTEGER NOT NULL DEFAULT 0, min_text_length INTEGER NOT NULL DEFAULT 0,
 			crawl_delay_ms INTEGER NOT NULL DEFAULT 0, max_response_kb INTEGER NOT NULL DEFAULT 0,
-			prioritize_unindexed BOOLEAN NOT NULL DEFAULT false, recurring BOOLEAN NOT NULL DEFAULT true,
+			prioritize_unindexed BOOLEAN NOT NULL DEFAULT false, recurring BOOLEAN NOT NULL DEFAULT true, max_runs INTEGER NOT NULL DEFAULT 0, run_count INTEGER NOT NULL DEFAULT 0,
 			enabled BOOLEAN NOT NULL DEFAULT true, last_run_at TEXT,
 			next_run_at TEXT NOT NULL, created_at TEXT NOT NULL
 		)`,
@@ -147,7 +147,7 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			use_sitemap BOOLEAN, interval_minutes INT NOT NULL,
 			fetch_timeout_seconds INT NOT NULL DEFAULT 0, min_text_length INT NOT NULL DEFAULT 0,
 			crawl_delay_ms INT NOT NULL DEFAULT 0, max_response_kb INT NOT NULL DEFAULT 0,
-			prioritize_unindexed BOOLEAN NOT NULL DEFAULT false, recurring BOOLEAN NOT NULL DEFAULT true,
+			prioritize_unindexed BOOLEAN NOT NULL DEFAULT false, recurring BOOLEAN NOT NULL DEFAULT true, max_runs INT NOT NULL DEFAULT 0, run_count INT NOT NULL DEFAULT 0,
 			enabled BOOLEAN NOT NULL DEFAULT true, last_run_at VARCHAR(64),
 			next_run_at VARCHAR(64) NOT NULL, created_at VARCHAR(64) NOT NULL
 		) ENGINE=InnoDB`,
@@ -230,7 +230,7 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			use_sitemap BOOLEAN, interval_minutes INT NOT NULL,
 			fetch_timeout_seconds INT NOT NULL DEFAULT 0, min_text_length INT NOT NULL DEFAULT 0,
 			crawl_delay_ms INT NOT NULL DEFAULT 0, max_response_kb INT NOT NULL DEFAULT 0,
-			prioritize_unindexed BOOLEAN NOT NULL DEFAULT false, recurring BOOLEAN NOT NULL DEFAULT true,
+			prioritize_unindexed BOOLEAN NOT NULL DEFAULT false, recurring BOOLEAN NOT NULL DEFAULT true, max_runs INTEGER NOT NULL DEFAULT 0, run_count INTEGER NOT NULL DEFAULT 0,
 			enabled BOOLEAN NOT NULL DEFAULT true, last_run_at TEXT,
 			next_run_at TEXT NOT NULL, created_at TEXT NOT NULL
 		)`,

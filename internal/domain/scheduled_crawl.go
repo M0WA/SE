@@ -38,10 +38,17 @@ type ScheduledCrawl struct {
 	PrioritizeUnindexed bool
 	Recurring           bool
 	IntervalMinutes     int
-	Enabled             bool
-	LastRunAt           *time.Time
-	NextRunAt           time.Time
-	CreatedAt           time.Time
+	// MaxRuns caps how many times a recurring schedule repeats before
+	// disabling itself, same as a non-recurring entry already disables
+	// after its one run -- 0 means unlimited (repeats forever until an
+	// admin disables or deletes it). Meaningless for a non-recurring entry,
+	// which already stops after run 1 regardless of this value.
+	MaxRuns   int
+	RunCount  int
+	Enabled   bool
+	LastRunAt *time.Time
+	NextRunAt time.Time
+	CreatedAt time.Time
 }
 
 var scheduledCrawlSeq int64

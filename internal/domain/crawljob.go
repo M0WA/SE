@@ -21,10 +21,11 @@ var ErrCrawlJobNotFound = errors.New("crawl job not found")
 type CrawlJobStatus string
 
 const (
-	CrawlJobQueued  CrawlJobStatus = "queued"
-	CrawlJobRunning CrawlJobStatus = "running"
-	CrawlJobDone    CrawlJobStatus = "done"
-	CrawlJobFailed  CrawlJobStatus = "failed"
+	CrawlJobQueued    CrawlJobStatus = "queued"
+	CrawlJobRunning   CrawlJobStatus = "running"
+	CrawlJobDone      CrawlJobStatus = "done"
+	CrawlJobFailed    CrawlJobStatus = "failed"
+	CrawlJobCancelled CrawlJobStatus = "cancelled"
 )
 
 // CrawlPageStatus is the outcome of one URL a crawl job attempted.
@@ -209,6 +210,20 @@ func (s *CrawlJobStore) MarkFailed(_ context.Context, id string, failErr error) 
 	if j, ok := s.jobs[id]; ok {
 		j.Status = CrawlJobFailed
 		j.Error = failErr.Error()
+		now := time.Now()
+		j.FinishedAt = &now
+	}
+	return nil
+}
+
+// MarkCancelled records that a job was stopped by an admin request before
+// it finished on its own -- distinct from MarkFailed so the UI can tell
+// "the admin cancelled this" apart from "this crawl actually errored out".
+func (s *CrawlJobStore) MarkCancelled(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if j, ok := s.jobs[id]; ok {
+		j.Status = CrawlJobCancelled
 		now := time.Now()
 		j.FinishedAt = &now
 	}

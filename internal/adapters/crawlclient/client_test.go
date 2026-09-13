@@ -137,6 +137,71 @@ func TestClient_GetCrawlJob_InvalidBaseURL(t *testing.T) {
 	}
 }
 
+func TestClient_CancelCrawlJob_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/jobs/job-1/cancel" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	}))
+	defer srv.Close()
+
+	c := crawlclient.New(srv.URL)
+	if err := c.CancelCrawlJob(context.Background(), "job-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestClient_CancelCrawlJob_NotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "crawl job not found", http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := crawlclient.New(srv.URL)
+	if err := c.CancelCrawlJob(context.Background(), "missing"); !errors.Is(err, ports.ErrCrawlJobNotFound) {
+		t.Errorf("expected ErrCrawlJobNotFound, got %v", err)
+	}
+}
+
+func TestClient_CancelCrawlJob_NotRunning(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "crawl job is not currently running", http.StatusConflict)
+	}))
+	defer srv.Close()
+
+	c := crawlclient.New(srv.URL)
+	if err := c.CancelCrawlJob(context.Background(), "job-1"); !errors.Is(err, ports.ErrCrawlJobNotRunning) {
+		t.Errorf("expected ErrCrawlJobNotRunning, got %v", err)
+	}
+}
+
+func TestClient_CancelCrawlJob_ServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := crawlclient.New(srv.URL)
+	if err := c.CancelCrawlJob(context.Background(), "job-1"); err == nil {
+		t.Error("expected error for a non-200/404/409 response")
+	}
+}
+
+func TestClient_CancelCrawlJob_ConnectionError(t *testing.T) {
+	c := crawlclient.New("http://127.0.0.1:1")
+	if err := c.CancelCrawlJob(context.Background(), "job-1"); err == nil {
+		t.Error("expected error for an unreachable crawl server")
+	}
+}
+
+func TestClient_CancelCrawlJob_InvalidBaseURL(t *testing.T) {
+	c := crawlclient.New("http://\x7f")
+	if err := c.CancelCrawlJob(context.Background(), "job-1"); err == nil {
+		t.Error("expected error when the base URL contains an invalid control character")
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

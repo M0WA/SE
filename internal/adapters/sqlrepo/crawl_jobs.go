@@ -103,6 +103,15 @@ func (r *Repository) MarkFailed(ctx context.Context, id string, failErr error) e
 	return nil
 }
 
+func (r *Repository) MarkCancelled(ctx context.Context, id string) error {
+	updateSQL := r.ph(`UPDATE crawl_jobs SET status = %s, finished_at = %s WHERE id = %s`, 1, 2, 3)
+	_, err := r.db.ExecContext(ctx, updateSQL, string(domain.CrawlJobCancelled), time.Now().UTC().Format(crawledAtLayout), id)
+	if err != nil {
+		return fmt.Errorf("marking crawl job %s cancelled: %w", id, err)
+	}
+	return nil
+}
+
 // Get returns the job and every one of its page events, oldest first
 // (insertion order, served by crawl_job_pages' own auto-increment primary
 // key). Returns domain.ErrCrawlJobNotFound if no job with this ID exists.

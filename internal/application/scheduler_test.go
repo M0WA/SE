@@ -60,7 +60,7 @@ func (f *fakeScheduledCrawlStore) DueScheduledCrawls(_ context.Context, now time
 	return due, nil
 }
 
-func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(_ context.Context, id string, lastRunAt, nextRunAt time.Time, enabled bool) error {
+func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(_ context.Context, id string, lastRunAt, nextRunAt time.Time, enabled bool, runCount int) error {
 	f.markCalls++
 	if f.markErr != nil {
 		return f.markErr
@@ -75,6 +75,7 @@ func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(_ context.Context, id st
 	s.LastRunAt = &lastRunAt
 	s.NextRunAt = nextRunAt
 	s.Enabled = enabled
+	s.RunCount = runCount
 	f.schedules[id] = s
 	return nil
 }
@@ -256,6 +257,78 @@ func TestTriggerDueCrawls_NonRecurringStaysDisabledOnDone(t *testing.T) {
 
 	if store.schedules["once"].Enabled {
 		t.Error("expected a non-recurring entry to stay disabled after onDone")
+	}
+}
+
+// TestTriggerDueCrawls_MaxRunsDisablesOnceReached proves a recurring
+// schedule with a MaxRuns cap disables itself the moment this run reaches
+// it, exactly like a non-recurring entry disables after its one run --
+// runCount (RunCount+1, this run included) is what's compared against
+// MaxRuns.
+func TestTriggerDueCrawls_MaxRunsDisablesOnceReached(t *testing.T) {
+	now := time.Now().UTC()
+	s := domain.ScheduledCrawl{
+		ID: "capped", SeedURLs: []string{"http://a"}, IntervalMinutes: 30,
+		Recurring: true, MaxRuns: 3, RunCount: 2, Enabled: true, NextRunAt: now.Add(-time.Minute),
+	}
+	store := newFakeScheduledCrawlStore(s)
+
+	trigger := func(context.Context, ports.CrawlOptions, func()) (string, error) { return "job-1", nil }
+	if _, err := application.TriggerDueCrawls(context.Background(), store, trigger, now); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	updated := store.schedules["capped"]
+	if updated.Enabled {
+		t.Error("expected the schedule to disable itself on reaching its MaxRuns cap")
+	}
+	if updated.RunCount != 3 {
+		t.Errorf("expected RunCount 3, got %d", updated.RunCount)
+	}
+}
+
+// TestTriggerDueCrawls_MaxRunsNotYetReachedStaysEnabled proves a schedule
+// below its MaxRuns cap keeps running normally, and RunCount advances by
+// exactly one per triggered run.
+func TestTriggerDueCrawls_MaxRunsNotYetReachedStaysEnabled(t *testing.T) {
+	now := time.Now().UTC()
+	s := domain.ScheduledCrawl{
+		ID: "capped", SeedURLs: []string{"http://a"}, IntervalMinutes: 30,
+		Recurring: true, MaxRuns: 5, RunCount: 1, Enabled: true, NextRunAt: now.Add(-time.Minute),
+	}
+	store := newFakeScheduledCrawlStore(s)
+
+	trigger := func(context.Context, ports.CrawlOptions, func()) (string, error) { return "job-1", nil }
+	if _, err := application.TriggerDueCrawls(context.Background(), store, trigger, now); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	updated := store.schedules["capped"]
+	if !updated.Enabled {
+		t.Error("expected the schedule to stay enabled below its MaxRuns cap")
+	}
+	if updated.RunCount != 2 {
+		t.Errorf("expected RunCount 2, got %d", updated.RunCount)
+	}
+}
+
+// TestTriggerDueCrawls_ZeroMaxRunsIsUnlimited proves MaxRuns 0 (the
+// default) never disables a recurring schedule no matter how high
+// RunCount climbs.
+func TestTriggerDueCrawls_ZeroMaxRunsIsUnlimited(t *testing.T) {
+	now := time.Now().UTC()
+	s := domain.ScheduledCrawl{
+		ID: "unlimited", SeedURLs: []string{"http://a"}, IntervalMinutes: 30,
+		Recurring: true, MaxRuns: 0, RunCount: 1000, Enabled: true, NextRunAt: now.Add(-time.Minute),
+	}
+	store := newFakeScheduledCrawlStore(s)
+
+	trigger := func(context.Context, ports.CrawlOptions, func()) (string, error) { return "job-1", nil }
+	if _, err := application.TriggerDueCrawls(context.Background(), store, trigger, now); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !store.schedules["unlimited"].Enabled {
+		t.Error("expected MaxRuns 0 to mean unlimited, staying enabled")
 	}
 }
 

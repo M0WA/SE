@@ -71,6 +71,29 @@ func (c *Client) GetCrawlJob(ctx context.Context, jobID string) (domain.CrawlJob
 	return out, nil
 }
 
+// CancelCrawlJob asks crawl-server to stop a queued or running job.
+func (c *Client) CancelCrawlJob(ctx context.Context, jobID string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/jobs/"+url.PathEscape(jobID)+"/cancel", nil)
+	if err != nil {
+		return fmt.Errorf("building cancel request: %w", err)
+	}
+
+	respBody, status, err := c.do(req)
+	if err != nil {
+		return err
+	}
+	switch status {
+	case http.StatusOK:
+		return nil
+	case http.StatusNotFound:
+		return ports.ErrCrawlJobNotFound
+	case http.StatusConflict:
+		return ports.ErrCrawlJobNotRunning
+	default:
+		return fmt.Errorf("crawl server returned %d: %s", status, bytes.TrimSpace(respBody))
+	}
+}
+
 // do sends req and returns its body and status code, or an error if the
 // request couldn't be made or its response body couldn't be read.
 func (c *Client) do(req *http.Request) ([]byte, int, error) {

@@ -47,7 +47,7 @@ func (f *fakeScheduledCrawlStore) DeleteScheduledCrawl(_ context.Context, id str
 func (f *fakeScheduledCrawlStore) DueScheduledCrawls(context.Context, time.Time) ([]domain.ScheduledCrawl, error) {
 	return nil, nil
 }
-func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(context.Context, string, time.Time, time.Time, bool) error {
+func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(context.Context, string, time.Time, time.Time, bool, int) error {
 	return nil
 }
 
@@ -136,7 +136,7 @@ func TestHandleAdminSchedules_PostCreatesRecurringCrawl(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithSchedules(t, store)
 	body, _ := json.Marshal(map[string]interface{}{
 		"seed_urls": []string{"http://a.example"}, "max_pages": 15,
-		"recurring": true, "interval_minutes": 20, "respect_robots": true, "use_sitemap": true,
+		"interval_minutes": 20, "respect_robots": true, "use_sitemap": true,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
 	req.AddCookie(cookie)
@@ -175,7 +175,7 @@ func TestHandleAdminSchedules_PostCreatesOneOffCrawl(t *testing.T) {
 	store := &fakeScheduledCrawlStore{}
 	h, cookie := adminAuthedHandlerWithSchedules(t, store)
 	body, _ := json.Marshal(map[string]interface{}{
-		"seed_urls": []string{"http://a.example"}, "max_pages": 15, "recurring": false,
+		"seed_urls": []string{"http://a.example"}, "max_pages": 15,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
 	req.AddCookie(cookie)
@@ -206,7 +206,7 @@ func TestHandleAdminSchedules_PostReusesExistingScheduleForSameDomain(t *testing
 	}}
 	h, cookie := adminAuthedHandlerWithSchedules(t, store)
 	body, _ := json.Marshal(map[string]interface{}{
-		"seed_urls": []string{"http://a.example/new-path"}, "max_pages": 30, "recurring": true, "interval_minutes": 45,
+		"seed_urls": []string{"http://a.example/new-path"}, "max_pages": 30, "interval_minutes": 45,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
 	req.AddCookie(cookie)
@@ -236,7 +236,7 @@ func TestHandleAdminSchedules_PostDifferentDomainCreatesNewSchedule(t *testing.T
 	}}
 	h, cookie := adminAuthedHandlerWithSchedules(t, store)
 	body, _ := json.Marshal(map[string]interface{}{
-		"seed_urls": []string{"http://b.example"}, "max_pages": 10, "recurring": false,
+		"seed_urls": []string{"http://b.example"}, "max_pages": 10,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
 	req.AddCookie(cookie)
@@ -255,7 +255,7 @@ func TestHandleAdminSchedules_PostDomainLookupServiceError(t *testing.T) {
 	store := &fakeScheduledCrawlStore{listErr: errors.New("boom")}
 	h, cookie := adminAuthedHandlerWithSchedules(t, store)
 	body, _ := json.Marshal(map[string]interface{}{
-		"seed_urls": []string{"http://a.example"}, "max_pages": 10, "recurring": false,
+		"seed_urls": []string{"http://a.example"}, "max_pages": 10,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
 	req.AddCookie(cookie)
@@ -268,7 +268,7 @@ func TestHandleAdminSchedules_PostDomainLookupServiceError(t *testing.T) {
 
 func TestHandleAdminSchedules_PostEmptySeedURLs(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithSchedules(t, &fakeScheduledCrawlStore{})
-	body, _ := json.Marshal(map[string]interface{}{"recurring": true, "interval_minutes": 20})
+	body, _ := json.Marshal(map[string]interface{}{"interval_minutes": 20})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
@@ -278,30 +278,68 @@ func TestHandleAdminSchedules_PostEmptySeedURLs(t *testing.T) {
 	}
 }
 
-func TestHandleAdminSchedules_PostRecurringWithZeroInterval(t *testing.T) {
-	h, cookie := adminAuthedHandlerWithSchedules(t, &fakeScheduledCrawlStore{})
-	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}, "recurring": true})
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d", rec.Code)
-	}
-}
-
-// TestHandleAdminSchedules_PostNonRecurringIgnoresZeroInterval proves a
-// non-recurring entry never needs interval_minutes -- the validation that
-// requires it only applies when recurring is true.
-func TestHandleAdminSchedules_PostNonRecurringIgnoresZeroInterval(t *testing.T) {
-	h, cookie := adminAuthedHandlerWithSchedules(t, &fakeScheduledCrawlStore{})
-	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}, "recurring": false})
+// TestHandleAdminSchedules_PostNoIntervalMeansOneOff proves omitting
+// interval_minutes entirely (the zero value) is a perfectly valid one-off
+// crawl -- there's no separate "recurring" flag to set, and no validation
+// error for leaving the interval blank.
+func TestHandleAdminSchedules_PostNoIntervalMeansOneOff(t *testing.T) {
+	store := &fakeScheduledCrawlStore{}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Errorf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.created.Recurring {
+		t.Error("expected a blank interval to mean one-off, not recurring")
+	}
+}
+
+func TestHandleAdminSchedules_PostNegativeIntervalRejected(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithSchedules(t, &fakeScheduledCrawlStore{})
+	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}, "interval_minutes": -5})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminSchedules_PostNegativeMaxRunsRejected(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithSchedules(t, &fakeScheduledCrawlStore{})
+	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}, "interval_minutes": 30, "max_runs": -1})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+// TestHandleAdminSchedules_PostMaxRunsPassesThrough proves an optional
+// MaxRuns cap on a recurring crawl is stored, and 0 (the default, omitted
+// here) means unlimited elsewhere.
+func TestHandleAdminSchedules_PostMaxRunsPassesThrough(t *testing.T) {
+	store := &fakeScheduledCrawlStore{}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	body, _ := json.Marshal(map[string]interface{}{
+		"seed_urls": []string{"http://a"}, "interval_minutes": 30, "max_runs": 5,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.created.MaxRuns != 5 {
+		t.Errorf("expected MaxRuns 5, got %d", store.created.MaxRuns)
 	}
 }
 

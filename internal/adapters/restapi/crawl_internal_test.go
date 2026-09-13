@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -292,6 +293,212 @@ func TestHandleCrawlInternal_ConcurrentJobsAllComplete(t *testing.T) {
 			t.Errorf("expected job %s done, got %s", id, job.Status)
 		}
 	}
+}
+
+// blockingCrawler blocks until its context is cancelled (or released),
+// returning ctx.Err() -- the stand-in for a real crawl in flight when a
+// test needs to cancel a job while it's actually running (or still queued
+// behind maxConcurrentCrawls). started is closed the instant Crawl is
+// entered, so a test can tell "queued, never started" apart from "running,
+// then cancelled".
+type blockingCrawler struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func newBlockingCrawler() *blockingCrawler {
+	return &blockingCrawler{started: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (b *blockingCrawler) Crawl(ctx context.Context, _ ports.CrawlOptions, _ func(domain.CrawlPageEvent)) (int, error) {
+	close(b.started)
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case <-b.release:
+		return 0, nil
+	}
+}
+
+// TestCancelCrawlJob_StopsARunningJob proves cancelling a job that's
+// already fetching stops it promptly (via crawlLoop/the fetch's own
+// context, not just a flag runCrawlJob happens to check later) and records
+// it as cancelled, distinct from failed.
+func TestCancelCrawlJob_StopsARunningJob(t *testing.T) {
+	bc := newBlockingCrawler()
+	h := restapi.New(restapi.Config{Crawler: bc, CrawlJobs: domain.NewCrawlJobStore()})
+	jobID := startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"http://a"}})
+
+	select {
+	case <-bc.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the crawl to start")
+	}
+
+	if !h.CancelCrawlJob(jobID) {
+		t.Fatal("expected CancelCrawlJob to find and cancel the running job")
+	}
+
+	job := waitForJobStatus(t, h, jobID, domain.CrawlJobCancelled)
+	if job.FinishedAt == nil {
+		t.Error("expected FinishedAt to be set on a cancelled job")
+	}
+}
+
+// TestCancelCrawlJob_StopsAQueuedJob proves a job cancelled before it ever
+// acquires crawlSem never calls Crawl at all -- cancellation works on the
+// queue, not just on an already-running fetch. maxConcurrentCrawls (3, see
+// crawl_internal.go) concurrency slots are filled with jobs that never
+// release, so one more job queues behind crawlSem instead of running
+// immediately.
+func TestCancelCrawlJob_StopsAQueuedJob(t *testing.T) {
+	const maxConcurrentCrawlsForTest = 3
+	dispatch := &dispatchingCrawler{}
+	h := restapi.New(restapi.Config{Crawler: dispatch, CrawlJobs: domain.NewCrawlJobStore()})
+
+	blockers := make([]*blockingCrawler, maxConcurrentCrawlsForTest)
+	for i := range blockers {
+		blockers[i] = newBlockingCrawler()
+		dispatch.push(blockers[i])
+		startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"http://a"}})
+	}
+	for _, bc := range blockers {
+		select {
+		case <-bc.started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for a blocking slot to start")
+		}
+	}
+	defer func() {
+		for _, bc := range blockers {
+			close(bc.release)
+		}
+	}()
+
+	queuedCrawler := newBlockingCrawler()
+	dispatch.push(queuedCrawler)
+	queuedJobID := startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"http://b"}})
+
+	// Give the queued job a moment to (incorrectly) start if cancellation
+	// didn't actually stop it before crawlSem admitted it.
+	time.Sleep(20 * time.Millisecond)
+
+	if !h.CancelCrawlJob(queuedJobID) {
+		t.Fatal("expected CancelCrawlJob to find and cancel the queued job")
+	}
+	waitForJobStatus(t, h, queuedJobID, domain.CrawlJobCancelled)
+
+	select {
+	case <-queuedCrawler.started:
+		t.Error("expected the queued job's Crawl to never be entered once cancelled")
+	default:
+	}
+}
+
+// dispatchingCrawler hands out a queue of *blockingCrawler in FIFO order,
+// one per Crawl call -- lets a test control exactly which call gets which
+// controllable fake, needed when several jobs are in flight against
+// crawlSem at once.
+type dispatchingCrawler struct {
+	mu    sync.Mutex
+	queue []*blockingCrawler
+}
+
+func (d *dispatchingCrawler) push(bc *blockingCrawler) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.queue = append(d.queue, bc)
+}
+
+func (d *dispatchingCrawler) Crawl(ctx context.Context, opts ports.CrawlOptions, onPage func(domain.CrawlPageEvent)) (int, error) {
+	d.mu.Lock()
+	bc := d.queue[0]
+	d.queue = d.queue[1:]
+	d.mu.Unlock()
+	return bc.Crawl(ctx, opts, onPage)
+}
+
+// waitForJobStatus polls GET /jobs/{id} until it reaches want, failing the
+// test if it times out or reaches a different terminal status first.
+func waitForJobStatus(t *testing.T, h *restapi.Handler, jobID string, want domain.CrawlJobStatus) domain.CrawlJob {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		req := httptest.NewRequest(http.MethodGet, "/jobs/"+jobID, nil)
+		rec := httptest.NewRecorder()
+		h.RoutesCrawlInternal().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 fetching job, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var job domain.CrawlJob
+		if err := json.Unmarshal(rec.Body.Bytes(), &job); err != nil {
+			t.Fatalf("decoding job: %v", err)
+		}
+		if job.Status == want {
+			return job
+		}
+		if job.Status == domain.CrawlJobDone || job.Status == domain.CrawlJobFailed {
+			t.Fatalf("expected job status %s, got terminal status %s instead", want, job.Status)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for crawl job to reach status %s", want)
+	return domain.CrawlJob{}
+}
+
+// TestCancelCrawlJob_UnknownJobReturnsFalse proves cancelling a job ID this
+// process never registered a cancel func for (never existed, or already
+// finished and was unregistered) is a clean no-op, not a panic.
+func TestCancelCrawlJob_UnknownJobReturnsFalse(t *testing.T) {
+	h := newCrawlServerHandler(&fakeCrawler{})
+	if h.CancelCrawlJob("does-not-exist") {
+		t.Error("expected CancelCrawlJob to report false for an unknown job")
+	}
+}
+
+func TestHandleCancelCrawlJob_NotFound(t *testing.T) {
+	h := newCrawlServerHandler(&fakeCrawler{})
+	req := httptest.NewRequest(http.MethodPost, "/jobs/does-not-exist/cancel", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesCrawlInternal().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleCancelCrawlJob_AlreadyFinishedConflicts proves cancelling a job
+// that already reached a terminal status (nothing left to cancel) is a 409,
+// not silently a 200 or a 404 (it does exist).
+func TestHandleCancelCrawlJob_AlreadyFinishedConflicts(t *testing.T) {
+	h := newCrawlServerHandler(&fakeCrawler{count: 1})
+	jobID := startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"http://a"}})
+	waitForJob(t, h, jobID)
+
+	req := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/cancel", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesCrawlInternal().ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Errorf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleCancelCrawlJob_Success(t *testing.T) {
+	bc := newBlockingCrawler()
+	h := restapi.New(restapi.Config{Crawler: bc, CrawlJobs: domain.NewCrawlJobStore()})
+	jobID := startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"http://a"}})
+	select {
+	case <-bc.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the crawl to start")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/jobs/"+jobID+"/cancel", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesCrawlInternal().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	waitForJobStatus(t, h, jobID, domain.CrawlJobCancelled)
 }
 
 // pageEmittingFakeCrawler actually invokes onPage (unlike fakeCrawler,

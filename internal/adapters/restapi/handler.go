@@ -1,9 +1,11 @@
 package restapi
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"net/http"
+	"sync"
 
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
@@ -59,6 +61,8 @@ type Handler struct {
 	crawler         ports.CrawlerService
 	crawlJobs       ports.CrawlJobStore
 	crawlSem        chan struct{}
+	cancelMu        sync.Mutex
+	cancelFuncs     map[string]context.CancelFunc
 	jobs            ports.CrawlJobService
 	debug           ports.DebugSearchService
 	admin           ports.AdminRepository
@@ -142,6 +146,7 @@ func New(cfg Config) *Handler {
 		crawler:         cfg.Crawler,
 		crawlJobs:       cfg.CrawlJobs,
 		crawlSem:        make(chan struct{}, maxConcurrentCrawls),
+		cancelFuncs:     make(map[string]context.CancelFunc),
 		jobs:            cfg.Jobs,
 		debug:           cfg.Debug,
 		admin:           cfg.Admin,
@@ -213,6 +218,7 @@ func (h *Handler) RoutesAdmin() *http.ServeMux {
 	mux.HandleFunc("/admin/api/overrides", h.requireAuthAPI(h.handleAdminOverrides))
 	mux.HandleFunc("/admin/api/crawl/jobs", h.requireAuthAPI(h.handleAdminCrawlJobs))
 	mux.HandleFunc("GET /admin/api/crawl/jobs/{id}", h.requireAuthAPI(h.handleAdminCrawlJob))
+	mux.HandleFunc("POST /admin/api/crawl/jobs/{id}/cancel", h.requireAuthAPI(h.handleAdminCancelCrawlJob))
 	mux.HandleFunc("/admin/api/schedules", h.requireAuthAPI(h.handleAdminSchedules))
 	mux.HandleFunc("DELETE /admin/api/schedules/{id}", h.requireAuthAPI(h.handleAdminDeleteSchedule))
 	mux.HandleFunc("PATCH /admin/api/schedules/{id}", h.requireAuthAPI(h.handleAdminUpdateSchedule))

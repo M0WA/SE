@@ -27,7 +27,11 @@ import (
 // waiting for onDone: since its "interval" is meaningless, leaving it
 // enabled with next_run_at=now would just have the very next tick trigger
 // it again. onDone still fires for it (recording the real finish time as
-// last_run_at), it just re-affirms disabled rather than re-enabling it.
+// last_run_at), it just re-affirms disabled rather than re-enabling it. A
+// recurring entry with a positive MaxRuns is disabled the same way once
+// this run reaches that cap -- runCount (this run included) is computed
+// once per entry and passed to both MarkScheduledCrawlRun calls below, so
+// the placeholder and the onDone correction always agree on it.
 //
 // A trigger failure for one entry is logged and skipped, not fatal: its
 // next_run_at is left untouched, so the next tick retries it rather than
@@ -41,9 +45,11 @@ func TriggerDueCrawls(ctx context.Context, store ports.ScheduledCrawlStore, trig
 	triggered := 0
 	for _, s := range due {
 		interval := time.Duration(s.IntervalMinutes) * time.Minute
+		runCount := s.RunCount + 1
+		stillEnabled := s.Recurring && (s.MaxRuns <= 0 || runCount < s.MaxRuns)
 		onDone := func() {
 			finishedAt := time.Now()
-			if err := store.MarkScheduledCrawlRun(context.Background(), s.ID, finishedAt, finishedAt.Add(interval), s.Recurring); err != nil {
+			if err := store.MarkScheduledCrawlRun(context.Background(), s.ID, finishedAt, finishedAt.Add(interval), stillEnabled, runCount); err != nil {
 				log.Printf("recording completion for scheduled crawl %s: %v", s.ID, err)
 			}
 		}
@@ -55,7 +61,7 @@ func TriggerDueCrawls(ctx context.Context, store ports.ScheduledCrawlStore, trig
 		}
 
 		nextRun := now.Add(interval)
-		if err := store.MarkScheduledCrawlRun(ctx, s.ID, now, nextRun, s.Recurring); err != nil {
+		if err := store.MarkScheduledCrawlRun(ctx, s.ID, now, nextRun, stillEnabled, runCount); err != nil {
 			log.Printf("recording run for scheduled crawl %s (job %s): %v", s.ID, jobID, err)
 			continue
 		}

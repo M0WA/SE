@@ -114,6 +114,21 @@ func TestCrawlJobStore_MarkFailedRecordsError(t *testing.T) {
 	}
 }
 
+func TestCrawlJobStore_MarkCancelledSetsFinishedAt(t *testing.T) {
+	ctx := context.Background()
+	s := domain.NewCrawlJobStore()
+	job, _ := s.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://a"}})
+	_ = s.MarkRunning(ctx, job.ID)
+	_ = s.MarkCancelled(ctx, job.ID)
+	got, _ := s.Get(ctx, job.ID)
+	if got.Status != domain.CrawlJobCancelled {
+		t.Errorf("expected cancelled, got %s", got.Status)
+	}
+	if got.FinishedAt == nil {
+		t.Error("expected FinishedAt to be set on cancellation too")
+	}
+}
+
 func TestCrawlJobStore_GetUnknownIDReportsNotFound(t *testing.T) {
 	ctx := context.Background()
 	s := domain.NewCrawlJobStore()

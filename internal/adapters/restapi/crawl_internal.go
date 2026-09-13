@@ -25,6 +25,7 @@ func (h *Handler) RoutesCrawlInternal() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /jobs", h.handleListCrawlJobs)
 	mux.HandleFunc("GET /jobs/{id}", h.handleGetCrawlJob)
+	mux.HandleFunc("POST /jobs/{id}/cancel", h.handleCancelCrawlJob)
 	mux.HandleFunc("/healthz", h.handleHealthz)
 	return mux
 }
@@ -96,31 +97,58 @@ func (h *Handler) ResumeCrawlJob(jobID string, opts ports.CrawlOptions) {
 }
 
 // runCrawlJob executes opts in the background against job.ID's tracked
-// state. It uses context.Background(), not the triggering request's
-// context, since the crawl must keep running after that request returns.
+// state. Store writes (MarkRunning/AppendPage/MarkDone/MarkFailed/
+// MarkCancelled) always use a fresh context.Background(), not the crawl's
+// own cancelable one, since the job's final state still needs to be
+// recorded even after that context is cancelled -- and the crawl must keep
+// running after the triggering request's own context returns regardless.
 // A store error along the way (the persistent store is unreachable, say)
 // is logged rather than aborting the crawl itself -- losing this job's
 // history is far less harmful than silently losing already-crawled pages.
+//
+// A cancel func is registered under jobID for the job's entire lifetime,
+// including while it's still queued behind maxConcurrentCrawls -- so
+// CancelCrawlJob can stop a job before it even starts fetching, not just
+// while it's actively running.
 func (h *Handler) runCrawlJob(jobID string, opts ports.CrawlOptions) {
-	h.crawlSem <- struct{}{}
+	crawlCtx, cancel := context.WithCancel(context.Background())
+	h.registerCancel(jobID, cancel)
+	defer h.unregisterCancel(jobID)
+	defer cancel()
+
+	storeCtx := context.Background()
+
+	select {
+	case h.crawlSem <- struct{}{}:
+	case <-crawlCtx.Done():
+		if err := h.crawlJobs.MarkCancelled(storeCtx, jobID); err != nil {
+			log.Printf("crawl job %s: marking cancelled: %v", jobID, err)
+		}
+		return
+	}
 	defer func() { <-h.crawlSem }()
 
-	ctx := context.Background()
-	if err := h.crawlJobs.MarkRunning(ctx, jobID); err != nil {
+	if err := h.crawlJobs.MarkRunning(storeCtx, jobID); err != nil {
 		log.Printf("crawl job %s: marking running: %v", jobID, err)
 	}
-	_, err := h.crawler.Crawl(ctx, opts, func(ev domain.CrawlPageEvent) {
-		if err := h.crawlJobs.AppendPage(ctx, jobID, ev); err != nil {
+	_, err := h.crawler.Crawl(crawlCtx, opts, func(ev domain.CrawlPageEvent) {
+		if err := h.crawlJobs.AppendPage(storeCtx, jobID, ev); err != nil {
 			log.Printf("crawl job %s: appending page event: %v", jobID, err)
 		}
 	})
 	if err != nil {
-		if markErr := h.crawlJobs.MarkFailed(ctx, jobID, err); markErr != nil {
+		if errors.Is(err, context.Canceled) {
+			if markErr := h.crawlJobs.MarkCancelled(storeCtx, jobID); markErr != nil {
+				log.Printf("crawl job %s: marking cancelled: %v", jobID, markErr)
+			}
+			return
+		}
+		if markErr := h.crawlJobs.MarkFailed(storeCtx, jobID, err); markErr != nil {
 			log.Printf("crawl job %s: marking failed: %v", jobID, markErr)
 		}
 		return
 	}
-	if err := h.crawlJobs.MarkDone(ctx, jobID); err != nil {
+	if err := h.crawlJobs.MarkDone(storeCtx, jobID); err != nil {
 		log.Printf("crawl job %s: marking done: %v", jobID, err)
 	}
 	// A crawl just changed the link graph -- give the caller (cmd/crawl, to
@@ -129,6 +157,52 @@ func (h *Handler) runCrawlJob(jobID string, opts ports.CrawlOptions) {
 	if h.onCrawlComplete != nil {
 		h.onCrawlComplete()
 	}
+}
+
+func (h *Handler) registerCancel(jobID string, cancel context.CancelFunc) {
+	h.cancelMu.Lock()
+	defer h.cancelMu.Unlock()
+	h.cancelFuncs[jobID] = cancel
+}
+
+func (h *Handler) unregisterCancel(jobID string) {
+	h.cancelMu.Lock()
+	defer h.cancelMu.Unlock()
+	delete(h.cancelFuncs, jobID)
+}
+
+// CancelCrawlJob stops a queued or running job by cancelling its context,
+// and reports whether it found one to cancel -- false means jobID isn't
+// currently queued/running in this process (already finished, never
+// existed, or -- after a crawl-server restart -- recovered under a fresh
+// context that predates this call, which is fine: the old registration
+// died with the old process, and a freshly recovered job is cancelable
+// again as soon as ResumeCrawlJob re-registers it).
+func (h *Handler) CancelCrawlJob(jobID string) bool {
+	h.cancelMu.Lock()
+	cancel, ok := h.cancelFuncs[jobID]
+	h.cancelMu.Unlock()
+	if !ok {
+		return false
+	}
+	cancel()
+	return true
+}
+
+// handleCancelCrawlJob is crawl-server's own cancel endpoint -- called only
+// by admin-server's crawlclient.Client, never directly reachable from the
+// internet (see RoutesCrawlInternal's doc comment).
+func (h *Handler) handleCancelCrawlJob(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if h.CancelCrawlJob(id) {
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
+	if _, err := h.crawlJobs.Get(r.Context(), id); errors.Is(err, domain.ErrCrawlJobNotFound) {
+		http.Error(w, "crawl job not found", http.StatusNotFound)
+		return
+	}
+	http.Error(w, ports.ErrCrawlJobNotRunning.Error(), http.StatusConflict)
 }
 
 func (h *Handler) handleListCrawlJobs(w http.ResponseWriter, r *http.Request) {

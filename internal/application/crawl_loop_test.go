@@ -626,6 +626,34 @@ func TestCrawlLoop_CancelledContextDuringDelayStopsTheCrawl(t *testing.T) {
 	}
 }
 
+// TestCrawlLoop_AlreadyCancelledContextStopsBeforeAnyFetch proves the loop
+// checks ctx itself on every iteration (not only inside the crawl-delay
+// wait, which only ever runs between fetches when CrawlDelayMs > 0) -- a
+// context cancelled before crawlLoop is even called (or with no delay
+// configured at all) must still stop it from fetching, since this is what
+// Handler.CancelCrawlJob relies on to stop a running crawl promptly.
+func TestCrawlLoop_AlreadyCancelledContextStopsBeforeAnyFetch(t *testing.T) {
+	fetcher := &scopedFetcher{pages: map[string]string{"http://a/1": "<html>a</html>"}}
+	parse := func(html, pageURL string) (string, string, []string) { return "T", "irrelevant", nil }
+	save := func(ctx context.Context, doc domain.Document) error { return nil }
+	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	opts := ports.CrawlOptions{SeedURLs: []string{"http://a/1"}, MaxPages: 5}
+	count, err := crawlLoop(ctx, fetcher, nil, parse, settings, opts, nil, save, nil)
+	if err == nil {
+		t.Fatal("expected the already-cancelled context to surface as an error")
+	}
+	if count != 0 {
+		t.Errorf("expected no pages counted, got %d", count)
+	}
+	if len(fetcher.times) != 0 {
+		t.Errorf("expected no fetch to happen at all, got %d calls", len(fetcher.times))
+	}
+}
+
 func TestCrawlLoop_UseSitemapEnqueuesDiscoveredURLs(t *testing.T) {
 	fetcher := &scopedFetcher{pages: map[string]string{
 		"http://a.example/start":        "<html>start</html>",

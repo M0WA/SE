@@ -115,16 +115,15 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 	}
 
 	// Every crawl -- one-off or recurring -- is created the same way: a
-	// scheduled_crawls entry (see domain.ScheduledCrawl). "recurring: false"
-	// is a plain one-off crawl, due immediately; crawl-server's scheduler
-	// ticker (application.TriggerDueCrawls, run here directly rather than
-	// waiting on cmd/crawl/main.go's real polling loop) is what actually
-	// executes it, exactly as production does.
+	// scheduled_crawls entry (see domain.ScheduledCrawl). Omitting
+	// interval_minutes (0) is a plain one-off crawl, due immediately;
+	// crawl-server's scheduler ticker (application.TriggerDueCrawls, run
+	// here directly rather than waiting on cmd/crawl/main.go's real polling
+	// loop) is what actually executes it, exactly as production does.
 	crawlBody, _ := json.Marshal(map[string]interface{}{
 		"seed_urls":      []string{site.URL + "/"},
 		"max_pages":      10,
 		"respect_robots": true,
-		"recurring":      false,
 	})
 	resp, err := client.Post(adminAPI.URL+"/admin/api/schedules", "application/json", bytes.NewReader(crawlBody))
 	if err != nil {
