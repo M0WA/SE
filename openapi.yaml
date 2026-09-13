@@ -913,6 +913,7 @@ components:
         last_recompute_documents: { type: integer, description: How many documents that run scored. }
         last_recompute_iterations: { type: integer, description: How many iterations that run took. }
         last_recompute_final_delta: { type: number, description: That run's final convergence delta. }
+        last_recompute_duration_ms: { type: integer, description: "Wall-clock time that run took, covering the link-graph read, the algorithm, and writing scores back." }
 
     PageRankRecomputeResult:
       type: object

@@ -2296,6 +2296,7 @@ func TestHandleAdminPageRankRecompute_PersistsStatusForGetToRead(t *testing.T) {
 		LastRecomputedAt        *string `json:"last_recomputed_at"`
 		LastRecomputeDocuments  int     `json:"last_recompute_documents"`
 		LastRecomputeIterations int     `json:"last_recompute_iterations"`
+		LastRecomputeDurationMs int64   `json:"last_recompute_duration_ms"`
 	}
 	if err := json.Unmarshal(getRec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decoding response: %v", err)
@@ -2311,6 +2312,9 @@ func TestHandleAdminPageRankRecompute_PersistsStatusForGetToRead(t *testing.T) {
 	}
 	if resp.LastRecomputeIterations <= 0 {
 		t.Errorf("expected a positive last_recompute_iterations, got %d", resp.LastRecomputeIterations)
+	}
+	if resp.LastRecomputeDurationMs < 0 {
+		t.Errorf("expected a non-negative last_recompute_duration_ms, got %d", resp.LastRecomputeDurationMs)
 	}
 }
 
@@ -2346,6 +2350,9 @@ func TestHandleAdminPageRankRecompute_EmptyGraphReportsRealZeroes(t *testing.T) 
 	}
 	if _, ok := resp["last_recompute_iterations"]; !ok {
 		t.Error("expected last_recompute_iterations present (as 0), not omitted, for an empty-graph run")
+	}
+	if _, ok := resp["last_recompute_duration_ms"]; !ok {
+		t.Error("expected last_recompute_duration_ms present (as 0), not omitted, for an empty-graph run")
 	}
 	if resp["last_recompute_documents"] != float64(0) {
 		t.Errorf("expected last_recompute_documents=0, got %+v", resp["last_recompute_documents"])

@@ -20,14 +20,18 @@ const PageRankMaxIterations = 50
 // this, the scores are considered settled and iteration stops early.
 const PageRankEpsilon = 1e-6
 
-// PageRankRunInfo reports how a PageRank computation actually ran --
-// how many iterations it took and how far the final iteration still was
-// from full convergence. Neither number is observable from the returned
-// scores alone, and both are useful diagnostics for the admin PageRank
-// debug page after a forced recompute.
+// PageRankRunInfo reports how a PageRank computation actually ran -- how
+// many iterations it took, how far the final iteration still was from full
+// convergence, and how long the run took wall-clock. None of these are
+// observable from the returned scores alone, and all are useful
+// diagnostics for the admin PageRank debug page after a forced recompute.
+// DurationMs is set by application.RunPageRankJob (it covers the whole job
+// -- reading the link graph, running the algorithm, and writing scores
+// back -- not just the in-memory iteration below), not by PageRank itself.
 type PageRankRunInfo struct {
 	Iterations int     `json:"iterations,omitempty"`
 	FinalDelta float64 `json:"final_delta,omitempty"`
+	DurationMs int64   `json:"duration_ms,omitempty"`
 }
 
 // PageRankStatus is the persisted, cross-process-visible record of the

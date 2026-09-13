@@ -84,6 +84,7 @@
       kvRow(lastRunEl, 'Documents scored', String(s.last_recompute_documents));
       kvRow(lastRunEl, 'Iterations run', String(s.last_recompute_iterations));
       kvRow(lastRunEl, 'Final convergence delta', s.last_recompute_final_delta.toExponential(3));
+      kvRow(lastRunEl, 'Duration', s.last_recompute_duration_ms + ' ms');
     }
 
     clear(configEl);

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"searchengine/internal/application"
 	"searchengine/internal/domain"
@@ -44,12 +45,16 @@ func (s *fakeSettingsStore) GetSetting(_ context.Context, key string) (string, b
 type fakePageRankRepo struct {
 	graph             map[string][]string
 	linkGraphErr      error
+	linkGraphDelay    time.Duration
 	updated           map[string]float64
 	updatePageRankErr error
 	updateCalls       int
 }
 
 func (r *fakePageRankRepo) LinkGraph(context.Context) (map[string][]string, error) {
+	if r.linkGraphDelay > 0 {
+		time.Sleep(r.linkGraphDelay)
+	}
 	if r.linkGraphErr != nil {
 		return nil, r.linkGraphErr
 	}
@@ -90,6 +95,23 @@ func TestRunPageRankJob_ComputesAndWritesScores(t *testing.T) {
 	}
 	if result.Iterations <= 0 {
 		t.Errorf("expected a positive iteration count, got %d", result.Iterations)
+	}
+}
+
+// TestRunPageRankJob_RecordsDuration proves DurationMs covers the whole
+// job (LinkGraph included), not just the in-memory PageRank iteration --
+// an artificial delay in LinkGraph must show up in the reported duration.
+func TestRunPageRankJob_RecordsDuration(t *testing.T) {
+	repo := &fakePageRankRepo{
+		graph:          map[string][]string{"a": {"b"}, "b": {"a"}},
+		linkGraphDelay: 5 * time.Millisecond,
+	}
+	result, err := application.RunPageRankJob(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.DurationMs < 5 {
+		t.Errorf("expected DurationMs to reflect the ~5ms LinkGraph delay, got %d", result.DurationMs)
 	}
 }
 
@@ -141,7 +163,7 @@ func TestRunPageRankJobWithStatus_RecordsCompletedRun(t *testing.T) {
 	if status.LastRunAt.IsZero() {
 		t.Error("expected LastRunAt to be set")
 	}
-	if status.Documents != result.Documents || status.Iterations != result.Iterations || status.FinalDelta != result.FinalDelta {
+	if status.Documents != result.Documents || status.Iterations != result.Iterations || status.FinalDelta != result.FinalDelta || status.DurationMs != result.DurationMs {
 		t.Errorf("expected persisted status to match the run result, got %+v want %+v", status, result)
 	}
 }

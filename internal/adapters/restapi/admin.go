@@ -1045,6 +1045,7 @@ type adminPageRankResponse struct {
 	LastRecomputeDocuments  int     `json:"last_recompute_documents"`
 	LastRecomputeIterations int     `json:"last_recompute_iterations"`
 	LastRecomputeFinalDelta float64 `json:"last_recompute_final_delta"`
+	LastRecomputeDurationMs int64   `json:"last_recompute_duration_ms"`
 }
 
 func (h *Handler) handleAdminPageRank(w http.ResponseWriter, r *http.Request) {
@@ -1082,6 +1083,7 @@ func (h *Handler) handleAdminPageRank(w http.ResponseWriter, r *http.Request) {
 		resp.LastRecomputeDocuments = status.Documents
 		resp.LastRecomputeIterations = status.Iterations
 		resp.LastRecomputeFinalDelta = status.FinalDelta
+		resp.LastRecomputeDurationMs = status.DurationMs
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1106,7 +1108,6 @@ func (h *Handler) handleAdminPageRankRecompute(w http.ResponseWriter, r *http.Re
 	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.pageRank != nil, "pagerank") {
 		return
 	}
-	start := time.Now()
 	result, err := application.RunPageRankJobWithStatus(r.Context(), h.pageRank, h.settingsStore)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1116,7 +1117,7 @@ func (h *Handler) handleAdminPageRankRecompute(w http.ResponseWriter, r *http.Re
 		Documents:  result.Documents,
 		Iterations: result.Iterations,
 		FinalDelta: result.FinalDelta,
-		DurationMS: time.Since(start).Milliseconds(),
+		DurationMS: result.DurationMs,
 	}
 	if h.admin != nil {
 		if min, max, avg, err := h.admin.PageRankDistribution(r.Context()); err == nil {

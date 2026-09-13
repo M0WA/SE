@@ -33,6 +33,7 @@ type PageRankRunResult struct {
 // UpdatePageRanks leaves it untouched -- it keeps whatever neutral default
 // (or prior score) it already had rather than being reset to 0.
 func RunPageRankJob(ctx context.Context, repo ports.PageRankRepository) (PageRankRunResult, error) {
+	start := time.Now()
 	graph, err := repo.LinkGraph(ctx)
 	if err != nil {
 		return PageRankRunResult{}, err
@@ -44,6 +45,7 @@ func RunPageRankJob(ctx context.Context, repo ports.PageRankRepository) (PageRan
 	if err := repo.UpdatePageRanks(ctx, scores); err != nil {
 		return PageRankRunResult{}, err
 	}
+	info.DurationMs = time.Since(start).Milliseconds()
 	return PageRankRunResult{Documents: len(scores), PageRankRunInfo: info}, nil
 }
 
