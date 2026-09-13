@@ -114,6 +114,55 @@
     }
   }
 
+  let deleteProgressTimer = null;
+
+  function stopDeleteProgressPolling() {
+    if (deleteProgressTimer) {
+      clearInterval(deleteProgressTimer);
+      deleteProgressTimer = null;
+    }
+  }
+
+  // pollDeleteProgress re-fetches this domain's document list every couple
+  // of seconds and re-renders from it -- the same view a manual reload
+  // would produce, just without one -- so the count and table visibly
+  // shrink as the background goroutine works through the queue. Stops once
+  // every page is gone, or once the remaining count holds steady for a
+  // few ticks in a row (some deletions failed and logged server-side
+  // rather than the batch stalling forever).
+  function pollDeleteProgress(initialCount) {
+    stopDeleteProgressPolling();
+    let lastRemaining = initialCount;
+    let steadyTicks = 0;
+    deleteProgressTimer = setInterval(async () => {
+      let docs;
+      try {
+        docs = await getJSON('/admin/api/documents?domain=' + encodeURIComponent(host) + '&limit=1000');
+      } catch (err) {
+        return; // transient error -- try again next tick rather than giving up.
+      }
+      allDocs = docs;
+      renderDocs(docs);
+
+      const remaining = docs.length;
+      const removed = Math.max(0, initialCount - remaining);
+      if (remaining === 0) {
+        deleteAllStatusEl.textContent = 'Done — all ' + initialCount + (initialCount === 1 ? ' page' : ' pages') + ' removed.';
+        stopDeleteProgressPolling();
+        return;
+      }
+      steadyTicks = remaining === lastRemaining ? steadyTicks + 1 : 0;
+      lastRemaining = remaining;
+      if (steadyTicks >= 5) {
+        deleteAllStatusEl.textContent = removed + ' of ' + initialCount + ' removed — the rest appear stuck (check the server log); ' + remaining + ' remaining.';
+        deleteAllBtn.disabled = false;
+        stopDeleteProgressPolling();
+        return;
+      }
+      deleteAllStatusEl.textContent = 'Removing in the background — ' + removed + ' of ' + initialCount + ' removed, ' + remaining + ' remaining…';
+    }, 1500);
+  }
+
   // deleteAllInDomain fires one request and returns -- the server queues
   // every page's removal in its own background goroutine (detached from
   // this request, so it isn't tied to this tab staying open) and responds
@@ -122,7 +171,8 @@
   // abort the moment the admin navigated away or closed the tab mid-batch,
   // silently leaving the domain half-deleted with no way to know or
   // resume -- leaving this page (or closing it) can never interrupt the
-  // removal now.
+  // removal now. Progress while staying on the page comes from
+  // pollDeleteProgress re-fetching the list, not from this response.
   async function deleteAllInDomain(count) {
     if (!window.confirm('Remove all ' + count + ' pages in this domain from the index?')) return;
     deleteAllBtn.disabled = true;
@@ -130,7 +180,8 @@
     try {
       const resp = await deleteRequest('/admin/api/documents?domain=' + encodeURIComponent(host));
       deleteAllStatusEl.textContent = 'Removing ' + resp.queued + (resp.queued === 1 ? ' page' : ' pages') +
-        ' in the background — safe to leave this page. Reload to see progress.';
+        ' in the background — safe to leave this page.';
+      pollDeleteProgress(resp.queued);
     } catch (err) {
       deleteAllBtn.disabled = false;
       deleteAllStatusEl.textContent = 'Could not start the removal: ' + err.message;
@@ -166,6 +217,11 @@
   }
 
   function renderDocs(docs) {
+    clear(tailEl);
+    clear(chartEl);
+    clear(tableEl);
+    statusEl.textContent = '';
+
     const totalLen = docs.reduce((sum, d) => sum + d.doc_length, 0);
     const avgLen = docs.length ? totalLen / docs.length : 0;
     const totalInternal = docs.reduce((sum, d) => sum + d.internal_links, 0);
@@ -186,6 +242,8 @@
 
     if (docs.length === 0) {
       statusEl.textContent = 'No pages indexed for this domain.';
+      filterEl.hidden = true;
+      deleteAllBtn.hidden = true;
       return;
     }
 
@@ -195,7 +253,6 @@
     renderTable(filterDocs(docs, domainFilterText));
 
     deleteAllBtn.hidden = false;
-    deleteAllBtn.addEventListener('click', () => deleteAllInDomain(docs.length));
   }
 
   function renderTable(docs) {
@@ -272,6 +329,12 @@
     domainFilterText = filterEl.value.trim();
     renderTable(filterDocs(allDocs, domainFilterText));
   });
+
+  // Wired once here rather than inside renderDocs, which now re-runs on
+  // every delete-progress poll tick -- re-registering a listener there on
+  // each call would fire deleteAllInDomain once per accumulated listener
+  // per click.
+  deleteAllBtn.addEventListener('click', () => deleteAllInDomain(allDocs.length));
 
   async function load() {
     try {
