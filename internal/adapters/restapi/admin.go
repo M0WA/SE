@@ -429,7 +429,7 @@ func (h *Handler) handleAdminPostings(w http.ResponseWriter, r *http.Request) {
 		doc := docs[p.DocID]
 		resp.Postings[i] = adminPosting{
 			DocID: p.DocID, URL: doc.URL, Title: doc.Title,
-			Snippet:  domain.Snippet(doc.Text, []string{term}, postingsSnippetMaxLen),
+			Snippet:  domain.Snippet(doc.Text, nil, []string{term}, postingsSnippetMaxLen),
 			TermFreq: p.TermFreq, DocLength: p.DocLength,
 		}
 	}

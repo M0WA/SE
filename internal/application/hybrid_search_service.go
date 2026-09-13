@@ -363,7 +363,7 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 		}
 		ranked[i].URL = doc.URL
 		ranked[i].Title = doc.Title
-		ranked[i].Snippet = domain.Snippet(doc.Text, terms, 200)
+		ranked[i].Snippet = domain.Snippet(doc.Text, parsed.Phrases, terms, 200)
 	}
 
 	return ranked, nil
