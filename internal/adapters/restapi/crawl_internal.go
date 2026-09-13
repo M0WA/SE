@@ -73,7 +73,7 @@ func (h *Handler) createCrawlJob(ctx context.Context, opts ports.CrawlOptions) (
 		HasBasicAuth:        opts.BasicAuthUser != "" || opts.BasicAuthPass != "",
 		RespectRobots:       opts.RespectRobots,
 		UserAgent:           opts.UserAgent,
-		AllowOffDomainLinks: opts.AllowOffDomainLinks,
+		LinkScope:           opts.LinkScope,
 		UseSitemap:          opts.UseSitemap,
 		FetchTimeoutSeconds: opts.FetchTimeoutSeconds,
 		MinTextLength:       opts.MinTextLength,

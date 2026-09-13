@@ -85,6 +85,13 @@ type OperationalSettingsValues struct {
 	// (ScheduledCrawl.Renderer / ports.CrawlOptions.Renderer) overrides
 	// this when set to anything other than RendererDefault ("").
 	DefaultRenderer string
+	// LinkScope is the crawler's global default for how far a crawl
+	// follows discovered links (see LinkScope* constants) -- defaults to
+	// LinkScopeDomain (same registrable domain, any subdomain). A crawl's
+	// own LinkScope (ScheduledCrawl.LinkScope / ports.CrawlOptions.
+	// LinkScope) overrides this when set to anything other than
+	// LinkScopeDefault ("").
+	LinkScope string
 }
 
 // defaultUserAgent mimics a standard desktop Firefox so crawled sites treat
@@ -150,6 +157,7 @@ func defaultOperationalSettings() OperationalSettingsValues {
 		ANNSearchEnabled:                 true,
 		MaxRetainedCrawlJobs:             defaultMaxRetainedCrawlJobs,
 		DefaultRenderer:                  RendererNone,
+		LinkScope:                        LinkScopeDomain,
 	}
 }
 
@@ -249,6 +257,11 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 	// convention as every other field above.
 	if v.DefaultRenderer == RendererDefault || !ValidRenderer(v.DefaultRenderer) {
 		v.DefaultRenderer = RendererNone
+	}
+	// LinkScopeDefault ("") isn't valid for the global default either --
+	// same reasoning as DefaultRenderer above.
+	if v.LinkScope == LinkScopeDefault || !ValidLinkScope(v.LinkScope) {
+		v.LinkScope = LinkScopeDomain
 	}
 
 	s.mu.Lock()

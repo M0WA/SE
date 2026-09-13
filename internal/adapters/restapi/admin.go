@@ -549,6 +549,11 @@ type operationalValues struct {
 	// (domain.RendererNone/RendererChromium/RendererFirefox) -- a
 	// scheduled/one-off crawl's own renderer overrides this when set.
 	DefaultRenderer string `json:"default_renderer"`
+	// LinkScope is the crawler's global default for how far a crawl
+	// follows discovered links (domain.LinkScopeHost/LinkScopeDomain/
+	// LinkScopeAny) -- a scheduled/one-off crawl's own link_scope
+	// overrides this when set.
+	LinkScope string `json:"link_scope"`
 }
 
 func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
@@ -571,6 +576,7 @@ func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 		ANNSearchEnabled:                 v.ANNSearchEnabled,
 		MaxRetainedCrawlJobs:             v.MaxRetainedCrawlJobs,
 		DefaultRenderer:                  v.DefaultRenderer,
+		LinkScope:                        v.LinkScope,
 	}
 }
 
@@ -594,6 +600,7 @@ func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 		ANNSearchEnabled:                 o.ANNSearchEnabled,
 		MaxRetainedCrawlJobs:             o.MaxRetainedCrawlJobs,
 		DefaultRenderer:                  o.DefaultRenderer,
+		LinkScope:                        o.LinkScope,
 	}
 }
 
@@ -762,7 +769,6 @@ type scheduledCrawlRequest struct {
 	Cookie              string   `json:"cookie"`
 	BasicAuthUser       string   `json:"basic_auth_user"`
 	BasicAuthPass       string   `json:"basic_auth_pass"`
-	AllowOffDomainLinks bool     `json:"allow_off_domain_links"`
 	UseSitemap          bool     `json:"use_sitemap"`
 	FetchTimeoutSeconds int      `json:"fetch_timeout_seconds"`
 	MinTextLength       int      `json:"min_text_length"`
@@ -770,6 +776,11 @@ type scheduledCrawlRequest struct {
 	MaxResponseKB       int      `json:"max_response_kb"`
 	PrioritizeUnindexed bool     `json:"prioritize_unindexed"`
 	IntervalMinutes     int      `json:"interval_minutes"`
+	// LinkScope overrides the Tuning page's global default for how far
+	// this crawl follows discovered links -- "" (domain.LinkScopeDefault)
+	// means "inherit the global default"; "host"/"domain"/"any" choose
+	// explicitly.
+	LinkScope string `json:"link_scope"`
 	// MaxRuns caps how many times a recurring crawl repeats before
 	// disabling itself; 0 (the default) means unlimited. Meaningless when
 	// IntervalMinutes is 0 (a one-off crawl already stops after its one
@@ -791,7 +802,7 @@ type scheduledCrawlResponse struct {
 	Cookie              string     `json:"cookie"`
 	BasicAuthUser       string     `json:"basic_auth_user"`
 	BasicAuthPass       string     `json:"basic_auth_pass"`
-	AllowOffDomainLinks bool       `json:"allow_off_domain_links"`
+	LinkScope           string     `json:"link_scope"`
 	UseSitemap          bool       `json:"use_sitemap"`
 	FetchTimeoutSeconds int        `json:"fetch_timeout_seconds"`
 	MinTextLength       int        `json:"min_text_length"`
@@ -814,7 +825,7 @@ func toScheduledCrawlResponse(s domain.ScheduledCrawl) scheduledCrawlResponse {
 		ID: s.ID, SeedURLs: s.SeedURLs, MaxPages: s.MaxPages,
 		RespectRobots: s.RespectRobots, UserAgent: s.UserAgent,
 		Cookie: s.Cookie, BasicAuthUser: s.BasicAuthUser, BasicAuthPass: s.BasicAuthPass,
-		AllowOffDomainLinks: s.AllowOffDomainLinks, UseSitemap: s.UseSitemap,
+		LinkScope: s.LinkScope, UseSitemap: s.UseSitemap,
 		FetchTimeoutSeconds: s.FetchTimeoutSeconds, MinTextLength: s.MinTextLength,
 		CrawlDelayMs: s.CrawlDelayMs, MaxResponseKB: s.MaxResponseKB,
 		PrioritizeUnindexed: s.PrioritizeUnindexed, Recurring: s.Recurring,
@@ -847,7 +858,7 @@ func (req scheduledCrawlRequest) toScheduledCrawl(id string, enabled bool, now t
 		ID: id, SeedURLs: req.SeedURLs, MaxPages: req.MaxPages,
 		RespectRobots: req.RespectRobots, UserAgent: req.UserAgent,
 		Cookie: req.Cookie, BasicAuthUser: req.BasicAuthUser, BasicAuthPass: req.BasicAuthPass,
-		AllowOffDomainLinks: req.AllowOffDomainLinks, UseSitemap: req.UseSitemap,
+		LinkScope: req.LinkScope, UseSitemap: req.UseSitemap,
 		FetchTimeoutSeconds: req.FetchTimeoutSeconds, MinTextLength: req.MinTextLength,
 		CrawlDelayMs: req.CrawlDelayMs, MaxResponseKB: req.MaxResponseKB,
 		PrioritizeUnindexed: req.PrioritizeUnindexed, Recurring: recurring,
@@ -873,6 +884,10 @@ func validateScheduledCrawlRequest(w http.ResponseWriter, req scheduledCrawlRequ
 	}
 	if !domain.ValidRenderer(req.Renderer) {
 		http.Error(w, "renderer must be one of: (blank), none, chromium, firefox", http.StatusBadRequest)
+		return false
+	}
+	if !domain.ValidLinkScope(req.LinkScope) {
+		http.Error(w, "link_scope must be one of: (blank), host, domain, any", http.StatusBadRequest)
 		return false
 	}
 	return true

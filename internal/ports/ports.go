@@ -267,21 +267,23 @@ type SearchService interface {
 // Basic auth (applied to every fetch made during that crawl). RespectRobots
 // defaults to false (robots.txt is ignored) unless explicitly set; UserAgent
 // overrides the process's configured default for this crawl only.
-// AllowOffDomainLinks defaults to false, so a crawl stays on the seed URLs'
-// own host(s) unless explicitly allowed to wander to other domains via
-// discovered links. UseSitemap defaults to false; when set, each seed's
-// /sitemap.xml is fetched and its URLs enqueued alongside normally
-// discovered links.
+// UseSitemap defaults to false; when set, each seed's /sitemap.xml is
+// fetched and its URLs enqueued alongside normally discovered links.
 type CrawlOptions struct {
-	SeedURLs            []string
-	MaxPages            int
-	Cookie              string
-	BasicAuthUser       string
-	BasicAuthPass       string
-	RespectRobots       bool
-	UserAgent           string
-	AllowOffDomainLinks bool `json:"allow_off_domain_links"`
-	UseSitemap          bool `json:"use_sitemap"`
+	SeedURLs      []string
+	MaxPages      int
+	Cookie        string
+	BasicAuthUser string
+	BasicAuthPass string
+	RespectRobots bool
+	UserAgent     string
+	// LinkScope overrides the Tuning page's global default for how far
+	// this crawl follows discovered links -- "" (domain.LinkScopeDefault)
+	// means "use the global default," same convention Renderer already
+	// uses; domain.LinkScopeHost/LinkScopeDomain/LinkScopeAny choose
+	// explicitly. See domain.LinkScope* and crawlLoop's onDomain.
+	LinkScope  string `json:"link_scope"`
+	UseSitemap bool   `json:"use_sitemap"`
 	// FetchTimeoutSeconds, MinTextLength, CrawlDelayMs and MaxResponseKB
 	// override the same-named operational defaults for this crawl alone
 	// when positive; zero means "use the global default" -- the same

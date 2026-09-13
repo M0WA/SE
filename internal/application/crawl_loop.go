@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/net/publicsuffix"
+
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
 )
@@ -65,7 +67,11 @@ func crawlLoop(
 		}
 	}
 
-	hosts := seedHosts(opts.SeedURLs)
+	linkScope := opts.LinkScope
+	if linkScope == domain.LinkScopeDefault {
+		linkScope = v.LinkScope
+	}
+	scope := newLinkScopeMatcher(opts.SeedURLs)
 
 	// prioritize is true only when the caller both asked for it
 	// (opts.PrioritizeUnindexed) and can actually tell fresh from
@@ -103,7 +109,7 @@ func crawlLoop(
 	enqueue := func(links []string) {
 		var allowed []string
 		for _, l := range links {
-			if opts.AllowOffDomainLinks || onDomain(l, hosts) {
+			if scope.allows(l, linkScope) {
 				allowed = append(allowed, l)
 			}
 		}
@@ -199,22 +205,65 @@ func crawlLoop(
 	return crawled, nil
 }
 
-// seedHosts collects the host of every seed URL, so discovered links can be
-// checked against the crawl's own starting point(s) rather than growing to
-// include every domain a crawl happens to wander onto.
-func seedHosts(seeds []string) map[string]bool {
-	hosts := make(map[string]bool, len(seeds))
-	for _, s := range seeds {
-		if u, err := url.Parse(s); err == nil && u.Host != "" {
-			hosts[u.Host] = true
-		}
-	}
-	return hosts
+// linkScopeMatcher decides whether a discovered link is within scope for a
+// crawl, relative to its seed URL(s) -- see domain.LinkScope*. hosts holds
+// every seed's exact host (for domain.LinkScopeHost); domains holds every
+// seed host's registrable domain, i.e. its effective-TLD-plus-one (for
+// domain.LinkScopeDomain).
+type linkScopeMatcher struct {
+	hosts   map[string]bool
+	domains map[string]bool
 }
 
-func onDomain(rawURL string, hosts map[string]bool) bool {
+func newLinkScopeMatcher(seeds []string) linkScopeMatcher {
+	m := linkScopeMatcher{hosts: make(map[string]bool, len(seeds)), domains: make(map[string]bool, len(seeds))}
+	for _, s := range seeds {
+		u, err := url.Parse(s)
+		if err != nil || u.Host == "" {
+			continue
+		}
+		host := strings.ToLower(u.Host)
+		m.hosts[host] = true
+		m.domains[registrableDomain(host)] = true
+	}
+	return m
+}
+
+// allows reports whether rawURL is within scope, given the crawl's already-
+// resolved LinkScope (opts.LinkScope, or the Tuning page's global default
+// when that was left blank -- see crawlLoop). domain.LinkScopeAny always
+// allows; domain.LinkScopeHost requires an exact match against a seed's own
+// host; anything else (domain.LinkScopeDomain, the default) allows any
+// host that shares a seed's registrable domain -- covering that seed's own
+// host, any of its subdomains, and its bare registrable domain.
+func (m linkScopeMatcher) allows(rawURL, scope string) bool {
+	if scope == domain.LinkScopeAny {
+		return true
+	}
 	u, err := url.Parse(rawURL)
-	return err == nil && hosts[u.Host]
+	if err != nil || u.Host == "" {
+		return false
+	}
+	host := strings.ToLower(u.Host)
+	if scope == domain.LinkScopeHost {
+		return m.hosts[host]
+	}
+	return m.domains[registrableDomain(host)]
+}
+
+// registrableDomain returns host's effective TLD plus one label (e.g.
+// "blog.example.co.uk" -> "example.co.uk"), using the public suffix list so
+// multi-part TLDs (".co.uk", ".com.au", ...) are handled correctly rather
+// than naively taking "the last two labels". Falls back to host itself for
+// anything the list can't derive an eTLD+1 for (a bare IP address,
+// "localhost", or a host that's already a public suffix on its own) -- such
+// a host still only ever matches itself, never anything else.
+func registrableDomain(host string) string {
+	etld1, err := publicsuffix.EffectiveTLDPlusOne(host)
+	if err != nil {
+		return host
+	}
+	return etld1
 }
 
 // sitemapURL builds the /sitemap.xml URL at a seed's origin, discarding any

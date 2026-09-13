@@ -84,7 +84,15 @@
           <option value="firefox">Firefox — real headless browser, runs the page's JavaScript</option>
         </select>
       </div>
-      <p class="tuning-hint">Defaults: 8s timeout, 20 pages, 50 characters minimum, 250ms delay, 5120 KB (5 MB) response cap, 200 retained crawl jobs, no rendering. Rendering a page in a real browser is much slower than a plain fetch (each page opens its own browser tab) and downloads that browser engine the first time it's ever used -- turn it on only for sites whose real content needs JavaScript to appear.</p>
+      <div class="form-row">
+        <label for="default-link-scope">Link scope — how far a crawl follows discovered links, unless it overrides this itself</label><br>
+        <select id="default-link-scope" class="field">
+          <option value="host">Exact seed host only</option>
+          <option value="domain">Seed's domain, including subdomains</option>
+          <option value="any">Any domain</option>
+        </select>
+      </div>
+      <p class="tuning-hint">Defaults: 8s timeout, 20 pages, 50 characters minimum, 250ms delay, 5120 KB (5 MB) response cap, 200 retained crawl jobs, no rendering, seed's domain including subdomains. Rendering a page in a real browser is much slower than a plain fetch (each page opens its own browser tab) and downloads that browser engine the first time it's ever used -- turn it on only for sites whose real content needs JavaScript to appear. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org.</p>
     </section>
 
     <section class="panel">
@@ -182,6 +190,7 @@
   const maxResponseKBEl = document.getElementById('max-response-kb');
   const maxRetainedCrawlJobsEl = document.getElementById('max-retained-crawl-jobs');
   const defaultRendererEl = document.getElementById('default-renderer');
+  const defaultLinkScopeEl = document.getElementById('default-link-scope');
   const defaultTopKEl = document.getElementById('default-top-k');
   const semanticPoolSizeEl = document.getElementById('semantic-pool-size');
   const annSearchEnabledEl = document.getElementById('ann-search-enabled');
@@ -207,6 +216,7 @@
     maxResponseKBEl.value = s.operational.max_response_kb;
     maxRetainedCrawlJobsEl.value = s.operational.max_retained_crawl_jobs;
     defaultRendererEl.value = s.operational.default_renderer || 'none';
+    defaultLinkScopeEl.value = s.operational.link_scope || 'domain';
     defaultTopKEl.value = s.operational.default_top_k;
     semanticPoolSizeEl.value = s.operational.semantic_candidate_pool_size;
     annSearchEnabledEl.checked = s.operational.ann_search_enabled;
@@ -248,6 +258,7 @@
           max_response_kb: parseInt(maxResponseKBEl.value, 10),
           max_retained_crawl_jobs: parseInt(maxRetainedCrawlJobsEl.value, 10),
           default_renderer: defaultRendererEl.value,
+          link_scope: defaultLinkScopeEl.value,
           default_top_k: parseInt(defaultTopKEl.value, 10),
           semantic_candidate_pool_size: parseInt(semanticPoolSizeEl.value, 10),
           ann_search_enabled: annSearchEnabledEl.checked,

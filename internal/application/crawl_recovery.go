@@ -64,7 +64,7 @@ func RecoverInterruptedCrawls(
 			MaxPages:            j.Request.MaxPages,
 			RespectRobots:       j.Request.RespectRobots,
 			UserAgent:           j.Request.UserAgent,
-			AllowOffDomainLinks: j.Request.AllowOffDomainLinks,
+			LinkScope:           j.Request.LinkScope,
 			UseSitemap:          j.Request.UseSitemap,
 			FetchTimeoutSeconds: j.Request.FetchTimeoutSeconds,
 			MinTextLength:       j.Request.MinTextLength,

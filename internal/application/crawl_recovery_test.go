@@ -189,7 +189,7 @@ func TestRecoverInterruptedCrawls_PreservesOriginalSettingOverrides(t *testing.T
 		ID: "job-1", Status: domain.CrawlJobRunning,
 		Request: domain.CrawlJobRequest{
 			SeedURLs: []string{"http://a"}, MaxPages: 7, RespectRobots: true,
-			UserAgent: "custom/1.0", AllowOffDomainLinks: true, UseSitemap: true,
+			UserAgent: "custom/1.0", LinkScope: domain.LinkScopeAny, UseSitemap: true,
 			FetchTimeoutSeconds: 45, MinTextLength: 100, CrawlDelayMs: 500, MaxResponseKB: 2048,
 		},
 	})
@@ -199,7 +199,7 @@ func TestRecoverInterruptedCrawls_PreservesOriginalSettingOverrides(t *testing.T
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got.MaxPages != 7 || !got.RespectRobots || got.UserAgent != "custom/1.0" ||
-		!got.AllowOffDomainLinks || !got.UseSitemap || got.FetchTimeoutSeconds != 45 ||
+		got.LinkScope != domain.LinkScopeAny || !got.UseSitemap || got.FetchTimeoutSeconds != 45 ||
 		got.MinTextLength != 100 || got.CrawlDelayMs != 500 || got.MaxResponseKB != 2048 {
 		t.Errorf("expected every setting override preserved on resume, got %+v", got)
 	}

@@ -499,7 +499,7 @@ func TestCrawlLoop_StaysOnSeedDomainByDefault(t *testing.T) {
 	}
 }
 
-func TestCrawlLoop_AllowOffDomainLinksFollowsOtherDomains(t *testing.T) {
+func TestCrawlLoop_LinkScopeAnyFollowsOtherDomains(t *testing.T) {
 	fetcher := &scopedFetcher{pages: map[string]string{
 		"http://a.example/start": "<html>start</html>",
 		"http://a.example/other": "<html>other</html>",
@@ -513,13 +513,99 @@ func TestCrawlLoop_AllowOffDomainLinksFollowsOtherDomains(t *testing.T) {
 	}
 	save := func(ctx context.Context, doc domain.Document) error { return nil }
 
-	opts := ports.CrawlOptions{SeedURLs: []string{"http://a.example/start"}, MaxPages: 10, AllowOffDomainLinks: true}
+	opts := ports.CrawlOptions{SeedURLs: []string{"http://a.example/start"}, MaxPages: 10, LinkScope: domain.LinkScopeAny}
 	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if count != 3 {
-		t.Errorf("expected all 3 pages crawled when off-domain links are allowed, got %d", count)
+		t.Errorf("expected all 3 pages crawled when link_scope is any, got %d", count)
+	}
+}
+
+// TestCrawlLoop_LinkScopeHostRejectsSameDomainSubdomain proves
+// domain.LinkScopeHost is stricter than the default LinkScopeDomain --
+// even a subdomain of the seed's own registrable domain is off scope.
+func TestCrawlLoop_LinkScopeHostRejectsSameDomainSubdomain(t *testing.T) {
+	fetcher := &scopedFetcher{pages: map[string]string{
+		"http://www.example.com/start": "<html>start</html>",
+		"http://blog.example.com/x":    "<html>x</html>",
+	}}
+	parse := func(html, pageURL string) (string, string, []string) {
+		if pageURL == "http://www.example.com/start" {
+			return "T", "genuegend inhalt text fuer diese seite bitte danke", []string{"http://blog.example.com/x"}
+		}
+		return "T2", "genuegend inhalt text fuer diese andere seite bitte danke", nil
+	}
+	save := func(ctx context.Context, doc domain.Document) error { return nil }
+
+	opts := ports.CrawlOptions{SeedURLs: []string{"http://www.example.com/start"}, MaxPages: 10, LinkScope: domain.LinkScopeHost}
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected the subdomain link rejected under link_scope=host, got count=%d", count)
+	}
+}
+
+// TestCrawlLoop_LinkScopeDomainAllowsSameRegistrableDomainSubdomain proves
+// the default LinkScopeDomain follows a link to a different subdomain of
+// the seed's own registrable domain, but still rejects a genuinely
+// different domain.
+func TestCrawlLoop_LinkScopeDomainAllowsSameRegistrableDomainSubdomain(t *testing.T) {
+	fetcher := &scopedFetcher{pages: map[string]string{
+		"http://www.example.com/start": "<html>start</html>",
+		"http://blog.example.com/x":    "<html>x</html>",
+		"http://other.org/y":           "<html>y</html>",
+	}}
+	parse := func(html, pageURL string) (string, string, []string) {
+		if pageURL == "http://www.example.com/start" {
+			return "T", "genuegend inhalt text fuer diese seite bitte danke", []string{"http://blog.example.com/x", "http://other.org/y"}
+		}
+		return "T2", "genuegend inhalt text fuer diese andere seite bitte danke", nil
+	}
+	save := func(ctx context.Context, doc domain.Document) error { return nil }
+
+	opts := ports.CrawlOptions{SeedURLs: []string{"http://www.example.com/start"}, MaxPages: 10, LinkScope: domain.LinkScopeDomain}
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected the same-registrable-domain subdomain crawled but the different domain rejected, got count=%d", count)
+	}
+	for _, u := range fetcher.urls {
+		if u == "http://other.org/y" {
+			t.Error("expected the genuinely different domain not to be fetched under link_scope=domain")
+		}
+	}
+}
+
+// TestCrawlLoop_LinkScopeDefaultInheritsGlobalSetting proves opts.LinkScope
+// left blank falls back to the Tuning page's global default (via
+// settings.Get().LinkScope), not to the old strict host-only behavior.
+func TestCrawlLoop_LinkScopeDefaultInheritsGlobalSetting(t *testing.T) {
+	fetcher := &scopedFetcher{pages: map[string]string{
+		"http://www.example.com/start": "<html>start</html>",
+		"http://blog.example.com/x":    "<html>x</html>",
+	}}
+	parse := func(html, pageURL string) (string, string, []string) {
+		if pageURL == "http://www.example.com/start" {
+			return "T", "genuegend inhalt text fuer diese seite bitte danke", []string{"http://blog.example.com/x"}
+		}
+		return "T2", "genuegend inhalt text fuer diese andere seite bitte danke", nil
+	}
+	save := func(ctx context.Context, doc domain.Document) error { return nil }
+
+	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{LinkScope: domain.LinkScopeHost})
+	opts := ports.CrawlOptions{SeedURLs: []string{"http://www.example.com/start"}, MaxPages: 10}
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, settings, opts, nil, save, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected opts.LinkScope=='' to inherit the global default (host), got count=%d", count)
 	}
 }
 
@@ -806,6 +892,41 @@ func TestCrawlLoop_UnparseableSitemapIsSkippedSilently(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("expected only the seed crawled when sitemap.xml is unparseable, got %d", count)
+	}
+}
+
+// TestNewLinkScopeMatcher_SkipsSeedsWithNoHost proves a seed URL that
+// carries no host (a relative/opaque reference, not a real error from
+// url.Parse -- it accepts almost anything) is simply skipped rather than
+// causing a panic or an entry with an empty-string host.
+func TestNewLinkScopeMatcher_SkipsSeedsWithNoHost(t *testing.T) {
+	m := newLinkScopeMatcher([]string{"not a url with no host", "http://a.example"})
+	if len(m.hosts) != 1 || !m.hosts["a.example"] {
+		t.Errorf("expected only the well-formed seed's host recorded, got %+v", m.hosts)
+	}
+}
+
+// TestLinkScopeMatcher_Allows_RejectsLinksWithNoHost proves a discovered
+// link with no host is rejected under every scope except LinkScopeAny
+// (which never even parses the URL).
+func TestLinkScopeMatcher_Allows_RejectsLinksWithNoHost(t *testing.T) {
+	m := newLinkScopeMatcher([]string{"http://a.example"})
+	if m.allows("not a url with no host", domain.LinkScopeDomain) {
+		t.Error("expected a hostless link rejected under link_scope=domain")
+	}
+	if m.allows("not a url with no host", domain.LinkScopeHost) {
+		t.Error("expected a hostless link rejected under link_scope=host")
+	}
+	if !m.allows("not a url with no host", domain.LinkScopeAny) {
+		t.Error("expected link_scope=any to allow anything, even a hostless string")
+	}
+}
+
+func TestRegistrableDomain_FallsBackToHostForIPsAndLocalhost(t *testing.T) {
+	for _, host := range []string{"localhost", "127.0.0.1"} {
+		if got := registrableDomain(host); got != host {
+			t.Errorf("registrableDomain(%q) = %q, want %q (fallback to the host itself)", host, got, host)
+		}
 	}
 }
 

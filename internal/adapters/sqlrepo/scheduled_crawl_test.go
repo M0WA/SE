@@ -20,7 +20,7 @@ func newScheduledCrawl(id string, intervalMinutes int, nextRunAt time.Time) doma
 		Cookie:              "session=abc123",
 		BasicAuthUser:       "admin",
 		BasicAuthPass:       "hunter2",
-		AllowOffDomainLinks: false,
+		LinkScope:           domain.LinkScopeHost,
 		UseSitemap:          true,
 		FetchTimeoutSeconds: 10,
 		MinTextLength:       100,
@@ -57,7 +57,7 @@ func TestCreateScheduledCrawl_ThenListRoundTrips(t *testing.T) {
 	if g.ID != s.ID || len(g.SeedURLs) != 2 || g.SeedURLs[0] != "http://a.example" {
 		t.Errorf("unexpected seed urls round trip: %+v", g)
 	}
-	if g.MaxPages != 20 || !g.RespectRobots || g.UserAgent != "test-agent" || g.AllowOffDomainLinks || !g.UseSitemap {
+	if g.MaxPages != 20 || !g.RespectRobots || g.UserAgent != "test-agent" || g.LinkScope != domain.LinkScopeHost || !g.UseSitemap {
 		t.Errorf("unexpected option round trip: %+v", g)
 	}
 	if g.Cookie != "session=abc123" || g.BasicAuthUser != "admin" || g.BasicAuthPass != "hunter2" {

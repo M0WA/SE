@@ -16,16 +16,21 @@ import (
 // stored and reused on every run the same way UserAgent is. LastRunAt is
 // nil until the first (and for a non-recurring entry, only) run.
 type ScheduledCrawl struct {
-	ID                  string
-	SeedURLs            []string
-	MaxPages            int
-	RespectRobots       bool
-	UserAgent           string
-	Cookie              string
-	BasicAuthUser       string
-	BasicAuthPass       string
-	AllowOffDomainLinks bool
-	UseSitemap          bool
+	ID            string
+	SeedURLs      []string
+	MaxPages      int
+	RespectRobots bool
+	UserAgent     string
+	Cookie        string
+	BasicAuthUser string
+	BasicAuthPass string
+	// LinkScope overrides the Tuning page's global default for how far
+	// this crawl follows discovered links -- "" (domain.LinkScopeDefault)
+	// means "use the global default"; LinkScopeHost/LinkScopeDomain/
+	// LinkScopeAny choose explicitly. See ports.CrawlOptions.LinkScope
+	// (the same field, carried through by application.scheduledCrawlOptions).
+	LinkScope  string
+	UseSitemap bool
 	// FetchTimeoutSeconds, MinTextLength, CrawlDelayMs, MaxResponseKB and
 	// PrioritizeUnindexed mirror ports.CrawlOptions' per-crawl overrides --
 	// a scheduled crawl accepts every option a one-off crawl does (0 means

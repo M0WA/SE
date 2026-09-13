@@ -34,7 +34,7 @@ func TestRepository_CrawlJobRequestRoundTripsThroughStorage(t *testing.T) {
 	req := domain.CrawlJobRequest{
 		SeedURLs: []string{"http://a", "http://b"}, MaxPages: 42,
 		HasCookie: true, HasBasicAuth: true, RespectRobots: true,
-		UserAgent: "custom-agent", AllowOffDomainLinks: true, UseSitemap: true,
+		UserAgent: "custom-agent", LinkScope: domain.LinkScopeAny, UseSitemap: true,
 	}
 	job, err := repo.Create(ctx, req)
 	if err != nil {

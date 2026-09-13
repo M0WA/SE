@@ -60,12 +60,15 @@
       </label>
       <p class="tuning-hint">Off by default — this crawl ignores robots.txt unless checked.</p>
     </div>
-    <div class="form-row form-row-check">
-      <label for="crawl-allow-off-domain">
-        <input id="crawl-allow-off-domain" type="checkbox">
-        Allow linking to other domains
-      </label>
-      <p class="tuning-hint">Off by default — this crawl stays on the seed URL's own domain and never follows links elsewhere.</p>
+    <div class="form-row">
+      <label for="crawl-link-scope">How far to follow links</label><br>
+      <select id="crawl-link-scope" class="field">
+        <option value="">Use site default</option>
+        <option value="host">Exact seed host only</option>
+        <option value="domain">Seed's domain, including subdomains</option>
+        <option value="any">Any domain</option>
+      </select>
+      <p class="tuning-hint">"Use site default" follows whatever the Tuning page has set. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org.</p>
     </div>
     <div class="form-row form-row-check">
       <label for="crawl-use-sitemap">
@@ -158,7 +161,7 @@
   const crawlBasicUser = document.getElementById('crawl-basic-user');
   const crawlBasicPass = document.getElementById('crawl-basic-pass');
   const crawlRespectRobots = document.getElementById('crawl-respect-robots');
-  const crawlAllowOffDomain = document.getElementById('crawl-allow-off-domain');
+  const crawlLinkScope = document.getElementById('crawl-link-scope');
   const crawlUseSitemap = document.getElementById('crawl-use-sitemap');
   const crawlPrioritizeUnindexed = document.getElementById('crawl-prioritize-unindexed');
   const crawlInterval = document.getElementById('crawl-interval');
@@ -359,7 +362,8 @@
   function requestOptionsSummary(request) {
     const parts = [request.respect_robots ? 'respects robots.txt' : 'ignores robots.txt'];
     parts.push(request.user_agent ? 'custom User-Agent' : 'default User-Agent');
-    parts.push(request.allow_off_domain_links ? 'allows other domains' : 'stays on seed domain');
+    const linkScopeLabels = { host: 'exact seed host only', domain: 'seed domain + subdomains', any: 'any domain' };
+    parts.push(linkScopeLabels[request.link_scope] || 'site default link scope');
     if (request.use_sitemap) parts.push('uses sitemap.xml');
     if (request.prioritize_unindexed) parts.push('prioritizes unindexed pages');
     if (request.fetch_timeout_seconds) parts.push('fetch timeout ' + request.fetch_timeout_seconds + 's');
@@ -590,7 +594,7 @@
       seed_urls: s.seed_urls, max_pages: s.max_pages,
       respect_robots: s.respect_robots, user_agent: s.user_agent,
       cookie: s.cookie, basic_auth_user: s.basic_auth_user, basic_auth_pass: s.basic_auth_pass,
-      allow_off_domain_links: s.allow_off_domain_links, use_sitemap: s.use_sitemap,
+      link_scope: s.link_scope, use_sitemap: s.use_sitemap,
       fetch_timeout_seconds: s.fetch_timeout_seconds, min_text_length: s.min_text_length,
       crawl_delay_ms: s.crawl_delay_ms, max_response_kb: s.max_response_kb,
       prioritize_unindexed: s.prioritize_unindexed,
@@ -647,7 +651,7 @@
         basic_auth_pass: crawlBasicPass.value,
         respect_robots: crawlRespectRobots.checked,
         user_agent: crawlUserAgent.value,
-        allow_off_domain_links: crawlAllowOffDomain.checked,
+        link_scope: crawlLinkScope.value,
         use_sitemap: crawlUseSitemap.checked,
         prioritize_unindexed: crawlPrioritizeUnindexed.checked,
         fetch_timeout_seconds: parseInt(crawlFetchTimeout.value, 10) || 0,

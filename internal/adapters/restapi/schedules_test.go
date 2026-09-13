@@ -396,6 +396,59 @@ func TestHandleAdminSchedules_PostInvalidRendererRejected(t *testing.T) {
 	}
 }
 
+// TestHandleAdminSchedules_PostLinkScopePassesThrough proves an explicit
+// per-crawl link_scope override is stored as-is.
+func TestHandleAdminSchedules_PostLinkScopePassesThrough(t *testing.T) {
+	store := &fakeScheduledCrawlStore{}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	body, _ := json.Marshal(map[string]interface{}{
+		"seed_urls": []string{"http://a"}, "link_scope": "host",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.created.LinkScope != "host" {
+		t.Errorf("expected link_scope=host, got %q", store.created.LinkScope)
+	}
+}
+
+// TestHandleAdminSchedules_PostBlankLinkScopeMeansInherit proves omitting
+// link_scope entirely (the zero value) is valid -- it means "inherit the
+// Tuning page's global default," not an error.
+func TestHandleAdminSchedules_PostBlankLinkScopeMeansInherit(t *testing.T) {
+	store := &fakeScheduledCrawlStore{}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.created.LinkScope != "" {
+		t.Errorf("expected an empty LinkScope to mean inherit, got %q", store.created.LinkScope)
+	}
+}
+
+func TestHandleAdminSchedules_PostInvalidLinkScopeRejected(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithSchedules(t, &fakeScheduledCrawlStore{})
+	body, _ := json.Marshal(map[string]interface{}{
+		"seed_urls": []string{"http://a"}, "link_scope": "planet",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
 func TestHandleAdminSchedules_PostInvalidJSON(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithSchedules(t, &fakeScheduledCrawlStore{})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules", bytes.NewReader([]byte("not json")))

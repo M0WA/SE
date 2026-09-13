@@ -213,20 +213,20 @@ func TestHandleCrawlInternal_RecordsRendererOnTheJob(t *testing.T) {
 	}
 }
 
-func TestHandleCrawlInternal_RecordsOffDomainAndSitemapOptionsOnTheJob(t *testing.T) {
+func TestHandleCrawlInternal_RecordsLinkScopeAndSitemapOptionsOnTheJob(t *testing.T) {
 	fc := &fakeCrawler{count: 1}
 	h := newCrawlServerHandler(fc)
 
 	jobID := startCrawl(t, h, ports.CrawlOptions{
-		SeedURLs: []string{"http://a"}, AllowOffDomainLinks: true, UseSitemap: true,
+		SeedURLs: []string{"http://a"}, LinkScope: domain.LinkScopeAny, UseSitemap: true,
 	})
 	job := waitForJob(t, h, jobID)
 
-	if !job.Request.AllowOffDomainLinks || !job.Request.UseSitemap {
-		t.Errorf("expected the job to record allow_off_domain_links/use_sitemap, got %+v", job.Request)
+	if job.Request.LinkScope != domain.LinkScopeAny || !job.Request.UseSitemap {
+		t.Errorf("expected the job to record link_scope/use_sitemap, got %+v", job.Request)
 	}
-	if !fc.gotOptions.AllowOffDomainLinks || !fc.gotOptions.UseSitemap {
-		t.Errorf("expected the crawler to receive allow_off_domain_links/use_sitemap, got %+v", fc.gotOptions)
+	if fc.gotOptions.LinkScope != domain.LinkScopeAny || !fc.gotOptions.UseSitemap {
+		t.Errorf("expected the crawler to receive link_scope/use_sitemap, got %+v", fc.gotOptions)
 	}
 }
 

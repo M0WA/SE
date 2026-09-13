@@ -863,6 +863,15 @@ components:
                 executes the page's JavaScript and waits for it to load
                 ("chromium"/"firefox"). A schedule's own renderer overrides
                 this when set.
+            link_scope:
+              type: string
+              enum: [host, domain, any]
+              description: >-
+                The crawler's global default for how far a crawl follows
+                discovered links -- "domain" (the default: the seed's
+                registrable domain, including subdomains), "host" (the
+                exact seed host only), or "any" (no restriction). A
+                schedule's own link_scope overrides this when set.
 
     Overrides:
       type: object
@@ -946,7 +955,10 @@ components:
         has_basic_auth: { type: boolean }
         respect_robots: { type: boolean }
         user_agent: { type: string }
-        allow_off_domain_links: { type: boolean }
+        link_scope:
+          type: string
+          enum: ["", host, domain, any]
+          description: '"" means this job used the Tuning page''s global default link scope.'
         use_sitemap: { type: boolean }
         fetch_timeout_seconds: { type: integer }
         min_text_length: { type: integer }
@@ -1013,7 +1025,17 @@ components:
           description: Stored and reused on every run, like any other option.
         basic_auth_user: { type: string }
         basic_auth_pass: { type: string, description: "Stored and reused on every run, like any other option." }
-        allow_off_domain_links: { type: boolean }
+        link_scope:
+          type: string
+          enum: ["", host, domain, any]
+          default: ""
+          description: >-
+            "" (default): inherit the Tuning page's global default for how
+            far this crawl follows discovered links. "host": the exact
+            seed host only. "domain": the seed's registrable domain,
+            including subdomains (e.g. a seed of www.example.com also
+            follows blog.example.com and example.com, but not
+            example.org). "any": no restriction.
         use_sitemap: { type: boolean }
         fetch_timeout_seconds:
           type: integer

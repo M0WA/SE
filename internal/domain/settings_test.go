@@ -214,6 +214,7 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 		ANNSearchEnabled:                 true,
 		MaxRetainedCrawlJobs:             200,
 		DefaultRenderer:                  domain.RendererNone,
+		LinkScope:                        domain.LinkScopeDomain,
 	}
 	if v != want {
 		t.Errorf("expected defaults %+v, got %+v", want, v)
@@ -265,6 +266,48 @@ func TestOperationalSettings_SetValidDefaultRendererPreserved(t *testing.T) {
 	s.Set(domain.OperationalSettingsValues{DefaultRenderer: domain.RendererChromium})
 	if v := s.Get(); v.DefaultRenderer != domain.RendererChromium {
 		t.Errorf("expected DefaultRenderer=chromium to be preserved, got %q", v.DefaultRenderer)
+	}
+}
+
+func TestOperationalSettings_SetBlankLinkScopeFallsBackToDomain(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{LinkScope: ""})
+	if v := s.Get(); v.LinkScope != domain.LinkScopeDomain {
+		t.Errorf("expected a blank LinkScope to fall back to LinkScopeDomain, got %q", v.LinkScope)
+	}
+}
+
+func TestOperationalSettings_SetInvalidLinkScopeFallsBackToDomain(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{LinkScope: "planet"})
+	if v := s.Get(); v.LinkScope != domain.LinkScopeDomain {
+		t.Errorf("expected an unrecognized LinkScope to fall back to LinkScopeDomain, got %q", v.LinkScope)
+	}
+}
+
+func TestOperationalSettings_SetValidLinkScopePreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{LinkScope: domain.LinkScopeAny})
+	if v := s.Get(); v.LinkScope != domain.LinkScopeAny {
+		t.Errorf("expected LinkScope=any to be preserved, got %q", v.LinkScope)
+	}
+}
+
+func TestValidLinkScope(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{domain.LinkScopeDefault, true},
+		{domain.LinkScopeHost, true},
+		{domain.LinkScopeDomain, true},
+		{domain.LinkScopeAny, true},
+		{"planet", false},
+	}
+	for _, tc := range cases {
+		if got := domain.ValidLinkScope(tc.name); got != tc.want {
+			t.Errorf("ValidLinkScope(%q) = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 

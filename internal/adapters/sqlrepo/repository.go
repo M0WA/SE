@@ -197,7 +197,18 @@ func (r *Repository) migrateScheduledCrawlColumns(ctx context.Context) error {
 	// renderer defaults to '' (domain.RendererDefault) for a pre-existing
 	// row -- inherit whatever the Tuning page's global default is, same as
 	// a freshly created schedule that never set it.
-	return addColumn("renderer", "renderer TEXT NOT NULL DEFAULT ''")
+	if err := addColumn("renderer", "renderer TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// link_scope replaces the old allow_off_domain_links boolean (left in
+	// place, unused, on a database that has it -- this project's
+	// migrations only ever add columns). Defaulting a pre-existing row to
+	// '' (inherit the Tuning page's global default, domain.LinkScopeDomain)
+	// rather than translating its old boolean is a deliberate behavior
+	// change for any schedule that predates this column, same tradeoff as
+	// every other breaking change in this app: downwards compatibility
+	// isn't a concern here.
+	return addColumn("link_scope", "link_scope TEXT NOT NULL DEFAULT ''")
 }
 
 // ensureHostIndex and ensureCrawledAtIndex both run after
@@ -1372,7 +1383,7 @@ func (r *Repository) GetSetting(ctx context.Context, key string) (value string, 
 // statements so all four stay in sync.
 const scheduledCrawlColumns = `id, seed_urls, max_pages, respect_robots, user_agent,
 	cookie, basic_auth_user, basic_auth_pass,
-	allow_off_domain_links, use_sitemap, fetch_timeout_seconds, min_text_length,
+	link_scope, use_sitemap, fetch_timeout_seconds, min_text_length,
 	crawl_delay_ms, max_response_kb, prioritize_unindexed, recurring,
 	interval_minutes, max_runs, run_count, renderer, enabled, last_run_at, next_run_at, created_at`
 
@@ -1390,7 +1401,7 @@ func (r *Repository) CreateScheduledCrawl(ctx context.Context, s domain.Schedule
 	_, err = r.db.ExecContext(ctx, insertSQL,
 		s.ID, string(seedJSON), s.MaxPages, s.RespectRobots, s.UserAgent,
 		s.Cookie, s.BasicAuthUser, s.BasicAuthPass,
-		s.AllowOffDomainLinks, s.UseSitemap, s.FetchTimeoutSeconds, s.MinTextLength,
+		s.LinkScope, s.UseSitemap, s.FetchTimeoutSeconds, s.MinTextLength,
 		s.CrawlDelayMs, s.MaxResponseKB, s.PrioritizeUnindexed, s.Recurring,
 		s.IntervalMinutes, s.MaxRuns, s.RunCount, s.Renderer, s.Enabled,
 		nullableTimeString(s.LastRunAt), s.NextRunAt.UTC().Format(crawledAtLayout), s.CreatedAt.UTC().Format(crawledAtLayout),
@@ -1433,7 +1444,7 @@ func (r *Repository) UpdateScheduledCrawl(ctx context.Context, s domain.Schedule
 	updateSQL := r.ph(`UPDATE scheduled_crawls SET
 	                      seed_urls = %s, max_pages = %s, respect_robots = %s, user_agent = %s,
 	                      cookie = %s, basic_auth_user = %s, basic_auth_pass = %s,
-	                      allow_off_domain_links = %s, use_sitemap = %s, fetch_timeout_seconds = %s,
+	                      link_scope = %s, use_sitemap = %s, fetch_timeout_seconds = %s,
 	                      min_text_length = %s, crawl_delay_ms = %s, max_response_kb = %s,
 	                      prioritize_unindexed = %s, recurring = %s, interval_minutes = %s, max_runs = %s,
 	                      renderer = %s, enabled = %s, next_run_at = %s
@@ -1441,7 +1452,7 @@ func (r *Repository) UpdateScheduledCrawl(ctx context.Context, s domain.Schedule
 	res, err := r.db.ExecContext(ctx, updateSQL,
 		string(seedJSON), s.MaxPages, s.RespectRobots, s.UserAgent,
 		s.Cookie, s.BasicAuthUser, s.BasicAuthPass,
-		s.AllowOffDomainLinks, s.UseSitemap, s.FetchTimeoutSeconds,
+		s.LinkScope, s.UseSitemap, s.FetchTimeoutSeconds,
 		s.MinTextLength, s.CrawlDelayMs, s.MaxResponseKB,
 		s.PrioritizeUnindexed, s.Recurring, s.IntervalMinutes, s.MaxRuns, s.Renderer, s.Enabled,
 		s.NextRunAt.UTC().Format(crawledAtLayout), s.ID,
@@ -1558,7 +1569,7 @@ func scanScheduledCrawl(row scanner) (domain.ScheduledCrawl, error) {
 	var nextRunAt, createdAt string
 	if err := row.Scan(&s.ID, &seedJSON, &s.MaxPages, &s.RespectRobots, &s.UserAgent,
 		&s.Cookie, &s.BasicAuthUser, &s.BasicAuthPass,
-		&s.AllowOffDomainLinks, &s.UseSitemap, &s.FetchTimeoutSeconds, &s.MinTextLength,
+		&s.LinkScope, &s.UseSitemap, &s.FetchTimeoutSeconds, &s.MinTextLength,
 		&s.CrawlDelayMs, &s.MaxResponseKB, &s.PrioritizeUnindexed, &s.Recurring,
 		&s.IntervalMinutes, &s.MaxRuns, &s.RunCount, &s.Renderer, &s.Enabled,
 		&lastRunAt, &nextRunAt, &createdAt); err != nil {

@@ -79,7 +79,7 @@ func scheduledCrawlOptions(s domain.ScheduledCrawl) ports.CrawlOptions {
 		Cookie:              s.Cookie,
 		BasicAuthUser:       s.BasicAuthUser,
 		BasicAuthPass:       s.BasicAuthPass,
-		AllowOffDomainLinks: s.AllowOffDomainLinks,
+		LinkScope:           s.LinkScope,
 		UseSitemap:          s.UseSitemap,
 		FetchTimeoutSeconds: s.FetchTimeoutSeconds,
 		MinTextLength:       s.MinTextLength,

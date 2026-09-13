@@ -57,17 +57,20 @@ type CrawlPageEvent struct {
 // CrawlJobRequest is a redacted summary of the request that started a job:
 // it deliberately carries HasCookie/HasBasicAuth booleans rather than the
 // actual credentials, so a crawl's secrets never appear in a job listing
-// or detail view. RespectRobots, UserAgent, AllowOffDomainLinks and
-// UseSitemap aren't secrets, so they're carried through as-is.
+// or detail view. RespectRobots, UserAgent, LinkScope and UseSitemap
+// aren't secrets, so they're carried through as-is.
 type CrawlJobRequest struct {
-	SeedURLs            []string `json:"seed_urls"`
-	MaxPages            int      `json:"max_pages"`
-	HasCookie           bool     `json:"has_cookie"`
-	HasBasicAuth        bool     `json:"has_basic_auth"`
-	RespectRobots       bool     `json:"respect_robots"`
-	UserAgent           string   `json:"user_agent,omitempty"`
-	AllowOffDomainLinks bool     `json:"allow_off_domain_links"`
-	UseSitemap          bool     `json:"use_sitemap"`
+	SeedURLs      []string `json:"seed_urls"`
+	MaxPages      int      `json:"max_pages"`
+	HasCookie     bool     `json:"has_cookie"`
+	HasBasicAuth  bool     `json:"has_basic_auth"`
+	RespectRobots bool     `json:"respect_robots"`
+	UserAgent     string   `json:"user_agent,omitempty"`
+	// LinkScope is "" when this job used the Tuning page's global default
+	// (see domain.LinkScope*), or an explicit override otherwise -- not a
+	// secret, so it's the actual value, not a boolean.
+	LinkScope  string `json:"link_scope,omitempty"`
+	UseSitemap bool   `json:"use_sitemap"`
 	// FetchTimeoutSeconds/MinTextLength/CrawlDelayMs/MaxResponseKB are 0
 	// when this job used the global operational default for that setting,
 	// non-zero when it overrode it -- see ports.CrawlOptions' doc comment.

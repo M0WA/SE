@@ -194,7 +194,7 @@ func TestTriggerDueCrawls_PassesScheduleOptionsThrough(t *testing.T) {
 		ID: "sched-1", SeedURLs: []string{"http://a", "http://b"}, MaxPages: 42,
 		RespectRobots: true, UserAgent: "custom-agent",
 		Cookie: "session=abc", BasicAuthUser: "admin", BasicAuthPass: "hunter2",
-		AllowOffDomainLinks: true, UseSitemap: true,
+		LinkScope: domain.LinkScopeAny, UseSitemap: true,
 		IntervalMinutes: 30, Recurring: true, Enabled: true, NextRunAt: now.Add(-time.Minute),
 	}
 	store := newFakeScheduledCrawlStore(s)
@@ -209,7 +209,7 @@ func TestTriggerDueCrawls_PassesScheduleOptionsThrough(t *testing.T) {
 	}
 
 	if len(gotOpts.SeedURLs) != 2 || gotOpts.MaxPages != 42 || !gotOpts.RespectRobots ||
-		gotOpts.UserAgent != "custom-agent" || !gotOpts.AllowOffDomainLinks || !gotOpts.UseSitemap {
+		gotOpts.UserAgent != "custom-agent" || gotOpts.LinkScope != domain.LinkScopeAny || !gotOpts.UseSitemap {
 		t.Errorf("expected the schedule's options to pass through untouched, got %+v", gotOpts)
 	}
 	if gotOpts.Cookie != "session=abc" || gotOpts.BasicAuthUser != "admin" || gotOpts.BasicAuthPass != "hunter2" {
