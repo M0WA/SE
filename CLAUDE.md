@@ -40,6 +40,31 @@ an actual error is not.)
   Claude-Session: https://claude.ai/code/session_011oQftaLHMZhXYAmkTegESW
   ```
 
+## Test coverage
+
+Keep test coverage close to 100% for both Go and JavaScript — not just "the
+tests I thought of pass," but every branch a change adds (happy path, error
+path, not-configured/empty-input edge cases).
+
+- **Go**: `make coverage-check` runs the suite with a coverage profile and
+  fails under 100%. Check new/changed code with
+  `go test ./... -coverprofile=/tmp/cov.out -covermode=atomic && go tool cover
+  -func=/tmp/cov.out | grep <yourFunc>` before calling a change done. The admin
+  handler tests in `internal/adapters/restapi/admin_test.go` are the reference
+  pattern: fakes implementing the relevant port + `httptest`, one test per
+  status code/branch (success, not-configured/503, service-error/500,
+  method-not-allowed/405, and any handler-specific branch like a partial
+  failure or an empty-result case).
+- **JavaScript** (`internal/adapters/restapi/*.js` and the inline `<script>`
+  in `admin_*.html`/`crawl.html`): there's no automated JS test runner in this
+  repo yet. Until one exists, "tested" means actually exercised, not just
+  read: build the binaries, run them locally (or verify against
+  `se.mo-sys.de` post-deploy) and drive the change through a real browser —
+  headless Chromium over the DevTools Protocol works well for this
+  (`Page.navigate`, then `Runtime.evaluate` to click/type and read back DOM
+  state, then `Page.captureScreenshot`). Never report a JS/HTML change as
+  working without having actually run it this way.
+
 ## Deployment
 
 `se.mo-sys.de` is the dev/test deployment, not production — deploying there is
