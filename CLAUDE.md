@@ -27,6 +27,31 @@ npx --yes @redocly/cli@latest lint openapi.yaml
 (Missing `operationId` / missing 4xx-on-GET warnings are expected and fine to leave;
 an actual error is not.)
 
+## Keep nginx's routing config in sync
+
+`packaging/nginx/searchengine.conf` (+ its `README.md`) is the tracked source of
+truth for how nginx splits traffic between search-server (`127.0.0.1:8080`) and
+admin-server (`127.0.0.1:8081`) by path -- **whenever a route or served-asset path
+changes in a way that affects which top-level path prefix it lives under, update
+this file (and the README's routing list) in the same change.** postinst does
+*not* install or reload nginx config -- a real deployment's `/etc/nginx/...` can
+silently drift from this tracked copy unless someone manually re-syncs it, so
+don't assume "I updated the Go route" is the whole job.
+
+The concrete gotcha that already caused a real outage: nginx's `location /admin`
+(no trailing slash, no exact/regex modifier) is a plain **string prefix** match,
+not path-segment-aware -- it matches anything starting with those five
+characters, not just `/admin/...`. A new admin-only static asset route "just
+works" through the existing rule only if its path happens to literally start
+with `/admin`, `/login`, or `/logout` (e.g. `admin_schedule.js` does,
+`admin.js` does); anything else (e.g. a file that was named `crawl.js`) falls
+through to the catch-all `location /` rule instead, which proxies to
+search-server -- wrong backend, wrong auth requirements, and it fails in a
+confusing way (an HTML login-redirect page served in place of the JS, so the
+page's own script silently never runs) rather than a clean 404. When adding a
+new served path, either name it so it already falls under an existing prefix,
+or add a real `location` block for it in `packaging/nginx/searchengine.conf`.
+
 ## Before committing
 
 - `go build ./...`, `go vet ./...`, `gofmt -l .` must be clean.

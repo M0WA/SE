@@ -16,10 +16,22 @@ control, no rate limiting outside of nginx).
 
 nginx must split traffic between search-server and admin-server by path:
 
-- `/`, `/style.css`, `/search` -> search-server, `http://127.0.0.1:8080`
+- `/`, `/style.css`, `/search`, `/index.js` -> search-server, `http://127.0.0.1:8080`
 - `/login`, `/logout`, `/admin` and its subpaths (`/admin.js`,
   `/admin/documents`, `/admin/crawl`, `/admin/tuning`, `/admin/search`,
-  `/admin/api/...`) -> admin-server, `http://127.0.0.1:8081`
+  `/admin/api/...`, and every per-page script the admin UI serves --
+  `/admin_*.js`, `/admin_crawl.js`, `/login.js`) -> admin-server,
+  `http://127.0.0.1:8081`
+
+The `location /admin`/`/login`/`/logout` blocks below are plain **string
+prefix** matches, not path-segment-aware -- `/admin` matches anything
+starting with those five characters, not just `/admin/...`. A new
+admin-only static asset route only reaches admin-server through the
+existing rules if its path literally starts with `/admin`, `/login`, or
+`/logout`; anything else falls through to the catch-all `location /`
+below (search-server) instead and needs its own `location` block added
+here. See CLAUDE.md's "Keep nginx's routing config in sync" for the
+real incident this caused.
 
 crawl-server (`127.0.0.1:8082`) is an internal API that only
 admin-server talks to (via `CRAWL_SERVER_URL`). It must never be added
