@@ -49,8 +49,8 @@ const crawlJobPrunePollInterval = 5 * time.Minute
 // restapi.Config.OnCrawlComplete below) also resets this timer, so a crawl
 // finishing moments before the interval would have fired doesn't trigger an
 // almost-immediate redundant second run.
-func runPageRankScheduler(ctx context.Context, repo ports.PageRankRepository, opSettings *domain.OperationalSettings) *pageRankRecomputer {
-	pr := &pageRankRecomputer{ctx: ctx, repo: repo}
+func runPageRankScheduler(ctx context.Context, repo ports.PageRankRepository, settingsStore ports.SettingsStore, opSettings *domain.OperationalSettings) *pageRankRecomputer {
+	pr := &pageRankRecomputer{ctx: ctx, repo: repo, settingsStore: settingsStore}
 	pr.recompute()
 
 	go func() {
@@ -76,14 +76,15 @@ func runPageRankScheduler(ctx context.Context, repo ports.PageRankRepository, op
 // one "was it just recomputed" clock rather than racing two independent
 // timers.
 type pageRankRecomputer struct {
-	ctx  context.Context
-	repo ports.PageRankRepository
-	mu   sync.Mutex
-	last time.Time
+	ctx           context.Context
+	repo          ports.PageRankRepository
+	settingsStore ports.SettingsStore
+	mu            sync.Mutex
+	last          time.Time
 }
 
 func (p *pageRankRecomputer) recompute() {
-	if _, err := application.RunPageRankJob(p.ctx, p.repo); err != nil {
+	if _, err := application.RunPageRankJobWithStatus(p.ctx, p.repo, p.settingsStore); err != nil {
 		log.Printf("recomputing pagerank: %v", err)
 	}
 	p.mu.Lock()
@@ -188,7 +189,7 @@ func main() {
 	}
 	crawlerSvc := application.NewSQLCrawlerService(fetcher, robotsChecker, repo, embedder, parseHTML, opSettings)
 
-	pageRank := runPageRankScheduler(ctx, repo, opSettings)
+	pageRank := runPageRankScheduler(ctx, repo, repo, opSettings)
 
 	handler := restapi.New(restapi.Config{
 		Crawler:   crawlerSvc,

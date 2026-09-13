@@ -879,6 +879,20 @@ components:
         epsilon: { type: number, description: "Fixed convergence threshold (domain.PageRankEpsilon)." }
         pagerank_weight: { type: number, description: "The Tuning page's blend weight -- how much this feeds into search ranking." }
         recompute_interval_minutes: { type: integer, description: "The Tuning page's automatic recompute interval." }
+        recompute_in_progress:
+          type: boolean
+          description: >-
+            Whether a recompute is currently running, triggered by anything
+            -- another admin's "force recalculation" click (possibly on a
+            different admin-server instance), the periodic ticker, or a
+            post-crawl trigger -- not just this request's own caller.
+        last_recomputed_at:
+          type: string
+          format: date-time
+          description: When the last completed recompute finished. Absent if none has ever run on this instance.
+        last_recompute_documents: { type: integer, description: How many documents that run scored. }
+        last_recompute_iterations: { type: integer, description: How many iterations that run took. }
+        last_recompute_final_delta: { type: number, description: That run's final convergence delta. }
 
     PageRankRecomputeResult:
       type: object

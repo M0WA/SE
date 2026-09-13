@@ -2153,6 +2153,136 @@ func TestHandleAdminPageRankRecompute_MethodNotAllowed(t *testing.T) {
 	}
 }
 
+// adminAuthedHandlerWithPageRankAndSettingsStore adds a real SettingsStore
+// (see newSettingsStoreTestRepo) to adminAuthedHandlerWithPageRank's setup,
+// for the tests below that check domain.PageRankStatus actually persists
+// and round-trips through GET /admin/api/pagerank.
+func adminAuthedHandlerWithPageRankAndSettingsStore(t *testing.T, pageRank ports.PageRankRepository, store ports.SettingsStore) (*restapi.Handler, *http.Cookie) {
+	t.Helper()
+	h := restapi.New(restapi.Config{
+		Admin: &fakeAdminRepo{}, PageRank: pageRank, SettingsStore: store,
+		DBDriver: "pgx", AdminUser: testAdminUser, AdminPass: testAdminPass,
+	})
+	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
+	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login failed: %d %s", rec.Code, rec.Body.String())
+	}
+	return h, rec.Result().Cookies()[0]
+}
+
+// TestHandleAdminPageRankRecompute_PersistsStatusForGetToRead proves the
+// two handlers are actually wired together through the settings store --
+// POST /recompute's result is what a subsequent GET /pagerank reports,
+// not just what the POST response itself said.
+func TestHandleAdminPageRankRecompute_PersistsStatusForGetToRead(t *testing.T) {
+	store := newSettingsStoreTestRepo(t)
+	prRepo := &fakePageRankRepo{graph: map[string][]string{"a": {"b"}, "b": {"a"}}}
+	h, cookie := adminAuthedHandlerWithPageRankAndSettingsStore(t, prRepo, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/pagerank/recompute", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/pagerank", nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+	var resp struct {
+		RecomputeInProgress     bool    `json:"recompute_in_progress"`
+		LastRecomputedAt        *string `json:"last_recomputed_at"`
+		LastRecomputeDocuments  int     `json:"last_recompute_documents"`
+		LastRecomputeIterations int     `json:"last_recompute_iterations"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.RecomputeInProgress {
+		t.Error("expected recompute_in_progress false once the recompute finished")
+	}
+	if resp.LastRecomputedAt == nil {
+		t.Error("expected last_recomputed_at to be set")
+	}
+	if resp.LastRecomputeDocuments != 2 {
+		t.Errorf("expected last_recompute_documents=2, got %d", resp.LastRecomputeDocuments)
+	}
+	if resp.LastRecomputeIterations <= 0 {
+		t.Errorf("expected a positive last_recompute_iterations, got %d", resp.LastRecomputeIterations)
+	}
+}
+
+// TestHandleAdminPageRankRecompute_EmptyGraphReportsRealZeroes guards
+// against a real bug: recomputing over an empty link graph legitimately
+// scores 0 documents in 0 iterations, and an earlier version of
+// adminPageRankResponse used `omitempty` on those int fields -- which
+// silently dropped the real zero the same way a genuinely-missing value
+// would, so the page showed "undefined" instead of 0.
+func TestHandleAdminPageRankRecompute_EmptyGraphReportsRealZeroes(t *testing.T) {
+	store := newSettingsStoreTestRepo(t)
+	prRepo := &fakePageRankRepo{graph: map[string][]string{}}
+	h, cookie := adminAuthedHandlerWithPageRankAndSettingsStore(t, prRepo, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/pagerank/recompute", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/pagerank", nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(getRec, getReq)
+	var resp map[string]interface{}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if _, ok := resp["last_recompute_documents"]; !ok {
+		t.Error("expected last_recompute_documents present (as 0), not omitted, for an empty-graph run")
+	}
+	if _, ok := resp["last_recompute_iterations"]; !ok {
+		t.Error("expected last_recompute_iterations present (as 0), not omitted, for an empty-graph run")
+	}
+	if resp["last_recompute_documents"] != float64(0) {
+		t.Errorf("expected last_recompute_documents=0, got %+v", resp["last_recompute_documents"])
+	}
+}
+
+// TestHandleAdminPageRank_NoStatusYetOmitsRecomputeFields proves a process
+// that's never recomputed (or has no SettingsStore configured) reports
+// recompute_in_progress=false and no last_recomputed_at, rather than a
+// misleading zero-value timestamp.
+func TestHandleAdminPageRank_NoStatusYetOmitsRecomputeFields(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithPageRank(t, &fakeAdminRepo{}, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/pagerank", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if _, ok := resp["last_recomputed_at"]; ok {
+		t.Errorf("expected last_recomputed_at omitted when nothing has recomputed yet, got %+v", resp)
+	}
+	if resp["recompute_in_progress"] != false {
+		t.Errorf("expected recompute_in_progress=false, got %+v", resp["recompute_in_progress"])
+	}
+}
+
 func TestHandleAdminDatabasePage_GetServesPage(t *testing.T) {
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
 	req := httptest.NewRequest(http.MethodGet, "/admin/database", nil)

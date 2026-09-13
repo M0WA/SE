@@ -339,6 +339,11 @@ const (
 	SettingsKeyTuning      = "tuning"
 	SettingsKeyOperational = "operational"
 	SettingsKeyOverrides   = "overrides"
+	// SettingsKeyPageRankStatus holds a domain.PageRankStatus -- unlike the
+	// three above (admin-edited configuration, synced by
+	// bootstrap.SyncSettings' poll loop), this one is runtime status
+	// written by application.RunPageRankJobWithStatus, not admin input.
+	SettingsKeyPageRankStatus = "pagerank_status"
 )
 
 // SettingsStore persists the admin-configurable tuning/operational/ranking

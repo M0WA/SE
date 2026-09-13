@@ -996,6 +996,23 @@ type adminPageRankResponse struct {
 	Epsilon                  float64 `json:"epsilon"`
 	PageRankWeight           float64 `json:"pagerank_weight"`
 	RecomputeIntervalMinutes int     `json:"recompute_interval_minutes"`
+	// RecomputeInProgress/LastRecomputedAt/LastRecomputeDocuments/
+	// LastRecomputeIterations/LastRecomputeFinalDelta reflect
+	// domain.PageRankStatus, persisted by any process that ran a recompute
+	// (this admin-server's own "force recalculation" click, another
+	// admin-server instance, or cmd/crawl's periodic ticker/post-crawl
+	// trigger) -- so this shows the real cross-process state, not just
+	// whatever this one browser tab remembers triggering.
+	RecomputeInProgress bool       `json:"recompute_in_progress"`
+	LastRecomputedAt    *time.Time `json:"last_recomputed_at,omitempty"`
+	// No omitempty on these three: a run over an empty link graph
+	// legitimately scores 0 documents in 0 iterations, and omitempty would
+	// silently drop that real value the same way a genuinely-missing one
+	// would -- the JS side only reads them once LastRecomputedAt is set
+	// anyway, so there's nothing to gain by omitting a real zero.
+	LastRecomputeDocuments  int     `json:"last_recompute_documents"`
+	LastRecomputeIterations int     `json:"last_recompute_iterations"`
+	LastRecomputeFinalDelta float64 `json:"last_recompute_final_delta"`
 }
 
 func (h *Handler) handleAdminPageRank(w http.ResponseWriter, r *http.Request) {
@@ -1025,6 +1042,15 @@ func (h *Handler) handleAdminPageRank(w http.ResponseWriter, r *http.Request) {
 	if h.settings != nil {
 		resp.PageRankWeight = h.settings.PageRankWeight()
 	}
+	status := application.LoadPageRankStatus(r.Context(), h.settingsStore)
+	resp.RecomputeInProgress = status.InProgress
+	if !status.LastRunAt.IsZero() {
+		lastRunAt := status.LastRunAt
+		resp.LastRecomputedAt = &lastRunAt
+		resp.LastRecomputeDocuments = status.Documents
+		resp.LastRecomputeIterations = status.Iterations
+		resp.LastRecomputeFinalDelta = status.FinalDelta
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -1049,7 +1075,7 @@ func (h *Handler) handleAdminPageRankRecompute(w http.ResponseWriter, r *http.Re
 		return
 	}
 	start := time.Now()
-	result, err := application.RunPageRankJob(r.Context(), h.pageRank)
+	result, err := application.RunPageRankJobWithStatus(r.Context(), h.pageRank, h.settingsStore)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

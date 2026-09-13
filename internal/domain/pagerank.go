@@ -1,6 +1,9 @@
 package domain
 
-import "math"
+import (
+	"math"
+	"time"
+)
 
 // PageRankDamping is the classic PageRank damping factor d: the
 // probability mass a page passes along its outbound links, versus (1-d)
@@ -23,8 +26,27 @@ const PageRankEpsilon = 1e-6
 // scores alone, and both are useful diagnostics for the admin PageRank
 // debug page after a forced recompute.
 type PageRankRunInfo struct {
-	Iterations int
-	FinalDelta float64
+	Iterations int     `json:"iterations,omitempty"`
+	FinalDelta float64 `json:"final_delta,omitempty"`
+}
+
+// PageRankStatus is the persisted, cross-process-visible record of the
+// last PageRank recompute -- written to a shared SettingsStore key (see
+// application.RunPageRankJobWithStatus) so the admin PageRank debug page
+// shows whether a recompute triggered by ANY process (the periodic
+// ticker, a post-crawl trigger, or an admin's "force recalculation"
+// click, possibly from a different browser or a different admin-server
+// instance) is currently running, and what the last completed run found
+// -- not just whatever this one process/browser happens to remember.
+// LastRunAt/Documents/Iterations/FinalDelta describe the last run that
+// actually completed; a run currently in progress doesn't touch them
+// until it finishes, so a concurrent viewer still sees the previous
+// result rather than a blank slate while InProgress is true.
+type PageRankStatus struct {
+	InProgress bool      `json:"in_progress"`
+	LastRunAt  time.Time `json:"last_run_at,omitempty"`
+	Documents  int       `json:"documents,omitempty"`
+	PageRankRunInfo
 }
 
 // PageRank computes classic iterative PageRank scores over a directed

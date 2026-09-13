@@ -2,11 +2,44 @@ package application_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
 	"searchengine/internal/application"
+	"searchengine/internal/domain"
+	"searchengine/internal/ports"
 )
+
+// fakeSettingsStore is a minimal in-memory ports.SettingsStore -- enough to
+// exercise RunPageRankJobWithStatus/LoadPageRankStatus without a real DB.
+type fakeSettingsStore struct {
+	values    map[string]string
+	saveErr   error
+	getErr    error
+	saveCalls []string // values saved, in order, for assertions on intermediate writes
+}
+
+func newFakeSettingsStore() *fakeSettingsStore {
+	return &fakeSettingsStore{values: make(map[string]string)}
+}
+
+func (s *fakeSettingsStore) SaveSetting(_ context.Context, key, value string) error {
+	if s.saveErr != nil {
+		return s.saveErr
+	}
+	s.values[key] = value
+	s.saveCalls = append(s.saveCalls, value)
+	return nil
+}
+
+func (s *fakeSettingsStore) GetSetting(_ context.Context, key string) (string, bool, error) {
+	if s.getErr != nil {
+		return "", false, s.getErr
+	}
+	v, ok := s.values[key]
+	return v, ok, nil
+}
 
 type fakePageRankRepo struct {
 	graph             map[string][]string
@@ -89,5 +122,102 @@ func TestRunPageRankJob_PropagatesUpdateError(t *testing.T) {
 	}
 	if _, err := application.RunPageRankJob(context.Background(), repo); !errors.Is(err, wantErr) {
 		t.Errorf("expected UpdatePageRanks error to propagate, got %v", err)
+	}
+}
+
+func TestRunPageRankJobWithStatus_RecordsCompletedRun(t *testing.T) {
+	repo := &fakePageRankRepo{graph: map[string][]string{"a": {"b"}, "b": {"a"}}}
+	settings := newFakeSettingsStore()
+
+	result, err := application.RunPageRankJobWithStatus(context.Background(), repo, settings)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	status := application.LoadPageRankStatus(context.Background(), settings)
+	if status.InProgress {
+		t.Error("expected InProgress false once the run has finished")
+	}
+	if status.LastRunAt.IsZero() {
+		t.Error("expected LastRunAt to be set")
+	}
+	if status.Documents != result.Documents || status.Iterations != result.Iterations || status.FinalDelta != result.FinalDelta {
+		t.Errorf("expected persisted status to match the run result, got %+v want %+v", status, result)
+	}
+}
+
+// TestRunPageRankJobWithStatus_SetsInProgressBeforeRunning proves the
+// in-progress flag is visible to a concurrent reader before the run
+// finishes, not only after -- the whole point of persisting it.
+func TestRunPageRankJobWithStatus_SetsInProgressBeforeRunning(t *testing.T) {
+	repo := &fakePageRankRepo{graph: map[string][]string{"a": {"b"}}}
+	settings := newFakeSettingsStore()
+
+	if _, err := application.RunPageRankJobWithStatus(context.Background(), repo, settings); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(settings.saveCalls) < 2 {
+		t.Fatalf("expected at least 2 saves (in-progress, then completed), got %d", len(settings.saveCalls))
+	}
+	var firstSave domain.PageRankStatus
+	if err := json.Unmarshal([]byte(settings.saveCalls[0]), &firstSave); err != nil {
+		t.Fatalf("decoding first save: %v", err)
+	}
+	if !firstSave.InProgress {
+		t.Error("expected the first persisted status to have InProgress true")
+	}
+}
+
+func TestRunPageRankJobWithStatus_ErrorClearsInProgressButKeepsLastResult(t *testing.T) {
+	repo := &fakePageRankRepo{graph: map[string][]string{"a": {"b"}, "b": {"a"}}}
+	settings := newFakeSettingsStore()
+	if _, err := application.RunPageRankJobWithStatus(context.Background(), repo, settings); err != nil {
+		t.Fatalf("unexpected error on first (successful) run: %v", err)
+	}
+	successStatus := application.LoadPageRankStatus(context.Background(), settings)
+
+	repo.linkGraphErr = errors.New("db unavailable")
+	if _, err := application.RunPageRankJobWithStatus(context.Background(), repo, settings); err == nil {
+		t.Fatal("expected the second run's error to propagate")
+	}
+
+	status := application.LoadPageRankStatus(context.Background(), settings)
+	if status.InProgress {
+		t.Error("expected InProgress false after a failed run")
+	}
+	if !status.LastRunAt.Equal(successStatus.LastRunAt) || status.Documents != successStatus.Documents {
+		t.Errorf("expected the last successful run's result preserved after a failure, got %+v want %+v", status, successStatus)
+	}
+}
+
+func TestRunPageRankJobWithStatus_NilSettingsStoreIsANoop(t *testing.T) {
+	repo := &fakePageRankRepo{graph: map[string][]string{"a": {"b"}}}
+	if _, err := application.RunPageRankJobWithStatus(context.Background(), repo, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadPageRankStatus_NilSettingsStoreReturnsZeroValue(t *testing.T) {
+	status := application.LoadPageRankStatus(context.Background(), nil)
+	if status.InProgress || !status.LastRunAt.IsZero() {
+		t.Errorf("expected the zero value, got %+v", status)
+	}
+}
+
+func TestLoadPageRankStatus_StoreErrorReturnsZeroValue(t *testing.T) {
+	settings := newFakeSettingsStore()
+	settings.getErr = errors.New("db unavailable")
+	status := application.LoadPageRankStatus(context.Background(), settings)
+	if status.InProgress || !status.LastRunAt.IsZero() {
+		t.Errorf("expected the zero value on a store error, got %+v", status)
+	}
+}
+
+func TestLoadPageRankStatus_UndecodableValueReturnsZeroValue(t *testing.T) {
+	settings := newFakeSettingsStore()
+	settings.values[ports.SettingsKeyPageRankStatus] = "not json"
+	status := application.LoadPageRankStatus(context.Background(), settings)
+	if status.InProgress || !status.LastRunAt.IsZero() {
+		t.Errorf("expected the zero value on undecodable stored JSON, got %+v", status)
 	}
 }
