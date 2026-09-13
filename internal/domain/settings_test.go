@@ -301,6 +301,7 @@ func TestValidLinkScope(t *testing.T) {
 		{domain.LinkScopeDefault, true},
 		{domain.LinkScopeHost, true},
 		{domain.LinkScopeDomain, true},
+		{domain.LinkScopeTLD, true},
 		{domain.LinkScopeAny, true},
 		{"planet", false},
 	}

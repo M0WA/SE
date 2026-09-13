@@ -66,9 +66,10 @@
         <option value="">Use site default</option>
         <option value="host">Exact seed host only</option>
         <option value="domain">Seed's domain, including subdomains</option>
+        <option value="tld">Any domain under the seed's top-level domain</option>
         <option value="any">Any domain</option>
       </select>
-      <p class="tuning-hint">"Use site default" follows whatever the Tuning page has set. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org.</p>
+      <p class="tuning-hint">"Use site default" follows whatever the Tuning page has set. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org. "Any domain under the seed's top-level domain" is broader still — from a seed of example.com it also follows other.com (any ".com" site), but not example.org.</p>
     </div>
     <div class="form-row form-row-check">
       <label for="crawl-use-sitemap">
@@ -361,7 +362,7 @@
     }, 1500);
   }
 
-  const LINK_SCOPE_LABELS = { '': 'Site default', host: 'Exact seed host only', domain: 'Seed domain + subdomains', any: 'Any domain' };
+  const LINK_SCOPE_LABELS = { '': 'Site default', host: 'Exact seed host only', domain: 'Seed domain + subdomains', tld: 'Any domain, same top-level domain', any: 'Any domain' };
   const RENDERER_LABELS = { '': 'Site default', none: 'None (plain HTTP)', chromium: 'Chromium', firefox: 'Firefox' };
 
   // renderRequestOptions shows every option this job actually ran with --
@@ -530,6 +531,10 @@
     return textCell(label);
   }
 
+  function crawlLinkScopeCell(s) {
+    return textCell(LINK_SCOPE_LABELS[s.link_scope || ''] || s.link_scope);
+  }
+
   function crawlEnabledCell(s) {
     const td = document.createElement('td');
     const label = document.createElement('label');
@@ -569,11 +574,12 @@
     }
     crawlsStatusEl.textContent = '';
     const table = buildTable(
-      [{ label: 'seed' }, { label: 'repeats' }, { label: 'next run' }, { label: 'last run' }, { label: 'enabled' }, { label: '' }],
+      [{ label: 'seed' }, { label: 'repeats' }, { label: 'links' }, { label: 'next run' }, { label: 'last run' }, { label: 'enabled' }, { label: '' }],
       filtered,
       (s) => [
         urlCell(seedSummary(s.seed_urls)),
         crawlRecurrenceCell(s),
+        crawlLinkScopeCell(s),
         textCell(formatTimestamp(s.next_run_at)),
         textCell(formatTimestamp(s.last_run_at)),
         crawlEnabledCell(s),

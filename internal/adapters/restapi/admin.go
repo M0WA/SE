@@ -887,7 +887,7 @@ func validateScheduledCrawlRequest(w http.ResponseWriter, req scheduledCrawlRequ
 		return false
 	}
 	if !domain.ValidLinkScope(req.LinkScope) {
-		http.Error(w, "link_scope must be one of: (blank), host, domain, any", http.StatusBadRequest)
+		http.Error(w, "link_scope must be one of: (blank), host, domain, tld, any", http.StatusBadRequest)
 		return false
 	}
 	return true

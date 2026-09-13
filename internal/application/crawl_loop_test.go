@@ -582,6 +582,67 @@ func TestCrawlLoop_LinkScopeDomainAllowsSameRegistrableDomainSubdomain(t *testin
 	}
 }
 
+// TestCrawlLoop_LinkScopeTLDAllowsDifferentDomainSameSuffix proves
+// LinkScopeTLD is broader than LinkScopeDomain -- it follows a link to a
+// completely different registrable domain, as long as it shares the
+// seed's public suffix (here, ".com"), but still rejects a domain under a
+// different suffix.
+func TestCrawlLoop_LinkScopeTLDAllowsDifferentDomainSameSuffix(t *testing.T) {
+	fetcher := &scopedFetcher{pages: map[string]string{
+		"http://www.example.com/start": "<html>start</html>",
+		"http://other.com/x":           "<html>x</html>",
+		"http://other.org/y":           "<html>y</html>",
+	}}
+	parse := func(html, pageURL string) (string, string, []string) {
+		if pageURL == "http://www.example.com/start" {
+			return "T", "genuegend inhalt text fuer diese seite bitte danke", []string{"http://other.com/x", "http://other.org/y"}
+		}
+		return "T2", "genuegend inhalt text fuer diese andere seite bitte danke", nil
+	}
+	save := func(ctx context.Context, doc domain.Document) error { return nil }
+
+	opts := ports.CrawlOptions{SeedURLs: []string{"http://www.example.com/start"}, MaxPages: 10, LinkScope: domain.LinkScopeTLD}
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected the different .com domain crawled but the .org domain rejected, got count=%d", count)
+	}
+	for _, u := range fetcher.urls {
+		if u == "http://other.org/y" {
+			t.Error("expected a domain under a different public suffix not to be fetched under link_scope=tld")
+		}
+	}
+}
+
+// TestCrawlLoop_LinkScopeTLDRejectsUnrelatedDomainUnderLinkScopeDomain
+// proves LinkScopeDomain (the stricter, default tier) rejects exactly the
+// cross-domain-same-suffix link that LinkScopeTLD allows -- the two tiers
+// genuinely differ, not just in name.
+func TestCrawlLoop_LinkScopeTLDRejectsUnrelatedDomainUnderLinkScopeDomain(t *testing.T) {
+	fetcher := &scopedFetcher{pages: map[string]string{
+		"http://www.example.com/start": "<html>start</html>",
+		"http://other.com/x":           "<html>x</html>",
+	}}
+	parse := func(html, pageURL string) (string, string, []string) {
+		if pageURL == "http://www.example.com/start" {
+			return "T", "genuegend inhalt text fuer diese seite bitte danke", []string{"http://other.com/x"}
+		}
+		return "T2", "genuegend inhalt text fuer diese andere seite bitte danke", nil
+	}
+	save := func(ctx context.Context, doc domain.Document) error { return nil }
+
+	opts := ports.CrawlOptions{SeedURLs: []string{"http://www.example.com/start"}, MaxPages: 10, LinkScope: domain.LinkScopeDomain}
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, nil, opts, nil, save, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected the different .com domain rejected under link_scope=domain, got count=%d", count)
+	}
+}
+
 // TestCrawlLoop_LinkScopeDefaultInheritsGlobalSetting proves opts.LinkScope
 // left blank falls back to the Tuning page's global default (via
 // settings.Get().LinkScope), not to the old strict host-only behavior.
@@ -917,6 +978,9 @@ func TestLinkScopeMatcher_Allows_RejectsLinksWithNoHost(t *testing.T) {
 	if m.allows("not a url with no host", domain.LinkScopeHost) {
 		t.Error("expected a hostless link rejected under link_scope=host")
 	}
+	if m.allows("not a url with no host", domain.LinkScopeTLD) {
+		t.Error("expected a hostless link rejected under link_scope=tld")
+	}
 	if !m.allows("not a url with no host", domain.LinkScopeAny) {
 		t.Error("expected link_scope=any to allow anything, even a hostless string")
 	}
@@ -927,6 +991,20 @@ func TestRegistrableDomain_FallsBackToHostForIPsAndLocalhost(t *testing.T) {
 		if got := registrableDomain(host); got != host {
 			t.Errorf("registrableDomain(%q) = %q, want %q (fallback to the host itself)", host, got, host)
 		}
+	}
+}
+
+func TestTopLevelDomain_FallsBackToHostForIPsAndLocalhost(t *testing.T) {
+	for _, host := range []string{"localhost", "127.0.0.1"} {
+		if got := topLevelDomain(host); got != host {
+			t.Errorf("topLevelDomain(%q) = %q, want %q (fallback to the host itself)", host, got, host)
+		}
+	}
+}
+
+func TestTopLevelDomain_HandlesMultiPartSuffix(t *testing.T) {
+	if got := topLevelDomain("www.example.co.uk"); got != "co.uk" {
+		t.Errorf(`topLevelDomain("www.example.co.uk") = %q, want "co.uk"`, got)
 	}
 }
 
