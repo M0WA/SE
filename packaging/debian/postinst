@@ -7,6 +7,13 @@ chown searchengine:searchengine /etc/searchengine/searchengine.env
 chmod 640 /etc/searchengine/searchengine.env
 mkdir -p /var/lib/searchengine
 chown searchengine:searchengine /var/lib/searchengine
+# TMPDIR for Playwright's driver (see searchengine.env's PLAYWRIGHT_*/TMPDIR
+# comment) -- crawl-server's ProtectSystem=strict makes the real /tmp
+# read-only, and unlike PLAYWRIGHT_DRIVER_PATH/PLAYWRIGHT_BROWSERS_PATH,
+# Node's mkdtemp doesn't create its own TMPDIR base, only subdirectories
+# under it.
+mkdir -p /var/lib/searchengine/tmp
+chown searchengine:searchengine /var/lib/searchengine/tmp
 if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     systemctl daemon-reload
     systemctl enable searchengine-search.service

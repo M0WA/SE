@@ -63,11 +63,22 @@ func (r *Renderer) ensureBrowser() (playwright.Browser, error) {
 		return nil, fmt.Errorf("starting playwright driver: %w", err)
 	}
 
+	// Playwright's own documented default for ChromiumSandbox is false --
+	// it launches with --no-sandbox unless told otherwise, favoring broad
+	// compatibility (works even where the OS-level sandbox mechanism
+	// Chromium wants isn't available) over defense in depth. This crawler
+	// runs pages from arbitrary, untrusted sites, so that tradeoff is wrong
+	// here: explicitly turn Chromium's own sandbox on. Firefox has no
+	// equivalent Playwright toggle -- its content-process sandboxing is
+	// always active regardless of launch options.
+	launchOpts := playwright.BrowserTypeLaunchOptions{}
 	browserType := pw.Chromium
 	if r.Engine == "firefox" {
 		browserType = pw.Firefox
+	} else {
+		launchOpts.ChromiumSandbox = playwright.Bool(true)
 	}
-	browser, err := browserType.Launch()
+	browser, err := browserType.Launch(launchOpts)
 	if err != nil {
 		_ = pw.Stop()
 		return nil, fmt.Errorf("launching %s: %w", r.Engine, err)
