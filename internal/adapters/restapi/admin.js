@@ -2,6 +2,30 @@ function clear(el) {
   while (el.firstChild) el.removeChild(el.firstChild);
 }
 
+// setButtonLoading swaps a button's label for a small spinner + verb while
+// an action is in flight, and disables it so the same click can't fire
+// twice -- restoring the exact original label when the action settles
+// (success or failure) via the matching setButtonLoading(btn, false) call.
+// Shared by every admin form's submit button (see crawl.html, admin_pagerank.html)
+// rather than each page hand-rolling its own busy state.
+function setButtonLoading(btn, loading, loadingLabel) {
+  if (loading) {
+    if (btn.dataset.originalLabel === undefined) btn.dataset.originalLabel = btn.textContent;
+    btn.disabled = true;
+    clear(btn);
+    const spinner = document.createElement('span');
+    spinner.className = 'spinner';
+    btn.appendChild(spinner);
+    btn.appendChild(document.createTextNode(loadingLabel || btn.dataset.originalLabel));
+  } else {
+    btn.disabled = false;
+    if (btn.dataset.originalLabel !== undefined) {
+      btn.textContent = btn.dataset.originalLabel;
+      delete btn.dataset.originalLabel;
+    }
+  }
+}
+
 // normalizeURL prepends https:// when a URL has no scheme at all, so an
 // admin can type "example.com" instead of always needing the full
 // "https://example.com" -- a URL that already names an explicit scheme

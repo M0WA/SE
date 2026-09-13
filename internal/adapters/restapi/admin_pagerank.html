@@ -42,7 +42,7 @@
   <section class="panel">
     <h2>Force recalculation</h2>
     <p class="tuning-hint">Recomputes every document's PageRank score from the current link graph right now, instead of waiting for the next scheduled or post-crawl run.</p>
-    <button id="recompute-btn" class="text-button" type="button">Recompute now</button>
+    <button id="recompute-btn" type="button">Recompute now</button>
     <div id="recompute-status" class="panel-status"></div>
     <div id="recompute-result"></div>
   </section>
@@ -79,7 +79,7 @@
   }
 
   recomputeBtn.addEventListener('click', async () => {
-    recomputeBtn.disabled = true;
+    setButtonLoading(recomputeBtn, true, 'Recomputing…');
     recomputeStatusEl.textContent = 'Recomputing…';
     clear(recomputeResultEl);
     try {
@@ -95,7 +95,7 @@
     } catch (err) {
       recomputeStatusEl.textContent = 'Could not recompute: ' + err.message;
     } finally {
-      recomputeBtn.disabled = false;
+      setButtonLoading(recomputeBtn, false);
     }
   });
 
