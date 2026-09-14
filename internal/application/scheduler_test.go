@@ -56,14 +56,14 @@ func (f *fakeScheduledCrawlStore) DueScheduledCrawls(_ context.Context, now time
 	}
 	var due []domain.ScheduledCrawl
 	for _, s := range f.schedules {
-		if s.Enabled && !s.NextRunAt.After(now) {
+		if s.Enabled && !s.InProgress && !s.NextRunAt.After(now) {
 			due = append(due, s)
 		}
 	}
 	return due, nil
 }
 
-func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(_ context.Context, id string, lastRunAt, nextRunAt time.Time, enabled bool, runCount int) error {
+func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(_ context.Context, id string, lastRunAt, nextRunAt time.Time, enabled, inProgress bool, runCount int) error {
 	f.markCalls++
 	if f.markErr != nil {
 		return f.markErr
@@ -78,6 +78,7 @@ func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(_ context.Context, id st
 	s.LastRunAt = &lastRunAt
 	s.NextRunAt = nextRunAt
 	s.Enabled = enabled
+	s.InProgress = inProgress
 	s.RunCount = runCount
 	f.schedules[id] = s
 	return nil
@@ -230,14 +231,16 @@ func TestTriggerDueCrawls_PassesScheduleOptionsThrough(t *testing.T) {
 	}
 }
 
-// TestTriggerDueCrawls_DisablesEveryEntryAtTriggerTime proves a schedule is
-// taken out of contention the instant it's triggered -- regardless of
-// whether it's recurring -- so a tick before the run finishes never sees
-// it as due again. This is the fix for schedules double-triggering when a
-// crawl runs longer than its own interval: the old provisional
-// next_run_at=trigger+interval placeholder could arrive before the run
-// actually finished; disabling outright removes that window entirely.
-func TestTriggerDueCrawls_DisablesEveryEntryAtTriggerTime(t *testing.T) {
+// TestTriggerDueCrawls_MarksInProgressAtTriggerTimeWithoutTouchingEnabled
+// proves a schedule is taken out of contention the instant it's triggered
+// -- regardless of whether it's recurring -- so a tick before the run
+// finishes never sees it as due again, via InProgress alone. This is the
+// fix for schedules double-triggering when a crawl runs longer than its
+// own interval: the old provisional next_run_at=trigger+interval
+// placeholder could arrive before the run actually finished. Enabled (the
+// admin's own on/off toggle) must stay exactly as it was -- InProgress is
+// what actually excludes it from DueScheduledCrawls.
+func TestTriggerDueCrawls_MarksInProgressAtTriggerTimeWithoutTouchingEnabled(t *testing.T) {
 	now := time.Now().UTC()
 	s := domain.ScheduledCrawl{ID: "sched-1", SeedURLs: []string{"http://a"}, IntervalMinutes: 30, Recurring: true, Enabled: true, NextRunAt: now.Add(-time.Minute)}
 	store := newFakeScheduledCrawlStore(s)
@@ -247,17 +250,22 @@ func TestTriggerDueCrawls_DisablesEveryEntryAtTriggerTime(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if store.schedules["sched-1"].Enabled {
-		t.Error("expected a recurring entry to be disabled immediately at trigger time, before its run finishes")
+	updated := store.schedules["sched-1"]
+	if !updated.Enabled {
+		t.Error("expected Enabled to stay true at trigger time -- triggering must never touch the admin's own toggle")
+	}
+	if !updated.InProgress {
+		t.Error("expected InProgress to be set immediately at trigger time, before its run finishes")
 	}
 }
 
-// TestTriggerDueCrawls_StaysDisabledUntilOnDoneEvenPastItsOwnInterval is
+// TestTriggerDueCrawls_StaysInProgressUntilOnDoneEvenPastItsOwnInterval is
 // the direct regression test for the double-trigger bug: even once "now"
 // has advanced past the old provisional next_run_at (trigger+interval),
-// the still-running entry must not come back from DueScheduledCrawls --
-// only onDone (the run actually finishing) can re-arm it.
-func TestTriggerDueCrawls_StaysDisabledUntilOnDoneEvenPastItsOwnInterval(t *testing.T) {
+// the still-running (InProgress) entry must not come back from
+// DueScheduledCrawls -- only onDone (the run actually finishing) can
+// re-arm it.
+func TestTriggerDueCrawls_StaysInProgressUntilOnDoneEvenPastItsOwnInterval(t *testing.T) {
 	now := time.Now().UTC()
 	s := domain.ScheduledCrawl{ID: "sched-1", SeedURLs: []string{"http://a"}, IntervalMinutes: 30, Recurring: true, Enabled: true, NextRunAt: now.Add(-time.Minute)}
 	store := newFakeScheduledCrawlStore(s)
@@ -297,11 +305,11 @@ func TestTriggerDueCrawls_StaysDisabledUntilOnDoneEvenPastItsOwnInterval(t *test
 	}
 }
 
-// TestTriggerDueCrawls_NonRecurringDisablesItselfAtTriggerTime proves a
+// TestTriggerDueCrawls_NonRecurringMarksInProgressAtTriggerTime proves a
 // one-off entry (Recurring false) is taken out of contention the instant
-// it's triggered, not left enabled with a meaningless next_run_at that the
-// very next tick would treat as due all over again.
-func TestTriggerDueCrawls_NonRecurringDisablesItselfAtTriggerTime(t *testing.T) {
+// it's triggered (via InProgress, not by touching Enabled), not left
+// available for the very next tick to treat as due all over again.
+func TestTriggerDueCrawls_NonRecurringMarksInProgressAtTriggerTime(t *testing.T) {
 	now := time.Now().UTC()
 	s := domain.ScheduledCrawl{ID: "once", SeedURLs: []string{"http://a"}, Recurring: false, Enabled: true, NextRunAt: now.Add(-time.Minute)}
 	store := newFakeScheduledCrawlStore(s)
@@ -311,8 +319,12 @@ func TestTriggerDueCrawls_NonRecurringDisablesItselfAtTriggerTime(t *testing.T) 
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if store.schedules["once"].Enabled {
-		t.Error("expected a non-recurring entry to disable itself immediately at trigger time")
+	updated := store.schedules["once"]
+	if !updated.Enabled {
+		t.Error("expected Enabled to stay true at trigger time -- only onDone turns a one-off entry off for good")
+	}
+	if !updated.InProgress {
+		t.Error("expected a non-recurring entry to be marked in-progress immediately at trigger time")
 	}
 }
 
@@ -335,16 +347,22 @@ func TestTriggerDueCrawls_NonRecurringStaysDisabledOnDone(t *testing.T) {
 	}
 	onDone()
 
-	if store.schedules["once"].Enabled {
-		t.Error("expected a non-recurring entry to stay disabled after onDone")
+	updated := store.schedules["once"]
+	if updated.Enabled {
+		t.Error("expected a non-recurring entry to be disabled by onDone")
+	}
+	if updated.InProgress {
+		t.Error("expected onDone to clear InProgress even for a non-recurring entry")
 	}
 }
 
 // TestTriggerDueCrawls_MaxRunsDisablesOnceReached proves a recurring
-// schedule with a MaxRuns cap disables itself the moment this run reaches
-// it, exactly like a non-recurring entry disables after its one run --
-// runCount (RunCount+1, this run included) is what's compared against
-// MaxRuns.
+// schedule with a MaxRuns cap disables itself once onDone fires for the
+// run that reaches it, exactly like a non-recurring entry disables after
+// its one run -- runCount (RunCount+1, this run included) is what's
+// compared against MaxRuns. Disabling only happens at onDone (completion),
+// not at trigger time -- Enabled stays untouched (InProgress alone excludes
+// it from DueScheduledCrawls) until the run actually finishes.
 func TestTriggerDueCrawls_MaxRunsDisablesOnceReached(t *testing.T) {
 	now := time.Now().UTC()
 	s := domain.ScheduledCrawl{
@@ -353,14 +371,26 @@ func TestTriggerDueCrawls_MaxRunsDisablesOnceReached(t *testing.T) {
 	}
 	store := newFakeScheduledCrawlStore(s)
 
-	trigger := func(context.Context, ports.CrawlOptions, func()) (string, error) { return "job-1", nil }
+	var onDone func()
+	trigger := func(_ context.Context, _ ports.CrawlOptions, done func()) (string, error) {
+		onDone = done
+		return "job-1", nil
+	}
 	if _, err := application.TriggerDueCrawls(context.Background(), store, trigger, now); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	if !store.schedules["capped"].Enabled {
+		t.Fatal("expected Enabled to stay true at trigger time, before its run finishes")
+	}
+	onDone()
+
 	updated := store.schedules["capped"]
 	if updated.Enabled {
-		t.Error("expected the schedule to disable itself on reaching its MaxRuns cap")
+		t.Error("expected the schedule to disable itself once onDone fires for the run that reaches its MaxRuns cap")
+	}
+	if updated.InProgress {
+		t.Error("expected onDone to clear InProgress")
 	}
 	if updated.RunCount != 3 {
 		t.Errorf("expected RunCount 3, got %d", updated.RunCount)
@@ -368,9 +398,10 @@ func TestTriggerDueCrawls_MaxRunsDisablesOnceReached(t *testing.T) {
 }
 
 // TestTriggerDueCrawls_MaxRunsNotYetReachedStaysEnabled proves a schedule
-// below its MaxRuns cap is re-enabled by onDone (once its run actually
-// finishes) rather than staying disabled like a capped/one-off entry, and
-// that RunCount advances by exactly one per triggered run.
+// below its MaxRuns cap stays enabled (Enabled untouched) through onDone
+// (once its run actually finishes) rather than being disabled like a
+// capped/one-off entry, and that RunCount advances by exactly one per
+// triggered run.
 func TestTriggerDueCrawls_MaxRunsNotYetReachedStaysEnabled(t *testing.T) {
 	now := time.Now().UTC()
 	s := domain.ScheduledCrawl{
@@ -387,14 +418,21 @@ func TestTriggerDueCrawls_MaxRunsNotYetReachedStaysEnabled(t *testing.T) {
 	if _, err := application.TriggerDueCrawls(context.Background(), store, trigger, now); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if store.schedules["capped"].Enabled {
-		t.Fatal("expected the schedule disabled while its run is still in progress")
+	beforeDone := store.schedules["capped"]
+	if !beforeDone.Enabled {
+		t.Fatal("expected Enabled to stay true at trigger time -- InProgress is what excludes it while its run is in progress")
+	}
+	if !beforeDone.InProgress {
+		t.Fatal("expected the schedule marked in-progress while its run is still ongoing")
 	}
 	onDone()
 
 	updated := store.schedules["capped"]
 	if !updated.Enabled {
-		t.Error("expected the schedule re-enabled by onDone, below its MaxRuns cap")
+		t.Error("expected the schedule to stay enabled by onDone, below its MaxRuns cap")
+	}
+	if updated.InProgress {
+		t.Error("expected onDone to clear InProgress")
 	}
 	if updated.RunCount != 2 {
 		t.Errorf("expected RunCount 2, got %d", updated.RunCount)
@@ -403,7 +441,7 @@ func TestTriggerDueCrawls_MaxRunsNotYetReachedStaysEnabled(t *testing.T) {
 
 // TestTriggerDueCrawls_ZeroMaxRunsIsUnlimited proves MaxRuns 0 (the
 // default) never disables a recurring schedule for good, no matter how
-// high RunCount climbs -- onDone still re-enables it once its run
+// high RunCount climbs -- it stays enabled through onDone once its run
 // finishes.
 func TestTriggerDueCrawls_ZeroMaxRunsIsUnlimited(t *testing.T) {
 	now := time.Now().UTC()
@@ -423,7 +461,7 @@ func TestTriggerDueCrawls_ZeroMaxRunsIsUnlimited(t *testing.T) {
 	}
 	onDone()
 	if !store.schedules["unlimited"].Enabled {
-		t.Error("expected MaxRuns 0 to mean unlimited, re-enabled by onDone")
+		t.Error("expected MaxRuns 0 to mean unlimited, stays enabled through onDone")
 	}
 }
 

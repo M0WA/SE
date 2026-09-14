@@ -254,7 +254,15 @@ func (r *Repository) migrateScheduledCrawlColumns(ctx context.Context) error {
 	if err := addColumn("blocked_domains", "blocked_domains TEXT NOT NULL DEFAULT '[]'"); err != nil {
 		return err
 	}
-	return addColumn("follow_indexed_domains", "follow_indexed_domains BOOLEAN NOT NULL DEFAULT false")
+	if err := addColumn("follow_indexed_domains", "follow_indexed_domains BOOLEAN NOT NULL DEFAULT false"); err != nil {
+		return err
+	}
+	// in_progress tracks "a triggered run for this entry hasn't finished
+	// yet" separately from enabled (the admin's own on/off toggle) -- see
+	// domain.ScheduledCrawl.InProgress and application.TriggerDueCrawls for
+	// why the two must never be conflated. Defaults to false for a
+	// pre-existing row: nothing was mid-run when this column didn't exist.
+	return addColumn("in_progress", "in_progress BOOLEAN NOT NULL DEFAULT false")
 }
 
 // ensureHostIndex and ensureCrawledAtIndex both run after
@@ -1647,7 +1655,7 @@ const scheduledCrawlColumns = `id, seed_urls, max_pages, respect_robots, user_ag
 	link_scope, allowed_domains, blocked_domains, follow_indexed_domains,
 	use_sitemap, fetch_timeout_seconds, min_text_length,
 	crawl_delay_ms, max_response_kb, prioritize_unindexed, recurring,
-	interval_minutes, max_runs, run_count, renderer, enabled, last_run_at, next_run_at, created_at`
+	interval_minutes, max_runs, run_count, renderer, enabled, in_progress, last_run_at, next_run_at, created_at`
 
 // CreateScheduledCrawl inserts a new crawl definition -- the one
 // representation of a crawl the admin sets up, whether it recurs or (see
@@ -1666,15 +1674,15 @@ func (r *Repository) CreateScheduledCrawl(ctx context.Context, s domain.Schedule
 		return fmt.Errorf("encoding blocked domains: %w", err)
 	}
 	insertSQL := r.ph(`INSERT INTO scheduled_crawls (`+scheduledCrawlColumns+`)
-	                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`,
-		1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27)
+	                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`,
+		1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28)
 	_, err = r.db.ExecContext(ctx, insertSQL,
 		s.ID, string(seedJSON), s.MaxPages, s.RespectRobots, s.UserAgent,
 		s.Cookie, s.BasicAuthUser, s.BasicAuthPass,
 		s.LinkScope, string(allowedJSON), string(blockedJSON), s.FollowIndexedDomains,
 		s.UseSitemap, s.FetchTimeoutSeconds, s.MinTextLength,
 		s.CrawlDelayMs, s.MaxResponseKB, s.PrioritizeUnindexed, s.Recurring,
-		s.IntervalMinutes, s.MaxRuns, s.RunCount, s.Renderer, s.Enabled,
+		s.IntervalMinutes, s.MaxRuns, s.RunCount, s.Renderer, s.Enabled, s.InProgress,
 		nullableTimeString(s.LastRunAt), s.NextRunAt.UTC().Format(crawledAtLayout), s.CreatedAt.UTC().Format(crawledAtLayout),
 	)
 	if err != nil {
@@ -1781,12 +1789,16 @@ func requireRowsAffected(res sql.Result, id string) error {
 	return nil
 }
 
-// DueScheduledCrawls lists every enabled schedule whose next_run_at is at
-// or before now, soonest-due first.
+// DueScheduledCrawls lists every enabled, not-already-in-progress schedule
+// whose next_run_at is at or before now, soonest-due first. in_progress =
+// false excludes an entry whose previously-triggered run hasn't finished
+// yet -- see application.TriggerDueCrawls, which is the only thing that
+// ever sets in_progress true, and MarkScheduledCrawlRun's onDone call,
+// which is the only thing that ever clears it back to false.
 func (r *Repository) DueScheduledCrawls(ctx context.Context, now time.Time) ([]domain.ScheduledCrawl, error) {
 	query := r.ph(`SELECT `+scheduledCrawlColumns+` FROM scheduled_crawls
-	               WHERE enabled = %s AND next_run_at <= %s ORDER BY next_run_at ASC`, 1, 2)
-	rows, err := r.db.QueryContext(ctx, query, true, now.UTC().Format(crawledAtLayout))
+	               WHERE enabled = %s AND in_progress = %s AND next_run_at <= %s ORDER BY next_run_at ASC`, 1, 2, 3)
+	rows, err := r.db.QueryContext(ctx, query, true, false, now.UTC().Format(crawledAtLayout))
 	if err != nil {
 		return nil, fmt.Errorf("querying due scheduled crawls: %w", err)
 	}
@@ -1805,17 +1817,23 @@ func (r *Repository) DueScheduledCrawls(ctx context.Context, now time.Time) ([]d
 
 // MarkScheduledCrawlRun records that a schedule was just triggered (or just
 // finished -- see application.TriggerDueCrawls, which calls this twice per
-// run: once immediately with a provisional nextRunAt, once more when the
-// crawl actually completes, correcting nextRunAt to reflect the real
-// finish time; runCount and enabled are computed once by the caller and
-// passed unchanged to both calls, so they never disagree). enabled lets a
-// one-off (non-recurring) entry, or a recurring one that just reached its
-// MaxRuns cap, take itself out of contention for DueScheduledCrawls
-// immediately, rather than waiting to be corrected at completion.
-func (r *Repository) MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time, enabled bool, runCount int) error {
-	updateSQL := r.ph(`UPDATE scheduled_crawls SET last_run_at = %s, next_run_at = %s, enabled = %s, run_count = %s WHERE id = %s`, 1, 2, 3, 4, 5)
+// run: once immediately with a provisional nextRunAt and inProgress=true,
+// once more when the crawl actually completes, correcting nextRunAt to
+// reflect the real finish time and clearing inProgress back to false).
+// enabled and inProgress are deliberately separate columns: enabled is
+// purely the admin's own on/off toggle (this call only ever changes it to
+// reflect a genuine end state -- a one-off entry that just ran, or a
+// recurring one that just reached its MaxRuns cap -- never merely "a run
+// is currently in flight"), while inProgress is what actually keeps
+// DueScheduledCrawls from double-triggering an entry that's still running
+// past its own interval. Conflating the two used to mean every trigger
+// (including a manual "Run now") visibly, if temporarily, unchecked the
+// admin's own enabled toggle in the UI -- confusing and wrong, since the
+// admin never touched it.
+func (r *Repository) MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time, enabled, inProgress bool, runCount int) error {
+	updateSQL := r.ph(`UPDATE scheduled_crawls SET last_run_at = %s, next_run_at = %s, enabled = %s, in_progress = %s, run_count = %s WHERE id = %s`, 1, 2, 3, 4, 5, 6)
 	res, err := r.db.ExecContext(ctx, updateSQL,
-		lastRunAt.UTC().Format(crawledAtLayout), nextRunAt.UTC().Format(crawledAtLayout), enabled, runCount, id)
+		lastRunAt.UTC().Format(crawledAtLayout), nextRunAt.UTC().Format(crawledAtLayout), enabled, inProgress, runCount, id)
 	if err != nil {
 		return fmt.Errorf("marking scheduled crawl run (%s): %w", id, err)
 	}
@@ -1884,7 +1902,7 @@ func scanScheduledCrawl(row scanner) (domain.ScheduledCrawl, error) {
 		&s.LinkScope, &allowedJSON, &blockedJSON, &s.FollowIndexedDomains,
 		&s.UseSitemap, &s.FetchTimeoutSeconds, &s.MinTextLength,
 		&s.CrawlDelayMs, &s.MaxResponseKB, &s.PrioritizeUnindexed, &s.Recurring,
-		&s.IntervalMinutes, &s.MaxRuns, &s.RunCount, &s.Renderer, &s.Enabled,
+		&s.IntervalMinutes, &s.MaxRuns, &s.RunCount, &s.Renderer, &s.Enabled, &s.InProgress,
 		&lastRunAt, &nextRunAt, &createdAt); err != nil {
 		return domain.ScheduledCrawl{}, err
 	}

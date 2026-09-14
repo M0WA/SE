@@ -189,7 +189,7 @@ func TestUpdateScheduledCrawl_ReplacesEditableFields(t *testing.T) {
 	// Give it a real RunCount before editing, so the assertion below can
 	// prove UpdateScheduledCrawl leaves it alone (like LastRunAt) even
 	// though MaxRuns -- the cap it's compared against -- does change.
-	if err := repo.MarkScheduledCrawlRun(ctx, "sched-1", now, now.Add(30*time.Minute), true, 3); err != nil {
+	if err := repo.MarkScheduledCrawlRun(ctx, "sched-1", now, now.Add(30*time.Minute), true, false, 3); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -308,6 +308,34 @@ func TestDueScheduledCrawls_OnlyReturnsEnabledAndOverdue(t *testing.T) {
 	}
 }
 
+// TestDueScheduledCrawls_ExcludesInProgress proves an enabled, overdue
+// entry that's currently in_progress is still excluded -- in_progress is a
+// second, independent gate alongside enabled, not something enabled alone
+// covers.
+func TestDueScheduledCrawls_ExcludesInProgress(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	overdueIdle := newScheduledCrawl("overdue-idle", 30, now.Add(-1*time.Minute))
+	overdueInProgress := newScheduledCrawl("overdue-in-progress", 30, now.Add(-1*time.Minute))
+	overdueInProgress.InProgress = true
+
+	for _, s := range []domain.ScheduledCrawl{overdueIdle, overdueInProgress} {
+		if err := repo.CreateScheduledCrawl(ctx, s); err != nil {
+			t.Fatalf("unexpected error creating %s: %v", s.ID, err)
+		}
+	}
+
+	due, err := repo.DueScheduledCrawls(ctx, now)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(due) != 1 || due[0].ID != "overdue-idle" {
+		t.Errorf("expected only the idle (not in-progress) overdue schedule, got %+v", due)
+	}
+}
+
 func TestMarkScheduledCrawlRun_AdvancesLastAndNextRun(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
@@ -318,7 +346,7 @@ func TestMarkScheduledCrawlRun_AdvancesLastAndNextRun(t *testing.T) {
 	}
 
 	nextRun := now.Add(30 * time.Minute)
-	if err := repo.MarkScheduledCrawlRun(ctx, "sched-1", now, nextRun, true, 1); err != nil {
+	if err := repo.MarkScheduledCrawlRun(ctx, "sched-1", now, nextRun, true, false, 1); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -351,8 +379,8 @@ func TestMarkScheduledCrawlRun_AdvancesLastAndNextRun(t *testing.T) {
 
 // TestMarkScheduledCrawlRun_PersistsEnabled proves the enabled param is
 // actually written, not just last_run_at/next_run_at -- what a one-off
-// (non-recurring) entry relies on to take itself out of contention right
-// at trigger time (see application.TriggerDueCrawls).
+// (non-recurring) entry's onDone relies on to disable itself for good once
+// its triggered run actually completes (see application.TriggerDueCrawls).
 func TestMarkScheduledCrawlRun_PersistsEnabled(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
@@ -362,7 +390,7 @@ func TestMarkScheduledCrawlRun_PersistsEnabled(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if err := repo.MarkScheduledCrawlRun(ctx, "once", now, now, false, 1); err != nil {
+	if err := repo.MarkScheduledCrawlRun(ctx, "once", now, now, false, false, 1); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -375,9 +403,58 @@ func TestMarkScheduledCrawlRun_PersistsEnabled(t *testing.T) {
 	}
 }
 
+// TestMarkScheduledCrawlRun_PersistsInProgress proves the inProgress param
+// is actually written -- what application.TriggerDueCrawls' trigger-time
+// call relies on to keep DueScheduledCrawls from picking this entry up
+// again while it's still running, without touching enabled at all.
+func TestMarkScheduledCrawlRun_PersistsInProgress(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	s := newScheduledCrawl("sched-1", 30, now.Add(-time.Minute))
+	if err := repo.CreateScheduledCrawl(ctx, s); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Simulate TriggerDueCrawls' trigger-time call: enabled stays true,
+	// inProgress becomes true.
+	if err := repo.MarkScheduledCrawlRun(ctx, "sched-1", now, now.Add(30*time.Minute), true, true, 1); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got, err := repo.ListScheduledCrawls(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || !got[0].Enabled || !got[0].InProgress {
+		t.Errorf("expected enabled=true, in_progress=true after the trigger-time call, got %+v", got)
+	}
+
+	// The entry must not be due again while in_progress, even though
+	// next_run_at has already passed.
+	due, err := repo.DueScheduledCrawls(ctx, now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(due) != 0 {
+		t.Errorf("expected the in-progress entry to be excluded from DueScheduledCrawls, got %+v", due)
+	}
+
+	// Simulate onDone: inProgress clears back to false.
+	if err := repo.MarkScheduledCrawlRun(ctx, "sched-1", now, now.Add(30*time.Minute), true, false, 1); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got, err = repo.ListScheduledCrawls(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || got[0].InProgress {
+		t.Errorf("expected in_progress cleared after the onDone-style call, got %+v", got)
+	}
+}
+
 func TestMarkScheduledCrawlRun_NotFound(t *testing.T) {
 	repo := newTestRepo(t)
-	err := repo.MarkScheduledCrawlRun(context.Background(), "missing", time.Now(), time.Now(), true, 1)
+	err := repo.MarkScheduledCrawlRun(context.Background(), "missing", time.Now(), time.Now(), true, false, 1)
 	if !errors.Is(err, ports.ErrScheduledCrawlNotFound) {
 		t.Errorf("expected ErrScheduledCrawlNotFound, got %v", err)
 	}

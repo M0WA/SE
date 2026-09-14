@@ -438,15 +438,20 @@ type ScheduledCrawlStore interface {
 	ListScheduledCrawls(ctx context.Context) ([]domain.ScheduledCrawl, error)
 	UpdateScheduledCrawl(ctx context.Context, s domain.ScheduledCrawl) error
 	DeleteScheduledCrawl(ctx context.Context, id string) error
-	// DueScheduledCrawls lists every enabled schedule whose NextRunAt is at
-	// or before now.
+	// DueScheduledCrawls lists every enabled, not-already-in-progress
+	// schedule whose NextRunAt is at or before now.
 	DueScheduledCrawls(ctx context.Context, now time.Time) ([]domain.ScheduledCrawl, error)
 	// MarkScheduledCrawlRun records that a schedule was just triggered (or
 	// just finished), advancing it to its next run, storing runCount (how
 	// many times it has now run), and setting whether it stays enabled -- a
 	// one-off (non-recurring) entry, or one that just reached its MaxRuns
-	// cap, passes false so it's never picked up again.
-	MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time, enabled bool, runCount int) error
+	// cap, passes false so it's never picked up again. inProgress is
+	// separate from enabled: true from the moment a run is triggered until
+	// that same run's completion clears it, keeping DueScheduledCrawls from
+	// double-triggering an entry that runs longer than its own interval,
+	// without touching (or visibly flickering) the admin's own enabled
+	// toggle to do it.
+	MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time, enabled, inProgress bool, runCount int) error
 	// RunScheduledCrawlNow marks a schedule due immediately -- sets
 	// NextRunAt to now and re-enables it if it was paused -- without
 	// touching any other field (recurring/interval/run count/options all

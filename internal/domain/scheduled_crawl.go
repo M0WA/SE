@@ -61,11 +61,26 @@ type ScheduledCrawl struct {
 	// global default"; RendererNone/RendererChromium/RendererFirefox
 	// choose explicitly. See ports.CrawlOptions.Renderer (the same field,
 	// carried through by application.scheduledCrawlOptions).
-	Renderer  string
-	Enabled   bool
-	LastRunAt *time.Time
-	NextRunAt time.Time
-	CreatedAt time.Time
+	Renderer string
+	// Enabled is purely the admin's own on/off toggle for this schedule --
+	// never flipped merely because a triggered run for it hasn't finished
+	// yet (see InProgress for that). It only ever changes to reflect a
+	// genuine end state: an admin toggling it directly, a one-off entry
+	// that just ran once, or a recurring entry that just reached its
+	// MaxRuns cap.
+	Enabled bool
+	// InProgress is true from the moment application.TriggerDueCrawls
+	// triggers this entry until that same triggered run actually finishes,
+	// at which point its onDone callback clears it back to false. It exists
+	// so a schedule that runs longer than its own interval can't be
+	// double-triggered by the next scheduler tick, without needing to
+	// (mis)use Enabled as that mutex -- which used to make every trigger,
+	// including a manual "Run now", visibly uncheck Enabled in the admin UI
+	// even though the admin never touched it.
+	InProgress bool
+	LastRunAt  *time.Time
+	NextRunAt  time.Time
+	CreatedAt  time.Time
 }
 
 var scheduledCrawlSeq int64
