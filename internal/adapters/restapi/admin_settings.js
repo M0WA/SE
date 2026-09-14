@@ -25,6 +25,10 @@
   const pageRankIntervalEl = document.getElementById('pagerank-interval');
   const sessionTTLEl = document.getElementById('session-ttl');
   const status = document.getElementById('settings-status');
+  const blockedTermsEl = document.getElementById('blocked-terms');
+  const blockedDomainsEl = document.getElementById('blocked-domains');
+  const boostedTermsEl = document.getElementById('boosted-terms');
+  const boostedDomainsEl = document.getElementById('boosted-domains');
 
   function applySettings(s) {
     alphaEl.value = s.tuning.alpha;
@@ -62,60 +66,82 @@
     }
   }
 
+  // Ranking/Crawler/.../Session and Blocked/Boosted are two logically
+  // independent resources (GET/POST /admin/api/settings vs.
+  // /admin/api/overrides, merged onto this page from the old standalone
+  // Overrides page) but share this one form and one Save button -- saving
+  // both together on a single click, rather than needing to remember to
+  // click two separate buttons for one page of settings. Each save is
+  // attempted independently (one endpoint failing doesn't stop the other
+  // from being tried), and the combined result is reported on one status
+  // line.
+  async function saveSettings() {
+    const s = await postJSON('/admin/api/settings', {
+      tuning: {
+        alpha: parseFloat(alphaEl.value),
+        k1: parseFloat(k1El.value),
+        b: parseFloat(bEl.value),
+        pagerank_weight: parseFloat(pageRankWeightEl.value),
+      },
+      operational: {
+        title_weight: parseInt(titleWeightEl.value, 10),
+        fetch_timeout_seconds: parseInt(fetchTimeoutEl.value, 10),
+        user_agent: userAgentEl.value,
+        default_max_pages: parseInt(defaultMaxPagesEl.value, 10),
+        min_text_length: parseInt(minTextLengthEl.value, 10),
+        crawl_delay_ms: parseInt(crawlDelayEl.value, 10),
+        max_response_kb: parseInt(maxResponseKBEl.value, 10),
+        max_retained_crawl_jobs: parseInt(maxRetainedCrawlJobsEl.value, 10),
+        default_renderer: defaultRendererEl.value,
+        link_scope: defaultLinkScopeEl.value,
+        default_top_k: parseInt(defaultTopKEl.value, 10),
+        semantic_candidate_pool_size: parseInt(semanticPoolSizeEl.value, 10),
+        ann_search_enabled: annSearchEnabledEl.checked,
+        max_document_versions: parseInt(maxDocumentVersionsEl.value, 10),
+        db_max_open_conns: parseInt(dbMaxOpenConnsEl.value, 10),
+        db_max_idle_conns: parseInt(dbMaxIdleConnsEl.value, 10),
+        db_conn_max_lifetime_minutes: parseInt(dbConnMaxLifetimeEl.value, 10),
+        fuzzy_match_enabled: fuzzyEnabledEl.checked,
+        fuzzy_max_edit_distance: parseInt(fuzzyMaxEditDistanceEl.value, 10),
+        pagerank_recompute_interval_minutes: parseInt(pageRankIntervalEl.value, 10),
+        session_ttl_hours: parseInt(sessionTTLEl.value, 10),
+      },
+    });
+    applySettings(s);
+  }
+
+  async function saveOverrides() {
+    const o = await postJSON('/admin/api/overrides', {
+      blocked_terms: parseLines(blockedTermsEl.value),
+      blocked_domains: parseLines(blockedDomainsEl.value),
+      boosted_terms: parseFactorLines(boostedTermsEl.value),
+      boosted_domains: parseFactorLines(boostedDomainsEl.value),
+    });
+    applyOverrides(o);
+  }
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     status.textContent = '';
+    const errors = [];
     try {
-      const s = await postJSON('/admin/api/settings', {
-        tuning: {
-          alpha: parseFloat(alphaEl.value),
-          k1: parseFloat(k1El.value),
-          b: parseFloat(bEl.value),
-          pagerank_weight: parseFloat(pageRankWeightEl.value),
-        },
-        operational: {
-          title_weight: parseInt(titleWeightEl.value, 10),
-          fetch_timeout_seconds: parseInt(fetchTimeoutEl.value, 10),
-          user_agent: userAgentEl.value,
-          default_max_pages: parseInt(defaultMaxPagesEl.value, 10),
-          min_text_length: parseInt(minTextLengthEl.value, 10),
-          crawl_delay_ms: parseInt(crawlDelayEl.value, 10),
-          max_response_kb: parseInt(maxResponseKBEl.value, 10),
-          max_retained_crawl_jobs: parseInt(maxRetainedCrawlJobsEl.value, 10),
-          default_renderer: defaultRendererEl.value,
-          link_scope: defaultLinkScopeEl.value,
-          default_top_k: parseInt(defaultTopKEl.value, 10),
-          semantic_candidate_pool_size: parseInt(semanticPoolSizeEl.value, 10),
-          ann_search_enabled: annSearchEnabledEl.checked,
-          max_document_versions: parseInt(maxDocumentVersionsEl.value, 10),
-          db_max_open_conns: parseInt(dbMaxOpenConnsEl.value, 10),
-          db_max_idle_conns: parseInt(dbMaxIdleConnsEl.value, 10),
-          db_conn_max_lifetime_minutes: parseInt(dbConnMaxLifetimeEl.value, 10),
-          fuzzy_match_enabled: fuzzyEnabledEl.checked,
-          fuzzy_max_edit_distance: parseInt(fuzzyMaxEditDistanceEl.value, 10),
-          pagerank_recompute_interval_minutes: parseInt(pageRankIntervalEl.value, 10),
-          session_ttl_hours: parseInt(sessionTTLEl.value, 10),
-        },
-      });
-      applySettings(s);
+      await saveSettings();
+    } catch (err) {
+      errors.push('settings: ' + err.message);
+    }
+    try {
+      await saveOverrides();
+    } catch (err) {
+      errors.push('overrides: ' + err.message);
+    }
+    if (errors.length > 0) {
+      status.style.color = 'var(--accent)';
+      status.textContent = 'Could not save ' + errors.join('; ');
+    } else {
       status.style.color = 'var(--ink-muted)';
       status.textContent = 'Saved.';
-    } catch (err) {
-      status.style.color = 'var(--accent)';
-      status.textContent = 'Could not save: ' + err.message;
     }
   });
-
-  // The Overrides form below is entirely independent of the settings form
-  // above -- its own fields, its own GET/POST /admin/api/overrides
-  // endpoint, its own status line -- merged onto this page from the old
-  // standalone Overrides page.
-  const overridesForm = document.getElementById('overrides-form');
-  const blockedTermsEl = document.getElementById('blocked-terms');
-  const blockedDomainsEl = document.getElementById('blocked-domains');
-  const boostedTermsEl = document.getElementById('boosted-terms');
-  const boostedDomainsEl = document.getElementById('boosted-domains');
-  const overridesStatus = document.getElementById('overrides-status');
 
   function factorsToText(factors) {
     return Object.entries(factors || {}).map(([k, v]) => k + ' ' + v).join('\n');
@@ -144,28 +170,9 @@
     try {
       applyOverrides(await getJSON('/admin/api/overrides'));
     } catch (err) {
-      overridesStatus.textContent = 'Could not load overrides: ' + err.message;
+      status.textContent = 'Could not load overrides: ' + err.message;
     }
   }
-
-  overridesForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    overridesStatus.textContent = '';
-    try {
-      const o = await postJSON('/admin/api/overrides', {
-        blocked_terms: parseLines(blockedTermsEl.value),
-        blocked_domains: parseLines(blockedDomainsEl.value),
-        boosted_terms: parseFactorLines(boostedTermsEl.value),
-        boosted_domains: parseFactorLines(boostedDomainsEl.value),
-      });
-      applyOverrides(o);
-      overridesStatus.style.color = 'var(--ink-muted)';
-      overridesStatus.textContent = 'Saved.';
-    } catch (err) {
-      overridesStatus.style.color = 'var(--accent)';
-      overridesStatus.textContent = 'Could not save: ' + err.message;
-    }
-  });
 
   wireSignOut();
   loadSettings();
