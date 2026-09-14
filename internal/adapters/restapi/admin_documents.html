@@ -19,22 +19,32 @@
     <a href="/admin">Overview</a>
     <a href="/admin/documents" aria-current="page">Documents</a>
     <a href="/admin/crawl">Crawl</a>
-    <a href="/admin/tuning">Tuning</a>
+    <a href="/admin/jobs">Jobs</a>
+    <a href="/admin/settings">Settings</a>
     <a href="/admin/search">Search</a>
     <a href="/admin/overrides">Overrides</a>
     <a href="/admin/pagerank">PageRank</a>
     <a href="/admin/database">Database</a>
   </nav>
 
-  <form id="domain-search-form" class="crawl-form" style="margin-bottom: 0.5rem;">
-    <input id="domain-q" class="field" type="text" placeholder="Find a domain…" autofocus autocomplete="off">
-  </form>
-  <div id="domain-results"></div>
+  <section class="panel">
+    <h2>Domain/URL Search</h2>
+    <form id="domain-search-form" class="crawl-form" style="margin-bottom: 0.5rem;">
+      <input id="domain-q" class="field" type="text" placeholder="Search domains or URLs (regex)…" autofocus autocomplete="off">
+    </form>
+    <div id="domain-search-error" class="panel-status"></div>
+    <div id="domain-results"></div>
+    <div id="document-results"></div>
+  </section>
 
   <section class="panel">
-    <h2>Index at a glance</h2>
-    <div id="overview-status" class="panel-status"></div>
-    <div id="overview-charts"></div>
+    <h2>Vocabulary Search</h2>
+    <form id="vocab-search-form" class="crawl-form" style="margin-bottom: 0.5rem;">
+      <input id="vocab-q" class="field" type="text" placeholder="Search vocabulary (regex)…" autocomplete="off">
+    </form>
+    <div id="vocab-error" class="panel-status"></div>
+    <div id="vocab-summary"></div>
+    <div id="vocab-table"></div>
   </section>
 </main>
 <script src="/admin.js"></script>

@@ -19,7 +19,8 @@
     <a href="/admin" aria-current="page">Overview</a>
     <a href="/admin/documents">Documents</a>
     <a href="/admin/crawl">Crawl</a>
-    <a href="/admin/tuning">Tuning</a>
+    <a href="/admin/jobs">Jobs</a>
+    <a href="/admin/settings">Settings</a>
     <a href="/admin/search">Search</a>
     <a href="/admin/overrides">Overrides</a>
     <a href="/admin/pagerank">PageRank</a>
@@ -32,12 +33,9 @@
   </section>
 
   <section class="panel">
-    <h2>Vocabulary</h2>
-    <div id="vocab-summary"></div>
-    <form id="vocab-search-form" class="crawl-form" style="margin-bottom: 0.5rem;">
-      <input id="vocab-q" class="field" type="text" placeholder="Find a term…" autocomplete="off">
-    </form>
-    <div id="vocab-table"></div>
+    <h2>Corpus</h2>
+    <div id="overview-status" class="panel-status"></div>
+    <div id="overview-charts"></div>
   </section>
 </main>
 <script src="/admin.js"></script>

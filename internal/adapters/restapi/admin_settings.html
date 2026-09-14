@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>se. — tuning</title>
+<title>se. — settings</title>
 <link rel="stylesheet" href="/style.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -19,16 +19,17 @@
     <a href="/admin">Overview</a>
     <a href="/admin/documents">Documents</a>
     <a href="/admin/crawl">Crawl</a>
-    <a href="/admin/tuning" aria-current="page">Tuning</a>
+    <a href="/admin/jobs">Jobs</a>
+    <a href="/admin/settings" aria-current="page">Settings</a>
     <a href="/admin/search">Search</a>
     <a href="/admin/overrides">Overrides</a>
     <a href="/admin/pagerank">PageRank</a>
     <a href="/admin/database">Database</a>
   </nav>
 
-  <p class="lede" style="margin: 0 0 2rem;">Adjust ranking, crawling, and session behavior. Changes apply to every process (search, admin, crawl) within about 10 seconds.</p>
+  <p class="lede" style="margin: 0 0 2rem;">Adjust ranking, search, and session behavior. Changes apply to every process (search, admin, crawl) within about 10 seconds.</p>
 
-  <form id="tuning-form" class="stacked-form">
+  <form id="settings-form" class="stacked-form">
     <section class="panel">
       <h2>Ranking</h2>
       <div class="form-row">
@@ -44,56 +45,6 @@
         <input id="b" class="field" type="number" step="0.05" min="0" max="1" required>
       </div>
       <p class="tuning-hint">Defaults: alpha 0.5, k1 1.2, b 0.75. Values outside 0–1 (alpha, b) or below 0 (k1) are clamped.</p>
-    </section>
-
-    <section class="panel">
-      <h2>Crawler</h2>
-      <div class="form-row">
-        <label for="fetch-timeout">Fetch timeout — seconds per page before giving up</label><br>
-        <input id="fetch-timeout" class="field" type="number" step="1" min="1" required>
-      </div>
-      <div class="form-row">
-        <label for="user-agent">User-Agent sent with every fetch</label><br>
-        <input id="user-agent" class="field" type="text" required>
-      </div>
-      <div class="form-row">
-        <label for="default-max-pages">Default max pages — used when a crawl doesn't specify one</label><br>
-        <input id="default-max-pages" class="field" type="number" step="1" min="1" required>
-      </div>
-      <div class="form-row">
-        <label for="min-text-length">Minimum text length — shorter pages are skipped as thin content</label><br>
-        <input id="min-text-length" class="field" type="number" step="1" min="0" required>
-      </div>
-      <div class="form-row">
-        <label for="crawl-delay">Crawl delay — milliseconds to wait before each fetch after the first</label><br>
-        <input id="crawl-delay" class="field" type="number" step="1" min="0" required>
-      </div>
-      <div class="form-row">
-        <label for="max-response-kb">Max response size — kilobytes read from a page before truncating</label><br>
-        <input id="max-response-kb" class="field" type="number" step="1" min="1" required>
-      </div>
-      <div class="form-row">
-        <label for="max-retained-crawl-jobs">Crawl history retention — number of past crawl jobs (with full per-page detail) kept before the oldest are deleted</label><br>
-        <input id="max-retained-crawl-jobs" class="field" type="number" step="1" min="1" required>
-      </div>
-      <div class="form-row">
-        <label for="default-renderer">Rendering — how a crawl fetches each page, unless it overrides this itself</label><br>
-        <select id="default-renderer" class="field">
-          <option value="none">None — plain HTTP fetch (fastest, no JavaScript)</option>
-          <option value="chromium">Chromium — real headless browser, runs the page's JavaScript</option>
-          <option value="firefox">Firefox — real headless browser, runs the page's JavaScript</option>
-        </select>
-      </div>
-      <div class="form-row">
-        <label for="default-link-scope">Link scope — how far a crawl follows discovered links, unless it overrides this itself</label><br>
-        <select id="default-link-scope" class="field">
-          <option value="host">Exact seed host only</option>
-          <option value="domain">Seed's domain, including subdomains</option>
-          <option value="tld">Same domain, any subdomain, any top-level domain</option>
-          <option value="any">Any domain</option>
-        </select>
-      </div>
-      <p class="tuning-hint">Defaults: 8s timeout, 20 pages, 50 characters minimum, 250ms delay, 5120 KB (5 MB) response cap, 200 retained crawl jobs, no rendering, seed's domain including subdomains. Rendering a page in a real browser is much slower than a plain fetch (each page opens its own browser tab) and downloads that browser engine the first time it's ever used -- turn it on only for sites whose real content needs JavaScript to appear. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org. "Same domain, any subdomain, any top-level domain" is broader still — from a seed of example.com it also follows example.org and www.example.de (the same domain name, any subdomain, under any TLD), but not other.com.</p>
     </section>
 
     <section class="panel">
@@ -173,11 +124,11 @@
 
     <div class="form-actions">
       <button type="submit">Save</button>
-      <span id="tuning-status" class="error-text"></span>
+      <span id="settings-status" class="error-text"></span>
     </div>
   </form>
 </main>
 <script src="/admin.js"></script>
-<script src="/admin_tuning.js"></script>
+<script src="/admin_settings.js"></script>
 </body>
 </html>

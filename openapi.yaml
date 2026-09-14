@@ -267,7 +267,11 @@ paths:
   /admin/api/documents/overview:
     get:
       tags: [admin]
-      summary: Summary charts for the Documents page (top domains, age buckets)
+      summary: Summary panels for the admin Overview page
+      description: >-
+        Top domains, an age-of-content breakdown, the total number of
+        distinct domains indexed, and how documents are distributed
+        across version numbers (see Document.version).
       responses:
         "200":
           description: OK
@@ -285,6 +289,17 @@ paths:
                       type: object
                       properties:
                         label: { type: string, example: "last 24h" }
+                        count: { type: integer }
+                  total_domains:
+                    type: integer
+                    description: Count of distinct domains across the whole corpus (not capped, unlike top_domains).
+                  version_counts:
+                    type: array
+                    description: How many documents currently sit at each version number, ordered by version ascending.
+                    items:
+                      type: object
+                      properties:
+                        version: { type: integer }
                         count: { type: integer }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
@@ -335,7 +350,11 @@ paths:
     get:
       tags: [admin]
       summary: Search crawled domains by name
-      description: An empty or missing `q` returns an empty list by design.
+      description: >-
+        An empty or missing `q` returns every domain (most-documents-first,
+        still capped at `limit`) rather than an empty list -- the admin
+        Documents page fetches this broad batch once a search starts, then
+        matches `q` as a regular expression against it client-side.
       parameters:
         - name: q
           in: query

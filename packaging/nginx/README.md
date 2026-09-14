@@ -18,10 +18,10 @@ nginx must split traffic between search-server and admin-server by path:
 
 - `/`, `/style.css`, `/search`, `/index.js` -> search-server, `http://127.0.0.1:8080`
 - `/login`, `/logout`, `/admin` and its subpaths (`/admin.js`,
-  `/admin/documents`, `/admin/crawl`, `/admin/tuning`, `/admin/search`,
-  `/admin/api/...`, and every per-page script the admin UI serves --
-  `/admin_*.js`, `/admin_crawl.js`, `/login.js`) -> admin-server,
-  `http://127.0.0.1:8081`
+  `/admin/documents`, `/admin/crawl`, `/admin/jobs`, `/admin/settings`,
+  `/admin/search`, `/admin/api/...`, and every per-page script the admin UI
+  serves -- `/admin_*.js`, `/admin_crawl.js`, `/admin_jobs.js`, `/login.js`)
+  -> admin-server, `http://127.0.0.1:8081`
 
 The `location /admin`/`/login`/`/logout` blocks below are plain **string
 prefix** matches, not path-segment-aware -- `/admin` matches anything

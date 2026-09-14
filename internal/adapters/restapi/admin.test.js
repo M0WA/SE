@@ -310,35 +310,67 @@ test('loadStats reports the error message on a failed fetch', async () => {
 
 test('loadVocabulary is a no-op when the page has neither vocab element', async () => {
   const { loadVocabulary } = load();
-  await assert.doesNotReject(() => loadVocabulary(''));
+  await assert.doesNotReject(() => loadVocabulary('any'));
 });
 
-test('loadVocabulary renders the vocabulary table with term links', async () => {
+test('loadVocabulary renders nothing for a blank pattern (no preloaded table)', async () => {
+  setupDOM('<!doctype html><html><body><div id="vocab-summary"></div><div id="vocab-table"></div></body></html>');
+  const { loadVocabulary } = load();
+  let called = false;
+  global.fetch = async () => {
+    called = true;
+    return { ok: true, json: async () => ({ vocabulary_size: 100, top_terms: [] }) };
+  };
+  await loadVocabulary('');
+  assert.equal(called, false);
+  assert.equal(document.getElementById('vocab-summary').textContent, '');
+  assert.equal(document.getElementById('vocab-table').textContent, '');
+});
+
+test('loadVocabulary fetches once, regex-filters the cached terms, and always shows the true vocabulary_size', async () => {
+  setupDOM('<!doctype html><html><body><div id="vocab-summary"></div><div id="vocab-table"></div></body></html>');
+  const { loadVocabulary } = load();
+  let fetchCount = 0;
+  global.fetch = async () => {
+    fetchCount++;
+    return {
+      ok: true,
+      json: async () => ({
+        vocabulary_size: 100,
+        top_terms: [
+          { term: 'search', doc_freq: 10, total_freq: 20 },
+          { term: 'engine', doc_freq: 5, total_freq: 8 },
+        ],
+      }),
+    };
+  };
+  await loadVocabulary('^sea');
+  assert.equal(document.getElementById('vocab-summary').textContent.includes('100'), true);
+  const rows = document.getElementById('vocab-table').querySelectorAll('tbody tr');
+  assert.equal(rows.length, 1);
+  const link = document.getElementById('vocab-table').querySelector('a');
+  assert.equal(link.textContent, 'search');
+  assert.equal(link.getAttribute('href'), '/admin/vocabulary/term?term=search');
+
+  // A second filter against a different pattern must not re-fetch.
+  await loadVocabulary('engine');
+  assert.equal(fetchCount, 1);
+  assert.equal(document.getElementById('vocab-summary').textContent.includes('100'), true);
+  assert.equal(document.getElementById('vocab-table').querySelector('a').textContent, 'engine');
+});
+
+test('loadVocabulary matches case-insensitively', async () => {
   setupDOM('<!doctype html><html><body><div id="vocab-summary"></div><div id="vocab-table"></div></body></html>');
   const { loadVocabulary } = load();
   global.fetch = async () => ({
     ok: true,
-    json: async () => ({
-      vocabulary_size: 100,
-      top_terms: [{ term: 'search', doc_freq: 10, total_freq: 20 }],
-    }),
+    json: async () => ({ vocabulary_size: 1, top_terms: [{ term: 'Search', doc_freq: 1, total_freq: 1 }] }),
   });
-  await loadVocabulary('sea');
-  assert.equal(document.getElementById('vocab-summary').textContent.includes('100'), true);
-  const link = document.getElementById('vocab-table').querySelector('a');
-  assert.equal(link.textContent, 'search');
-  assert.equal(link.getAttribute('href'), '/admin/vocabulary/term?term=search');
+  await loadVocabulary('search');
+  assert.equal(document.getElementById('vocab-table').querySelector('a').textContent, 'Search');
 });
 
-test('loadVocabulary shows an empty-corpus message when there are no terms and no search', async () => {
-  setupDOM('<!doctype html><html><body><div id="vocab-summary"></div><div id="vocab-table"></div></body></html>');
-  const { loadVocabulary } = load();
-  global.fetch = async () => ({ ok: true, json: async () => ({ vocabulary_size: 0, top_terms: [] }) });
-  await loadVocabulary('');
-  assert.equal(document.getElementById('vocab-table').textContent.includes('No terms indexed yet'), true);
-});
-
-test('loadVocabulary shows a no-match message when a search finds nothing', async () => {
+test('loadVocabulary shows a no-match message when the pattern matches nothing', async () => {
   setupDOM('<!doctype html><html><body><div id="vocab-summary"></div><div id="vocab-table"></div></body></html>');
   const { loadVocabulary } = load();
   global.fetch = async () => ({ ok: true, json: async () => ({ vocabulary_size: 0, top_terms: [] }) });
@@ -346,15 +378,41 @@ test('loadVocabulary shows a no-match message when a search finds nothing', asyn
   assert.equal(document.getElementById('vocab-table').textContent.includes('zzz'), true);
 });
 
+test('loadVocabulary reports an invalid regex via the dedicated error element without crashing', async () => {
+  setupDOM(
+    '<!doctype html><html><body>' +
+      '<div id="vocab-error"></div><div id="vocab-summary"></div><div id="vocab-table"></div>' +
+      '</body></html>',
+  );
+  const { loadVocabulary } = load();
+  let called = false;
+  global.fetch = async () => {
+    called = true;
+    return { ok: true, json: async () => ({ vocabulary_size: 0, top_terms: [] }) };
+  };
+  await assert.doesNotReject(() => loadVocabulary('['));
+  assert.equal(called, false);
+  assert.equal(document.getElementById('vocab-error').textContent.includes('Invalid pattern'), true);
+  assert.equal(document.getElementById('vocab-summary').textContent, '');
+  assert.equal(document.getElementById('vocab-table').textContent, '');
+});
+
+test('loadVocabulary falls back to the table element for an invalid regex when there is no error element', async () => {
+  setupDOM('<!doctype html><html><body><div id="vocab-summary"></div><div id="vocab-table"></div></body></html>');
+  const { loadVocabulary } = load();
+  await loadVocabulary('(');
+  assert.equal(document.getElementById('vocab-table').textContent.includes('Invalid pattern'), true);
+});
+
 test('loadVocabulary reports the error message on a failed fetch', async () => {
   setupDOM('<!doctype html><html><body><div id="vocab-summary"></div><div id="vocab-table"></div></body></html>');
   const { loadVocabulary } = load();
   global.fetch = async () => ({ ok: false, status: 500, text: async () => 'vocab unavailable' });
-  await loadVocabulary('');
+  await loadVocabulary('term');
   assert.equal(document.getElementById('vocab-summary').textContent.includes('vocab unavailable'), true);
 });
 
-test('wireVocabularySearch loads immediately when there is no search form', () => {
+test('wireVocabularySearch does nothing when there is no search form (no unconditional preload)', () => {
   setupDOM('<!doctype html><html><body><div id="vocab-summary"></div><div id="vocab-table"></div></body></html>');
   const { wireVocabularySearch } = load();
   let called = false;
@@ -362,11 +420,11 @@ test('wireVocabularySearch loads immediately when there is no search form', () =
     called = true;
     return { ok: true, json: async () => ({ vocabulary_size: 0, top_terms: [] }) };
   };
-  wireVocabularySearch();
-  assert.equal(called, true);
+  assert.doesNotThrow(() => wireVocabularySearch());
+  assert.equal(called, false);
 });
 
-test('wireVocabularySearch debounces typing before loading', async () => {
+test('wireVocabularySearch renders nothing until the admin types, then debounces typing before loading', async () => {
   setupDOM(
     '<!doctype html><html><body>' +
       '<form id="vocab-search-form"><input id="vocab-q"></form>' +
@@ -374,12 +432,13 @@ test('wireVocabularySearch debounces typing before loading', async () => {
       '</body></html>',
   );
   const { wireVocabularySearch } = load();
-  const gotURLs = [];
-  global.fetch = async (url) => {
-    gotURLs.push(url);
-    return { ok: true, json: async () => ({ vocabulary_size: 0, top_terms: [] }) };
+  let fetchCount = 0;
+  global.fetch = async () => {
+    fetchCount++;
+    return { ok: true, json: async () => ({ vocabulary_size: 0, top_terms: [{ term: 'foo', doc_freq: 1, total_freq: 1 }] }) };
   };
-  wireVocabularySearch(); // initial unfiltered load -- gotURLs[0]
+  wireVocabularySearch();
+  assert.equal(fetchCount, 0); // no preload
   const input = document.getElementById('vocab-q');
   input.value = 'f';
   input.dispatchEvent(new window.Event('input'));
@@ -389,11 +448,11 @@ test('wireVocabularySearch debounces typing before loading', async () => {
   input.dispatchEvent(new window.Event('input'));
   // Only the last keystroke's debounced call should ever fire.
   await new Promise((resolve) => setTimeout(resolve, 250));
-  assert.equal(gotURLs.length, 2);
-  assert.equal(gotURLs[1].includes('search=foo'), true);
+  assert.equal(fetchCount, 1);
+  assert.equal(document.getElementById('vocab-table').querySelector('a').textContent, 'foo');
 });
 
-test('wireVocabularySearch submitting the form loads with the trimmed, lowercased query', async () => {
+test('wireVocabularySearch submitting the form loads with the trimmed query, preserving case for the regex', async () => {
   setupDOM(
     '<!doctype html><html><body>' +
       '<form id="vocab-search-form"><input id="vocab-q"></form>' +
@@ -401,14 +460,15 @@ test('wireVocabularySearch submitting the form loads with the trimmed, lowercase
       '</body></html>',
   );
   const { wireVocabularySearch } = load();
-  let gotURL;
-  global.fetch = async (url) => {
-    gotURL = url;
-    return { ok: true, json: async () => ({ vocabulary_size: 0, top_terms: [] }) };
-  };
-  wireVocabularySearch(); // initial unfiltered load
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({ vocabulary_size: 0, top_terms: [{ term: 'Search', doc_freq: 1, total_freq: 1 }] }),
+  });
+  wireVocabularySearch();
   document.getElementById('vocab-q').value = '  Search  ';
   document.getElementById('vocab-search-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(gotURL.includes('search=search'), true);
+  // Case-insensitive match via the 'i' flag, not via lowercasing the input
+  // (lowercasing would corrupt a pattern like "[A-Z]").
+  assert.equal(document.getElementById('vocab-table').querySelector('a').textContent, 'Search');
 });

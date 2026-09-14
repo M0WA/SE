@@ -75,10 +75,22 @@ type AgeBucket struct {
 	Count int
 }
 
-// DocumentsOverview is the aggregate data behind the admin Documents
-// page's summary charts: which domains hold the most pages, and how
-// recently the index was last refreshed.
+// VersionCount is how many documents currently sit at a given version
+// number (see Document.Version) -- version 1 is a page that has only ever
+// been crawled once; a higher number means it's been re-crawled and its
+// content changed that many times since.
+type VersionCount struct {
+	Version int
+	Count   int
+}
+
+// DocumentsOverview is the aggregate data behind the admin Overview page's
+// summary panels: which domains hold the most pages, how recently the
+// index was last refreshed, how many distinct domains are indexed at all,
+// and how documents are distributed across version numbers.
 type DocumentsOverview struct {
-	TopDomains []DomainSummary
-	AgeBuckets []AgeBucket
+	TopDomains    []DomainSummary
+	AgeBuckets    []AgeBucket
+	TotalDomains  int
+	VersionCounts []VersionCount
 }

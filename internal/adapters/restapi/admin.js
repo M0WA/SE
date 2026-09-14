@@ -198,23 +198,67 @@ async function loadStats() {
   }
 }
 
-async function loadVocabulary(search) {
+// vocabFetchPromise caches the one broad, unfiltered vocabulary fetch so
+// every keystroke's regex filter runs against an in-memory array instead of
+// re-querying the server -- the server's own `search` param is a substring
+// match only and can't support real regex. A failed fetch clears the cache
+// so the next call gets to retry rather than being stuck replaying the same
+// rejection forever.
+let vocabFetchPromise = null;
+
+function fetchVocabOnce() {
+  if (!vocabFetchPromise) {
+    vocabFetchPromise = getJSON('/admin/api/vocabulary?limit=2000').catch((err) => {
+      vocabFetchPromise = null;
+      throw err;
+    });
+  }
+  return vocabFetchPromise;
+}
+
+// loadVocabulary regex-filters the (once-fetched, cached) full term list
+// against `pattern` (case-insensitive) and renders the matches -- an empty
+// pattern renders nothing (the page shows no table until the admin types),
+// and an invalid pattern reports an error rather than throwing, the same
+// convention as this page's other regex searches (see filterJobs in
+// admin_crawl.js). `vocabulary_size` in the summary is always the server's
+// real corpus-wide distinct-term count, never a filtered count.
+async function loadVocabulary(pattern) {
   const summaryEl = document.getElementById('vocab-summary');
   const tableEl = document.getElementById('vocab-table');
   if (!summaryEl || !tableEl) return;
-  const q = search || '';
+  const errorEl = document.getElementById('vocab-error');
+  if (errorEl) clear(errorEl);
+  const q = (pattern || '').trim();
+  if (q === '') {
+    clear(summaryEl);
+    clear(tableEl);
+    return;
+  }
+  let re;
   try {
-    const v = await getJSON('/admin/api/vocabulary?limit=20&search=' + encodeURIComponent(q));
+    re = new RegExp(q, 'i');
+  } catch (err) {
+    clear(summaryEl);
+    clear(tableEl);
+    const msg = 'Invalid pattern: ' + err.message;
+    if (errorEl) errorEl.textContent = msg;
+    else tableEl.textContent = msg;
+    return;
+  }
+  try {
+    const v = await fetchVocabOnce();
     clear(summaryEl);
     kvRow(summaryEl, 'Vocabulary size', String(v.vocabulary_size) + ' distinct terms');
+    const matches = v.top_terms.filter((t) => re.test(t.term));
     clear(tableEl);
-    if (v.top_terms.length === 0) {
-      tableEl.textContent = q === '' ? 'No terms indexed yet.' : 'No terms match “' + q + '”.';
+    if (matches.length === 0) {
+      tableEl.textContent = 'No terms match “' + q + '”.';
       return;
     }
     const table = buildTable(
       [{ label: 'term' }, { label: 'doc freq', num: true }, { label: 'total freq', num: true }],
-      v.top_terms,
+      matches,
       (t) => {
         const link = document.createElement('a');
         link.href = '/admin/vocabulary/term?term=' + encodeURIComponent(t.term);
@@ -232,32 +276,29 @@ async function loadVocabulary(search) {
     );
     tableEl.appendChild(table);
   } catch (err) {
+    clear(tableEl);
     summaryEl.textContent = 'Could not load vocabulary: ' + err.message;
   }
 }
 
 // wireVocabularySearch wires the vocabulary panel's term filter (debounced
-// on input, immediate on submit) and performs the initial unfiltered load --
-// the same debounce-then-submit pattern the Documents page's domain search
-// uses.
+// on input, immediate on submit). Unlike the old substring-search version,
+// it does NOT preload anything on wiring -- like every other search on the
+// Documents page, nothing renders until the admin actually types a pattern.
 function wireVocabularySearch() {
   const form = document.getElementById('vocab-search-form');
   const input = document.getElementById('vocab-q');
-  if (!form || !input) {
-    loadVocabulary('');
-    return;
-  }
+  if (!form || !input) return;
   let searchTimer = null;
   input.addEventListener('input', () => {
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => loadVocabulary(input.value.trim().toLowerCase()), 200);
+    searchTimer = setTimeout(() => loadVocabulary(input.value.trim()), 200);
   });
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     clearTimeout(searchTimer);
-    loadVocabulary(input.value.trim().toLowerCase());
+    loadVocabulary(input.value.trim());
   });
-  loadVocabulary('');
 }
 
 // Exports for the Node test runner only -- `typeof module` is undefined in

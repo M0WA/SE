@@ -1292,13 +1292,13 @@ func (r *Repository) placeholderList(n, startPos int) string {
 }
 
 // SearchDomains finds distinct crawled domains whose hostname contains q,
-// most-documents-first. An empty q intentionally matches nothing -- the
-// admin Documents page only shows domains once an admin searches for one,
-// rather than listing every domain by default.
+// most-documents-first, capped at limit. An empty q matches every domain
+// (still capped at limit, most-documents-first) rather than nothing -- the
+// admin Documents page's domain search fetches this bounded-but-broad
+// batch once an admin starts searching, then matches q as a regular
+// expression against it client-side, since a substring LIKE can't express
+// what a regex can.
 func (r *Repository) SearchDomains(ctx context.Context, q string, limit int) ([]domain.DomainSummary, error) {
-	if q == "" {
-		return nil, nil
-	}
 	query := r.ph(`SELECT host, COUNT(*) AS cnt FROM documents
 	               WHERE host LIKE %s GROUP BY host ORDER BY cnt DESC, host ASC LIMIT %s`, 1, 2)
 	rows, err := r.db.QueryContext(ctx, query, "%"+q+"%", limit)
@@ -1389,6 +1389,27 @@ func (r *Repository) DocumentsOverview(ctx context.Context, topDomains int) (dom
 		}
 		overview.AgeBuckets = append(overview.AgeBuckets, domain.AgeBucket{Label: b.label, Count: count})
 	}
+
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT host) FROM documents`).Scan(&overview.TotalDomains); err != nil {
+		return overview, fmt.Errorf("counting distinct domains: %w", err)
+	}
+
+	versionRows, err := r.db.QueryContext(ctx, `SELECT version, COUNT(*) AS cnt FROM documents GROUP BY version ORDER BY version ASC`)
+	if err != nil {
+		return overview, fmt.Errorf("querying version counts: %w", err)
+	}
+	defer versionRows.Close()
+	for versionRows.Next() {
+		var v domain.VersionCount
+		if err := versionRows.Scan(&v.Version, &v.Count); err != nil {
+			return overview, fmt.Errorf("scanning version count row: %w", err)
+		}
+		overview.VersionCounts = append(overview.VersionCounts, v)
+	}
+	if err := versionRows.Err(); err != nil {
+		return overview, err
+	}
+
 	return overview, nil
 }
 

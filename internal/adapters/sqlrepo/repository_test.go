@@ -1192,19 +1192,53 @@ func TestListDocuments_FiltersByHost(t *testing.T) {
 	}
 }
 
-func TestSearchDomains_EmptyQueryReturnsNothing(t *testing.T) {
+// TestSearchDomains_EmptyQueryReturnsEveryDomain proves a blank q returns
+// every domain (most-documents-first, still capped at limit) rather than
+// nothing -- the admin Documents page fetches this broad batch once an
+// admin starts searching, then matches q as a regex against it client-side.
+func TestSearchDomains_EmptyQueryReturnsEveryDomain(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
-	doc := domain.Document{ID: "doc-1", URL: "http://a.example/1", Title: "A", Text: "text"}
-	if err := repo.SaveDocument(ctx, doc, []float32{1}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	docs := []domain.Document{
+		{ID: "doc-1", URL: "http://a.example/1", Title: "A", Text: "text"},
+		{ID: "doc-2", URL: "http://b.example/1", Title: "B", Text: "text"},
+	}
+	for _, d := range docs {
+		if err := repo.SaveDocument(ctx, d, []float32{1}); err != nil {
+			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
+		}
 	}
 	domains, err := repo.SearchDomains(ctx, "", 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if domains != nil {
-		t.Errorf("expected an empty query to match nothing, got %+v", domains)
+	if len(domains) != 2 {
+		t.Errorf("expected both domains returned for a blank query, got %+v", domains)
+	}
+}
+
+// TestSearchDomains_EmptyQueryStillRespectsLimit proves the blank-query
+// "return everything" path is still bounded by limit, not a genuinely
+// unbounded fetch.
+func TestSearchDomains_EmptyQueryStillRespectsLimit(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	docs := []domain.Document{
+		{ID: "doc-1", URL: "http://a.example/1", Title: "A", Text: "text"},
+		{ID: "doc-2", URL: "http://b.example/1", Title: "B", Text: "text"},
+		{ID: "doc-3", URL: "http://c.example/1", Title: "C", Text: "text"},
+	}
+	for _, d := range docs {
+		if err := repo.SaveDocument(ctx, d, []float32{1}); err != nil {
+			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
+		}
+	}
+	domains, err := repo.SearchDomains(ctx, "", 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(domains) != 2 {
+		t.Errorf("expected the blank-query result capped at limit=2, got %+v", domains)
 	}
 }
 
@@ -1270,6 +1304,45 @@ func TestDocumentsOverview_TopDomainsAndAgeBuckets(t *testing.T) {
 	if overview.AgeBuckets[0].Label != "last 24h" || overview.AgeBuckets[0].Count != 3 {
 		t.Errorf("expected all 3 freshly-saved documents in the 'last 24h' bucket, got %+v", overview.AgeBuckets[0])
 	}
+	if overview.TotalDomains != 2 {
+		t.Errorf("expected 2 distinct domains (a.example, b.example), got %d", overview.TotalDomains)
+	}
+	if len(overview.VersionCounts) != 1 || overview.VersionCounts[0].Version != 1 || overview.VersionCounts[0].Count != 3 {
+		t.Errorf("expected all 3 freshly-saved documents at version 1, got %+v", overview.VersionCounts)
+	}
+}
+
+// TestDocumentsOverview_VersionCountsGroupsByVersion proves a re-crawled
+// page (its version bumped by a second SaveDocument with changed text)
+// lands in a separate version bucket from a page that's only ever been
+// saved once.
+func TestDocumentsOverview_VersionCountsGroupsByVersion(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	once := domain.Document{ID: "doc-1", URL: "http://a.example/1", Title: "A", Text: "genuegend inhalt text fuer diese seite bitte danke"}
+	if err := repo.SaveDocument(ctx, once, []float32{1}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	recrawled := domain.Document{ID: "doc-2", URL: "http://b.example/1", Title: "B", Text: "genuegend inhalt text fuer diese andere seite bitte danke"}
+	if err := repo.SaveDocument(ctx, recrawled, []float32{1}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	recrawled.Text = "genuegend inhalt text fuer diese andere seite bitte danke, jetzt geaendert"
+	if err := repo.SaveDocument(ctx, recrawled, []float32{1}); err != nil {
+		t.Fatalf("unexpected error re-saving: %v", err)
+	}
+
+	overview, err := repo.DocumentsOverview(ctx, 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := map[int]int{}
+	for _, v := range overview.VersionCounts {
+		got[v.Version] = v.Count
+	}
+	if got[1] != 1 || got[2] != 1 {
+		t.Errorf("expected version 1 count=1 (doc-1) and version 2 count=1 (doc-2, re-crawled once), got %+v", overview.VersionCounts)
+	}
 }
 
 func TestDocumentsOverview_EmptyCorpus(t *testing.T) {
@@ -1280,6 +1353,12 @@ func TestDocumentsOverview_EmptyCorpus(t *testing.T) {
 	}
 	if len(overview.TopDomains) != 0 {
 		t.Errorf("expected no top domains for an empty corpus, got %+v", overview.TopDomains)
+	}
+	if overview.TotalDomains != 0 {
+		t.Errorf("expected 0 distinct domains for an empty corpus, got %d", overview.TotalDomains)
+	}
+	if len(overview.VersionCounts) != 0 {
+		t.Errorf("expected no version counts for an empty corpus, got %+v", overview.VersionCounts)
 	}
 }
 

@@ -32,8 +32,11 @@ var adminDomainHTML []byte
 //go:embed admin_schedule.html
 var adminScheduleHTML []byte
 
-//go:embed admin_tuning.html
-var adminTuningHTML []byte
+//go:embed admin_jobs.html
+var adminJobsHTML []byte
+
+//go:embed admin_settings.html
+var adminSettingsHTML []byte
 
 //go:embed admin_search.html
 var adminSearchHTML []byte
@@ -91,8 +94,11 @@ var adminSearchJS []byte
 //go:embed admin_search_result.js
 var adminSearchResultJS []byte
 
-//go:embed admin_tuning.js
-var adminTuningJS []byte
+//go:embed admin_jobs.js
+var adminJobsJS []byte
+
+//go:embed admin_settings.js
+var adminSettingsJS []byte
 
 //go:embed admin_vocabulary_term.js
 var adminVocabularyTermJS []byte
@@ -256,8 +262,10 @@ func (h *Handler) RoutesAdmin() *http.ServeMux {
 	mux.HandleFunc("/admin_crawl.js", h.handleAdminCrawlJS)
 	mux.HandleFunc("/admin/schedule/{id}", h.requireAuthPage(h.handleAdminSchedulePage))
 	mux.HandleFunc("/admin_schedule.js", h.handleAdminScheduleJS)
-	mux.HandleFunc("/admin/tuning", h.requireAuthPage(h.handleAdminTuningPage))
-	mux.HandleFunc("/admin_tuning.js", h.handleAdminTuningJS)
+	mux.HandleFunc("/admin/jobs", h.requireAuthPage(h.handleAdminJobsPage))
+	mux.HandleFunc("/admin_jobs.js", h.handleAdminJobsJS)
+	mux.HandleFunc("/admin/settings", h.requireAuthPage(h.handleAdminSettingsPage))
+	mux.HandleFunc("/admin_settings.js", h.handleAdminSettingsJS)
 	mux.HandleFunc("/admin/search", h.requireAuthPage(h.handleAdminSearchPage))
 	mux.HandleFunc("/admin_search.js", h.handleAdminSearchJS)
 	mux.HandleFunc("/admin/search/result", h.requireAuthPage(h.handleAdminSearchResultPage))
@@ -363,8 +371,12 @@ func (h *Handler) handleAdminSearchResultJS(w http.ResponseWriter, r *http.Reque
 	serveStatic(w, r, "text/javascript; charset=utf-8", adminSearchResultJS)
 }
 
-func (h *Handler) handleAdminTuningJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminTuningJS)
+func (h *Handler) handleAdminJobsJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminJobsJS)
+}
+
+func (h *Handler) handleAdminSettingsJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminSettingsJS)
 }
 
 func (h *Handler) handleAdminVocabularyTermJS(w http.ResponseWriter, r *http.Request) {

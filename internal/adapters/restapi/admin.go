@@ -92,8 +92,12 @@ func (h *Handler) handleAdminVocabularyTermPage(w http.ResponseWriter, r *http.R
 	serveStatic(w, r, "text/html; charset=utf-8", adminVocabularyTermHTML)
 }
 
-func (h *Handler) handleAdminTuningPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminTuningHTML)
+func (h *Handler) handleAdminSettingsPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminSettingsHTML)
+}
+
+func (h *Handler) handleAdminJobsPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminJobsHTML)
 }
 
 func (h *Handler) handleAdminSearchPage(w http.ResponseWriter, r *http.Request) {
@@ -303,15 +307,24 @@ type adminAgeBucket struct {
 	Count int    `json:"count"`
 }
 
-type adminDocumentsOverview struct {
-	TopDomains []adminDomainSummary `json:"top_domains"`
-	AgeBuckets []adminAgeBucket     `json:"age_buckets"`
+type adminVersionCount struct {
+	Version int `json:"version"`
+	Count   int `json:"count"`
 }
 
-// handleAdminDocumentsOverview backs the Documents page's summary charts:
-// document count per (top) domain, and how recently pages were crawled.
-// Registered as "GET /admin/api/documents/overview", so the method is
-// already guaranteed -- no separate check needed here.
+type adminDocumentsOverview struct {
+	TopDomains    []adminDomainSummary `json:"top_domains"`
+	AgeBuckets    []adminAgeBucket     `json:"age_buckets"`
+	TotalDomains  int                  `json:"total_domains"`
+	VersionCounts []adminVersionCount  `json:"version_counts"`
+}
+
+// handleAdminDocumentsOverview backs the admin Overview page's summary
+// panels: document count per (top) domain, how recently pages were
+// crawled, how many distinct domains are indexed, and how documents are
+// distributed across version numbers. Registered as "GET
+// /admin/api/documents/overview", so the method is already guaranteed --
+// no separate check needed here.
 func (h *Handler) handleAdminDocumentsOverview(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.admin != nil, "admin diagnostics") {
 		return
@@ -329,7 +342,14 @@ func (h *Handler) handleAdminDocumentsOverview(w http.ResponseWriter, r *http.Re
 	for i, b := range overview.AgeBuckets {
 		ageBuckets[i] = adminAgeBucket{Label: b.Label, Count: b.Count}
 	}
-	writeJSON(w, http.StatusOK, adminDocumentsOverview{TopDomains: topDomains, AgeBuckets: ageBuckets})
+	versionCounts := make([]adminVersionCount, len(overview.VersionCounts))
+	for i, v := range overview.VersionCounts {
+		versionCounts[i] = adminVersionCount{Version: v.Version, Count: v.Count}
+	}
+	writeJSON(w, http.StatusOK, adminDocumentsOverview{
+		TopDomains: topDomains, AgeBuckets: ageBuckets,
+		TotalDomains: overview.TotalDomains, VersionCounts: versionCounts,
+	})
 }
 
 type adminDocumentVersion struct {
