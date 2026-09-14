@@ -128,14 +128,11 @@ func isHTTPS(r *http.Request) bool {
 // redirect target -- "/\evil.example" would otherwise slip past a plain
 // url.Parse(next) as a harmless-looking path.
 func safeNext(next string) string {
-	if next == "" || next[0] != '/' {
-		return "/admin"
-	}
 	target, err := url.Parse(strings.ReplaceAll(next, "\\", "/"))
-	if err != nil || target.Hostname() != "" {
-		return "/admin"
+	if err == nil && next != "" && next[0] == '/' && target.Hostname() == "" {
+		return target.String()
 	}
-	return target.String()
+	return "/admin"
 }
 
 func (h *Handler) handleLoginPage(w http.ResponseWriter, r *http.Request) {
