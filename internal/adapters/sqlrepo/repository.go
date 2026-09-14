@@ -94,10 +94,27 @@ func New(ctx context.Context, driverName, dsn string) (*Repository, error) {
 		// fsyncs FULL performs per commit (safe under WAL: a crash can lose
 		// the most recent commit but never corrupts the database, unlike
 		// under rollback-journal mode where NORMAL can permit corruption).
-		if _, err := db.ExecContext(ctx, "PRAGMA journal_mode = WAL"); err != nil {
+		// The very first time WAL mode is set up on a brand new database
+		// file -- e.g. all three binaries starting for the first time at
+		// once, or in CI's install smoke test -- this PRAGMA can return
+		// SQLITE_BUSY immediately rather than honoring busy_timeout's own
+		// retry window (observed in practice both locally and in CI: the
+		// error surfaces within milliseconds, not after waiting out the
+		// 5-second busy_timeout above). retrySQLiteBusy is cheap, short-
+		// lived insurance against that one-time startup race; once the
+		// file is already in WAL mode (every subsequent process start,
+		// overwhelmingly the common case), this is a fast no-op that never
+		// retries at all.
+		if err := retrySQLiteBusy(ctx, func() error {
+			_, err := db.ExecContext(ctx, "PRAGMA journal_mode = WAL")
+			return err
+		}); err != nil {
 			return nil, fmt.Errorf("setting journal_mode=WAL (sqlite): %w", err)
 		}
-		if _, err := db.ExecContext(ctx, "PRAGMA synchronous = NORMAL"); err != nil {
+		if err := retrySQLiteBusy(ctx, func() error {
+			_, err := db.ExecContext(ctx, "PRAGMA synchronous = NORMAL")
+			return err
+		}); err != nil {
 			return nil, fmt.Errorf("setting synchronous=NORMAL (sqlite): %w", err)
 		}
 	}
@@ -327,6 +344,41 @@ func isAlreadyExistsError(err error) bool {
 	return strings.Contains(msg, "already exists") ||
 		strings.Contains(msg, "duplicate key value violates unique constraint") ||
 		strings.Contains(msg, "Duplicate column name")
+}
+
+// isSQLiteBusyError reports whether err is modernc.org/sqlite's
+// SQLITE_BUSY, phrased as "database is locked (5)" (plain busy) or
+// "(261)"/"(517)" (the WAL-mode and RESERVED-lock variants SQLITE_BUSY
+// carries as extended result codes) -- all three show up when two
+// processes race to convert a brand new database file to WAL mode at
+// once, see retrySQLiteBusy.
+func isSQLiteBusyError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "SQLITE_BUSY") || strings.Contains(msg, "database is locked")
+}
+
+// retrySQLiteBusy runs fn, retrying with a short backoff if it fails with
+// SQLITE_BUSY. PRAGMA busy_timeout only governs SQLite's own internal wait
+// loop for a lock held by another connection's in-flight statement; the
+// one-time conversion of a brand new file to WAL mode involves SQLite
+// re-opening the database's shared-memory (-shm) file, which can hand back
+// SQLITE_BUSY immediately, before busy_timeout's retry logic ever engages
+// -- see the call sites in New(). A handful of short retries is enough to
+// let the winning process finish that one-time setup.
+func retrySQLiteBusy(ctx context.Context, fn func() error) error {
+	const maxAttempts = 10
+	var err error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if err = fn(); err == nil || !isSQLiteBusyError(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	return err
 }
 
 // migrateDocumentColumns adds host/version/crawled_at/norm_embedding to a
