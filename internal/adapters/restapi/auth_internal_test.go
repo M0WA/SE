@@ -83,14 +83,13 @@ func TestSessionStore_RevokeInvalidatesSession(t *testing.T) {
 // protocol-relative forms browsers will follow off-site -- "//host",
 // "/\host" (backslash is treated the same as a forward slash by browsers
 // when resolving a URL, so it's an equally valid open-redirect vector),
-// and a plain absolute URL. Three-or-more leading slashes ("///host",
-// from a two-backslash "next") are deliberately NOT in the rejected set:
-// per RFC 3986 (and matching real browsers), only exactly "//" followed by
-// a non-slash character introduces an authority/host component -- a third
-// leading slash makes the host component empty again, so it resolves as a
-// same-origin path, not an off-site redirect. url.Parse+Hostname() (this
-// function's actual check) gets this right where a naive prefix/character
-// check wouldn't.
+// a double-backslash, and a plain absolute URL. The literal character
+// check rejects any second character that's "/" or "\" outright (matching
+// CodeQL's own go/bad-redirect-check recommendation), even though a
+// two-backslash value alone would actually resolve as a safe same-origin
+// path in both net/url and real browsers -- deliberately more conservative
+// than strictly necessary rather than relying solely on the url.Parse
+// layer underneath it.
 func TestSafeNext(t *testing.T) {
 	cases := []struct {
 		name string
@@ -103,7 +102,7 @@ func TestSafeNext(t *testing.T) {
 		{"protocol-relative // is rejected", "//evil.example", "/admin"},
 		{"backslash after slash is rejected", "/\\evil.example", "/admin"},
 		{"backslash-prefixed path is rejected", "/\\evil.com", "/admin"},
-		{"triple-slash (from a double backslash) is a safe same-origin path, not rejected", "/\\\\evil.com", "///evil.com"},
+		{"double-backslash is rejected", "/\\\\evil.com", "/admin"},
 		{"absolute URL is rejected", "https://evil.example/", "/admin"},
 		{"relative path without leading slash is rejected", "evil.example", "/admin"},
 	}

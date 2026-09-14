@@ -123,14 +123,20 @@ func isHTTPS(r *http.Request) bool {
 // safeNext keeps post-login redirects on this site: an absolute or
 // protocol-relative "next" value is rejected in favor of the default, since
 // a query-string-controlled redirect target is an open-redirect vector
-// otherwise. Backslashes are normalized to slashes before parsing since
-// browsers (unlike net/url) treat them as equivalent when resolving a
-// redirect target -- "/\evil.example" would otherwise slip past a plain
-// url.Parse(next) as a harmless-looking path.
+// otherwise. Two layers, both required: a literal check that the first
+// character is "/" and the second is neither "/" nor "\" (browsers treat
+// a leading "\" the same as "/" when resolving a redirect target), plus a
+// url.Parse-based check that the value has no host component at all --
+// belt and suspenders, since a plain character check alone can't rule out
+// every way a value might carry an authority component.
 func safeNext(next string) string {
-	target, err := url.Parse(strings.ReplaceAll(next, "\\", "/"))
-	if err == nil && next != "" && next[0] == '/' && target.Hostname() == "" {
-		return target.String()
+	if next == "/" {
+		return next
+	}
+	if len(next) > 1 && next[0] == '/' && next[1] != '/' && next[1] != '\\' {
+		if target, err := url.Parse(strings.ReplaceAll(next, "\\", "/")); err == nil && target.Hostname() == "" {
+			return next
+		}
 	}
 	return "/admin"
 }
