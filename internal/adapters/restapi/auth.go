@@ -124,13 +124,10 @@ func isHTTPS(r *http.Request) bool {
 // a query-string-controlled redirect target is an open-redirect vector
 // otherwise.
 func safeNext(next string) string {
-	if len(next) == 0 || next[0] != '/' {
-		return "/admin"
+	if next == "/" || (len(next) > 1 && next[0] == '/' && next[1] != '/' && next[1] != '\\') {
+		return next
 	}
-	if len(next) > 1 && (next[1] == '/' || next[1] == '\\') {
-		return "/admin"
-	}
-	return next
+	return "/admin"
 }
 
 func (h *Handler) handleLoginPage(w http.ResponseWriter, r *http.Request) {
