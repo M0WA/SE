@@ -36,8 +36,11 @@ func (f *fakeCrawlJobStore) MarkRunning(context.Context, string) error {
 func (f *fakeCrawlJobStore) AppendPage(context.Context, string, domain.CrawlPageEvent) error {
 	return errors.New("not implemented")
 }
-func (f *fakeCrawlJobStore) MarkDone(context.Context, string) error {
-	return errors.New("not implemented")
+func (f *fakeCrawlJobStore) MarkDone(_ context.Context, id string) error {
+	j := f.jobs[id]
+	j.Status = domain.CrawlJobDone
+	f.jobs[id] = j
+	return nil
 }
 func (f *fakeCrawlJobStore) MarkFailed(_ context.Context, id string, failErr error) error {
 	f.markFailed[id] = failErr
@@ -202,5 +205,80 @@ func TestRecoverInterruptedCrawls_PreservesOriginalSettingOverrides(t *testing.T
 		got.LinkScope != domain.LinkScopeAny || !got.UseSitemap || got.FetchTimeoutSeconds != 45 ||
 		got.MinTextLength != 100 || got.CrawlDelayMs != 500 || got.MaxResponseKB != 2048 {
 		t.Errorf("expected every setting override preserved on resume, got %+v", got)
+	}
+}
+
+// TestRecoverInterruptedCrawls_ShrinksMaxPagesByPagesAlreadyCrawled proves
+// the fix for a real bug: crawlLoop's own page counter starts back at zero
+// every time a job is resumed, so without shrinking MaxPages first, a job
+// interrupted partway through its budget would get handed that same full
+// budget all over again -- surviving enough restarts, its total pages
+// crawled could run many times past the limit it was configured with,
+// while still reporting that original limit in its request.
+func TestRecoverInterruptedCrawls_ShrinksMaxPagesByPagesAlreadyCrawled(t *testing.T) {
+	store := newFakeCrawlJobStore(domain.CrawlJobSummary{
+		ID: "job-partial", Status: domain.CrawlJobRunning,
+		Request:      domain.CrawlJobRequest{SeedURLs: []string{"http://a"}, MaxPages: 10000},
+		PagesCrawled: 6000,
+	})
+	var got ports.CrawlOptions
+	resume := func(_ string, opts ports.CrawlOptions) { got = opts }
+	recovered, _, err := application.RecoverInterruptedCrawls(context.Background(), store, resume)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if recovered != 1 {
+		t.Fatalf("expected 1 recovered, got %d", recovered)
+	}
+	if got.MaxPages != 4000 {
+		t.Errorf("expected the remaining budget (10000-6000=4000), got MaxPages=%d", got.MaxPages)
+	}
+}
+
+// TestRecoverInterruptedCrawls_MarksDoneRatherThanResumingOnceBudgetIsSpent
+// proves the other half of that same fix: a job that had already reached
+// (or, from an earlier restart, overshot) its MaxPages budget before this
+// restart has no budget left to spend, so it's marked done outright
+// instead of being resumed for yet another full pass.
+func TestRecoverInterruptedCrawls_MarksDoneRatherThanResumingOnceBudgetIsSpent(t *testing.T) {
+	store := newFakeCrawlJobStore(domain.CrawlJobSummary{
+		ID: "job-exhausted", Status: domain.CrawlJobRunning,
+		Request:      domain.CrawlJobRequest{SeedURLs: []string{"http://a"}, MaxPages: 10000},
+		PagesCrawled: 15883,
+	})
+	resumeCalls := 0
+	resume := func(string, ports.CrawlOptions) { resumeCalls++ }
+	recovered, abandoned, err := application.RecoverInterruptedCrawls(context.Background(), store, resume)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if recovered != 1 || abandoned != 0 {
+		t.Fatalf("expected 1 recovered, 0 abandoned, got recovered=%d abandoned=%d", recovered, abandoned)
+	}
+	if resumeCalls != 0 {
+		t.Errorf("expected no resume once the budget is already spent, got %d calls", resumeCalls)
+	}
+	if store.jobs["job-exhausted"].Status != domain.CrawlJobDone {
+		t.Errorf("expected the job marked done, got status %q", store.jobs["job-exhausted"].Status)
+	}
+}
+
+// TestRecoverInterruptedCrawls_UnboundedMaxPagesIsUntouched proves
+// MaxPages<=0 (crawlLoop applies the operational default instead of an
+// explicit cap) is passed through unchanged on resume -- there's no fixed
+// budget here to shrink against, unlike the explicit-MaxPages case above.
+func TestRecoverInterruptedCrawls_UnboundedMaxPagesIsUntouched(t *testing.T) {
+	store := newFakeCrawlJobStore(domain.CrawlJobSummary{
+		ID: "job-unbounded", Status: domain.CrawlJobRunning,
+		Request:      domain.CrawlJobRequest{SeedURLs: []string{"http://a"}, MaxPages: 0},
+		PagesCrawled: 500,
+	})
+	var got ports.CrawlOptions
+	resume := func(_ string, opts ports.CrawlOptions) { got = opts }
+	if _, _, err := application.RecoverInterruptedCrawls(context.Background(), store, resume); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.MaxPages != 0 {
+		t.Errorf("expected MaxPages left at 0 (unbounded/default), got %d", got.MaxPages)
 	}
 }

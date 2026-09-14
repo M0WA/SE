@@ -39,6 +39,20 @@ var ErrCrawlInterruptedByRestart = errors.New("crawl-server restarted before thi
 // regardless of the original request's own setting, so the budget reaches
 // still-missing pages fastest rather than being spent re-confirming ones
 // already indexed before the restart.
+//
+// Resuming hands crawlLoop a fresh, zeroed local page counter every time,
+// so a job's original MaxPages is shrunk by however many pages it already
+// has to its name (j.PagesCrawled) before being passed on -- otherwise
+// each restart would silently hand the job another full MaxPages budget on
+// top of what it already used, so a long-lived job surviving several
+// restarts (deploys, crashes) could end up crawling many times its
+// configured limit while still reporting that same limit in its request.
+// A job that had already reached (or, from an even earlier restart,
+// exceeded) its budget before this restart has nothing left to spend, so
+// it's marked done outright rather than resumed for yet another pass.
+// MaxPages<=0 (the crawl never set an explicit cap, so crawlLoop applies
+// the operational default instead) is left untouched -- there's no fixed
+// budget here to shrink against.
 func RecoverInterruptedCrawls(
 	ctx context.Context,
 	jobs ports.CrawlJobStore,
@@ -59,9 +73,20 @@ func RecoverInterruptedCrawls(
 			abandoned++
 			continue
 		}
+		remainingMaxPages := j.Request.MaxPages
+		if remainingMaxPages > 0 {
+			remainingMaxPages -= j.PagesCrawled
+			if remainingMaxPages <= 0 {
+				if doneErr := jobs.MarkDone(ctx, j.ID); doneErr != nil {
+					return recovered, abandoned, doneErr
+				}
+				recovered++
+				continue
+			}
+		}
 		opts := ports.CrawlOptions{
 			SeedURLs:            j.Request.SeedURLs,
-			MaxPages:            j.Request.MaxPages,
+			MaxPages:            remainingMaxPages,
 			RespectRobots:       j.Request.RespectRobots,
 			UserAgent:           j.Request.UserAgent,
 			LinkScope:           j.Request.LinkScope,
