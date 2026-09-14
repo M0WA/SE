@@ -96,7 +96,7 @@ func BenchmarkSemanticCandidateLookup(b *testing.B) {
 				vec[j] = rng.Float32()
 			}
 			doc := domain.Document{ID: id, URL: "https://example.com/" + id, Title: "T", Text: "benchmark content"}
-			if err := repo.SaveDocument(ctx, doc, vec, 100); err != nil {
+			if err := repo.SaveDocument(ctx, doc, vec, 100, 2); err != nil {
 				b.Fatalf("seeding document %s: %v", id, err)
 			}
 			embeddings[id] = domain.EmbeddedVector{Vector: vec, Norm: domain.VectorNorm(vec)}

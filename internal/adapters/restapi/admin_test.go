@@ -1752,6 +1752,67 @@ func TestHandleAdminSettings_MaxDocumentVersionsFieldRoundTrips(t *testing.T) {
 	}
 }
 
+// TestHandleAdminSettings_TitleWeightFieldRoundTrips mirrors
+// TestHandleAdminSettings_MaxDocumentVersionsFieldRoundTrips for the
+// title_weight knob: GET reports whatever's currently set, and a POST
+// updates it.
+func TestHandleAdminSettings_TitleWeightFieldRoundTrips(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{TitleWeight: 2})
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", getRec.Code)
+	}
+	var getResp struct {
+		Operational struct {
+			TitleWeight int `json:"title_weight"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decoding GET response: %v", err)
+	}
+	if getResp.Operational.TitleWeight != 2 {
+		t.Errorf("expected GET to report title_weight=2, got %+v", getResp.Operational)
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
+			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
+			"title_weight": 4,
+		},
+	})
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	postReq.AddCookie(cookie)
+	postRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
+	}
+
+	if ov := opSettings.Get(); ov.TitleWeight != 4 {
+		t.Errorf("expected title_weight=4 to be applied, got %+v", ov)
+	}
+
+	var postResp struct {
+		Operational struct {
+			TitleWeight int `json:"title_weight"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(postRec.Body.Bytes(), &postResp); err != nil {
+		t.Fatalf("decoding POST response: %v", err)
+	}
+	if postResp.Operational.TitleWeight != 4 {
+		t.Errorf("expected the POST response to echo back title_weight=4, got %+v", postResp.Operational)
+	}
+}
+
 func TestHandleAdminSettings_NotConfigured(t *testing.T) {
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)

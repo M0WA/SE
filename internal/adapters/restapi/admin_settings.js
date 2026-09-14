@@ -2,6 +2,7 @@
   const alphaEl = document.getElementById('alpha');
   const k1El = document.getElementById('k1');
   const bEl = document.getElementById('b');
+  const titleWeightEl = document.getElementById('title-weight');
   const fetchTimeoutEl = document.getElementById('fetch-timeout');
   const userAgentEl = document.getElementById('user-agent');
   const defaultMaxPagesEl = document.getElementById('default-max-pages');
@@ -29,6 +30,7 @@
     alphaEl.value = s.tuning.alpha;
     k1El.value = s.tuning.k1;
     bEl.value = s.tuning.b;
+    titleWeightEl.value = s.operational.title_weight;
     fetchTimeoutEl.value = s.operational.fetch_timeout_seconds;
     userAgentEl.value = s.operational.user_agent;
     defaultMaxPagesEl.value = s.operational.default_max_pages;
@@ -72,6 +74,7 @@
           pagerank_weight: parseFloat(pageRankWeightEl.value),
         },
         operational: {
+          title_weight: parseInt(titleWeightEl.value, 10),
           fetch_timeout_seconds: parseInt(fetchTimeoutEl.value, 10),
           user_agent: userAgentEl.value,
           default_max_pages: parseInt(defaultMaxPagesEl.value, 10),

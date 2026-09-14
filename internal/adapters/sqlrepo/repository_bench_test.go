@@ -54,7 +54,7 @@ func seedBenchDocuments(b *testing.B, repo *sqlrepo.Repository, n int, rareTerms
 			Title: "Document " + id,
 			Text:  text,
 		}
-		if err := repo.SaveDocument(ctx, doc, []float32{rng.Float32(), rng.Float32(), rng.Float32(), rng.Float32()}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, doc, []float32{rng.Float32(), rng.Float32(), rng.Float32(), rng.Float32()}, 100, 2); err != nil {
 			b.Fatalf("seeding document %s: %v", id, err)
 		}
 	}
@@ -176,7 +176,7 @@ func seedBenchDocumentsWithCrawledAt(b *testing.B, dsn string, repo *sqlrepo.Rep
 		id := fmt.Sprintf("doc-%d", i)
 		ids[i] = id
 		doc := domain.Document{ID: id, URL: fmt.Sprintf("https://example.com/%s", id), Title: "T", Text: "x"}
-		if err := repo.SaveDocument(ctx, doc, []float32{rng.Float32(), rng.Float32()}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, doc, []float32{rng.Float32(), rng.Float32()}, 100, 2); err != nil {
 			b.Fatalf("seeding document %s: %v", id, err)
 		}
 	}
@@ -316,7 +316,7 @@ func BenchmarkSaveDocumentNewDoc(b *testing.B) {
 					Title: "New Document",
 					Text:  "brand new content never seen before",
 				}
-				if err := repo.SaveDocument(ctx, doc, []float32{0.1, 0.2, 0.3, 0.4}, 100); err != nil {
+				if err := repo.SaveDocument(ctx, doc, []float32{0.1, 0.2, 0.3, 0.4}, 100, 2); err != nil {
 					b.Fatalf("SaveDocument: %v", err)
 				}
 			}
@@ -410,14 +410,14 @@ func BenchmarkSaveDocumentWrites(b *testing.B) {
 			// Prime once outside the timed loop so every timed iteration hits
 			// the "unchanged content" branch (no archiving), matching a
 			// re-crawl of an unchanged page -- the common case in practice.
-			if err := repo.SaveDocument(ctx, doc, embedding, 100); err != nil {
+			if err := repo.SaveDocument(ctx, doc, embedding, 100, 2); err != nil {
 				b.Fatalf("priming SaveDocument: %v", err)
 			}
 
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if err := repo.SaveDocument(ctx, doc, embedding, 100); err != nil {
+				if err := repo.SaveDocument(ctx, doc, embedding, 100, 2); err != nil {
 					b.Fatalf("SaveDocument: %v", err)
 				}
 			}
@@ -446,7 +446,7 @@ func seedBenchEmbeddingCorpus(b *testing.B, repo *sqlrepo.Repository, n, dims in
 			vec[j] = rng.Float32()*2 - 1
 		}
 		doc := domain.Document{ID: id, URL: "https://example.com/" + id, Title: "T", Text: "benchmark content"}
-		if err := repo.SaveDocument(ctx, doc, vec, 100); err != nil {
+		if err := repo.SaveDocument(ctx, doc, vec, 100, 2); err != nil {
 			b.Fatalf("seeding document %s: %v", id, err)
 		}
 	}
@@ -628,7 +628,7 @@ func BenchmarkWALConcurrency(b *testing.B) {
 			default:
 			}
 			embedding := []float32{rng.Float32(), rng.Float32(), rng.Float32(), rng.Float32()}
-			if err := writerRepo.SaveDocument(ctx, writerDoc, embedding, 100); err != nil {
+			if err := writerRepo.SaveDocument(ctx, writerDoc, embedding, 100, 2); err != nil {
 				b.Error(err)
 				return
 			}

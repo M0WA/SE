@@ -15,16 +15,6 @@ import (
 
 const crawledAtLayout = time.RFC3339Nano
 
-// titleRepeatCount is how many times a document's title is counted into
-// its indexed token stream, ahead of its body -- see SaveDocument. 2 is a
-// modest edge (title terms end up with roughly double the term frequency
-// they'd get from a single mention, on top of however many times they
-// separately occur in the body), not an aggressive one: a title-only
-// match still needs the term to actually appear in the title to benefit
-// at all, and BM25's own term-frequency saturation (the k1 parameter)
-// keeps repeated terms from dominating a score outright.
-const titleRepeatCount = 2
-
 // newDocumentPlaceholderPageRank is the pagerank a brand-new document row
 // gets at insert time, before application.RunPageRankJob has ever had a
 // chance to score it -- see SaveDocument's sql.ErrNoRows branch. Order of
@@ -584,17 +574,24 @@ func (r *Repository) Ping(ctx context.Context) error {
 // makes up the "+1") are pruned, oldest first, in the same transaction;
 // re-confirming unchanged content just refreshes crawled_at and prunes
 // nothing.
-func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embedding []float32, maxVersions int) error {
-	// The title is counted titleRepeatCount times before the body: postings
+func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embedding []float32, maxVersions, titleWeight int) error {
+	// The title is counted titleWeight times before the body: postings
 	// stores one merged term_freq per (term, doc) rather than a separate
 	// per-field count (no BM25F-style fielded formula), so the simplest way
-	// to give a title match a little more weight than the same word
-	// appearing in the body is to make it contribute that many times more
-	// to term_freq. Like every other indexing-time behavior (min text
-	// length, crawl delay, ...), this only takes effect for documents
-	// crawled or re-crawled after this change -- it isn't retroactively
-	// applied to already-indexed content.
-	tokens := domain.Tokenize(strings.Repeat(doc.Title+" ", titleRepeatCount) + doc.Text)
+	// to give a title match more weight than the same word appearing in the
+	// body is to make it contribute that many times more to term_freq --
+	// see domain.OperationalSettingsValues.TitleWeight. A non-positive
+	// value (the caller passed a zero value rather than a real setting, as
+	// in an older test) is treated as 1, the same as any other unweighted
+	// term, rather than dropping the title from the token stream entirely.
+	// Like every other indexing-time setting (min text length, crawl
+	// delay, ...), this only takes effect for documents crawled or
+	// re-crawled after a change to it -- it isn't retroactively applied to
+	// already-indexed content.
+	if titleWeight <= 0 {
+		titleWeight = 1
+	}
+	tokens := domain.Tokenize(strings.Repeat(doc.Title+" ", titleWeight) + doc.Text)
 	embBlob := EncodeEmbedding(embedding)
 	// Computed once here, at write time, and persisted alongside the
 	// embedding -- so every future search request that scores this

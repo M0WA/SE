@@ -84,8 +84,10 @@ type SQLRepository interface {
 	// document_versions first if it changed -- maxVersions bounds how
 	// many versions (current plus archived) survive that archiving,
 	// pruning the oldest beyond it in the same write. See
-	// domain.OperationalSettingsValues.MaxDocumentVersions.
-	SaveDocument(ctx context.Context, doc domain.Document, embedding []float32, maxVersions int) error
+	// domain.OperationalSettingsValues.MaxDocumentVersions. titleWeight is
+	// how many times the title is counted into the indexed token stream
+	// ahead of the body -- see domain.OperationalSettingsValues.TitleWeight.
+	SaveDocument(ctx context.Context, doc domain.Document, embedding []float32, maxVersions, titleWeight int) error
 	// PostingsForTerms batch-fetches postings for every given term in a
 	// single query (a "WHERE term IN (...)" join against documents), so a
 	// multi-term search issues one round trip regardless of how many unique

@@ -964,6 +964,16 @@ components:
                 beyond this are pruned in the same write that archives a
                 new one. A document that's never changed always has
                 exactly one version regardless of this setting.
+            title_weight:
+              type: integer
+              description: >-
+                How many times a document's title is counted into its
+                indexed token stream, ahead of its body -- 1 gives the
+                title no extra weight (counted once, same as any body
+                mention), values above 1 give it a progressively bigger
+                edge in BM25 scoring. A value below 1 falls back to the
+                default (2). Only takes effect for documents crawled or
+                re-crawled after the change -- not retroactive.
 
     Overrides:
       type: object

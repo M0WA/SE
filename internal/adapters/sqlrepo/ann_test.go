@@ -144,7 +144,7 @@ func TestEnableANN_BackfillsVectorColumnForPreExistingDocuments(t *testing.T) {
 	// NULL at this point, the same as every document crawled before this
 	// process ever turned ANN on.
 	doc := domain.Document{ID: "pre-existing", URL: "https://example.com/pre-existing", Title: "pre-existing", Text: "pre-existing"}
-	if err := repo.SaveDocument(ctx, doc, []float32{1, 0}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, doc, []float32{1, 0}, 100, 2); err != nil {
 		t.Fatalf("saving pre-existing document: %v", err)
 	}
 
@@ -184,7 +184,7 @@ func TestTopSemanticMatches_ReturnsNearestNeighborsInSaneOrder(t *testing.T) {
 	}
 	for _, d := range docs {
 		doc := domain.Document{ID: d.id, URL: "https://example.com/" + d.id, Title: d.id, Text: d.id}
-		if err := repo.SaveDocument(ctx, doc, d.vec, 100); err != nil {
+		if err := repo.SaveDocument(ctx, doc, d.vec, 100, 2); err != nil {
 			t.Fatalf("saving document %s: %v", d.id, err)
 		}
 	}
@@ -220,7 +220,7 @@ func TestTopSemanticMatches_LimitBoundsResultCount(t *testing.T) {
 
 	for _, id := range []string{"a", "b", "c", "d", "e"} {
 		doc := domain.Document{ID: id, URL: "https://example.com/" + id, Title: id, Text: id}
-		if err := repo.SaveDocument(ctx, doc, []float32{1, 0}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, doc, []float32{1, 0}, 100, 2); err != nil {
 			t.Fatalf("saving document %s: %v", id, err)
 		}
 	}
@@ -262,7 +262,7 @@ func TestTopSemanticMatches_ClampsEfSearchAboveOwnPgvectorMax(t *testing.T) {
 	repo := requirePostgresANN(t)
 	ctx := context.Background()
 	doc := domain.Document{ID: "doc-1", URL: "https://example.com/doc-1", Title: "Doc", Text: "hello world"}
-	if err := repo.SaveDocument(ctx, doc, []float32{1, 0}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, doc, []float32{1, 0}, 100, 2); err != nil {
 		t.Fatalf("saving document: %v", err)
 	}
 
@@ -309,7 +309,7 @@ func TestSaveDocument_PopulatesVectorColumnWhenANNAvailable(t *testing.T) {
 	repo := requirePostgresANN(t)
 	ctx := context.Background()
 	doc := domain.Document{ID: "doc-1", URL: "https://example.com/doc-1", Title: "Doc", Text: "hello world"}
-	if err := repo.SaveDocument(ctx, doc, []float32{1, 0}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, doc, []float32{1, 0}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	matches, ok, err := repo.TopSemanticMatches(ctx, []float32{1, 0}, 10)

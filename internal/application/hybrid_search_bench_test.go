@@ -28,7 +28,7 @@ type benchHybridRepo struct {
 	docs       map[string]domain.Document
 }
 
-func (r *benchHybridRepo) SaveDocument(context.Context, domain.Document, []float32, int) error {
+func (r *benchHybridRepo) SaveDocument(context.Context, domain.Document, []float32, int, int) error {
 	return nil
 }
 

@@ -43,7 +43,11 @@
         <label for="b">b — document-length normalization (0 = none, 1 = full)</label><br>
         <input id="b" class="field" type="number" step="0.05" min="0" max="1" required>
       </div>
-      <p class="tuning-hint">Defaults: alpha 0.5, k1 1.2, b 0.75. Values outside 0–1 (alpha, b) or below 0 (k1) are clamped.</p>
+      <div class="form-row">
+        <label for="title-weight">Title weight — how many times a title match counts, vs. once for the same word in the body</label><br>
+        <input id="title-weight" class="field" type="number" step="1" min="1" required>
+      </div>
+      <p class="tuning-hint">Defaults: alpha 0.5, k1 1.2, b 0.75, title weight 2. Values outside 0–1 (alpha, b) or below 0 (k1) are clamped; title weight below 1 falls back to the default. A title weight change only takes effect for documents crawled or re-crawled afterward -- it isn't retroactively applied to already-indexed content.</p>
     </section>
 
     <section class="panel">

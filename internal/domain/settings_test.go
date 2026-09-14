@@ -216,6 +216,7 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 		DefaultRenderer:                  domain.RendererNone,
 		LinkScope:                        domain.LinkScopeDomain,
 		MaxDocumentVersions:              5,
+		TitleWeight:                      2,
 	}
 	if v != want {
 		t.Errorf("expected defaults %+v, got %+v", want, v)
@@ -243,6 +244,34 @@ func TestOperationalSettings_SetPositiveMaxDocumentVersionsPreserved(t *testing.
 	s.Set(domain.OperationalSettingsValues{MaxDocumentVersions: 12})
 	if v := s.Get(); v.MaxDocumentVersions != 12 {
 		t.Errorf("expected MaxDocumentVersions=12 to be preserved, got %d", v.MaxDocumentVersions)
+	}
+}
+
+func TestOperationalSettings_SetZeroTitleWeightFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{TitleWeight: 0})
+	if v := s.Get(); v.TitleWeight != 2 {
+		t.Errorf("expected a zero TitleWeight to fall back to the default 2, got %d", v.TitleWeight)
+	}
+}
+
+func TestOperationalSettings_SetNegativeTitleWeightFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{TitleWeight: -3})
+	if v := s.Get(); v.TitleWeight != 2 {
+		t.Errorf("expected a negative TitleWeight to fall back to the default 2, got %d", v.TitleWeight)
+	}
+}
+
+func TestOperationalSettings_SetPositiveTitleWeightPreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{TitleWeight: 1})
+	if v := s.Get(); v.TitleWeight != 1 {
+		t.Errorf("expected TitleWeight=1 (no boost, but still a valid explicit choice) to be preserved, got %d", v.TitleWeight)
+	}
+	s.Set(domain.OperationalSettingsValues{TitleWeight: 7})
+	if v := s.Get(); v.TitleWeight != 7 {
+		t.Errorf("expected TitleWeight=7 to be preserved, got %d", v.TitleWeight)
 	}
 }
 

@@ -95,7 +95,7 @@ func (r *fakeSQLRepo) TopSemanticMatches(_ context.Context, _ []float32, _ int) 
 	return r.annMatches, true, nil
 }
 
-func (r *fakeSQLRepo) SaveDocument(context.Context, domain.Document, []float32, int) error {
+func (r *fakeSQLRepo) SaveDocument(context.Context, domain.Document, []float32, int, int) error {
 	return nil
 }
 

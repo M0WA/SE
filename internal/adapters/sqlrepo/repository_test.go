@@ -244,7 +244,7 @@ func TestSaveDocument_ThenRetrieveEverywhere(t *testing.T) {
 	doc := domain.Document{ID: "doc-1", URL: "http://a", Title: "Cats", Text: "Cats are great pets indeed"}
 	embedding := []float32{0.1, 0.2, 0.3}
 
-	if err := repo.SaveDocument(ctx, doc, embedding, 100); err != nil {
+	if err := repo.SaveDocument(ctx, doc, embedding, 100, 2); err != nil {
 		t.Fatalf("unexpected error saving document: %v", err)
 	}
 
@@ -306,9 +306,10 @@ func TestSaveDocument_ThenRetrieveEverywhere(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error querying postings: %v", err)
 	}
-	// "cats" appears 3 times: titleRepeatCount=2 copies of the title ("Cats"
-	// twice) plus once in the body text (SaveDocument tokenizes
-	// title+title+text together, giving the title a little more weight).
+	// "cats" appears 3 times: 2 (the titleWeight passed to SaveDocument
+	// above) copies of the title ("Cats" twice) plus once in the body text
+	// (SaveDocument tokenizes title repeated titleWeight times, then text,
+	// giving the title a little more weight).
 	if len(postings) != 1 || postings[0].DocID != "doc-1" || postings[0].TermFreq != 3 {
 		t.Errorf("expected one posting for 'cats' with freq 3, got %+v", postings)
 	}
@@ -325,17 +326,16 @@ func TestSaveDocument_ThenRetrieveEverywhere(t *testing.T) {
 	}
 }
 
-// titleRepeatCountForTest mirrors sqlrepo's unexported titleRepeatCount
-// constant (this test lives in the external sqlrepo_test package, so it
-// can't reference the constant directly) -- keep the two in sync if that
-// constant ever changes.
+// titleRepeatCountForTest is the titleWeight this test passes to
+// SaveDocument -- kept as a named constant purely so the assertion below
+// reads as "however many times we asked for", not a bare magic number.
 const titleRepeatCountForTest = 2
 
 // TestSaveDocument_TitleTermsCountedExtraForModestBoost is the direct
-// regression test for titleRepeatCount: the exact same word contributes
-// more to term_freq when it's in the title than when it's only in the
-// body, giving a title match a little more weight in BM25 scoring without
-// needing a separate per-field formula.
+// regression test for SaveDocument's titleWeight parameter: the exact same
+// word contributes more to term_freq when it's in the title than when it's
+// only in the body, giving a title match a little more weight in BM25
+// scoring without needing a separate per-field formula.
 func TestSaveDocument_TitleTermsCountedExtraForModestBoost(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
@@ -343,7 +343,7 @@ func TestSaveDocument_TitleTermsCountedExtraForModestBoost(t *testing.T) {
 	titleMatch := domain.Document{ID: "doc-title", URL: "http://a", Title: "Widget", Text: "This product is great"}
 	bodyMatch := domain.Document{ID: "doc-body", URL: "http://b", Title: "Gadget", Text: "This widget is great"}
 	for _, d := range []domain.Document{titleMatch, bodyMatch} {
-		if err := repo.SaveDocument(ctx, d, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, d, []float32{1}, 100, titleRepeatCountForTest); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
 		}
 	}
@@ -370,17 +370,58 @@ func TestSaveDocument_TitleTermsCountedExtraForModestBoost(t *testing.T) {
 	}
 }
 
+// TestSaveDocument_TitleWeightIsConfigurable proves titleWeight isn't just
+// wired through but actually changes the resulting term_freq -- a higher
+// weight passed for the same document produces a proportionally higher
+// count for its title term.
+func TestSaveDocument_TitleWeightIsConfigurable(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-1", URL: "http://a", Title: "Gizmo", Text: "unrelated body"}, []float32{1}, 100, 5); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	postings, err := repo.PostingsForTerm(ctx, "gizmo", 100)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(postings) != 1 || postings[0].TermFreq != 5 {
+		t.Errorf("expected titleWeight=5 to produce TermFreq=5 for a title-only term, got %+v", postings)
+	}
+}
+
+// TestSaveDocument_NonPositiveTitleWeightStillIndexesTitleOnce proves a
+// non-positive titleWeight (a caller that passed a zero value rather than
+// a real setting) doesn't silently drop the title from the token stream
+// entirely -- it falls back to counting it once, the same as any
+// unweighted term.
+func TestSaveDocument_NonPositiveTitleWeightStillIndexesTitleOnce(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-1", URL: "http://a", Title: "Sprocket", Text: "unrelated body"}, []float32{1}, 100, 0); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	postings, err := repo.PostingsForTerm(ctx, "sprocket", 100)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(postings) != 1 || postings[0].TermFreq != 1 {
+		t.Errorf("expected titleWeight<=0 to still index the title once, got %+v", postings)
+	}
+}
+
 func TestSaveDocument_UpsertReplacesPostings(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
 
 	first := domain.Document{ID: "doc-1", URL: "http://a", Title: "Cats", Text: "cats everywhere"}
-	if err := repo.SaveDocument(ctx, first, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, first, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error on first save: %v", err)
 	}
 
 	second := domain.Document{ID: "doc-1", URL: "http://a", Title: "Dogs", Text: "dogs everywhere"}
-	if err := repo.SaveDocument(ctx, second, []float32{2}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, second, []float32{2}, 100, 2); err != nil {
 		t.Fatalf("unexpected error on upsert save: %v", err)
 	}
 
@@ -428,7 +469,7 @@ func TestPostingsForTerm_AcrossMultipleDocuments(t *testing.T) {
 		{ID: "doc-2", URL: "http://b", Title: "B", Text: "shared term appears twice, shared term"},
 	}
 	for _, d := range docs {
-		if err := repo.SaveDocument(ctx, d, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, d, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
 		}
 	}
@@ -461,7 +502,7 @@ func TestPostingsForTerm_RespectsLimitAndOrdering(t *testing.T) {
 		{ID: "doc-mid", URL: "http://c", Title: "C", Text: "shared shared"},
 	}
 	for _, d := range docs {
-		if err := repo.SaveDocument(ctx, d, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, d, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
 		}
 	}
@@ -517,7 +558,7 @@ func TestPostingsForTerms_BatchesMultipleTermsInOneCall(t *testing.T) {
 		{ID: "doc-2", URL: "http://b", Title: "B", Text: "cats everywhere, cats"},
 	}
 	for _, d := range docs {
-		if err := repo.SaveDocument(ctx, d, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, d, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
 		}
 	}
@@ -575,7 +616,7 @@ func TestVocabularyStats_ReportsSizeAndTopTermsByDocFreq(t *testing.T) {
 		{ID: "doc-3", URL: "http://c", Title: "C", Text: "shared unique"},
 	}
 	for _, d := range docs {
-		if err := repo.SaveDocument(ctx, d, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, d, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
 		}
 	}
@@ -612,7 +653,7 @@ func TestVocabularyStats_SearchFiltersTopTermsButNotVocabSize(t *testing.T) {
 		{ID: "doc-3", URL: "http://c", Title: "C", Text: "shared unique"},
 	}
 	for _, d := range docs {
-		if err := repo.SaveDocument(ctx, d, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, d, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
 		}
 	}
@@ -632,7 +673,7 @@ func TestVocabularyStats_SearchFiltersTopTermsButNotVocabSize(t *testing.T) {
 func TestVocabularyStats_SearchWithNoMatchesReturnsEmptyTopTerms(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
-	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "shared common"}, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "shared common"}, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error saving doc: %v", err)
 	}
 
@@ -669,7 +710,7 @@ func TestAllTerms_ReturnsEveryTermUnbounded(t *testing.T) {
 		{ID: "doc-3", URL: "http://c", Title: "C", Text: "shared unique"},
 	}
 	for _, d := range docs {
-		if err := repo.SaveDocument(ctx, d, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, d, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
 		}
 	}
@@ -700,7 +741,7 @@ func TestDeleteDocument_Success(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
 	doc := domain.Document{ID: "doc-1", URL: "http://a", Title: "Cats", Text: "cats are great"}
-	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error saving: %v", err)
 	}
 
@@ -733,7 +774,7 @@ func TestListDocuments_RespectsLimit(t *testing.T) {
 	ctx := context.Background()
 	for _, id := range []string{"doc-1", "doc-2", "doc-3"} {
 		doc := domain.Document{ID: id, URL: "http://" + id, Title: id, Text: "content for " + id}
-		if err := repo.SaveDocument(ctx, doc, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", id, err)
 		}
 	}
@@ -856,7 +897,7 @@ func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 	})
 	t.Run("SaveDocument", func(t *testing.T) {
 		doc := domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "some text"}
-		if err := closedRepo(t).SaveDocument(ctx, doc, []float32{1}, 100); err == nil {
+		if err := closedRepo(t).SaveDocument(ctx, doc, []float32{1}, 100, 2); err == nil {
 			t.Error("expected an error")
 		}
 	})
@@ -1001,7 +1042,7 @@ func TestHostOf_InvalidURLReturnsEmpty(t *testing.T) {
 	// hostOf's error branch (a merely relative/schemeless URL still parses
 	// fine and just yields an empty Hostname(), which isn't this branch).
 	doc := domain.Document{ID: "doc-1", URL: "http://\x7f", Title: "A", Text: "some text"}
-	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	docs, err := repo.ListDocuments(ctx, 10, "")
@@ -1027,7 +1068,7 @@ func TestSampleEmbeddings_EmptyWhenNoDocuments(t *testing.T) {
 func TestSampleEmbeddings_ZeroLimitReturnsEmptyWithoutQuerying(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
-	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "some text"}, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "some text"}, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error saving document: %v", err)
 	}
 	embeddings, err := repo.SampleEmbeddings(ctx, 0)
@@ -1044,7 +1085,7 @@ func TestSampleEmbeddings_BoundedByLimitRegardlessOfCorpusSize(t *testing.T) {
 	ctx := context.Background()
 	for i := 0; i < 5; i++ {
 		id := fmt.Sprintf("doc-%d", i)
-		if err := repo.SaveDocument(ctx, domain.Document{ID: id, URL: "http://" + id, Title: "A", Text: "some text"}, []float32{float32(i)}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, domain.Document{ID: id, URL: "http://" + id, Title: "A", Text: "some text"}, []float32{float32(i)}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving document %s: %v", id, err)
 		}
 	}
@@ -1060,10 +1101,10 @@ func TestSampleEmbeddings_BoundedByLimitRegardlessOfCorpusSize(t *testing.T) {
 func TestEmbeddingsForDocs_OnlyReturnsRequestedIDs(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
-	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "some text"}, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "some text"}, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-2", URL: "http://b", Title: "B", Text: "other text"}, []float32{2}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-2", URL: "http://b", Title: "B", Text: "other text"}, []float32{2}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	embeddings, err := repo.EmbeddingsForDocs(ctx, []string{"doc-1", "does-not-exist"})
@@ -1100,7 +1141,7 @@ func TestDocumentsByIDs_EmptyIDsReturnsEmptyWithoutQuerying(t *testing.T) {
 func TestDocumentsByIDs_MissingIDsAreOmittedNotErrored(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
-	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "some text"}, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "some text"}, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	docs, err := repo.DocumentsByIDs(ctx, []string{"doc-1", "ghost-doc"})
@@ -1119,7 +1160,7 @@ func TestSaveDocument_SetsHostFromURL(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
 	doc := domain.Document{ID: "doc-1", URL: "https://example.com/page", Title: "A", Text: "some text"}
-	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	docs, err := repo.ListDocuments(ctx, 10, "")
@@ -1141,10 +1182,10 @@ func TestSaveDocument_UnchangedContentKeepsVersion(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
 	doc := domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "same text"}
-	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error on first save: %v", err)
 	}
-	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error on re-save: %v", err)
 	}
 	docs, _ := repo.ListDocuments(ctx, 10, "")
@@ -1164,15 +1205,15 @@ func TestSaveDocument_ChangedContentArchivesPreviousVersion(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
 	v1 := domain.Document{ID: "doc-1", URL: "http://a", Title: "Old Title", Text: "old text"}
-	if err := repo.SaveDocument(ctx, v1, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, v1, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error on first save: %v", err)
 	}
 	v2 := domain.Document{ID: "doc-1", URL: "http://a", Title: "New Title", Text: "new text"}
-	if err := repo.SaveDocument(ctx, v2, []float32{2}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, v2, []float32{2}, 100, 2); err != nil {
 		t.Fatalf("unexpected error on second save: %v", err)
 	}
 	v3 := domain.Document{ID: "doc-1", URL: "http://a", Title: "Newer Title", Text: "newer text"}
-	if err := repo.SaveDocument(ctx, v3, []float32{3}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, v3, []float32{3}, 100, 2); err != nil {
 		t.Fatalf("unexpected error on third save: %v", err)
 	}
 
@@ -1207,7 +1248,7 @@ func TestSaveDocument_PrunesArchivedVersionsBeyondMaxVersions(t *testing.T) {
 	ctx := context.Background()
 	for i := 1; i <= 5; i++ {
 		doc := domain.Document{ID: "doc-1", URL: "http://a", Title: fmt.Sprintf("Title %d", i), Text: fmt.Sprintf("text version %d", i)}
-		if err := repo.SaveDocument(ctx, doc, []float32{float32(i)}, 2); err != nil {
+		if err := repo.SaveDocument(ctx, doc, []float32{float32(i)}, 2, 2); err != nil {
 			t.Fatalf("unexpected error on save %d: %v", i, err)
 		}
 	}
@@ -1235,7 +1276,7 @@ func TestSaveDocument_MaxVersionsOfOneKeepsNoArchivedHistory(t *testing.T) {
 	ctx := context.Background()
 	for i := 1; i <= 3; i++ {
 		doc := domain.Document{ID: "doc-1", URL: "http://a", Title: fmt.Sprintf("Title %d", i), Text: fmt.Sprintf("text version %d", i)}
-		if err := repo.SaveDocument(ctx, doc, []float32{float32(i)}, 1); err != nil {
+		if err := repo.SaveDocument(ctx, doc, []float32{float32(i)}, 1, 2); err != nil {
 			t.Fatalf("unexpected error on save %d: %v", i, err)
 		}
 	}
@@ -1252,7 +1293,7 @@ func TestDocumentVersions_EmptyForNeverModifiedDocument(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
 	doc := domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "text"}
-	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	versions, err := repo.DocumentVersions(ctx, "doc-1")
@@ -1273,7 +1314,7 @@ func TestListDocuments_FiltersByHost(t *testing.T) {
 		{ID: "doc-3", URL: "http://b.example/1", Title: "B1", Text: "text"},
 	}
 	for _, d := range docs {
-		if err := repo.SaveDocument(ctx, d, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, d, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	}
@@ -1303,7 +1344,7 @@ func TestSearchDomains_EmptyQueryReturnsEveryDomain(t *testing.T) {
 		{ID: "doc-2", URL: "http://b.example/1", Title: "B", Text: "text"},
 	}
 	for _, d := range docs {
-		if err := repo.SaveDocument(ctx, d, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, d, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
 		}
 	}
@@ -1328,7 +1369,7 @@ func TestSearchDomains_EmptyQueryStillRespectsLimit(t *testing.T) {
 		{ID: "doc-3", URL: "http://c.example/1", Title: "C", Text: "text"},
 	}
 	for _, d := range docs {
-		if err := repo.SaveDocument(ctx, d, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, d, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
 		}
 	}
@@ -1351,7 +1392,7 @@ func TestSearchDomains_MatchesSubstringOrderedByCount(t *testing.T) {
 		{ID: "doc-4", URL: "http://other.org/1", Title: "D", Text: "text"},
 	}
 	for _, d := range docs {
-		if err := repo.SaveDocument(ctx, d, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, d, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	}
@@ -1379,7 +1420,7 @@ func TestDocumentsOverview_TopDomainsAndAgeBuckets(t *testing.T) {
 		{ID: "doc-3", URL: "http://b.example/1", Title: "B", Text: "text"},
 	}
 	for _, d := range docs {
-		if err := repo.SaveDocument(ctx, d, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, d, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	}
@@ -1422,15 +1463,15 @@ func TestDocumentsOverview_VersionCountsGroupsByVersion(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
 	once := domain.Document{ID: "doc-1", URL: "http://a.example/1", Title: "A", Text: "genuegend inhalt text fuer diese seite bitte danke"}
-	if err := repo.SaveDocument(ctx, once, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, once, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	recrawled := domain.Document{ID: "doc-2", URL: "http://b.example/1", Title: "B", Text: "genuegend inhalt text fuer diese andere seite bitte danke"}
-	if err := repo.SaveDocument(ctx, recrawled, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, recrawled, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	recrawled.Text = "genuegend inhalt text fuer diese andere seite bitte danke, jetzt geaendert"
-	if err := repo.SaveDocument(ctx, recrawled, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, recrawled, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error re-saving: %v", err)
 	}
 
@@ -1465,7 +1506,7 @@ func TestDocumentsOverview_StoredVersionCountsReflectsPruningNotVersionNumber(t 
 	ctx := context.Background()
 	for i := 1; i <= 5; i++ {
 		doc := domain.Document{ID: "doc-1", URL: "http://a.example/1", Title: fmt.Sprintf("Title %d", i), Text: fmt.Sprintf("text version %d", i)}
-		if err := repo.SaveDocument(ctx, doc, []float32{float32(i)}, 2); err != nil {
+		if err := repo.SaveDocument(ctx, doc, []float32{float32(i)}, 2, 2); err != nil {
 			t.Fatalf("unexpected error on save %d: %v", i, err)
 		}
 	}
@@ -1602,7 +1643,7 @@ func TestSaveDocument_ClassifiesOutboundLinksInternalVsExternal(t *testing.T) {
 			"https://b.example/elsewhere",
 		},
 	}
-	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	docs, err := repo.ListDocuments(ctx, 10, "")
@@ -1627,7 +1668,7 @@ func TestSaveDocument_SelfLinkIsExcludedFromLinkCounts(t *testing.T) {
 		ID: "doc-1", URL: "https://a.example/page", Title: "A", Text: "text",
 		Links: []string{"https://a.example/page", "https://a.example/page"},
 	}
-	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	docs, _ := repo.ListDocuments(ctx, 10, "")
@@ -1643,14 +1684,14 @@ func TestSaveDocument_ResavingReplacesLinks(t *testing.T) {
 		ID: "doc-1", URL: "https://a.example/page", Title: "A", Text: "text one",
 		Links: []string{"https://a.example/other", "https://b.example/x"},
 	}
-	if err := repo.SaveDocument(ctx, first, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, first, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error on first save: %v", err)
 	}
 	second := domain.Document{
 		ID: "doc-1", URL: "https://a.example/page", Title: "A", Text: "text two",
 		Links: []string{"https://b.example/x"},
 	}
-	if err := repo.SaveDocument(ctx, second, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, second, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error on re-save: %v", err)
 	}
 	docs, _ := repo.ListDocuments(ctx, 10, "")
@@ -1670,7 +1711,7 @@ func TestListDocuments_ComputesBacklinksFromOtherIndexedPages(t *testing.T) {
 		{ID: "doc-c", URL: "https://c.example/target", Title: "C", Text: "text"},
 	}
 	for _, d := range docs {
-		if err := repo.SaveDocument(ctx, d, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, d, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	}
@@ -1699,7 +1740,7 @@ func TestDeleteDocument_RemovesItsOutboundLinks(t *testing.T) {
 		{ID: "doc-b", URL: "https://b.example/target", Title: "B", Text: "text"},
 	}
 	for _, d := range docs {
-		if err := repo.SaveDocument(ctx, d, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, d, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	}
@@ -1801,7 +1842,7 @@ func TestDocumentsByIDsSortedByCrawledAt_EmptyIDsReturnsEmptyWithoutQuerying(t *
 func TestDocumentsByIDsSortedByCrawledAt_MissingIDsAreOmittedNotErrored(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
-	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "some text"}, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "some text"}, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	docs, err := repo.DocumentsByIDsSortedByCrawledAt(ctx, []string{"doc-1", "ghost-doc"})
@@ -1835,7 +1876,7 @@ func TestDocumentsByIDsSortedByCrawledAt_OrdersDescendingWithDeterministicTieBre
 
 	ctx := context.Background()
 	for _, id := range []string{"a", "b", "c", "d"} {
-		if err := repo.SaveDocument(ctx, domain.Document{ID: id, URL: "http://" + id, Title: id, Text: "text " + id}, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, domain.Document{ID: id, URL: "http://" + id, Title: id, Text: "text " + id}, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", id, err)
 		}
 	}
@@ -1896,7 +1937,7 @@ func TestDocumentIDsByHost_MatchesExactAndSubdomainNotUnrelated(t *testing.T) {
 		{ID: "other-site", URL: "https://other.test/d", Title: "t", Text: "some text"},
 	}
 	for _, d := range docs {
-		if err := repo.SaveDocument(ctx, d, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, d, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
 		}
 	}
@@ -1943,7 +1984,7 @@ func TestHostsIndexed_MatchesExactAndSubdomainNotUnrelated(t *testing.T) {
 		{ID: "subdomain", URL: "https://www.other.example/b", Title: "t", Text: "some text"},
 	}
 	for _, d := range docs {
-		if err := repo.SaveDocument(ctx, d, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, d, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
 		}
 	}
@@ -1970,7 +2011,7 @@ func TestHostsIndexed_MatchesExactAndSubdomainNotUnrelated(t *testing.T) {
 func TestHostsIndexed_TruncatesToMaxBatch(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
-	if err := repo.SaveDocument(ctx, domain.Document{ID: "d1", URL: "https://kept.example/a", Title: "t", Text: "some text"}, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "d1", URL: "https://kept.example/a", Title: "t", Text: "some text"}, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -2059,11 +2100,11 @@ func TestSaveDocument_NewDocumentGetsNeutralPageRankDefault(t *testing.T) {
 	ctx := context.Background()
 
 	first := domain.Document{ID: "doc-1", URL: "https://a.example/", Title: "A", Text: "text one"}
-	if err := repo.SaveDocument(ctx, first, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, first, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error saving first doc: %v", err)
 	}
 	second := domain.Document{ID: "doc-2", URL: "https://b.example/", Title: "B", Text: "text two"}
-	if err := repo.SaveDocument(ctx, second, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, second, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error saving second doc: %v", err)
 	}
 
@@ -2090,7 +2131,7 @@ func TestSaveDocument_ResavingUnchangedContentPreservesPageRank(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
 	doc := domain.Document{ID: "doc-1", URL: "https://a.example/", Title: "A", Text: "text"}
-	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if err := repo.UpdatePageRanks(ctx, map[string]float64{"doc-1": 0.42}); err != nil {
@@ -2099,7 +2140,7 @@ func TestSaveDocument_ResavingUnchangedContentPreservesPageRank(t *testing.T) {
 	// Re-save with identical content (a re-crawl that found nothing new):
 	// unchanged-content path should preserve the pagerank set above, never
 	// reset it back to a neutral default.
-	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error re-saving: %v", err)
 	}
 	docs, err := repo.ListDocuments(ctx, 10, "")
@@ -2115,14 +2156,14 @@ func TestSaveDocument_ResavingChangedContentPreservesPageRank(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
 	doc := domain.Document{ID: "doc-1", URL: "https://a.example/", Title: "A", Text: "text one"}
-	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if err := repo.UpdatePageRanks(ctx, map[string]float64{"doc-1": 0.77}); err != nil {
 		t.Fatalf("unexpected error updating pagerank: %v", err)
 	}
 	changed := domain.Document{ID: "doc-1", URL: "https://a.example/", Title: "A", Text: "text two, now different"}
-	if err := repo.SaveDocument(ctx, changed, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, changed, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error re-saving changed content: %v", err)
 	}
 	docs, err := repo.ListDocuments(ctx, 10, "")
@@ -2152,7 +2193,7 @@ func TestRepository_LinkGraph(t *testing.T) {
 		{ID: "doc-c", URL: "https://c.example/target", Title: "C", Text: "text"},
 	}
 	for _, d := range docs {
-		if err := repo.SaveDocument(ctx, d, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, d, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
 		}
 	}
@@ -2175,7 +2216,7 @@ func TestRepository_LinkGraph(t *testing.T) {
 func TestRepository_LinkGraph_EmptyWhenNoLinks(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
-	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-1", URL: "https://a.example/", Title: "A", Text: "text"}, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-1", URL: "https://a.example/", Title: "A", Text: "text"}, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	graph, err := repo.LinkGraph(ctx)
@@ -2196,7 +2237,7 @@ func TestRepository_UpdatePageRanks_RoundTrips(t *testing.T) {
 	ctx := context.Background()
 	for _, id := range []string{"doc-1", "doc-2"} {
 		doc := domain.Document{ID: id, URL: "https://example.com/" + id, Title: id, Text: "text " + id}
-		if err := repo.SaveDocument(ctx, doc, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", id, err)
 		}
 	}
@@ -2260,7 +2301,7 @@ func TestRepository_UpdatePageRanks_SpansMultipleBatches(t *testing.T) {
 	for i := 0; i < n; i++ {
 		id := fmt.Sprintf("doc-%d", i)
 		doc := domain.Document{ID: id, URL: "https://example.com/" + id, Title: id, Text: "text"}
-		if err := repo.SaveDocument(ctx, doc, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", id, err)
 		}
 		scores[id] = float64(i) / float64(n)
@@ -2308,7 +2349,7 @@ func TestPageRankDistribution_ReflectsUpdatedScores(t *testing.T) {
 	ctx := context.Background()
 	for _, id := range []string{"doc-1", "doc-2", "doc-3"} {
 		doc := domain.Document{ID: id, URL: "https://example.com/" + id, Title: id, Text: "text " + id}
-		if err := repo.SaveDocument(ctx, doc, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", id, err)
 		}
 	}
@@ -2337,7 +2378,7 @@ func TestTableRowCounts_ReflectsSavedDocuments(t *testing.T) {
 	ctx := context.Background()
 	for _, id := range []string{"doc-1", "doc-2"} {
 		doc := domain.Document{ID: id, URL: "https://example.com/" + id, Title: id, Text: "shared term"}
-		if err := repo.SaveDocument(ctx, doc, []float32{1}, 100); err != nil {
+		if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", id, err)
 		}
 	}
@@ -2446,7 +2487,7 @@ func TestSaveDocument_ChunkedInsertsAcrossBatchBoundary(t *testing.T) {
 		ID: "doc-chunk", URL: "https://example.com/doc-chunk",
 		Text: text.String(), Links: links,
 	}
-	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("SaveDocument: %v", err)
 	}
 
@@ -2494,7 +2535,7 @@ func TestSaveDocument_ChunkedInsertsAcrossBatchBoundary(t *testing.T) {
 		ID: "doc-chunk", URL: "https://example.com/doc-chunk",
 		Text: "onlyterm", Links: []string{"https://example.com/onlylink"},
 	}
-	if err := repo.SaveDocument(ctx, doc2, []float32{1}, 100); err != nil {
+	if err := repo.SaveDocument(ctx, doc2, []float32{1}, 100, 2); err != nil {
 		t.Fatalf("SaveDocument (second): %v", err)
 	}
 	if err := raw.QueryRowContext(ctx, `SELECT COUNT(*) FROM postings WHERE doc_id = ?`, doc.ID).Scan(&postingsCount); err != nil {

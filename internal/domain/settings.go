@@ -101,6 +101,22 @@ type OperationalSettingsValues struct {
 	// regardless of this setting; it only bounds how much prior history a
 	// frequently-changing page accumulates.
 	MaxDocumentVersions int
+	// TitleWeight is how many times a document's title is counted into its
+	// indexed token stream, ahead of its body -- see
+	// sqlrepo.Repository.SaveDocument. postings stores one merged term_freq
+	// per (term, doc) rather than a separate per-field count (no
+	// BM25F-style fielded formula), so the simplest way to give a title
+	// match more weight than the same word appearing in the body is to make
+	// it contribute that many times more to term_freq. 1 gives the title no
+	// extra weight at all (counted once, same as any body mention); values
+	// above 1 give it a progressively bigger edge, tempered by BM25's own
+	// term-frequency saturation (the k1 parameter), which keeps a repeated
+	// term from dominating a score outright. Like every other
+	// indexing-time setting (min text length, crawl delay, ...), a change
+	// here only takes effect for documents crawled or re-crawled
+	// afterward -- it isn't retroactively applied to already-indexed
+	// content.
+	TitleWeight int
 }
 
 // defaultUserAgent mimics a standard desktop Firefox so crawled sites treat
@@ -148,6 +164,11 @@ const (
 	// for a changing page without letting document_versions grow
 	// unbounded for a page that's re-crawled often.
 	defaultMaxDocumentVersions = 5
+	// defaultTitleWeight is a modest edge (title terms end up with roughly
+	// double the term frequency they'd get from a single mention, on top
+	// of however many times they separately occur in the body), not an
+	// aggressive one.
+	defaultTitleWeight = 2
 )
 
 func defaultOperationalSettings() OperationalSettingsValues {
@@ -172,6 +193,7 @@ func defaultOperationalSettings() OperationalSettingsValues {
 		DefaultRenderer:                  RendererNone,
 		LinkScope:                        LinkScopeDomain,
 		MaxDocumentVersions:              defaultMaxDocumentVersions,
+		TitleWeight:                      defaultTitleWeight,
 	}
 }
 
@@ -267,6 +289,9 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 	}
 	if v.MaxDocumentVersions <= 0 {
 		v.MaxDocumentVersions = d.MaxDocumentVersions
+	}
+	if v.TitleWeight <= 0 {
+		v.TitleWeight = d.TitleWeight
 	}
 	// RendererDefault ("") isn't a valid global default -- there's nothing
 	// for the global setting itself to inherit from -- so an empty or

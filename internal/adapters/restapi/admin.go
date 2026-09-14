@@ -585,6 +585,10 @@ type operationalValues struct {
 	// plus archived) are kept -- see domain.OperationalSettingsValues for
 	// the full doc comment.
 	MaxDocumentVersions int `json:"max_document_versions"`
+	// TitleWeight is how many times a document's title is counted into its
+	// indexed token stream, ahead of its body -- see
+	// domain.OperationalSettingsValues for the full doc comment.
+	TitleWeight int `json:"title_weight"`
 }
 
 func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
@@ -609,6 +613,7 @@ func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 		DefaultRenderer:                  v.DefaultRenderer,
 		LinkScope:                        v.LinkScope,
 		MaxDocumentVersions:              v.MaxDocumentVersions,
+		TitleWeight:                      v.TitleWeight,
 	}
 }
 
@@ -634,6 +639,7 @@ func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 		DefaultRenderer:                  o.DefaultRenderer,
 		LinkScope:                        o.LinkScope,
 		MaxDocumentVersions:              o.MaxDocumentVersions,
+		TitleWeight:                      o.TitleWeight,
 	}
 }
 
