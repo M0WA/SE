@@ -14,6 +14,8 @@ jobs:
   test:
     name: Build, vet & test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -99,6 +101,8 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     container: golang:1.25-bookworm
+    permissions:
+      contents: read
     steps:
       - run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
       - uses: actions/checkout@v4
@@ -116,6 +120,8 @@ jobs:
     name: Build .deb (Ubuntu)
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -145,6 +151,8 @@ jobs:
             image: ubuntu:22.04
             artifact: searchengine-ubuntu-amd64-deb
     container: ${{ matrix.image }}
+    permissions:
+      contents: read
     steps:
       - uses: actions/download-artifact@v4
         with:

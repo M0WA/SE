@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"strings"
 	"sync"
 	"time"
 )
@@ -125,10 +124,13 @@ func isHTTPS(r *http.Request) bool {
 // a query-string-controlled redirect target is an open-redirect vector
 // otherwise.
 func safeNext(next string) string {
-	if strings.HasPrefix(next, "/") && !strings.HasPrefix(next, "//") {
-		return next
+	if len(next) == 0 || next[0] != '/' {
+		return "/admin"
 	}
-	return "/admin"
+	if len(next) > 1 && (next[1] == '/' || next[1] == '\\') {
+		return "/admin"
+	}
+	return next
 }
 
 func (h *Handler) handleLoginPage(w http.ResponseWriter, r *http.Request) {

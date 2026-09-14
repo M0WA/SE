@@ -78,6 +78,37 @@ func TestSessionStore_RevokeInvalidatesSession(t *testing.T) {
 	}
 }
 
+// TestSafeNext covers every branch of safeNext's open-redirect guard: an
+// empty value, a bare "/", a same-site path, and the various absolute /
+// protocol-relative forms browsers will follow off-site -- "//host",
+// "/\host" (backslash is treated the same as a forward slash by browsers
+// when resolving a URL, so it's an equally valid open-redirect vector),
+// and a plain absolute URL.
+func TestSafeNext(t *testing.T) {
+	cases := []struct {
+		name string
+		next string
+		want string
+	}{
+		{"empty falls back to /admin", "", "/admin"},
+		{"bare slash is safe", "/", "/"},
+		{"same-site path is safe", "/admin/jobs", "/admin/jobs"},
+		{"protocol-relative // is rejected", "//evil.example", "/admin"},
+		{"backslash after slash is rejected", "/\\evil.example", "/admin"},
+		{"backslash-prefixed path is rejected", "/\\evil.com", "/admin"},
+		{"double-backslash is rejected", "/\\\\evil.com", "/admin"},
+		{"absolute URL is rejected", "https://evil.example/", "/admin"},
+		{"relative path without leading slash is rejected", "evil.example", "/admin"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := safeNext(tc.next); got != tc.want {
+				t.Errorf("safeNext(%q) = %q, want %q", tc.next, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRandomToken_ProducesDistinctNonEmptyTokens(t *testing.T) {
 	a := randomToken()
 	b := randomToken()
