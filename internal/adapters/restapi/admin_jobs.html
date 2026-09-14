@@ -1,17 +1,20 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>se. — jobs</title>
-  <link rel="stylesheet" href="/style.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — jobs</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
 </head>
-<body>
-  <header class="page-header">
+<body class="admin">
+<main>
+  <div class="page-header">
     <a class="mark" href="/">se.</a>
     <button id="sign-out" class="text-button" type="button">Sign out</button>
-  </header>
-
+  </div>
   <nav class="admin-nav">
     <a href="/admin">Overview</a>
     <a href="/admin/documents">Documents</a>
@@ -24,41 +27,39 @@
     <a href="/admin/database">Database</a>
   </nav>
 
-  <main>
-    <section class="panel">
-      <h2>Schedules</h2>
-      <p class="lede" style="margin: 0 0 1rem;">Every crawl set up on this instance, one-off or repeating, with its options saved for reuse. Uncheck one to pause it; check a finished one-off crawl again to re-run it once more.</p>
-      <div id="crawls-status" class="panel-status"></div>
-      <input id="crawls-filter" class="field" type="text" placeholder="Filter schedules (regex) — matches seed" hidden>
-      <div id="crawls-filter-error" class="error-text"></div>
-      <div id="crawls-table"></div>
-    </section>
+  <section class="panel">
+    <h2>Schedules</h2>
+    <p class="lede" style="margin: 0 0 1rem;">Every crawl set up on this instance, one-off or repeating, with its options saved for reuse. Uncheck one to pause it; check a finished one-off crawl again to re-run it once more.</p>
+    <div id="crawls-status" class="panel-status"></div>
+    <input id="crawls-filter" class="field" type="text" placeholder="Filter schedules (regex) — matches seed" hidden>
+    <div id="crawls-filter-error" class="error-text"></div>
+    <div id="crawls-table"></div>
+  </section>
 
-    <section class="panel">
-      <h2>Jobs</h2>
-      <p class="lede" style="margin: 0 0 1rem;">Every crawl triggered on this instance, most recent first. Up to three run at once; the rest wait their turn.</p>
-      <div id="jobs-status" class="panel-status"></div>
-      <input id="jobs-filter" class="field" type="text" placeholder="Filter jobs (regex) — matches seed or status" hidden>
-      <div id="jobs-filter-error" class="error-text"></div>
-      <div id="jobs-table"></div>
-    </section>
+  <section class="panel">
+    <h2>Jobs</h2>
+    <p class="lede" style="margin: 0 0 1rem;">Every crawl triggered on this instance, most recent first. Up to three run at once; the rest wait their turn.</p>
+    <div id="jobs-status" class="panel-status"></div>
+    <input id="jobs-filter" class="field" type="text" placeholder="Filter jobs (regex) — matches seed or status" hidden>
+    <div id="jobs-filter-error" class="error-text"></div>
+    <div id="jobs-table"></div>
+  </section>
 
-    <section class="panel">
-      <h2 id="job-detail-heading" hidden>Job detail</h2>
-      <div id="job-detail-summary"></div>
-      <div id="job-detail-options"></div>
-      <input id="job-detail-filter" class="field" type="text" placeholder="Filter pages (regex) — matches URL, status, or title" hidden>
-      <div id="job-detail-filter-error" class="error-text"></div>
-      <div id="job-detail-table" class="table-scroll"></div>
-      <div id="job-detail-pager" class="pager" hidden>
-        <button id="job-detail-prev" class="text-button" type="button">Previous</button>
-        <span id="job-detail-page-info"></span>
-        <button id="job-detail-next" class="text-button" type="button">Next</button>
-      </div>
-    </section>
-  </main>
-
-  <script src="/admin.js"></script>
-  <script src="/admin_jobs.js"></script>
+  <section class="panel">
+    <h2 id="job-detail-heading" hidden>Job detail</h2>
+    <div id="job-detail-summary"></div>
+    <div id="job-detail-options"></div>
+    <input id="job-detail-filter" class="field" type="text" placeholder="Filter pages (regex) — matches URL, status, or title" hidden>
+    <div id="job-detail-filter-error" class="error-text"></div>
+    <div id="job-detail-table" class="table-scroll"></div>
+    <div id="job-detail-pager" class="pager" hidden>
+      <button id="job-detail-prev" class="text-button" type="button">Previous</button>
+      <span id="job-detail-page-info"></span>
+      <button id="job-detail-next" class="text-button" type="button">Next</button>
+    </div>
+  </section>
+</main>
+<script src="/admin.js"></script>
+<script src="/admin_jobs.js"></script>
 </body>
 </html>
