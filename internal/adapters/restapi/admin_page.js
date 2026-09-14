@@ -91,11 +91,34 @@
     return wrap;
   }
 
-  function buildVersionTable(versionCounts) {
-    return buildTable(['Version', 'Documents'], versionCounts, (v) => [
-      textCell(v.version),
-      textCell(String(v.count)),
-    ]);
+  // buildVersionBars mirrors buildAgeBars' bar-chart shape (same CSS
+  // classes, same "count above a height-scaled bar, label below" layout)
+  // for the version-number breakdown -- a document's version count is a
+  // small, discrete distribution just like an age bucket, so the same
+  // visual treatment reads the same way at a glance.
+  function buildVersionBars(versionCounts) {
+    const maxCount = Math.max.apply(null, versionCounts.map((v) => v.count).concat([1]));
+    const wrap = document.createElement('div');
+    wrap.className = 'age-bars';
+    for (const v of versionCounts) {
+      const col = document.createElement('div');
+      col.className = 'age-bar-col';
+      const bar = document.createElement('div');
+      bar.className = 'age-bar';
+      bar.style.height = Math.max(2, (v.count / maxCount) * 80) + 'px';
+      bar.title = 'Version ' + v.version + ': ' + v.count + (v.count === 1 ? ' document' : ' documents');
+      const count = document.createElement('div');
+      count.className = 'age-bar-count';
+      count.textContent = String(v.count);
+      const label = document.createElement('div');
+      label.className = 'age-bar-label';
+      label.textContent = 'v' + v.version;
+      col.appendChild(count);
+      col.appendChild(bar);
+      col.appendChild(label);
+      wrap.appendChild(col);
+    }
+    return wrap;
   }
 
   async function loadCorpusOverview(statsEl, statusEl, chartsEl) {
@@ -145,7 +168,7 @@
         const versionHeading = document.createElement('h3');
         versionHeading.textContent = 'Documents by version';
         versionBlock.appendChild(versionHeading);
-        versionBlock.appendChild(buildVersionTable(overview.version_counts));
+        versionBlock.appendChild(buildVersionBars(overview.version_counts));
         row.appendChild(versionBlock);
       }
 
