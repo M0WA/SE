@@ -50,7 +50,7 @@ func (c *sqlCrawlerService) Crawl(ctx context.Context, opts ports.CrawlOptions, 
 		if err != nil {
 			return err
 		}
-		return c.repo.SaveDocument(ctx, doc, embedding)
+		return c.repo.SaveDocument(ctx, doc, embedding, c.settings.Get().MaxDocumentVersions)
 	}, onPage)
 }
 

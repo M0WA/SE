@@ -574,6 +574,10 @@ type operationalValues struct {
 	// LinkScopeAny) -- a scheduled/one-off crawl's own link_scope
 	// overrides this when set.
 	LinkScope string `json:"link_scope"`
+	// MaxDocumentVersions bounds how many versions of a document (current
+	// plus archived) are kept -- see domain.OperationalSettingsValues for
+	// the full doc comment.
+	MaxDocumentVersions int `json:"max_document_versions"`
 }
 
 func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
@@ -597,6 +601,7 @@ func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 		MaxRetainedCrawlJobs:             v.MaxRetainedCrawlJobs,
 		DefaultRenderer:                  v.DefaultRenderer,
 		LinkScope:                        v.LinkScope,
+		MaxDocumentVersions:              v.MaxDocumentVersions,
 	}
 }
 
@@ -621,6 +626,7 @@ func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 		MaxRetainedCrawlJobs:             o.MaxRetainedCrawlJobs,
 		DefaultRenderer:                  o.DefaultRenderer,
 		LinkScope:                        o.LinkScope,
+		MaxDocumentVersions:              o.MaxDocumentVersions,
 	}
 }
 

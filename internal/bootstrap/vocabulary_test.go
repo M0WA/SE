@@ -24,7 +24,7 @@ func TestSyncVocabulary_SeedsCacheFromExistingDocuments(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
 	doc := domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "cats and dogs"}
-	if err := repo.SaveDocument(ctx, doc, []float32{1}); err != nil {
+	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100); err != nil {
 		t.Fatalf("unexpected error saving doc: %v", err)
 	}
 
@@ -52,7 +52,7 @@ func TestSyncVocabulary_ReReadsOnEachCall(t *testing.T) {
 	}
 
 	doc := domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "widgets"}
-	if err := repo.SaveDocument(ctx, doc, []float32{1}); err != nil {
+	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 

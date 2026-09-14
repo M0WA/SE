@@ -5,6 +5,7 @@
   const defaultTopKEl = document.getElementById('default-top-k');
   const semanticPoolSizeEl = document.getElementById('semantic-pool-size');
   const annSearchEnabledEl = document.getElementById('ann-search-enabled');
+  const maxDocumentVersionsEl = document.getElementById('max-document-versions');
   const dbMaxOpenConnsEl = document.getElementById('db-max-open-conns');
   const dbMaxIdleConnsEl = document.getElementById('db-max-idle-conns');
   const dbConnMaxLifetimeEl = document.getElementById('db-conn-max-lifetime');
@@ -22,6 +23,7 @@
     defaultTopKEl.value = s.operational.default_top_k;
     semanticPoolSizeEl.value = s.operational.semantic_candidate_pool_size;
     annSearchEnabledEl.checked = s.operational.ann_search_enabled;
+    maxDocumentVersionsEl.value = s.operational.max_document_versions;
     dbMaxOpenConnsEl.value = s.operational.db_max_open_conns;
     dbMaxIdleConnsEl.value = s.operational.db_max_idle_conns;
     dbConnMaxLifetimeEl.value = s.operational.db_conn_max_lifetime_minutes;
@@ -57,6 +59,7 @@
           default_top_k: parseInt(defaultTopKEl.value, 10),
           semantic_candidate_pool_size: parseInt(semanticPoolSizeEl.value, 10),
           ann_search_enabled: annSearchEnabledEl.checked,
+          max_document_versions: parseInt(maxDocumentVersionsEl.value, 10),
           db_max_open_conns: parseInt(dbMaxOpenConnsEl.value, 10),
           db_max_idle_conns: parseInt(dbMaxIdleConnsEl.value, 10),
           db_conn_max_lifetime_minutes: parseInt(dbConnMaxLifetimeEl.value, 10),

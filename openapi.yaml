@@ -937,6 +937,15 @@ components:
                 subdomain, any top-level domain), or "any" (no
                 restriction). A schedule's own link_scope overrides this
                 when set.
+            max_document_versions:
+              type: integer
+              description: >-
+                How many versions of a document (the current one plus its
+                archived predecessors) are kept whenever a re-crawl finds
+                its content has changed -- the oldest archived versions
+                beyond this are pruned in the same write that archives a
+                new one. A document that's never changed always has
+                exactly one version regardless of this setting.
 
     Overrides:
       type: object

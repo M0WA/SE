@@ -28,7 +28,9 @@ type benchHybridRepo struct {
 	docs       map[string]domain.Document
 }
 
-func (r *benchHybridRepo) SaveDocument(context.Context, domain.Document, []float32) error { return nil }
+func (r *benchHybridRepo) SaveDocument(context.Context, domain.Document, []float32, int) error {
+	return nil
+}
 
 func (r *benchHybridRepo) PostingsForTerms(_ context.Context, terms []string) (map[string][]domain.PostingStats, error) {
 	out := make(map[string][]domain.PostingStats, len(terms))

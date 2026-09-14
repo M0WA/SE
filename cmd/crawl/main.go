@@ -50,9 +50,21 @@ const crawlJobPrunePollInterval = 5 * time.Minute
 // restapi.Config.OnCrawlComplete below) also resets this timer, so a crawl
 // finishing moments before the interval would have fired doesn't trigger an
 // almost-immediate redundant second run.
+//
+// That first recompute runs in the background (go pr.recompute()) rather
+// than blocking here: on a large corpus it can take minutes (a full-graph
+// PageRank pass over every document), and main() still has
+// RecoverInterruptedCrawls and http.ListenAndServe to get through after
+// this returns -- crawl-server should start accepting requests (and
+// resuming interrupted jobs) immediately with the previous scores still in
+// place, not sit unreachable until a potentially long recompute finishes.
+// pageRankRecomputer.recompute's own running-guard keeps this from
+// overlapping with the ticker below, which would otherwise see a
+// zero-value lastRun() and fire a redundant concurrent second pass before
+// this first one even finishes.
 func runPageRankScheduler(ctx context.Context, repo ports.PageRankRepository, settingsStore ports.SettingsStore, opSettings *domain.OperationalSettings) *pageRankRecomputer {
 	pr := &pageRankRecomputer{ctx: ctx, repo: repo, settingsStore: settingsStore}
-	pr.recompute()
+	go pr.recompute()
 
 	go func() {
 		ticker := time.NewTicker(pageRankPollInterval)
@@ -82,13 +94,31 @@ type pageRankRecomputer struct {
 	settingsStore ports.SettingsStore
 	mu            sync.Mutex
 	last          time.Time
+	// running guards against two recompute()s overlapping -- e.g. the
+	// startup call (backgrounded in runPageRankScheduler, above) still
+	// going when the ticker's first tick fires and sees a zero-value
+	// lastRun(), or a crawl completing (OnCrawlComplete) while the
+	// periodic ticker's own run is already underway. A second call while
+	// one is in flight just returns immediately rather than running a
+	// wasteful, contending second full-corpus pass.
+	running bool
 }
 
 func (p *pageRankRecomputer) recompute() {
+	p.mu.Lock()
+	if p.running {
+		p.mu.Unlock()
+		return
+	}
+	p.running = true
+	p.mu.Unlock()
+
 	if _, err := application.RunPageRankJobWithStatus(p.ctx, p.repo, p.settingsStore); err != nil {
 		log.Printf("recomputing pagerank: %v", err)
 	}
+
 	p.mu.Lock()
+	p.running = false
 	p.last = time.Now()
 	p.mu.Unlock()
 }

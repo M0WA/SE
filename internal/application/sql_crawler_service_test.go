@@ -33,7 +33,7 @@ type recordingSQLRepo struct {
 	saveErr    error
 }
 
-func (r *recordingSQLRepo) SaveDocument(_ context.Context, doc domain.Document, embedding []float32) error {
+func (r *recordingSQLRepo) SaveDocument(_ context.Context, doc domain.Document, embedding []float32, _ int) error {
 	if r.saveErr != nil {
 		return r.saveErr
 	}

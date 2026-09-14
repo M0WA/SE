@@ -215,9 +215,34 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 		MaxRetainedCrawlJobs:             200,
 		DefaultRenderer:                  domain.RendererNone,
 		LinkScope:                        domain.LinkScopeDomain,
+		MaxDocumentVersions:              5,
 	}
 	if v != want {
 		t.Errorf("expected defaults %+v, got %+v", want, v)
+	}
+}
+
+func TestOperationalSettings_SetZeroMaxDocumentVersionsFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{MaxDocumentVersions: 0})
+	if v := s.Get(); v.MaxDocumentVersions != 5 {
+		t.Errorf("expected a zero MaxDocumentVersions to fall back to the default 5, got %d", v.MaxDocumentVersions)
+	}
+}
+
+func TestOperationalSettings_SetNegativeMaxDocumentVersionsFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{MaxDocumentVersions: -5})
+	if v := s.Get(); v.MaxDocumentVersions != 5 {
+		t.Errorf("expected a negative MaxDocumentVersions to fall back to the default 5, got %d", v.MaxDocumentVersions)
+	}
+}
+
+func TestOperationalSettings_SetPositiveMaxDocumentVersionsPreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{MaxDocumentVersions: 12})
+	if v := s.Get(); v.MaxDocumentVersions != 12 {
+		t.Errorf("expected MaxDocumentVersions=12 to be preserved, got %d", v.MaxDocumentVersions)
 	}
 }
 

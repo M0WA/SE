@@ -68,6 +68,15 @@
     </section>
 
     <section class="panel">
+      <h2>Documents</h2>
+      <div class="form-row">
+        <label for="max-document-versions">Version history — how many versions of a document (current plus archived) are kept when a re-crawl changes its content</label><br>
+        <input id="max-document-versions" class="field" type="number" step="1" min="1" required>
+      </div>
+      <p class="tuning-hint">Default: 5. A document that's never changed always has exactly one version regardless of this setting -- it only bounds how much prior history a frequently-changing page accumulates. Lowering it prunes existing extra versions the next time that document is re-crawled, not immediately.</p>
+    </section>
+
+    <section class="panel">
       <h2>Database connection pool</h2>
       <div class="form-row">
         <label for="db-max-open-conns">Max open connections</label><br>

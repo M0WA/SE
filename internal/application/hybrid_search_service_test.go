@@ -95,7 +95,9 @@ func (r *fakeSQLRepo) TopSemanticMatches(_ context.Context, _ []float32, _ int) 
 	return r.annMatches, true, nil
 }
 
-func (r *fakeSQLRepo) SaveDocument(context.Context, domain.Document, []float32) error { return nil }
+func (r *fakeSQLRepo) SaveDocument(context.Context, domain.Document, []float32, int) error {
+	return nil
+}
 
 // PostingsForTerms mimics a batched "WHERE term IN (...)" fetch: only
 // requested terms come back, and only those actually present.

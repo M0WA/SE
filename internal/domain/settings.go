@@ -92,6 +92,15 @@ type OperationalSettingsValues struct {
 	// LinkScope) overrides this when set to anything other than
 	// LinkScopeDefault ("").
 	LinkScope string
+	// MaxDocumentVersions bounds how many versions of a document (the
+	// current one plus its archived predecessors in document_versions)
+	// are kept whenever a re-crawl finds its content has changed -- see
+	// sqlrepo.Repository.SaveDocument, which prunes the oldest archived
+	// versions beyond this limit in the same write that archives a new
+	// one. A document that's never changed always has exactly one version
+	// regardless of this setting; it only bounds how much prior history a
+	// frequently-changing page accumulates.
+	MaxDocumentVersions int
 }
 
 // defaultUserAgent mimics a standard desktop Firefox so crawled sites treat
@@ -135,6 +144,10 @@ const (
 	// point rather than a hard limit -- persistent storage can comfortably
 	// hold far more history if an admin raises it.
 	defaultMaxRetainedCrawlJobs = 200
+	// defaultMaxDocumentVersions keeps a handful of prior versions around
+	// for a changing page without letting document_versions grow
+	// unbounded for a page that's re-crawled often.
+	defaultMaxDocumentVersions = 5
 )
 
 func defaultOperationalSettings() OperationalSettingsValues {
@@ -158,6 +171,7 @@ func defaultOperationalSettings() OperationalSettingsValues {
 		MaxRetainedCrawlJobs:             defaultMaxRetainedCrawlJobs,
 		DefaultRenderer:                  RendererNone,
 		LinkScope:                        LinkScopeDomain,
+		MaxDocumentVersions:              defaultMaxDocumentVersions,
 	}
 }
 
@@ -250,6 +264,9 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 	}
 	if v.MaxRetainedCrawlJobs <= 0 {
 		v.MaxRetainedCrawlJobs = d.MaxRetainedCrawlJobs
+	}
+	if v.MaxDocumentVersions <= 0 {
+		v.MaxDocumentVersions = d.MaxDocumentVersions
 	}
 	// RendererDefault ("") isn't a valid global default -- there's nothing
 	// for the global setting itself to inherit from -- so an empty or

@@ -80,7 +80,12 @@ type EmbeddingProvider interface {
 
 // SQLRepository is the port to the relational database.
 type SQLRepository interface {
-	SaveDocument(ctx context.Context, doc domain.Document, embedding []float32) error
+	// SaveDocument upserts doc, archiving its previous content to
+	// document_versions first if it changed -- maxVersions bounds how
+	// many versions (current plus archived) survive that archiving,
+	// pruning the oldest beyond it in the same write. See
+	// domain.OperationalSettingsValues.MaxDocumentVersions.
+	SaveDocument(ctx context.Context, doc domain.Document, embedding []float32, maxVersions int) error
 	// PostingsForTerms batch-fetches postings for every given term in a
 	// single query (a "WHERE term IN (...)" join against documents), so a
 	// multi-term search issues one round trip regardless of how many unique

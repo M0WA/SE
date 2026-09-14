@@ -53,7 +53,7 @@ func seedBenchDocuments(b *testing.B, repo *sqlrepo.Repository, n int, rareTerms
 			Title: "Document " + id,
 			Text:  text,
 		}
-		if err := repo.SaveDocument(ctx, doc, []float32{rng.Float32(), rng.Float32(), rng.Float32(), rng.Float32()}); err != nil {
+		if err := repo.SaveDocument(ctx, doc, []float32{rng.Float32(), rng.Float32(), rng.Float32(), rng.Float32()}, 100); err != nil {
 			b.Fatalf("seeding document %s: %v", id, err)
 		}
 	}
@@ -175,7 +175,7 @@ func seedBenchDocumentsWithCrawledAt(b *testing.B, dsn string, repo *sqlrepo.Rep
 		id := fmt.Sprintf("doc-%d", i)
 		ids[i] = id
 		doc := domain.Document{ID: id, URL: fmt.Sprintf("https://example.com/%s", id), Title: "T", Text: "x"}
-		if err := repo.SaveDocument(ctx, doc, []float32{rng.Float32(), rng.Float32()}); err != nil {
+		if err := repo.SaveDocument(ctx, doc, []float32{rng.Float32(), rng.Float32()}, 100); err != nil {
 			b.Fatalf("seeding document %s: %v", id, err)
 		}
 	}

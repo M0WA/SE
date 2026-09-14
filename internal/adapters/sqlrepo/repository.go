@@ -476,9 +476,12 @@ func (r *Repository) Ping(ctx context.Context) error {
 // deterministically from the URL, so re-crawling the same page always
 // lands on the same row rather than creating a duplicate). When the new
 // content actually differs from what's on record, the previous version is
-// archived to document_versions and the version counter advances;
-// re-confirming unchanged content just refreshes crawled_at.
-func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embedding []float32) error {
+// archived to document_versions and the version counter advances, and any
+// archived versions beyond maxVersions-1 (the current row in documents
+// makes up the "+1") are pruned, oldest first, in the same transaction;
+// re-confirming unchanged content just refreshes crawled_at and prunes
+// nothing.
+func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embedding []float32, maxVersions int) error {
 	tokens := domain.Tokenize(doc.Title + " " + doc.Text)
 	embJSON, err := json.Marshal(embedding)
 	if err != nil {
@@ -531,6 +534,27 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 		}
 		version = existingVersion + 1
 		pagerank = existingPageRank
+
+		// keep is how many archived rows may remain for this doc_id --
+		// maxVersions counts the current (documents-table) row too, so a
+		// maxVersions of 1 keeps no archived history at all (keep=0, which
+		// LIMIT 0 below turns into "delete every archived row").
+		keep := maxVersions - 1
+		if keep < 0 {
+			keep = 0
+		}
+		// The kept-versions LIMIT is nested inside a derived table (FROM
+		// subquery), not the immediate operand of NOT IN, since MySQL
+		// rejects "LIMIT & IN/ALL/ANY/SOME subquery" used directly there --
+		// a derived table sidesteps that restriction on every dialect.
+		pruneSQL := r.ph(`DELETE FROM document_versions WHERE doc_id = %s AND version NOT IN (
+		                     SELECT version FROM (
+		                       SELECT version FROM document_versions WHERE doc_id = %s ORDER BY version DESC LIMIT %s
+		                     ) kept_versions
+		                   )`, 1, 2, 3)
+		if _, err := tx.ExecContext(ctx, pruneSQL, doc.ID, doc.ID, keep); err != nil {
+			return fmt.Errorf("pruning old document versions: %w", err)
+		}
 	}
 
 	if _, err := tx.ExecContext(ctx, r.dialect.UpsertDocumentSQL(),
