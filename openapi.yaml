@@ -163,15 +163,28 @@ paths:
   /admin/api/vocabulary:
     get:
       tags: [admin]
-      summary: Top terms by document frequency, optionally filtered
+      summary: A page of the vocabulary, sortable and optionally filtered
       parameters:
         - name: limit
           in: query
+          description: Items per page.
           schema: { type: integer, default: 20 }
+        - name: offset
+          in: query
+          description: How many matching terms to skip before this page.
+          schema: { type: integer, default: 0 }
         - name: search
           in: query
           description: Case-insensitive substring filter on the term.
           schema: { type: string }
+        - name: sort
+          in: query
+          description: Falls back to `doc_freq` for anything else.
+          schema: { type: string, enum: [term, doc_freq, total_freq], default: doc_freq }
+        - name: dir
+          in: query
+          description: Falls back to `desc` for anything else.
+          schema: { type: string, enum: [asc, desc], default: desc }
       responses:
         "200":
           description: OK
@@ -183,7 +196,13 @@ paths:
                   vocabulary_size:
                     type: integer
                     description: Total distinct terms corpus-wide (unaffected by `search`).
-                  top_terms:
+                  matched_count:
+                    type: integer
+                    description: >-
+                      How many terms match `search` in total, before
+                      `limit`/`offset` are applied -- for computing a page
+                      count. Equal to vocabulary_size when `search` is empty.
+                  terms:
                     type: array
                     items: { $ref: "#/components/schemas/TermStat" }
         "503": { $ref: "#/components/responses/NotConfigured" }

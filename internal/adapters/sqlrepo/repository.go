@@ -946,30 +946,59 @@ func (r *Repository) TableRowCounts(ctx context.Context) (map[string]int64, erro
 	return counts, nil
 }
 
-// VocabularyStats reports the total number of distinct indexed terms plus
-// the topN terms by document frequency (ties broken by total frequency). When
-// search is non-empty, the topN listing is restricted to terms containing it
-// (vocabSize itself always covers the whole corpus).
-func (r *Repository) VocabularyStats(ctx context.Context, topN int, search string) (int, []domain.TermStat, error) {
+// vocabularySortColumn whitelists sortBy against the only sortable
+// columns -- sortBy reaches here from an HTTP query parameter, so it's
+// never interpolated into the ORDER BY clause directly.
+func vocabularySortColumn(sortBy string) string {
+	switch sortBy {
+	case "term":
+		return "term"
+	case "total_freq":
+		return "total_freq"
+	default:
+		return "doc_freq"
+	}
+}
+
+// VocabularyStats reports the total number of distinct indexed terms
+// (vocabSize, always corpus-wide) plus a limit/offset page of terms
+// ordered by sortBy/sortDir (see vocabularySortColumn; ties are always
+// broken by term ascending, for a stable order across pages). When search
+// is non-empty, both the page and matchedCount (the total this search
+// matches, before limit/offset -- for the caller to compute a page count)
+// are restricted to terms containing it; matchedCount equals vocabSize
+// when search is empty.
+func (r *Repository) VocabularyStats(ctx context.Context, limit, offset int, search, sortBy, sortDir string) (int, int, []domain.TermStat, error) {
 	var vocabSize int
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT term) FROM postings`).Scan(&vocabSize); err != nil {
-		return 0, nil, fmt.Errorf("querying vocabulary size: %w", err)
+		return 0, 0, nil, fmt.Errorf("querying vocabulary size: %w", err)
 	}
 
+	orderCol := vocabularySortColumn(sortBy)
+	dir := "DESC"
+	if sortDir == "asc" {
+		dir = "ASC"
+	}
+
+	matched := vocabSize
 	var query string
 	var args []interface{}
 	if search == "" {
-		query = r.ph(`SELECT term, COUNT(*) AS doc_freq, SUM(term_freq) AS total_freq
-		               FROM postings GROUP BY term ORDER BY doc_freq DESC, total_freq DESC LIMIT %s`, 1)
-		args = []interface{}{topN}
+		query = r.ph(fmt.Sprintf(`SELECT term, COUNT(*) AS doc_freq, SUM(term_freq) AS total_freq
+		               FROM postings GROUP BY term ORDER BY %s %s, term ASC LIMIT %%s OFFSET %%s`, orderCol, dir), 1, 2)
+		args = []interface{}{limit, offset}
 	} else {
-		query = r.ph(`SELECT term, COUNT(*) AS doc_freq, SUM(term_freq) AS total_freq
-		               FROM postings WHERE term LIKE %s GROUP BY term ORDER BY doc_freq DESC, total_freq DESC LIMIT %s`, 1, 2)
-		args = []interface{}{"%" + search + "%", topN}
+		like := "%" + search + "%"
+		if err := r.db.QueryRowContext(ctx, r.ph(`SELECT COUNT(DISTINCT term) FROM postings WHERE term LIKE %s`, 1), like).Scan(&matched); err != nil {
+			return 0, 0, nil, fmt.Errorf("counting matching terms: %w", err)
+		}
+		query = r.ph(fmt.Sprintf(`SELECT term, COUNT(*) AS doc_freq, SUM(term_freq) AS total_freq
+		               FROM postings WHERE term LIKE %%s GROUP BY term ORDER BY %s %s, term ASC LIMIT %%s OFFSET %%s`, orderCol, dir), 1, 2, 3)
+		args = []interface{}{like, limit, offset}
 	}
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return 0, nil, fmt.Errorf("querying top terms: %w", err)
+		return 0, 0, nil, fmt.Errorf("querying terms: %w", err)
 	}
 	defer rows.Close()
 
@@ -977,11 +1006,11 @@ func (r *Repository) VocabularyStats(ctx context.Context, topN int, search strin
 	for rows.Next() {
 		var s domain.TermStat
 		if err := rows.Scan(&s.Term, &s.DocFreq, &s.TotalFreq); err != nil {
-			return 0, nil, fmt.Errorf("scanning row: %w", err)
+			return 0, 0, nil, fmt.Errorf("scanning row: %w", err)
 		}
 		out = append(out, s)
 	}
-	return vocabSize, out, rows.Err()
+	return vocabSize, matched, out, rows.Err()
 }
 
 // AllTerms returns every distinct term in the postings table with its

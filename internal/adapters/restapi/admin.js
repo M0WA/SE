@@ -198,107 +198,193 @@ async function loadStats() {
   }
 }
 
-// vocabFetchPromise caches the one broad, unfiltered vocabulary fetch so
-// every keystroke's regex filter runs against an in-memory array instead of
-// re-querying the server -- the server's own `search` param is a substring
-// match only and can't support real regex. A failed fetch clears the cache
-// so the next call gets to retry rather than being stuck replaying the same
-// rejection forever.
-let vocabFetchPromise = null;
+// Vocabulary state: a real server-driven page (limit/offset), sorted by a
+// real server-driven column/direction (sort/dir) -- see
+// handleAdminVocabulary. Unlike the old approach (fetch up to 2000 terms
+// once, then regex-filter/display that fixed slice client-side), every
+// page and sort order rendered here is correct regardless of how large the
+// corpus's vocabulary actually is, since the database itself does the
+// ordering and paging rather than a client-side slice of a bounded sample.
+// The tradeoff: the search box is now a plain substring filter (what the
+// server itself supports), not a client-side regex.
+let vocabPage = 0;
+let vocabPageSize = 20;
+let vocabSearch = '';
+let vocabSortBy = 'doc_freq';
+let vocabSortDir = 'desc';
 
-function fetchVocabOnce() {
-  if (!vocabFetchPromise) {
-    vocabFetchPromise = getJSON('/admin/api/vocabulary?limit=2000').catch((err) => {
-      vocabFetchPromise = null;
-      throw err;
-    });
-  }
-  return vocabFetchPromise;
+const VOCAB_COLUMNS = [
+  { key: 'term', label: 'term' },
+  { key: 'doc_freq', label: 'doc freq', num: true },
+  { key: 'total_freq', label: 'total freq', num: true },
+];
+
+// vocabDefaultDir picks a sensible starting direction the first time a
+// column is clicked: alphabetical starts ascending, frequency columns
+// start descending (most-frequent first, the old fixed behavior).
+function vocabDefaultDir(key) {
+  return key === 'term' ? 'asc' : 'desc';
 }
 
-// loadVocabulary regex-filters the (once-fetched, cached) full term list
-// against `pattern` (case-insensitive) and renders the matches -- an empty
-// pattern renders nothing (the page shows no table until the admin types),
-// and an invalid pattern reports an error rather than throwing, the same
-// convention as this page's other regex searches (see filterJobs in
-// admin_crawl.js). `vocabulary_size` in the summary is always the server's
-// real corpus-wide distinct-term count, never a filtered count.
-async function loadVocabulary(pattern) {
+// buildVocabTable renders one page of terms with clickable, sort-indicating
+// column headers -- clicking the already-active column flips its
+// direction; clicking a different one switches to it at its default
+// direction (see vocabDefaultDir) and reloads page 1.
+function buildVocabTable(terms) {
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  for (const col of VOCAB_COLUMNS) {
+    const th = document.createElement('th');
+    if (col.num) th.className = 'num';
+    th.classList.add('sortable-th');
+    th.tabIndex = 0;
+    const active = vocabSortBy === col.key;
+    th.textContent = col.label + (active ? (vocabSortDir === 'asc' ? ' ▲' : ' ▼') : '');
+    const activate = () => {
+      if (vocabSortBy === col.key) {
+        vocabSortDir = vocabSortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        vocabSortBy = col.key;
+        vocabSortDir = vocabDefaultDir(col.key);
+      }
+      vocabPage = 0;
+      loadVocabulary();
+    };
+    th.addEventListener('click', activate);
+    th.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); }
+    });
+    headRow.appendChild(th);
+  }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  for (const t of terms) {
+    const tr = document.createElement('tr');
+    const link = document.createElement('a');
+    link.href = '/admin/vocabulary/term?term=' + encodeURIComponent(t.term);
+    link.style.color = 'var(--ink)';
+    link.textContent = t.term;
+    link.title = 'See which pages contain this term';
+    const termTd = document.createElement('td');
+    termTd.appendChild(link);
+    tr.appendChild(termTd);
+    tr.appendChild(textCell(String(t.doc_freq), { num: true }));
+    tr.appendChild(textCell(String(t.total_freq), { num: true }));
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  return table;
+}
+
+// renderVocabPager shows/hides the Previous/Next controls and page count --
+// hidden entirely when everything fits on one page, same convention as
+// admin_jobs.js's per-job page detail pager.
+function renderVocabPager(pagerEl, matchedCount) {
+  const totalPages = Math.max(1, Math.ceil(matchedCount / vocabPageSize));
+  pagerEl.hidden = totalPages <= 1;
+  const info = document.getElementById('vocab-page-info');
+  if (info) info.textContent = 'Page ' + (vocabPage + 1) + ' of ' + totalPages;
+  const prev = document.getElementById('vocab-prev');
+  const next = document.getElementById('vocab-next');
+  if (prev) prev.disabled = vocabPage <= 0;
+  if (next) next.disabled = vocabPage + 1 >= totalPages;
+}
+
+// loadVocabulary fetches the current page (vocabPage/vocabPageSize/
+// vocabSearch/vocabSortBy/vocabSortDir) from the server and renders it.
+// `vocabulary_size` in the summary is always the server's real
+// corpus-wide distinct-term count; `matched_count` (shown alongside it
+// only while a search filter is active) is what that filter matches, and
+// is what the pager's page count is computed from.
+async function loadVocabulary() {
   const summaryEl = document.getElementById('vocab-summary');
   const tableEl = document.getElementById('vocab-table');
+  const pagerEl = document.getElementById('vocab-pager');
   if (!summaryEl || !tableEl) return;
-  const errorEl = document.getElementById('vocab-error');
-  if (errorEl) clear(errorEl);
-  const q = (pattern || '').trim();
-  if (q === '') {
-    clear(summaryEl);
-    clear(tableEl);
-    return;
-  }
-  let re;
   try {
-    re = new RegExp(q, 'i');
-  } catch (err) {
+    const params = new URLSearchParams({
+      limit: String(vocabPageSize),
+      offset: String(vocabPage * vocabPageSize),
+      sort: vocabSortBy,
+      dir: vocabSortDir,
+    });
+    if (vocabSearch) params.set('search', vocabSearch);
+    const v = await getJSON('/admin/api/vocabulary?' + params.toString());
     clear(summaryEl);
+    kvRow(summaryEl, 'Vocabulary size', String(v.vocabulary_size) + ' distinct terms' +
+      (vocabSearch ? ' (' + v.matched_count + ' match “' + vocabSearch + '”)' : ''));
     clear(tableEl);
-    const msg = 'Invalid pattern: ' + err.message;
-    if (errorEl) errorEl.textContent = msg;
-    else tableEl.textContent = msg;
-    return;
-  }
-  try {
-    const v = await fetchVocabOnce();
-    clear(summaryEl);
-    kvRow(summaryEl, 'Vocabulary size', String(v.vocabulary_size) + ' distinct terms');
-    const matches = v.top_terms.filter((t) => re.test(t.term));
-    clear(tableEl);
-    if (matches.length === 0) {
-      tableEl.textContent = 'No terms match “' + q + '”.';
+    if (v.terms.length === 0) {
+      tableEl.textContent = vocabSearch ? 'No terms match “' + vocabSearch + '”.' : 'No terms indexed yet.';
+      if (pagerEl) pagerEl.hidden = true;
       return;
     }
-    const table = buildTable(
-      [{ label: 'term' }, { label: 'doc freq', num: true }, { label: 'total freq', num: true }],
-      matches,
-      (t) => {
-        const link = document.createElement('a');
-        link.href = '/admin/vocabulary/term?term=' + encodeURIComponent(t.term);
-        link.style.color = 'var(--ink)';
-        link.textContent = t.term;
-        link.title = 'See which pages contain this term';
-        const termTd = document.createElement('td');
-        termTd.appendChild(link);
-        return [
-          termTd,
-          textCell(String(t.doc_freq), { num: true }),
-          textCell(String(t.total_freq), { num: true }),
-        ];
-      },
-    );
-    tableEl.appendChild(table);
+    tableEl.appendChild(buildVocabTable(v.terms));
+    if (pagerEl) renderVocabPager(pagerEl, v.matched_count);
   } catch (err) {
     clear(tableEl);
     summaryEl.textContent = 'Could not load vocabulary: ' + err.message;
+    if (pagerEl) pagerEl.hidden = true;
   }
 }
 
-// wireVocabularySearch wires the vocabulary panel's term filter (debounced
-// on input, immediate on submit). Unlike the old substring-search version,
-// it does NOT preload anything on wiring -- like every other search on the
-// Documents page, nothing renders until the admin actually types a pattern.
+// wireVocabularySearch wires the vocabulary panel's filter (debounced on
+// input, immediate on submit), items-per-page field, and Previous/Next
+// pager, then loads page 1 immediately -- unlike the old regex-search
+// version, this is a real pageable list, so it has something to show
+// before the admin types anything.
 function wireVocabularySearch() {
   const form = document.getElementById('vocab-search-form');
   const input = document.getElementById('vocab-q');
   if (!form || !input) return;
+
+  const pageSizeEl = document.getElementById('vocab-page-size');
+  if (pageSizeEl) {
+    const initial = parseInt(pageSizeEl.value, 10);
+    if (Number.isFinite(initial) && initial > 0) vocabPageSize = initial;
+    pageSizeEl.addEventListener('change', () => {
+      const n = parseInt(pageSizeEl.value, 10);
+      vocabPageSize = (Number.isFinite(n) && n > 0) ? n : 20;
+      vocabPage = 0;
+      loadVocabulary();
+    });
+  }
+
   let searchTimer = null;
   input.addEventListener('input', () => {
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => loadVocabulary(input.value.trim()), 200);
+    searchTimer = setTimeout(() => {
+      vocabSearch = input.value.trim();
+      vocabPage = 0;
+      loadVocabulary();
+    }, 200);
   });
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     clearTimeout(searchTimer);
-    loadVocabulary(input.value.trim());
+    vocabSearch = input.value.trim();
+    vocabPage = 0;
+    loadVocabulary();
   });
+
+  const prevBtn = document.getElementById('vocab-prev');
+  const nextBtn = document.getElementById('vocab-next');
+  if (prevBtn) {
+    prevBtn.addEventListener('click', () => {
+      if (vocabPage > 0) { vocabPage--; loadVocabulary(); }
+    });
+  }
+  if (nextBtn) {
+    nextBtn.addEventListener('click', () => {
+      vocabPage++;
+      loadVocabulary();
+    });
+  }
+
+  loadVocabulary();
 }
 
 // Exports for the Node test runner only -- `typeof module` is undefined in

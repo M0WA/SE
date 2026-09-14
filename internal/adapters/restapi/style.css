@@ -376,6 +376,39 @@ button:focus-visible {
 
 .crawl-form .field { font-size: 1rem; }
 
+.vocab-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.vocab-controls .field { font-size: 1rem; }
+
+.vocab-controls #vocab-q { flex: 1 1 auto; }
+
+.vocab-page-size-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.vocab-page-size {
+  width: 4rem;
+  flex: 0 0 auto;
+}
+
+.sortable-th {
+  cursor: pointer;
+  user-select: none;
+}
+
+.sortable-th:hover { color: var(--ink); }
+
 #max-pages {
   width: 3.5rem;
   font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;

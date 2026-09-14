@@ -144,7 +144,9 @@ func (h *Handler) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-const defaultVocabularyTopTermsLimit = 20
+// defaultVocabularyPageSize is the vocabulary page's default items-per-page
+// -- also the fallback for an invalid/absent limit query param.
+const defaultVocabularyPageSize = 20
 
 type adminTermStat struct {
 	Term      string `json:"term"`
@@ -153,29 +155,52 @@ type adminTermStat struct {
 }
 
 type adminVocabularyResponse struct {
-	VocabularySize int             `json:"vocabulary_size"`
-	TopTerms       []adminTermStat `json:"top_terms"`
+	// VocabularySize is the whole corpus's distinct-term count, unaffected
+	// by search/limit/offset.
+	VocabularySize int `json:"vocabulary_size"`
+	// MatchedCount is how many terms match search (ignoring limit/offset),
+	// equal to VocabularySize when search is empty -- what the page uses to
+	// compute how many pages exist.
+	MatchedCount int             `json:"matched_count"`
+	Terms        []adminTermStat `json:"terms"`
+}
+
+// vocabularySortParam whitelists the sort/dir query params against the
+// admin vocabulary page's actual sortable columns/directions, defaulting
+// anything else exactly the way this endpoint always ordered before
+// pagination/sorting existed (highest doc_freq first).
+func vocabularySortParam(r *http.Request, name, def string, valid ...string) string {
+	v := r.URL.Query().Get(name)
+	for _, ok := range valid {
+		if v == ok {
+			return v
+		}
+	}
+	return def
 }
 
 func (h *Handler) handleAdminVocabulary(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
 		return
 	}
-	limit := intQueryParam(r, "limit", defaultVocabularyTopTermsLimit, true)
+	limit := intQueryParam(r, "limit", defaultVocabularyPageSize, true)
+	offset := intQueryParam(r, "offset", 0, false)
 	// Indexed terms are always lowercased at tokenize time (see
 	// domain.Tokenize), so a mixed-case search would otherwise silently miss
 	// every match.
 	search := strings.ToLower(r.URL.Query().Get("search"))
-	vocabSize, topTerms, err := h.admin.VocabularyStats(r.Context(), limit, search)
+	sortBy := vocabularySortParam(r, "sort", "doc_freq", "term", "doc_freq", "total_freq")
+	sortDir := vocabularySortParam(r, "dir", "desc", "asc", "desc")
+	vocabSize, matched, terms, err := h.admin.VocabularyStats(r.Context(), limit, offset, search, sortBy, sortDir)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	out := make([]adminTermStat, len(topTerms))
-	for i, t := range topTerms {
+	out := make([]adminTermStat, len(terms))
+	for i, t := range terms {
 		out[i] = adminTermStat{Term: t.Term, DocFreq: t.DocFreq, TotalFreq: t.TotalFreq}
 	}
-	writeJSON(w, http.StatusOK, adminVocabularyResponse{VocabularySize: vocabSize, TopTerms: out})
+	writeJSON(w, http.StatusOK, adminVocabularyResponse{VocabularySize: vocabSize, MatchedCount: matched, Terms: out})
 }
 
 type adminDocument struct {

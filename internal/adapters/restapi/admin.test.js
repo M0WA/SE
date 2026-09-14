@@ -308,167 +308,275 @@ test('loadStats reports the error message on a failed fetch', async () => {
   assert.equal(document.getElementById('stats').textContent.includes('db down'), true);
 });
 
+// vocabFixture builds the vocabulary panel's full markup (search form,
+// page-size field, summary/table, and pager) -- every vocabulary test
+// below uses this same shape, since the panel's pieces (page-size field,
+// pager) are exercised together with the search form far more often than
+// any single piece needs to be tested in isolation.
+function vocabFixture() {
+  setupDOM(
+    '<!doctype html><html><body>' +
+      '<form id="vocab-search-form"><input id="vocab-q">' +
+      '<input id="vocab-page-size" value="20"></form>' +
+      '<div id="vocab-summary"></div><div id="vocab-table"></div>' +
+      '<div id="vocab-pager" hidden><button id="vocab-prev"></button>' +
+      '<span id="vocab-page-info"></span><button id="vocab-next"></button></div>' +
+      '</body></html>',
+  );
+}
+
 test('loadVocabulary is a no-op when the page has neither vocab element', async () => {
   const { loadVocabulary } = load();
-  await assert.doesNotReject(() => loadVocabulary('any'));
+  await assert.doesNotReject(() => loadVocabulary());
 });
 
-test('loadVocabulary renders nothing for a blank pattern (no preloaded table)', async () => {
-  setupDOM('<!doctype html><html><body><div id="vocab-summary"></div><div id="vocab-table"></div></body></html>');
+test('loadVocabulary requests limit/offset/sort/dir and renders vocabulary_size plus the term list', async () => {
+  vocabFixture();
   const { loadVocabulary } = load();
-  let called = false;
-  global.fetch = async () => {
-    called = true;
-    return { ok: true, json: async () => ({ vocabulary_size: 100, top_terms: [] }) };
-  };
-  await loadVocabulary('');
-  assert.equal(called, false);
-  assert.equal(document.getElementById('vocab-summary').textContent, '');
-  assert.equal(document.getElementById('vocab-table').textContent, '');
-});
-
-test('loadVocabulary fetches once, regex-filters the cached terms, and always shows the true vocabulary_size', async () => {
-  setupDOM('<!doctype html><html><body><div id="vocab-summary"></div><div id="vocab-table"></div></body></html>');
-  const { loadVocabulary } = load();
-  let fetchCount = 0;
-  global.fetch = async () => {
-    fetchCount++;
+  let gotURL;
+  global.fetch = async (url) => {
+    gotURL = url;
     return {
       ok: true,
       json: async () => ({
         vocabulary_size: 100,
-        top_terms: [
+        matched_count: 100,
+        terms: [
           { term: 'search', doc_freq: 10, total_freq: 20 },
           { term: 'engine', doc_freq: 5, total_freq: 8 },
         ],
       }),
     };
   };
-  await loadVocabulary('^sea');
+  await loadVocabulary();
+  assert.equal(gotURL, '/admin/api/vocabulary?limit=20&offset=0&sort=doc_freq&dir=desc');
   assert.equal(document.getElementById('vocab-summary').textContent.includes('100'), true);
   const rows = document.getElementById('vocab-table').querySelectorAll('tbody tr');
-  assert.equal(rows.length, 1);
+  assert.equal(rows.length, 2);
   const link = document.getElementById('vocab-table').querySelector('a');
   assert.equal(link.textContent, 'search');
   assert.equal(link.getAttribute('href'), '/admin/vocabulary/term?term=search');
-
-  // A second filter against a different pattern must not re-fetch.
-  await loadVocabulary('engine');
-  assert.equal(fetchCount, 1);
-  assert.equal(document.getElementById('vocab-summary').textContent.includes('100'), true);
-  assert.equal(document.getElementById('vocab-table').querySelector('a').textContent, 'engine');
 });
 
-test('loadVocabulary matches case-insensitively', async () => {
-  setupDOM('<!doctype html><html><body><div id="vocab-summary"></div><div id="vocab-table"></div></body></html>');
+test('loadVocabulary shows a no-terms message when the corpus has none', async () => {
+  vocabFixture();
   const { loadVocabulary } = load();
-  global.fetch = async () => ({
-    ok: true,
-    json: async () => ({ vocabulary_size: 1, top_terms: [{ term: 'Search', doc_freq: 1, total_freq: 1 }] }),
-  });
-  await loadVocabulary('search');
-  assert.equal(document.getElementById('vocab-table').querySelector('a').textContent, 'Search');
-});
-
-test('loadVocabulary shows a no-match message when the pattern matches nothing', async () => {
-  setupDOM('<!doctype html><html><body><div id="vocab-summary"></div><div id="vocab-table"></div></body></html>');
-  const { loadVocabulary } = load();
-  global.fetch = async () => ({ ok: true, json: async () => ({ vocabulary_size: 0, top_terms: [] }) });
-  await loadVocabulary('zzz');
-  assert.equal(document.getElementById('vocab-table').textContent.includes('zzz'), true);
-});
-
-test('loadVocabulary reports an invalid regex via the dedicated error element without crashing', async () => {
-  setupDOM(
-    '<!doctype html><html><body>' +
-      '<div id="vocab-error"></div><div id="vocab-summary"></div><div id="vocab-table"></div>' +
-      '</body></html>',
-  );
-  const { loadVocabulary } = load();
-  let called = false;
-  global.fetch = async () => {
-    called = true;
-    return { ok: true, json: async () => ({ vocabulary_size: 0, top_terms: [] }) };
-  };
-  await assert.doesNotReject(() => loadVocabulary('['));
-  assert.equal(called, false);
-  assert.equal(document.getElementById('vocab-error').textContent.includes('Invalid pattern'), true);
-  assert.equal(document.getElementById('vocab-summary').textContent, '');
-  assert.equal(document.getElementById('vocab-table').textContent, '');
-});
-
-test('loadVocabulary falls back to the table element for an invalid regex when there is no error element', async () => {
-  setupDOM('<!doctype html><html><body><div id="vocab-summary"></div><div id="vocab-table"></div></body></html>');
-  const { loadVocabulary } = load();
-  await loadVocabulary('(');
-  assert.equal(document.getElementById('vocab-table').textContent.includes('Invalid pattern'), true);
+  global.fetch = async () => ({ ok: true, json: async () => ({ vocabulary_size: 0, matched_count: 0, terms: [] }) });
+  await loadVocabulary();
+  assert.equal(document.getElementById('vocab-table').textContent, 'No terms indexed yet.');
 });
 
 test('loadVocabulary reports the error message on a failed fetch', async () => {
-  setupDOM('<!doctype html><html><body><div id="vocab-summary"></div><div id="vocab-table"></div></body></html>');
+  vocabFixture();
   const { loadVocabulary } = load();
   global.fetch = async () => ({ ok: false, status: 500, text: async () => 'vocab unavailable' });
-  await loadVocabulary('term');
+  await loadVocabulary();
   assert.equal(document.getElementById('vocab-summary').textContent.includes('vocab unavailable'), true);
 });
 
-test('wireVocabularySearch does nothing when there is no search form (no unconditional preload)', () => {
+test('wireVocabularySearch does nothing when there is no search form', () => {
   setupDOM('<!doctype html><html><body><div id="vocab-summary"></div><div id="vocab-table"></div></body></html>');
   const { wireVocabularySearch } = load();
   let called = false;
   global.fetch = async () => {
     called = true;
-    return { ok: true, json: async () => ({ vocabulary_size: 0, top_terms: [] }) };
+    return { ok: true, json: async () => ({ vocabulary_size: 0, matched_count: 0, terms: [] }) };
   };
   assert.doesNotThrow(() => wireVocabularySearch());
   assert.equal(called, false);
 });
 
-test('wireVocabularySearch renders nothing until the admin types, then debounces typing before loading', async () => {
-  setupDOM(
-    '<!doctype html><html><body>' +
-      '<form id="vocab-search-form"><input id="vocab-q"></form>' +
-      '<div id="vocab-summary"></div><div id="vocab-table"></div>' +
-      '</body></html>',
-  );
+test('wireVocabularySearch loads page 1 immediately (a real list, not search-only)', async () => {
+  vocabFixture();
   const { wireVocabularySearch } = load();
   let fetchCount = 0;
   global.fetch = async () => {
     fetchCount++;
-    return { ok: true, json: async () => ({ vocabulary_size: 0, top_terms: [{ term: 'foo', doc_freq: 1, total_freq: 1 }] }) };
+    return { ok: true, json: async () => ({ vocabulary_size: 1, matched_count: 1, terms: [{ term: 'foo', doc_freq: 1, total_freq: 1 }] }) };
   };
   wireVocabularySearch();
-  assert.equal(fetchCount, 0); // no preload
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(fetchCount, 1);
+  assert.equal(document.getElementById('vocab-table').querySelector('a').textContent, 'foo');
+});
+
+test('wireVocabularySearch debounces typing into the search filter, resets to page 1, and sends the trimmed term', async () => {
+  vocabFixture();
+  const { wireVocabularySearch } = load();
+  let fetchCount = 0;
+  let lastURL;
+  global.fetch = async (url) => {
+    fetchCount++;
+    lastURL = url;
+    return { ok: true, json: async () => ({ vocabulary_size: 0, matched_count: 0, terms: [{ term: 'foo', doc_freq: 1, total_freq: 1 }] }) };
+  };
+  wireVocabularySearch();
+  await new Promise((resolve) => setTimeout(resolve, 0)); // the immediate page-1 load
+  fetchCount = 0;
   const input = document.getElementById('vocab-q');
   input.value = 'f';
   input.dispatchEvent(new window.Event('input'));
   input.value = 'fo';
   input.dispatchEvent(new window.Event('input'));
-  input.value = 'foo';
+  input.value = '  foo  ';
   input.dispatchEvent(new window.Event('input'));
   // Only the last keystroke's debounced call should ever fire.
   await new Promise((resolve) => setTimeout(resolve, 250));
   assert.equal(fetchCount, 1);
-  assert.equal(document.getElementById('vocab-table').querySelector('a').textContent, 'foo');
+  assert.equal(lastURL.includes('search=foo'), true);
+  assert.equal(lastURL.includes('offset=0'), true);
 });
 
-test('wireVocabularySearch submitting the form loads with the trimmed query, preserving case for the regex', async () => {
-  setupDOM(
-    '<!doctype html><html><body>' +
-      '<form id="vocab-search-form"><input id="vocab-q"></form>' +
-      '<div id="vocab-summary"></div><div id="vocab-table"></div>' +
-      '</body></html>',
-  );
+test('wireVocabularySearch submitting the form loads immediately with the trimmed query', async () => {
+  vocabFixture();
   const { wireVocabularySearch } = load();
-  global.fetch = async () => ({
-    ok: true,
-    json: async () => ({ vocabulary_size: 0, top_terms: [{ term: 'Search', doc_freq: 1, total_freq: 1 }] }),
-  });
+  let lastURL;
+  global.fetch = async (url) => {
+    lastURL = url;
+    return { ok: true, json: async () => ({ vocabulary_size: 0, matched_count: 0, terms: [{ term: 'Search', doc_freq: 1, total_freq: 1 }] }) };
+  };
   wireVocabularySearch();
+  await new Promise((resolve) => setTimeout(resolve, 0));
   document.getElementById('vocab-q').value = '  Search  ';
   document.getElementById('vocab-search-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
   await new Promise((resolve) => setTimeout(resolve, 0));
-  // Case-insensitive match via the 'i' flag, not via lowercasing the input
-  // (lowercasing would corrupt a pattern like "[A-Z]").
+  assert.equal(lastURL.includes('search=Search'), true);
   assert.equal(document.getElementById('vocab-table').querySelector('a').textContent, 'Search');
+});
+
+test('wireVocabularySearch reads the page-size field\'s initial value and sends it as limit', async () => {
+  vocabFixture();
+  document.getElementById('vocab-page-size').value = '5';
+  const { wireVocabularySearch } = load();
+  let lastURL;
+  global.fetch = async (url) => {
+    lastURL = url;
+    return { ok: true, json: async () => ({ vocabulary_size: 0, matched_count: 0, terms: [] }) };
+  };
+  wireVocabularySearch();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(lastURL.includes('limit=5'), true);
+});
+
+test('changing the page-size field reloads page 1 with the new limit', async () => {
+  vocabFixture();
+  const { wireVocabularySearch } = load();
+  let lastURL;
+  global.fetch = async (url) => {
+    lastURL = url;
+    return { ok: true, json: async () => ({ vocabulary_size: 0, matched_count: 0, terms: [] }) };
+  };
+  wireVocabularySearch();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  document.getElementById('vocab-page-size').value = '50';
+  document.getElementById('vocab-page-size').dispatchEvent(new window.Event('change'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(lastURL.includes('limit=50'), true);
+  assert.equal(lastURL.includes('offset=0'), true);
+});
+
+test('an invalid page-size value falls back to 20', async () => {
+  vocabFixture();
+  const { wireVocabularySearch } = load();
+  let lastURL;
+  global.fetch = async (url) => {
+    lastURL = url;
+    return { ok: true, json: async () => ({ vocabulary_size: 0, matched_count: 0, terms: [] }) };
+  };
+  wireVocabularySearch();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  document.getElementById('vocab-page-size').value = 'abc';
+  document.getElementById('vocab-page-size').dispatchEvent(new window.Event('change'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(lastURL.includes('limit=20'), true);
+});
+
+test('clicking a column header sorts by it, defaulting frequency columns to descending', async () => {
+  vocabFixture();
+  const { wireVocabularySearch } = load();
+  let lastURL;
+  global.fetch = async (url) => {
+    lastURL = url;
+    return { ok: true, json: async () => ({ vocabulary_size: 1, matched_count: 1, terms: [{ term: 'foo', doc_freq: 1, total_freq: 3 }] }) };
+  };
+  wireVocabularySearch();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const totalFreqHeader = document.getElementById('vocab-table').querySelectorAll('th')[2];
+  totalFreqHeader.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(lastURL.includes('sort=total_freq'), true);
+  assert.equal(lastURL.includes('dir=desc'), true);
+});
+
+test('clicking the term column header defaults to ascending', async () => {
+  vocabFixture();
+  const { wireVocabularySearch } = load();
+  let lastURL;
+  global.fetch = async (url) => {
+    lastURL = url;
+    return { ok: true, json: async () => ({ vocabulary_size: 1, matched_count: 1, terms: [{ term: 'foo', doc_freq: 1, total_freq: 3 }] }) };
+  };
+  wireVocabularySearch();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const termHeader = document.getElementById('vocab-table').querySelectorAll('th')[0];
+  termHeader.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(lastURL.includes('sort=term'), true);
+  assert.equal(lastURL.includes('dir=asc'), true);
+});
+
+test('clicking the already-active column header flips direction instead of resetting it', async () => {
+  vocabFixture();
+  const { wireVocabularySearch } = load();
+  let lastURL;
+  global.fetch = async (url) => {
+    lastURL = url;
+    return { ok: true, json: async () => ({ vocabulary_size: 1, matched_count: 1, terms: [{ term: 'foo', doc_freq: 1, total_freq: 3 }] }) };
+  };
+  wireVocabularySearch();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  // Default sort is doc_freq/desc -- clicking that same column should flip to asc.
+  const docFreqHeader = document.getElementById('vocab-table').querySelectorAll('th')[1];
+  docFreqHeader.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(lastURL.includes('sort=doc_freq'), true);
+  assert.equal(lastURL.includes('dir=asc'), true);
+});
+
+test('the pager is hidden for a single page and shown, with Previous/Next wired, across multiple pages', async () => {
+  vocabFixture();
+  document.getElementById('vocab-page-size').value = '1';
+  const { wireVocabularySearch } = load();
+  let lastURL;
+  global.fetch = async (url) => {
+    lastURL = url;
+    return { ok: true, json: async () => ({ vocabulary_size: 2, matched_count: 2, terms: [{ term: 'foo', doc_freq: 1, total_freq: 1 }] }) };
+  };
+  wireVocabularySearch();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const pagerEl = document.getElementById('vocab-pager');
+  assert.equal(pagerEl.hidden, false);
+  assert.equal(document.getElementById('vocab-page-info').textContent, 'Page 1 of 2');
+  assert.equal(document.getElementById('vocab-prev').disabled, true);
+  assert.equal(document.getElementById('vocab-next').disabled, false);
+
+  document.getElementById('vocab-next').dispatchEvent(new window.Event('click'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(lastURL.includes('offset=1'), true);
+  assert.equal(document.getElementById('vocab-page-info').textContent, 'Page 2 of 2');
+  assert.equal(document.getElementById('vocab-next').disabled, true);
+  assert.equal(document.getElementById('vocab-prev').disabled, false);
+
+  document.getElementById('vocab-prev').dispatchEvent(new window.Event('click'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(lastURL.includes('offset=0'), true);
+});
+
+test('the pager is hidden when everything fits on one page', async () => {
+  vocabFixture();
+  const { wireVocabularySearch } = load();
+  global.fetch = async () => ({ ok: true, json: async () => ({ vocabulary_size: 1, matched_count: 1, terms: [{ term: 'foo', doc_freq: 1, total_freq: 1 }] }) });
+  wireVocabularySearch();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('vocab-pager').hidden, true);
 });

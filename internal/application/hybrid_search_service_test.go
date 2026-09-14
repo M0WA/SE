@@ -113,8 +113,8 @@ func (r *fakeSQLRepo) PostingsForTerms(_ context.Context, terms []string) (map[s
 	return out, nil
 }
 func (r *fakeSQLRepo) CorpusStats(context.Context) (int, float64, error) { return 2, 10, nil }
-func (r *fakeSQLRepo) VocabularyStats(context.Context, int, string) (int, []domain.TermStat, error) {
-	return 0, nil, nil
+func (r *fakeSQLRepo) VocabularyStats(context.Context, int, int, string, string, string) (int, int, []domain.TermStat, error) {
+	return 0, 0, nil, nil
 }
 func (r *fakeSQLRepo) AllTerms(context.Context) ([]domain.TermStat, error) {
 	return r.vocabulary, nil

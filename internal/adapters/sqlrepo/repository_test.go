@@ -598,18 +598,17 @@ func TestPostingsForTerms_BatchesMultipleTermsInOneCall(t *testing.T) {
 
 func TestVocabularyStats_EmptyCorpus(t *testing.T) {
 	repo := newTestRepo(t)
-	vocabSize, topTerms, err := repo.VocabularyStats(context.Background(), 10, "")
+	vocabSize, matched, topTerms, err := repo.VocabularyStats(context.Background(), 10, 0, "", "doc_freq", "desc")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if vocabSize != 0 || topTerms != nil {
-		t.Errorf("expected an empty vocabulary, got (%d, %+v)", vocabSize, topTerms)
+	if vocabSize != 0 || matched != 0 || topTerms != nil {
+		t.Errorf("expected an empty vocabulary, got (%d, %d, %+v)", vocabSize, matched, topTerms)
 	}
 }
 
-func TestVocabularyStats_ReportsSizeAndTopTermsByDocFreq(t *testing.T) {
-	repo := newTestRepo(t)
-	ctx := context.Background()
+func vocabularyTestCorpus(t *testing.T, repo *sqlrepo.Repository, ctx context.Context) {
+	t.Helper()
 	docs := []domain.Document{
 		{ID: "doc-1", URL: "http://a", Title: "A", Text: "shared common rare"},
 		{ID: "doc-2", URL: "http://b", Title: "B", Text: "shared common common"},
@@ -620,14 +619,23 @@ func TestVocabularyStats_ReportsSizeAndTopTermsByDocFreq(t *testing.T) {
 			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
 		}
 	}
+}
 
-	vocabSize, topTerms, err := repo.VocabularyStats(ctx, 2, "")
+func TestVocabularyStats_ReportsSizeAndTopTermsByDocFreq(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	vocabularyTestCorpus(t, repo, ctx)
+
+	vocabSize, matched, topTerms, err := repo.VocabularyStats(ctx, 2, 0, "", "doc_freq", "desc")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// distinct terms across all three docs: shared, common, rare, unique.
 	if vocabSize != 4 {
 		t.Errorf("expected vocabulary size 4, got %d", vocabSize)
+	}
+	if matched != 4 {
+		t.Errorf("expected matchedCount=4 (no search filter, so it equals vocabSize), got %d", matched)
 	}
 	if len(topTerms) != 2 {
 		t.Fatalf("expected limit=2 to be respected, got %+v", topTerms)
@@ -640,30 +648,99 @@ func TestVocabularyStats_ReportsSizeAndTopTermsByDocFreq(t *testing.T) {
 	}
 }
 
-// TestVocabularyStats_SearchFiltersTopTermsButNotVocabSize verifies the
-// search-filtered topN listing only includes terms containing the search
-// string, while vocabSize keeps reporting the whole corpus's distinct-term
-// count regardless of the filter.
-func TestVocabularyStats_SearchFiltersTopTermsButNotVocabSize(t *testing.T) {
+// TestVocabularyStats_OffsetPagesPastTheFirstLimit proves offset actually
+// advances the page rather than being silently ignored: the same query
+// with offset=2 picks up right where a limit=2/offset=0 page left off.
+func TestVocabularyStats_OffsetPagesPastTheFirstLimit(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
-	docs := []domain.Document{
-		{ID: "doc-1", URL: "http://a", Title: "A", Text: "shared common rare"},
-		{ID: "doc-2", URL: "http://b", Title: "B", Text: "shared common common"},
-		{ID: "doc-3", URL: "http://c", Title: "C", Text: "shared unique"},
+	vocabularyTestCorpus(t, repo, ctx)
+
+	firstPage, _, page1, err := repo.VocabularyStats(ctx, 2, 0, "", "doc_freq", "desc")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	for _, d := range docs {
-		if err := repo.SaveDocument(ctx, d, []float32{1}, 100, 2); err != nil {
-			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
+	_, _, page2, err := repo.VocabularyStats(ctx, 2, 2, "", "doc_freq", "desc")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if firstPage != 4 || len(page1) != 2 || len(page2) != 2 {
+		t.Fatalf("expected two full pages of 2 out of vocabSize=4, got page1=%+v page2=%+v", page1, page2)
+	}
+	seen := map[string]bool{}
+	for _, s := range append(append([]domain.TermStat{}, page1...), page2...) {
+		if seen[s.Term] {
+			t.Errorf("expected offset=2 to page past page1 without repeating %q", s.Term)
+		}
+		seen[s.Term] = true
+	}
+	if len(seen) != 4 {
+		t.Errorf("expected the two pages together to cover all 4 distinct terms, got %+v", seen)
+	}
+}
+
+// TestVocabularyStats_SortByTermAscending proves sortBy="term" orders
+// alphabetically rather than by frequency -- unlike the doc_freq default,
+// this ordering also holds across the whole vocabulary, not just within
+// whatever the frequency-based top page happened to include.
+func TestVocabularyStats_SortByTermAscending(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	vocabularyTestCorpus(t, repo, ctx)
+
+	_, _, terms, err := repo.VocabularyStats(ctx, 10, 0, "", "term", "asc")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"common", "rare", "shared", "unique"}
+	if len(terms) != len(want) {
+		t.Fatalf("expected %d terms, got %+v", len(want), terms)
+	}
+	for i, w := range want {
+		if terms[i].Term != w {
+			t.Errorf("expected terms[%d]=%q, got %q (full: %+v)", i, w, terms[i].Term, terms)
 		}
 	}
+}
 
-	vocabSize, topTerms, err := repo.VocabularyStats(ctx, 10, "rare")
+// TestVocabularyStats_SortByTotalFreqDescending proves sortBy="total_freq"
+// orders by the (potentially different) total-occurrence count rather than
+// doc_freq -- "common" occurs 3 times total (twice in doc-2) but only in 2
+// documents, so it outranks "shared" (3 distinct documents, 3 occurrences)
+// under this sort even though "shared" has the higher doc_freq.
+func TestVocabularyStats_SortByTotalFreqDescending(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	vocabularyTestCorpus(t, repo, ctx)
+
+	_, _, terms, err := repo.VocabularyStats(ctx, 1, 0, "", "total_freq", "desc")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(terms) != 1 || terms[0].TotalFreq != 3 {
+		t.Fatalf("expected a single top result with total_freq=3 (a 3-way tie broken by term ascending), got %+v", terms)
+	}
+}
+
+// TestVocabularyStats_SearchFiltersTermsAndReportsMatchedCount verifies the
+// search-filtered listing only includes terms containing the search
+// string, matchedCount reflects that filtered total (not vocabSize), and
+// vocabSize itself keeps reporting the whole corpus's distinct-term count
+// regardless of the filter.
+func TestVocabularyStats_SearchFiltersTermsAndReportsMatchedCount(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	vocabularyTestCorpus(t, repo, ctx)
+
+	vocabSize, matched, topTerms, err := repo.VocabularyStats(ctx, 10, 0, "rare", "doc_freq", "desc")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if vocabSize != 4 {
 		t.Errorf("expected vocabSize to stay at the whole corpus's 4 regardless of the filter, got %d", vocabSize)
+	}
+	if matched != 1 {
+		t.Errorf("expected matchedCount=1 for a search matching only 'rare', got %d", matched)
 	}
 	if len(topTerms) != 1 || topTerms[0].Term != "rare" {
 		t.Errorf("expected only 'rare' to match search %q, got %+v", "rare", topTerms)
@@ -677,9 +754,12 @@ func TestVocabularyStats_SearchWithNoMatchesReturnsEmptyTopTerms(t *testing.T) {
 		t.Fatalf("unexpected error saving doc: %v", err)
 	}
 
-	_, topTerms, err := repo.VocabularyStats(ctx, 10, "zzz-no-such-term")
+	_, matched, topTerms, err := repo.VocabularyStats(ctx, 10, 0, "zzz-no-such-term", "doc_freq", "desc")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if matched != 0 {
+		t.Errorf("expected matchedCount=0 for a search with no matches, got %d", matched)
 	}
 	if len(topTerms) != 0 {
 		t.Errorf("expected no terms to match, got %+v", topTerms)
@@ -861,7 +941,7 @@ func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 		}
 	})
 	t.Run("VocabularyStats", func(t *testing.T) {
-		if _, _, err := closedRepo(t).VocabularyStats(ctx, 10, ""); err == nil {
+		if _, _, _, err := closedRepo(t).VocabularyStats(ctx, 10, 0, "", "doc_freq", "desc"); err == nil {
 			t.Error("expected an error")
 		}
 	})

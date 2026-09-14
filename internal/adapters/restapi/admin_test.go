@@ -26,6 +26,7 @@ type fakeAdminRepo struct {
 	totalDocs      int
 	avgDocLen      float64
 	vocabularySize int
+	matchedCount   int
 	topTerms       []domain.TermStat
 	docs           []domain.IndexedDocument
 	gotHost        string
@@ -39,7 +40,10 @@ type fakeAdminRepo struct {
 	deleteErr      error
 	deletedID      string
 	gotLimit       int
+	gotOffset      int
 	gotSearch      string
+	gotSortBy      string
+	gotSortDir     string
 
 	pageRankMin    float64
 	pageRankMax    float64
@@ -68,10 +72,17 @@ func (f *fakeAdminRepo) DeletedIDs() []string {
 func (f *fakeAdminRepo) CorpusStats(context.Context) (int, float64, error) {
 	return f.totalDocs, f.avgDocLen, f.err
 }
-func (f *fakeAdminRepo) VocabularyStats(_ context.Context, limit int, search string) (int, []domain.TermStat, error) {
+func (f *fakeAdminRepo) VocabularyStats(_ context.Context, limit, offset int, search, sortBy, sortDir string) (int, int, []domain.TermStat, error) {
 	f.gotLimit = limit
+	f.gotOffset = offset
 	f.gotSearch = search
-	return f.vocabularySize, f.topTerms, f.err
+	f.gotSortBy = sortBy
+	f.gotSortDir = sortDir
+	matched := f.matchedCount
+	if matched == 0 {
+		matched = f.vocabularySize
+	}
+	return f.vocabularySize, matched, f.topTerms, f.err
 }
 func (f *fakeAdminRepo) ListDocuments(_ context.Context, _ int, host string) ([]domain.IndexedDocument, error) {
 	f.gotHost = host
@@ -251,15 +262,16 @@ func TestHandleAdminVocabulary_Success(t *testing.T) {
 	}
 	var resp struct {
 		VocabularySize int `json:"vocabulary_size"`
-		TopTerms       []struct {
+		MatchedCount   int `json:"matched_count"`
+		Terms          []struct {
 			Term      string `json:"term"`
 			DocFreq   int    `json:"doc_freq"`
 			TotalFreq int    `json:"total_freq"`
-		} `json:"top_terms"`
+		} `json:"terms"`
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
-	if resp.VocabularySize != 42 || len(resp.TopTerms) != 1 || resp.TopTerms[0].Term != "cats" ||
-		resp.TopTerms[0].DocFreq != 3 || resp.TopTerms[0].TotalFreq != 7 {
+	if resp.VocabularySize != 42 || resp.MatchedCount != 42 || len(resp.Terms) != 1 || resp.Terms[0].Term != "cats" ||
+		resp.Terms[0].DocFreq != 3 || resp.Terms[0].TotalFreq != 7 {
 		t.Errorf("unexpected vocabulary response: %+v", resp)
 	}
 }
@@ -321,6 +333,89 @@ func TestHandleAdminVocabulary_AbsentSearchParamIsEmptyString(t *testing.T) {
 	}
 	if repo.gotSearch != "" {
 		t.Errorf("expected an absent search param to reach VocabularyStats as \"\", got %q", repo.gotSearch)
+	}
+}
+
+func TestHandleAdminVocabulary_DefaultsLimitOffsetSortDir(t *testing.T) {
+	repo := &fakeAdminRepo{vocabularySize: 1}
+	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/vocabulary", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if repo.gotLimit != 20 || repo.gotOffset != 0 || repo.gotSortBy != "doc_freq" || repo.gotSortDir != "desc" {
+		t.Errorf("expected default limit=20 offset=0 sort=doc_freq dir=desc, got limit=%d offset=%d sort=%q dir=%q",
+			repo.gotLimit, repo.gotOffset, repo.gotSortBy, repo.gotSortDir)
+	}
+}
+
+func TestHandleAdminVocabulary_RespectsOffsetParam(t *testing.T) {
+	repo := &fakeAdminRepo{vocabularySize: 1}
+	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/vocabulary?offset=40", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if repo.gotOffset != 40 {
+		t.Errorf("expected offset=40 to reach VocabularyStats, got %d", repo.gotOffset)
+	}
+}
+
+func TestHandleAdminVocabulary_RespectsSortAndDirParams(t *testing.T) {
+	repo := &fakeAdminRepo{vocabularySize: 1}
+	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/vocabulary?sort=term&dir=asc", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if repo.gotSortBy != "term" || repo.gotSortDir != "asc" {
+		t.Errorf("expected sort=term dir=asc to reach VocabularyStats, got sort=%q dir=%q", repo.gotSortBy, repo.gotSortDir)
+	}
+}
+
+func TestHandleAdminVocabulary_InvalidSortAndDirFallBackToDefaults(t *testing.T) {
+	repo := &fakeAdminRepo{vocabularySize: 1}
+	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/vocabulary?sort=bogus&dir=sideways", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if repo.gotSortBy != "doc_freq" || repo.gotSortDir != "desc" {
+		t.Errorf("expected an invalid sort/dir to fall back to doc_freq/desc, got sort=%q dir=%q", repo.gotSortBy, repo.gotSortDir)
+	}
+}
+
+func TestHandleAdminVocabulary_ReportsMatchedCountSeparateFromVocabularySize(t *testing.T) {
+	repo := &fakeAdminRepo{vocabularySize: 500, matchedCount: 3}
+	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/vocabulary?search=cat", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var resp struct {
+		VocabularySize int `json:"vocabulary_size"`
+		MatchedCount   int `json:"matched_count"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.VocabularySize != 500 || resp.MatchedCount != 3 {
+		t.Errorf("expected vocabulary_size=500 matched_count=3 (a filtered search matching far fewer than the whole corpus), got %+v", resp)
 	}
 }
 

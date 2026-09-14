@@ -46,8 +46,8 @@ func (r *benchHybridRepo) CorpusStats(context.Context) (int, float64, error) {
 	return len(r.sortedIDs), 120, nil
 }
 
-func (r *benchHybridRepo) VocabularyStats(context.Context, int, string) (int, []domain.TermStat, error) {
-	return 0, nil, nil
+func (r *benchHybridRepo) VocabularyStats(context.Context, int, int, string, string, string) (int, int, []domain.TermStat, error) {
+	return 0, 0, nil, nil
 }
 
 // AllTerms is unused by this benchmark (fuzzy correction is never
