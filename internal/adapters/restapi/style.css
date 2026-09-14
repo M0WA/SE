@@ -517,6 +517,80 @@ section.panel:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
   font-size: 0.92rem;
 }
 
+/* Settings page: read-only summary tiles + collapsible groups (see
+   admin_settings.html/admin_settings.js). Tiles show the current
+   configuration at a glance; groups replace the old flat stack of
+   section.panel blocks with four named groups an admin actually thinks
+   in terms of, collapsed by default so opening one doesn't push the
+   others far from the tiles above them. */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.6rem;
+  margin-bottom: 2rem;
+}
+
+.tile {
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  padding: 0.6rem 0.75rem;
+}
+
+.tile .k { color: var(--ink-muted); font-size: 0.75rem; }
+
+.tile .v {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 1rem;
+  margin-top: 0.15rem;
+}
+
+details.group {
+  border-bottom: 1px solid var(--rule);
+  padding: 0.9rem 0;
+}
+
+details.group summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+details.group summary::-webkit-details-marker { display: none; }
+
+details.group summary .gh { font-size: 1.02rem; font-weight: 600; color: var(--ink); }
+
+details.group summary .gd { color: var(--ink-muted); font-size: 0.82rem; font-weight: 400; }
+
+details.group summary:hover .gh { color: var(--accent); }
+
+.subpanel { margin-top: 1.1rem; }
+
+.subpanel + .subpanel {
+  margin-top: 1.6rem;
+  padding-top: 1.1rem;
+  border-top: 1px dashed var(--rule);
+}
+
+.subpanel h4 {
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+  margin: 0 0 0.7rem;
+  font-weight: 600;
+}
+
+.sticky-save {
+  position: sticky;
+  bottom: 0;
+  width: 100%;
+  background: var(--paper);
+  padding: 0.9rem 0;
+  margin-top: 0.5rem;
+  border-top: 1px solid var(--rule-strong);
+}
+
 .panel-form { margin-bottom: 1rem; }
 
 .panel-form .field { font-size: 1rem; }

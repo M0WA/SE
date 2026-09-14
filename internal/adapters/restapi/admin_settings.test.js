@@ -173,6 +173,54 @@ test('parseFactorLines parses "word factor" pairs and skips malformed lines', ()
   );
 });
 
+test('renderSettingsSummary fills the ranking/title-weight/ANN/fuzzy/session/crawl-default tiles', () => {
+  const { renderSettingsSummary } = loadFixture();
+  renderSettingsSummary(FULL_SETTINGS);
+  assert.equal(document.getElementById('tile-ranking').textContent, '0.5 · 1.2 · 0.75');
+  assert.equal(document.getElementById('tile-title-weight').textContent, '2×');
+  assert.equal(document.getElementById('tile-ann').textContent, 'enabled');
+  assert.equal(document.getElementById('tile-fuzzy').textContent, 'on, d≤2');
+  assert.equal(document.getElementById('tile-session').textContent, '12h');
+  assert.equal(document.getElementById('tile-crawl-default').textContent, '20 pages');
+});
+
+test('renderSettingsSummary shows ANN/fuzzy as off when disabled', () => {
+  const { renderSettingsSummary } = loadFixture();
+  const s = JSON.parse(JSON.stringify(FULL_SETTINGS));
+  s.operational.ann_search_enabled = false;
+  s.operational.fuzzy_match_enabled = false;
+  renderSettingsSummary(s);
+  assert.equal(document.getElementById('tile-ann').textContent, 'disabled');
+  assert.equal(document.getElementById('tile-fuzzy').textContent, 'off');
+});
+
+test('renderOverridesSummary counts blocked/boosted terms and domains, pluralizing correctly', () => {
+  const { renderOverridesSummary } = loadFixture();
+  renderOverridesSummary({
+    blocked_terms: ['spam'],
+    blocked_domains: ['a.example', 'b.example'],
+    boosted_terms: { official: 1.5 },
+    boosted_domains: {},
+  });
+  assert.equal(document.getElementById('tile-blocked').textContent, '1 term · 2 domains');
+  assert.equal(document.getElementById('tile-boosted').textContent, '1 term · 0 domains');
+});
+
+test('renderOverridesSummary treats a missing list/map as empty (0)', () => {
+  const { renderOverridesSummary } = loadFixture();
+  renderOverridesSummary({});
+  assert.equal(document.getElementById('tile-blocked').textContent, '0 terms · 0 domains');
+  assert.equal(document.getElementById('tile-boosted').textContent, '0 terms · 0 domains');
+});
+
+test('loading settings and overrides together populates every summary tile', async () => {
+  const { loadSettings, loadOverrides } = loadFixture();
+  await loadSettings();
+  await loadOverrides();
+  assert.equal(document.getElementById('tile-ranking').textContent, '0.5 · 1.2 · 0.75');
+  assert.equal(document.getElementById('tile-blocked').textContent, '0 terms · 0 domains');
+});
+
 test('submitting the form saves both settings and overrides, reporting "Saved." on full success', async () => {
   const mod = loadFixture();
   let settingsPosted = false;

@@ -28,190 +28,217 @@
 
   <p class="lede" style="margin: 0 0 2rem;">Adjust ranking, crawling, search, and session behavior. Changes apply to every process (search, admin, crawl) within about 10 seconds.</p>
 
+  <div id="settings-summary" class="tiles" aria-label="Current configuration at a glance">
+    <div class="tile"><div class="k">alpha · k1 · b</div><div class="v" id="tile-ranking">—</div></div>
+    <div class="tile"><div class="k">title weight</div><div class="v" id="tile-title-weight">—</div></div>
+    <div class="tile"><div class="k">ANN search</div><div class="v" id="tile-ann">—</div></div>
+    <div class="tile"><div class="k">fuzzy matching</div><div class="v" id="tile-fuzzy">—</div></div>
+    <div class="tile"><div class="k">blocked</div><div class="v" id="tile-blocked">—</div></div>
+    <div class="tile"><div class="k">boosted</div><div class="v" id="tile-boosted">—</div></div>
+    <div class="tile"><div class="k">session length</div><div class="v" id="tile-session">—</div></div>
+    <div class="tile"><div class="k">crawl default</div><div class="v" id="tile-crawl-default">—</div></div>
+  </div>
+
   <form id="settings-form" class="stacked-form">
-    <section class="panel">
-      <h2>Ranking</h2>
-      <div class="form-row">
-        <label for="alpha">Alpha — BM25 vs. semantic weight (0 = pure semantic, 1 = pure BM25)</label><br>
-        <input id="alpha" class="field" type="number" step="0.05" min="0" max="1" required>
-      </div>
-      <div class="form-row">
-        <label for="k1">k1 — term-frequency saturation</label><br>
-        <input id="k1" class="field" type="number" step="0.1" min="0" required>
-      </div>
-      <div class="form-row">
-        <label for="b">b — document-length normalization (0 = none, 1 = full)</label><br>
-        <input id="b" class="field" type="number" step="0.05" min="0" max="1" required>
-      </div>
-      <div class="form-row">
-        <label for="title-weight">Title weight — how many times a title match counts, vs. once for the same word in the body</label><br>
-        <input id="title-weight" class="field" type="number" step="1" min="1" required>
-      </div>
-      <p class="tuning-hint">Defaults: alpha 0.5, k1 1.2, b 0.75, title weight 2. Values outside 0–1 (alpha, b) or below 0 (k1) are clamped; title weight below 1 falls back to the default. A title weight change only takes effect for documents crawled or re-crawled afterward -- it isn't retroactively applied to already-indexed content.</p>
-    </section>
+    <details class="group">
+      <summary><span class="gh">Search &amp; ranking</span><span class="gd">BM25 weights, semantic pool, link authority, fuzzy matching</span></summary>
 
-    <section class="panel">
-      <h2>Crawler</h2>
-      <div class="form-row">
-        <label for="fetch-timeout">Fetch timeout — seconds per page before giving up</label><br>
-        <input id="fetch-timeout" class="field" type="number" step="1" min="1" required>
+      <div class="subpanel">
+        <h4>Ranking</h4>
+        <div class="form-row">
+          <label for="alpha">Alpha — BM25 vs. semantic weight (0 = pure semantic, 1 = pure BM25)</label><br>
+          <input id="alpha" class="field" type="number" step="0.05" min="0" max="1" required>
+        </div>
+        <div class="form-row">
+          <label for="k1">k1 — term-frequency saturation</label><br>
+          <input id="k1" class="field" type="number" step="0.1" min="0" required>
+        </div>
+        <div class="form-row">
+          <label for="b">b — document-length normalization (0 = none, 1 = full)</label><br>
+          <input id="b" class="field" type="number" step="0.05" min="0" max="1" required>
+        </div>
+        <div class="form-row">
+          <label for="title-weight">Title weight — how many times a title match counts, vs. once for the same word in the body</label><br>
+          <input id="title-weight" class="field" type="number" step="1" min="1" required>
+        </div>
+        <p class="tuning-hint">Defaults: alpha 0.5, k1 1.2, b 0.75, title weight 2. Values outside 0–1 (alpha, b) or below 0 (k1) are clamped; title weight below 1 falls back to the default. A title weight change only takes effect for documents crawled or re-crawled afterward -- it isn't retroactively applied to already-indexed content.</p>
       </div>
-      <div class="form-row">
-        <label for="user-agent">User-Agent sent with every fetch</label><br>
-        <input id="user-agent" class="field" type="text" required>
-      </div>
-      <div class="form-row">
-        <label for="default-max-pages">Default max pages — used when a crawl doesn't specify one</label><br>
-        <input id="default-max-pages" class="field" type="number" step="1" min="1" required>
-      </div>
-      <div class="form-row">
-        <label for="min-text-length">Minimum text length — shorter pages are skipped as thin content</label><br>
-        <input id="min-text-length" class="field" type="number" step="1" min="0" required>
-      </div>
-      <div class="form-row">
-        <label for="crawl-delay">Crawl delay — milliseconds to wait before each fetch after the first</label><br>
-        <input id="crawl-delay" class="field" type="number" step="1" min="0" required>
-      </div>
-      <div class="form-row">
-        <label for="max-response-kb">Max response size — kilobytes read from a page before truncating</label><br>
-        <input id="max-response-kb" class="field" type="number" step="1" min="1" required>
-      </div>
-      <div class="form-row">
-        <label for="max-retained-crawl-jobs">Crawl history retention — number of past crawl jobs (with full per-page detail) kept before the oldest are deleted</label><br>
-        <input id="max-retained-crawl-jobs" class="field" type="number" step="1" min="1" required>
-      </div>
-      <div class="form-row">
-        <label for="default-renderer">Rendering — how a crawl fetches each page, unless it overrides this itself</label><br>
-        <select id="default-renderer" class="field">
-          <option value="none">None — plain HTTP fetch (fastest, no JavaScript)</option>
-          <option value="chromium">Chromium — real headless browser, runs the page's JavaScript</option>
-          <option value="firefox">Firefox — real headless browser, runs the page's JavaScript</option>
-        </select>
-      </div>
-      <div class="form-row">
-        <label for="default-link-scope">Link scope — how far a crawl follows discovered links, unless it overrides this itself</label><br>
-        <select id="default-link-scope" class="field">
-          <option value="host">Exact seed host only</option>
-          <option value="domain">Seed's domain, including subdomains</option>
-          <option value="tld">Same domain, any subdomain, any top-level domain</option>
-          <option value="any">Any domain</option>
-        </select>
-      </div>
-      <p class="tuning-hint">Defaults: 8s timeout, 20 pages, 50 characters minimum, 250ms delay, 5120 KB (5 MB) response cap, 200 retained crawl jobs, no rendering, seed's domain including subdomains. Rendering a page in a real browser is much slower than a plain fetch (each page opens its own browser tab) and downloads that browser engine the first time it's ever used -- turn it on only for sites whose real content needs JavaScript to appear. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org. "Same domain, any subdomain, any top-level domain" is broader still — from a seed of example.com it also follows example.org and www.example.de (the same domain name, any subdomain, under any TLD), but not other.com.</p>
-    </section>
 
-    <section class="panel">
-      <h2>Search</h2>
-      <div class="form-row">
-        <label for="default-top-k">Default result count — used when a search doesn't specify one</label><br>
-        <input id="default-top-k" class="field" type="number" step="1" min="1" required>
+      <div class="subpanel">
+        <h4>Search</h4>
+        <div class="form-row">
+          <label for="default-top-k">Default result count — used when a search doesn't specify one</label><br>
+          <input id="default-top-k" class="field" type="number" step="1" min="1" required>
+        </div>
+        <div class="form-row">
+          <label for="semantic-pool-size">Semantic candidate pool size — max documents scored for semantic similarity per search, regardless of corpus size (also the ANN top-K below, when active)</label><br>
+          <input id="semantic-pool-size" class="field" type="number" step="1" min="1" required>
+        </div>
+        <div class="form-row form-row-check">
+          <label for="ann-search-enabled">
+            <input id="ann-search-enabled" type="checkbox">
+            Use approximate nearest-neighbor (ANN) search when available
+          </label>
+          <p class="tuning-hint">On Postgres with the pgvector extension installed, fills the semantic candidate pool from a real nearest-neighbor index instead of a bounded brute-force sample. Has no effect on SQLite/MySQL, or a Postgres server without the extension -- those always use the brute-force sample regardless of this setting. Uncheck to force the brute-force path for troubleshooting even when ANN is available.</p>
+        </div>
+        <p class="tuning-hint">Defaults: 10 results, 200 candidates, ANN enabled. Every BM25 match is always scored too; the pool size only bounds how many additional documents get sampled/searched for a purely semantic match.</p>
       </div>
-      <div class="form-row">
-        <label for="semantic-pool-size">Semantic candidate pool size — max documents scored for semantic similarity per search, regardless of corpus size (also the ANN top-K below, when active)</label><br>
-        <input id="semantic-pool-size" class="field" type="number" step="1" min="1" required>
-      </div>
-      <div class="form-row form-row-check">
-        <label for="ann-search-enabled">
-          <input id="ann-search-enabled" type="checkbox">
-          Use approximate nearest-neighbor (ANN) search when available
-        </label>
-        <p class="tuning-hint">On Postgres with the pgvector extension installed, fills the semantic candidate pool from a real nearest-neighbor index instead of a bounded brute-force sample. Has no effect on SQLite/MySQL, or a Postgres server without the extension -- those always use the brute-force sample regardless of this setting. Uncheck to force the brute-force path for troubleshooting even when ANN is available.</p>
-      </div>
-      <p class="tuning-hint">Defaults: 10 results, 200 candidates, ANN enabled. Every BM25 match is always scored too; the pool size only bounds how many additional documents get sampled/searched for a purely semantic match.</p>
-    </section>
 
-    <section class="panel">
-      <h2>Documents</h2>
-      <div class="form-row">
-        <label for="max-document-versions">Version history — how many versions of a document (current plus archived) are kept when a re-crawl changes its content</label><br>
-        <input id="max-document-versions" class="field" type="number" step="1" min="1" required>
+      <div class="subpanel">
+        <h4>Link authority</h4>
+        <div class="form-row">
+          <label for="pagerank-weight">PageRank weight — how much link authority influences ranking (0 = no effect, 1 = ranking driven entirely by link authority)</label><br>
+          <input id="pagerank-weight" class="field" type="number" step="0.05" min="0" max="1" required>
+        </div>
+        <div class="form-row">
+          <label for="pagerank-interval">Recompute interval — minutes between automatic PageRank recomputations</label><br>
+          <input id="pagerank-interval" class="field" type="number" step="1" min="5" required>
+        </div>
+        <p class="tuning-hint">Defaults: weight 0 (no effect on ranking until raised), 60 minute interval (minimum 5). A recompute also always runs right after a crawl finishes, since that's when the link graph actually changes.</p>
       </div>
-      <p class="tuning-hint">Default: 5. A document that's never changed always has exactly one version regardless of this setting -- it only bounds how much prior history a frequently-changing page accumulates. Lowering it prunes existing extra versions the next time that document is re-crawled, not immediately.</p>
-    </section>
 
-    <section class="panel">
-      <h2>Database connection pool</h2>
-      <div class="form-row">
-        <label for="db-max-open-conns">Max open connections</label><br>
-        <input id="db-max-open-conns" class="field" type="number" step="1" min="1" required>
+      <div class="subpanel">
+        <h4>Fuzzy matching</h4>
+        <div class="form-row form-row-check">
+          <label for="fuzzy-enabled">
+            <input id="fuzzy-enabled" type="checkbox">
+            Correct misspelled query terms
+          </label>
+          <p class="tuning-hint">When a query term has no matches at all, look it up against the index's vocabulary for a near-miss (within the edit distance below) and use that instead for scoring -- the displayed query is never rewritten, only what's used behind the scenes.</p>
+        </div>
+        <div class="form-row">
+          <label for="fuzzy-max-edit-distance">Max edit distance — how many typos (insert/delete/substitute) a correction may be off by</label><br>
+          <input id="fuzzy-max-edit-distance" class="field" type="number" step="1" min="1" max="2" required>
+        </div>
+        <p class="tuning-hint">Defaults: enabled, distance 2. A term that already matches something is never touched.</p>
       </div>
-      <div class="form-row">
-        <label for="db-max-idle-conns">Max idle connections — kept warm between requests instead of closed</label><br>
-        <input id="db-max-idle-conns" class="field" type="number" step="1" min="1" required>
-      </div>
-      <div class="form-row">
-        <label for="db-conn-max-lifetime">Connection max lifetime — minutes before a pooled connection is recycled</label><br>
-        <input id="db-conn-max-lifetime" class="field" type="number" step="1" min="1" required>
-      </div>
-      <p class="tuning-hint">Defaults: 25 open, 25 idle, 5 minute lifetime. SQLite always keeps a single connection regardless of these values, since it serializes writers at the file level; a running process re-reads and re-applies these within about 10 seconds of a save, but the effect on already-open connections is limited to pool bookkeeping (idle/lifetime), not an instant reconnect.</p>
-    </section>
+    </details>
 
-    <section class="panel">
-      <h2>Fuzzy matching</h2>
-      <div class="form-row form-row-check">
-        <label for="fuzzy-enabled">
-          <input id="fuzzy-enabled" type="checkbox">
-          Correct misspelled query terms
-        </label>
-        <p class="tuning-hint">When a query term has no matches at all, look it up against the index's vocabulary for a near-miss (within the edit distance below) and use that instead for scoring -- the displayed query is never rewritten, only what's used behind the scenes.</p>
-      </div>
-      <div class="form-row">
-        <label for="fuzzy-max-edit-distance">Max edit distance — how many typos (insert/delete/substitute) a correction may be off by</label><br>
-        <input id="fuzzy-max-edit-distance" class="field" type="number" step="1" min="1" max="2" required>
-      </div>
-      <p class="tuning-hint">Defaults: enabled, distance 2. A term that already matches something is never touched.</p>
-    </section>
+    <details class="group">
+      <summary><span class="gh">Crawling</span><span class="gd">Fetch limits, rendering, link scope, version history</span></summary>
 
-    <section class="panel">
-      <h2>Link authority</h2>
-      <div class="form-row">
-        <label for="pagerank-weight">PageRank weight — how much link authority influences ranking (0 = no effect, 1 = ranking driven entirely by link authority)</label><br>
-        <input id="pagerank-weight" class="field" type="number" step="0.05" min="0" max="1" required>
+      <div class="subpanel">
+        <h4>Crawler</h4>
+        <div class="form-row">
+          <label for="fetch-timeout">Fetch timeout — seconds per page before giving up</label><br>
+          <input id="fetch-timeout" class="field" type="number" step="1" min="1" required>
+        </div>
+        <div class="form-row">
+          <label for="user-agent">User-Agent sent with every fetch</label><br>
+          <input id="user-agent" class="field" type="text" required>
+        </div>
+        <div class="form-row">
+          <label for="default-max-pages">Default max pages — used when a crawl doesn't specify one</label><br>
+          <input id="default-max-pages" class="field" type="number" step="1" min="1" required>
+        </div>
+        <div class="form-row">
+          <label for="min-text-length">Minimum text length — shorter pages are skipped as thin content</label><br>
+          <input id="min-text-length" class="field" type="number" step="1" min="0" required>
+        </div>
+        <div class="form-row">
+          <label for="crawl-delay">Crawl delay — milliseconds to wait before each fetch after the first</label><br>
+          <input id="crawl-delay" class="field" type="number" step="1" min="0" required>
+        </div>
+        <div class="form-row">
+          <label for="max-response-kb">Max response size — kilobytes read from a page before truncating</label><br>
+          <input id="max-response-kb" class="field" type="number" step="1" min="1" required>
+        </div>
+        <div class="form-row">
+          <label for="max-retained-crawl-jobs">Crawl history retention — number of past crawl jobs (with full per-page detail) kept before the oldest are deleted</label><br>
+          <input id="max-retained-crawl-jobs" class="field" type="number" step="1" min="1" required>
+        </div>
+        <div class="form-row">
+          <label for="default-renderer">Rendering — how a crawl fetches each page, unless it overrides this itself</label><br>
+          <select id="default-renderer" class="field">
+            <option value="none">None — plain HTTP fetch (fastest, no JavaScript)</option>
+            <option value="chromium">Chromium — real headless browser, runs the page's JavaScript</option>
+            <option value="firefox">Firefox — real headless browser, runs the page's JavaScript</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="default-link-scope">Link scope — how far a crawl follows discovered links, unless it overrides this itself</label><br>
+          <select id="default-link-scope" class="field">
+            <option value="host">Exact seed host only</option>
+            <option value="domain">Seed's domain, including subdomains</option>
+            <option value="tld">Same domain, any subdomain, any top-level domain</option>
+            <option value="any">Any domain</option>
+          </select>
+        </div>
+        <p class="tuning-hint">Defaults: 8s timeout, 20 pages, 50 characters minimum, 250ms delay, 5120 KB (5 MB) response cap, 200 retained crawl jobs, no rendering, seed's domain including subdomains. Rendering a page in a real browser is much slower than a plain fetch (each page opens its own browser tab) and downloads that browser engine the first time it's ever used -- turn it on only for sites whose real content needs JavaScript to appear. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org. "Same domain, any subdomain, any top-level domain" is broader still — from a seed of example.com it also follows example.org and www.example.de (the same domain name, any subdomain, under any TLD), but not other.com.</p>
       </div>
-      <div class="form-row">
-        <label for="pagerank-interval">Recompute interval — minutes between automatic PageRank recomputations</label><br>
-        <input id="pagerank-interval" class="field" type="number" step="1" min="5" required>
-      </div>
-      <p class="tuning-hint">Defaults: weight 0 (no effect on ranking until raised), 60 minute interval (minimum 5). A recompute also always runs right after a crawl finishes, since that's when the link graph actually changes.</p>
-    </section>
 
-    <section class="panel">
-      <h2>Session</h2>
-      <div class="form-row">
-        <label for="session-ttl">Session length — hours before a sign-in expires</label><br>
-        <input id="session-ttl" class="field" type="number" step="1" min="1" required>
+      <div class="subpanel">
+        <h4>Documents</h4>
+        <div class="form-row">
+          <label for="max-document-versions">Version history — how many versions of a document (current plus archived) are kept when a re-crawl changes its content</label><br>
+          <input id="max-document-versions" class="field" type="number" step="1" min="1" required>
+        </div>
+        <p class="tuning-hint">Default: 5. A document that's never changed always has exactly one version regardless of this setting -- it only bounds how much prior history a frequently-changing page accumulates. Lowering it prunes existing extra versions the next time that document is re-crawled, not immediately.</p>
       </div>
-      <p class="tuning-hint">Default: 12 hours. Applies to sessions created after saving.</p>
-    </section>
+    </details>
 
-    <section class="panel">
-      <h2>Blocked</h2>
-      <div class="form-row">
-        <label for="blocked-terms">Blocked words — one per line; a document containing any of these is excluded from results entirely</label><br>
-        <textarea id="blocked-terms" class="field" rows="4" placeholder="spam&#10;scam"></textarea>
-      </div>
-      <div class="form-row">
-        <label for="blocked-domains">Blocked domains — one host or URL per line; a document served from any of these is excluded entirely</label><br>
-        <textarea id="blocked-domains" class="field" rows="4" placeholder="spammy.example"></textarea>
-      </div>
-      <p class="tuning-hint">Word matching uses the same tokenization as search, so casing and punctuation don't matter.</p>
-    </section>
+    <details class="group">
+      <summary><span class="gh">Content rules</span><span class="gd">Blocked and boosted terms and domains</span></summary>
 
-    <section class="panel">
-      <h2>Boosted</h2>
-      <div class="form-row">
-        <label for="boosted-terms">Boosted words — one "word factor" pair per line; a matching document's final score is multiplied by factor</label><br>
-        <textarea id="boosted-terms" class="field" rows="4" placeholder="official 1.5"></textarea>
+      <div class="subpanel">
+        <h4>Blocked</h4>
+        <div class="form-row">
+          <label for="blocked-terms">Blocked words — one per line; a document containing any of these is excluded from results entirely</label><br>
+          <textarea id="blocked-terms" class="field" rows="4" placeholder="spam&#10;scam"></textarea>
+        </div>
+        <div class="form-row">
+          <label for="blocked-domains">Blocked domains — one host or URL per line; a document served from any of these is excluded entirely</label><br>
+          <textarea id="blocked-domains" class="field" rows="4" placeholder="spammy.example"></textarea>
+        </div>
+        <p class="tuning-hint">Word matching uses the same tokenization as search, so casing and punctuation don't matter.</p>
       </div>
-      <div class="form-row">
-        <label for="boosted-domains">Boosted domains — one "host factor" pair per line</label><br>
-        <textarea id="boosted-domains" class="field" rows="4" placeholder="trusted.example 2.0"></textarea>
-      </div>
-      <p class="tuning-hint">A factor above 1 ranks a match higher, below 1 lower. Matching factors multiply together; zero or blank is ignored.</p>
-    </section>
 
-    <div class="form-actions">
-      <button type="submit">Save</button>
+      <div class="subpanel">
+        <h4>Boosted</h4>
+        <div class="form-row">
+          <label for="boosted-terms">Boosted words — one "word factor" pair per line; a matching document's final score is multiplied by factor</label><br>
+          <textarea id="boosted-terms" class="field" rows="4" placeholder="official 1.5"></textarea>
+        </div>
+        <div class="form-row">
+          <label for="boosted-domains">Boosted domains — one "host factor" pair per line</label><br>
+          <textarea id="boosted-domains" class="field" rows="4" placeholder="trusted.example 2.0"></textarea>
+        </div>
+        <p class="tuning-hint">A factor above 1 ranks a match higher, below 1 lower. Matching factors multiply together; zero or blank is ignored.</p>
+      </div>
+    </details>
+
+    <details class="group">
+      <summary><span class="gh">System</span><span class="gd">Database connection pool, session length</span></summary>
+
+      <div class="subpanel">
+        <h4>Database connection pool</h4>
+        <div class="form-row">
+          <label for="db-max-open-conns">Max open connections</label><br>
+          <input id="db-max-open-conns" class="field" type="number" step="1" min="1" required>
+        </div>
+        <div class="form-row">
+          <label for="db-max-idle-conns">Max idle connections — kept warm between requests instead of closed</label><br>
+          <input id="db-max-idle-conns" class="field" type="number" step="1" min="1" required>
+        </div>
+        <div class="form-row">
+          <label for="db-conn-max-lifetime">Connection max lifetime — minutes before a pooled connection is recycled</label><br>
+          <input id="db-conn-max-lifetime" class="field" type="number" step="1" min="1" required>
+        </div>
+        <p class="tuning-hint">Defaults: 25 open, 25 idle, 5 minute lifetime. SQLite always keeps a single connection regardless of these values, since it serializes writers at the file level; a running process re-reads and re-applies these within about 10 seconds of a save, but the effect on already-open connections is limited to pool bookkeeping (idle/lifetime), not an instant reconnect.</p>
+      </div>
+
+      <div class="subpanel">
+        <h4>Session</h4>
+        <div class="form-row">
+          <label for="session-ttl">Session length — hours before a sign-in expires</label><br>
+          <input id="session-ttl" class="field" type="number" step="1" min="1" required>
+        </div>
+        <p class="tuning-hint">Default: 12 hours. Applies to sessions created after saving.</p>
+      </div>
+    </details>
+
+    <div class="form-actions sticky-save">
+      <button type="submit">Save changes</button>
       <span id="settings-status" class="error-text"></span>
     </div>
   </form>

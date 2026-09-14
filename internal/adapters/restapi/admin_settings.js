@@ -29,6 +29,42 @@
   const blockedDomainsEl = document.getElementById('blocked-domains');
   const boostedTermsEl = document.getElementById('boosted-terms');
   const boostedDomainsEl = document.getElementById('boosted-domains');
+  const tileRankingEl = document.getElementById('tile-ranking');
+  const tileTitleWeightEl = document.getElementById('tile-title-weight');
+  const tileAnnEl = document.getElementById('tile-ann');
+  const tileFuzzyEl = document.getElementById('tile-fuzzy');
+  const tileSessionEl = document.getElementById('tile-session');
+  const tileCrawlDefaultEl = document.getElementById('tile-crawl-default');
+  const tileBlockedEl = document.getElementById('tile-blocked');
+  const tileBoostedEl = document.getElementById('tile-boosted');
+
+  // renderSettingsSummary/renderOverridesSummary fill the read-only "at a
+  // glance" tiles above the (collapsed-by-default) settings groups, so the
+  // current configuration is visible without opening anything -- see
+  // CLAUDE.md/the settings-page redesign discussion. Called from
+  // applySettings/applyOverrides, so the tiles refresh on both initial load
+  // and right after a save.
+  function renderSettingsSummary(s) {
+    tileRankingEl.textContent = s.tuning.alpha + ' · ' + s.tuning.k1 + ' · ' + s.tuning.b;
+    tileTitleWeightEl.textContent = s.operational.title_weight + '×';
+    tileAnnEl.textContent = s.operational.ann_search_enabled ? 'enabled' : 'disabled';
+    tileFuzzyEl.textContent = s.operational.fuzzy_match_enabled
+      ? 'on, d≤' + s.operational.fuzzy_max_edit_distance
+      : 'off';
+    tileSessionEl.textContent = s.operational.session_ttl_hours + 'h';
+    tileCrawlDefaultEl.textContent = s.operational.default_max_pages + ' pages';
+  }
+
+  function countLabel(n, noun) {
+    return n + ' ' + noun + (n === 1 ? '' : 's');
+  }
+
+  function renderOverridesSummary(o) {
+    tileBlockedEl.textContent = countLabel((o.blocked_terms || []).length, 'term') +
+      ' · ' + countLabel((o.blocked_domains || []).length, 'domain');
+    tileBoostedEl.textContent = countLabel(Object.keys(o.boosted_terms || {}).length, 'term') +
+      ' · ' + countLabel(Object.keys(o.boosted_domains || {}).length, 'domain');
+  }
 
   function applySettings(s) {
     alphaEl.value = s.tuning.alpha;
@@ -56,6 +92,7 @@
     pageRankWeightEl.value = s.tuning.pagerank_weight;
     pageRankIntervalEl.value = s.operational.pagerank_recompute_interval_minutes;
     sessionTTLEl.value = s.operational.session_ttl_hours;
+    renderSettingsSummary(s);
   }
 
   async function loadSettings() {
@@ -164,6 +201,7 @@
     blockedDomainsEl.value = linesToText(o.blocked_domains);
     boostedTermsEl.value = factorsToText(o.boosted_terms);
     boostedDomainsEl.value = factorsToText(o.boosted_domains);
+    renderOverridesSummary(o);
   }
 
   async function loadOverrides() {
@@ -186,5 +224,6 @@
       applySettings, loadSettings, saveSettings,
       saveOverrides, applyOverrides, loadOverrides,
       factorsToText, parseFactorLines,
+      renderSettingsSummary, renderOverridesSummary,
     };
   }
