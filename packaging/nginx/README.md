@@ -80,6 +80,20 @@ systemctl status certbot.timer
 certbot certificates
 ```
 
+## nginx stats for the Prometheus agent
+
+`stub_status.conf` adds a separate `127.0.0.1:8090`-only server block
+exposing nginx's `stub_status` page, scraped by `prometheus-nginx-exporter`
+-- see `../prometheus/README.md`. It's outside the public `<DOMAIN>` server
+blocks above entirely, so it's never reachable through the public listener
+regardless of path -- unaffected by the `location /admin` string-prefix
+gotcha described below.
+
+```sh
+cp stub_status.conf /etc/nginx/conf.d/stub_status.conf
+nginx -t && systemctl reload nginx
+```
+
 ## Notes
 
 - Only port 80/443 need to be open on this host; nginx proxies to

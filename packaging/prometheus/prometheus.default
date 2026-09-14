@@ -1,0 +1,12 @@
+## Deployed to /etc/default/prometheus.
+##
+## --enable-feature=agent: Prometheus agent mode -- scrape + remote_write
+## only, no local TSDB or query API. This host only forwards metrics to
+## the IONOS monitoring platform; nothing here ever queries Prometheus
+## directly. (This Debian-packaged build has no separate `agent`
+## subcommand -- agent mode is entered via this feature flag instead.)
+## --web.listen-address is loopback-only: there's no firewall on a
+## typical bare VM (see nginx/README.md's Notes), and nothing other than
+## this host itself needs to reach the agent's own /metrics or
+## /-/healthy endpoints.
+ARGS="--enable-feature=agent --config.file=/etc/prometheus/prometheus.yml --storage.agent.path=/var/lib/prometheus/data-agent/ --web.listen-address=127.0.0.1:9090"

@@ -1,0 +1,5 @@
+## Deployed to /etc/default/prometheus-node-exporter.
+## Loopback-only -- see prometheus.default's comment on --web.listen-address.
+## Default collectors already cover cpu, memory, disk, io and network
+## (cpu, meminfo, diskstats, filesystem, netdev); nothing extra to enable.
+ARGS="--web.listen-address=127.0.0.1:9100"

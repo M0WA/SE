@@ -1,0 +1,25 @@
+## Deployed to /etc/prometheus/prometheus.yml. Runs Prometheus in --agent
+## mode (see prometheus.default's ARGS): no local TSDB, no query API --
+## it only scrapes the two local exporters below and forwards everything
+## to the IONOS monitoring platform via remote_write. See README.md.
+##
+## <IONOS_METRICS_ENDPOINT> and <IONOS_APIKEY> come from the monitoring
+## pipeline created in the IONOS DCD (Observability > Monitoring). Fill
+## these in on the deployed copy only -- never commit real values here.
+
+global:
+  scrape_interval: 30s
+
+scrape_configs:
+  - job_name: node
+    static_configs:
+      - targets: ["127.0.0.1:9100"]
+
+  - job_name: nginx
+    static_configs:
+      - targets: ["127.0.0.1:9113"]
+
+remote_write:
+  - url: "https://<IONOS_METRICS_ENDPOINT>/api/v1/push"
+    headers:
+      APIKEY: "<IONOS_APIKEY>"
