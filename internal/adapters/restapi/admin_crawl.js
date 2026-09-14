@@ -120,83 +120,8 @@
     }
   }
 
-  // The Crawler settings panel below edits the site-wide crawl defaults
-  // (the `operational` half of GET/POST /admin/api/settings) -- distinct
-  // from the per-crawl override fields above, which apply only to a single
-  // crawl and are never sent here. This section moved here from the old
-  // Tuning page (now Settings), which still owns the other 10 operational
-  // fields plus the `tuning` (alpha/k1/b/pagerank_weight) object.
-  const crawlerSettingsForm = document.getElementById('crawler-settings-form');
-  const crawlerFetchTimeoutEl = document.getElementById('crawler-setting-fetch-timeout');
-  const crawlerUserAgentEl = document.getElementById('crawler-setting-user-agent');
-  const crawlerDefaultMaxPagesEl = document.getElementById('crawler-setting-default-max-pages');
-  const crawlerMinTextLengthEl = document.getElementById('crawler-setting-min-text-length');
-  const crawlerCrawlDelayEl = document.getElementById('crawler-setting-crawl-delay');
-  const crawlerMaxResponseKBEl = document.getElementById('crawler-setting-max-response-kb');
-  const crawlerMaxRetainedCrawlJobsEl = document.getElementById('crawler-setting-max-retained-crawl-jobs');
-  const crawlerDefaultRendererEl = document.getElementById('crawler-setting-default-renderer');
-  const crawlerDefaultLinkScopeEl = document.getElementById('crawler-setting-default-link-scope');
-  const crawlerSettingsStatus = document.getElementById('crawler-settings-status');
-
-  function applyCrawlerSettings(s) {
-    crawlerFetchTimeoutEl.value = s.operational.fetch_timeout_seconds;
-    crawlerUserAgentEl.value = s.operational.user_agent;
-    crawlerDefaultMaxPagesEl.value = s.operational.default_max_pages;
-    crawlerMinTextLengthEl.value = s.operational.min_text_length;
-    crawlerCrawlDelayEl.value = s.operational.crawl_delay_ms;
-    crawlerMaxResponseKBEl.value = s.operational.max_response_kb;
-    crawlerMaxRetainedCrawlJobsEl.value = s.operational.max_retained_crawl_jobs;
-    crawlerDefaultRendererEl.value = s.operational.default_renderer || 'none';
-    crawlerDefaultLinkScopeEl.value = s.operational.link_scope || 'domain';
-  }
-
-  async function loadCrawlerSettings() {
-    try {
-      applyCrawlerSettings(await getJSON('/admin/api/settings'));
-    } catch (err) {
-      crawlerSettingsStatus.textContent = 'Could not load settings: ' + err.message;
-    }
-  }
-
-  // The submit handler GETs the full settings object first and merges its
-  // own 9 fields into it, then POSTs the whole thing back -- POST
-  // /admin/api/settings is a full-replace endpoint carrying both `tuning`
-  // and all 19 `operational` fields, and this page only owns 9 of those 19,
-  // so every other field must round-trip unchanged or it would silently
-  // zero out settings this page doesn't display (session length, fuzzy
-  // matching, etc. -- owned by the Settings page instead).
-  crawlerSettingsForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    crawlerSettingsStatus.textContent = '';
-    try {
-      const current = await getJSON('/admin/api/settings');
-      const s = await postJSON('/admin/api/settings', {
-        tuning: current.tuning,
-        operational: {
-          ...current.operational,
-          fetch_timeout_seconds: parseInt(crawlerFetchTimeoutEl.value, 10),
-          user_agent: crawlerUserAgentEl.value,
-          default_max_pages: parseInt(crawlerDefaultMaxPagesEl.value, 10),
-          min_text_length: parseInt(crawlerMinTextLengthEl.value, 10),
-          crawl_delay_ms: parseInt(crawlerCrawlDelayEl.value, 10),
-          max_response_kb: parseInt(crawlerMaxResponseKBEl.value, 10),
-          max_retained_crawl_jobs: parseInt(crawlerMaxRetainedCrawlJobsEl.value, 10),
-          default_renderer: crawlerDefaultRendererEl.value,
-          link_scope: crawlerDefaultLinkScopeEl.value,
-        },
-      });
-      applyCrawlerSettings(s);
-      crawlerSettingsStatus.style.color = 'var(--ink-muted)';
-      crawlerSettingsStatus.textContent = 'Saved.';
-    } catch (err) {
-      crawlerSettingsStatus.style.color = 'var(--accent)';
-      crawlerSettingsStatus.textContent = 'Could not save: ' + err.message;
-    }
-  });
-
   wireSignOut();
   showCurrentDefaults();
-  loadCrawlerSettings();
 
   // Exports for the Node test runner only -- `typeof module` is undefined
   // in a browser's <script> tag, so this is a no-op there. See
@@ -206,6 +131,5 @@
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       updateSubmitLabel,
-      applyCrawlerSettings,
     };
   }

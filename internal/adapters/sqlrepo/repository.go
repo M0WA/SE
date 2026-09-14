@@ -1434,6 +1434,35 @@ func (r *Repository) DocumentsOverview(ctx context.Context, topDomains int) (dom
 		return overview, err
 	}
 
+	// storedQuery counts, per document, 1 (the current row) plus however
+	// many archived rows it still has in document_versions, then groups
+	// documents by that total -- how many versions are actually retained
+	// right now, capped by MaxDocumentVersions, as opposed to VersionCounts
+	// above (a document's version NUMBER, uncapped, counting every change
+	// it's ever had regardless of what's since been pruned).
+	storedQuery := `SELECT stored_versions, COUNT(*) AS doc_count FROM (
+	                   SELECT d.id, 1 + COALESCE(dv.cnt, 0) AS stored_versions
+	                   FROM documents d
+	                   LEFT JOIN (SELECT doc_id, COUNT(*) AS cnt FROM document_versions GROUP BY doc_id) dv
+	                     ON dv.doc_id = d.id
+	                 ) counted
+	                 GROUP BY stored_versions ORDER BY stored_versions ASC`
+	storedRows, err := r.db.QueryContext(ctx, storedQuery)
+	if err != nil {
+		return overview, fmt.Errorf("querying stored version counts: %w", err)
+	}
+	defer storedRows.Close()
+	for storedRows.Next() {
+		var s domain.StoredVersionsCount
+		if err := storedRows.Scan(&s.StoredVersions, &s.DocCount); err != nil {
+			return overview, fmt.Errorf("scanning stored version count row: %w", err)
+		}
+		overview.StoredVersionCounts = append(overview.StoredVersionCounts, s)
+	}
+	if err := storedRows.Err(); err != nil {
+		return overview, err
+	}
+
 	return overview, nil
 }
 

@@ -22,7 +22,6 @@
     <a href="/admin/jobs">Jobs</a>
     <a href="/admin/settings">Settings</a>
     <a href="/admin/search">Search</a>
-    <a href="/admin/overrides">Overrides</a>
     <a href="/admin/pagerank">PageRank</a>
     <a href="/admin/database">Database</a>
   </nav>
@@ -52,7 +51,7 @@
         <option value="chromium">Chromium — real headless browser, runs the page's JavaScript</option>
         <option value="firefox">Firefox — real headless browser, runs the page's JavaScript</option>
       </select>
-      <p class="tuning-hint">"Use site default" follows whatever the Crawler settings below have set. Rendering a page in a real browser is much slower than a plain fetch and downloads that browser engine the first time it's ever used on this server.</p>
+      <p class="tuning-hint">"Use site default" follows whatever the Settings page has set. Rendering a page in a real browser is much slower than a plain fetch and downloads that browser engine the first time it's ever used on this server.</p>
     </div>
     <div class="form-row form-row-check">
       <label for="crawl-respect-robots">
@@ -70,7 +69,7 @@
         <option value="tld">Same domain, any subdomain, any top-level domain</option>
         <option value="any">Any domain</option>
       </select>
-      <p class="tuning-hint">"Use site default" follows whatever the Crawler settings below have set. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org. "Same domain, any subdomain, any top-level domain" is broader still — from a seed of example.com it also follows example.org and www.example.de (the same domain name, any subdomain, under any TLD), but not other.com.</p>
+      <p class="tuning-hint">"Use site default" follows whatever the Settings page has set. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org. "Same domain, any subdomain, any top-level domain" is broader still — from a seed of example.com it also follows example.org and www.example.de (the same domain name, any subdomain, under any TLD), but not other.com.</p>
     </div>
     <div class="form-row">
       <label for="crawl-allowed-domains">Allowed domains (optional) — one domain per line</label><br>
@@ -136,66 +135,9 @@
       <label for="crawl-max-response">Max response size (KB)</label><br>
       <input id="crawl-max-response" class="field" type="number" min="1" placeholder="Default: global setting">
     </div>
-    <p class="tuning-hint">These four override the site-wide crawl defaults (set below, under Crawler) for this crawl alone — leave blank to use whatever's currently configured there.</p>
+    <p class="tuning-hint">These four override the site-wide crawl defaults (set on the Settings page) for this crawl alone — leave blank to use whatever's currently configured there.</p>
   </details>
   <div id="crawl-status"></div>
-
-  <section class="panel">
-    <form id="crawler-settings-form" class="stacked-form">
-      <h2>Crawler</h2>
-      <p class="lede" style="margin: 0 0 1rem;">Site-wide crawl defaults, used whenever a crawl (or the per-crawl overrides above) doesn't specify its own value.</p>
-      <div class="form-row">
-        <label for="crawler-setting-fetch-timeout">Fetch timeout — seconds per page before giving up</label><br>
-        <input id="crawler-setting-fetch-timeout" class="field" type="number" step="1" min="1" required>
-      </div>
-      <div class="form-row">
-        <label for="crawler-setting-user-agent">User-Agent sent with every fetch</label><br>
-        <input id="crawler-setting-user-agent" class="field" type="text" required>
-      </div>
-      <div class="form-row">
-        <label for="crawler-setting-default-max-pages">Default max pages — used when a crawl doesn't specify one</label><br>
-        <input id="crawler-setting-default-max-pages" class="field" type="number" step="1" min="1" required>
-      </div>
-      <div class="form-row">
-        <label for="crawler-setting-min-text-length">Minimum text length — shorter pages are skipped as thin content</label><br>
-        <input id="crawler-setting-min-text-length" class="field" type="number" step="1" min="0" required>
-      </div>
-      <div class="form-row">
-        <label for="crawler-setting-crawl-delay">Crawl delay — milliseconds to wait before each fetch after the first</label><br>
-        <input id="crawler-setting-crawl-delay" class="field" type="number" step="1" min="0" required>
-      </div>
-      <div class="form-row">
-        <label for="crawler-setting-max-response-kb">Max response size — kilobytes read from a page before truncating</label><br>
-        <input id="crawler-setting-max-response-kb" class="field" type="number" step="1" min="1" required>
-      </div>
-      <div class="form-row">
-        <label for="crawler-setting-max-retained-crawl-jobs">Crawl history retention — number of past crawl jobs (with full per-page detail) kept before the oldest are deleted</label><br>
-        <input id="crawler-setting-max-retained-crawl-jobs" class="field" type="number" step="1" min="1" required>
-      </div>
-      <div class="form-row">
-        <label for="crawler-setting-default-renderer">Rendering — how a crawl fetches each page, unless it overrides this itself</label><br>
-        <select id="crawler-setting-default-renderer" class="field">
-          <option value="none">None — plain HTTP fetch (fastest, no JavaScript)</option>
-          <option value="chromium">Chromium — real headless browser, runs the page's JavaScript</option>
-          <option value="firefox">Firefox — real headless browser, runs the page's JavaScript</option>
-        </select>
-      </div>
-      <div class="form-row">
-        <label for="crawler-setting-default-link-scope">Link scope — how far a crawl follows discovered links, unless it overrides this itself</label><br>
-        <select id="crawler-setting-default-link-scope" class="field">
-          <option value="host">Exact seed host only</option>
-          <option value="domain">Seed's domain, including subdomains</option>
-          <option value="tld">Same domain, any subdomain, any top-level domain</option>
-          <option value="any">Any domain</option>
-        </select>
-      </div>
-      <p class="tuning-hint">Defaults: 8s timeout, 20 pages, 50 characters minimum, 250ms delay, 5120 KB (5 MB) response cap, 200 retained crawl jobs, no rendering, seed's domain including subdomains. Rendering a page in a real browser is much slower than a plain fetch (each page opens its own browser tab) and downloads that browser engine the first time it's ever used -- turn it on only for sites whose real content needs JavaScript to appear. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org. "Same domain, any subdomain, any top-level domain" is broader still — from a seed of example.com it also follows example.org and www.example.de (the same domain name, any subdomain, under any TLD), but not other.com.</p>
-      <div class="form-actions">
-        <button type="submit">Save</button>
-        <span id="crawler-settings-status" class="error-text"></span>
-      </div>
-    </form>
-  </section>
 </main>
 <script src="/admin.js"></script>
 <script src="/admin_crawl.js"></script>

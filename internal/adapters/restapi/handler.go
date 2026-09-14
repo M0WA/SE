@@ -47,9 +47,6 @@ var adminSearchResultHTML []byte
 //go:embed admin_vocabulary_term.html
 var adminVocabularyTermHTML []byte
 
-//go:embed admin_overrides.html
-var adminOverridesHTML []byte
-
 //go:embed admin_pagerank.html
 var adminPageRankHTML []byte
 
@@ -78,9 +75,6 @@ var adminDocumentsJS []byte
 
 //go:embed admin_domain.js
 var adminDomainJS []byte
-
-//go:embed admin_overrides.js
-var adminOverridesJS []byte
 
 //go:embed admin_pagerank.js
 var adminPageRankJS []byte
@@ -270,8 +264,6 @@ func (h *Handler) RoutesAdmin() *http.ServeMux {
 	mux.HandleFunc("/admin_search.js", h.handleAdminSearchJS)
 	mux.HandleFunc("/admin/search/result", h.requireAuthPage(h.handleAdminSearchResultPage))
 	mux.HandleFunc("/admin_search_result.js", h.handleAdminSearchResultJS)
-	mux.HandleFunc("/admin/overrides", h.requireAuthPage(h.handleAdminOverridesPage))
-	mux.HandleFunc("/admin_overrides.js", h.handleAdminOverridesJS)
 	mux.HandleFunc("/admin/pagerank", h.requireAuthPage(h.handleAdminPageRankPage))
 	mux.HandleFunc("/admin_pagerank.js", h.handleAdminPageRankJS)
 	mux.HandleFunc("/admin/database", h.requireAuthPage(h.handleAdminDatabasePage))
@@ -349,10 +341,6 @@ func (h *Handler) handleAdminDocumentsJS(w http.ResponseWriter, r *http.Request)
 
 func (h *Handler) handleAdminDomainJS(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/javascript; charset=utf-8", adminDomainJS)
-}
-
-func (h *Handler) handleAdminOverridesJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminOverridesJS)
 }
 
 func (h *Handler) handleAdminPageRankJS(w http.ResponseWriter, r *http.Request) {

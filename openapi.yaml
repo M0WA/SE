@@ -301,6 +301,24 @@ paths:
                       properties:
                         version: { type: integer }
                         count: { type: integer }
+                  stored_version_counts:
+                    type: array
+                    description: >-
+                      How many documents currently have exactly N versions
+                      actually retained in storage (the current row plus any
+                      archived predecessors still in document_versions,
+                      bounded by operational.max_document_versions), ordered
+                      by stored_versions ascending. Distinct from
+                      version_counts: a document changed 20 times sits at
+                      version 20 (its version_counts bucket) but, once its
+                      oldest archived rows have been pruned down to the
+                      configured limit, may have far fewer than 20 versions
+                      actually stored.
+                    items:
+                      type: object
+                      properties:
+                        stored_versions: { type: integer }
+                        doc_count: { type: integer }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
   /admin/api/documents/{id}:

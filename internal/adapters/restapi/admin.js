@@ -125,7 +125,7 @@ function seedSummary(seedURLs) {
 // linesToText/parseLines round-trip a one-value-per-line <textarea> (seed
 // URLs, allow/block domain lists, ...) against the string array a JSON
 // request/response actually carries -- shared by every page with one of
-// these fields (see crawl.html, admin_schedule.html, admin_overrides.html).
+// these fields (see crawl.html, admin_schedule.html, admin_settings.html).
 function linesToText(lines) {
   return (lines || []).join('\n');
 }

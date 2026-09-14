@@ -1362,6 +1362,9 @@ func TestDocumentsOverview_TopDomainsAndAgeBuckets(t *testing.T) {
 	if len(overview.VersionCounts) != 1 || overview.VersionCounts[0].Version != 1 || overview.VersionCounts[0].Count != 3 {
 		t.Errorf("expected all 3 freshly-saved documents at version 1, got %+v", overview.VersionCounts)
 	}
+	if len(overview.StoredVersionCounts) != 1 || overview.StoredVersionCounts[0].StoredVersions != 1 || overview.StoredVersionCounts[0].DocCount != 3 {
+		t.Errorf("expected all 3 freshly-saved (never-changed) documents to have exactly 1 version stored, got %+v", overview.StoredVersionCounts)
+	}
 }
 
 // TestDocumentsOverview_VersionCountsGroupsByVersion proves a re-crawled
@@ -1395,6 +1398,40 @@ func TestDocumentsOverview_VersionCountsGroupsByVersion(t *testing.T) {
 	if got[1] != 1 || got[2] != 1 {
 		t.Errorf("expected version 1 count=1 (doc-1) and version 2 count=1 (doc-2, re-crawled once), got %+v", overview.VersionCounts)
 	}
+
+	gotStored := map[int]int{}
+	for _, s := range overview.StoredVersionCounts {
+		gotStored[s.StoredVersions] = s.DocCount
+	}
+	if gotStored[1] != 1 || gotStored[2] != 1 {
+		t.Errorf("expected 1 document with 1 version stored (doc-1, never changed) and 1 with 2 stored (doc-2, changed once), got %+v", overview.StoredVersionCounts)
+	}
+}
+
+// TestDocumentsOverview_StoredVersionCountsReflectsPruningNotVersionNumber
+// proves StoredVersionCounts and VersionCounts diverge once
+// MaxDocumentVersions has actually pruned something: a document changed 4
+// times (version number 5) but saved with maxVersions=2 has only 2 rows of
+// history retained (the current one plus 1 archived), not 5.
+func TestDocumentsOverview_StoredVersionCountsReflectsPruningNotVersionNumber(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	for i := 1; i <= 5; i++ {
+		doc := domain.Document{ID: "doc-1", URL: "http://a.example/1", Title: fmt.Sprintf("Title %d", i), Text: fmt.Sprintf("text version %d", i)}
+		if err := repo.SaveDocument(ctx, doc, []float32{float32(i)}, 2); err != nil {
+			t.Fatalf("unexpected error on save %d: %v", i, err)
+		}
+	}
+	overview, err := repo.DocumentsOverview(ctx, 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(overview.VersionCounts) != 1 || overview.VersionCounts[0].Version != 5 || overview.VersionCounts[0].Count != 1 {
+		t.Errorf("expected the document's version number to reach 5 regardless of pruning, got %+v", overview.VersionCounts)
+	}
+	if len(overview.StoredVersionCounts) != 1 || overview.StoredVersionCounts[0].StoredVersions != 2 || overview.StoredVersionCounts[0].DocCount != 1 {
+		t.Errorf("expected only 2 versions actually stored (maxVersions=2), got %+v", overview.StoredVersionCounts)
+	}
 }
 
 func TestDocumentsOverview_EmptyCorpus(t *testing.T) {
@@ -1411,6 +1448,9 @@ func TestDocumentsOverview_EmptyCorpus(t *testing.T) {
 	}
 	if len(overview.VersionCounts) != 0 {
 		t.Errorf("expected no version counts for an empty corpus, got %+v", overview.VersionCounts)
+	}
+	if len(overview.StoredVersionCounts) != 0 {
+		t.Errorf("expected no stored version counts for an empty corpus, got %+v", overview.StoredVersionCounts)
 	}
 }
 

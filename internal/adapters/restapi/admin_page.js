@@ -121,6 +121,38 @@
     return wrap;
   }
 
+  // buildStoredVersionsBars mirrors buildVersionBars' bar-chart shape for
+  // a different distribution: how many documents currently have exactly N
+  // versions actually retained in storage (current + archived, bounded by
+  // the Settings > Documents > "Version history" limit) -- distinct from
+  // "Documents by version" above, which buckets by a document's version
+  // NUMBER (total historical changes, unaffected by pruning).
+  function buildStoredVersionsBars(storedVersionCounts) {
+    const maxCount = Math.max.apply(null, storedVersionCounts.map((s) => s.doc_count).concat([1]));
+    const wrap = document.createElement('div');
+    wrap.className = 'age-bars';
+    for (const s of storedVersionCounts) {
+      const col = document.createElement('div');
+      col.className = 'age-bar-col';
+      const bar = document.createElement('div');
+      bar.className = 'age-bar';
+      bar.style.height = Math.max(2, (s.doc_count / maxCount) * 80) + 'px';
+      const versionsLabel = s.stored_versions + (s.stored_versions === 1 ? ' version' : ' versions');
+      bar.title = versionsLabel + ': ' + s.doc_count + (s.doc_count === 1 ? ' document' : ' documents');
+      const count = document.createElement('div');
+      count.className = 'age-bar-count';
+      count.textContent = String(s.doc_count);
+      const label = document.createElement('div');
+      label.className = 'age-bar-label';
+      label.textContent = versionsLabel;
+      col.appendChild(count);
+      col.appendChild(bar);
+      col.appendChild(label);
+      wrap.appendChild(col);
+    }
+    return wrap;
+  }
+
   async function loadCorpusOverview(statsEl, statusEl, chartsEl) {
     let overview;
     try {
@@ -170,6 +202,16 @@
         versionBlock.appendChild(versionHeading);
         versionBlock.appendChild(buildVersionBars(overview.version_counts));
         row.appendChild(versionBlock);
+      }
+
+      if (overview.stored_version_counts && overview.stored_version_counts.length > 0) {
+        const storedVersionBlock = document.createElement('div');
+        storedVersionBlock.className = 'overview-block';
+        const storedVersionHeading = document.createElement('h3');
+        storedVersionHeading.textContent = 'Documents by number of versions';
+        storedVersionBlock.appendChild(storedVersionHeading);
+        storedVersionBlock.appendChild(buildStoredVersionsBars(overview.stored_version_counts));
+        row.appendChild(storedVersionBlock);
       }
 
       chartsEl.appendChild(row);

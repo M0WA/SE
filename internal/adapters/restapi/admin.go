@@ -118,10 +118,6 @@ func (h *Handler) handleAdminSearchResultPage(w http.ResponseWriter, r *http.Req
 	serveStatic(w, r, "text/html; charset=utf-8", adminSearchResultHTML)
 }
 
-func (h *Handler) handleAdminOverridesPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminOverridesHTML)
-}
-
 func (h *Handler) handleAdminCrawlPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/html; charset=utf-8", crawlHTML)
 }
@@ -312,11 +308,17 @@ type adminVersionCount struct {
 	Count   int `json:"count"`
 }
 
+type adminStoredVersionsCount struct {
+	StoredVersions int `json:"stored_versions"`
+	DocCount       int `json:"doc_count"`
+}
+
 type adminDocumentsOverview struct {
-	TopDomains    []adminDomainSummary `json:"top_domains"`
-	AgeBuckets    []adminAgeBucket     `json:"age_buckets"`
-	TotalDomains  int                  `json:"total_domains"`
-	VersionCounts []adminVersionCount  `json:"version_counts"`
+	TopDomains          []adminDomainSummary       `json:"top_domains"`
+	AgeBuckets          []adminAgeBucket           `json:"age_buckets"`
+	TotalDomains        int                        `json:"total_domains"`
+	VersionCounts       []adminVersionCount        `json:"version_counts"`
+	StoredVersionCounts []adminStoredVersionsCount `json:"stored_version_counts"`
 }
 
 // handleAdminDocumentsOverview backs the admin Overview page's summary
@@ -346,9 +348,14 @@ func (h *Handler) handleAdminDocumentsOverview(w http.ResponseWriter, r *http.Re
 	for i, v := range overview.VersionCounts {
 		versionCounts[i] = adminVersionCount{Version: v.Version, Count: v.Count}
 	}
+	storedVersionCounts := make([]adminStoredVersionsCount, len(overview.StoredVersionCounts))
+	for i, s := range overview.StoredVersionCounts {
+		storedVersionCounts[i] = adminStoredVersionsCount{StoredVersions: s.StoredVersions, DocCount: s.DocCount}
+	}
 	writeJSON(w, http.StatusOK, adminDocumentsOverview{
 		TopDomains: topDomains, AgeBuckets: ageBuckets,
 		TotalDomains: overview.TotalDomains, VersionCounts: versionCounts,
+		StoredVersionCounts: storedVersionCounts,
 	})
 }
 

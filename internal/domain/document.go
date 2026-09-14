@@ -78,19 +78,38 @@ type AgeBucket struct {
 // VersionCount is how many documents currently sit at a given version
 // number (see Document.Version) -- version 1 is a page that has only ever
 // been crawled once; a higher number means it's been re-crawled and its
-// content changed that many times since.
+// content changed that many times since. Unaffected by
+// OperationalSettingsValues.MaxDocumentVersions pruning -- the version
+// number keeps counting every change a document has ever had, even once
+// its oldest archived rows are pruned from document_versions.
 type VersionCount struct {
 	Version int
 	Count   int
 }
 
+// StoredVersionsCount is how many documents currently have exactly
+// StoredVersions versions actually retained in storage -- the current row
+// in documents plus however many of its predecessors still survive in
+// document_versions, bounded by MaxDocumentVersions. Distinct from
+// VersionCount: a document changed 20 times sits at version 20 (one
+// VersionCount bucket) but, with MaxDocumentVersions=3, has only 3 rows of
+// history retained (StoredVersions=3) -- this is what actually bounds
+// storage/reflects the retention setting, where VersionCount reflects
+// total historical churn regardless of what's since been pruned.
+type StoredVersionsCount struct {
+	StoredVersions int
+	DocCount       int
+}
+
 // DocumentsOverview is the aggregate data behind the admin Overview page's
 // summary panels: which domains hold the most pages, how recently the
 // index was last refreshed, how many distinct domains are indexed at all,
-// and how documents are distributed across version numbers.
+// how documents are distributed across version numbers, and how many
+// versions of each document are actually retained in storage right now.
 type DocumentsOverview struct {
-	TopDomains    []DomainSummary
-	AgeBuckets    []AgeBucket
-	TotalDomains  int
-	VersionCounts []VersionCount
+	TopDomains          []DomainSummary
+	AgeBuckets          []AgeBucket
+	TotalDomains        int
+	VersionCounts       []VersionCount
+	StoredVersionCounts []StoredVersionsCount
 }

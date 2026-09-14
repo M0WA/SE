@@ -534,10 +534,11 @@ func TestHandleAdminSearchDomains_MethodNotAllowed(t *testing.T) {
 
 func TestHandleAdminDocumentsOverview_Success(t *testing.T) {
 	overview := domain.DocumentsOverview{
-		TopDomains:    []domain.DomainSummary{{Host: "example.com", DocCount: 2}},
-		AgeBuckets:    []domain.AgeBucket{{Label: "last 24h", Count: 2}},
-		TotalDomains:  5,
-		VersionCounts: []domain.VersionCount{{Version: 1, Count: 8}, {Version: 2, Count: 3}},
+		TopDomains:          []domain.DomainSummary{{Host: "example.com", DocCount: 2}},
+		AgeBuckets:          []domain.AgeBucket{{Label: "last 24h", Count: 2}},
+		TotalDomains:        5,
+		VersionCounts:       []domain.VersionCount{{Version: 1, Count: 8}, {Version: 2, Count: 3}},
+		StoredVersionCounts: []domain.StoredVersionsCount{{StoredVersions: 1, DocCount: 8}, {StoredVersions: 2, DocCount: 3}},
 	}
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{overview: overview}, &fakeDebugSearch{})
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/documents/overview", nil)
@@ -549,10 +550,11 @@ func TestHandleAdminDocumentsOverview_Success(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 	var resp struct {
-		TopDomains    []map[string]interface{} `json:"top_domains"`
-		AgeBuckets    []map[string]interface{} `json:"age_buckets"`
-		TotalDomains  int                      `json:"total_domains"`
-		VersionCounts []map[string]interface{} `json:"version_counts"`
+		TopDomains          []map[string]interface{} `json:"top_domains"`
+		AgeBuckets          []map[string]interface{} `json:"age_buckets"`
+		TotalDomains        int                      `json:"total_domains"`
+		VersionCounts       []map[string]interface{} `json:"version_counts"`
+		StoredVersionCounts []map[string]interface{} `json:"stored_version_counts"`
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if len(resp.TopDomains) != 1 || resp.TopDomains[0]["host"] != "example.com" {
@@ -566,6 +568,9 @@ func TestHandleAdminDocumentsOverview_Success(t *testing.T) {
 	}
 	if len(resp.VersionCounts) != 2 || resp.VersionCounts[0]["version"] != float64(1) || resp.VersionCounts[0]["count"] != float64(8) {
 		t.Errorf("unexpected version_counts: %v", resp.VersionCounts)
+	}
+	if len(resp.StoredVersionCounts) != 2 || resp.StoredVersionCounts[0]["stored_versions"] != float64(1) || resp.StoredVersionCounts[0]["doc_count"] != float64(8) {
+		t.Errorf("unexpected stored_version_counts: %v", resp.StoredVersionCounts)
 	}
 }
 
@@ -1004,7 +1009,7 @@ func TestHandleAdminSearch_MethodNotAllowed(t *testing.T) {
 
 func TestHandleAdminSubpages_RequireAuth(t *testing.T) {
 	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
-	for _, path := range []string{"/admin/documents", "/admin/crawl", "/admin/jobs", "/admin/settings", "/admin/search", "/admin/search/result", "/admin/overrides"} {
+	for _, path := range []string{"/admin/documents", "/admin/crawl", "/admin/jobs", "/admin/settings", "/admin/search", "/admin/search/result"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		h.RoutesAdmin().ServeHTTP(rec, req)
@@ -1016,7 +1021,7 @@ func TestHandleAdminSubpages_RequireAuth(t *testing.T) {
 
 func TestHandleAdminSubpages_ServeWhenAuthenticated(t *testing.T) {
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
-	for _, path := range []string{"/admin/documents", "/admin/crawl", "/admin/jobs", "/admin/settings", "/admin/search", "/admin/search/result", "/admin/overrides"} {
+	for _, path := range []string{"/admin/documents", "/admin/crawl", "/admin/jobs", "/admin/settings", "/admin/search", "/admin/search/result"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.AddCookie(cookie)
 		rec := httptest.NewRecorder()
