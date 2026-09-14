@@ -31,7 +31,7 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS documents (
 			id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT, text TEXT,
-			doc_length INTEGER NOT NULL, embedding TEXT NOT NULL,
+			doc_length INTEGER NOT NULL, embedding BLOB NOT NULL,
 			norm_embedding REAL NOT NULL DEFAULT 0,
 			pagerank REAL NOT NULL DEFAULT 0,
 			host TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1,
@@ -113,7 +113,7 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS documents (
 			id VARCHAR(64) PRIMARY KEY, url TEXT NOT NULL, title TEXT, text LONGTEXT,
-			doc_length INT NOT NULL, embedding LONGTEXT NOT NULL,
+			doc_length INT NOT NULL, embedding LONGBLOB NOT NULL,
 			norm_embedding DOUBLE NOT NULL DEFAULT 0,
 			pagerank DOUBLE NOT NULL DEFAULT 0,
 			host VARCHAR(255) NOT NULL DEFAULT '', version INT NOT NULL DEFAULT 1,
@@ -198,7 +198,7 @@ func (postgresDialect) CreateSchemaSQL() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS documents (
 			id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT, text TEXT,
-			doc_length INT NOT NULL, embedding TEXT NOT NULL,
+			doc_length INT NOT NULL, embedding BYTEA NOT NULL,
 			norm_embedding DOUBLE PRECISION NOT NULL DEFAULT 0,
 			pagerank DOUBLE PRECISION NOT NULL DEFAULT 0,
 			host TEXT NOT NULL DEFAULT '', version INT NOT NULL DEFAULT 1,

@@ -250,6 +250,56 @@ func TestTopSemanticMatches_NonPositiveLimitReturnsUnavailableWithoutQuerying(t 
 	}
 }
 
+// TestTopSemanticMatches_ClampsEfSearchAboveOwnPgvectorMax proves the
+// maxHNSWEfSearch clamp actually protects a real query: without it, a limit
+// above pgvector's own hnsw.ef_search ceiling (1000) would make "SET LOCAL
+// hnsw.ef_search = <limit>" itself fail with a Postgres error ("invalid
+// value for parameter \"hnsw.ef_search\": 1500"), turning an
+// admin-configurable SemanticCandidatePoolSize with no upper bound of its
+// own (see domain.OperationalSettingsValues) into a hard ANN outage instead
+// of merely capping recall quality at pgvector's own ceiling.
+func TestTopSemanticMatches_ClampsEfSearchAboveOwnPgvectorMax(t *testing.T) {
+	repo := requirePostgresANN(t)
+	ctx := context.Background()
+	doc := domain.Document{ID: "doc-1", URL: "https://example.com/doc-1", Title: "Doc", Text: "hello world"}
+	if err := repo.SaveDocument(ctx, doc, []float32{1, 0}, 100); err != nil {
+		t.Fatalf("saving document: %v", err)
+	}
+
+	matches, ok, err := repo.TopSemanticMatches(ctx, []float32{1, 0}, 1500)
+	if err != nil {
+		t.Fatalf("expected the over-ceiling limit to be clamped rather than erroring, got: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true once ANN is available")
+	}
+	if _, found := matches["doc-1"]; !found {
+		t.Errorf("expected doc-1 to be found, got %+v", matches)
+	}
+}
+
+// TestTopSemanticMatches_TransactionStartFailureIsReportedAsError covers the
+// "starting ANN transaction" error path added alongside the SET LOCAL
+// hnsw.ef_search fix: closing the repository's pool out from under it before
+// calling TopSemanticMatches forces BeginTx to fail (a closed *sql.DB
+// returns sql.ErrConnDone), which must surface as a real error rather than
+// panicking or silently reporting ok=false the way "ANN unavailable" does.
+func TestTopSemanticMatches_TransactionStartFailureIsReportedAsError(t *testing.T) {
+	repo := requirePostgresANN(t)
+	ctx := context.Background()
+	if err := repo.Close(); err != nil {
+		t.Fatalf("closing repository: %v", err)
+	}
+
+	_, ok, err := repo.TopSemanticMatches(ctx, []float32{1, 0}, 10)
+	if err == nil {
+		t.Fatal("expected an error once the underlying connection pool is closed")
+	}
+	if ok {
+		t.Error("expected ok=false alongside the error")
+	}
+}
+
 // TestSaveDocument_PopulatesVectorColumnWhenANNAvailable verifies
 // SaveDocument writes the pgvector column (not just the JSON embedding
 // column) once ANN is available for this process -- otherwise

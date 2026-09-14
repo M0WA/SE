@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math/rand"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -285,6 +286,215 @@ func BenchmarkRecencyQueries(b *testing.B) {
 	b.Run("WithoutIndex", runBoth)
 }
 
+// BenchmarkSaveDocumentNewDoc isolates the cost of SaveDocument's
+// never-before-seen-URL branch (the sql.ErrNoRows case) at increasing
+// pre-existing corpus sizes. Before the O(N^2) fix, that branch runs a
+// live, unindexed `SELECT COUNT(*) FROM documents` inside the transaction
+// purely to seed a placeholder pagerank -- so ns/op here should grow
+// roughly linearly with corpus size (a bigger table takes proportionally
+// longer to fully scan) before the fix, and stay flat across corpus sizes
+// after it.
+func BenchmarkSaveDocumentNewDoc(b *testing.B) {
+	ctx := context.Background()
+
+	for _, size := range []int{1000, 5000, 20000, 50000} {
+		b.Run(fmt.Sprintf("corpus=%d", size), func(b *testing.B) {
+			repo, err := sqlrepo.New(ctx, "sqlite", benchDSN(fmt.Sprintf("benchnewdoc%d", size)))
+			if err != nil {
+				b.Fatalf("failed to create repo: %v", err)
+			}
+			defer repo.Close()
+
+			seedBenchDocuments(b, repo, size, nil)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				doc := domain.Document{
+					ID:    fmt.Sprintf("new-%d-%d", size, i),
+					URL:   fmt.Sprintf("http://example.com/new-%d-%d", size, i),
+					Title: "New Document",
+					Text:  "brand new content never seen before",
+				}
+				if err := repo.SaveDocument(ctx, doc, []float32{0.1, 0.2, 0.3, 0.4}, 100); err != nil {
+					b.Fatalf("SaveDocument: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// saveDocumentInsertBatchSizeForBench mirrors sqlrepo's unexported
+// saveDocumentInsertBatchSize constant (this test lives in the external
+// sqlrepo_test package, so it can't reference the constant directly) --
+// keep the two in sync if that constant ever changes.
+const saveDocumentInsertBatchSizeForBench = 300
+
+// analyticalSaveDocumentPostingsLinkExecs returns how many tx.ExecContext
+// calls SaveDocument's postings+links rewrite makes for the given unique
+// term/link counts, under the CURRENT (batched) implementation: one
+// multi-row INSERT per saveDocumentInsertBatchSizeForBench-sized chunk of
+// terms, plus one per chunk of links.
+func analyticalSaveDocumentPostingsLinkExecs(terms, links int) int {
+	chunks := func(n int) int {
+		if n == 0 {
+			return 0
+		}
+		return (n + saveDocumentInsertBatchSizeForBench - 1) / saveDocumentInsertBatchSizeForBench
+	}
+	return chunks(terms) + chunks(links)
+}
+
+// buildSaveDocumentBenchDoc builds a domain.Document with exactly termCount
+// unique postings terms (each long enough, and not a stopword, to survive
+// domain.Tokenize) and linkCount unique, non-self-referential links -- the
+// two collections SaveDocument rewrites in full on every call.
+func buildSaveDocumentBenchDoc(termCount, linkCount int) domain.Document {
+	var text strings.Builder
+	for i := 0; i < termCount; i++ {
+		fmt.Fprintf(&text, "benchterm%d ", i)
+	}
+	links := make([]string, linkCount)
+	for i := 0; i < linkCount; i++ {
+		links[i] = fmt.Sprintf("https://example.com/linked-%d", i)
+	}
+	return domain.Document{
+		ID:    "bench-savedoc",
+		URL:   "https://example.com/bench-savedoc",
+		Title: "Bench Document",
+		Text:  text.String(),
+		Links: links,
+	}
+}
+
+// BenchmarkSaveDocumentWrites measures SaveDocument itself (postings +
+// links rewrite is the dominant cost: every term and every link on the page
+// is rewritten on every save, unconditionally, regardless of whether the
+// document's content actually changed) across a handful of realistic
+// term/link-count combinations, from a small page up through a
+// heavily-linked, term-rich one. Each sub-benchmark saves the exact same
+// document repeatedly -- after the first call, existingText == doc.Text, so
+// no version archiving happens on subsequent iterations, isolating the
+// postings/links rewrite path from the versioning path measured elsewhere.
+//
+// execs/op is the number of tx.ExecContext calls SaveDocument makes purely
+// for postings+links (i.e. excluding the fixed handful of calls for the
+// existing-version SELECT, the documents upsert, and the two DELETEs) --
+// computed analytically from the known implementation (one INSERT per
+// unique term/link row-by-row before this change; one INSERT per
+// saveDocumentInsertChunkSize-sized chunk after), not measured via a
+// counting driver, since the loop shape is a fixed, known property of the
+// code under test at any given commit.
+func BenchmarkSaveDocumentWrites(b *testing.B) {
+	cases := []struct {
+		terms int
+		links int
+	}{
+		{terms: 50, links: 10},
+		{terms: 200, links: 50},
+		{terms: 500, links: 200},
+	}
+
+	for _, tc := range cases {
+		b.Run(fmt.Sprintf("terms=%d_links=%d", tc.terms, tc.links), func(b *testing.B) {
+			ctx := context.Background()
+			repo, err := sqlrepo.New(ctx, "sqlite", benchDSN(fmt.Sprintf("benchsavedoc%d_%d", tc.terms, tc.links)))
+			if err != nil {
+				b.Fatalf("failed to create repo: %v", err)
+			}
+			defer repo.Close()
+
+			doc := buildSaveDocumentBenchDoc(tc.terms, tc.links)
+			embedding := []float32{0.1, 0.2, 0.3, 0.4}
+
+			// Prime once outside the timed loop so every timed iteration hits
+			// the "unchanged content" branch (no archiving), matching a
+			// re-crawl of an unchanged page -- the common case in practice.
+			if err := repo.SaveDocument(ctx, doc, embedding, 100); err != nil {
+				b.Fatalf("priming SaveDocument: %v", err)
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := repo.SaveDocument(ctx, doc, embedding, 100); err != nil {
+					b.Fatalf("SaveDocument: %v", err)
+				}
+			}
+			b.StopTimer()
+
+			execsPerOp := analyticalSaveDocumentPostingsLinkExecs(tc.terms, tc.links)
+			b.ReportMetric(float64(execsPerOp), "execs/op")
+		})
+	}
+}
+
+// seedBenchEmbeddingCorpus saves n synthetic documents through the real
+// SaveDocument path, each with a realistic dims-wide embedding (unlike
+// seedBenchDocuments, which hardcodes a fixed 4-element embedding regardless
+// of what's asked -- too small to meaningfully exercise the embedding
+// column's own encode/decode cost, the entire point of
+// BenchmarkSampleEmbeddings below).
+func seedBenchEmbeddingCorpus(b *testing.B, repo *sqlrepo.Repository, n, dims int) {
+	b.Helper()
+	ctx := context.Background()
+	rng := rand.New(rand.NewSource(23))
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("doc-%d", i)
+		vec := make([]float32, dims)
+		for j := range vec {
+			vec[j] = rng.Float32()*2 - 1
+		}
+		doc := domain.Document{ID: id, URL: "https://example.com/" + id, Title: "T", Text: "benchmark content"}
+		if err := repo.SaveDocument(ctx, doc, vec, 100); err != nil {
+			b.Fatalf("seeding document %s: %v", id, err)
+		}
+	}
+}
+
+// BenchmarkSampleEmbeddings measures the real, current SampleEmbeddings
+// fallback end-to-end (seed via SaveDocument, read via SampleEmbeddings
+// against a real SQLite-backed documents table) -- the brute-force
+// candidate-pool path every process actually runs on every hybrid search
+// request unless Postgres ANN is available (see ann.go), at poolSize=200
+// (SemanticCandidatePoolSize's real default) and poolSize=5000 (this
+// package's larger-corpus benchmark convention). 128-dim embeddings, this
+// codebase's actual embedder default (see BenchmarkEmbeddingCodec's doc
+// comment for why 128, not the proposal's assumed 384).
+//
+// Run before and after documents.embedding's on-disk encoding changes from
+// JSON text to packed binary (see dialect.go/repository.go) to capture the
+// real row-size + I/O + CPU cost together -- not just the pure codec cost
+// BenchmarkEmbeddingCodec measures in isolation.
+func BenchmarkSampleEmbeddings(b *testing.B) {
+	const dims = 128
+	const corpusSize = 5000
+	ctx := context.Background()
+
+	for _, poolSize := range []int{200, 5000} {
+		repo, err := sqlrepo.New(ctx, "sqlite", benchDSN("benchsampleemb"))
+		if err != nil {
+			b.Fatalf("failed to create repo: %v", err)
+		}
+		seedBenchEmbeddingCorpus(b, repo, corpusSize, dims)
+
+		b.Run(fmt.Sprintf("PoolSize=%d", poolSize), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				out, err := repo.SampleEmbeddings(ctx, poolSize)
+				if err != nil {
+					b.Fatalf("SampleEmbeddings: %v", err)
+				}
+				if len(out) != poolSize {
+					b.Fatalf("expected %d embeddings, got %d", poolSize, len(out))
+				}
+			}
+		})
+		repo.Close()
+	}
+}
+
 // BenchmarkConnectionPoolTuning validates connection-pool-tuning's actual
 // mechanism -- database/sql's own MaxOpenConns limiting, which ConfigurePool
 // drives -- under concurrent load. A live Postgres/MySQL server (what the
@@ -316,7 +526,7 @@ func BenchmarkConnectionPoolTuning(b *testing.B) {
 			ctx := context.Background()
 			if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS documents (
 				id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT, text TEXT,
-				doc_length INTEGER NOT NULL, embedding TEXT NOT NULL,
+				doc_length INTEGER NOT NULL, embedding BLOB NOT NULL,
 				norm_embedding REAL NOT NULL DEFAULT 0
 			)`); err != nil {
 				b.Fatalf("failed to create schema: %v", err)
@@ -344,5 +554,120 @@ func BenchmarkConnectionPoolTuning(b *testing.B) {
 				b.ReportMetric(float64(stats.WaitDuration.Nanoseconds())/float64(b.N), "waitns/op")
 			}
 		})
+	}
+}
+
+// BenchmarkWALConcurrency measures whether SQLite's default rollback-journal
+// mode lets a writer's transaction stall concurrent readers -- the scenario
+// that motivates turning on WAL + synchronous=NORMAL. Unlike
+// BenchmarkConnectionPoolTuning (one repository, contention arbitrated by
+// database/sql's own connection pool), this opens two *separate* repository
+// instances -- a "writer" and a "reader" -- against the same on-disk SQLite
+// file, exactly mirroring how cmd/crawl and cmd/search are two independent
+// OS processes each with their own single-connection *sql.DB pointed at the
+// same search.db file (ConfigurePool always clamps SQLite to 1 open
+// connection). With two connections onto one *sql.DB, database/sql's own
+// pool would serialize them regardless of SQLite's journal mode, hiding
+// exactly the effect this benchmark exists to observe -- so two connections
+// (two repos) is the only way to actually exercise SQLite's own file-level
+// locking.
+//
+// A real temp-file DSN is required (not the benchDSN in-memory-shared-cache
+// helper used elsewhere in this file): WAL mode writes a real "-wal" file
+// alongside the main database file on disk, which an in-memory database
+// doesn't have.
+//
+// The writer goroutine loops SaveDocument (a real multi-statement write
+// transaction -- select existing version/text/pagerank, archive, prune,
+// upsert, rewrite postings/links) against one already-seeded document,
+// continuously, for the duration of the timed loop. Concurrently, each
+// timed round fans out readConcurrency goroutines that each do one
+// CorpusStats + PostingsForTerms read (the read path a live /search request
+// exercises), timing it individually via time.Since so a writer-induced
+// stall shows up in the per-read average even when b.N's own ns/op gets
+// diluted by read/read parallelism.
+func BenchmarkWALConcurrency(b *testing.B) {
+	const readConcurrency = 20
+	const seedSize = 500
+
+	ctx := context.Background()
+	dir := b.TempDir()
+	dsn := fmt.Sprintf("file:%s/bench.db?cache=shared", dir)
+
+	writerRepo, err := sqlrepo.New(ctx, "sqlite", dsn)
+	if err != nil {
+		b.Fatalf("failed to open writer repo: %v", err)
+	}
+	defer writerRepo.Close()
+
+	readerRepo, err := sqlrepo.New(ctx, "sqlite", dsn)
+	if err != nil {
+		b.Fatalf("failed to open reader repo: %v", err)
+	}
+	defer readerRepo.Close()
+
+	terms := []string{"alpha", "bravo", "charlie", "delta", "echo"}
+	seedBenchDocuments(b, writerRepo, seedSize, terms)
+
+	rng := rand.New(rand.NewSource(13))
+	writerDoc := domain.Document{
+		ID:    "doc-0",
+		URL:   "https://example.com/doc-0",
+		Title: "Document doc-0",
+		Text:  "common alpha bravo charlie delta echo",
+	}
+
+	stopWriter := make(chan struct{})
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		for {
+			select {
+			case <-stopWriter:
+				return
+			default:
+			}
+			embedding := []float32{rng.Float32(), rng.Float32(), rng.Float32(), rng.Float32()}
+			if err := writerRepo.SaveDocument(ctx, writerDoc, embedding, 100); err != nil {
+				b.Error(err)
+				return
+			}
+		}
+	}()
+
+	var totalReadNs int64
+	var readCount int64
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var wg sync.WaitGroup
+		wg.Add(readConcurrency)
+		for g := 0; g < readConcurrency; g++ {
+			go func() {
+				defer wg.Done()
+				start := time.Now()
+				if _, _, err := readerRepo.CorpusStats(ctx); err != nil {
+					b.Error(err)
+					return
+				}
+				if _, err := readerRepo.PostingsForTerms(ctx, terms); err != nil {
+					b.Error(err)
+					return
+				}
+				elapsed := time.Since(start)
+				atomic.AddInt64(&totalReadNs, elapsed.Nanoseconds())
+				atomic.AddInt64(&readCount, 1)
+			}()
+		}
+		wg.Wait()
+	}
+	b.StopTimer()
+
+	close(stopWriter)
+	<-writerDone
+
+	if n := atomic.LoadInt64(&readCount); n > 0 {
+		b.ReportMetric(float64(atomic.LoadInt64(&totalReadNs))/float64(n), "readns/op")
 	}
 }

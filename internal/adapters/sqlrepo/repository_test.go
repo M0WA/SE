@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,7 +36,7 @@ const testPostgresDSNEnv = "TEST_POSTGRES_DSN"
 // without leaking into other tests). When TEST_POSTGRES_DSN is set, it
 // instead runs the same test against that real Postgres server, in a fresh
 // schema created just for this test so concurrent tests never collide.
-func newTestRepo(t *testing.T) *sqlrepo.Repository {
+func newTestRepo(t testing.TB) *sqlrepo.Repository {
 	t.Helper()
 	if dsn := os.Getenv(testPostgresDSNEnv); dsn != "" {
 		return newPostgresTestRepo(t, dsn)
@@ -56,7 +57,7 @@ func newTestRepo(t *testing.T) *sqlrepo.Repository {
 // invocations against the same long-lived server). The schema -- and every
 // table in it -- is dropped in t.Cleanup, so a re-run against the same
 // server always starts clean rather than accumulating schemas over time.
-func newPostgresTestRepo(t *testing.T, baseDSN string) *sqlrepo.Repository {
+func newPostgresTestRepo(t testing.TB, baseDSN string) *sqlrepo.Repository {
 	t.Helper()
 	ctx := context.Background()
 	n := atomic.AddInt64(&dsnCounter, 1)
@@ -145,7 +146,7 @@ func TestNewWithDB_UsesGivenConnectionAndDialect(t *testing.T) {
 	// NewWithDB doesn't migrate, so exercise the connection directly first.
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS documents (
 		id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT, text TEXT,
-		doc_length INTEGER NOT NULL, embedding TEXT NOT NULL
+		doc_length INTEGER NOT NULL, embedding BLOB NOT NULL
 	)`); err != nil {
 		t.Fatalf("failed to create schema: %v", err)
 	}
@@ -1465,12 +1466,13 @@ func TestMigrateDocumentColumns_BackfillsHostOnPreExistingRows(t *testing.T) {
 	}
 	if _, err := pre.Exec(`CREATE TABLE documents (
 		id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT, text TEXT,
-		doc_length INTEGER NOT NULL, embedding TEXT NOT NULL
+		doc_length INTEGER NOT NULL, embedding BLOB NOT NULL
 	)`); err != nil {
 		t.Fatalf("failed to create legacy schema: %v", err)
 	}
 	if _, err := pre.Exec(`INSERT INTO documents (id, url, title, text, doc_length, embedding)
-	                       VALUES ('doc-1', 'https://old.example/page', 'Old', 'old text', 10, '[]')`); err != nil {
+	                       VALUES ('doc-1', 'https://old.example/page', 'Old', 'old text', 10, ?)`,
+		sqlrepo.EncodeEmbedding(nil)); err != nil {
 		t.Fatalf("failed to insert legacy row: %v", err)
 	}
 	// Keep pre open for the rest of the test: an in-memory sqlite database
@@ -1509,12 +1511,13 @@ func TestMigrateDocumentColumns_BackfillsNormEmbeddingOnPreExistingRows(t *testi
 	}
 	if _, err := pre.Exec(`CREATE TABLE documents (
 		id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT, text TEXT,
-		doc_length INTEGER NOT NULL, embedding TEXT NOT NULL
+		doc_length INTEGER NOT NULL, embedding BLOB NOT NULL
 	)`); err != nil {
 		t.Fatalf("failed to create legacy schema: %v", err)
 	}
 	if _, err := pre.Exec(`INSERT INTO documents (id, url, title, text, doc_length, embedding)
-	                       VALUES ('doc-1', 'https://old.example/page', 'Old', 'old text', 10, '[3,4]')`); err != nil {
+	                       VALUES ('doc-1', 'https://old.example/page', 'Old', 'old text', 10, ?)`,
+		sqlrepo.EncodeEmbedding([]float32{3, 4})); err != nil {
 		t.Fatalf("failed to insert legacy row: %v", err)
 	}
 	// Keep pre open for the rest of the test: an in-memory sqlite database
@@ -1984,7 +1987,7 @@ func TestEnsureCrawledAtIndex_BackstopCreatesIndexOnPreExistingDatabase(t *testi
 	}
 	if _, err := pre.Exec(`CREATE TABLE documents (
 		id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT, text TEXT,
-		doc_length INTEGER NOT NULL, embedding TEXT NOT NULL,
+		doc_length INTEGER NOT NULL, embedding BLOB NOT NULL,
 		norm_embedding REAL NOT NULL DEFAULT 0,
 		host TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1,
 		crawled_at TEXT NOT NULL DEFAULT ''
@@ -2326,7 +2329,7 @@ func TestMigrateDocumentColumns_BackfillsPageRankOnPreExistingRows(t *testing.T)
 	}
 	if _, err := pre.Exec(`CREATE TABLE documents (
 		id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT, text TEXT,
-		doc_length INTEGER NOT NULL, embedding TEXT NOT NULL,
+		doc_length INTEGER NOT NULL, embedding BLOB NOT NULL,
 		norm_embedding REAL NOT NULL DEFAULT 0,
 		host TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1,
 		crawled_at TEXT NOT NULL DEFAULT ''
@@ -2335,7 +2338,7 @@ func TestMigrateDocumentColumns_BackfillsPageRankOnPreExistingRows(t *testing.T)
 	}
 	for _, id := range []string{"doc-1", "doc-2"} {
 		if _, err := pre.Exec(`INSERT INTO documents (id, url, title, text, doc_length, embedding)
-		                       VALUES (?, ?, 'Old', 'old text', 10, '[]')`, id, "https://old.example/"+id); err != nil {
+		                       VALUES (?, ?, 'Old', 'old text', 10, ?)`, id, "https://old.example/"+id, sqlrepo.EncodeEmbedding(nil)); err != nil {
 			t.Fatalf("failed to insert legacy row %s: %v", id, err)
 		}
 	}
@@ -2358,5 +2361,106 @@ func TestMigrateDocumentColumns_BackfillsPageRankOnPreExistingRows(t *testing.T)
 		if d.PageRank != 0.5 {
 			t.Errorf("expected pre-existing row %s backfilled to 1/2 = 0.5, got %v", d.ID, d.PageRank)
 		}
+	}
+}
+
+// TestSaveDocument_ChunkedInsertsAcrossBatchBoundary verifies SaveDocument's
+// postings/links rewrite -- chunked into multi-row "INSERT ... VALUES
+// (...),(...),..." statements bounded by an internal batch size -- inserts
+// every single row correctly (no row dropped or duplicated at a chunk
+// boundary) when the term/link count is large enough to span more than one
+// chunk (currently 300 rows/chunk), and that a follow-up save with far
+// fewer terms/links leaves exactly the new, smaller set behind rather than
+// merging with whatever the previous save's chunks touched.
+func TestSaveDocument_ChunkedInsertsAcrossBatchBoundary(t *testing.T) {
+	ctx := context.Background()
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testdbchunk%d?mode=memory&cache=shared", n)
+	repo, err := sqlrepo.New(ctx, "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to create repo: %v", err)
+	}
+	defer repo.Close()
+
+	const termCount = 350
+	const linkCount = 350
+	var text strings.Builder
+	for i := 0; i < termCount; i++ {
+		fmt.Fprintf(&text, "chunkterm%d ", i)
+	}
+	links := make([]string, linkCount)
+	for i := 0; i < linkCount; i++ {
+		links[i] = fmt.Sprintf("https://example.com/chunklink-%d", i)
+	}
+	doc := domain.Document{
+		// Title left empty so the only tokens produced are the termCount
+		// chunktermN ones in Text -- a non-empty title would itself
+		// contribute an extra posting row and throw off the exact counts
+		// this test checks.
+		ID: "doc-chunk", URL: "https://example.com/doc-chunk",
+		Text: text.String(), Links: links,
+	}
+	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100); err != nil {
+		t.Fatalf("SaveDocument: %v", err)
+	}
+
+	raw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("opening raw connection: %v", err)
+	}
+	defer raw.Close()
+
+	var postingsCount int
+	if err := raw.QueryRowContext(ctx, `SELECT COUNT(*) FROM postings WHERE doc_id = ?`, doc.ID).Scan(&postingsCount); err != nil {
+		t.Fatalf("counting postings: %v", err)
+	}
+	if postingsCount != termCount {
+		t.Errorf("expected %d postings rows spanning multiple insert chunks, got %d", termCount, postingsCount)
+	}
+
+	var linksCount int
+	if err := raw.QueryRowContext(ctx, `SELECT COUNT(*) FROM links WHERE from_id = ?`, doc.ID).Scan(&linksCount); err != nil {
+		t.Fatalf("counting links: %v", err)
+	}
+	if linksCount != linkCount {
+		t.Errorf("expected %d links rows spanning multiple insert chunks, got %d", linkCount, linksCount)
+	}
+
+	// Spot-check specific terms straddling the chunk boundary (currently
+	// 300 rows/chunk: index 299 is the last row of chunk 1, 300 the first
+	// of chunk 2) actually made it in with the right frequency, not just
+	// that the total count matches.
+	for _, i := range []int{0, 299, 300, termCount - 1} {
+		term := fmt.Sprintf("chunkterm%d", i)
+		postings, err := repo.PostingsForTerm(ctx, term, 10)
+		if err != nil {
+			t.Fatalf("PostingsForTerm(%s): %v", term, err)
+		}
+		if len(postings) != 1 || postings[0].DocID != doc.ID || postings[0].TermFreq != 1 {
+			t.Errorf("expected exactly one posting for %q with term_freq=1, got %+v", term, postings)
+		}
+	}
+
+	// Re-saving with far fewer terms/links must leave exactly the new
+	// counts behind, not a union with the previous (larger, multi-chunk)
+	// save's rows.
+	doc2 := domain.Document{
+		ID: "doc-chunk", URL: "https://example.com/doc-chunk",
+		Text: "onlyterm", Links: []string{"https://example.com/onlylink"},
+	}
+	if err := repo.SaveDocument(ctx, doc2, []float32{1}, 100); err != nil {
+		t.Fatalf("SaveDocument (second): %v", err)
+	}
+	if err := raw.QueryRowContext(ctx, `SELECT COUNT(*) FROM postings WHERE doc_id = ?`, doc.ID).Scan(&postingsCount); err != nil {
+		t.Fatalf("counting postings after re-save: %v", err)
+	}
+	if postingsCount != 1 {
+		t.Errorf("expected 1 posting row after re-save, got %d", postingsCount)
+	}
+	if err := raw.QueryRowContext(ctx, `SELECT COUNT(*) FROM links WHERE from_id = ?`, doc.ID).Scan(&linksCount); err != nil {
+		t.Fatalf("counting links after re-save: %v", err)
+	}
+	if linksCount != 1 {
+		t.Errorf("expected 1 link row after re-save, got %d", linksCount)
 	}
 }

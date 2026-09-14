@@ -2,7 +2,6 @@ package sqlrepo
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
@@ -44,6 +43,17 @@ const (
 	vectorColumnName = "embedding_vector"
 	vectorIndexName  = "idx_documents_embedding_vector_hnsw"
 )
+
+// maxHNSWEfSearch is pgvector's own hard ceiling on the hnsw.ef_search GUC
+// (see pgvector's hnsw.c: DefineCustomIntVariable clamps it to [1, 1000]) --
+// setting anything higher fails with "invalid value for parameter
+// \"hnsw.ef_search\"". SemanticCandidatePoolSize (the value TopSemanticMatches
+// is called with as limit) is an admin-configurable knob with no upper bound
+// of its own (see domain.OperationalSettingsValues), so this clamp is what
+// keeps an unusually large configured pool size from turning every ANN query
+// into a hard Postgres error instead of merely capping recall quality at
+// pgvector's own ceiling.
+const maxHNSWEfSearch = 1000
 
 // EnableANN attempts to turn on Postgres pgvector-backed ANN semantic
 // search for this process's lifetime: enabling the pgvector extension,
@@ -102,7 +112,8 @@ func (r *Repository) EnableANN(ctx context.Context, dims int) {
 // candidates for the entire corpus until each document happened to be
 // re-crawled. Only ANN's own caller (EnableANN) runs this, and only once
 // the column exists -- mirrors backfillNormEmbedding's shape exactly
-// (parse the existing JSON embedding column, write the derived value),
+// (parse the existing packed-binary embedding column, write the derived
+// value),
 // just writing to embedding_vector instead of norm_embedding. Run before
 // r.ann.markAvailable, so TopSemanticMatches is never used against a
 // corpus that hasn't actually been backfilled yet.
@@ -113,12 +124,12 @@ func (r *Repository) backfillVectorColumn(ctx context.Context) error {
 	}
 	type idEmbedding struct {
 		id      string
-		embJSON string
+		embBlob []byte
 	}
 	var pending []idEmbedding
 	for rows.Next() {
 		var ie idEmbedding
-		if err := rows.Scan(&ie.id, &ie.embJSON); err != nil {
+		if err := rows.Scan(&ie.id, &ie.embBlob); err != nil {
 			rows.Close()
 			return fmt.Errorf("scanning row: %w", err)
 		}
@@ -131,8 +142,8 @@ func (r *Repository) backfillVectorColumn(ctx context.Context) error {
 
 	updateSQL := r.ph(`UPDATE documents SET `+vectorColumnName+` = %s::vector WHERE id = %s`, 1, 2)
 	for _, ie := range pending {
-		var vec []float32
-		if err := json.Unmarshal([]byte(ie.embJSON), &vec); err != nil {
+		vec, err := DecodeEmbedding(ie.embBlob)
+		if err != nil {
 			return fmt.Errorf("deserializing embedding for vector backfill (%s): %w", ie.id, err)
 		}
 		if len(vec) == 0 {
@@ -250,14 +261,50 @@ func formatPgVectorLiteral(vec []float32) string {
 // only writes this column once r.ann.isAvailable(), see SaveDocument) are
 // excluded, since ordering by cosine distance against a NULL is
 // meaningless.
+//
+// Before the ORDER BY query, this issues "SET LOCAL hnsw.ef_search = <n>"
+// (n = limit, clamped to maxHNSWEfSearch) inside the same transaction. HNSW
+// query-time recall is governed entirely by hnsw.ef_search, a GUC that
+// defaults to 40 and is completely independent of the query's own LIMIT --
+// pgvector's docs are explicit that ef_search should be >= the requested
+// LIMIT for good recall, but nothing in EnableANN's migration ever touches
+// it. Left at its 40 default while LIMIT asks for (typically) 200 rows, the
+// HNSW graph traversal only ever explores a 40-wide dynamic candidate list,
+// so the query still returns exactly `limit` rows -- they just are not
+// reliably the true top-`limit` nearest neighbors by cosine distance, a
+// silent recall degradation with no visible error. SET LOCAL scopes the
+// change to this transaction only (never a session-wide SET, which would
+// leak the setting to whatever unrelated query the pooled connection serves
+// next), so it's safe under the connection pool's concurrent connections
+// each potentially wanting a different ef_search for a different limit.
 func (r *Repository) TopSemanticMatches(ctx context.Context, queryVec []float32, limit int) (map[string]domain.EmbeddedVector, bool, error) {
 	if !r.ann.isAvailable() || limit <= 0 {
 		return nil, false, nil
 	}
+
+	efSearch := limit
+	if efSearch > maxHNSWEfSearch {
+		efSearch = maxHNSWEfSearch
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, false, fmt.Errorf("starting ANN transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// SET's parameter can't be bound as a placeholder (Postgres rejects
+	// "$1" there), so efSearch -- an int, clamped above, never raw user
+	// input -- is formatted directly; safe from injection the same way any
+	// %d-formatted int literal is.
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`SET LOCAL hnsw.ef_search = %d`, efSearch)); err != nil {
+		return nil, false, fmt.Errorf("setting hnsw.ef_search: %w", err)
+	}
+
 	query := r.ph(`SELECT id, embedding, norm_embedding, pagerank FROM documents
 	               WHERE `+vectorColumnName+` IS NOT NULL
 	               ORDER BY `+vectorColumnName+` <=> %s::vector LIMIT %s`, 1, 2)
-	rows, err := r.db.QueryContext(ctx, query, formatPgVectorLiteral(queryVec), limit)
+	rows, err := tx.QueryContext(ctx, query, formatPgVectorLiteral(queryVec), limit)
 	if err != nil {
 		return nil, false, fmt.Errorf("querying ANN semantic matches: %w", err)
 	}

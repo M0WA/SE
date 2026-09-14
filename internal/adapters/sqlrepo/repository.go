@@ -15,6 +15,18 @@ import (
 
 const crawledAtLayout = time.RFC3339Nano
 
+// newDocumentPlaceholderPageRank is the pagerank a brand-new document row
+// gets at insert time, before application.RunPageRankJob has ever had a
+// chance to score it -- see SaveDocument's sql.ErrNoRows branch. Order of
+// magnitude only: a fixed value in the same ballpark as 1/N for a
+// mid-sized (order-10,000-document) corpus, strictly positive (never the
+// column's bare-0 default) and cheap to produce (no query needed at all).
+// Any crawled corpus this is ever slightly too big or small for gets
+// corrected the moment RunPageRankJob next runs, exactly like this
+// codebase already treats backfillPageRank's and domain.PageRank's own
+// neutral placeholder values.
+const newDocumentPlaceholderPageRank = 1e-4
+
 func hostOf(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -56,6 +68,27 @@ func New(ctx context.Context, driverName, dsn string) (*Repository, error) {
 	if repo.dialect.Name() == "sqlite" {
 		if _, err := db.ExecContext(ctx, "PRAGMA busy_timeout = 5000"); err != nil {
 			return nil, fmt.Errorf("setting busy_timeout (sqlite): %w", err)
+		}
+		// search-server, admin-server and crawl-server are three separate OS
+		// processes, each opening its own *sql.DB (clamped to a single
+		// connection by ConfigurePool) against the same search.db file.
+		// Under SQLite's default rollback-journal mode, a writer's
+		// transaction (crawl-server's SaveDocument -- select/archive/prune/
+		// upsert/rewrite postings+links, all in one commit) takes a
+		// RESERVED/EXCLUSIVE lock that blocks every concurrent reader
+		// (search-server's PostingsForTerms/CorpusStats) until COMMIT. WAL
+		// mode removes that: readers proceed against the last-committed
+		// snapshot in the WAL file while a single writer appends to it, so
+		// readers never block behind the writer. synchronous=NORMAL is
+		// WAL's documented standard pairing -- it skips one of the two
+		// fsyncs FULL performs per commit (safe under WAL: a crash can lose
+		// the most recent commit but never corrupts the database, unlike
+		// under rollback-journal mode where NORMAL can permit corruption).
+		if _, err := db.ExecContext(ctx, "PRAGMA journal_mode = WAL"); err != nil {
+			return nil, fmt.Errorf("setting journal_mode=WAL (sqlite): %w", err)
+		}
+		if _, err := db.ExecContext(ctx, "PRAGMA synchronous = NORMAL"); err != nil {
+			return nil, fmt.Errorf("setting synchronous=NORMAL (sqlite): %w", err)
 		}
 	}
 	if err := repo.migrate(ctx); err != nil {
@@ -407,12 +440,12 @@ func (r *Repository) backfillNormEmbedding(ctx context.Context) error {
 	}
 	type idEmbedding struct {
 		id      string
-		embJSON string
+		embBlob []byte
 	}
 	var pending []idEmbedding
 	for rows.Next() {
 		var ie idEmbedding
-		if err := rows.Scan(&ie.id, &ie.embJSON); err != nil {
+		if err := rows.Scan(&ie.id, &ie.embBlob); err != nil {
 			rows.Close()
 			return fmt.Errorf("scanning row: %w", err)
 		}
@@ -425,8 +458,8 @@ func (r *Repository) backfillNormEmbedding(ctx context.Context) error {
 
 	updateSQL := r.ph(`UPDATE documents SET norm_embedding = %s WHERE id = %s`, 1, 2)
 	for _, ie := range pending {
-		var vec []float32
-		if err := json.Unmarshal([]byte(ie.embJSON), &vec); err != nil {
+		vec, err := DecodeEmbedding(ie.embBlob)
+		if err != nil {
 			return fmt.Errorf("deserializing embedding for norm backfill (%s): %w", ie.id, err)
 		}
 		norm := domain.VectorNorm(vec)
@@ -483,10 +516,7 @@ func (r *Repository) Ping(ctx context.Context) error {
 // nothing.
 func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embedding []float32, maxVersions int) error {
 	tokens := domain.Tokenize(doc.Title + " " + doc.Text)
-	embJSON, err := json.Marshal(embedding)
-	if err != nil {
-		return fmt.Errorf("serializing embedding: %w", err)
-	}
+	embBlob := EncodeEmbedding(embedding)
 	// Computed once here, at write time, and persisted alongside the
 	// embedding -- so every future search request that scores this
 	// document against a query reuses this norm instead of recomputing a
@@ -510,17 +540,26 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 	switch selectErr := tx.QueryRowContext(ctx, selectSQL, doc.ID).Scan(&existingVersion, &existingText, &existingPageRank); {
 	case selectErr == sql.ErrNoRows:
 		// New document: version stays 1, nothing to archive. Give it a
-		// neutral 1/N pagerank (N counting the row about to be inserted)
-		// rather than the column's bare-0 default, so it isn't unfairly
-		// ranked dead last on link authority before the next
-		// application.RunPageRankJob run ever gets a chance to score it --
-		// see backfillPageRank for the same reasoning applied to
-		// pre-existing rows.
-		var totalDocs int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM documents`).Scan(&totalDocs); err != nil {
-			return fmt.Errorf("counting documents for pagerank default: %w", err)
-		}
-		pagerank = 1.0 / float64(totalDocs+1)
+		// neutral placeholder pagerank rather than the column's bare-0
+		// default, so it isn't unfairly ranked dead last on link authority
+		// before the next application.RunPageRankJob run ever gets a
+		// chance to score it -- see backfillPageRank for the same
+		// reasoning applied to pre-existing rows.
+		//
+		// This used to be computed exactly as 1/(N+1) via a live `SELECT
+		// COUNT(*) FROM documents` run inside this same transaction --
+		// but that's a full, unindexed table scan on every single
+		// never-before-seen-URL insert, so a crawl that discovers N new
+		// pages did 1+2+...+N = O(N^2) row-scans overall (and held a
+		// full-table read lock against concurrent crawl workers writing
+		// to the same table). Exactness bought nothing: this value is
+		// immediately superseded by the next RunPageRankJob run, same as
+		// domain.PageRank's own (1-d)/N base term is a fixed value added
+		// unconditionally every iteration rather than something derived
+		// per node. newDocumentPlaceholderPageRank is that same kind of
+		// fixed, always-positive placeholder -- cheap (no query at all)
+		// and just as neutral, without the quadratic cost.
+		pagerank = newDocumentPlaceholderPageRank
 	case selectErr != nil:
 		return fmt.Errorf("checking existing document: %w", selectErr)
 	case existingText == doc.Text:
@@ -558,13 +597,13 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 	}
 
 	if _, err := tx.ExecContext(ctx, r.dialect.UpsertDocumentSQL(),
-		doc.ID, doc.URL, doc.Title, doc.Text, len(tokens), string(embJSON), normEmbedding, pagerank, host, version, now,
+		doc.ID, doc.URL, doc.Title, doc.Text, len(tokens), embBlob, normEmbedding, pagerank, host, version, now,
 	); err != nil {
 		return fmt.Errorf("saving document: %w", err)
 	}
 
 	// Also populate the pgvector column used by the ANN path (see ann.go),
-	// alongside (never instead of) the JSON embedding column above -- that
+	// alongside (never instead of) the packed-binary embedding column above -- that
 	// column stays the source of truth for SQLite/MySQL, and is a harmless
 	// duplicate on Postgres. A plain UPDATE right after the upsert rather
 	// than folding it into UpsertDocumentSQL, since that statement is
@@ -586,18 +625,25 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 	for _, t := range tokens {
 		counts[t]++
 	}
-	insertSQL := r.ph(`INSERT INTO postings (term, doc_id, term_freq) VALUES (%s, %s, %s)`, 1, 2, 3)
-	for term, freq := range counts {
-		if _, err := tx.ExecContext(ctx, insertSQL, term, doc.ID, freq); err != nil {
-			return fmt.Errorf("saving posting: %w", err)
+	terms := make([]string, 0, len(counts))
+	for term := range counts {
+		terms = append(terms, term)
+	}
+	for start := 0; start < len(terms); start += saveDocumentInsertBatchSize {
+		end := start + saveDocumentInsertBatchSize
+		if end > len(terms) {
+			end = len(terms)
+		}
+		if err := r.insertPostingsBatch(ctx, tx, doc.ID, terms[start:end], counts); err != nil {
+			return err
 		}
 	}
 
 	if _, err := tx.ExecContext(ctx, r.ph(`DELETE FROM links WHERE from_id = %s`, 1), doc.ID); err != nil {
 		return fmt.Errorf("deleting old links: %w", err)
 	}
-	insertLinkSQL := r.ph(`INSERT INTO links (from_id, to_url, to_host) VALUES (%s, %s, %s)`, 1, 2, 3)
 	seenLinks := make(map[string]bool)
+	links := make([]string, 0, len(doc.Links))
 	for _, link := range doc.Links {
 		// A link back to the page itself (e.g. a logo/home link) isn't a
 		// meaningful internal link or backlink -- skip it so it can't
@@ -606,12 +652,84 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 			continue
 		}
 		seenLinks[link] = true
-		if _, err := tx.ExecContext(ctx, insertLinkSQL, doc.ID, link, hostOf(link)); err != nil {
-			return fmt.Errorf("saving link: %w", err)
+		links = append(links, link)
+	}
+	for start := 0; start < len(links); start += saveDocumentInsertBatchSize {
+		end := start + saveDocumentInsertBatchSize
+		if end > len(links) {
+			end = len(links)
+		}
+		if err := r.insertLinksBatch(ctx, tx, doc.ID, links[start:end]); err != nil {
+			return err
 		}
 	}
 
 	return tx.Commit()
+}
+
+// saveDocumentInsertBatchSize bounds how many postings or links rows one
+// multi-row "INSERT ... VALUES (...),(...),..." statement in SaveDocument
+// covers, following the same batching principle UpdatePageRanks/
+// updatePageRankBatch already apply to the pagerank write path -- applied
+// here to the postings/links rewrite that runs on literally every crawled
+// page, replacing what used to be one INSERT per term/link row. Each row
+// contributes 3 placeholders, and SQLite's default
+// SQLITE_MAX_VARIABLE_NUMBER is 999 -- 300 rows/chunk (900 params) stays
+// comfortably under that regardless of dialect, since Postgres/MySQL's own
+// per-statement parameter limits are far higher and never the binding
+// constraint.
+const saveDocumentInsertBatchSize = 300
+
+// insertPostingsBatch runs one multi-row INSERT INTO postings statement
+// covering the given terms (a saveDocumentInsertBatchSize-sized, or
+// smaller, chunk from SaveDocument), looking each term's frequency up in
+// counts.
+func (r *Repository) insertPostingsBatch(ctx context.Context, tx *sql.Tx, docID string, terms []string, counts map[string]int) error {
+	if len(terms) == 0 {
+		return nil
+	}
+	var stmt strings.Builder
+	stmt.WriteString("INSERT INTO postings (term, doc_id, term_freq) VALUES ")
+	args := make([]interface{}, 0, len(terms)*3)
+	pos := 1
+	for i, term := range terms {
+		if i > 0 {
+			stmt.WriteString(", ")
+		}
+		stmt.WriteString("(" + r.placeholderList(3, pos) + ")")
+		args = append(args, term, docID, counts[term])
+		pos += 3
+	}
+	if _, err := tx.ExecContext(ctx, stmt.String(), args...); err != nil {
+		return fmt.Errorf("saving postings batch: %w", err)
+	}
+	return nil
+}
+
+// insertLinksBatch runs one multi-row INSERT INTO links statement covering
+// the given links (a saveDocumentInsertBatchSize-sized, or smaller, chunk
+// from SaveDocument, already deduplicated and self-loop-filtered by the
+// caller).
+func (r *Repository) insertLinksBatch(ctx context.Context, tx *sql.Tx, docID string, links []string) error {
+	if len(links) == 0 {
+		return nil
+	}
+	var stmt strings.Builder
+	stmt.WriteString("INSERT INTO links (from_id, to_url, to_host) VALUES ")
+	args := make([]interface{}, 0, len(links)*3)
+	pos := 1
+	for i, link := range links {
+		if i > 0 {
+			stmt.WriteString(", ")
+		}
+		stmt.WriteString("(" + r.placeholderList(3, pos) + ")")
+		args = append(args, docID, link, hostOf(link))
+		pos += 3
+	}
+	if _, err := tx.ExecContext(ctx, stmt.String(), args...); err != nil {
+		return fmt.Errorf("saving links batch: %w", err)
+	}
+	return nil
 }
 
 func (r *Repository) PostingsForTerm(ctx context.Context, term string, limit int) ([]domain.PostingStats, error) {
@@ -814,7 +932,7 @@ func (r *Repository) AllTerms(ctx context.Context) ([]domain.TermStat, error) {
 	return out, rows.Err()
 }
 
-// scanEmbeddingRows reads (id, embedding-JSON, norm_embedding, pagerank)
+// scanEmbeddingRows reads (id, embedding-blob, norm_embedding, pagerank)
 // rows into a map, shared by EmbeddingsForDocs and SampleEmbeddings so both
 // stay consistent about how the embedding column is deserialized. The norm
 // and pagerank are read straight off their own columns -- computed once at
@@ -824,13 +942,14 @@ func (r *Repository) AllTerms(ctx context.Context) ([]domain.TermStat, error) {
 func scanEmbeddingRows(rows *sql.Rows) (map[string]domain.EmbeddedVector, error) {
 	out := make(map[string]domain.EmbeddedVector)
 	for rows.Next() {
-		var id, embJSON string
+		var id string
+		var embBlob []byte
 		var norm, pagerank float64
-		if err := rows.Scan(&id, &embJSON, &norm, &pagerank); err != nil {
+		if err := rows.Scan(&id, &embBlob, &norm, &pagerank); err != nil {
 			return nil, fmt.Errorf("scanning row: %w", err)
 		}
-		var vec []float32
-		if err := json.Unmarshal([]byte(embJSON), &vec); err != nil {
+		vec, err := DecodeEmbedding(embBlob)
+		if err != nil {
 			return nil, fmt.Errorf("deserializing embedding (%s): %w", id, err)
 		}
 		out[id] = domain.EmbeddedVector{Vector: vec, Norm: norm, PageRank: pagerank}

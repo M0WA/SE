@@ -85,55 +85,91 @@ func PageRank(adjacency map[string][]string) (map[string]float64, PageRankRunInf
 		return map[string]float64{}, PageRankRunInfo{}
 	}
 
-	outdegree := make(map[string]int, len(adjacency))
-	// incoming[v] lists every u with an edge u->v, so each iteration looks
-	// up a node's contributors directly rather than rescanning every edge.
-	incoming := make(map[string][]string, len(adjacency))
+	// Build a stable node-ID <-> dense integer index mapping once up
+	// front, so the whole iterative computation below can work with
+	// plain, index-addressed slices instead of string-keyed maps.
+	id := make([]string, n)
+	idx := make(map[string]int, n)
+	i := 0
+	for node := range nodes {
+		id[i] = node
+		idx[node] = i
+		i++
+	}
+
+	outdegree := make([]int32, n)
+	// incomingOffsets/incomingEdges together form a CSR-style flattened
+	// adjacency list: node v's contributors are
+	// incomingEdges[incomingOffsets[v]:incomingOffsets[v+1]]. Built with a
+	// single counting pass + single fill pass so it's one flat
+	// allocation rather than n growing []string slices.
+	incomingCount := make([]int32, n)
 	for from, tos := range adjacency {
-		outdegree[from] = len(tos)
+		fi := idx[from]
+		outdegree[fi] = int32(len(tos))
 		for _, to := range tos {
-			incoming[to] = append(incoming[to], from)
+			incomingCount[idx[to]]++
+		}
+	}
+	incomingOffsets := make([]int32, n+1)
+	for v := 0; v < n; v++ {
+		incomingOffsets[v+1] = incomingOffsets[v] + incomingCount[v]
+	}
+	incomingEdges := make([]int32, incomingOffsets[n])
+	fillPos := make([]int32, n)
+	copy(fillPos, incomingOffsets[:n])
+	for from, tos := range adjacency {
+		fi := int32(idx[from])
+		for _, to := range tos {
+			ti := idx[to]
+			incomingEdges[fillPos[ti]] = fi
+			fillPos[ti]++
 		}
 	}
 
 	nf := float64(n)
 	base := (1 - PageRankDamping) / nf
 
-	scores := make(map[string]float64, n)
 	init := 1.0 / nf
-	for node := range nodes {
-		scores[node] = init
+	scores := make([]float64, n)
+	next := make([]float64, n)
+	for v := range scores {
+		scores[v] = init
 	}
 
 	// contribution[u] is what u passes along each of its outbound links
 	// this iteration -- computed once per node (not once per incoming
 	// edge) since every edge out of u carries the identical
 	// scores[u]/outdegree[u] share.
-	contribution := make(map[string]float64, len(outdegree))
+	contribution := make([]float64, n)
 	info := PageRankRunInfo{}
 	for iter := 0; iter < PageRankMaxIterations; iter++ {
-		for u, deg := range outdegree {
-			if deg > 0 {
+		for u := 0; u < n; u++ {
+			if deg := outdegree[u]; deg > 0 {
 				contribution[u] = scores[u] / float64(deg)
 			}
 		}
-		next := make(map[string]float64, n)
 		delta := 0.0
-		for node := range nodes {
+		for v := 0; v < n; v++ {
 			sum := 0.0
-			for _, u := range incoming[node] {
+			for _, u := range incomingEdges[incomingOffsets[v]:incomingOffsets[v+1]] {
 				sum += contribution[u]
 			}
-			v := base + PageRankDamping*sum
-			next[node] = v
-			delta += math.Abs(v - scores[node])
+			val := base + PageRankDamping*sum
+			next[v] = val
+			delta += math.Abs(val - scores[v])
 		}
-		scores = next
+		scores, next = next, scores
 		info.Iterations = iter + 1
 		info.FinalDelta = delta
 		if delta < PageRankEpsilon {
 			break
 		}
 	}
-	return scores, info
+
+	result := make(map[string]float64, n)
+	for v := 0; v < n; v++ {
+		result[id[v]] = scores[v]
+	}
+	return result, info
 }
