@@ -1,0 +1,24 @@
+# Categorizes GitHub's auto-generated release notes (release.yml's publish
+# step sets generate_release_notes: true) by the merged PR's labels, instead
+# of one flat list. A PR with none of the labels below falls into "Other
+# Changes"; only ever applies to PRs merged since the previous release, so
+# it has no effect on history from before this repo required PRs for main.
+changelog:
+  exclude:
+    labels:
+      - no-changelog
+  categories:
+    - title: Features
+      labels:
+        - feature
+        - enhancement
+    - title: Bug Fixes
+      labels:
+        - fix
+        - bug
+    - title: Release Process
+      labels:
+        - release
+    - title: Other Changes
+      labels:
+        - "*"

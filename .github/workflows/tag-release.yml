@@ -1,0 +1,53 @@
+name: Tag Release
+
+# The other half of prepare-release.yml: once a "release/vX.Y.Z" PR (opened
+# by that workflow) is reviewed, approved, and merged into main, this tags
+# the resulting merge commit and hands off to release.yml (which builds the
+# .deb packages and publishes the GitHub Release) -- see CLAUDE.md's
+# "Branch, PR & release workflow" section.
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  tag:
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      startsWith(github.event.pull_request.head.ref, 'release/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Extract the version from the release branch name
+        id: meta
+        run: |
+          branch="${{ github.event.pull_request.head.ref }}"
+          echo "tag=${branch#release/}" >> "$GITHUB_OUTPUT"
+
+      - name: Tag the merge commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.meta.outputs.tag }}" \
+            "${{ github.event.pull_request.merge_commit_sha }}" \
+            -m "Release ${{ steps.meta.outputs.tag }}"
+          git push origin "${{ steps.meta.outputs.tag }}"
+
+      - name: Trigger release.yml for the new tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # A tag pushed with the default GITHUB_TOKEN (the step above)
+          # deliberately does NOT trigger another workflow's push trigger --
+          # dispatch release.yml explicitly instead. See release.yml's own
+          # workflow_dispatch trigger comment.
+          gh workflow run release.yml --ref "${{ steps.meta.outputs.tag }}"
