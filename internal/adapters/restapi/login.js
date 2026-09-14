@@ -33,3 +33,9 @@
       error.textContent = 'Sign-in failed: could not reach the server.';
     }
   });
+
+  // Exports for the Node test runner only -- `typeof module` is undefined in
+  // a browser's <script> tag. See login.test.js.
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { next };
+  }

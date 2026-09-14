@@ -154,3 +154,10 @@
 
   wireSignOut();
   load();
+
+  // Exports for the Node test runner only -- `typeof module` is undefined in
+  // a browser's <script> tag, so this is a no-op there. See
+  // internal/adapters/restapi/admin_search_result.test.js.
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { barRow, renderComposition, renderBM25Terms, render, load };
+  }

@@ -77,3 +77,9 @@
 
   wireSignOut();
   load();
+
+  // Exports for the Node test runner only -- `typeof module` is undefined in
+  // a browser's <script> tag. See admin_vocabulary_term.test.js.
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { renderPostings, load };
+  }

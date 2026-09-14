@@ -177,3 +177,14 @@
   wireSignOut();
   loadSettings();
   loadOverrides();
+
+  // Exports for the Node test runner only -- `typeof module` is undefined in
+  // a browser's <script> tag, so this is a no-op there. See
+  // internal/adapters/restapi/admin_settings.test.js.
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      applySettings, loadSettings, saveSettings,
+      saveOverrides, applyOverrides, loadOverrides,
+      factorsToText, parseFactorLines,
+    };
+  }

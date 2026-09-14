@@ -310,3 +310,11 @@
 
   wireSignOut();
   load();
+
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      filterDocs, buildChart, renderDocs, renderTable,
+      deleteDocument, deleteAllInDomain, showHistory,
+      pollDeleteProgress, stopDeleteProgressPolling, load,
+    };
+  }

@@ -119,11 +119,13 @@ path, not-configured/empty-input edge cases).
     `global` before it's required — see `admin_crawl.test.js`'s `loadFixture()`
     for the pattern, including using the real `crawl.html` as the jsdom
     fixture so the test never drifts from the actual page structure.
-  - Keep coverage close to 100% here the same way as Go — for a change, not
-    as a mandate to retroactively backfill every historical page's script in
-    one sitting. `admin.js` (the shared helpers) is fully covered; treat
-    that, and `admin_crawl.test.js`, as the reference pattern for a new page's
-    tests.
+  - Keep coverage close to 100% here the same way as Go. **Every script in
+    `internal/adapters/restapi/*.js` must have a `<name>.test.js`** — this
+    applies to existing untested files too, not just new/changed ones: if
+    you touch a page that has no test file yet, add one as part of that
+    change rather than leaving it untested. `admin.js` (the shared helpers)
+    is fully covered; treat that, and `admin_crawl.test.js`, as the
+    reference pattern for a new page's tests.
   - Unit tests check logic (parsing, filtering, formatting, DOM structure
     built from given data) in isolation. They don't replace actually
     exercising a change end-to-end in a real browser for anything that

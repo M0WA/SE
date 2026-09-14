@@ -140,3 +140,9 @@
       window.location = '/';
     }
   });
+
+  // Exports for the Node test runner only -- `typeof module` is undefined in
+  // a browser's <script> tag. See index.test.js.
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { renderCorrectionNote, clear, scoreRow, renderResults, runSearch };
+  }

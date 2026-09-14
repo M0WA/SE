@@ -121,3 +121,7 @@
 
   wireSignOut();
   wireVocabularySearch();
+
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { hostOf, renderDomainResults, renderDocumentResults, searchDomains, fetchCandidatesOnce };
+  }

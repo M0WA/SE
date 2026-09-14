@@ -83,3 +83,9 @@
 
   wireSignOut();
   load();
+
+  // Exports for the Node test runner only -- `typeof module` is undefined in
+  // a browser's <script> tag, so this is a no-op there. See admin_pagerank.test.js.
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { renderStats, load };
+  }
