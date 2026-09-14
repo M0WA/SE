@@ -306,10 +306,11 @@ func TestSaveDocument_ThenRetrieveEverywhere(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error querying postings: %v", err)
 	}
-	// "cats" appears twice: once in the title, once in the text (SaveDocument
-	// tokenizes title+text together).
-	if len(postings) != 1 || postings[0].DocID != "doc-1" || postings[0].TermFreq != 2 {
-		t.Errorf("expected one posting for 'cats' with freq 2, got %+v", postings)
+	// "cats" appears 3 times: titleRepeatCount=2 copies of the title ("Cats"
+	// twice) plus once in the body text (SaveDocument tokenizes
+	// title+title+text together, giving the title a little more weight).
+	if len(postings) != 1 || postings[0].DocID != "doc-1" || postings[0].TermFreq != 3 {
+		t.Errorf("expected one posting for 'cats' with freq 3, got %+v", postings)
 	}
 	if postings[0].TotalDocs != 1 {
 		t.Errorf("expected TotalDocs=1, got %d", postings[0].TotalDocs)
@@ -321,6 +322,51 @@ func TestSaveDocument_ThenRetrieveEverywhere(t *testing.T) {
 	}
 	if totalDocs != 1 || avgDocLen <= 0 {
 		t.Errorf("expected corpus stats to reflect the saved doc, got (%d, %v)", totalDocs, avgDocLen)
+	}
+}
+
+// titleRepeatCountForTest mirrors sqlrepo's unexported titleRepeatCount
+// constant (this test lives in the external sqlrepo_test package, so it
+// can't reference the constant directly) -- keep the two in sync if that
+// constant ever changes.
+const titleRepeatCountForTest = 2
+
+// TestSaveDocument_TitleTermsCountedExtraForModestBoost is the direct
+// regression test for titleRepeatCount: the exact same word contributes
+// more to term_freq when it's in the title than when it's only in the
+// body, giving a title match a little more weight in BM25 scoring without
+// needing a separate per-field formula.
+func TestSaveDocument_TitleTermsCountedExtraForModestBoost(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+
+	titleMatch := domain.Document{ID: "doc-title", URL: "http://a", Title: "Widget", Text: "This product is great"}
+	bodyMatch := domain.Document{ID: "doc-body", URL: "http://b", Title: "Gadget", Text: "This widget is great"}
+	for _, d := range []domain.Document{titleMatch, bodyMatch} {
+		if err := repo.SaveDocument(ctx, d, []float32{1}, 100); err != nil {
+			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
+		}
+	}
+
+	postings, err := repo.PostingsForTerm(ctx, "widget", 100)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(postings) != 2 {
+		t.Fatalf("expected postings for both documents, got %+v", postings)
+	}
+	byDoc := map[string]int{}
+	for _, p := range postings {
+		byDoc[p.DocID] = p.TermFreq
+	}
+	if byDoc["doc-title"] != titleRepeatCountForTest {
+		t.Errorf("expected 'widget' in the title counted %d times, got %d", titleRepeatCountForTest, byDoc["doc-title"])
+	}
+	if byDoc["doc-body"] != 1 {
+		t.Errorf("expected 'widget' in the body only counted once, got %d", byDoc["doc-body"])
+	}
+	if byDoc["doc-title"] <= byDoc["doc-body"] {
+		t.Errorf("expected the title mention to count for more than the body-only mention, got title=%d body=%d", byDoc["doc-title"], byDoc["doc-body"])
 	}
 }
 
