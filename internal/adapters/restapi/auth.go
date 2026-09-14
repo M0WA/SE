@@ -135,7 +135,7 @@ func safeNext(next string) string {
 	}
 	if len(next) > 1 && next[0] == '/' && next[1] != '/' && next[1] != '\\' {
 		if target, err := url.Parse(strings.ReplaceAll(next, "\\", "/")); err == nil && target.Hostname() == "" {
-			return next
+			return target.String()
 		}
 	}
 	return "/admin"
