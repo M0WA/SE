@@ -1109,6 +1109,32 @@ func TestHybridSearch_FuzzyMatch_CorrectsTypoAndFindsMatch(t *testing.T) {
 	}
 }
 
+// TestHybridSearch_FuzzyMatch_HighlightsTheCorrectedSpellingNotTheTypo
+// proves the returned Snippet highlights "katzen" (what's actually in the
+// document's text), not "katzn" (the query's own misspelling, which
+// scoringTerm guarantees appears in zero documents corpus-wide) -- a
+// fuzzy-matched result whose excerpt highlighted nothing at all was the
+// bug this covers.
+func TestHybridSearch_FuzzyMatch_HighlightsTheCorrectedSpellingNotTheTypo(t *testing.T) {
+	vocabulary := domain.NewVocabularyCache([]domain.TermStat{{Term: "katzen", DocFreq: 1, TotalFreq: 5}})
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+	svc := application.NewHybridSearchService(newFuzzyTestRepo(), embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), vocabulary)
+
+	results, err := svc.Search(context.Background(), "katzn", ports.SearchQuery{TopK: 10})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %+v", results)
+	}
+	if !strings.Contains(results[0].Snippet, "<mark>Katzen</mark>") {
+		t.Errorf("expected the snippet to highlight the corrected spelling actually present in the text, got %q", results[0].Snippet)
+	}
+	if strings.Contains(results[0].Snippet, "<mark>katzn</mark>") {
+		t.Errorf("expected the original typo (present in zero documents) to never be what gets highlighted, got %q", results[0].Snippet)
+	}
+}
+
 // TestHybridSearch_FuzzyMatch_ScoreMatchesCorrectlySpelledQuery proves the
 // corrected term's BM25 contribution is exactly what searching for the
 // correctly-spelled term directly would have produced, not an

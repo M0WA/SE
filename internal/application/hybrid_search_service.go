@@ -354,6 +354,25 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 			docCache[id] = doc
 		}
 	}
+	// highlightTerms swaps in each fuzzy-corrected term's actual spelling in
+	// place of the original: scoringTerm only ever contains a term that had
+	// zero postings hits anywhere in the corpus, so the original literally
+	// never appears in any document's text -- highlighting the original
+	// there would never find a match, silently leaving a fuzzy-matched
+	// result's excerpt unhighlighted even though it's exactly why that
+	// result matched at all.
+	highlightTerms := terms
+	if len(scoringTerm) > 0 {
+		highlightTerms = make([]string, len(terms))
+		for i, t := range terms {
+			if corrected, ok := scoringTerm[t]; ok {
+				highlightTerms[i] = corrected
+			} else {
+				highlightTerms[i] = t
+			}
+		}
+	}
+
 	for i := range ranked {
 		id := ranked[i].DocID
 		ranked[i].BM25Terms = domain.BM25TermScores(bm25TermsPerDoc[id], bm25PerDoc[id], k1, b)
@@ -363,7 +382,7 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 		}
 		ranked[i].URL = doc.URL
 		ranked[i].Title = doc.Title
-		ranked[i].Snippet = domain.Snippet(doc.Text, parsed.Phrases, terms, 200)
+		ranked[i].Snippet = domain.Snippet(doc.Text, parsed.Phrases, highlightTerms, 200)
 	}
 
 	return ranked, nil

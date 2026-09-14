@@ -249,6 +249,7 @@ button:focus-visible {
 .result-snippet mark {
   background: var(--accent-soft);
   color: var(--ink);
+  font-weight: 700;
   padding: 0 0.15em;
   border-radius: 2px;
 }
@@ -557,6 +558,7 @@ td.excerpt {
 td.excerpt mark {
   background: var(--accent-soft);
   color: var(--ink);
+  font-weight: 700;
   padding: 0 0.15em;
   border-radius: 2px;
 }
@@ -812,6 +814,7 @@ textarea.field {
 .result-detail-snippet mark {
   background: var(--accent-soft);
   color: var(--ink);
+  font-weight: 700;
   padding: 0 0.15em;
   border-radius: 2px;
 }
