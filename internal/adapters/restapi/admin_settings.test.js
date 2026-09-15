@@ -360,6 +360,24 @@ test('submitting the form saves both settings and overrides, reporting "Saved." 
   void mod;
 });
 
+test('a settings response carrying embedding_test_error reports "Saved, but..." instead of plain "Saved."', async () => {
+  loadFixture();
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/settings') && opts.method === 'POST') {
+      return { ok: true, json: async () => ({ ...FULL_SETTINGS, embedding_test_error: 'dial tcp: connection refused' }) };
+    }
+    if (url.includes('/admin/api/overrides') && opts.method === 'POST') {
+      return { ok: true, json: async () => EMPTY_OVERRIDES };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  document.getElementById('settings-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const text = document.getElementById('settings-status').textContent;
+  assert.equal(text.includes('Saved, but'), true);
+  assert.equal(text.includes('embedding provider test failed: dial tcp: connection refused'), true);
+});
+
 test('one endpoint failing does not stop the other from being tried, and both errors are reported', async () => {
   loadFixture();
   global.fetch = async (url, opts) => {
@@ -397,4 +415,109 @@ test('a failing settings save still lets the overrides save succeed', async () =
   const text = document.getElementById('settings-status').textContent;
   assert.equal(text.includes('settings: settings write failed'), true);
   assert.equal(text.includes('overrides:'), false);
+});
+
+function baseEmbeddingStatus(overrides) {
+  return Object.assign({
+    total_docs: 10,
+    in_progress: false,
+    last_run_at: null,
+    documents: 0,
+    failed: 0,
+    duration_ms: 0,
+  }, overrides);
+}
+
+test('renderEmbeddingRecomputeStatus shows "no recompute yet" when this instance has never run one', () => {
+  const { renderEmbeddingRecomputeStatus } = loadFixture();
+  renderEmbeddingRecomputeStatus(baseEmbeddingStatus());
+  assert.equal(document.getElementById('embedding-recompute-status').textContent, 'No recompute has run yet on this instance.');
+  assert.equal(document.getElementById('embedding-recompute-result').textContent, '');
+});
+
+test('renderEmbeddingRecomputeStatus renders the last run summary when one has run', () => {
+  const { renderEmbeddingRecomputeStatus } = loadFixture();
+  renderEmbeddingRecomputeStatus(baseEmbeddingStatus({
+    last_run_at: '2026-01-02T03:04:05Z', documents: 8, failed: 2, duration_ms: 4200,
+  }));
+  const resultText = document.getElementById('embedding-recompute-result').textContent;
+  assert.equal(resultText.includes('8'), true);
+  assert.equal(resultText.includes('2'), true);
+  assert.equal(resultText.includes('4200'), true);
+});
+
+test('renderEmbeddingRecomputeStatus shows "Recomputing…" and disables the button while in progress', () => {
+  const { renderEmbeddingRecomputeStatus } = loadFixture();
+  renderEmbeddingRecomputeStatus(baseEmbeddingStatus({ in_progress: true }));
+  assert.equal(document.getElementById('embedding-recompute-status').textContent.includes('Recomputing…'), true);
+  assert.equal(document.getElementById('embedding-recompute-btn').disabled, true);
+});
+
+test('renderEmbeddingRecomputeStatus schedules exactly one poll while in progress, and clears it once done', () => {
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const scheduled = [];
+  let cleared = 0;
+  global.setTimeout = (fn, ms) => { scheduled.push(ms); return 'fake-timer'; };
+  global.clearTimeout = () => { cleared++; };
+  try {
+    const { renderEmbeddingRecomputeStatus } = loadFixture();
+    renderEmbeddingRecomputeStatus(baseEmbeddingStatus({ in_progress: true }));
+    renderEmbeddingRecomputeStatus(baseEmbeddingStatus({ in_progress: true }));
+    assert.deepEqual(scheduled, [2000]);
+    renderEmbeddingRecomputeStatus(baseEmbeddingStatus({ in_progress: false }));
+    assert.equal(cleared, 1);
+  } finally {
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+  }
+});
+
+test('clicking Recompute embeddings posts a start request and then polls for status', async () => {
+  let postedURL = null;
+  loadFixture();
+  // Let the module's own load-time loadEmbeddingRecomputeStatus() settle
+  // against loadFixture's default fetch stub first -- otherwise it can
+  // resolve after the click below and clobber the status text it's about
+  // to set, since both write to the same element (see
+  // admin_pagerank.test.js's identical comment on its own poll test).
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  global.fetch = async (url, opts) => {
+    if (url === '/admin/api/embeddings/recompute' && opts && opts.method === 'POST') {
+      postedURL = url;
+      return { ok: true, json: async () => ({ started: true }) };
+    }
+    if (url === '/admin/api/embeddings/recompute') {
+      return {
+        ok: true,
+        json: async () => baseEmbeddingStatus({ last_run_at: '2026-01-02T03:04:05Z', documents: 5, failed: 1, duration_ms: 123 }),
+      };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  document.getElementById('embedding-recompute-btn').dispatchEvent(new window.Event('click'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(postedURL, '/admin/api/embeddings/recompute');
+  assert.equal(document.getElementById('embedding-recompute-result').textContent.includes('5'), true);
+  assert.equal(document.getElementById('embedding-recompute-btn').disabled, false);
+});
+
+test('clicking Recompute embeddings reports the error and stops the button loading on failure', async () => {
+  loadFixture();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  global.fetch = async (url, opts) => {
+    if (url === '/admin/api/embeddings/recompute' && opts && opts.method === 'POST') {
+      return { ok: false, status: 409, text: async () => 'an embedding recompute is already in progress' };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  document.getElementById('embedding-recompute-btn').dispatchEvent(new window.Event('click'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(
+    document.getElementById('embedding-recompute-status').textContent,
+    'Could not start recompute: an embedding recompute is already in progress',
+  );
+  assert.equal(document.getElementById('embedding-recompute-btn').disabled, false);
 });

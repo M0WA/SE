@@ -542,6 +542,42 @@ paths:
               schema: { $ref: "#/components/schemas/PageRankRecomputeResult" }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
+  /admin/api/embeddings/recompute:
+    get:
+      tags: [admin]
+      summary: Embedding recompute status and corpus size
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EmbeddingRecomputeStatus" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    post:
+      tags: [admin]
+      summary: Start a full-corpus embedding recompute in the background
+      description: >-
+        Re-embeds every document's already-stored text against whatever
+        embedding provider is currently configured -- no re-crawl, just a
+        fresh Embed call per document. Unlike PageRank's "force
+        recalculation" (a single fast batched DB read+write, synchronous in
+        its own handler), this is fire-and-forget: the response returns
+        immediately (202) and the run continues in the background, its
+        progress visible via GET on this same path. Recomputing means one
+        Embed call per document -- a real network round-trip for the "http"
+        provider -- so a large corpus can take minutes.
+      responses:
+        "202":
+          description: Accepted -- the recompute has started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { started: { type: boolean } }
+        "409":
+          description: A recompute is already running (triggered by this or another admin-server instance).
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
   /admin/api/database:
     get:
       tags: [admin]
@@ -1047,7 +1083,10 @@ components:
                 are restarted. Switching providers also changes the vector
                 space entirely -- existing stored embeddings become
                 meaningless to compare against newly computed ones until
-                every document is re-crawled.
+                every document's embedding is recomputed against its
+                already-stored text (POST /admin/api/embeddings/recompute --
+                no re-crawl needed, since the indexed text itself doesn't
+                change).
             embedding_http_base_url:
               type: string
               description: >-
@@ -1079,6 +1118,17 @@ components:
               description: >-
                 GET-only: whether an embedding_http_api_key is currently
                 configured, without revealing the key itself.
+        embedding_test_error:
+          type: string
+          readOnly: true
+          description: >-
+            POST-only: set when operational.embedding_provider is "http" and
+            a real Embed call against the just-saved base
+            URL/model/API key fails, so a misconfiguration is visible
+            immediately rather than only on the next real search. The save
+            itself still succeeds either way -- this is a warning, not a
+            validation error. Absent (not just empty) on a GET, and on a
+            POST whose probe succeeds or whose provider isn't "http".
 
     Overrides:
       type: object
@@ -1130,6 +1180,24 @@ components:
         min_pagerank: { type: number }
         max_pagerank: { type: number }
         avg_pagerank: { type: number }
+
+    EmbeddingRecomputeStatus:
+      type: object
+      properties:
+        total_docs: { type: integer, description: "Current corpus size, from CorpusStats -- not necessarily what the last run processed if the corpus has changed since." }
+        in_progress:
+          type: boolean
+          description: >-
+            Whether a recompute is currently running, triggered by anything
+            -- another admin's click (possibly on a different admin-server
+            instance), not just this request's own caller.
+        last_run_at:
+          type: string
+          format: date-time
+          description: When the last completed run finished. Absent if none has ever run on this instance.
+        documents: { type: integer, description: "How many documents that run successfully re-embedded." }
+        failed: { type: integer, description: "How many documents that run failed to re-embed (a flaky endpoint, a rate limit, a since-deleted document) -- logged, not fatal to the run." }
+        duration_ms: { type: integer }
 
     DatabaseDiagnostics:
       type: object

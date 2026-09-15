@@ -66,6 +66,8 @@ func main() {
 		Debug:                 debugSvc,
 		Admin:                 repo,
 		PageRank:              repo,
+		EmbeddingRepo:         repo,
+		Embedder:              embedder,
 		Settings:              settings,
 		OpSettings:            opSettings,
 		Overrides:             overrides,

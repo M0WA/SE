@@ -196,6 +196,30 @@ type PageRankRepository interface {
 	UpdatePageRanks(ctx context.Context, scores map[string]float64) error
 }
 
+// EmbeddingRepository is the narrow slice of *sqlrepo.Repository
+// application.RunEmbeddingRecomputeJob needs -- iterate every document's
+// ID, fetch each one's already-stored Text, and overwrite just its
+// embedding, without touching anything else SaveDocument would (postings,
+// links, document_versions, pagerank, host).
+type EmbeddingRepository interface {
+	// AllDocumentIDs lists every document ID in the corpus, ordered so
+	// repeated calls (and the batches RunEmbeddingRecomputeJob fetches
+	// against DocumentsByIDs) are stable and deterministic.
+	AllDocumentIDs(ctx context.Context) ([]string, error)
+	// DocumentsByIDs batch-fetches each document's URL/title/text -- see
+	// AdminRepository's identical method (implemented once, satisfying
+	// both narrow ports).
+	DocumentsByIDs(ctx context.Context, ids []string) (map[string]domain.Document, error)
+	// UpdateEmbedding overwrites one document's embedding (and, when
+	// Postgres pgvector ANN is enabled for this process, its
+	// embedding_vector column too) -- the narrow write SaveDocument's
+	// embedding-writing half performs, without re-tokenizing text, without
+	// touching postings/links/versions/pagerank, and without archiving a
+	// new document_versions row (the text itself hasn't changed, only its
+	// vector representation).
+	UpdateEmbedding(ctx context.Context, id string, embedding []float32) error
+}
+
 // SessionStore backs the admin/search login system's session tokens.
 // Implemented by *sqlrepo.Repository (a "sessions" table any process
 // sharing the database can read) so a login on one process -- e.g.
@@ -436,6 +460,11 @@ const (
 	// bootstrap.SyncSettings' poll loop), this one is runtime status
 	// written by application.RunPageRankJobWithStatus, not admin input.
 	SettingsKeyPageRankStatus = "pagerank_status"
+	// SettingsKeyEmbeddingRecomputeStatus holds a
+	// domain.EmbeddingRecomputeStatus -- the same runtime-status pattern
+	// as SettingsKeyPageRankStatus, written by
+	// application.RunEmbeddingRecomputeJobWithStatus.
+	SettingsKeyEmbeddingRecomputeStatus = "embedding_recompute_status"
 )
 
 // SettingsStore persists the admin-configurable tuning/operational/ranking

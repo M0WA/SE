@@ -326,6 +326,99 @@ func TestSaveDocument_ThenRetrieveEverywhere(t *testing.T) {
 	}
 }
 
+func TestAllDocumentIDs_ReturnsEveryIDOrdered(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	for _, id := range []string{"doc-b", "doc-a", "doc-c"} {
+		doc := domain.Document{ID: id, URL: "http://" + id, Title: "t", Text: "x"}
+		if err := repo.SaveDocument(ctx, doc, []float32{0.1}, 10, 1); err != nil {
+			t.Fatalf("unexpected error saving %s: %v", id, err)
+		}
+	}
+	ids, err := repo.AllDocumentIDs(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := []string{"doc-a", "doc-b", "doc-c"}; len(ids) != len(want) || ids[0] != want[0] || ids[1] != want[1] || ids[2] != want[2] {
+		t.Errorf("expected ids ordered %v, got %v", want, ids)
+	}
+}
+
+func TestAllDocumentIDs_EmptyCorpus(t *testing.T) {
+	repo := newTestRepo(t)
+	ids, err := repo.AllDocumentIDs(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Errorf("expected no ids for an empty corpus, got %v", ids)
+	}
+}
+
+// TestUpdateEmbedding_OverwritesEmbeddingWithoutTouchingText proves
+// UpdateEmbedding is the narrow write application.RunEmbeddingRecomputeJob
+// needs: a document's embedding (and precomputed norm) changes, but its
+// text, postings, and version history don't -- unlike SaveDocument, which
+// would archive a new document_versions row and rebuild postings for any
+// text change (irrelevant here, since the text hasn't changed).
+func TestUpdateEmbedding_OverwritesEmbeddingWithoutTouchingText(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	doc := domain.Document{ID: "doc-1", URL: "http://a", Title: "Cats", Text: "Cats are great pets indeed"}
+	if err := repo.SaveDocument(ctx, doc, []float32{0.1, 0.2, 0.3}, 10, 1); err != nil {
+		t.Fatalf("unexpected error saving document: %v", err)
+	}
+
+	newEmbedding := []float32{0.9, 0.8, 0.7}
+	if err := repo.UpdateEmbedding(ctx, "doc-1", newEmbedding); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	embeddings, err := repo.EmbeddingsForDocs(ctx, []string{"doc-1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := embeddings["doc-1"]
+	if len(got.Vector) != 3 || got.Vector[0] != 0.9 || got.Vector[1] != 0.8 || got.Vector[2] != 0.7 {
+		t.Errorf("expected the new embedding back, got %v", got.Vector)
+	}
+	wantNorm := domain.VectorNorm(newEmbedding)
+	if got.Norm < wantNorm-1e-9 || got.Norm > wantNorm+1e-9 {
+		t.Errorf("expected norm recomputed for the new embedding %v, got %v", wantNorm, got.Norm)
+	}
+
+	fetchedDocs, err := repo.DocumentsByIDs(ctx, []string{"doc-1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fetchedDocs["doc-1"].Text != doc.Text || fetchedDocs["doc-1"].Title != doc.Title {
+		t.Errorf("expected text/title untouched, got %+v", fetchedDocs["doc-1"])
+	}
+
+	versions, err := repo.DocumentVersions(ctx, "doc-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(versions) != 0 {
+		t.Errorf("expected no archived versions from an embedding-only update, got %+v", versions)
+	}
+
+	postings, err := repo.PostingsForTerm(ctx, "cats", 100)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(postings) != 1 || postings[0].DocID != "doc-1" {
+		t.Errorf("expected postings untouched by an embedding-only update, got %+v", postings)
+	}
+}
+
+func TestUpdateEmbedding_UnknownIDIsNotAnError(t *testing.T) {
+	repo := newTestRepo(t)
+	if err := repo.UpdateEmbedding(context.Background(), "does-not-exist", []float32{0.1}); err != nil {
+		t.Errorf("expected updating a nonexistent document's embedding to be a harmless no-op, got: %v", err)
+	}
+}
+
 // titleRepeatCountForTest is the titleWeight this test passes to
 // SaveDocument -- kept as a named constant purely so the assertion below
 // reads as "however many times we asked for", not a bare magic number.

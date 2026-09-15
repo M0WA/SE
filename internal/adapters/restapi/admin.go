@@ -708,6 +708,43 @@ func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 type settingsResponse struct {
 	Tuning      tuningValues      `json:"tuning"`
 	Operational operationalValues `json:"operational"`
+	// EmbeddingTestError is set only by a POST that leaves the embedding
+	// provider configured as EmbeddingProviderHTTP (see
+	// testEmbeddingConnectivity) -- a GET never populates it. The save
+	// itself still succeeds either way (see OperationalSettings.Set's doc
+	// comment on why this is a best-effort convenience, not a rejected
+	// submission): this only tells the admin their new HTTP endpoint/
+	// model/API key combination doesn't actually work, since that
+	// otherwise wouldn't surface until the next real search request long
+	// after the settings page was closed.
+	EmbeddingTestError string `json:"embedding_test_error,omitempty"`
+}
+
+// embeddingConnectivityTestTimeout bounds testEmbeddingConnectivity's probe
+// call -- short enough that a hung/unreachable endpoint doesn't stall the
+// settings-save request for too long, generous enough for a real (if
+// slow) inference call to finish.
+const embeddingConnectivityTestTimeout = 10 * time.Second
+
+// testEmbeddingConnectivity makes one real Embed call (via h.newEmbedder --
+// bootstrap.NewEmbedder in production, faked out in tests) against v's
+// currently-configured HTTP embedding provider so a settings save can tell
+// the admin immediately if the endpoint/model/API key they just entered
+// doesn't actually work, rather than that only surfacing on the next real
+// search. A no-op (empty string, no network call) when v isn't configured
+// for the HTTP provider -- the hash provider can't fail this way -- or
+// when h.newEmbedder itself isn't set (a Handler built without going
+// through New, e.g. a test fixture that doesn't care about this feature).
+func (h *Handler) testEmbeddingConnectivity(ctx context.Context, v domain.OperationalSettingsValues) string {
+	if v.EmbeddingProvider != domain.EmbeddingProviderHTTP || h.newEmbedder == nil {
+		return ""
+	}
+	testCtx, cancel := context.WithTimeout(ctx, embeddingConnectivityTestTimeout)
+	defer cancel()
+	if _, err := h.newEmbedder(v).Embed(testCtx, "connection test"); err != nil {
+		return err.Error()
+	}
+	return ""
 }
 
 // persistSetting saves v (JSON-encoded) to the settings store under key, so
@@ -773,7 +810,9 @@ func (h *Handler) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		h.opSettings.Set(req.Operational.toSettingsValues())
 		h.persistSetting(r.Context(), ports.SettingsKeyTuning, h.settings.Values())
 		h.persistSetting(r.Context(), ports.SettingsKeyOperational, h.encryptedOperationalValues())
-		writeJSON(w, http.StatusOK, h.currentSettings())
+		resp := h.currentSettings()
+		resp.EmbeddingTestError = h.testEmbeddingConnectivity(r.Context(), h.opSettings.Get())
+		writeJSON(w, http.StatusOK, resp)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -1320,6 +1359,78 @@ func (h *Handler) handleAdminPageRankRecompute(w http.ResponseWriter, r *http.Re
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+type adminEmbeddingRecomputeStatusResponse struct {
+	TotalDocs  int  `json:"total_docs"`
+	InProgress bool `json:"in_progress"`
+	// LastRunAt/Documents/Failed/DurationMs reflect
+	// domain.EmbeddingRecomputeStatus, persisted by any admin-server
+	// instance that ran a recompute -- so this shows the real
+	// cross-process state, not just whatever this one browser tab
+	// remembers triggering. No omitempty on Documents/Failed/DurationMs:
+	// a run over an empty corpus legitimately recomputes 0 documents, and
+	// omitempty would silently drop that real value the same way a
+	// genuinely-missing one would.
+	LastRunAt  *time.Time `json:"last_run_at,omitempty"`
+	Documents  int        `json:"documents"`
+	Failed     int        `json:"failed"`
+	DurationMs int64      `json:"duration_ms"`
+}
+
+func (h *Handler) handleAdminEmbeddingsRecomputeStatus(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.embeddingRepo != nil && h.embedder != nil, "embedding recompute") {
+		return
+	}
+	resp := adminEmbeddingRecomputeStatusResponse{}
+	if h.admin != nil {
+		if totalDocs, _, err := h.admin.CorpusStats(r.Context()); err == nil {
+			resp.TotalDocs = totalDocs
+		}
+	}
+	status := application.LoadEmbeddingRecomputeStatus(r.Context(), h.settingsStore)
+	resp.InProgress = status.InProgress
+	if !status.LastRunAt.IsZero() {
+		lastRunAt := status.LastRunAt
+		resp.LastRunAt = &lastRunAt
+		resp.Documents = status.Documents
+		resp.Failed = status.Failed
+		resp.DurationMs = status.DurationMs
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleAdminEmbeddingsRecomputeStart kicks off a full-corpus embedding
+// recompute in the background and returns immediately -- unlike PageRank's
+// "force recalculation" (a single fast batched DB read+write, synchronous
+// in its own handler), recomputing embeddings means one Embed call per
+// document against whatever provider is currently configured, which for
+// the HTTP provider is a real network round-trip per document; waiting
+// for that inline would tie up this request (and the admin's browser tab)
+// for as long as the whole corpus takes. The fire-and-forget goroutine
+// uses context.Background(), not r.Context(), so it keeps running to
+// completion after this request returns -- same reasoning as bulk
+// document delete and a triggered crawl job.
+//
+// Rejects a second trigger while one is already running (409): recomputing
+// the same corpus twice concurrently wastes embeddings-endpoint calls (and
+// rate-limit budget) for no benefit, since the second run would just
+// recompute the same documents the first one is already working through.
+func (h *Handler) handleAdminEmbeddingsRecomputeStart(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.embeddingRepo != nil && h.embedder != nil, "embedding recompute") {
+		return
+	}
+	if application.LoadEmbeddingRecomputeStatus(r.Context(), h.settingsStore).InProgress {
+		http.Error(w, "an embedding recompute is already in progress", http.StatusConflict)
+		return
+	}
+	go func() {
+		ctx := context.Background()
+		if _, err := application.RunEmbeddingRecomputeJobWithStatus(ctx, h.embeddingRepo, h.embedder, h.settingsStore); err != nil {
+			log.Printf("recomputing embeddings: %v", err)
+		}
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]bool{"started": true})
 }
 
 func (h *Handler) handleAdminDatabasePage(w http.ResponseWriter, r *http.Request) {
