@@ -6,8 +6,10 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -164,18 +166,129 @@ type loginRequest struct {
 	Next     string `json:"next"`
 }
 
+// loginAttemptWindow/loginMaxAttempts/loginBaseLockout/loginMaxLockout tune
+// loginLimiter -- see its doc comment. loginMaxAttempts failures within
+// loginAttemptWindow trigger a lockout starting at loginBaseLockout and
+// doubling on every further failure while still locked out, capped at
+// loginMaxLockout.
+const (
+	loginAttemptWindow = 15 * time.Minute
+	loginMaxAttempts   = 5
+	loginBaseLockout   = 30 * time.Second
+	loginMaxLockout    = 15 * time.Minute
+)
+
+// loginLimiter is a small in-process, per-key (see clientIP) sliding-window
+// rate limiter for POST /login -- nothing else in this codebase throttles
+// authentication attempts, and /login sits on a public, unauthenticated
+// path (see packaging/nginx/searchengine.conf), so without this an
+// internet attacker can script an unthrottled password-guessing loop
+// against it. Login credentials are compared in constant time
+// (checkCredentials), which prevents a timing side-channel but does
+// nothing to slow down raw guess volume -- that's this limiter's job.
+//
+// This limits by client IP only, not by attempted username -- it doesn't
+// defend against a distributed attack spreading guesses for one account
+// across many source IPs, only the far more common single-source
+// brute-force case the actual exploit scenario describes. State is
+// in-memory and per-process: it resets on restart and isn't shared across
+// admin-server replicas, which is an accepted gap for this single-admin,
+// dev/test-deployed app rather than a distributed rate limiter.
+type loginLimiter struct {
+	mu      sync.Mutex
+	entries map[string]*loginAttempts
+}
+
+type loginAttempts struct {
+	failures    int
+	windowStart time.Time
+	lockedUntil time.Time
+}
+
+func newLoginLimiter() *loginLimiter {
+	return &loginLimiter{entries: make(map[string]*loginAttempts)}
+}
+
+// locked reports whether key is currently locked out and, if so, how much
+// longer.
+func (l *loginLimiter) locked(key string, now time.Time) (time.Duration, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.entries[key]
+	if !ok || !now.Before(e.lockedUntil) {
+		return 0, false
+	}
+	return e.lockedUntil.Sub(now), true
+}
+
+// recordFailure records a failed attempt for key: starts a fresh sliding
+// window if the previous one has expired, then locks key out (with
+// exponential backoff for repeated lockouts) once it crosses
+// loginMaxAttempts failures within the current window.
+func (l *loginLimiter) recordFailure(key string, now time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.entries[key]
+	if !ok || now.Sub(e.windowStart) > loginAttemptWindow {
+		e = &loginAttempts{windowStart: now}
+		l.entries[key] = e
+	}
+	e.failures++
+	if e.failures > loginMaxAttempts {
+		backoff := loginBaseLockout << uint(e.failures-loginMaxAttempts-1)
+		if backoff <= 0 || backoff > loginMaxLockout {
+			backoff = loginMaxLockout
+		}
+		e.lockedUntil = now.Add(backoff)
+	}
+}
+
+// recordSuccess clears key's failure history -- a correct login shouldn't
+// leave a stale attempt count around to make the next legitimate login
+// look like part of an ongoing attack.
+func (l *loginLimiter) recordSuccess(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.entries, key)
+}
+
+// clientIP returns the address /login's rate limiter should key on.
+// admin-server is only ever reached through the tracked nginx proxy in
+// production (see packaging/nginx/searchengine.conf), which always sets
+// X-Real-IP to the real client address -- r.RemoteAddr alone would be
+// nginx's own loopback address for every request, making every client
+// share one rate-limit bucket. Falls back to r.RemoteAddr when the header
+// is absent (direct connections, e.g. in tests).
+func clientIP(r *http.Request) string {
+	if ip := r.Header.Get("X-Real-IP"); ip != "" {
+		return ip
+	}
+	return r.RemoteAddr
+}
+
 // handleLogin is only ever reached via handleLoginRoute, which already
 // guarantees the method is POST -- no method check needed here.
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
+	ip := clientIP(r)
+	now := time.Now()
+	if wait, locked := h.loginLimiter.locked(ip, now); locked {
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
+		http.Error(w, "too many failed login attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
+
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
 	if !h.checkCredentials(req.Username, req.Password) {
+		h.loginLimiter.recordFailure(ip, now)
+		log.Printf("failed login attempt for user %q from %s", req.Username, ip)
 		http.Error(w, "incorrect username or password", http.StatusUnauthorized)
 		return
 	}
+	h.loginLimiter.recordSuccess(ip)
 
 	sessionTTL := h.opSettings.Get().SessionTTL
 	token := randomToken()

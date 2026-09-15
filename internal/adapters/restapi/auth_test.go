@@ -45,6 +45,64 @@ func TestHandleLogin_WrongPassword(t *testing.T) {
 	}
 }
 
+// TestHandleLogin_LockoutAfterTooManyFailures proves the end-to-end
+// behavior of loginLimiter (see its doc comment): enough failed attempts
+// from the same source lock out even a correct subsequent attempt, with a
+// 429 and a Retry-After header telling the caller how long to wait.
+func TestHandleLogin_LockoutAfterTooManyFailures(t *testing.T) {
+	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	wrongBody, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": "wrong"})
+
+	for i := 0; i < 6; i++ { // past loginMaxAttempts (5)
+		req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(wrongBody))
+		req.Header.Set("X-Real-IP", "203.0.113.9")
+		rec := httptest.NewRecorder()
+		h.RoutesAdmin().ServeHTTP(rec, req)
+	}
+
+	// Even the *correct* credentials are now refused, since the lockout
+	// kicks in before checkCredentials is ever consulted.
+	correctBody, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
+	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(correctBody))
+	req.Header.Set("X-Real-IP", "203.0.113.9")
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 once locked out, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("expected a Retry-After header on a 429")
+	}
+	if len(rec.Result().Cookies()) != 0 {
+		t.Error("expected no session cookie while locked out")
+	}
+}
+
+// TestHandleLogin_LockoutIsPerSource proves one source's lockout doesn't
+// block a different one -- a different client IP still gets a normal 401
+// for a wrong password rather than inheriting someone else's lockout.
+func TestHandleLogin_LockoutIsPerSource(t *testing.T) {
+	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	wrongBody, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": "wrong"})
+
+	for i := 0; i < 6; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(wrongBody))
+		req.Header.Set("X-Real-IP", "203.0.113.9")
+		rec := httptest.NewRecorder()
+		h.RoutesAdmin().ServeHTTP(rec, req)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(wrongBody))
+	req.Header.Set("X-Real-IP", "203.0.113.10")
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected a different source IP to be unaffected (401, not 429), got %d", rec.Code)
+	}
+}
+
 func TestHandleLogin_NotConfigured(t *testing.T) {
 	h := restapi.New(restapi.Config{})
 	body, _ := json.Marshal(map[string]string{"username": "admin", "password": "anything"})
