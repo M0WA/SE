@@ -100,7 +100,9 @@
           </div>
           <div class="form-row">
             <label for="embedding-http-model">Model name — sent as the request's "model" field</label><br>
-            <input id="embedding-http-model" class="field" type="text" placeholder="nomic-embed-text">
+            <input id="embedding-http-model" class="field" type="text" placeholder="nomic-embed-text" list="embedding-http-model-options">
+            <datalist id="embedding-http-model-options"></datalist>
+            <p class="tuning-hint" id="embedding-http-model-hint"></p>
           </div>
           <div class="form-row">
             <label for="embedding-http-dimensions">Dimensions — the model's embedding vector length; a mismatch fails clearly rather than corrupting search</label><br>

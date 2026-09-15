@@ -288,6 +288,131 @@ func TestEmbedder_ContextDeadlineExceededReturnsError(t *testing.T) {
 	}
 }
 
+func TestEmbedder_ListModelsSuccess(t *testing.T) {
+	var gotPath, gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"object": "list",
+			"data": []map[string]interface{}{
+				{"id": "intfloat/e5-large-v2", "object": "model"},
+				{"id": "Qwen/Qwen3-VL-Embedding-8B", "object": "model"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, APIKey: "secret-key"})
+	ids, err := e.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/models" {
+		t.Errorf("expected GET /models, got %q", gotPath)
+	}
+	if gotAuth != "Bearer secret-key" {
+		t.Errorf("expected Authorization header 'Bearer secret-key', got %q", gotAuth)
+	}
+	if len(ids) != 2 || ids[0] != "intfloat/e5-large-v2" || ids[1] != "Qwen/Qwen3-VL-Embedding-8B" {
+		t.Errorf("unexpected model list: %v", ids)
+	}
+}
+
+func TestEmbedder_ListModelsNoAPIKeyOmitsAuthorizationHeader(t *testing.T) {
+	var sawHeader bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, sawHeader = r.Header["Authorization"]
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": []map[string]interface{}{}})
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL})
+	if _, err := e.ListModels(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sawHeader {
+		t.Error("expected no Authorization header when APIKey is unset")
+	}
+}
+
+func TestEmbedder_ListModelsEmptyDataReturnsEmptySlice(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"object": "list", "data": []map[string]interface{}{}})
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL})
+	ids, err := e.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Errorf("expected an empty (not nil-panicking) slice, got %v", ids)
+	}
+}
+
+func TestEmbedder_ListModelsNonOKStatusReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"invalid token"}`))
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, APIKey: "secret-key"})
+	_, err := e.ListModels(context.Background())
+	if err == nil {
+		t.Fatal("expected an error for a non-2xx response")
+	}
+	if strings.Contains(err.Error(), "secret-key") {
+		t.Errorf("expected the API key redacted from the error, got: %v", err)
+	}
+}
+
+func TestEmbedder_ListModelsMalformedJSONReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("not json"))
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL})
+	if _, err := e.ListModels(context.Background()); err == nil {
+		t.Fatal("expected an error for malformed JSON")
+	}
+}
+
+func TestEmbedder_ListModelsNetworkErrorReturnsError(t *testing.T) {
+	e := httpembed.New(httpembed.Config{BaseURL: "http://127.0.0.1:1"})
+	if _, err := e.ListModels(context.Background()); err == nil {
+		t.Fatal("expected an error connecting to an unreachable address")
+	}
+}
+
+// TestEmbedder_ListModelsBodyReadErrorReturnsError mirrors
+// TestEmbedder_BodyReadErrorReturnsError for ListModels.
+func TestEmbedder_ListModelsBodyReadErrorReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("expected a hijackable response writer")
+		}
+		conn, buf, err := hj.Hijack()
+		if err != nil {
+			t.Fatalf("failed to hijack connection: %v", err)
+		}
+		defer conn.Close()
+		buf.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort")
+		buf.Flush()
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL})
+	_, err := e.ListModels(context.Background())
+	if err == nil {
+		t.Fatal("expected an error when the response body can't be fully read")
+	}
+}
+
 func containsAll(s string, substrs ...string) bool {
 	for _, sub := range substrs {
 		if !strings.Contains(s, sub) {

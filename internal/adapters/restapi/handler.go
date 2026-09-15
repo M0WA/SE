@@ -367,6 +367,7 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("/admin/api/postings", h.requireAuthAPI(h.handleAdminPostings))
 	mux.HandleFunc("/admin/api/search", h.requireAuthAPI(h.handleAdminSearch))
 	mux.HandleFunc("/admin/api/settings", h.requireAuthAPI(h.handleAdminSettings))
+	mux.HandleFunc("GET /admin/api/embeddings/models", h.requireAuthAPI(h.handleAdminEmbeddingsModels))
 	mux.HandleFunc("/admin/api/overrides", h.requireAuthAPI(h.handleAdminOverrides))
 	mux.HandleFunc("/admin/api/crawl/jobs", h.requireAuthAPI(h.handleAdminCrawlJobs))
 	mux.HandleFunc("GET /admin/api/crawl/jobs/{id}", h.requireAuthAPI(h.handleAdminCrawlJob))

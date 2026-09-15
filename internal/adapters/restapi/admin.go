@@ -720,11 +720,66 @@ type settingsResponse struct {
 	EmbeddingTestError string `json:"embedding_test_error,omitempty"`
 }
 
-// embeddingConnectivityTestTimeout bounds testEmbeddingConnectivity's probe
-// call -- short enough that a hung/unreachable endpoint doesn't stall the
-// settings-save request for too long, generous enough for a real (if
-// slow) inference call to finish.
+// embeddingConnectivityTestTimeout bounds a single probe call against the
+// configured HTTP embedding provider -- testEmbeddingConnectivity's Embed
+// call and handleAdminEmbeddingsModels' ListModels call alike -- short
+// enough that a hung/unreachable endpoint doesn't stall the request for
+// too long, generous enough for a real (if slow) inference call to finish.
 const embeddingConnectivityTestTimeout = 10 * time.Second
+
+// modelLister is the narrow capability httpembed.Embedder implements
+// beyond ports.EmbeddingProvider -- not every embedding provider has a
+// remote catalog to list (hashembed doesn't), so this is a type assertion
+// at the point of use rather than a method on ports.EmbeddingProvider
+// itself. See httpembed.Embedder.ListModels's doc comment.
+type modelLister interface {
+	ListModels(ctx context.Context) ([]string, error)
+}
+
+type adminEmbeddingModelsResponse struct {
+	Models []string `json:"models"`
+	// Error is set when the provider is "http" and a base URL is
+	// configured, but the ListModels call itself fails (bad credentials,
+	// endpoint doesn't implement /models, network error) -- a soft
+	// failure the admin Settings page shows as "couldn't fetch model
+	// list," not a hard error, since the model field always stays usable
+	// as free text either way.
+	Error string `json:"error,omitempty"`
+}
+
+// handleAdminEmbeddingsModels lists the models the currently-configured
+// HTTP embedding endpoint reports (GET {base_url}/models), so the Settings
+// page can prefill the model field's suggestions instead of the admin
+// having to already know (or guess/mistype) a valid model ID. Uses the
+// live, saved opSettings -- including its real, plaintext API key -- the
+// same way testEmbeddingConnectivity does, so this reuses whatever
+// credentials are already configured rather than asking the admin to
+// resupply them just to list models. Returns an empty list (200, no
+// error) rather than attempting a call at all when no base URL is
+// configured yet, or the provider isn't "http" -- there's nothing to ask.
+func (h *Handler) handleAdminEmbeddingsModels(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.opSettings != nil && h.newEmbedder != nil, "embedding models") {
+		return
+	}
+	v := h.opSettings.Get()
+	if v.EmbeddingProvider != domain.EmbeddingProviderHTTP || v.EmbeddingHTTPBaseURL == "" {
+		writeJSON(w, http.StatusOK, adminEmbeddingModelsResponse{})
+		return
+	}
+	lister, ok := h.newEmbedder(v).(modelLister)
+	if !ok {
+		writeJSON(w, http.StatusOK, adminEmbeddingModelsResponse{Error: "this provider doesn't support listing models"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), embeddingConnectivityTestTimeout)
+	defer cancel()
+	models, err := lister.ListModels(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusOK, adminEmbeddingModelsResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, adminEmbeddingModelsResponse{Models: models})
+}
 
 // testEmbeddingConnectivity makes one real Embed call (via h.newEmbedder --
 // bootstrap.NewEmbedder in production, faked out in tests) against v's
