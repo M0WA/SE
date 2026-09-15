@@ -17,7 +17,12 @@ function setupScheduleDOM(scheduleID) {
   const dom = new JSDOM(SCHEDULE_HTML, { url: 'http://localhost/admin/schedule/' + encodeURIComponent(scheduleID) });
   global.window = dom.window;
   global.document = dom.window.document;
-  global.navigator = dom.window.navigator;
+  // Node's own getter-only global `navigator` (since Node 21) rejects a
+  // plain assignment in strict mode -- see dom_helper.test_util.js's
+  // setupDOM for the same fix.
+  Object.defineProperty(global, 'navigator', {
+    value: dom.window.navigator, configurable: true, writable: true,
+  });
   return dom;
 }
 
