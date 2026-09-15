@@ -81,6 +81,12 @@ func TestRenderer_RespectsMaxResponseBytes(t *testing.T) {
 	}
 }
 
+// alwaysAllowURL is a Renderer.AllowURL override for tests that render an
+// httptest.Server -- a loopback address the real SSRF guard
+// (netguard.URLAllowed) rejects by design. The guard itself is exercised
+// separately, in TestRenderer_BlocksLoopbackNavigationTarget.
+func alwaysAllowURL(string) bool { return true }
+
 func TestRenderer_SetsUserAgentAndCookie(t *testing.T) {
 	requireBrowserTests(t)
 	var gotUA, gotCookie string
@@ -94,6 +100,7 @@ func TestRenderer_SetsUserAgentAndCookie(t *testing.T) {
 	defer srv.Close()
 
 	r := browserfetcher.New("chromium")
+	r.AllowURL = alwaysAllowURL
 	defer r.Close()
 
 	_, err := r.Render(context.Background(), srv.URL, ports.FetchOptions{
@@ -136,6 +143,7 @@ func TestRenderer_SetsBasicAuth(t *testing.T) {
 	defer srv.Close()
 
 	r := browserfetcher.New("chromium")
+	r.AllowURL = alwaysAllowURL
 	defer r.Close()
 
 	_, err := r.Render(context.Background(), srv.URL, ports.FetchOptions{
@@ -166,6 +174,7 @@ func TestRenderer_ContextCancellationInterruptsRender(t *testing.T) {
 	}()
 
 	r := browserfetcher.New("chromium")
+	r.AllowURL = alwaysAllowURL
 	defer r.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -177,5 +186,26 @@ func TestRenderer_ContextCancellationInterruptsRender(t *testing.T) {
 	_, err := r.Render(ctx, srv.URL, ports.FetchOptions{})
 	if err == nil {
 		t.Fatal("expected an error from the cancelled render")
+	}
+}
+
+// TestRenderer_BlocksLoopbackNavigationTarget exercises the real SSRF guard
+// (Renderer.AllowURL left at its default, netguard.URLAllowed) against a
+// loopback navigation target -- the browser's very first request (the page
+// navigation itself) must be aborted before it ever reaches the target.
+func TestRenderer_BlocksLoopbackNavigationTarget(t *testing.T) {
+	requireBrowserTests(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		fmt.Fprint(w, "<html><body>should never be reached</body></html>")
+	}))
+	defer srv.Close()
+
+	r := browserfetcher.New("chromium")
+	defer r.Close()
+
+	_, err := r.Render(context.Background(), srv.URL, ports.FetchOptions{})
+	skipIfNoUsableSandbox(t, err)
+	if err == nil {
+		t.Fatal("expected the loopback navigation target to be blocked by the SSRF guard")
 	}
 }
