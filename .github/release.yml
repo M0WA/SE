@@ -19,6 +19,9 @@ changelog:
     - title: Release Process
       labels:
         - release
+    - title: Dependencies
+      labels:
+        - dependencies
     - title: Other Changes
       labels:
         - "*"
