@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"searchengine/internal/application"
 	"searchengine/internal/domain"
@@ -310,5 +311,64 @@ func TestLoadEmbeddingRecomputeStatus_UndecodableValueReturnsZeroValue(t *testin
 	status := application.LoadEmbeddingRecomputeStatus(context.Background(), settings)
 	if status.InProgress || !status.LastRunAt.IsZero() {
 		t.Errorf("expected the zero value on undecodable stored JSON, got %+v", status)
+	}
+}
+
+// TestResetStaleEmbeddingRecomputeStatus_ClearsStuckInProgress proves the
+// exact scenario this exists for: a previous process instance was killed
+// mid-run (crash, restart, redeploy) and never got to write its own
+// InProgress=false, leaving the flag stuck -- ResetStaleEmbeddingRecomputeStatus
+// must clear it without touching the last real completed run's own
+// Documents/Failed/DurationMs/LastRunAt.
+func TestResetStaleEmbeddingRecomputeStatus_ClearsStuckInProgress(t *testing.T) {
+	settings := newFakeSettingsStore()
+	stuck := domain.EmbeddingRecomputeStatus{
+		InProgress: true,
+		LastRunAt:  time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		Documents:  10,
+		Failed:     2,
+		DurationMs: 500,
+	}
+	data, _ := json.Marshal(stuck)
+	settings.values[ports.SettingsKeyEmbeddingRecomputeStatus] = string(data)
+
+	if reset := application.ResetStaleEmbeddingRecomputeStatus(context.Background(), settings); !reset {
+		t.Error("expected reset=true for a stuck in-progress status")
+	}
+
+	status := application.LoadEmbeddingRecomputeStatus(context.Background(), settings)
+	if status.InProgress {
+		t.Error("expected InProgress cleared to false")
+	}
+	if !status.LastRunAt.Equal(stuck.LastRunAt) || status.Documents != stuck.Documents || status.Failed != stuck.Failed || status.DurationMs != stuck.DurationMs {
+		t.Errorf("expected the last completed run's own fields preserved, got %+v", status)
+	}
+}
+
+func TestResetStaleEmbeddingRecomputeStatus_NotInProgressIsANoop(t *testing.T) {
+	settings := newFakeSettingsStore()
+	done := domain.EmbeddingRecomputeStatus{InProgress: false, Documents: 5}
+	data, _ := json.Marshal(done)
+	settings.values[ports.SettingsKeyEmbeddingRecomputeStatus] = string(data)
+	settings.saveCalls = nil
+
+	if reset := application.ResetStaleEmbeddingRecomputeStatus(context.Background(), settings); reset {
+		t.Error("expected reset=false when nothing is in progress")
+	}
+	if len(settings.saveCalls) != 0 {
+		t.Errorf("expected no save when there's nothing to reset, got %d saves", len(settings.saveCalls))
+	}
+}
+
+func TestResetStaleEmbeddingRecomputeStatus_NoStatusYetIsANoop(t *testing.T) {
+	settings := newFakeSettingsStore()
+	if reset := application.ResetStaleEmbeddingRecomputeStatus(context.Background(), settings); reset {
+		t.Error("expected reset=false when no status has ever been saved")
+	}
+}
+
+func TestResetStaleEmbeddingRecomputeStatus_NilSettingsStoreIsANoop(t *testing.T) {
+	if reset := application.ResetStaleEmbeddingRecomputeStatus(context.Background(), nil); reset {
+		t.Error("expected reset=false for a nil settings store")
 	}
 }
