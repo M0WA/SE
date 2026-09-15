@@ -66,7 +66,13 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 	}
 	defer repo.Close()
 
+	// This test crawls a local httptest.Server, which listens on a
+	// loopback address -- exactly what httpfetcher.New's production SSRF
+	// guard (see its doc comment) exists to block, so the guard is swapped
+	// back out here for the plain default transport. The guard itself is
+	// covered separately, in httpfetcher's own package tests.
 	fetcher := httpfetcher.New(nil)
+	fetcher.Client.Transport = http.DefaultTransport
 	embedder := hashembed.New(8)
 	opSettings := domain.DefaultOperationalSettings()
 	robotsChecker := robots.New(fetcher)

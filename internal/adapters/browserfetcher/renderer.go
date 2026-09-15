@@ -10,10 +10,12 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/mxschmitt/playwright-go"
 
+	"searchengine/internal/adapters/netguard"
 	"searchengine/internal/ports"
 )
 
@@ -27,6 +29,14 @@ import (
 type Renderer struct {
 	// Engine is "chromium" or "firefox" (see domain.Renderer* constants).
 	Engine string
+
+	// AllowURL decides whether a request (the top-level navigation or any
+	// subresource request the rendered page's own JavaScript issues) may
+	// go out -- see Render's SSRF-guard comment. Defaults to
+	// netguard.URLAllowed when nil; overridable so tests can render an
+	// httptest.Server, whose loopback address the default guard rejects
+	// by design.
+	AllowURL func(rawURL string) bool
 
 	mu      sync.Mutex
 	pw      *playwright.Playwright
@@ -122,6 +132,34 @@ func (r *Renderer) Render(ctx context.Context, url string, opts ports.FetchOptio
 		return "", fmt.Errorf("creating browser context: %w", err)
 	}
 	defer bctx.Close()
+
+	// A rendered page executes the target's own JavaScript, which can
+	// issue its own fetch()/XHR/image-load requests to anywhere -- unlike
+	// the plain fetcher (netguard.Transport, wired into httpfetcher.New),
+	// nothing here stops the target site's own script from probing the
+	// deploy host's internal network or its cloud metadata endpoint.
+	// Route every request this browser context makes (the top-level
+	// navigation and every subresource alike) through the same
+	// loopback/private/reserved-IP guard: a DNS lookup here, rather than
+	// Go's Transport-level connect-time hook, since Playwright exposes no
+	// dial-level control -- so, unlike the plain fetcher, this still has a
+	// (narrow) resolve-then-connect gap a DNS-rebinding attacker could
+	// race against. data: URLs are always let through -- they carry their
+	// own content inline, never touch the network, and so can't SSRF.
+	allowURL := r.AllowURL
+	if allowURL == nil {
+		allowURL = netguard.URLAllowed
+	}
+	if err := bctx.Route("**/*", func(route playwright.Route) {
+		reqURL := route.Request().URL()
+		if strings.HasPrefix(reqURL, "data:") || allowURL(reqURL) {
+			_ = route.Continue()
+			return
+		}
+		_ = route.Abort("blockedbyclient")
+	}); err != nil {
+		return "", fmt.Errorf("installing SSRF request guard: %w", err)
+	}
 
 	if opts.Cookie != "" {
 		if err := setCookies(bctx, url, opts.Cookie); err != nil {
