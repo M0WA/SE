@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"searchengine/internal/adapters/settingscrypto"
 	"searchengine/internal/application"
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
@@ -724,6 +725,23 @@ func (h *Handler) persistSetting(ctx context.Context, key string, v interface{})
 	}
 }
 
+// encryptedOperationalValues returns h.opSettings' current values with
+// EmbeddingHTTPAPIKey sealed via settingscrypto (a no-op passthrough when
+// h.settingsEncryptionKey is nil -- see Encrypt's doc comment), for
+// persistSetting to save. The in-memory h.opSettings itself is left
+// untouched -- this process still needs the real plaintext key for its own
+// use (see bootstrap.NewEmbedder), only the persisted copy is protected.
+func (h *Handler) encryptedOperationalValues() domain.OperationalSettingsValues {
+	v := h.opSettings.Get()
+	enc, err := settingscrypto.Encrypt(h.settingsEncryptionKey, v.EmbeddingHTTPAPIKey)
+	if err != nil {
+		log.Printf("encrypting embedding API key: %v", err)
+		return v
+	}
+	v.EmbeddingHTTPAPIKey = enc
+	return v
+}
+
 func (h *Handler) currentSettings() settingsResponse {
 	alpha, k1, b := h.settings.Get()
 	return settingsResponse{
@@ -749,7 +767,7 @@ func (h *Handler) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		h.settings.SetPageRankWeight(req.Tuning.PageRankWeight)
 		h.opSettings.Set(req.Operational.toSettingsValues())
 		h.persistSetting(r.Context(), ports.SettingsKeyTuning, h.settings.Values())
-		h.persistSetting(r.Context(), ports.SettingsKeyOperational, h.opSettings.Get())
+		h.persistSetting(r.Context(), ports.SettingsKeyOperational, h.encryptedOperationalValues())
 		writeJSON(w, http.StatusOK, h.currentSettings())
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

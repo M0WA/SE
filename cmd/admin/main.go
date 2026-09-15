@@ -8,6 +8,7 @@ import (
 
 	"searchengine/internal/adapters/crawlclient"
 	"searchengine/internal/adapters/restapi"
+	"searchengine/internal/adapters/settingscrypto"
 	"searchengine/internal/application"
 	"searchengine/internal/bootstrap"
 	"searchengine/internal/domain"
@@ -39,7 +40,11 @@ func main() {
 	go func() { defer wg.Done(); bootstrap.SyncVocabulary(ctx, repo, vocabulary) }()
 	wg.Wait()
 
-	embedder := bootstrap.NewEmbedder(opSettings.Get())
+	settingsEncryptionKey, err := settingscrypto.ParseKey(bootstrap.GetEnv("SETTINGS_ENCRYPTION_KEY", ""))
+	if err != nil {
+		log.Fatal(err)
+	}
+	embedder := bootstrap.NewEmbedder(bootstrap.DecryptEmbeddingKey(opSettings.Get(), settingsEncryptionKey))
 	// Enables Postgres pgvector ANN search for this process when
 	// available, never fatal otherwise. Must run after embedder is
 	// constructed -- see cmd/search's identical comment.
@@ -57,20 +62,21 @@ func main() {
 	jobs := crawlclient.New(bootstrap.GetEnv("CRAWL_SERVER_URL", "http://127.0.0.1:8082"), crawlInternalToken)
 
 	handler := restapi.New(restapi.Config{
-		Jobs:            jobs,
-		Debug:           debugSvc,
-		Admin:           repo,
-		PageRank:        repo,
-		Settings:        settings,
-		OpSettings:      opSettings,
-		Overrides:       overrides,
-		SettingsStore:   repo,
-		ScheduledCrawls: repo,
-		Health:          repo,
-		Sessions:        repo,
-		DBDriver:        driver,
-		AdminUser:       adminUser,
-		AdminPass:       adminPass,
+		Jobs:                  jobs,
+		Debug:                 debugSvc,
+		Admin:                 repo,
+		PageRank:              repo,
+		Settings:              settings,
+		OpSettings:            opSettings,
+		Overrides:             overrides,
+		SettingsStore:         repo,
+		ScheduledCrawls:       repo,
+		Health:                repo,
+		Sessions:              repo,
+		DBDriver:              driver,
+		AdminUser:             adminUser,
+		AdminPass:             adminPass,
+		SettingsEncryptionKey: settingsEncryptionKey,
 	})
 
 	addr := bootstrap.GetEnv("ADMIN_LISTEN_ADDR", "127.0.0.1:8081")
