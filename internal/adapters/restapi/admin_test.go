@@ -201,6 +201,30 @@ func stubNewEmbedder(err error) func(domain.OperationalSettingsValues) ports.Emb
 	}
 }
 
+// fakeEmbeddingProviderWithModels extends fakeEmbeddingProvider with
+// ListModels, satisfying restapi's unexported modelLister interface via
+// Go's structural typing -- used to exercise
+// handleAdminEmbeddingsModels' success and ListModels-error paths.
+// fakeEmbeddingProvider itself (no ListModels method) is what exercises
+// its "provider doesn't support listing models" branch.
+type fakeEmbeddingProviderWithModels struct {
+	fakeEmbeddingProvider
+	models    []string
+	modelsErr error
+}
+
+func (f fakeEmbeddingProviderWithModels) ListModels(context.Context) ([]string, error) {
+	return f.models, f.modelsErr
+}
+
+// stubNewEmbedderWithModels mirrors stubNewEmbedder, for a
+// restapi.Config.NewEmbedder whose embedder also supports ListModels.
+func stubNewEmbedderWithModels(models []string, modelsErr error) func(domain.OperationalSettingsValues) ports.EmbeddingProvider {
+	return func(domain.OperationalSettingsValues) ports.EmbeddingProvider {
+		return fakeEmbeddingProviderWithModels{models: models, modelsErr: modelsErr}
+	}
+}
+
 func adminAuthedHandler(t *testing.T, admin ports.AdminRepository, debug ports.DebugSearchService) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
 	return adminAuthedHandlerWithSettings(t, admin, debug, nil, nil)
@@ -2572,6 +2596,147 @@ func TestHandleAdminSettings_EmbeddingConnectivityTestSkippedForHashProvider(t *
 	}
 	if called {
 		t.Error("expected NewEmbedder to never be called for the hash provider")
+	}
+}
+
+func getEmbeddingModels(t *testing.T, h *restapi.Handler, cookie *http.Cookie) (int, adminEmbeddingModelsResp) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/embeddings/models", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	var resp adminEmbeddingModelsResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	return rec.Code, resp
+}
+
+type adminEmbeddingModelsResp struct {
+	Models []string `json:"models"`
+	Error  string   `json:"error"`
+}
+
+func TestHandleAdminEmbeddingsModels_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/embeddings/models", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when opSettings isn't configured, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminEmbeddingsModels_MethodNotAllowed(t *testing.T) {
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, OpSettings: domain.DefaultOperationalSettings(),
+		NewEmbedder: stubNewEmbedderWithModels(nil, nil),
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/embeddings/models", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+// TestHandleAdminEmbeddingsModels_HashProviderReturnsEmptyWithoutCalling
+// proves no network call is attempted (NewEmbedder never even called) for
+// the hash provider -- there's no remote catalog to list.
+func TestHandleAdminEmbeddingsModels_HashProviderReturnsEmptyWithoutCalling(t *testing.T) {
+	called := false
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
+		OpSettings: domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHash}),
+		NewEmbedder: func(domain.OperationalSettingsValues) ports.EmbeddingProvider {
+			called = true
+			return fakeEmbeddingProviderWithModels{}
+		},
+	})
+	code, resp := getEmbeddingModels(t, h, cookie)
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if len(resp.Models) != 0 || resp.Error != "" {
+		t.Errorf("expected an empty response for the hash provider, got %+v", resp)
+	}
+	if called {
+		t.Error("expected NewEmbedder to never be called for the hash provider")
+	}
+}
+
+// TestHandleAdminEmbeddingsModels_BlankBaseURLReturnsEmptyWithoutCalling
+// proves the "prefill only when the endpoint has already been filled in"
+// rule is enforced server-side too, not just left to the frontend.
+func TestHandleAdminEmbeddingsModels_BlankBaseURLReturnsEmptyWithoutCalling(t *testing.T) {
+	called := false
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
+		OpSettings: domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHTTP, EmbeddingHTTPBaseURL: ""}),
+		NewEmbedder: func(domain.OperationalSettingsValues) ports.EmbeddingProvider {
+			called = true
+			return fakeEmbeddingProviderWithModels{}
+		},
+	})
+	code, resp := getEmbeddingModels(t, h, cookie)
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if len(resp.Models) != 0 || resp.Error != "" {
+		t.Errorf("expected an empty response for a blank base URL, got %+v", resp)
+	}
+	if called {
+		t.Error("expected NewEmbedder to never be called for a blank base URL")
+	}
+}
+
+func TestHandleAdminEmbeddingsModels_ProviderWithoutListModelsSupport(t *testing.T) {
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
+		OpSettings:  domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHTTP, EmbeddingHTTPBaseURL: "https://example.com/v1"}),
+		NewEmbedder: stubNewEmbedder(nil),
+	})
+	code, resp := getEmbeddingModels(t, h, cookie)
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if len(resp.Models) != 0 || resp.Error == "" {
+		t.Errorf("expected an error explaining models aren't supported, got %+v", resp)
+	}
+}
+
+func TestHandleAdminEmbeddingsModels_Success(t *testing.T) {
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
+		OpSettings:  domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHTTP, EmbeddingHTTPBaseURL: "https://example.com/v1"}),
+		NewEmbedder: stubNewEmbedderWithModels([]string{"intfloat/e5-large-v2", "Qwen/Qwen3-VL-Embedding-8B"}, nil),
+	})
+	code, resp := getEmbeddingModels(t, h, cookie)
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if len(resp.Models) != 2 || resp.Models[0] != "intfloat/e5-large-v2" || resp.Models[1] != "Qwen/Qwen3-VL-Embedding-8B" {
+		t.Errorf("unexpected models: %+v", resp)
+	}
+	if resp.Error != "" {
+		t.Errorf("expected no error on success, got %q", resp.Error)
+	}
+}
+
+func TestHandleAdminEmbeddingsModels_ListModelsErrorIsSoftFailure(t *testing.T) {
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
+		OpSettings:  domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHTTP, EmbeddingHTTPBaseURL: "https://example.com/v1"}),
+		NewEmbedder: stubNewEmbedderWithModels(nil, errors.New("401 unauthorized")),
+	})
+	code, resp := getEmbeddingModels(t, h, cookie)
+	if code != http.StatusOK {
+		t.Fatalf("expected 200 (a soft failure, not a hard error), got %d", code)
+	}
+	if len(resp.Models) != 0 || resp.Error != "401 unauthorized" {
+		t.Errorf("expected the ListModels error surfaced, got %+v", resp)
 	}
 }
 

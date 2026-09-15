@@ -22,6 +22,8 @@
   const embeddingHTTPDimensionsEl = document.getElementById('embedding-http-dimensions');
   const embeddingHTTPAPIKeyEl = document.getElementById('embedding-http-api-key');
   const embeddingHTTPAPIKeyHintEl = document.getElementById('embedding-http-api-key-hint');
+  const embeddingHTTPModelOptionsEl = document.getElementById('embedding-http-model-options');
+  const embeddingHTTPModelHintEl = document.getElementById('embedding-http-model-hint');
   const maxDocumentVersionsEl = document.getElementById('max-document-versions');
   const dbMaxOpenConnsEl = document.getElementById('db-max-open-conns');
   const dbMaxIdleConnsEl = document.getElementById('db-max-idle-conns');
@@ -93,6 +95,38 @@
       ' · ' + countLabel(Object.keys(o.boosted_domains || {}).length, 'domain');
   }
 
+  // loadEmbeddingModels prefills the model field's <datalist> suggestions
+  // from GET /admin/api/embeddings/models, using whatever base URL/API key
+  // are already saved server-side (see handleAdminEmbeddingsModels) --
+  // never values just typed into the form but not yet saved. Only
+  // attempted when the HTTP provider is selected and a base URL is
+  // already saved -- there's nothing to ask otherwise, so a freshly-typed
+  // base URL needs a save first before this prefills anything.
+  async function loadEmbeddingModels(s) {
+    clear(embeddingHTTPModelOptionsEl);
+    embeddingHTTPModelHintEl.textContent = '';
+    if (s.operational.embedding_provider !== 'http' || !s.operational.embedding_http_base_url) {
+      return;
+    }
+    try {
+      const r = await getJSON('/admin/api/embeddings/models');
+      if (r.error) {
+        embeddingHTTPModelHintEl.textContent = 'Could not list models: ' + r.error;
+        return;
+      }
+      (r.models || []).forEach((id) => {
+        const opt = document.createElement('option');
+        opt.value = id;
+        embeddingHTTPModelOptionsEl.appendChild(opt);
+      });
+      if (r.models && r.models.length > 0) {
+        embeddingHTTPModelHintEl.textContent = r.models.length + ' model(s) available from this endpoint.';
+      }
+    } catch (err) {
+      embeddingHTTPModelHintEl.textContent = 'Could not list models: ' + err.message;
+    }
+  }
+
   function applySettings(s) {
     alphaEl.value = s.tuning.alpha;
     k1El.value = s.tuning.k1;
@@ -122,6 +156,7 @@
       ? 'A key is currently configured. Leave blank to keep it, or type a new one to replace it.'
       : 'No key currently configured.';
     toggleEmbeddingHTTPFields();
+    loadEmbeddingModels(s);
     maxDocumentVersionsEl.value = s.operational.max_document_versions;
     dbMaxOpenConnsEl.value = s.operational.db_max_open_conns;
     dbMaxIdleConnsEl.value = s.operational.db_max_idle_conns;
@@ -339,5 +374,6 @@
       renderSettingsSummary, renderOverridesSummary,
       toggleEmbeddingHTTPFields,
       renderEmbeddingRecomputeStatus, loadEmbeddingRecomputeStatus,
+      loadEmbeddingModels,
     };
   }

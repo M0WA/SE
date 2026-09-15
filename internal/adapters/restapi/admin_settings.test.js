@@ -521,3 +521,70 @@ test('clicking Recompute embeddings reports the error and stops the button loadi
   );
   assert.equal(document.getElementById('embedding-recompute-btn').disabled, false);
 });
+
+test('loadEmbeddingModels does not fetch when the provider is not http', async () => {
+  let called = false;
+  const { loadEmbeddingModels } = loadFixture();
+  global.fetch = async () => { called = true; return { ok: true, json: async () => ({ models: ['x'] }) }; };
+  await loadEmbeddingModels({ operational: { embedding_provider: 'hash', embedding_http_base_url: 'https://example.com' } });
+  assert.equal(called, false);
+  assert.equal(document.getElementById('embedding-http-model-options').children.length, 0);
+});
+
+test('loadEmbeddingModels does not fetch when the base URL is blank', async () => {
+  let called = false;
+  const { loadEmbeddingModels } = loadFixture();
+  global.fetch = async () => { called = true; return { ok: true, json: async () => ({ models: ['x'] }) }; };
+  await loadEmbeddingModels({ operational: { embedding_provider: 'http', embedding_http_base_url: '' } });
+  assert.equal(called, false);
+});
+
+test('loadEmbeddingModels populates the datalist and hint on success', async () => {
+  const { loadEmbeddingModels } = loadFixture();
+  global.fetch = async (url) => {
+    if (url === '/admin/api/embeddings/models') {
+      return { ok: true, json: async () => ({ models: ['intfloat/e5-large-v2', 'Qwen/Qwen3-VL-Embedding-8B'] }) };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  await loadEmbeddingModels({ operational: { embedding_provider: 'http', embedding_http_base_url: 'https://example.com/v1' } });
+  const options = Array.from(document.getElementById('embedding-http-model-options').children).map((o) => o.value);
+  assert.deepEqual(options, ['intfloat/e5-large-v2', 'Qwen/Qwen3-VL-Embedding-8B']);
+  assert.equal(document.getElementById('embedding-http-model-hint').textContent, '2 model(s) available from this endpoint.');
+});
+
+test('loadEmbeddingModels clears stale options before repopulating', async () => {
+  const { loadEmbeddingModels } = loadFixture();
+  const optionsEl = document.getElementById('embedding-http-model-options');
+  const stale = document.createElement('option');
+  stale.value = 'stale-model';
+  optionsEl.appendChild(stale);
+  global.fetch = async (url) => {
+    if (url === '/admin/api/embeddings/models') return { ok: true, json: async () => ({ models: ['fresh-model'] }) };
+    return { ok: true, json: async () => ({}) };
+  };
+  await loadEmbeddingModels({ operational: { embedding_provider: 'http', embedding_http_base_url: 'https://example.com/v1' } });
+  const options = Array.from(optionsEl.children).map((o) => o.value);
+  assert.deepEqual(options, ['fresh-model']);
+});
+
+test('loadEmbeddingModels shows the error hint on a soft failure from the server', async () => {
+  const { loadEmbeddingModels } = loadFixture();
+  global.fetch = async (url) => {
+    if (url === '/admin/api/embeddings/models') return { ok: true, json: async () => ({ error: '401 unauthorized' }) };
+    return { ok: true, json: async () => ({}) };
+  };
+  await loadEmbeddingModels({ operational: { embedding_provider: 'http', embedding_http_base_url: 'https://example.com/v1' } });
+  assert.equal(document.getElementById('embedding-http-model-hint').textContent, 'Could not list models: 401 unauthorized');
+  assert.equal(document.getElementById('embedding-http-model-options').children.length, 0);
+});
+
+test('loadEmbeddingModels shows the error hint on a network failure', async () => {
+  const { loadEmbeddingModels } = loadFixture();
+  global.fetch = async (url) => {
+    if (url === '/admin/api/embeddings/models') throw new Error('network down');
+    return { ok: true, json: async () => ({}) };
+  };
+  await loadEmbeddingModels({ operational: { embedding_provider: 'http', embedding_http_base_url: 'https://example.com/v1' } });
+  assert.equal(document.getElementById('embedding-http-model-hint').textContent, 'Could not list models: network down');
+});

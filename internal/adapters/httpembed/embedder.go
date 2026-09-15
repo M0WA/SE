@@ -149,6 +149,62 @@ func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	return vec, nil
 }
 
+// modelsResponse mirrors the OpenAI-compatible GET {base_url}/models
+// response: {"object":"list","data":[{"id":"...", ...}]}.
+type modelsResponse struct {
+	Data []struct {
+		ID string `json:"id"`
+	} `json:"data"`
+}
+
+// ListModels calls the configured endpoint's GET {base_url}/models and
+// returns every model ID it reports -- used by the admin Settings page to
+// prefill the embedding model field's suggestions, so an admin doesn't have
+// to already know (or guess/mistype) a valid model ID for whatever provider
+// they've pointed this at. Not part of ports.EmbeddingProvider: unlike
+// Embed, this isn't something every embedding provider implementation can
+// support (hashembed has no remote catalog to list), so callers that want
+// it type-assert for it specifically (see
+// restapi.handleAdminEmbeddingsModels). Some OpenAI-compatible servers
+// don't implement /models at all -- a 404 there surfaces as a normal
+// non-2xx error, same as any other endpoint failure.
+func (e *Embedder) ListModels(ctx context.Context) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.baseURL+"/models", nil)
+	if err != nil {
+		return nil, fmt.Errorf("httpembed: building request: %w", err)
+	}
+	if e.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+e.apiKey)
+	}
+
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("httpembed: calling models endpoint: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	if err != nil {
+		return nil, fmt.Errorf("httpembed: reading response body: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("httpembed: models endpoint returned status %d: %s", resp.StatusCode, truncate(redact(body, e.apiKey)))
+	}
+
+	var parsed modelsResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("httpembed: decoding response: %w", err)
+	}
+	ids := make([]string, 0, len(parsed.Data))
+	for _, m := range parsed.Data {
+		ids = append(ids, m.ID)
+	}
+	return ids, nil
+}
+
 // truncate bounds how much of a non-2xx response body an error message
 // carries, so a large HTML error page doesn't blow up a log line.
 func truncate(s string) string {
