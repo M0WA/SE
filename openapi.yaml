@@ -1308,14 +1308,17 @@ components:
               type: array
               items: { $ref: "#/components/schemas/CrawlPageEvent" }
 
-    ScheduledCrawlRequest:
+    ScheduledCrawlOptions:
       description: >-
-        The one request shape for creating or replacing any crawl -- a
-        one-off run and a recurring schedule differ only in
-        `interval_minutes`, not in which fields are available. There's no
-        separate "recurring" flag: `interval_minutes` 0 (the default, left
-        blank) means "run once, immediately"; a positive value means
-        "repeat on this cadence" until disabled or `max_runs` is reached.
+        Every crawl option a scheduled crawl has, except its credentials
+        (cookie/basic auth -- see ScheduledCrawlRequest and ScheduledCrawl,
+        which each carry those differently: write-only on the request,
+        redacted to has_cookie/has_basic_auth booleans on the response) and
+        its create/PATCH-only fields (see ScheduledCrawlRequest) vs.
+        server-assigned metadata (see ScheduledCrawl). There's no separate
+        "recurring" flag: `interval_minutes` 0 (the default, left blank)
+        means "run once, immediately"; a positive value means "repeat on
+        this cadence" until disabled or `max_runs` is reached.
       type: object
       required: [seed_urls]
       properties:
@@ -1323,11 +1326,6 @@ components:
         max_pages: { type: integer }
         respect_robots: { type: boolean }
         user_agent: { type: string }
-        cookie:
-          type: string
-          description: Stored and reused on every run, like any other option.
-        basic_auth_user: { type: string }
-        basic_auth_pass: { type: string, description: "Stored and reused on every run, like any other option." }
         link_scope:
           type: string
           enum: ["", host, domain, tld, any]
@@ -1411,12 +1409,42 @@ components:
             explicitly for this crawl alone.
         enabled: { type: boolean }
 
+    ScheduledCrawlRequest:
+      description: >-
+        The request shape for creating (POST) or replacing (PATCH) a crawl.
+        cookie/basic_auth_user/basic_auth_pass are write-only -- a
+        ScheduledCrawl response never echoes them back (see its own
+        has_cookie/has_basic_auth). For PATCH specifically, leaving one of
+        them blank means "keep whatever is already stored," not "clear
+        it" -- the edit form can't tell the difference otherwise, since it
+        never receives the real value to compare against. clear_cookie/
+        clear_basic_auth are the explicit way to actually remove a stored
+        credential; both are ignored by POST, which has no prior credential
+        to preserve or clear.
+      allOf:
+        - $ref: "#/components/schemas/ScheduledCrawlOptions"
+        - type: object
+          properties:
+            cookie:
+              type: string
+              description: "Stored and reused on every run, like any other option. PATCH: blank preserves the existing value unless clear_cookie is set."
+            basic_auth_user: { type: string, description: "PATCH: blank (together with basic_auth_pass) preserves the existing value unless clear_basic_auth is set." }
+            basic_auth_pass: { type: string, description: "Stored and reused on every run, like any other option. PATCH: blank (together with basic_auth_user) preserves the existing value unless clear_basic_auth is set." }
+            clear_cookie: { type: boolean, default: false, description: "PATCH only: removes the stored cookie instead of preserving it when cookie is left blank." }
+            clear_basic_auth: { type: boolean, default: false, description: "PATCH only: removes the stored basic auth credentials instead of preserving them when basic_auth_user/basic_auth_pass are left blank." }
+
     ScheduledCrawl:
       allOf:
-        - $ref: "#/components/schemas/ScheduledCrawlRequest"
+        - $ref: "#/components/schemas/ScheduledCrawlOptions"
         - type: object
           properties:
             id: { type: string }
+            has_cookie:
+              type: boolean
+              description: Whether a cookie is stored for this crawl -- its actual value is never returned.
+            has_basic_auth:
+              type: boolean
+              description: Whether basic auth credentials are stored for this crawl -- their actual values are never returned.
             recurring:
               type: boolean
               description: Derived from interval_minutes > 0 -- not settable directly.

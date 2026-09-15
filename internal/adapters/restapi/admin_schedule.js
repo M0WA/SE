@@ -16,8 +16,10 @@
   const rendererEl = document.getElementById('schedule-renderer');
   const userAgentEl = document.getElementById('schedule-user-agent');
   const cookieEl = document.getElementById('schedule-cookie');
+  const clearCookieEl = document.getElementById('schedule-clear-cookie');
   const basicUserEl = document.getElementById('schedule-basic-user');
   const basicPassEl = document.getElementById('schedule-basic-pass');
+  const clearBasicAuthEl = document.getElementById('schedule-clear-basic-auth');
   const fetchTimeoutEl = document.getElementById('schedule-fetch-timeout');
   const minTextLengthEl = document.getElementById('schedule-min-text-length');
   const delayEl = document.getElementById('schedule-delay');
@@ -51,9 +53,23 @@
     prioritizeUnindexedEl.checked = s.prioritize_unindexed;
     rendererEl.value = s.renderer || '';
     userAgentEl.value = s.user_agent || '';
-    cookieEl.value = s.cookie || '';
-    basicUserEl.value = s.basic_auth_user || '';
-    basicPassEl.value = s.basic_auth_pass || '';
+    // The server never echoes a stored cookie/basic-auth value back (see
+    // scheduledCrawlResponse) -- these fields always start blank, and
+    // saving with them left blank keeps whatever credential is already
+    // stored (see requestBody). has_cookie/has_basic_auth only drive the
+    // placeholder text and the "remove" checkboxes' availability, so the
+    // admin can see whether a credential is set without ever seeing its
+    // value.
+    cookieEl.value = '';
+    cookieEl.placeholder = s.has_cookie ? '(unchanged — a cookie is already set)' : 'session=abc123';
+    clearCookieEl.checked = false;
+    clearCookieEl.disabled = !s.has_cookie;
+    basicUserEl.value = '';
+    basicPassEl.value = '';
+    basicUserEl.placeholder = s.has_basic_auth ? '(unchanged — already set)' : '';
+    basicPassEl.placeholder = s.has_basic_auth ? '(unchanged — already set)' : '';
+    clearBasicAuthEl.checked = false;
+    clearBasicAuthEl.disabled = !s.has_basic_auth;
     fetchTimeoutEl.value = s.fetch_timeout_seconds || '';
     minTextLengthEl.value = s.min_text_length || '';
     delayEl.value = s.crawl_delay_ms || '';
@@ -66,8 +82,11 @@
   }
 
   // requestBody mirrors crawl.html's scheduledCrawlRequest construction --
-  // PATCH is a full replace, so every field is resent, credentials
-  // included, or they'd silently be cleared.
+  // PATCH is a full replace for every field except the credential ones:
+  // cookie/basic_auth_user/basic_auth_pass left blank means "leave the
+  // stored credential unchanged" (see applySchedule's comment on why the
+  // form can't pre-fill them), and clear_cookie/clear_basic_auth are the
+  // explicit way to actually remove one.
   function requestBody() {
     return {
       seed_urls: parseLines(seedURLsEl.value),
@@ -75,8 +94,10 @@
       respect_robots: respectRobotsEl.checked,
       user_agent: userAgentEl.value,
       cookie: cookieEl.value,
+      clear_cookie: clearCookieEl.checked,
       basic_auth_user: basicUserEl.value,
       basic_auth_pass: basicPassEl.value,
+      clear_basic_auth: clearBasicAuthEl.checked,
       link_scope: linkScopeEl.value,
       allowed_domains: parseLines(allowedDomainsEl.value),
       blocked_domains: parseLines(blockedDomainsEl.value),
