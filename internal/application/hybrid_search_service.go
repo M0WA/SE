@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
@@ -20,6 +21,56 @@ type hybridSearchService struct {
 
 func NewHybridSearchService(repo ports.SQLRepository, embedder ports.EmbeddingProvider, settings *domain.TuningSettings, opSettings *domain.OperationalSettings, overrides *domain.RankingOverrides, corpusStats *domain.CorpusStatsCache, vocabulary *domain.VocabularyCache) *hybridSearchService {
 	return &hybridSearchService{repo: repo, embedder: embedder, settings: settings, opSettings: opSettings, corpusStats: corpusStats, overrides: overrides, vocabulary: vocabulary}
+}
+
+// fetchPostings runs the BM25 side of a search: one batched postings
+// lookup across every unique query term, plus -- when
+// opValues.FuzzyMatchEnabled -- a fallback vocabulary lookup for any term
+// that matched nothing (a bounded-edit-distance near-miss substitute
+// stands in for it in BM25 scoring only; a term that already matched
+// something is never touched). correctedTerms reports every such
+// substitution so a caller/UI can show it transparently rather than
+// silently rewriting the displayed query. Split out from Search so it can
+// run concurrently with the query's own embedding call -- the two are
+// entirely independent until both feed into the semantic candidate pool.
+func (s *hybridSearchService) fetchPostings(ctx context.Context, uniqueTerms []string, opValues domain.OperationalSettingsValues) (postingsByTerm map[string][]domain.PostingStats, scoringTerm map[string]string, correctedTerms []domain.CorrectedTerm, err error) {
+	// One batched query across every unique query term (rather than one
+	// join query -- plus a separate doc-freq COUNT(*) query -- per term).
+	postingsByTerm, err = s.repo.PostingsForTerms(ctx, uniqueTerms)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	scoringTerm = make(map[string]string, len(uniqueTerms)) // original -> term to actually score with (itself, unless corrected)
+	if !opValues.FuzzyMatchEnabled {
+		return postingsByTerm, scoringTerm, nil, nil
+	}
+	vocabulary := s.vocabulary.Get()
+	var toFetch []string
+	for _, term := range uniqueTerms {
+		if len(postingsByTerm[term]) > 0 {
+			continue
+		}
+		match, _, found := domain.NearestTerm(term, vocabulary, opValues.FuzzyMaxEditDistance)
+		if !found {
+			continue
+		}
+		scoringTerm[term] = match
+		correctedTerms = append(correctedTerms, domain.CorrectedTerm{Original: term, Corrected: match})
+		if _, ok := postingsByTerm[match]; !ok {
+			toFetch = append(toFetch, match)
+		}
+	}
+	if len(toFetch) > 0 {
+		fetched, fetchErr := s.repo.PostingsForTerms(ctx, toFetch)
+		if fetchErr != nil {
+			return nil, nil, nil, fetchErr
+		}
+		for term, postings := range fetched {
+			postingsByTerm[term] = postings
+		}
+	}
+	return postingsByTerm, scoringTerm, correctedTerms, nil
 }
 
 func (s *hybridSearchService) Search(ctx context.Context, query string, opts ports.SearchQuery) ([]domain.HybridResult, error) {
@@ -44,54 +95,40 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 		uniqueTerms = append(uniqueTerms, term)
 	}
 
-	// One batched query across every unique query term (rather than one
-	// join query -- plus a separate doc-freq COUNT(*) query -- per term),
-	// and corpus-wide stats (totalDocs/avgDocLen) read once from an
-	// in-memory cache kept fresh by bootstrap.SyncCorpusStats, rather than
-	// a full-table COUNT/AVG scan repeated for every term of every request.
-	postingsByTerm, err := s.repo.PostingsForTerms(ctx, uniqueTerms)
-	if err != nil {
-		return nil, err
-	}
-
-	// Fuzzy (typo-tolerant) query matching: a term with zero postings hits
-	// gets one chance at a bounded-edit-distance vocabulary lookup, and --
-	// if found -- its near-miss substitute's postings stand in for it in
-	// BM25 scoring only. A term that already matched something is never
-	// touched, and the substitution is always reported back via
-	// correctedTerms so a caller/UI can show it transparently rather than
-	// silently rewriting the displayed query. When FuzzyMatchEnabled is
-	// false, this whole block is skipped and behavior is byte-for-byte the
-	// same as before this feature existed.
 	opValues := s.opSettings.Get()
-	scoringTerm := make(map[string]string, len(uniqueTerms)) // original -> term to actually score with (itself, unless corrected)
-	var correctedTerms []domain.CorrectedTerm
-	if opValues.FuzzyMatchEnabled {
-		vocabulary := s.vocabulary.Get()
-		var toFetch []string
-		for _, term := range uniqueTerms {
-			if len(postingsByTerm[term]) > 0 {
-				continue
-			}
-			match, _, found := domain.NearestTerm(term, vocabulary, opValues.FuzzyMaxEditDistance)
-			if !found {
-				continue
-			}
-			scoringTerm[term] = match
-			correctedTerms = append(correctedTerms, domain.CorrectedTerm{Original: term, Corrected: match})
-			if _, ok := postingsByTerm[match]; !ok {
-				toFetch = append(toFetch, match)
-			}
-		}
-		if len(toFetch) > 0 {
-			fetched, err := s.repo.PostingsForTerms(ctx, toFetch)
-			if err != nil {
-				return nil, err
-			}
-			for term, postings := range fetched {
-				postingsByTerm[term] = postings
-			}
-		}
+
+	// The BM25 side (postings lookup, plus fuzzy-match fallback) and the
+	// semantic side's query embedding are entirely independent of each
+	// other -- neither reads anything the other produces -- until both
+	// feed into the semantic candidate pool below. For the HTTP embedding
+	// provider in particular, Embed is a real network round-trip, so
+	// running it concurrently with the postings fetch (rather than only
+	// starting it once BM25 scoring has fully finished) shaves that
+	// latency off the request instead of paying for it twice.
+	var (
+		wg             sync.WaitGroup
+		postingsByTerm map[string][]domain.PostingStats
+		scoringTerm    map[string]string
+		correctedTerms []domain.CorrectedTerm
+		postingsErr    error
+		queryVec       []float32
+		embedErr       error
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		postingsByTerm, scoringTerm, correctedTerms, postingsErr = s.fetchPostings(ctx, uniqueTerms, opValues)
+	}()
+	go func() {
+		defer wg.Done()
+		queryVec, embedErr = s.embedder.Embed(ctx, query)
+	}()
+	wg.Wait()
+	if postingsErr != nil {
+		return nil, postingsErr
+	}
+	if embedErr != nil {
+		return nil, embedErr
 	}
 
 	totalDocs, avgDocLen := s.corpusStats.Get()
@@ -114,10 +151,6 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 		}
 	}
 
-	queryVec, err := s.embedder.Embed(ctx, query)
-	if err != nil {
-		return nil, err
-	}
 	// Computed once per Search call rather than inside every per-candidate
 	// cosine-similarity comparison below -- the query vector never changes
 	// across those comparisons within one request.

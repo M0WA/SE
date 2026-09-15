@@ -641,67 +641,73 @@ type operationalValues struct {
 	// ever seeing the key itself.
 	EmbeddingHTTPAPIKey    string `json:"embedding_http_api_key,omitempty"`
 	EmbeddingHTTPAPIKeySet bool   `json:"embedding_http_api_key_set,omitempty"`
+	// EmbeddingRecomputeRateLimitPerSecond mirrors the same-named
+	// domain.OperationalSettingsValues field -- see there for the full
+	// doc comment.
+	EmbeddingRecomputeRateLimitPerSecond int `json:"embedding_recompute_rate_limit_per_second"`
 }
 
 func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 	return operationalValues{
-		FetchTimeoutSeconds:              int(v.FetchTimeout / time.Second),
-		UserAgent:                        v.UserAgent,
-		DefaultMaxPages:                  v.DefaultMaxPages,
-		MinTextLength:                    v.MinTextLength,
-		DefaultTopK:                      v.DefaultTopK,
-		SessionTTLHours:                  int(v.SessionTTL / time.Hour),
-		CrawlDelayMs:                     v.CrawlDelayMs,
-		MaxResponseKB:                    v.MaxResponseBytes / 1024,
-		SemanticCandidatePoolSize:        v.SemanticCandidatePoolSize,
-		DBMaxOpenConns:                   v.DBMaxOpenConns,
-		DBMaxIdleConns:                   v.DBMaxIdleConns,
-		DBConnMaxLifetimeMinutes:         int(v.DBConnMaxLifetime / time.Minute),
-		FuzzyMatchEnabled:                v.FuzzyMatchEnabled,
-		FuzzyMaxEditDistance:             v.FuzzyMaxEditDistance,
-		PageRankRecomputeIntervalMinutes: v.PageRankRecomputeIntervalMinutes,
-		ANNSearchEnabled:                 v.ANNSearchEnabled,
-		MaxRetainedCrawlJobs:             v.MaxRetainedCrawlJobs,
-		DefaultRenderer:                  v.DefaultRenderer,
-		LinkScope:                        v.LinkScope,
-		MaxDocumentVersions:              v.MaxDocumentVersions,
-		TitleWeight:                      v.TitleWeight,
-		EmbeddingProvider:                v.EmbeddingProvider,
-		EmbeddingHTTPBaseURL:             v.EmbeddingHTTPBaseURL,
-		EmbeddingHTTPModel:               v.EmbeddingHTTPModel,
-		EmbeddingHTTPDimensions:          v.EmbeddingHTTPDimensions,
-		EmbeddingHTTPAPIKeySet:           v.EmbeddingHTTPAPIKey != "",
+		FetchTimeoutSeconds:                  int(v.FetchTimeout / time.Second),
+		UserAgent:                            v.UserAgent,
+		DefaultMaxPages:                      v.DefaultMaxPages,
+		MinTextLength:                        v.MinTextLength,
+		DefaultTopK:                          v.DefaultTopK,
+		SessionTTLHours:                      int(v.SessionTTL / time.Hour),
+		CrawlDelayMs:                         v.CrawlDelayMs,
+		MaxResponseKB:                        v.MaxResponseBytes / 1024,
+		SemanticCandidatePoolSize:            v.SemanticCandidatePoolSize,
+		DBMaxOpenConns:                       v.DBMaxOpenConns,
+		DBMaxIdleConns:                       v.DBMaxIdleConns,
+		DBConnMaxLifetimeMinutes:             int(v.DBConnMaxLifetime / time.Minute),
+		FuzzyMatchEnabled:                    v.FuzzyMatchEnabled,
+		FuzzyMaxEditDistance:                 v.FuzzyMaxEditDistance,
+		PageRankRecomputeIntervalMinutes:     v.PageRankRecomputeIntervalMinutes,
+		ANNSearchEnabled:                     v.ANNSearchEnabled,
+		MaxRetainedCrawlJobs:                 v.MaxRetainedCrawlJobs,
+		DefaultRenderer:                      v.DefaultRenderer,
+		LinkScope:                            v.LinkScope,
+		MaxDocumentVersions:                  v.MaxDocumentVersions,
+		TitleWeight:                          v.TitleWeight,
+		EmbeddingProvider:                    v.EmbeddingProvider,
+		EmbeddingHTTPBaseURL:                 v.EmbeddingHTTPBaseURL,
+		EmbeddingHTTPModel:                   v.EmbeddingHTTPModel,
+		EmbeddingHTTPDimensions:              v.EmbeddingHTTPDimensions,
+		EmbeddingHTTPAPIKeySet:               v.EmbeddingHTTPAPIKey != "",
+		EmbeddingRecomputeRateLimitPerSecond: v.EmbeddingRecomputeRateLimitPerSecond,
 	}
 }
 
 func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 	return domain.OperationalSettingsValues{
-		FetchTimeout:                     time.Duration(o.FetchTimeoutSeconds) * time.Second,
-		UserAgent:                        o.UserAgent,
-		DefaultMaxPages:                  o.DefaultMaxPages,
-		MinTextLength:                    o.MinTextLength,
-		DefaultTopK:                      o.DefaultTopK,
-		SessionTTL:                       time.Duration(o.SessionTTLHours) * time.Hour,
-		CrawlDelayMs:                     o.CrawlDelayMs,
-		MaxResponseBytes:                 o.MaxResponseKB * 1024,
-		SemanticCandidatePoolSize:        o.SemanticCandidatePoolSize,
-		DBMaxOpenConns:                   o.DBMaxOpenConns,
-		DBMaxIdleConns:                   o.DBMaxIdleConns,
-		DBConnMaxLifetime:                time.Duration(o.DBConnMaxLifetimeMinutes) * time.Minute,
-		FuzzyMatchEnabled:                o.FuzzyMatchEnabled,
-		FuzzyMaxEditDistance:             o.FuzzyMaxEditDistance,
-		PageRankRecomputeIntervalMinutes: o.PageRankRecomputeIntervalMinutes,
-		ANNSearchEnabled:                 o.ANNSearchEnabled,
-		MaxRetainedCrawlJobs:             o.MaxRetainedCrawlJobs,
-		DefaultRenderer:                  o.DefaultRenderer,
-		LinkScope:                        o.LinkScope,
-		MaxDocumentVersions:              o.MaxDocumentVersions,
-		TitleWeight:                      o.TitleWeight,
-		EmbeddingProvider:                o.EmbeddingProvider,
-		EmbeddingHTTPBaseURL:             o.EmbeddingHTTPBaseURL,
-		EmbeddingHTTPAPIKey:              o.EmbeddingHTTPAPIKey,
-		EmbeddingHTTPModel:               o.EmbeddingHTTPModel,
-		EmbeddingHTTPDimensions:          o.EmbeddingHTTPDimensions,
+		FetchTimeout:                         time.Duration(o.FetchTimeoutSeconds) * time.Second,
+		UserAgent:                            o.UserAgent,
+		DefaultMaxPages:                      o.DefaultMaxPages,
+		MinTextLength:                        o.MinTextLength,
+		DefaultTopK:                          o.DefaultTopK,
+		SessionTTL:                           time.Duration(o.SessionTTLHours) * time.Hour,
+		CrawlDelayMs:                         o.CrawlDelayMs,
+		MaxResponseBytes:                     o.MaxResponseKB * 1024,
+		SemanticCandidatePoolSize:            o.SemanticCandidatePoolSize,
+		DBMaxOpenConns:                       o.DBMaxOpenConns,
+		DBMaxIdleConns:                       o.DBMaxIdleConns,
+		DBConnMaxLifetime:                    time.Duration(o.DBConnMaxLifetimeMinutes) * time.Minute,
+		FuzzyMatchEnabled:                    o.FuzzyMatchEnabled,
+		FuzzyMaxEditDistance:                 o.FuzzyMaxEditDistance,
+		PageRankRecomputeIntervalMinutes:     o.PageRankRecomputeIntervalMinutes,
+		ANNSearchEnabled:                     o.ANNSearchEnabled,
+		MaxRetainedCrawlJobs:                 o.MaxRetainedCrawlJobs,
+		DefaultRenderer:                      o.DefaultRenderer,
+		LinkScope:                            o.LinkScope,
+		MaxDocumentVersions:                  o.MaxDocumentVersions,
+		TitleWeight:                          o.TitleWeight,
+		EmbeddingProvider:                    o.EmbeddingProvider,
+		EmbeddingHTTPBaseURL:                 o.EmbeddingHTTPBaseURL,
+		EmbeddingHTTPAPIKey:                  o.EmbeddingHTTPAPIKey,
+		EmbeddingHTTPModel:                   o.EmbeddingHTTPModel,
+		EmbeddingHTTPDimensions:              o.EmbeddingHTTPDimensions,
+		EmbeddingRecomputeRateLimitPerSecond: o.EmbeddingRecomputeRateLimitPerSecond,
 	}
 }
 
@@ -1479,9 +1485,10 @@ func (h *Handler) handleAdminEmbeddingsRecomputeStart(w http.ResponseWriter, r *
 		http.Error(w, "an embedding recompute is already in progress", http.StatusConflict)
 		return
 	}
+	ratePerSecond := h.opSettings.Get().EmbeddingRecomputeRateLimitPerSecond
 	go func() {
 		ctx := context.Background()
-		if _, err := application.RunEmbeddingRecomputeJobWithStatus(ctx, h.embeddingRepo, h.embedder, h.settingsStore); err != nil {
+		if _, err := application.RunEmbeddingRecomputeJobWithStatus(ctx, h.embeddingRepo, h.embedder, h.settingsStore, ratePerSecond); err != nil {
 			log.Printf("recomputing embeddings: %v", err)
 		}
 	}()

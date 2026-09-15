@@ -1141,6 +1141,19 @@ components:
               description: >-
                 GET-only: whether an embedding_http_api_key is currently
                 configured, without revealing the key itself.
+            embedding_recompute_rate_limit_per_second:
+              type: integer
+              description: >-
+                Caps how many Embed calls per second
+                POST /admin/api/embeddings/recompute issues against the
+                "http" provider, so a corpus-wide recompute doesn't flood a
+                real hosted provider's own rate limit (IONOS's AI Model Hub,
+                the motivating case, documents 5 requests/second -- see
+                docs.ionos.com/cloud/ai/ai-model-hub/how-tos/rate-limits). A
+                value below 1 falls back to the default (5). Meaningless for
+                a local server with no rate limit of its own -- raise this
+                well above whatever it can sustain to make pacing a no-op
+                there.
         embedding_test_error:
           type: string
           readOnly: true

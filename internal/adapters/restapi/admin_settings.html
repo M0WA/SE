@@ -113,6 +113,10 @@
             <input id="embedding-http-api-key" class="field" type="password" autocomplete="new-password" readonly>
             <p class="tuning-hint" id="embedding-http-api-key-hint"></p>
           </div>
+          <div class="form-row">
+            <label for="embedding-recompute-rate-limit">Recompute rate limit — max Embed calls per second during a recompute; keep at or below your provider's own limit</label><br>
+            <input id="embedding-recompute-rate-limit" class="field" type="number" step="1" min="1" placeholder="5">
+          </div>
         </div>
         <p class="tuning-hint">Default: hash. Switching providers takes effect only after every process (search, admin, crawl) is restarted -- unlike every other setting on this page, it isn't picked up live, since the embedding column's size is fixed at process startup. It also changes the vector space entirely: existing stored embeddings become meaningless to compare against newly computed ones until every document's embedding is recomputed below -- no re-crawl needed, since the indexed text itself doesn't change.</p>
         <div class="form-row">
