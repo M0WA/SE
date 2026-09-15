@@ -1053,6 +1053,16 @@ func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 			t.Error("expected an error")
 		}
 	})
+	t.Run("RunScheduledCrawlNow", func(t *testing.T) {
+		if err := closedRepo(t).RunScheduledCrawlNow(ctx, "sched-1", time.Now()); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("ResetStaleInProgress", func(t *testing.T) {
+		if _, err := closedRepo(t).ResetStaleInProgress(ctx); err == nil {
+			t.Error("expected an error")
+		}
+	})
 	t.Run("AllTerms", func(t *testing.T) {
 		if _, err := closedRepo(t).AllTerms(ctx); err == nil {
 			t.Error("expected an error")

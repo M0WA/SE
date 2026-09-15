@@ -80,6 +80,13 @@ func (f *fakeScheduledCrawlStore) RunScheduledCrawlNow(_ context.Context, id str
 	return f.runNowErr
 }
 
+// ResetStaleInProgress is never exercised by restapi's own handlers (it's
+// only called once at crawl-server startup, see cmd/crawl/main.go) -- kept
+// here purely to satisfy ports.ScheduledCrawlStore.
+func (f *fakeScheduledCrawlStore) ResetStaleInProgress(context.Context) (int, error) {
+	return 0, nil
+}
+
 var _ ports.ScheduledCrawlStore = (*fakeScheduledCrawlStore)(nil)
 
 func adminAuthedHandlerWithSchedules(t *testing.T, schedules ports.ScheduledCrawlStore) (*restapi.Handler, *http.Cookie) {

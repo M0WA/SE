@@ -1953,13 +1953,54 @@ func (r *Repository) MarkScheduledCrawlRun(ctx context.Context, id string, lastR
 // TriggerDueCrawls) discovers it on its next tick, the same as a freshly
 // created one-off crawl already does; that tick is what actually calls
 // MarkScheduledCrawlRun once the triggered job finishes.
+//
+// Also force-clears in_progress: DueScheduledCrawls only ever selects an
+// entry with in_progress = false (see its own doc comment), and nothing
+// besides a triggered run's own completion callback ever clears that flag
+// -- a callback that's only ever registered in-memory for the lifetime of
+// the goroutine that triggered it (see crawl_internal.go's
+// TriggerScheduledCrawl). A crawl-server restart while that run was still
+// in flight loses that callback entirely, leaving in_progress stuck true
+// forever with nothing to reset it (ResumeCrawlJob, the restart-recovery
+// path, only knows about the crawl_jobs row, not the ScheduledCrawl that
+// triggered it) -- silently breaking both this entry's normal recurring
+// schedule and every future "Run now" against it, since neither could
+// ever satisfy DueScheduledCrawls' in_progress = false condition again. An
+// explicit "run now" click is exactly the moment to self-heal that: the
+// admin is unambiguously asking for this to run immediately, so any stale
+// "already running" state is cleared rather than left to silently block
+// it forever. (cmd/crawl/main.go's own startup also resets every stale
+// in_progress flag, which is the systemic fix for schedules nobody
+// happens to click "Run now" on again.)
 func (r *Repository) RunScheduledCrawlNow(ctx context.Context, id string, now time.Time) error {
-	updateSQL := r.ph(`UPDATE scheduled_crawls SET next_run_at = %s, enabled = %s WHERE id = %s`, 1, 2, 3)
-	res, err := r.db.ExecContext(ctx, updateSQL, now.UTC().Format(crawledAtLayout), true, id)
+	updateSQL := r.ph(`UPDATE scheduled_crawls SET next_run_at = %s, enabled = %s, in_progress = %s WHERE id = %s`, 1, 2, 3, 4)
+	res, err := r.db.ExecContext(ctx, updateSQL, now.UTC().Format(crawledAtLayout), true, false, id)
 	if err != nil {
 		return fmt.Errorf("running scheduled crawl now (%s): %w", id, err)
 	}
 	return requireRowsAffected(res, id)
+}
+
+// ResetStaleInProgress clears in_progress back to false for every schedule
+// that has it stuck true -- meant to run once at crawl-server startup (see
+// cmd/crawl/main.go), before the scheduler ticker's first tick. Nothing
+// can genuinely still be "in progress" the instant this process starts:
+// any goroutine that would eventually have cleared the flag via its
+// triggered run's completion callback died with whatever process set it,
+// whether that was this same restart or an earlier one this schedule
+// never got "Run now" clicked on since. Returns how many rows were reset,
+// for a one-line startup log -- 0 is the expected, healthy case.
+func (r *Repository) ResetStaleInProgress(ctx context.Context) (int, error) {
+	updateSQL := r.ph(`UPDATE scheduled_crawls SET in_progress = %s WHERE in_progress = %s`, 1, 2)
+	res, err := r.db.ExecContext(ctx, updateSQL, false, true)
+	if err != nil {
+		return 0, fmt.Errorf("resetting stale in_progress flags: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("counting reset in_progress flags: %w", err)
+	}
+	return int(n), nil
 }
 
 func nullableTimeString(t *time.Time) sql.NullString {

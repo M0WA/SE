@@ -157,6 +157,112 @@ func TestRunScheduledCrawlNow_NotFound(t *testing.T) {
 	}
 }
 
+// TestRunScheduledCrawlNow_ClearsStuckInProgress proves an explicit "run
+// now" self-heals a schedule whose in_progress flag got stuck true (e.g.
+// by a crawl-server restart interrupting its previously-triggered run --
+// see RunScheduledCrawlNow's own doc comment) -- without this, the entry
+// would never satisfy DueScheduledCrawls' in_progress = false condition
+// again, no matter how many times "Run now" is clicked.
+func TestRunScheduledCrawlNow_ClearsStuckInProgress(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	s := newScheduledCrawl("sched-1", 30, time.Now().UTC().Add(2*time.Hour))
+	s.InProgress = true
+	if err := repo.CreateScheduledCrawl(ctx, s); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := repo.RunScheduledCrawlNow(ctx, "sched-1", now); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := repo.GetScheduledCrawl(ctx, "sched-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.InProgress {
+		t.Error("expected RunScheduledCrawlNow to clear a stuck InProgress flag")
+	}
+
+	due, err := repo.DueScheduledCrawls(ctx, now)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(due) != 1 || due[0].ID != "sched-1" {
+		t.Errorf("expected the schedule to now be selectable by DueScheduledCrawls, got %+v", due)
+	}
+}
+
+// TestResetStaleInProgress_ClearsEveryStuckFlag mirrors what
+// cmd/crawl/main.go runs once at startup: every schedule stuck
+// in_progress=true (from a restart that interrupted its triggered run,
+// with nothing left to ever clear it -- see ResetStaleInProgress's own
+// doc comment) is reset, while a schedule that was never in progress is
+// left alone.
+func TestResetStaleInProgress_ClearsEveryStuckFlag(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+
+	stuckA := newScheduledCrawl("sched-stuck-a", 30, time.Now().UTC().Add(-time.Hour))
+	stuckA.InProgress = true
+	stuckB := newScheduledCrawl("sched-stuck-b", 30, time.Now().UTC().Add(-time.Hour))
+	stuckB.InProgress = true
+	healthy := newScheduledCrawl("sched-healthy", 30, time.Now().UTC().Add(-time.Hour))
+	healthy.InProgress = false
+
+	for _, s := range []domain.ScheduledCrawl{stuckA, stuckB, healthy} {
+		if err := repo.CreateScheduledCrawl(ctx, s); err != nil {
+			t.Fatalf("unexpected error creating %s: %v", s.ID, err)
+		}
+	}
+
+	reset, err := repo.ResetStaleInProgress(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reset != 2 {
+		t.Errorf("expected 2 rows reset, got %d", reset)
+	}
+
+	for _, id := range []string{"sched-stuck-a", "sched-stuck-b", "sched-healthy"} {
+		got, err := repo.GetScheduledCrawl(ctx, id)
+		if err != nil {
+			t.Fatalf("unexpected error fetching %s: %v", id, err)
+		}
+		if got.InProgress {
+			t.Errorf("expected %s to have InProgress cleared, got true", id)
+		}
+	}
+
+	// Now that every stale flag is cleared, every enabled, due schedule
+	// (all three, all with a past NextRunAt) becomes selectable again.
+	due, err := repo.DueScheduledCrawls(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(due) != 3 {
+		t.Errorf("expected all 3 schedules to be due after the reset, got %d", len(due))
+	}
+}
+
+func TestResetStaleInProgress_NoOpWhenNothingStuck(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	s := newScheduledCrawl("sched-1", 30, time.Now().UTC().Add(time.Hour))
+	if err := repo.CreateScheduledCrawl(ctx, s); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	reset, err := repo.ResetStaleInProgress(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reset != 0 {
+		t.Errorf("expected 0 rows reset when nothing is stuck, got %d", reset)
+	}
+}
+
 func TestListScheduledCrawls_OrdersBySoonestNextRun(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()

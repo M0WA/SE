@@ -260,6 +260,22 @@ func main() {
 		log.Printf("recovered %d interrupted crawl job(s), %d could not be resumed (needed credentials) and were marked failed", recovered, abandoned)
 	}
 
+	// A scheduled crawl's in_progress flag only ever gets cleared by its
+	// own triggered run's completion callback -- an in-memory closure that
+	// dies with this process (see crawl_internal.go's TriggerScheduledCrawl
+	// and ResumeCrawlJob, which knows nothing about it). A restart while
+	// any schedule was mid-run leaves it stuck true forever otherwise,
+	// silently taking that schedule out of both its own recurring cadence
+	// and "Run now" (see RunScheduledCrawlNow's doc comment) until this
+	// runs. Nothing can genuinely still be in progress the instant this
+	// process starts, so every stale flag is reset before the scheduler's
+	// first tick can ever run.
+	if reset, err := repo.ResetStaleInProgress(ctx); err != nil {
+		log.Printf("resetting stale scheduled-crawl in-progress flags: %v", err)
+	} else if reset > 0 {
+		log.Printf("reset %d scheduled crawl(s) stuck in-progress from a previous restart", reset)
+	}
+
 	go runScheduler(ctx, repo, handler)
 	go runCrawlJobPruner(ctx, repo, opSettings)
 
