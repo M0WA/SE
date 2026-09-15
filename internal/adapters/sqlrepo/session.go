@@ -2,10 +2,25 @@ package sqlrepo
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"time"
 )
+
+// hashSessionToken returns the hex-encoded SHA-256 digest of a session
+// token -- what's actually stored as the sessions table's key, never the
+// raw token. randomToken (internal/adapters/restapi/auth.go) already draws
+// 256 bits from crypto/rand, so the token itself carries all the entropy
+// this needs; hashing it before it ever reaches the database means DB-only
+// access (a backup, a read replica, an unrelated SQL injection) yields
+// digests that can't be presented back as a live session cookie, the same
+// way a password hash can't be used to log in directly.
+func hashSessionToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
 
 // CreateSession persists a login session so any process sharing this
 // database -- search-server, admin-server -- recognizes the same token,
@@ -20,7 +35,7 @@ func (r *Repository) CreateSession(ctx context.Context, token string, expiresAt 
 		return fmt.Errorf("pruning expired sessions: %w", err)
 	}
 	insert := r.ph(`INSERT INTO sessions (token, expires_at) VALUES (%s, %s)`, 1, 2)
-	if _, err := r.db.ExecContext(ctx, insert, token, expiresAt.UTC().Format(crawledAtLayout)); err != nil {
+	if _, err := r.db.ExecContext(ctx, insert, hashSessionToken(token), expiresAt.UTC().Format(crawledAtLayout)); err != nil {
 		return fmt.Errorf("creating session: %w", err)
 	}
 	return nil
@@ -30,8 +45,9 @@ func (r *Repository) CreateSession(ctx context.Context, token string, expiresAt 
 // yet. An expired session is deleted as a side effect of being found, the
 // same lazy-cleanup behavior the old in-memory session store had.
 func (r *Repository) ValidSession(ctx context.Context, token string) (bool, error) {
+	hashed := hashSessionToken(token)
 	var expiresAtStr string
-	err := r.db.QueryRowContext(ctx, r.ph(`SELECT expires_at FROM sessions WHERE token = %s`, 1), token).Scan(&expiresAtStr)
+	err := r.db.QueryRowContext(ctx, r.ph(`SELECT expires_at FROM sessions WHERE token = %s`, 1), hashed).Scan(&expiresAtStr)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -43,7 +59,7 @@ func (r *Repository) ValidSession(ctx context.Context, token string) (bool, erro
 		return false, nil
 	}
 	if time.Now().After(expiresAt) {
-		if _, err := r.db.ExecContext(ctx, r.ph(`DELETE FROM sessions WHERE token = %s`, 1), token); err != nil {
+		if _, err := r.db.ExecContext(ctx, r.ph(`DELETE FROM sessions WHERE token = %s`, 1), hashed); err != nil {
 			return false, fmt.Errorf("deleting expired session: %w", err)
 		}
 		return false, nil
@@ -56,7 +72,7 @@ func (r *Repository) ValidSession(ctx context.Context, token string) (bool, erro
 // not an error -- signing out twice, or of an already-expired session, is a
 // normal, harmless occurrence, not a fault.
 func (r *Repository) RevokeSession(ctx context.Context, token string) error {
-	if _, err := r.db.ExecContext(ctx, r.ph(`DELETE FROM sessions WHERE token = %s`, 1), token); err != nil {
+	if _, err := r.db.ExecContext(ctx, r.ph(`DELETE FROM sessions WHERE token = %s`, 1), hashSessionToken(token)); err != nil {
 		return fmt.Errorf("revoking session: %w", err)
 	}
 	return nil
