@@ -13,6 +13,16 @@ import (
 	"searchengine/internal/ports"
 )
 
+// A test-only override of application.EmbeddingRecomputeMinInterval (see
+// its own doc comment) -- without this, every test in this file that
+// processes more than a handful of documents through
+// RunEmbeddingRecomputeJob's real per-document pacing would take
+// multiple real seconds (the batching test alone processes over 100
+// documents).
+func init() {
+	application.EmbeddingRecomputeMinInterval = time.Microsecond
+}
+
 // fakeEmbeddingRepo is a minimal in-memory ports.EmbeddingRepository --
 // enough to exercise RunEmbeddingRecomputeJob without a real DB.
 type fakeEmbeddingRepo struct {
@@ -61,9 +71,16 @@ func (r *fakeEmbeddingRepo) UpdateEmbedding(_ context.Context, id string, vec []
 // forced to fail by text.
 type fakeRecomputeEmbedder struct {
 	errByText map[string]error
+	// delay, when set, is slept inside Embed before returning -- used to
+	// prove paceEmbedCall adds no extra wait when the real call already
+	// took at least as long as the configured interval.
+	delay time.Duration
 }
 
 func (e *fakeRecomputeEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
+	if e.delay > 0 {
+		time.Sleep(e.delay)
+	}
 	if err, ok := e.errByText[text]; ok {
 		return nil, err
 	}
@@ -193,6 +210,56 @@ func TestRunEmbeddingRecomputeJob_EmptyCorpusIsANoop(t *testing.T) {
 	}
 	if result.Documents != 0 || result.Failed != 0 {
 		t.Errorf("expected a zero-value result for an empty corpus, got %+v", result)
+	}
+}
+
+// TestRunEmbeddingRecomputeJob_PacesEmbedCalls proves the job actually
+// paces its Embed calls (see application.EmbeddingRecomputeMinInterval)
+// rather than firing them back-to-back -- the whole point being to
+// respect a real embeddings provider's rate limit (see
+// docs.ionos.com/cloud/ai/ai-model-hub/how-tos/rate-limits) instead of
+// flooding it.
+func TestRunEmbeddingRecomputeJob_PacesEmbedCalls(t *testing.T) {
+	original := application.EmbeddingRecomputeMinInterval
+	application.EmbeddingRecomputeMinInterval = 50 * time.Millisecond
+	defer func() { application.EmbeddingRecomputeMinInterval = original }()
+
+	repo := &fakeEmbeddingRepo{
+		ids: []string{"a", "b", "c"},
+		docs: map[string]domain.Document{
+			"a": {ID: "a", Text: "x"}, "b": {ID: "b", Text: "y"}, "c": {ID: "c", Text: "z"},
+		},
+	}
+	start := time.Now()
+	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, &fakeRecomputeEmbedder{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// 3 documents, each paced to at least 50ms (the fake embedder returns
+	// near-instantly, so nearly all of that is spent waiting) -- expect
+	// close to 3 full intervals' worth of total wait, with slack for
+	// scheduling jitter.
+	if elapsed := time.Since(start); elapsed < 100*time.Millisecond {
+		t.Errorf("expected pacing to add at least ~100ms across 3 documents, took %v", elapsed)
+	}
+}
+
+// TestRunEmbeddingRecomputeJob_NoExtraWaitWhenEmbedAlreadySlow proves
+// pacing adds no meaningful extra delay when a real Embed call already
+// took at least as long as the configured interval -- pacing should never
+// make an already-slow provider slower.
+func TestRunEmbeddingRecomputeJob_NoExtraWaitWhenEmbedAlreadySlow(t *testing.T) {
+	original := application.EmbeddingRecomputeMinInterval
+	application.EmbeddingRecomputeMinInterval = 10 * time.Millisecond
+	defer func() { application.EmbeddingRecomputeMinInterval = original }()
+
+	repo := &fakeEmbeddingRepo{ids: []string{"a"}, docs: map[string]domain.Document{"a": {ID: "a", Text: "x"}}}
+	slowEmbedder := &fakeRecomputeEmbedder{delay: 100 * time.Millisecond}
+	start := time.Now()
+	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, slowEmbedder); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Errorf("expected no meaningful extra pacing wait when Embed already took longer than the interval, took %v", elapsed)
 	}
 }
 

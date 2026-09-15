@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -40,6 +41,67 @@ const maxResponseBytes = 1 << 20
 // Embedder (e.g. in a test) still gets a sane, non-zero value.
 const defaultDimensions = 128
 
+// rateLimitMaxRetries bounds how many times Embed/ListModels retries a
+// rate-limited response before giving up and returning the error to the
+// caller -- otherwise a single persistently-throttled call could retry
+// forever and stall a caller like application.RunEmbeddingRecomputeJob
+// (which needs to eventually move on and count a document as failed
+// rather than block the entire corpus behind one document).
+const rateLimitMaxRetries = 5
+
+// rateLimitInitialBackoff/rateLimitMaxBackoff bound the exponential
+// backoff used after a 429 -- IONOS's AI Model Hub rate-limit guidance
+// (docs.ionos.com/cloud/ai/ai-model-hub/how-tos/rate-limits) calls for
+// exponential backoff there specifically because 429 carries no
+// server-given delay (unlike 529 -- see retryDelay below).
+const (
+	rateLimitInitialBackoff = 500 * time.Millisecond
+	rateLimitMaxBackoff     = 30 * time.Second
+)
+
+// statusOverloaded is IONOS's "the platform overall is overloaded"
+// status -- distinct from the contract-specific 429, and the one case
+// that does carry a Retry-After the client is expected to honor exactly
+// rather than backing off on its own schedule. Not a named constant in
+// net/http (529 isn't part of the standard HTTP status registry).
+const statusOverloaded = 529
+
+// isRateLimitStatus reports whether status is one of the two codes
+// IONOS's rate-limit docs describe as retryable. Any other non-2xx status
+// (400, 401, 404, ...) means retrying would just fail identically again,
+// so those are never retried.
+func isRateLimitStatus(status int) bool {
+	return status == http.StatusTooManyRequests || status == statusOverloaded
+}
+
+// retryDelay picks how long to wait before the next attempt: a 529
+// carries its own Retry-After (seconds) that must be honored exactly per
+// IONOS's guidance ("retry only after the indicated delay"); a 429 never
+// carries one, so that case falls back to the caller's own exponential
+// backoff sequence instead.
+func retryDelay(resp *http.Response, backoff time.Duration) time.Duration {
+	if resp.StatusCode == statusOverloaded {
+		if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+			if secs, err := strconv.Atoi(retryAfter); err == nil && secs >= 0 {
+				return time.Duration(secs) * time.Second
+			}
+		}
+	}
+	return backoff
+}
+
+// waitForRetry blocks for wait, or returns ctx's error if it's cancelled
+// first -- shared by Embed/ListModels' retry loops so a long backoff
+// never outlives the caller's own context.
+func waitForRetry(ctx context.Context, wait time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(wait):
+		return nil
+	}
+}
+
 // Config configures a new Embedder. BaseURL and APIKey are read verbatim
 // from the admin-configured EmbeddingHTTPBaseURL/EmbeddingHTTPAPIKey
 // settings; APIKey is never logged by this package.
@@ -59,17 +121,26 @@ type Config struct {
 	// downstream cosine-similarity calculation. <=0 falls back to
 	// defaultDimensions.
 	Dimensions int
+	// RateLimitMaxRetries/RateLimitInitialBackoff override
+	// rateLimitMaxRetries/rateLimitInitialBackoff -- a test-only hook so
+	// the retry-on-429/529 behavior can be exercised without a real test
+	// waiting out multi-second production backoff delays. Production
+	// callers should leave both at their zero value.
+	RateLimitMaxRetries     int
+	RateLimitInitialBackoff time.Duration
 }
 
 // Embedder calls an OpenAI-compatible POST {base_url}/embeddings endpoint:
 // request body {"input": text, "model": "..."}, response body
 // {"data":[{"embedding":[...]}]}.
 type Embedder struct {
-	baseURL string
-	apiKey  string
-	model   string
-	dims    int
-	client  *http.Client
+	baseURL             string
+	apiKey              string
+	model               string
+	dims                int
+	client              *http.Client
+	rateLimitMaxRetries int
+	rateLimitBackoff    time.Duration
 }
 
 func New(cfg Config) *Embedder {
@@ -77,12 +148,22 @@ func New(cfg Config) *Embedder {
 	if dims <= 0 {
 		dims = defaultDimensions
 	}
+	maxRetries := cfg.RateLimitMaxRetries
+	if maxRetries <= 0 {
+		maxRetries = rateLimitMaxRetries
+	}
+	backoff := cfg.RateLimitInitialBackoff
+	if backoff <= 0 {
+		backoff = rateLimitInitialBackoff
+	}
 	return &Embedder{
-		baseURL: strings.TrimRight(cfg.BaseURL, "/"),
-		apiKey:  cfg.APIKey,
-		model:   cfg.Model,
-		dims:    dims,
-		client:  &http.Client{},
+		baseURL:             strings.TrimRight(cfg.BaseURL, "/"),
+		apiKey:              cfg.APIKey,
+		model:               cfg.Model,
+		dims:                dims,
+		client:              &http.Client{},
+		rateLimitMaxRetries: maxRetries,
+		rateLimitBackoff:    backoff,
 	}
 }
 
@@ -103,18 +184,46 @@ type embeddingResponse struct {
 // vector. A network failure, non-2xx status, malformed JSON response, empty
 // result, or a response vector whose length doesn't match the configured
 // Dimensions all return a clear, wrapped error -- never a panic, and never a
-// silently zero-valued or mis-sized vector.
+// silently zero-valued or mis-sized vector. A 429/529 response is retried
+// with backoff (see isRateLimitStatus/retryDelay) up to rateLimitMaxRetries
+// times before its error is finally returned.
 func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
-	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
-	defer cancel()
-
 	reqBody, err := json.Marshal(embeddingRequest{Input: text, Model: e.model})
 	if err != nil {
 		return nil, fmt.Errorf("httpembed: encoding request: %w", err)
 	}
+
+	backoff := e.rateLimitBackoff
+	for attempt := 0; ; attempt++ {
+		vec, resp, err := e.embedOnce(ctx, reqBody)
+		if err == nil {
+			return vec, nil
+		}
+		if resp == nil || !isRateLimitStatus(resp.StatusCode) || attempt >= e.rateLimitMaxRetries {
+			return nil, err
+		}
+		if waitErr := waitForRetry(ctx, retryDelay(resp, backoff)); waitErr != nil {
+			return nil, waitErr
+		}
+		backoff *= 2
+		if backoff > rateLimitMaxBackoff {
+			backoff = rateLimitMaxBackoff
+		}
+	}
+}
+
+// embedOnce makes a single attempt against the embeddings endpoint.
+// resp is non-nil whenever a real HTTP response was received (even a
+// non-2xx one), so Embed's retry loop can inspect its status/headers;
+// it's nil only for a request-building or network-level failure, which
+// Embed never retries.
+func (e *Embedder) embedOnce(ctx context.Context, reqBody []byte) ([]float32, *http.Response, error) {
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+"/embeddings", bytes.NewReader(reqBody))
 	if err != nil {
-		return nil, fmt.Errorf("httpembed: building request: %w", err)
+		return nil, nil, fmt.Errorf("httpembed: building request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if e.apiKey != "" {
@@ -123,30 +232,30 @@ func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
 
 	resp, err := e.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("httpembed: calling embeddings endpoint: %w", err)
+		return nil, nil, fmt.Errorf("httpembed: calling embeddings endpoint: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
-		return nil, fmt.Errorf("httpembed: reading response body: %w", err)
+		return nil, resp, fmt.Errorf("httpembed: reading response body: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("httpembed: embeddings endpoint returned status %d: %s", resp.StatusCode, truncate(redact(body, e.apiKey)))
+		return nil, resp, fmt.Errorf("httpembed: embeddings endpoint returned status %d: %s", resp.StatusCode, truncate(redact(body, e.apiKey)))
 	}
 
 	var parsed embeddingResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return nil, fmt.Errorf("httpembed: decoding response: %w", err)
+		return nil, resp, fmt.Errorf("httpembed: decoding response: %w", err)
 	}
 	if len(parsed.Data) == 0 {
-		return nil, fmt.Errorf("httpembed: embeddings endpoint returned no embedding data")
+		return nil, resp, fmt.Errorf("httpembed: embeddings endpoint returned no embedding data")
 	}
 	vec := parsed.Data[0].Embedding
 	if len(vec) != e.dims {
-		return nil, fmt.Errorf("httpembed: expected %d-dimensional embedding, got %d -- check the configured dimensions match the model actually serving %s", e.dims, len(vec), e.baseURL)
+		return nil, resp, fmt.Errorf("httpembed: expected %d-dimensional embedding, got %d -- check the configured dimensions match the model actually serving %s", e.dims, len(vec), e.baseURL)
 	}
-	return vec, nil
+	return vec, resp, nil
 }
 
 // modelsResponse mirrors the OpenAI-compatible GET {base_url}/models
@@ -169,12 +278,35 @@ type modelsResponse struct {
 // don't implement /models at all -- a 404 there surfaces as a normal
 // non-2xx error, same as any other endpoint failure.
 func (e *Embedder) ListModels(ctx context.Context) ([]string, error) {
+	backoff := e.rateLimitBackoff
+	for attempt := 0; ; attempt++ {
+		ids, resp, err := e.listModelsOnce(ctx)
+		if err == nil {
+			return ids, nil
+		}
+		if resp == nil || !isRateLimitStatus(resp.StatusCode) || attempt >= e.rateLimitMaxRetries {
+			return nil, err
+		}
+		if waitErr := waitForRetry(ctx, retryDelay(resp, backoff)); waitErr != nil {
+			return nil, waitErr
+		}
+		backoff *= 2
+		if backoff > rateLimitMaxBackoff {
+			backoff = rateLimitMaxBackoff
+		}
+	}
+}
+
+// listModelsOnce makes a single attempt against the models endpoint --
+// see embedOnce's identical doc comment on why resp is returned alongside
+// the error.
+func (e *Embedder) listModelsOnce(ctx context.Context) ([]string, *http.Response, error) {
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.baseURL+"/models", nil)
 	if err != nil {
-		return nil, fmt.Errorf("httpembed: building request: %w", err)
+		return nil, nil, fmt.Errorf("httpembed: building request: %w", err)
 	}
 	if e.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+e.apiKey)
@@ -182,27 +314,27 @@ func (e *Embedder) ListModels(ctx context.Context) ([]string, error) {
 
 	resp, err := e.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("httpembed: calling models endpoint: %w", err)
+		return nil, nil, fmt.Errorf("httpembed: calling models endpoint: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
-		return nil, fmt.Errorf("httpembed: reading response body: %w", err)
+		return nil, resp, fmt.Errorf("httpembed: reading response body: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("httpembed: models endpoint returned status %d: %s", resp.StatusCode, truncate(redact(body, e.apiKey)))
+		return nil, resp, fmt.Errorf("httpembed: models endpoint returned status %d: %s", resp.StatusCode, truncate(redact(body, e.apiKey)))
 	}
 
 	var parsed modelsResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return nil, fmt.Errorf("httpembed: decoding response: %w", err)
+		return nil, resp, fmt.Errorf("httpembed: decoding response: %w", err)
 	}
 	ids := make([]string, 0, len(parsed.Data))
 	for _, m := range parsed.Data {
 		ids = append(ids, m.ID)
 	}
-	return ids, nil
+	return ids, resp, nil
 }
 
 // truncate bounds how much of a non-2xx response body an error message
