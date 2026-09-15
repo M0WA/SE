@@ -52,6 +52,24 @@ function kvRow(container, key, value) {
   container.appendChild(row);
 }
 
+// buildTile builds one ".tile" box (see style.css's ".tiles" grid, used by
+// the Settings page's at-a-glance summary and the Overview page's
+// operational-health stats) -- a compact key/value pair, distinct from
+// kvRow's row-in-a-list treatment.
+function buildTile(k, v) {
+  const tile = document.createElement('div');
+  tile.className = 'tile';
+  const kEl = document.createElement('div');
+  kEl.className = 'k';
+  kEl.textContent = k;
+  const vEl = document.createElement('div');
+  vEl.className = 'v';
+  vEl.textContent = v;
+  tile.appendChild(kEl);
+  tile.appendChild(vEl);
+  return tile;
+}
+
 async function checkResponse(resp) {
   if (!resp.ok) {
     const msg = await resp.text();
@@ -392,7 +410,7 @@ function wireVocabularySearch() {
 // internal/adapters/restapi/admin.test.js.
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    clear, setButtonLoading, normalizeURL, kvRow, checkResponse,
+    clear, setButtonLoading, normalizeURL, kvRow, buildTile, checkResponse,
     getJSON, postJSON, deleteRequest, patchJSON,
     textCell, snippetCell, urlCell, seedSummary, formatTimestamp, buildTable,
     linesToText, parseLines,

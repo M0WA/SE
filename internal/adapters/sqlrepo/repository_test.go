@@ -996,6 +996,31 @@ func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 			t.Error("expected an error")
 		}
 	})
+	t.Run("CrawlJobOutcomes", func(t *testing.T) {
+		if _, err := closedRepo(t).CrawlJobOutcomes(ctx, time.Now()); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("DailyFetchOutcomes", func(t *testing.T) {
+		if _, err := closedRepo(t).DailyFetchOutcomes(ctx, time.Now()); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("DocumentsIndexedByDay", func(t *testing.T) {
+		if _, err := closedRepo(t).DocumentsIndexedByDay(ctx, time.Now()); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("DailyFetchDuration", func(t *testing.T) {
+		if _, err := closedRepo(t).DailyFetchDuration(ctx, time.Now()); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("PageRankHistogram", func(t *testing.T) {
+		if _, _, _, err := closedRepo(t).PageRankHistogram(ctx); err == nil {
+			t.Error("expected an error")
+		}
+	})
 	t.Run("CreateScheduledCrawl", func(t *testing.T) {
 		s := domain.ScheduledCrawl{ID: "sched-1", SeedURLs: []string{"http://a"}, IntervalMinutes: 5}
 		if err := closedRepo(t).CreateScheduledCrawl(ctx, s); err == nil {

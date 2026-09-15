@@ -2,6 +2,7 @@ package restapi
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log"
@@ -1256,6 +1257,23 @@ type adminDatabaseResponse struct {
 	TableRows map[string]int64 `json:"table_rows"`
 }
 
+// toAdminDBPoolStats maps sql.DBStats to its wire shape -- shared by
+// handleAdminDatabase and handleAdminOverviewMetrics, the two admin panels
+// that both surface the same live pool via AdminRepository.PoolStats.
+func toAdminDBPoolStats(stats sql.DBStats) adminDBPoolStats {
+	return adminDBPoolStats{
+		MaxOpenConnections: stats.MaxOpenConnections,
+		OpenConnections:    stats.OpenConnections,
+		InUse:              stats.InUse,
+		Idle:               stats.Idle,
+		WaitCount:          stats.WaitCount,
+		WaitDurationMS:     stats.WaitDuration.Milliseconds(),
+		MaxIdleClosed:      stats.MaxIdleClosed,
+		MaxIdleTimeClosed:  stats.MaxIdleTimeClosed,
+		MaxLifetimeClosed:  stats.MaxLifetimeClosed,
+	}
+}
+
 func (h *Handler) handleAdminDatabase(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
 		return
@@ -1265,20 +1283,218 @@ func (h *Handler) handleAdminDatabase(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	stats := h.admin.PoolStats()
 	writeJSON(w, http.StatusOK, adminDatabaseResponse{
-		Driver: h.dbDriver,
-		Pool: adminDBPoolStats{
-			MaxOpenConnections: stats.MaxOpenConnections,
-			OpenConnections:    stats.OpenConnections,
-			InUse:              stats.InUse,
-			Idle:               stats.Idle,
-			WaitCount:          stats.WaitCount,
-			WaitDurationMS:     stats.WaitDuration.Milliseconds(),
-			MaxIdleClosed:      stats.MaxIdleClosed,
-			MaxIdleTimeClosed:  stats.MaxIdleTimeClosed,
-			MaxLifetimeClosed:  stats.MaxLifetimeClosed,
-		},
+		Driver:    h.dbDriver,
+		Pool:      toAdminDBPoolStats(h.admin.PoolStats()),
 		TableRows: counts,
 	})
+}
+
+// Lookback windows for the admin Overview page's tier-2 trend/breakdown
+// panels (see handleAdminOverviewMetrics) -- the crawl-outcome donut and
+// documents-indexed trend look back 30 days, the two crawl_job_pages-backed
+// panels (fetch throughput/outcome breakdown, fetch duration trend) look
+// back a narrower 14 days so their one-bar/one-point-per-day charts stay
+// readable rather than cramming a full month of daily crawl activity, which
+// is typically much higher-volume than daily document counts, into the
+// same width.
+const (
+	overviewJobOutcomeDays     = 30
+	overviewDocumentsTrendDays = 30
+	overviewThroughputDays     = 14
+	overviewFetchDurationDays  = 14
+)
+
+type adminCrawlJobOutcome struct {
+	Status string `json:"status"`
+	Count  int    `json:"count"`
+}
+
+type adminDailyFetchOutcome struct {
+	Date     string         `json:"date"`
+	Outcomes map[string]int `json:"outcomes"`
+}
+
+type adminDailyCount struct {
+	Date  string `json:"date"`
+	Count int    `json:"count"`
+}
+
+type adminDailyDuration struct {
+	Date          string  `json:"date"`
+	AvgDurationMs float64 `json:"avg_duration_ms"`
+}
+
+type adminPageRankBucket struct {
+	Label string `json:"label"`
+	Count int    `json:"count"`
+}
+
+// adminOverviewRunningJob is the inline-visible detail for one currently
+// running crawl job on the Overview page -- just enough to summarize it
+// (seedSummary already renders SeedURLs client-side the same way the
+// Jobs/Schedules tables do), not the full CrawlJobSummary.
+type adminOverviewRunningJob struct {
+	ID           string   `json:"id"`
+	SeedURLs     []string `json:"seed_urls"`
+	PagesCrawled int      `json:"pages_crawled"`
+}
+
+type adminOverviewMetrics struct {
+	// Tier 1: pure aggregation over data already returned by ListCrawlJobs/
+	// ListScheduledCrawls/PoolStats -- see handleAdminOverviewMetrics.
+	RunningCrawlJobs    int                       `json:"running_crawl_jobs"`
+	QueuedCrawlJobs     int                       `json:"queued_crawl_jobs"`
+	RunningJobs         []adminOverviewRunningJob `json:"running_jobs"`
+	SchedulesEnabled    int                       `json:"schedules_enabled"`
+	SchedulesDisabled   int                       `json:"schedules_disabled"`
+	SchedulesInProgress int                       `json:"schedules_in_progress"`
+	SchedulesOverdue    int                       `json:"schedules_overdue"`
+	Pool                adminDBPoolStats          `json:"pool"`
+
+	// Tier 2: each backed by one new AdminRepository aggregate query.
+	JobOutcomes        []adminCrawlJobOutcome   `json:"job_outcomes"`
+	DailyFetchOutcomes []adminDailyFetchOutcome `json:"daily_fetch_outcomes"`
+	DocumentsByDay     []adminDailyCount        `json:"documents_by_day"`
+	FetchDurationByDay []adminDailyDuration     `json:"fetch_duration_by_day"`
+	PageRankBuckets    []adminPageRankBucket    `json:"pagerank_buckets"`
+	// PageRankOrphanThreshold documents the fixed cutoff PageRankOrphanCount/
+	// PageRankOrphanPercent were computed against (domain.
+	// PageRankOrphanThreshold), so the client can label the stat tile
+	// correctly without hardcoding the number itself.
+	PageRankOrphanThreshold float64 `json:"pagerank_orphan_threshold"`
+	PageRankOrphanCount     int     `json:"pagerank_orphan_count"`
+	PageRankOrphanPercent   float64 `json:"pagerank_orphan_percent"`
+	PageRankTotalDocs       int     `json:"pagerank_total_docs"`
+}
+
+// handleAdminOverviewMetrics backs the admin Overview page's operational
+// panels beyond the corpus summary handleAdminDocumentsOverview already
+// covers: crawl job/schedule health, DB pool utilization, and the tier-2
+// trend/breakdown charts (crawl outcomes, fetch throughput, documents
+// indexed over time, fetch duration, PageRank distribution). Registered as
+// "GET /admin/api/overview/metrics", so the method is already guaranteed.
+//
+// Only h.admin is required (matching every other admin-diagnostics
+// endpoint) -- h.jobs/h.scheduledCrawls are consulted only if configured,
+// each degrading to its zero-valued fields rather than failing the whole
+// response, since production always wires all three together (cmd/admin)
+// but nothing here strictly depends on that.
+func (h *Handler) handleAdminOverviewMetrics(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+		return
+	}
+	ctx := r.Context()
+	resp := adminOverviewMetrics{PageRankOrphanThreshold: domain.PageRankOrphanThreshold}
+
+	if h.jobs != nil {
+		jobs, err := h.jobs.ListCrawlJobs(ctx)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, j := range jobs {
+			switch j.Status {
+			case domain.CrawlJobRunning:
+				resp.RunningCrawlJobs++
+				resp.RunningJobs = append(resp.RunningJobs, adminOverviewRunningJob{
+					ID: j.ID, SeedURLs: j.Request.SeedURLs, PagesCrawled: j.PagesCrawled,
+				})
+			case domain.CrawlJobQueued:
+				resp.QueuedCrawlJobs++
+			}
+		}
+	}
+
+	if h.scheduledCrawls != nil {
+		schedules, err := h.scheduledCrawls.ListScheduledCrawls(ctx)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		now := time.Now().UTC()
+		for _, s := range schedules {
+			if s.Enabled {
+				resp.SchedulesEnabled++
+			} else {
+				resp.SchedulesDisabled++
+			}
+			if s.InProgress {
+				resp.SchedulesInProgress++
+			}
+			if s.Enabled && s.NextRunAt.Before(now) {
+				resp.SchedulesOverdue++
+			}
+		}
+	}
+
+	resp.Pool = toAdminDBPoolStats(h.admin.PoolStats())
+
+	now := time.Now().UTC()
+	outcomes, err := h.admin.CrawlJobOutcomes(ctx, now.AddDate(0, 0, -overviewJobOutcomeDays))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for _, o := range outcomes {
+		resp.JobOutcomes = append(resp.JobOutcomes, adminCrawlJobOutcome{Status: string(o.Status), Count: o.Count})
+	}
+
+	dailyOutcomes, err := h.admin.DailyFetchOutcomes(ctx, now.AddDate(0, 0, -overviewThroughputDays))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	resp.DailyFetchOutcomes = groupDailyFetchOutcomes(dailyOutcomes)
+
+	docsByDay, err := h.admin.DocumentsIndexedByDay(ctx, now.AddDate(0, 0, -overviewDocumentsTrendDays))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for _, d := range docsByDay {
+		resp.DocumentsByDay = append(resp.DocumentsByDay, adminDailyCount{Date: d.Date, Count: d.Count})
+	}
+
+	durationByDay, err := h.admin.DailyFetchDuration(ctx, now.AddDate(0, 0, -overviewFetchDurationDays))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for _, d := range durationByDay {
+		resp.FetchDurationByDay = append(resp.FetchDurationByDay, adminDailyDuration{Date: d.Date, AvgDurationMs: d.AvgDurationMs})
+	}
+
+	buckets, orphanCount, totalDocs, err := h.admin.PageRankHistogram(ctx)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for _, b := range buckets {
+		resp.PageRankBuckets = append(resp.PageRankBuckets, adminPageRankBucket{Label: b.Label, Count: b.Count})
+	}
+	resp.PageRankOrphanCount = orphanCount
+	resp.PageRankTotalDocs = totalDocs
+	if totalDocs > 0 {
+		resp.PageRankOrphanPercent = float64(orphanCount) / float64(totalDocs) * 100
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// groupDailyFetchOutcomes regroups sqlrepo's flat (day, status, count) rows
+// -- one row per outcome actually seen that day -- into one entry per day
+// with every outcome nested underneath, the shape the Overview page's
+// stacked-bar chart wants to render directly. Rows arrive already ordered
+// by day, so a single pass (tracking the last day seen) is enough, no
+// separate sort/index step.
+func groupDailyFetchOutcomes(rows []domain.DailyFetchOutcome) []adminDailyFetchOutcome {
+	var out []adminDailyFetchOutcome
+	for _, row := range rows {
+		if len(out) == 0 || out[len(out)-1].Date != row.Date {
+			out = append(out, adminDailyFetchOutcome{Date: row.Date, Outcomes: map[string]int{}})
+		}
+		out[len(out)-1].Outcomes[string(row.Status)] = row.Count
+	}
+	return out
 }

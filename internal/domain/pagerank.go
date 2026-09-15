@@ -20,6 +20,24 @@ const PageRankMaxIterations = 50
 // this, the scores are considered settled and iteration stops early.
 const PageRankEpsilon = 1e-6
 
+// PageRankOrphanThreshold is the pagerank value below which a document is
+// treated as an "orphan" -- functionally unlinked -- for the admin
+// Overview page's orphan-rate stat tile. Chosen to equal PageRankEpsilon,
+// the same "negligible" convergence threshold PageRank already uses
+// elsewhere: a score this close to zero only happens once PageRank has
+// actually run and found the page has no real incoming link weight, never
+// merely because it hasn't been recomputed yet (a never-recomputed
+// document instead sits at the neutral 1/N default every document starts
+// at -- see sqlrepo's backfillPageRank/SaveDocument -- which is nowhere
+// near this small once there's more than a handful of documents).
+const PageRankOrphanThreshold = 1e-6
+
+// PageRankHistogramBuckets is how many equal-width buckets
+// sqlrepo.Repository.PageRankHistogram divides the corpus's observed
+// [min, max] pagerank range into for the admin Overview page's
+// distribution histogram.
+const PageRankHistogramBuckets = 10
+
 // PageRankRunInfo reports how a PageRank computation actually ran -- how
 // many iterations it took, how far the final iteration still was from full
 // convergence, and how long the run took wall-clock. None of these are
