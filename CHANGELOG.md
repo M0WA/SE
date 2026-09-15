@@ -1,5 +1,18 @@
 # Changelog
 
+## v4.0.27 - 2026-09-15
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* tag-release.yml: wait for the merge commit's own CI before tagging by @M0WA in https://github.com/M0WA/SE/pull/20
+* Fix the site's type scale, label sizing, and a stray divider by @M0WA in https://github.com/M0WA/SE/pull/21
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.0.26...v4.0.27
+
+
 ## v4.0.26 - 2026-09-15
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
