@@ -128,6 +128,7 @@ type Handler struct {
 	adminUser       string
 	adminPass       string
 	sessions        ports.SessionStore
+	loginLimiter    *loginLimiter
 }
 
 // Config wires a Handler's dependencies. Crawler and CrawlJobs are used
@@ -212,6 +213,7 @@ func New(cfg Config) *Handler {
 		adminUser:       cfg.AdminUser,
 		adminPass:       cfg.AdminPass,
 		sessions:        sessions,
+		loginLimiter:    newLoginLimiter(),
 	}
 }
 

@@ -2,6 +2,7 @@ package restapi
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 )
@@ -123,5 +124,117 @@ func TestRandomToken_ProducesDistinctNonEmptyTokens(t *testing.T) {
 	}
 	if a == b {
 		t.Error("expected two calls to produce distinct tokens")
+	}
+}
+
+func TestLoginLimiter_UnknownKeyIsNotLocked(t *testing.T) {
+	l := newLoginLimiter()
+	if _, locked := l.locked("1.2.3.4", time.Now()); locked {
+		t.Error("expected a key with no history to not be locked")
+	}
+}
+
+func TestLoginLimiter_LocksOutAfterMaxAttempts(t *testing.T) {
+	l := newLoginLimiter()
+	now := time.Now()
+	for i := 0; i < loginMaxAttempts; i++ {
+		l.recordFailure("1.2.3.4", now)
+		if _, locked := l.locked("1.2.3.4", now); locked {
+			t.Fatalf("expected no lockout before crossing loginMaxAttempts, at failure %d", i+1)
+		}
+	}
+	l.recordFailure("1.2.3.4", now) // the failure that crosses the threshold
+	wait, locked := l.locked("1.2.3.4", now)
+	if !locked {
+		t.Fatal("expected a lockout after crossing loginMaxAttempts")
+	}
+	if wait != loginBaseLockout {
+		t.Errorf("expected the first lockout to be loginBaseLockout, got %v", wait)
+	}
+}
+
+func TestLoginLimiter_LockoutExpires(t *testing.T) {
+	l := newLoginLimiter()
+	now := time.Now()
+	for i := 0; i <= loginMaxAttempts; i++ {
+		l.recordFailure("1.2.3.4", now)
+	}
+	if _, locked := l.locked("1.2.3.4", now.Add(loginBaseLockout+time.Second)); locked {
+		t.Error("expected the lockout to have expired")
+	}
+}
+
+func TestLoginLimiter_BackoffGrowsAndCapsAtMaxLockout(t *testing.T) {
+	l := newLoginLimiter()
+	now := time.Now()
+	// Cross the threshold, then keep failing (each still within the
+	// lockout, as a real attacker retrying would) far past what it'd take
+	// to exceed loginMaxLockout without capping.
+	for i := 0; i < loginMaxAttempts+20; i++ {
+		l.recordFailure("1.2.3.4", now)
+	}
+	wait, locked := l.locked("1.2.3.4", now)
+	if !locked {
+		t.Fatal("expected still locked out")
+	}
+	if wait > loginMaxLockout {
+		t.Errorf("expected backoff capped at loginMaxLockout (%v), got %v", loginMaxLockout, wait)
+	}
+	if wait <= loginBaseLockout {
+		t.Errorf("expected backoff to have grown past the base lockout, got %v", wait)
+	}
+}
+
+func TestLoginLimiter_WindowResetsAfterExpiry(t *testing.T) {
+	l := newLoginLimiter()
+	start := time.Now()
+	for i := 0; i < loginMaxAttempts; i++ {
+		l.recordFailure("1.2.3.4", start)
+	}
+	// One more failure, but long after the sliding window expired -- this
+	// must start a fresh window (failures reset to 1) rather than treating
+	// it as the failure that crosses the threshold.
+	later := start.Add(loginAttemptWindow + time.Minute)
+	l.recordFailure("1.2.3.4", later)
+	if _, locked := l.locked("1.2.3.4", later); locked {
+		t.Error("expected a failure in a fresh window to not immediately lock out")
+	}
+}
+
+func TestLoginLimiter_SuccessClearsFailureHistory(t *testing.T) {
+	l := newLoginLimiter()
+	now := time.Now()
+	for i := 0; i < loginMaxAttempts; i++ {
+		l.recordFailure("1.2.3.4", now)
+	}
+	l.recordSuccess("1.2.3.4")
+	l.recordFailure("1.2.3.4", now) // would be failure #1 of a fresh window
+	if _, locked := l.locked("1.2.3.4", now); locked {
+		t.Error("expected recordSuccess to have cleared the prior failure count")
+	}
+}
+
+func TestLoginLimiter_KeysAreIndependent(t *testing.T) {
+	l := newLoginLimiter()
+	now := time.Now()
+	for i := 0; i <= loginMaxAttempts; i++ {
+		l.recordFailure("1.2.3.4", now)
+	}
+	if _, locked := l.locked("5.6.7.8", now); locked {
+		t.Error("expected a different key to be unaffected by another key's lockout")
+	}
+}
+
+func TestClientIP_PrefersXRealIP(t *testing.T) {
+	r := &http.Request{Header: http.Header{"X-Real-Ip": []string{"203.0.113.5"}}, RemoteAddr: "127.0.0.1:9999"}
+	if got := clientIP(r); got != "203.0.113.5" {
+		t.Errorf("expected X-Real-IP to win, got %q", got)
+	}
+}
+
+func TestClientIP_FallsBackToRemoteAddr(t *testing.T) {
+	r := &http.Request{Header: http.Header{}, RemoteAddr: "192.0.2.1:1234"}
+	if got := clientIP(r); got != "192.0.2.1:1234" {
+		t.Errorf("expected RemoteAddr fallback, got %q", got)
 	}
 }
