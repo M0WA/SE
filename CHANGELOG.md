@@ -1,5 +1,18 @@
 # Changelog
 
+## v4.0.33 - 2026-09-15
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Respect the embeddings provider's rate limit during recompute by @M0WA in https://github.com/M0WA/SE/pull/49
+* Run BM25 and query embedding concurrently; make the recompute rate limit configurable by @M0WA in https://github.com/M0WA/SE/pull/50
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.0.32...v4.0.33
+
+
 ## v4.0.32 - 2026-09-15
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
