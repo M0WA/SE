@@ -108,7 +108,19 @@ gh pr merge --squash   # or --merge/--rebase; any of the three is allowed
    workflow every time.
 2. Once its CI run (the same "Build, vet & test" job as always — a real,
    if usually uneventful, check that nothing about `main` is broken right
-   before cutting a release from it) goes green, merge it.
+   before cutting a release from it) goes green, merge it. **This PR's CI
+   run commonly comes up stuck at `action_required` instead of running at
+   all** (`gh run list --branch release/vX.Y.Z`) — the release branch's
+   HEAD commit is authored by `github-actions[bot]` (`prepare-release.yml`
+   pushed it), and that alone is enough for GitHub to hold the workflow
+   run for manual approval on this repo, even though the PR isn't from a
+   fork. No ruleset here controls it (checked both — neither
+   `main-protection` nor `release-tag-immutability` mention it), so
+   there's nothing to permanently disable short of finding the right
+   org/repo Actions setting, which wasn't locatable via the API. Approve
+   it directly to unblock: `gh api -X POST
+   repos/M0WA/SE/actions/runs/<run-id>/approve`, then wait for it to
+   actually complete before merging.
 3. Merging triggers `tag-release.yml`, which first *waits for the merge
    commit's own "Build, vet & test" run on `main`* to finish (a squash/
    merge/rebase produces a new commit with its own separate push-triggered
