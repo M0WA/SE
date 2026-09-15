@@ -15,6 +15,13 @@
   const defaultTopKEl = document.getElementById('default-top-k');
   const semanticPoolSizeEl = document.getElementById('semantic-pool-size');
   const annSearchEnabledEl = document.getElementById('ann-search-enabled');
+  const embeddingProviderEl = document.getElementById('embedding-provider');
+  const embeddingHTTPFieldsEl = document.getElementById('embedding-http-fields');
+  const embeddingHTTPBaseURLEl = document.getElementById('embedding-http-base-url');
+  const embeddingHTTPModelEl = document.getElementById('embedding-http-model');
+  const embeddingHTTPDimensionsEl = document.getElementById('embedding-http-dimensions');
+  const embeddingHTTPAPIKeyEl = document.getElementById('embedding-http-api-key');
+  const embeddingHTTPAPIKeyHintEl = document.getElementById('embedding-http-api-key-hint');
   const maxDocumentVersionsEl = document.getElementById('max-document-versions');
   const dbMaxOpenConnsEl = document.getElementById('db-max-open-conns');
   const dbMaxIdleConnsEl = document.getElementById('db-max-idle-conns');
@@ -55,6 +62,23 @@
     tileCrawlDefaultEl.textContent = s.operational.default_max_pages + ' pages';
   }
 
+  // toggleEmbeddingHTTPFields shows the HTTP-provider-only fields only when
+  // that provider is actually selected -- they're meaningless (and
+  // confusing to leave visible) while the default hash provider is active.
+  function toggleEmbeddingHTTPFields() {
+    embeddingHTTPFieldsEl.hidden = embeddingProviderEl.value !== 'http';
+  }
+  embeddingProviderEl.addEventListener('change', toggleEmbeddingHTTPFields);
+
+  // The API key field starts readonly and only becomes editable on focus --
+  // same reasoning as crawl.html's Basic auth password field (see
+  // admin_crawl.js): a browser won't offer to autofill a saved login into a
+  // field that's readonly when the page loads. Unlike that one-off crawl
+  // form, this field also never shows the real stored value (see
+  // applySettings/embeddingHTTPAPIKeyHintEl below) -- leaving it blank on
+  // save means "keep whatever's already configured," not "clear it."
+  embeddingHTTPAPIKeyEl.addEventListener('focus', () => embeddingHTTPAPIKeyEl.removeAttribute('readonly'), { once: true });
+
   function countLabel(n, noun) {
     return n + ' ' + noun + (n === 1 ? '' : 's');
   }
@@ -83,6 +107,18 @@
     defaultTopKEl.value = s.operational.default_top_k;
     semanticPoolSizeEl.value = s.operational.semantic_candidate_pool_size;
     annSearchEnabledEl.checked = s.operational.ann_search_enabled;
+    embeddingProviderEl.value = s.operational.embedding_provider || 'hash';
+    embeddingHTTPBaseURLEl.value = s.operational.embedding_http_base_url || '';
+    embeddingHTTPModelEl.value = s.operational.embedding_http_model || '';
+    embeddingHTTPDimensionsEl.value = s.operational.embedding_http_dimensions || '';
+    // The real key is never sent back (see toOperationalValues in admin.go)
+    // -- this field always starts blank, only ever showing whether one is
+    // currently configured, never the value itself.
+    embeddingHTTPAPIKeyEl.value = '';
+    embeddingHTTPAPIKeyHintEl.textContent = s.operational.embedding_http_api_key_set
+      ? 'A key is currently configured. Leave blank to keep it, or type a new one to replace it.'
+      : 'No key currently configured.';
+    toggleEmbeddingHTTPFields();
     maxDocumentVersionsEl.value = s.operational.max_document_versions;
     dbMaxOpenConnsEl.value = s.operational.db_max_open_conns;
     dbMaxIdleConnsEl.value = s.operational.db_max_idle_conns;
@@ -134,6 +170,11 @@
         default_top_k: parseInt(defaultTopKEl.value, 10),
         semantic_candidate_pool_size: parseInt(semanticPoolSizeEl.value, 10),
         ann_search_enabled: annSearchEnabledEl.checked,
+        embedding_provider: embeddingProviderEl.value,
+        embedding_http_base_url: embeddingHTTPBaseURLEl.value,
+        embedding_http_model: embeddingHTTPModelEl.value,
+        embedding_http_dimensions: parseInt(embeddingHTTPDimensionsEl.value, 10) || 0,
+        embedding_http_api_key: embeddingHTTPAPIKeyEl.value,
         max_document_versions: parseInt(maxDocumentVersionsEl.value, 10),
         db_max_open_conns: parseInt(dbMaxOpenConnsEl.value, 10),
         db_max_idle_conns: parseInt(dbMaxIdleConnsEl.value, 10),
@@ -225,5 +266,6 @@
       saveOverrides, applyOverrides, loadOverrides,
       factorsToText, parseFactorLines,
       renderSettingsSummary, renderOverridesSummary,
+      toggleEmbeddingHTTPFields,
     };
   }

@@ -1017,6 +1017,53 @@ components:
                 edge in BM25 scoring. A value below 1 falls back to the
                 default (2). Only takes effect for documents crawled or
                 re-crawled after the change -- not retroactive.
+            embedding_provider:
+              type: string
+              enum: [hash, http]
+              description: >-
+                Which embedding implementation every process (search,
+                admin, crawl) constructs at startup: "hash" (the default --
+                dependency-free feature hashing, not a trained model) or
+                "http" (calls an OpenAI-compatible embeddings HTTP
+                endpoint -- a local inference server or a hosted API -- for
+                a real trained model). Unlike every other field here, this
+                is NOT applied live: it's read once at process startup, so
+                a change only takes effect the next time search/admin/crawl
+                are restarted. Switching providers also changes the vector
+                space entirely -- existing stored embeddings become
+                meaningless to compare against newly computed ones until
+                every document is re-crawled.
+            embedding_http_base_url:
+              type: string
+              description: >-
+                The "http" embedding provider's OpenAI-compatible base URL,
+                e.g. "http://localhost:11434/v1" for a local Ollama server.
+                Requests go to "<embedding_http_base_url>/embeddings".
+                Meaningless unless embedding_provider is "http".
+            embedding_http_model:
+              type: string
+              description: Sent as the embeddings request body's "model" field.
+            embedding_http_dimensions:
+              type: integer
+              description: >-
+                Expected embedding vector length; a mismatch against the
+                API's actual response fails clearly rather than corrupting
+                search. A value below 1 falls back to the default (128).
+            embedding_http_api_key:
+              type: string
+              description: >-
+                Write-only: sent as an "Authorization: Bearer" header on
+                every embeddings request. A GET response always reports
+                this as "" regardless of what's configured -- see
+                embedding_http_api_key_set for whether a key is set. A POST
+                that leaves this blank leaves the currently configured key
+                unchanged rather than clearing it.
+            embedding_http_api_key_set:
+              type: boolean
+              readOnly: true
+              description: >-
+                GET-only: whether an embedding_http_api_key is currently
+                configured, without revealing the key itself.
 
     Overrides:
       type: object

@@ -85,6 +85,37 @@
       </div>
 
       <div class="subpanel">
+        <h4>Embeddings</h4>
+        <div class="form-row">
+          <label for="embedding-provider">Embedding provider — how documents and queries are turned into vectors for semantic search</label><br>
+          <select id="embedding-provider" class="field">
+            <option value="hash">Hash — dependency-free feature hashing (default; not a trained model)</option>
+            <option value="http">HTTP — a real trained model via an OpenAI-compatible embeddings endpoint</option>
+          </select>
+        </div>
+        <div id="embedding-http-fields">
+          <div class="form-row">
+            <label for="embedding-http-base-url">Base URL — the embeddings API's base URL, e.g. a local Ollama server or a hosted provider</label><br>
+            <input id="embedding-http-base-url" class="field" type="text" placeholder="http://localhost:11434/v1">
+          </div>
+          <div class="form-row">
+            <label for="embedding-http-model">Model name — sent as the request's "model" field</label><br>
+            <input id="embedding-http-model" class="field" type="text" placeholder="nomic-embed-text">
+          </div>
+          <div class="form-row">
+            <label for="embedding-http-dimensions">Dimensions — the model's embedding vector length; a mismatch fails clearly rather than corrupting search</label><br>
+            <input id="embedding-http-dimensions" class="field" type="number" step="1" min="1">
+          </div>
+          <div class="form-row">
+            <label for="embedding-http-api-key">API key — sent as an Authorization header; optional, leave blank for a server that needs none</label><br>
+            <input id="embedding-http-api-key" class="field" type="password" autocomplete="new-password" readonly>
+            <p class="tuning-hint" id="embedding-http-api-key-hint"></p>
+          </div>
+        </div>
+        <p class="tuning-hint">Default: hash. Switching providers takes effect only after every process (search, admin, crawl) is restarted -- unlike every other setting on this page, it isn't picked up live, since the embedding column's size is fixed at process startup. It also changes the vector space entirely: existing stored embeddings become meaningless to compare against newly computed ones until every document is re-crawled.</p>
+      </div>
+
+      <div class="subpanel">
         <h4>Link authority</h4>
         <div class="form-row">
           <label for="pagerank-weight">PageRank weight — how much link authority influences ranking (0 = no effect, 1 = ranking driven entirely by link authority)</label><br>

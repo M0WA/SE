@@ -217,6 +217,8 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 		LinkScope:                        domain.LinkScopeDomain,
 		MaxDocumentVersions:              5,
 		TitleWeight:                      2,
+		EmbeddingProvider:                domain.EmbeddingProviderHash,
+		EmbeddingHTTPDimensions:          128,
 	}
 	if v != want {
 		t.Errorf("expected defaults %+v, got %+v", want, v)
@@ -344,6 +346,107 @@ func TestOperationalSettings_SetValidLinkScopePreserved(t *testing.T) {
 	s.Set(domain.OperationalSettingsValues{LinkScope: domain.LinkScopeAny})
 	if v := s.Get(); v.LinkScope != domain.LinkScopeAny {
 		t.Errorf("expected LinkScope=any to be preserved, got %q", v.LinkScope)
+	}
+}
+
+func TestOperationalSettings_SetBlankEmbeddingProviderFallsBackToHash(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{EmbeddingProvider: ""})
+	if v := s.Get(); v.EmbeddingProvider != domain.EmbeddingProviderHash {
+		t.Errorf("expected a blank EmbeddingProvider to fall back to EmbeddingProviderHash, got %q", v.EmbeddingProvider)
+	}
+}
+
+func TestOperationalSettings_SetInvalidEmbeddingProviderFallsBackToHash(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{EmbeddingProvider: "ouija-board"})
+	if v := s.Get(); v.EmbeddingProvider != domain.EmbeddingProviderHash {
+		t.Errorf("expected an unrecognized EmbeddingProvider to fall back to EmbeddingProviderHash, got %q", v.EmbeddingProvider)
+	}
+}
+
+func TestOperationalSettings_SetValidEmbeddingProviderPreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHTTP})
+	if v := s.Get(); v.EmbeddingProvider != domain.EmbeddingProviderHTTP {
+		t.Errorf("expected EmbeddingProvider=http to be preserved, got %q", v.EmbeddingProvider)
+	}
+}
+
+func TestOperationalSettings_SetZeroEmbeddingHTTPDimensionsFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{EmbeddingHTTPDimensions: 0})
+	if v := s.Get(); v.EmbeddingHTTPDimensions != 128 {
+		t.Errorf("expected EmbeddingHTTPDimensions=0 to fall back to 128, got %d", v.EmbeddingHTTPDimensions)
+	}
+}
+
+func TestOperationalSettings_SetNegativeEmbeddingHTTPDimensionsFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{EmbeddingHTTPDimensions: -10})
+	if v := s.Get(); v.EmbeddingHTTPDimensions != 128 {
+		t.Errorf("expected a negative EmbeddingHTTPDimensions to fall back to 128, got %d", v.EmbeddingHTTPDimensions)
+	}
+}
+
+func TestOperationalSettings_SetPositiveEmbeddingHTTPDimensionsPreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{EmbeddingHTTPDimensions: 1536})
+	if v := s.Get(); v.EmbeddingHTTPDimensions != 1536 {
+		t.Errorf("expected EmbeddingHTTPDimensions=1536 to be preserved, got %d", v.EmbeddingHTTPDimensions)
+	}
+}
+
+// TestOperationalSettings_SetBlankEmbeddingHTTPAPIKeyPreservesExisting proves
+// the secret-field precedent from the doc comment on OperationalSettings.Set:
+// a settings-page save always resubmits every field, including ones the
+// admin didn't touch, and the admin form never sees the real stored key (see
+// admin.go's toOperationalValues) -- so a blank key in a Set call must never
+// wipe out whatever's already configured.
+func TestOperationalSettings_SetBlankEmbeddingHTTPAPIKeyPreservesExisting(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{EmbeddingHTTPAPIKey: "sk-original"})
+	s.Set(domain.OperationalSettingsValues{EmbeddingHTTPAPIKey: "", UserAgent: "some-other-change"})
+	if v := s.Get(); v.EmbeddingHTTPAPIKey != "sk-original" {
+		t.Errorf("expected a blank EmbeddingHTTPAPIKey to preserve the existing key, got %q", v.EmbeddingHTTPAPIKey)
+	}
+}
+
+func TestOperationalSettings_SetNonBlankEmbeddingHTTPAPIKeyReplacesExisting(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{EmbeddingHTTPAPIKey: "sk-original"})
+	s.Set(domain.OperationalSettingsValues{EmbeddingHTTPAPIKey: "sk-rotated"})
+	if v := s.Get(); v.EmbeddingHTTPAPIKey != "sk-rotated" {
+		t.Errorf("expected a non-blank EmbeddingHTTPAPIKey to replace the existing key, got %q", v.EmbeddingHTTPAPIKey)
+	}
+}
+
+func TestOperationalSettings_SetEmbeddingHTTPBaseURLAndModelPreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{
+		EmbeddingHTTPBaseURL: "http://localhost:11434/v1",
+		EmbeddingHTTPModel:   "nomic-embed-text",
+	})
+	v := s.Get()
+	if v.EmbeddingHTTPBaseURL != "http://localhost:11434/v1" || v.EmbeddingHTTPModel != "nomic-embed-text" {
+		t.Errorf("expected EmbeddingHTTPBaseURL/EmbeddingHTTPModel to be preserved, got %+v", v)
+	}
+}
+
+func TestValidEmbeddingProvider(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{domain.EmbeddingProviderHash, true},
+		{domain.EmbeddingProviderHTTP, true},
+		{"", false},
+		{"ouija-board", false},
+	}
+	for _, tc := range cases {
+		if got := domain.ValidEmbeddingProvider(tc.name); got != tc.want {
+			t.Errorf("ValidEmbeddingProvider(%q) = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 

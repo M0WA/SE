@@ -117,6 +117,61 @@ type OperationalSettingsValues struct {
 	// afterward -- it isn't retroactively applied to already-indexed
 	// content.
 	TitleWeight int
+	// EmbeddingProvider selects which ports.EmbeddingProvider implementation
+	// every process (cmd/search, cmd/admin, cmd/crawl) constructs at
+	// startup -- EmbeddingProviderHash (the default: hashembed.Embedder's
+	// dependency-free feature-hashing pseudo-embedding, "semantic" only in
+	// that documents sharing tokens score similarly) or
+	// EmbeddingProviderHTTP (httpembed.Embedder: calls an OpenAI-compatible
+	// embeddings HTTP endpoint -- a local inference server such as Ollama/
+	// llama.cpp/LM Studio, or a hosted API -- for a real trained model,
+	// without adding any ML runtime dependency to this binary itself).
+	//
+	// Unlike every other field on this page, this one is NOT picked up
+	// live by bootstrap.SyncSettings: each process reads it exactly once,
+	// at startup, to build its embedder before calling
+	// sqlrepo.Repository.EnableANN, which sizes its pgvector column and
+	// HNSW index to that embedder's Dimensions() -- swapping providers (or
+	// dimensions) without a restart would leave that column sized for the
+	// wrong vector length. Changing this setting takes effect the next
+	// time each of cmd/search/cmd/admin/cmd/crawl is restarted, same as
+	// any other change that would require re-sizing that column.
+	//
+	// Switching providers (or, for EmbeddingProviderHTTP, changing model or
+	// dimensions) also changes the vector space entirely: a similarity
+	// score between an embedding computed by the old provider/model and one
+	// computed by the new one is meaningless. Like TitleWeight above, there
+	// is no automatic full-corpus re-embed migration here -- a document's
+	// stored embedding only gets recomputed the next time that document is
+	// crawled or re-crawled, so search stays internally consistent (BM25
+	// keeps working normally) but semantic ranking degrades until the whole
+	// corpus has been re-crawled under the new provider.
+	EmbeddingProvider string
+	// EmbeddingHTTPBaseURL is the OpenAI-compatible embeddings API's base
+	// URL (e.g. "http://localhost:11434/v1" for a local Ollama server, or a
+	// hosted provider's own base URL) -- httpembed.Embedder POSTs to
+	// "<EmbeddingHTTPBaseURL>/embeddings". Meaningless unless
+	// EmbeddingProvider is EmbeddingProviderHTTP.
+	EmbeddingHTTPBaseURL string
+	// EmbeddingHTTPAPIKey is sent as an "Authorization: Bearer <key>"
+	// header on every embeddings request -- optional, since a local
+	// inference server often needs none. This is a real credential, so
+	// (like ScheduledCrawl's Cookie/BasicAuthPass) it's handled as one:
+	// admin.go's operationalValues wire format never echoes the stored
+	// value back in a GET response, and it's never logged. An empty value
+	// passed to OperationalSettings.Set leaves whatever key is already
+	// configured unchanged rather than clearing it -- see Set's doc
+	// comment for why.
+	EmbeddingHTTPAPIKey string
+	// EmbeddingHTTPModel is sent as the embeddings request body's "model"
+	// field.
+	EmbeddingHTTPModel string
+	// EmbeddingHTTPDimensions is the expected embedding vector length --
+	// httpembed.Embedder errors clearly if an API response's actual vector
+	// length doesn't match this, rather than silently corrupting every
+	// downstream cosine-similarity calculation. Also what Dimensions()
+	// reports to EnableANN for pgvector column sizing.
+	EmbeddingHTTPDimensions int
 }
 
 // defaultUserAgent mimics a standard desktop Firefox so crawled sites treat
@@ -169,6 +224,12 @@ const (
 	// of however many times they separately occur in the body), not an
 	// aggressive one.
 	defaultTitleWeight = 2
+	// defaultEmbeddingHTTPDimensions matches hashembed's own default, so an
+	// admin switching EmbeddingProvider to EmbeddingProviderHTTP without
+	// having yet set a dimensions count still gets a sane non-zero value
+	// (EnableANN treats dims<=0 as "ANN unavailable") rather than silently
+	// disabling ANN until they do.
+	defaultEmbeddingHTTPDimensions = 128
 )
 
 func defaultOperationalSettings() OperationalSettingsValues {
@@ -194,6 +255,8 @@ func defaultOperationalSettings() OperationalSettingsValues {
 		LinkScope:                        LinkScopeDomain,
 		MaxDocumentVersions:              defaultMaxDocumentVersions,
 		TitleWeight:                      defaultTitleWeight,
+		EmbeddingProvider:                EmbeddingProviderHash,
+		EmbeddingHTTPDimensions:          defaultEmbeddingHTTPDimensions,
 	}
 }
 
@@ -305,8 +368,26 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 	if v.LinkScope == LinkScopeDefault || !ValidLinkScope(v.LinkScope) {
 		v.LinkScope = LinkScopeDomain
 	}
+	if !ValidEmbeddingProvider(v.EmbeddingProvider) {
+		v.EmbeddingProvider = EmbeddingProviderHash
+	}
+	if v.EmbeddingHTTPDimensions <= 0 {
+		v.EmbeddingHTTPDimensions = d.EmbeddingHTTPDimensions
+	}
 
 	s.mu.Lock()
+	// EmbeddingHTTPAPIKey is a secret that's never round-tripped back to
+	// the admin UI (see the field's own doc comment and admin.go's
+	// toOperationalValues) -- the settings page always resubmits every
+	// field on every save, including ones the admin didn't touch, so an
+	// empty value here means "the admin didn't type a new one," not "clear
+	// the configured key," and is replaced with whatever's already stored
+	// rather than wiping it. There is deliberately no way to explicitly
+	// clear a configured key back to empty through this API; switching
+	// EmbeddingProvider away from EmbeddingProviderHTTP makes it moot.
+	if v.EmbeddingHTTPAPIKey == "" {
+		v.EmbeddingHTTPAPIKey = s.v.EmbeddingHTTPAPIKey
+	}
 	defer s.mu.Unlock()
 	s.v = v
 }

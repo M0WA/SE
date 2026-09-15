@@ -2241,6 +2241,139 @@ func TestHandleAdminSettings_TitleWeightFieldRoundTrips(t *testing.T) {
 	}
 }
 
+// TestHandleAdminSettings_EmbeddingFieldsRoundTrip mirrors
+// TestHandleAdminSettings_TitleWeightFieldRoundTrips for the new
+// embedding-provider knobs: GET reports the non-secret fields as currently
+// set, and a POST updates all of them (including the API key).
+func TestHandleAdminSettings_EmbeddingFieldsRoundTrip(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
+		EmbeddingProvider:       domain.EmbeddingProviderHash,
+		EmbeddingHTTPBaseURL:    "http://localhost:11434/v1",
+		EmbeddingHTTPModel:      "nomic-embed-text",
+		EmbeddingHTTPDimensions: 768,
+	})
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", getRec.Code)
+	}
+	var getResp struct {
+		Operational struct {
+			EmbeddingProvider       string `json:"embedding_provider"`
+			EmbeddingHTTPBaseURL    string `json:"embedding_http_base_url"`
+			EmbeddingHTTPModel      string `json:"embedding_http_model"`
+			EmbeddingHTTPDimensions int    `json:"embedding_http_dimensions"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decoding GET response: %v", err)
+	}
+	if getResp.Operational.EmbeddingProvider != domain.EmbeddingProviderHash ||
+		getResp.Operational.EmbeddingHTTPBaseURL != "http://localhost:11434/v1" ||
+		getResp.Operational.EmbeddingHTTPModel != "nomic-embed-text" ||
+		getResp.Operational.EmbeddingHTTPDimensions != 768 {
+		t.Errorf("unexpected GET response: %+v", getResp.Operational)
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
+			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
+			"embedding_provider": "http", "embedding_http_base_url": "https://api.example.com/v1",
+			"embedding_http_model": "text-embedding-3-small", "embedding_http_dimensions": 1536,
+			"embedding_http_api_key": "sk-new-key",
+		},
+	})
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	postReq.AddCookie(cookie)
+	postRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
+	}
+
+	ov := opSettings.Get()
+	if ov.EmbeddingProvider != domain.EmbeddingProviderHTTP || ov.EmbeddingHTTPBaseURL != "https://api.example.com/v1" ||
+		ov.EmbeddingHTTPModel != "text-embedding-3-small" || ov.EmbeddingHTTPDimensions != 1536 ||
+		ov.EmbeddingHTTPAPIKey != "sk-new-key" {
+		t.Errorf("expected embedding settings to be applied, got %+v", ov)
+	}
+}
+
+// TestHandleAdminSettings_EmbeddingAPIKeyNeverInGETResponse proves a
+// configured EmbeddingHTTPAPIKey never appears in a GET response body, only
+// a boolean indicating one is set -- the same "never echo a real credential
+// back" treatment as ScheduledCrawl's Cookie/BasicAuthPass, applied more
+// strictly here per this field's own requirement.
+func TestHandleAdminSettings_EmbeddingAPIKeyNeverInGETResponse(t *testing.T) {
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
+		EmbeddingProvider: domain.EmbeddingProviderHTTP, EmbeddingHTTPAPIKey: "sk-super-secret",
+	})
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, domain.NewTuningSettings(0.5, 1.2, 0.75), opSettings)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "sk-super-secret") {
+		t.Errorf("expected the GET response to never contain the configured API key, got: %s", rec.Body.String())
+	}
+	var resp struct {
+		Operational struct {
+			EmbeddingHTTPAPIKey    string `json:"embedding_http_api_key"`
+			EmbeddingHTTPAPIKeySet bool   `json:"embedding_http_api_key_set"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding GET response: %v", err)
+	}
+	if resp.Operational.EmbeddingHTTPAPIKey != "" {
+		t.Errorf("expected embedding_http_api_key to be blank in the GET response, got %q", resp.Operational.EmbeddingHTTPAPIKey)
+	}
+	if !resp.Operational.EmbeddingHTTPAPIKeySet {
+		t.Error("expected embedding_http_api_key_set to report true when a key is configured")
+	}
+}
+
+// TestHandleAdminSettings_BlankEmbeddingAPIKeyPreservesExisting proves a
+// settings save that doesn't touch the API key field (the normal case,
+// since the form never shows the real value) doesn't wipe out whatever key
+// is already configured.
+func TestHandleAdminSettings_BlankEmbeddingAPIKeyPreservesExisting(t *testing.T) {
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
+		EmbeddingProvider: domain.EmbeddingProviderHTTP, EmbeddingHTTPAPIKey: "sk-keep-me",
+	})
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, domain.NewTuningSettings(0.5, 1.2, 0.75), opSettings)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
+			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
+			"embedding_provider": "http",
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if ov := opSettings.Get(); ov.EmbeddingHTTPAPIKey != "sk-keep-me" {
+		t.Errorf("expected the existing API key to survive a save that left it blank, got %q", ov.EmbeddingHTTPAPIKey)
+	}
+}
+
 func TestHandleAdminSettings_NotConfigured(t *testing.T) {
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)

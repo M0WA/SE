@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"searchengine/internal/adapters/browserfetcher"
-	"searchengine/internal/adapters/hashembed"
 	"searchengine/internal/adapters/htmlparser"
 	"searchengine/internal/adapters/httpfetcher"
 	"searchengine/internal/adapters/restapi"
@@ -197,22 +196,15 @@ func main() {
 	defer repo.Close()
 
 	opSettings := domain.DefaultOperationalSettings()
-	embedder := hashembed.New(128)
+	bootstrap.SyncSettings(ctx, repo, nil, opSettings, nil, repo)
 
-	// See cmd/search's identical block: these two are independent blocking
-	// DB round-trips against unrelated state, so running them concurrently
-	// makes startup latency the slower one rather than their sum.
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); bootstrap.SyncSettings(ctx, repo, nil, opSettings, nil, repo) }()
-	go func() {
-		defer wg.Done()
-		// Enables Postgres pgvector ANN search for this process when
-		// available (so SaveDocument populates the vector column below),
-		// never fatal otherwise.
-		repo.EnableANN(ctx, embedder.Dimensions())
-	}()
-	wg.Wait()
+	embedder := bootstrap.NewEmbedder(opSettings.Get())
+	// Enables Postgres pgvector ANN search for this process when available
+	// (so SaveDocument populates the vector column below), never fatal
+	// otherwise. Must run after embedder is constructed -- see
+	// cmd/search's identical comment and domain.OperationalSettingsValues.
+	// EmbeddingProvider for why.
+	repo.EnableANN(ctx, embedder.Dimensions())
 	// fetcher does plain HTTP; wrapping it in RenderAwareFetcher adds an
 	// opt-in real-browser rendering path (see internal/adapters/
 	// browserfetcher) on top, chosen per-crawl or by the Tuning page's
