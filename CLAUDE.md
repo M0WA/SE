@@ -131,6 +131,19 @@ pinned action, resolve the tag to its commit SHA first (e.g. `gh api
 repos/<owner>/<action>/commits/<tag> --jq .sha`) and update the trailing
 version comment to match — never add a bare `@v<N>` reference.
 
+**Dependabot** (`.github/dependabot.yml`) opens weekly PRs bumping
+`gomod`/`npm`/`github-actions`/`docker` dependencies, each labeled
+`dependencies` (its own category in `.github/release.yml`'s generated
+notes). `dependabot-auto-merge.yml` arms auto-merge on every one of them as
+soon as it's opened, so it merges itself the moment its "Build, vet &
+test" check goes green — it doesn't bypass the PR-required ruleset, it
+just automates clicking the same "merge" a human otherwise would once
+that check passes. A bump that fails CI (a real incompatibility, not a
+fluke) needs an actual fix landed on `main` first — typically a CI
+toolchain version bump (Go/Node) — after which re-running or resyncing
+that Dependabot PR's branch lets it pass and auto-merge on its own; it's
+not something to force through red.
+
 ## Test coverage
 
 Keep test coverage close to 100% for both Go and JavaScript — not just "the
