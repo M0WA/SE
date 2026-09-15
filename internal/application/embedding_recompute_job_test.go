@@ -13,15 +13,12 @@ import (
 	"searchengine/internal/ports"
 )
 
-// A test-only override of application.EmbeddingRecomputeMinInterval (see
-// its own doc comment) -- without this, every test in this file that
-// processes more than a handful of documents through
-// RunEmbeddingRecomputeJob's real per-document pacing would take
-// multiple real seconds (the batching test alone processes over 100
-// documents).
-func init() {
-	application.EmbeddingRecomputeMinInterval = time.Microsecond
-}
+// noRateLimit is passed to RunEmbeddingRecomputeJob(WithStatus) by every
+// test that isn't specifically exercising pacing -- 0 disables it
+// entirely (see embedRateLimitInterval's doc comment), so a test
+// processing many documents (the batching test alone processes over 100)
+// never waits out a real per-document delay.
+const noRateLimit = 0
 
 // fakeEmbeddingRepo is a minimal in-memory ports.EmbeddingRepository --
 // enough to exercise RunEmbeddingRecomputeJob without a real DB.
@@ -99,7 +96,7 @@ func TestRunEmbeddingRecomputeJob_RecomputesEveryDocument(t *testing.T) {
 	}
 	embedder := &fakeRecomputeEmbedder{}
 
-	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, embedder)
+	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, embedder, noRateLimit)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -127,7 +124,7 @@ func TestRunEmbeddingRecomputeJob_BatchesAcrossMultipleFetches(t *testing.T) {
 	repo := &fakeEmbeddingRepo{ids: ids, docs: docs}
 	embedder := &fakeRecomputeEmbedder{}
 
-	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, embedder)
+	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, embedder, noRateLimit)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -148,7 +145,7 @@ func TestRunEmbeddingRecomputeJob_PerDocumentEmbedFailureIsCountedNotFatal(t *te
 	}
 	embedder := &fakeRecomputeEmbedder{errByText: map[string]error{"bad": errors.New("embed failed")}}
 
-	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, embedder)
+	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, embedder, noRateLimit)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -173,7 +170,7 @@ func TestRunEmbeddingRecomputeJob_PerDocumentUpdateFailureIsCountedNotFatal(t *t
 	}
 	embedder := &fakeRecomputeEmbedder{}
 
-	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, embedder)
+	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, embedder, noRateLimit)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -193,7 +190,7 @@ func TestRunEmbeddingRecomputeJob_SkipsDocumentDeletedBetweenListAndFetch(t *tes
 	}
 	embedder := &fakeRecomputeEmbedder{}
 
-	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, embedder)
+	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, embedder, noRateLimit)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -204,7 +201,7 @@ func TestRunEmbeddingRecomputeJob_SkipsDocumentDeletedBetweenListAndFetch(t *tes
 
 func TestRunEmbeddingRecomputeJob_EmptyCorpusIsANoop(t *testing.T) {
 	repo := &fakeEmbeddingRepo{}
-	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, &fakeRecomputeEmbedder{})
+	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, &fakeRecomputeEmbedder{}, noRateLimit)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -214,16 +211,13 @@ func TestRunEmbeddingRecomputeJob_EmptyCorpusIsANoop(t *testing.T) {
 }
 
 // TestRunEmbeddingRecomputeJob_PacesEmbedCalls proves the job actually
-// paces its Embed calls (see application.EmbeddingRecomputeMinInterval)
-// rather than firing them back-to-back -- the whole point being to
-// respect a real embeddings provider's rate limit (see
+// paces its Embed calls (see embedRateLimitInterval) rather than firing
+// them back-to-back -- the whole point being to respect a real embeddings
+// provider's rate limit (see
 // docs.ionos.com/cloud/ai/ai-model-hub/how-tos/rate-limits) instead of
 // flooding it.
 func TestRunEmbeddingRecomputeJob_PacesEmbedCalls(t *testing.T) {
-	original := application.EmbeddingRecomputeMinInterval
-	application.EmbeddingRecomputeMinInterval = 50 * time.Millisecond
-	defer func() { application.EmbeddingRecomputeMinInterval = original }()
-
+	const ratePerSecond = 20 // 50ms/call
 	repo := &fakeEmbeddingRepo{
 		ids: []string{"a", "b", "c"},
 		docs: map[string]domain.Document{
@@ -231,7 +225,7 @@ func TestRunEmbeddingRecomputeJob_PacesEmbedCalls(t *testing.T) {
 		},
 	}
 	start := time.Now()
-	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, &fakeRecomputeEmbedder{}); err != nil {
+	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, &fakeRecomputeEmbedder{}, ratePerSecond); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// 3 documents, each paced to at least 50ms (the fake embedder returns
@@ -248,14 +242,11 @@ func TestRunEmbeddingRecomputeJob_PacesEmbedCalls(t *testing.T) {
 // took at least as long as the configured interval -- pacing should never
 // make an already-slow provider slower.
 func TestRunEmbeddingRecomputeJob_NoExtraWaitWhenEmbedAlreadySlow(t *testing.T) {
-	original := application.EmbeddingRecomputeMinInterval
-	application.EmbeddingRecomputeMinInterval = 10 * time.Millisecond
-	defer func() { application.EmbeddingRecomputeMinInterval = original }()
-
+	const ratePerSecond = 100 // 10ms/call
 	repo := &fakeEmbeddingRepo{ids: []string{"a"}, docs: map[string]domain.Document{"a": {ID: "a", Text: "x"}}}
 	slowEmbedder := &fakeRecomputeEmbedder{delay: 100 * time.Millisecond}
 	start := time.Now()
-	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, slowEmbedder); err != nil {
+	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, slowEmbedder, ratePerSecond); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
@@ -263,10 +254,29 @@ func TestRunEmbeddingRecomputeJob_NoExtraWaitWhenEmbedAlreadySlow(t *testing.T) 
 	}
 }
 
+// TestEmbedRateLimitInterval_NonPositiveRateDisablesPacing proves 0 (and
+// negative) rates are a deliberate "no pacing" escape hatch for tests,
+// not accidentally-fast production behavior -- domain.OperationalSettings.Set
+// never actually lets a non-positive value reach RunEmbeddingRecomputeJob
+// in production (it self-heals to a positive default).
+func TestRunEmbeddingRecomputeJob_NonPositiveRateDisablesPacing(t *testing.T) {
+	repo := &fakeEmbeddingRepo{
+		ids:  []string{"a", "b", "c", "d", "e"},
+		docs: map[string]domain.Document{"a": {ID: "a", Text: "1"}, "b": {ID: "b", Text: "2"}, "c": {ID: "c", Text: "3"}, "d": {ID: "d", Text: "4"}, "e": {ID: "e", Text: "5"}},
+	}
+	start := time.Now()
+	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, &fakeRecomputeEmbedder{}, noRateLimit); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
+		t.Errorf("expected a non-positive rate to disable pacing entirely, took %v across 5 documents", elapsed)
+	}
+}
+
 func TestRunEmbeddingRecomputeJob_PropagatesAllDocumentIDsError(t *testing.T) {
 	wantErr := errors.New("db unavailable")
 	repo := &fakeEmbeddingRepo{allIDsErr: wantErr}
-	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, &fakeRecomputeEmbedder{}); !errors.Is(err, wantErr) {
+	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, &fakeRecomputeEmbedder{}, noRateLimit); !errors.Is(err, wantErr) {
 		t.Errorf("expected AllDocumentIDs error to propagate, got %v", err)
 	}
 }
@@ -274,7 +284,7 @@ func TestRunEmbeddingRecomputeJob_PropagatesAllDocumentIDsError(t *testing.T) {
 func TestRunEmbeddingRecomputeJob_PropagatesDocumentsByIDsError(t *testing.T) {
 	wantErr := errors.New("db unavailable")
 	repo := &fakeEmbeddingRepo{ids: []string{"a"}, documentsByIDsErr: wantErr}
-	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, &fakeRecomputeEmbedder{}); !errors.Is(err, wantErr) {
+	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, &fakeRecomputeEmbedder{}, noRateLimit); !errors.Is(err, wantErr) {
 		t.Errorf("expected DocumentsByIDs error to propagate, got %v", err)
 	}
 }
@@ -286,7 +296,7 @@ func TestRunEmbeddingRecomputeJobWithStatus_RecordsCompletedRun(t *testing.T) {
 	}
 	settings := newFakeSettingsStore()
 
-	result, err := application.RunEmbeddingRecomputeJobWithStatus(context.Background(), repo, &fakeRecomputeEmbedder{}, settings)
+	result, err := application.RunEmbeddingRecomputeJobWithStatus(context.Background(), repo, &fakeRecomputeEmbedder{}, settings, noRateLimit)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -309,7 +319,7 @@ func TestRunEmbeddingRecomputeJobWithStatus_SetsInProgressBeforeRunning(t *testi
 	repo := &fakeEmbeddingRepo{ids: []string{"a"}, docs: map[string]domain.Document{"a": {ID: "a", Text: "x"}}}
 	settings := newFakeSettingsStore()
 
-	if _, err := application.RunEmbeddingRecomputeJobWithStatus(context.Background(), repo, &fakeRecomputeEmbedder{}, settings); err != nil {
+	if _, err := application.RunEmbeddingRecomputeJobWithStatus(context.Background(), repo, &fakeRecomputeEmbedder{}, settings, noRateLimit); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(settings.saveCalls) < 2 {
@@ -330,13 +340,13 @@ func TestRunEmbeddingRecomputeJobWithStatus_ErrorClearsInProgressButKeepsLastRes
 		docs: map[string]domain.Document{"a": {ID: "a", Text: "x"}},
 	}
 	settings := newFakeSettingsStore()
-	if _, err := application.RunEmbeddingRecomputeJobWithStatus(context.Background(), repo, &fakeRecomputeEmbedder{}, settings); err != nil {
+	if _, err := application.RunEmbeddingRecomputeJobWithStatus(context.Background(), repo, &fakeRecomputeEmbedder{}, settings, noRateLimit); err != nil {
 		t.Fatalf("unexpected error on first (successful) run: %v", err)
 	}
 	successStatus := application.LoadEmbeddingRecomputeStatus(context.Background(), settings)
 
 	repo.allIDsErr = errors.New("db unavailable")
-	if _, err := application.RunEmbeddingRecomputeJobWithStatus(context.Background(), repo, &fakeRecomputeEmbedder{}, settings); err == nil {
+	if _, err := application.RunEmbeddingRecomputeJobWithStatus(context.Background(), repo, &fakeRecomputeEmbedder{}, settings, noRateLimit); err == nil {
 		t.Fatal("expected the second run's error to propagate")
 	}
 
@@ -351,7 +361,7 @@ func TestRunEmbeddingRecomputeJobWithStatus_ErrorClearsInProgressButKeepsLastRes
 
 func TestRunEmbeddingRecomputeJobWithStatus_NilSettingsStoreIsANoop(t *testing.T) {
 	repo := &fakeEmbeddingRepo{ids: []string{"a"}, docs: map[string]domain.Document{"a": {ID: "a", Text: "x"}}}
-	if _, err := application.RunEmbeddingRecomputeJobWithStatus(context.Background(), repo, &fakeRecomputeEmbedder{}, nil); err != nil {
+	if _, err := application.RunEmbeddingRecomputeJobWithStatus(context.Background(), repo, &fakeRecomputeEmbedder{}, nil, noRateLimit); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

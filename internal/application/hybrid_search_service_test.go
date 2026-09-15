@@ -34,6 +34,11 @@ type fakeSQLRepo struct {
 	// a real repository's postings table would report -- used by fuzzy
 	// query-term correction tests.
 	vocabulary []domain.TermStat
+	// postingsDelay, when set, is slept inside PostingsForTerms -- used
+	// alongside fakeEmbedder.delay to prove Search runs the BM25 postings
+	// fetch and the query embedding call concurrently rather than one
+	// after the other.
+	postingsDelay time.Duration
 
 	// documentsByIDsCalls lets tests assert the N+1 fix actually took:
 	// DocumentsByIDs must be called at most once per Search() phase
@@ -102,6 +107,9 @@ func (r *fakeSQLRepo) SaveDocument(context.Context, domain.Document, []float32, 
 // PostingsForTerms mimics a batched "WHERE term IN (...)" fetch: only
 // requested terms come back, and only those actually present.
 func (r *fakeSQLRepo) PostingsForTerms(_ context.Context, terms []string) (map[string][]domain.PostingStats, error) {
+	if r.postingsDelay > 0 {
+		time.Sleep(r.postingsDelay)
+	}
 	r.postingsForTermsCalls++
 	r.postingsForTermsArgs = append(r.postingsForTermsArgs, terms)
 	out := make(map[string][]domain.PostingStats, len(terms))
@@ -247,10 +255,20 @@ func (r *fakeSQLRepo) ListDocuments(context.Context, int, string) ([]domain.Inde
 }
 func (r *fakeSQLRepo) DeleteDocument(context.Context, string) error { return nil }
 
-type fakeEmbedder struct{ vec []float32 }
+type fakeEmbedder struct {
+	vec []float32
+	// delay, when set, is slept inside Embed -- see
+	// fakeSQLRepo.postingsDelay's identical doc comment.
+	delay time.Duration
+}
 
-func (e *fakeEmbedder) Embed(context.Context, string) ([]float32, error) { return e.vec, nil }
-func (e *fakeEmbedder) Dimensions() int                                  { return len(e.vec) }
+func (e *fakeEmbedder) Embed(context.Context, string) ([]float32, error) {
+	if e.delay > 0 {
+		time.Sleep(e.delay)
+	}
+	return e.vec, nil
+}
+func (e *fakeEmbedder) Dimensions() int { return len(e.vec) }
 
 func TestHybridSearch_CombinesBM25AndSemantic(t *testing.T) {
 	repo := &fakeSQLRepo{
@@ -1029,6 +1047,47 @@ func TestHybridSearch_PostingsForTermsCalledOnceForMultiTermQuery(t *testing.T) 
 	wantTerms := []string{"hunde", "katzen", "vogel"}
 	if !reflect.DeepEqual(gotTerms, wantTerms) {
 		t.Errorf("expected all 3 terms requested in that single call, got %v", gotTerms)
+	}
+}
+
+// TestHybridSearch_PostingsAndEmbeddingFetchedConcurrently proves the BM25
+// postings fetch and the query's own embedding call actually run
+// concurrently rather than one after the other -- each fake is given an
+// artificial delay, and the whole Search call must take roughly one
+// delay's worth of time, not the sum of both. This matters most for the
+// HTTP embedding provider, where Embed is a real network round-trip.
+func TestHybridSearch_PostingsAndEmbeddingFetchedConcurrently(t *testing.T) {
+	const delay = 50 * time.Millisecond
+	repo := &fakeSQLRepo{
+		postings:      map[string][]domain.PostingStats{"katzen": {{DocID: "1", TermFreq: 1, DocLength: 10, DocFreq: 1}}},
+		embeddings:    map[string][]float32{"1": {1, 0}},
+		docs:          map[string]domain.Document{"1": {ID: "1", URL: "http://a", Title: "Katzen", Text: "Katzen"}},
+		postingsDelay: delay,
+	}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}, delay: delay}
+	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
+
+	start := time.Now()
+	if _, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > delay+delay/2 {
+		t.Errorf("expected the postings fetch and embedding call to run concurrently (~%v total), took %v -- looks sequential", delay, elapsed)
+	}
+}
+
+// TestHybridSearch_PropagatesEmbedError proves an error from the query's
+// own embedding call is surfaced -- the postings side succeeding doesn't
+// mask it now that the two run concurrently.
+func TestHybridSearch_PropagatesEmbedError(t *testing.T) {
+	repo := &fakeSQLRepo{
+		postings: map[string][]domain.PostingStats{"katzen": {{DocID: "1", TermFreq: 1, DocLength: 10, DocFreq: 1}}},
+		docs:     map[string]domain.Document{"1": {ID: "1", URL: "http://a", Title: "Katzen", Text: "Katzen"}},
+	}
+	svc := application.NewHybridSearchService(repo, erroringEmbedder{}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
+
+	if _, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10}); err == nil {
+		t.Fatal("expected the embedding error to propagate")
 	}
 }
 

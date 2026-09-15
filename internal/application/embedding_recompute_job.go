@@ -16,27 +16,27 @@ import (
 // bare IDs rather than full documents up front.
 const EmbeddingRecomputeBatchSize = 50
 
-// EmbeddingRecomputeMinInterval paces this job's Embed calls so it stays
-// within a typical HTTP embeddings provider's rate limit rather than
-// firing every document's call back-to-back as fast as this loop
-// naturally would. This matters even with httpembed.Embedder's own
-// retry-on-429/529 backoff: a rate-limited response returns near-
-// instantly (no real inference work done), so an unthrottled loop can
-// spin through a rate-limit condition far faster than any real embedding
-// call ever would, compounding it instead of self-correcting. IONOS's AI
-// Model Hub -- the motivating case, see
-// docs.ionos.com/cloud/ai/ai-model-hub/how-tos/rate-limits -- documents a
-// 5 requests/second steady-state limit; this stays a little under that
-// (≈4.5/s) rather than riding the exact edge. Applied only around each
-// Embed call, timed from just before it to just after -- a slow real
-// inference call that already took longer than this needs no additional
-// wait, and the (fast, local) UpdateEmbedding write that follows isn't
-// rate-limited by anything external, so it's excluded from the timing.
-//
-// A var, not a const, purely so tests can shrink it and avoid real
-// multi-second waits when a run processes many documents -- production
-// code should never modify it.
-var EmbeddingRecomputeMinInterval = 220 * time.Millisecond
+// embedRateLimitInterval converts ratePerSecond (see
+// domain.OperationalSettingsValues.EmbeddingRecomputeRateLimitPerSecond)
+// into the minimum interval paceEmbedCall enforces between Embed calls --
+// pacing this job so it stays within a typical HTTP embeddings provider's
+// rate limit rather than firing every document's call back-to-back as
+// fast as this loop naturally would. This matters even with
+// httpembed.Embedder's own retry-on-429/529 backoff: a rate-limited
+// response returns near-instantly (no real inference work done), so an
+// unthrottled loop can spin through a rate-limit condition far faster
+// than any real embedding call ever would, compounding it instead of
+// self-correcting. ratePerSecond <= 0 disables pacing entirely (interval
+// 0) -- domain.OperationalSettings.Set never actually produces that in
+// production (it self-heals to a positive default), but tests exercising
+// RunEmbeddingRecomputeJob's other behavior rely on being able to opt out
+// of real waits this way.
+func embedRateLimitInterval(ratePerSecond int) time.Duration {
+	if ratePerSecond <= 0 {
+		return 0
+	}
+	return time.Second / time.Duration(ratePerSecond)
+}
 
 // paceEmbedCall blocks for whatever's left of interval beyond elapsed
 // (already-spent time on the Embed call this paces), or returns early if
@@ -76,7 +76,12 @@ type EmbeddingRecomputeResult struct {
 // to the whole run -- losing one document's fresh embedding is far less
 // harmful than aborting a recompute that's otherwise most of the way
 // through a large corpus.
-func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepository, embedder ports.EmbeddingProvider) (EmbeddingRecomputeResult, error) {
+//
+// ratePerSecond (see
+// domain.OperationalSettingsValues.EmbeddingRecomputeRateLimitPerSecond)
+// paces Embed calls to that rate -- see embedRateLimitInterval.
+func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepository, embedder ports.EmbeddingProvider, ratePerSecond int) (EmbeddingRecomputeResult, error) {
+	interval := embedRateLimitInterval(ratePerSecond)
 	ids, err := repo.AllDocumentIDs(ctx)
 	if err != nil {
 		return EmbeddingRecomputeResult{}, err
@@ -102,7 +107,7 @@ func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepositor
 			}
 			embedStart := time.Now()
 			vec, err := embedder.Embed(ctx, doc.Text)
-			paceEmbedCall(ctx, time.Since(embedStart), EmbeddingRecomputeMinInterval)
+			paceEmbedCall(ctx, time.Since(embedStart), interval)
 			if err != nil {
 				log.Printf("recomputing embedding for %s: %v", id, err)
 				result.Failed++
@@ -135,13 +140,13 @@ func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepositor
 // caller: recomputing a real corpus means one Embed call per document,
 // each a network round-trip against an HTTP embeddings endpoint, so the
 // whole run can easily take minutes -- see handleAdminEmbeddingsRecompute.
-func RunEmbeddingRecomputeJobWithStatus(ctx context.Context, repo ports.EmbeddingRepository, embedder ports.EmbeddingProvider, settings ports.SettingsStore) (EmbeddingRecomputeResult, error) {
+func RunEmbeddingRecomputeJobWithStatus(ctx context.Context, repo ports.EmbeddingRepository, embedder ports.EmbeddingProvider, settings ports.SettingsStore, ratePerSecond int) (EmbeddingRecomputeResult, error) {
 	start := time.Now()
 	status := LoadEmbeddingRecomputeStatus(ctx, settings)
 	status.InProgress = true
 	saveEmbeddingRecomputeStatus(ctx, settings, status)
 
-	result, err := RunEmbeddingRecomputeJob(ctx, repo, embedder)
+	result, err := RunEmbeddingRecomputeJob(ctx, repo, embedder, ratePerSecond)
 
 	status.InProgress = false
 	if err == nil {
