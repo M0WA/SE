@@ -1,0 +1,88 @@
+name: Prepare Release
+
+# Manually triggered ("gh workflow run prepare-release.yml -f version=X.Y.Z",
+# or the Actions tab's "Run workflow" button): opens a "Release vX.Y.Z" PR
+# into main with a generated changelog, rather than tagging directly. main's
+# branch ruleset requires a PR with an approving review before anything
+# lands there, including this -- see CLAUDE.md's "Branch, PR & release
+# workflow" section for the full flow. tag-release.yml is this workflow's
+# other half: once a reviewer approves and merges the PR this opens, that
+# tags the merge commit and triggers release.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, without the leading v (e.g. 4.0.26)"
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Validate version, compute tag/branch names
+        id: meta
+        run: |
+          version="${{ inputs.version }}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "version must be MAJOR.MINOR.PATCH (e.g. 4.0.26), got: $version" >&2
+            exit 1
+          fi
+          tag="v$version"
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            echo "tag $tag already exists" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "branch=release/$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes preview
+        id: notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The same "generate release notes" GitHub API release.yml's own
+          # publish step uses (via generate_release_notes: true) -- so the
+          # PR body previewed here for review is what the actual GitHub
+          # Release body will read once this is merged and tagged.
+          gh api "repos/${{ github.repository }}/releases/generate-notes" \
+            -f tag_name="${{ steps.meta.outputs.tag }}" -f target_commitish=main \
+            --jq .body > /tmp/notes.md
+
+      - name: Prepend a CHANGELOG.md entry on the release branch
+        run: |
+          git checkout -b "${{ steps.meta.outputs.branch }}"
+          {
+            echo "# Changelog"
+            echo
+            echo "## ${{ steps.meta.outputs.tag }} - $(date -u +%Y-%m-%d)"
+            echo
+            cat /tmp/notes.md
+            echo
+            if [ -f CHANGELOG.md ]; then tail -n +2 CHANGELOG.md; fi
+          } > /tmp/CHANGELOG.md.new
+          mv /tmp/CHANGELOG.md.new CHANGELOG.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "Prepare release ${{ steps.meta.outputs.tag }}"
+          git push origin "${{ steps.meta.outputs.branch }}"
+
+      - name: Open the release PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create release --color 0e8a16 \
+            --description "Release preparation PR" 2>/dev/null || true
+          gh pr create --base main --head "${{ steps.meta.outputs.branch }}" \
+            --title "Release ${{ steps.meta.outputs.tag }}" \
+            --body-file /tmp/notes.md \
+            --label release
