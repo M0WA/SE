@@ -161,7 +161,12 @@ type OperationalSettingsValues struct {
 	// value back in a GET response, and it's never logged. An empty value
 	// passed to OperationalSettings.Set leaves whatever key is already
 	// configured unchanged rather than clearing it -- see Set's doc
-	// comment for why.
+	// comment for why. This value in memory (here) is always plaintext;
+	// restapi.Handler.encryptedOperationalValues seals it (via
+	// settingscrypto, when SETTINGS_ENCRYPTION_KEY is configured) only in
+	// the copy that gets persisted to the shared app_settings table, and
+	// bootstrap.DecryptEmbeddingKey reverses that right before
+	// bootstrap.NewEmbedder reads it back out at startup.
 	EmbeddingHTTPAPIKey string
 	// EmbeddingHTTPModel is sent as the embeddings request body's "model"
 	// field.

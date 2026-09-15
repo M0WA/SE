@@ -16,6 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"searchengine/internal/adapters/restapi"
+	"searchengine/internal/adapters/settingscrypto"
 	"searchengine/internal/adapters/sqlrepo"
 	"searchengine/internal/bootstrap"
 	"searchengine/internal/domain"
@@ -2584,6 +2585,180 @@ func TestHandleAdminSettings_PostPersistsToSettingsStore(t *testing.T) {
 	}
 	if storedOp.UserAgent != "custom-bot" || storedOp.DefaultMaxPages != 5 || storedOp.CrawlDelayMs != 100 {
 		t.Errorf("unexpected persisted operational settings: %+v", storedOp)
+	}
+}
+
+// testSettingsEncryptionKey is a syntactically valid 32-byte
+// settingscrypto key for tests -- its value doesn't matter beyond being
+// well-formed hex of the right length.
+const testSettingsEncryptionKey = "00000000000000000000000000000000000000000000000000000000000000ab"
+
+// TestHandleAdminSettings_PostEncryptsEmbeddingAPIKeyAtRest proves that
+// when SettingsEncryptionKey is configured, the embedding API key is
+// persisted encrypted (never the plaintext, anywhere in the stored value)
+// while the in-memory opSettings a handler actually uses keeps the real
+// plaintext -- see Handler.encryptedOperationalValues' doc comment for why
+// only the persisted copy is touched.
+func TestHandleAdminSettings_PostEncryptsEmbeddingAPIKeyAtRest(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	key, err := settingscrypto.ParseKey(testSettingsEncryptionKey)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	opSettings := domain.DefaultOperationalSettings()
+	h := restapi.New(restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
+		Settings: settings, OpSettings: opSettings, SettingsStore: repo,
+		DBDriver: "sqlite", AdminUser: testAdminUser, AdminPass: testAdminPass,
+		SettingsEncryptionKey: key,
+	})
+	loginBody, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
+	loginReq := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(loginBody))
+	loginRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusOK {
+		t.Fatalf("login failed: %d %s", loginRec.Code, loginRec.Body.String())
+	}
+	cookie := loginRec.Result().Cookies()[0]
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.9, "k1": 2.0, "b": 0.2},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 3, "user_agent": "x", "default_max_pages": 5,
+			"min_text_length": 1, "default_top_k": 1, "session_ttl_hours": 1,
+			"crawl_delay_ms": 1, "max_response_kb": 1,
+			"embedding_provider": "http", "embedding_http_api_key": "sk-super-secret",
+			"embedding_http_base_url": "http://localhost/v1", "embedding_http_model": "m",
+			"embedding_http_dimensions": 8,
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rawOp, found, err := repo.GetSetting(context.Background(), ports.SettingsKeyOperational)
+	if err != nil || !found {
+		t.Fatalf("expected the operational setting to be persisted, found=%v err=%v", found, err)
+	}
+	if strings.Contains(rawOp, "sk-super-secret") {
+		t.Errorf("expected the persisted value to never contain the plaintext API key, got: %s", rawOp)
+	}
+	var storedOp domain.OperationalSettingsValues
+	if err := json.Unmarshal([]byte(rawOp), &storedOp); err != nil {
+		t.Fatalf("failed to decode persisted operational settings: %v", err)
+	}
+	if !strings.HasPrefix(storedOp.EmbeddingHTTPAPIKey, "enc:v1:") {
+		t.Errorf("expected the persisted key to carry settingscrypto's enc:v1: prefix, got %q", storedOp.EmbeddingHTTPAPIKey)
+	}
+	dec, err := settingscrypto.Decrypt(key, storedOp.EmbeddingHTTPAPIKey)
+	if err != nil {
+		t.Fatalf("unexpected error decrypting the persisted value: %v", err)
+	}
+	if dec != "sk-super-secret" {
+		t.Errorf("expected the persisted value to decrypt back to the real key, got %q", dec)
+	}
+
+	// The in-memory settings this same process would use to build its own
+	// embedder still hold the real plaintext -- only the persisted copy
+	// was encrypted.
+	if opSettings.Get().EmbeddingHTTPAPIKey != "sk-super-secret" {
+		t.Errorf("expected the in-memory settings to keep the plaintext key, got %q", opSettings.Get().EmbeddingHTTPAPIKey)
+	}
+}
+
+// TestHandleAdminSettings_PostFallsBackToPlaintextOnEncryptionError proves
+// a save still succeeds (persisting the plaintext key, exactly as it
+// would with no key configured) if settingscrypto.Encrypt itself ever
+// errors -- forced here via a malformed key that bypasses
+// settingscrypto.ParseKey's own validation, which is only enforced at
+// startup (see cmd/*/main.go), not by Handler itself.
+func TestHandleAdminSettings_PostFallsBackToPlaintextOnEncryptionError(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	opSettings := domain.DefaultOperationalSettings()
+	h := restapi.New(restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
+		Settings: settings, OpSettings: opSettings, SettingsStore: repo,
+		DBDriver: "sqlite", AdminUser: testAdminUser, AdminPass: testAdminPass,
+		SettingsEncryptionKey: []byte("too-short-for-aes"),
+	})
+	loginBody, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
+	loginReq := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(loginBody))
+	loginRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusOK {
+		t.Fatalf("login failed: %d %s", loginRec.Code, loginRec.Body.String())
+	}
+	cookie := loginRec.Result().Cookies()[0]
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.9, "k1": 2.0, "b": 0.2},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 3, "user_agent": "x", "default_max_pages": 5,
+			"min_text_length": 1, "default_top_k": 1, "session_ttl_hours": 1,
+			"crawl_delay_ms": 1, "max_response_kb": 1,
+			"embedding_provider": "http", "embedding_http_api_key": "sk-plain-key",
+			"embedding_http_base_url": "http://localhost/v1", "embedding_http_model": "m",
+			"embedding_http_dimensions": 8,
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rawOp, found, err := repo.GetSetting(context.Background(), ports.SettingsKeyOperational)
+	if err != nil || !found {
+		t.Fatalf("expected the operational setting to be persisted, found=%v err=%v", found, err)
+	}
+	if !strings.Contains(rawOp, "sk-plain-key") {
+		t.Errorf("expected the fallback-to-plaintext behavior on an encryption error, got: %s", rawOp)
+	}
+}
+
+// TestHandleAdminSettings_PostWithoutEncryptionKeyStoresPlaintext proves
+// the opt-in, non-breaking default: with no SettingsEncryptionKey
+// configured, the embedding API key is persisted exactly as before this
+// feature existed.
+func TestHandleAdminSettings_PostWithoutEncryptionKeyStoresPlaintext(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	opSettings := domain.DefaultOperationalSettings()
+	h, cookie := adminAuthedHandlerWithSettingsStore(t, settings, opSettings, nil, repo)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.9, "k1": 2.0, "b": 0.2},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 3, "user_agent": "x", "default_max_pages": 5,
+			"min_text_length": 1, "default_top_k": 1, "session_ttl_hours": 1,
+			"crawl_delay_ms": 1, "max_response_kb": 1,
+			"embedding_provider": "http", "embedding_http_api_key": "sk-plain-key",
+			"embedding_http_base_url": "http://localhost/v1", "embedding_http_model": "m",
+			"embedding_http_dimensions": 8,
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rawOp, found, err := repo.GetSetting(context.Background(), ports.SettingsKeyOperational)
+	if err != nil || !found {
+		t.Fatalf("expected the operational setting to be persisted, found=%v err=%v", found, err)
+	}
+	if !strings.Contains(rawOp, "sk-plain-key") {
+		t.Errorf("expected the persisted value to contain the plaintext key with no encryption key configured, got: %s", rawOp)
 	}
 }
 

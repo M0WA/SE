@@ -13,6 +13,7 @@ import (
 	"searchengine/internal/adapters/httpfetcher"
 	"searchengine/internal/adapters/restapi"
 	"searchengine/internal/adapters/robots"
+	"searchengine/internal/adapters/settingscrypto"
 	"searchengine/internal/application"
 	"searchengine/internal/bootstrap"
 	"searchengine/internal/domain"
@@ -198,7 +199,11 @@ func main() {
 	opSettings := domain.DefaultOperationalSettings()
 	bootstrap.SyncSettings(ctx, repo, nil, opSettings, nil, repo)
 
-	embedder := bootstrap.NewEmbedder(opSettings.Get())
+	settingsEncryptionKey, err := settingscrypto.ParseKey(bootstrap.GetEnv("SETTINGS_ENCRYPTION_KEY", ""))
+	if err != nil {
+		log.Fatal(err)
+	}
+	embedder := bootstrap.NewEmbedder(bootstrap.DecryptEmbeddingKey(opSettings.Get(), settingsEncryptionKey))
 	// Enables Postgres pgvector ANN search for this process when available
 	// (so SaveDocument populates the vector column below), never fatal
 	// otherwise. Must run after embedder is constructed -- see

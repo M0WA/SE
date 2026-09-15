@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"searchengine/internal/adapters/restapi"
+	"searchengine/internal/adapters/settingscrypto"
 	"searchengine/internal/application"
 	"searchengine/internal/bootstrap"
 	"searchengine/internal/domain"
@@ -40,7 +41,11 @@ func main() {
 	go func() { defer wg.Done(); bootstrap.SyncVocabulary(ctx, repo, vocabulary) }()
 	wg.Wait()
 
-	embedder := bootstrap.NewEmbedder(opSettings.Get())
+	settingsEncryptionKey, err := settingscrypto.ParseKey(bootstrap.GetEnv("SETTINGS_ENCRYPTION_KEY", ""))
+	if err != nil {
+		log.Fatal(err)
+	}
+	embedder := bootstrap.NewEmbedder(bootstrap.DecryptEmbeddingKey(opSettings.Get(), settingsEncryptionKey))
 	// Attempt to enable Postgres pgvector-backed ANN semantic search -- a
 	// no-op on SQLite/MySQL, and never fatal even on Postgres without the
 	// extension installed (see sqlrepo.Repository.EnableANN): this process

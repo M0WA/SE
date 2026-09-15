@@ -134,6 +134,10 @@ type Handler struct {
 	// against -- see its doc comment. Meaningless on RoutesSearch/
 	// RoutesAdmin, which never use it.
 	crawlInternalToken string
+	// settingsEncryptionKey, when set, is the key handleAdminSettings
+	// encrypts OperationalSettingsValues.EmbeddingHTTPAPIKey with before
+	// persisting it -- see settingscrypto's package doc comment.
+	settingsEncryptionKey []byte
 }
 
 // Config wires a Handler's dependencies. Crawler and CrawlJobs are used
@@ -197,6 +201,12 @@ type Config struct {
 	// see requireCrawlInternalToken's doc comment for why this exists
 	// and why it's opt-in.
 	CrawlInternalToken string
+	// SettingsEncryptionKey, when set (see settingscrypto.ParseKey), is
+	// the key handleAdminSettings encrypts
+	// OperationalSettingsValues.EmbeddingHTTPAPIKey with before persisting
+	// it. Meaningless on crawl-server/search-server, which never call
+	// handleAdminSettings.
+	SettingsEncryptionKey []byte
 }
 
 func New(cfg Config) *Handler {
@@ -205,28 +215,29 @@ func New(cfg Config) *Handler {
 		sessions = newSessionStore()
 	}
 	return &Handler{
-		search:             cfg.Search,
-		crawler:            cfg.Crawler,
-		crawlJobs:          cfg.CrawlJobs,
-		crawlSem:           make(chan struct{}, maxConcurrentCrawls),
-		cancelFuncs:        make(map[string]context.CancelFunc),
-		jobs:               cfg.Jobs,
-		debug:              cfg.Debug,
-		admin:              cfg.Admin,
-		pageRank:           cfg.PageRank,
-		settings:           cfg.Settings,
-		opSettings:         cfg.OpSettings,
-		overrides:          cfg.Overrides,
-		settingsStore:      cfg.SettingsStore,
-		scheduledCrawls:    cfg.ScheduledCrawls,
-		health:             cfg.Health,
-		onCrawlComplete:    cfg.OnCrawlComplete,
-		dbDriver:           cfg.DBDriver,
-		adminUser:          cfg.AdminUser,
-		adminPass:          cfg.AdminPass,
-		sessions:           sessions,
-		loginLimiter:       newLoginLimiter(),
-		crawlInternalToken: cfg.CrawlInternalToken,
+		search:                cfg.Search,
+		crawler:               cfg.Crawler,
+		crawlJobs:             cfg.CrawlJobs,
+		crawlSem:              make(chan struct{}, maxConcurrentCrawls),
+		cancelFuncs:           make(map[string]context.CancelFunc),
+		jobs:                  cfg.Jobs,
+		debug:                 cfg.Debug,
+		admin:                 cfg.Admin,
+		pageRank:              cfg.PageRank,
+		settings:              cfg.Settings,
+		opSettings:            cfg.OpSettings,
+		overrides:             cfg.Overrides,
+		settingsStore:         cfg.SettingsStore,
+		scheduledCrawls:       cfg.ScheduledCrawls,
+		health:                cfg.Health,
+		onCrawlComplete:       cfg.OnCrawlComplete,
+		dbDriver:              cfg.DBDriver,
+		adminUser:             cfg.AdminUser,
+		adminPass:             cfg.AdminPass,
+		sessions:              sessions,
+		loginLimiter:          newLoginLimiter(),
+		crawlInternalToken:    cfg.CrawlInternalToken,
+		settingsEncryptionKey: cfg.SettingsEncryptionKey,
 	}
 }
 

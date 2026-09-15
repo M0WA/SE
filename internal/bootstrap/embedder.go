@@ -5,6 +5,7 @@ import (
 
 	"searchengine/internal/adapters/hashembed"
 	"searchengine/internal/adapters/httpembed"
+	"searchengine/internal/adapters/settingscrypto"
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
 )
@@ -29,4 +30,28 @@ func NewEmbedder(v domain.OperationalSettingsValues) ports.EmbeddingProvider {
 		})
 	}
 	return hashembed.New(128)
+}
+
+// DecryptEmbeddingKey returns v with EmbeddingHTTPAPIKey decrypted via
+// settingsEncryptionKey (see settingscrypto's package doc comment) -- call
+// this on the value passed to NewEmbedder when the admin settings API may
+// have persisted an encrypted key (handleAdminSettings does, when
+// SettingsEncryptionKey is configured). A nil settingsEncryptionKey, or a
+// value that was never encrypted in the first place (an unconfigured key
+// at save time, or data older than this feature), passes v through
+// unchanged -- see settingscrypto.Decrypt. A genuine decryption failure
+// (the value IS encrypted but this process's key is nil, wrong, or the
+// data is corrupt) is logged and returns v with EmbeddingHTTPAPIKey
+// cleared rather than the raw ciphertext, so a misconfigured embedder
+// fails fast and visibly (every request to a bad URL/key rejected) rather
+// than silently sending garbage as a Bearer token.
+func DecryptEmbeddingKey(v domain.OperationalSettingsValues, settingsEncryptionKey []byte) domain.OperationalSettingsValues {
+	dec, err := settingscrypto.Decrypt(settingsEncryptionKey, v.EmbeddingHTTPAPIKey)
+	if err != nil {
+		log.Printf("decrypting embedding API key: %v", err)
+		v.EmbeddingHTTPAPIKey = ""
+		return v
+	}
+	v.EmbeddingHTTPAPIKey = dec
+	return v
 }
