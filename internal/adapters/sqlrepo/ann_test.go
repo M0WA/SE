@@ -165,6 +165,57 @@ func TestEnableANN_BackfillsVectorColumnForPreExistingDocuments(t *testing.T) {
 	}
 }
 
+// TestEnableANN_RecreatesColumnWhenDimensionsChange proves the real
+// production scenario this exists for: switching the embedding provider/
+// model (see application.RunEmbeddingRecomputeJob) changes the vector
+// dimension, and a later process restart's EnableANN call must pick that
+// up rather than silently keeping the old, now-mismatched pgvector
+// column.
+//
+// UpdateEmbedding is used here to bring the blob `embedding` column's
+// dimension in sync first, exactly like a real recompute run does for
+// every document -- but note it still returns an error at this point: its
+// blob write (`embedding`/`norm_embedding`) succeeds and commits on its
+// own regardless, but its *second* write, into the still-2-dimensional
+// embedding_vector column (ANN is already available at the old
+// dimension), correctly fails, since that column hasn't been recreated
+// yet. This matches exactly what was observed running a real recompute
+// against a live deployment: every document's blob embedding was already
+// updated to the new dimension, yet the run's own Failed counter still
+// counted every single one, because the process hadn't been restarted
+// (recreating the ANN column) yet.
+func TestEnableANN_RecreatesColumnWhenDimensionsChange(t *testing.T) {
+	repo := requirePostgresANN(t) // enables ANN at dims=2
+	ctx := context.Background()
+	doc := domain.Document{ID: "doc-1", URL: "https://example.com/doc-1", Title: "Doc", Text: "hello world"}
+	if err := repo.SaveDocument(ctx, doc, []float32{1, 0}, 100, 2); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := repo.UpdateEmbedding(ctx, "doc-1", []float32{0, 1, 0}); err == nil {
+		t.Fatal("expected an error writing a 3-dimensional vector into the still-2-dimensional ANN column")
+	}
+
+	// Simulate a later process restart picking up the new 3-dimensional
+	// embedder -- the same repo object stands in for "a fresh process
+	// against the same database" here, since EnableANN itself always
+	// re-checks the catalog rather than trusting any in-memory state.
+	repo.EnableANN(ctx, 3)
+	if !repo.ANNAvailable() {
+		t.Fatal("expected ANN to remain available after a clean dimension change")
+	}
+
+	matches, ok, err := repo.TopSemanticMatches(ctx, []float32{0, 1, 0}, 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if _, found := matches["doc-1"]; !found {
+		t.Errorf("expected doc-1 backfilled into the recreated 3-dimensional column from its already-updated blob embedding, got %+v", matches)
+	}
+}
+
 // TestTopSemanticMatches_ReturnsNearestNeighborsInSaneOrder verifies the
 // actual pgvector ORDER BY ... <=> $1 LIMIT $2 query against a small
 // synthetic embedding set: of three 2-D unit vectors, the one identical to

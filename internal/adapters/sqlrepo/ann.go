@@ -2,6 +2,7 @@ package sqlrepo
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"strconv"
@@ -189,11 +190,69 @@ func (r *Repository) enablePgVectorExtension(ctx context.Context) error {
 // "already exists" race covers the same concurrent-startup scenario
 // ensureHostIndex/ensureCrawledAtIndex guard against.
 func (r *Repository) ensureVectorColumn(ctx context.Context, dims int) error {
+	existingDims, found, err := r.vectorColumnDimensions(ctx)
+	if err != nil {
+		return err
+	}
+	if found && existingDims != dims {
+		// The embedding provider/model changed since this column was
+		// first created (see application.RunEmbeddingRecomputeJob, the
+		// whole point of which is letting that happen without a
+		// re-crawl) -- pgvector's vector(N) type is fixed per column,
+		// so the old column can't just be widened/narrowed in place.
+		// Drop it (and its now-mismatched index) and let the ADD COLUMN
+		// below recreate it fresh at the new size; backfillVectorColumn
+		// repopulates every row from the blob `embedding` column, which
+		// SaveDocument/UpdateEmbedding always keep current regardless
+		// of this column's own state -- so nothing is actually lost.
+		if _, err := r.db.ExecContext(ctx, `DROP INDEX IF EXISTS `+vectorIndexName); err != nil {
+			return fmt.Errorf("dropping stale pgvector index: %w", err)
+		}
+		if _, err := r.db.ExecContext(ctx, `ALTER TABLE documents DROP COLUMN IF EXISTS `+vectorColumnName); err != nil {
+			return fmt.Errorf("dropping mismatched-dimension pgvector column: %w", err)
+		}
+	}
 	ddl := fmt.Sprintf(`ALTER TABLE documents ADD COLUMN IF NOT EXISTS %s vector(%d)`, vectorColumnName, dims)
 	if _, err := r.db.ExecContext(ctx, ddl); err != nil && !isAlreadyExistsError(err) {
 		return err
 	}
 	return nil
+}
+
+// vectorColumnDimensions reports the dimension embedding_vector was
+// actually created with, by asking Postgres's own catalog rather than
+// trusting this process's in-memory dims -- necessary because another
+// process (or an earlier run of this one, before a provider/model change)
+// may have created the column at a different size. found is false when
+// the column doesn't exist yet at all (a fresh database, or ANN never
+// having been enabled before), which is not an error.
+func (r *Repository) vectorColumnDimensions(ctx context.Context) (dims int, found bool, err error) {
+	const q = `
+		SELECT format_type(a.atttypid, a.atttypmod)
+		FROM pg_attribute a
+		WHERE a.attrelid = 'documents'::regclass
+		  AND a.attname = $1
+		  AND NOT a.attisdropped`
+	var formatted string
+	if err := r.db.QueryRowContext(ctx, q, vectorColumnName).Scan(&formatted); err != nil {
+		if err == sql.ErrNoRows {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("checking existing pgvector column dimensions: %w", err)
+	}
+	// formatted looks like "vector(128)" -- pull the integer out from
+	// between the parens rather than assuming any particular prefix, so
+	// this doesn't silently misparse if a future pgvector version changes
+	// format_type's exact spelling.
+	open, close := strings.IndexByte(formatted, '('), strings.LastIndexByte(formatted, ')')
+	if open < 0 || close <= open {
+		return 0, false, fmt.Errorf("unexpected pgvector column type format %q", formatted)
+	}
+	dims, err = strconv.Atoi(formatted[open+1 : close])
+	if err != nil {
+		return 0, false, fmt.Errorf("parsing pgvector column dimensions from %q: %w", formatted, err)
+	}
+	return dims, true, nil
 }
 
 // ensureVectorIndex builds the HNSW index TopSemanticMatches' "ORDER BY
