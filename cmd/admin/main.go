@@ -53,7 +53,8 @@ func main() {
 		log.Print("ADMIN_USER/ADMIN_PASSWORD not set: /crawl and /admin will refuse all sign-ins")
 	}
 
-	jobs := crawlclient.New(bootstrap.GetEnv("CRAWL_SERVER_URL", "http://127.0.0.1:8082"))
+	crawlInternalToken := bootstrap.GetEnv("CRAWL_INTERNAL_TOKEN", "")
+	jobs := crawlclient.New(bootstrap.GetEnv("CRAWL_SERVER_URL", "http://127.0.0.1:8082"), crawlInternalToken)
 
 	handler := restapi.New(restapi.Config{
 		Jobs:            jobs,

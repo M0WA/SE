@@ -95,7 +95,7 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 	// production processes -- admin-server reaches crawl-server the same
 	// way it would in production: over HTTP, via crawlclient.
 	handler := restapi.New(restapi.Config{
-		Search: searchSvc, OpSettings: opSettings, Jobs: crawlclient.New(crawlServer.URL),
+		Search: searchSvc, OpSettings: opSettings, Jobs: crawlclient.New(crawlServer.URL, ""),
 		ScheduledCrawls: repo,
 		AdminUser:       "admin", AdminPass: "test-password",
 	})
