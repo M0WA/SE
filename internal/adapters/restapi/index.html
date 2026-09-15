@@ -35,8 +35,12 @@
       <dd>must not appear</dd>
       <dt><span class="syntax-token">"exact phrase"</span></dt>
       <dd>matches that phrase exactly</dd>
+      <dt><span class="syntax-token">-"exact phrase"</span></dt>
+      <dd>that exact phrase must not appear</dd>
       <dt><span class="syntax-token">site:example.com</span></dt>
       <dd>only that site (and its subdomains)</dd>
+      <dt><span class="syntax-token">-site:example.com</span></dt>
+      <dd>excludes that site (and its subdomains)</dd>
     </dl>
     <p class="syntax-aside">Combine them freely — e.g. <span class="syntax-token">cats +shelter -kitten site:example.com</span>. Add <span class="syntax-token">&amp;top_k=N</span> to the URL for more than the default number of results.</p>
   </details>

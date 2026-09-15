@@ -60,7 +60,8 @@ paths:
       description: >-
         Blends BM25 and semantic (embedding cosine-similarity) scoring.
         Query syntax supports `+required`, `-excluded`, `"exact phrase"`,
-        and `site:host` terms, combinable in one query.
+        `-"excluded phrase"`, `site:host`, and `-site:host` terms,
+        combinable in one query.
       parameters:
         - name: q
           in: query
