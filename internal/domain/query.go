@@ -5,7 +5,13 @@ import (
 	"strings"
 )
 
-var queryTokenRe = regexp.MustCompile(`"[^"]*"|\S+`)
+// The optional leading [+-] lets a sign attach directly to a quoted phrase
+// as one token (`-"exact phrase"`) -- previously absent, which let the
+// plain \S+ alternative match `-"exact` and `phrase"` as two separate,
+// nonsensical tokens instead (see ParseQuery's sign-then-body handling
+// below, and the -site: fix in the same commit for the analogous bug in
+// the site: operator).
+var queryTokenRe = regexp.MustCompile(`[+-]?"[^"]*"|\S+`)
 
 // sitePrefix is the "site:" operator prefix, matched case-insensitively
 // (e.g. "Site:Example.com" is equivalent to "site:example.com").
@@ -14,36 +20,61 @@ const sitePrefix = "site:"
 // ParsedQuery is a search query broken into its structural pieces: plain
 // optional terms that just contribute to relevance ranking, required terms
 // (+word) and excluded terms (-word), required exact phrases ("quoted
-// text"), and site: filters restricting results to one or more hosts.
+// text") and excluded ones (-"quoted text"), and site: filters restricting
+// results to (site:host) or away from (-site:host) one or more hosts.
 type ParsedQuery struct {
-	Optional []string
-	Required []string
-	Excluded []string
-	Phrases  []string
-	Sites    []string
+	Optional        []string
+	Required        []string
+	Excluded        []string
+	Phrases         []string
+	ExcludedPhrases []string
+	Sites           []string
+	ExcludedSites   []string
 }
 
 // ParseQuery splits a raw query string into its structural pieces. It must
 // run on the raw string before Tokenize, which would otherwise strip the
 // +/-/"/site: syntax this depends on.
+//
+// Every token's leading +/- sign (if any) is stripped once, up front, into
+// `sign` -- both the phrase and site: cases below key off that same sign
+// rather than re-deriving it from `tok`, which is what previously let
+// -"phrase" and -site:host fall through to the plain excluded-word case
+// instead of being recognized as an excluded phrase/site: -site:host in
+// particular used to tokenize as three unrelated excluded words
+// ("site","example","com") rather than excluding a host at all.
 func ParseQuery(raw string) ParsedQuery {
 	var parsed ParsedQuery
 	for _, tok := range queryTokenRe.FindAllString(raw, -1) {
+		var sign byte
+		body := tok
+		if len(tok) > 0 && (tok[0] == '+' || tok[0] == '-') {
+			sign = tok[0]
+			body = tok[1:]
+		}
 		switch {
-		case len(tok) >= 2 && strings.HasPrefix(tok, `"`) && strings.HasSuffix(tok, `"`):
-			phrase := strings.ToLower(strings.TrimSpace(tok[1 : len(tok)-1]))
+		case len(body) >= 2 && strings.HasPrefix(body, `"`) && strings.HasSuffix(body, `"`):
+			phrase := strings.ToLower(strings.TrimSpace(body[1 : len(body)-1]))
 			if phrase != "" {
-				parsed.Phrases = append(parsed.Phrases, phrase)
+				if sign == '-' {
+					parsed.ExcludedPhrases = append(parsed.ExcludedPhrases, phrase)
+				} else {
+					parsed.Phrases = append(parsed.Phrases, phrase)
+				}
 			}
-		case len(tok) >= len(sitePrefix) && strings.EqualFold(tok[:len(sitePrefix)], sitePrefix):
-			site := strings.ToLower(strings.TrimSpace(tok[len(sitePrefix):]))
+		case len(body) >= len(sitePrefix) && strings.EqualFold(body[:len(sitePrefix)], sitePrefix):
+			site := strings.ToLower(strings.TrimSpace(body[len(sitePrefix):]))
 			if site != "" {
-				parsed.Sites = append(parsed.Sites, site)
+				if sign == '-' {
+					parsed.ExcludedSites = append(parsed.ExcludedSites, site)
+				} else {
+					parsed.Sites = append(parsed.Sites, site)
+				}
 			}
-		case strings.HasPrefix(tok, "+") && len(tok) > 1:
-			parsed.Required = append(parsed.Required, Tokenize(tok[1:])...)
-		case strings.HasPrefix(tok, "-") && len(tok) > 1:
-			parsed.Excluded = append(parsed.Excluded, Tokenize(tok[1:])...)
+		case sign == '+' && len(body) > 0:
+			parsed.Required = append(parsed.Required, Tokenize(body)...)
+		case sign == '-' && len(body) > 0:
+			parsed.Excluded = append(parsed.Excluded, Tokenize(body)...)
 		default:
 			parsed.Optional = append(parsed.Optional, Tokenize(tok)...)
 		}
@@ -83,18 +114,26 @@ func (q ParsedQuery) Empty() bool {
 // terms, phrases, or site: filters that need per-document filtering,
 // beyond ordinary relevance ranking.
 func (q ParsedQuery) HasConstraints() bool {
-	return len(q.Required) > 0 || len(q.Excluded) > 0 || len(q.Phrases) > 0 || len(q.Sites) > 0
+	return len(q.Required) > 0 || len(q.Excluded) > 0 || len(q.Phrases) > 0 ||
+		len(q.ExcludedPhrases) > 0 || len(q.Sites) > 0 || len(q.ExcludedSites) > 0
 }
 
 // SiteAllowed reports whether doc's URL host satisfies this query's site:
-// filter(s), if any -- an exact host match or a subdomain of one (so
-// "site:example.com" also matches "www.example.com"). A query with no
-// site: filter allows every host.
+// filter(s), if any. -site:host is checked first and always wins over a
+// positive site: filter (matching how a required/excluded word pair would
+// behave): an exact host match or a subdomain of one (so "site:example.com"
+// also matches "www.example.com", and "-site:example.com" excludes it the
+// same way). A query with neither kind of site: filter allows every host.
 func (q ParsedQuery) SiteAllowed(doc Document) bool {
+	host := HostOf(doc.URL)
+	for _, site := range q.ExcludedSites {
+		if host == site || strings.HasSuffix(host, "."+site) {
+			return false
+		}
+	}
 	if len(q.Sites) == 0 {
 		return true
 	}
-	host := HostOf(doc.URL)
 	for _, site := range q.Sites {
 		if host == site || strings.HasSuffix(host, "."+site) {
 			return true
@@ -148,10 +187,15 @@ func (q ParsedQuery) MatchesTokens(tokens map[string]bool, title, text string) b
 		}
 	}
 
-	if len(q.Phrases) > 0 {
+	if len(q.Phrases) > 0 || len(q.ExcludedPhrases) > 0 {
 		haystack := strings.ToLower(title + " " + text)
 		for _, phrase := range q.Phrases {
 			if !strings.Contains(haystack, phrase) {
+				return false
+			}
+		}
+		for _, phrase := range q.ExcludedPhrases {
+			if strings.Contains(haystack, phrase) {
 				return false
 			}
 		}

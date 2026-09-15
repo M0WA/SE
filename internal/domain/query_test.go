@@ -249,3 +249,94 @@ func TestParsedQuery_MatchesTokens_NoConstraintsAlwaysTrue(t *testing.T) {
 		t.Error("expected a plain query with no operators to match unconditionally")
 	}
 }
+
+// TestParseQuery_ExcludedPhrase is the regression test for the bug where
+// `-"exact phrase"` was never recognized as one token: the tokenizer regex
+// split it into `-"exact` and `phrase"`, which then parsed as an excluded
+// word "exact" plus an unrelated optional word "phrase" -- nothing to do
+// with excluding the phrase the user actually typed.
+func TestParseQuery_ExcludedPhrase(t *testing.T) {
+	q := domain.ParseQuery(`katzen -"sehr laut"`)
+	if !reflect.DeepEqual(q.Optional, []string{"katzen"}) {
+		t.Errorf("expected 'katzen' optional, got %+v", q.Optional)
+	}
+	if len(q.Excluded) != 0 {
+		t.Errorf("expected no plain excluded words (the old buggy split), got %+v", q.Excluded)
+	}
+	if !reflect.DeepEqual(q.ExcludedPhrases, []string{"sehr laut"}) {
+		t.Errorf("expected 'sehr laut' as an excluded phrase, got %+v", q.ExcludedPhrases)
+	}
+}
+
+// TestParseQuery_RequiredPhraseSignIsHarmless proves a leading + on a
+// phrase parses as an ordinary (already-required-by-default) phrase,
+// rather than also splitting like the excluded case used to.
+func TestParseQuery_RequiredPhraseSignIsHarmless(t *testing.T) {
+	q := domain.ParseQuery(`+"sehr laut"`)
+	if !reflect.DeepEqual(q.Phrases, []string{"sehr laut"}) {
+		t.Errorf("expected 'sehr laut' as a phrase, got %+v", q.Phrases)
+	}
+	if len(q.Required) != 0 || len(q.ExcludedPhrases) != 0 {
+		t.Errorf("expected no other fields populated, got %+v", q)
+	}
+}
+
+func TestParsedQuery_MatchesTokens_ExcludedPhrase(t *testing.T) {
+	q := domain.ParseQuery(`-"sehr laut"`)
+	if q.MatchesTokens(nil, "Titel", "Der Hund ist sehr laut heute.") {
+		t.Error("expected a document containing the excluded phrase to not match")
+	}
+	if !q.MatchesTokens(nil, "Titel", "Der Hund ist sehr ruhig heute.") {
+		t.Error("expected a document without the excluded phrase to match")
+	}
+}
+
+func TestParsedQuery_HasConstraints_ExcludedPhraseAlone(t *testing.T) {
+	q := domain.ParseQuery(`-"sehr laut"`)
+	if !q.HasConstraints() {
+		t.Error("expected an excluded phrase alone to count as a constraint")
+	}
+}
+
+// TestParseQuery_ExcludedSite is the regression test for the bug where
+// `-site:example.com` was never recognized as the site: operator (the
+// sign check happened before the site: check, on the raw token which
+// starts with '-' not "site:") -- it fell through to the plain
+// excluded-word case instead, tokenizing "site:example.com" into three
+// unrelated excluded words ("site","example","com") and excluding any
+// document containing the literal word "site" anywhere, not a host at all.
+func TestParseQuery_ExcludedSite(t *testing.T) {
+	q := domain.ParseQuery("katzen -site:example.com")
+	if !reflect.DeepEqual(q.Optional, []string{"katzen"}) {
+		t.Errorf("expected 'katzen' optional, got %+v", q.Optional)
+	}
+	if len(q.Excluded) != 0 {
+		t.Errorf("expected no plain excluded words (the old buggy split), got %+v", q.Excluded)
+	}
+	if !reflect.DeepEqual(q.ExcludedSites, []string{"example.com"}) {
+		t.Errorf("expected 'example.com' as an excluded site, got %+v", q.ExcludedSites)
+	}
+}
+
+func TestParsedQuery_SiteAllowed_ExcludedSite(t *testing.T) {
+	q := domain.ParseQuery("katzen -site:example.com")
+	if q.SiteAllowed(domain.Document{URL: "https://example.com/page"}) {
+		t.Error("expected an exact host match on an excluded site to be disallowed")
+	}
+	if q.SiteAllowed(domain.Document{URL: "https://www.example.com/page"}) {
+		t.Error("expected a subdomain of an excluded site to be disallowed")
+	}
+	if !q.SiteAllowed(domain.Document{URL: "https://other.example/page"}) {
+		t.Error("expected a non-matching host to still be allowed")
+	}
+}
+
+// TestParsedQuery_SiteAllowed_ExcludedSiteWinsOverIncludedSite proves
+// -site: always wins, the same precedence a required/excluded word pair
+// would have -- excluding a site is never overridden by also including it.
+func TestParsedQuery_SiteAllowed_ExcludedSiteWinsOverIncludedSite(t *testing.T) {
+	q := domain.ParseQuery("katzen site:example.com -site:example.com")
+	if q.SiteAllowed(domain.Document{URL: "https://example.com/page"}) {
+		t.Error("expected the excluded site: filter to win over the included one")
+	}
+}
