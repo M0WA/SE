@@ -238,6 +238,11 @@ func main() {
 		// job's own reported completion or the concurrency semaphore's
 		// release) in addition to pageRank's own periodic ticker.
 		OnCrawlComplete: func() { go pageRank.recompute() },
+		// See requireCrawlInternalToken's doc comment: opt-in shared
+		// secret admin-server's crawlclient.Client must send back --
+		// empty by default, so an existing deployment that hasn't set
+		// this keeps working unchanged.
+		CrawlInternalToken: bootstrap.GetEnv("CRAWL_INTERNAL_TOKEN", ""),
 	})
 
 	// Any job still queued/running from before this process last stopped

@@ -20,6 +20,73 @@ func newCrawlServerHandler(crawler *fakeCrawler) *restapi.Handler {
 	return restapi.New(restapi.Config{Crawler: crawler, CrawlJobs: domain.NewCrawlJobStore()})
 }
 
+func TestRoutesCrawlInternal_NoTokenConfiguredAllowsAllRequests(t *testing.T) {
+	h := restapi.New(restapi.Config{Crawler: &fakeCrawler{}, CrawlJobs: domain.NewCrawlJobStore()})
+	req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesCrawlInternal().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 when no token is configured, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRoutesCrawlInternal_TokenConfigured_RejectsMissingHeader(t *testing.T) {
+	h := restapi.New(restapi.Config{
+		Crawler: &fakeCrawler{}, CrawlJobs: domain.NewCrawlJobStore(),
+		CrawlInternalToken: "shared-secret",
+	})
+	req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesCrawlInternal().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 with no token header, got %d", rec.Code)
+	}
+}
+
+func TestRoutesCrawlInternal_TokenConfigured_RejectsWrongToken(t *testing.T) {
+	h := restapi.New(restapi.Config{
+		Crawler: &fakeCrawler{}, CrawlJobs: domain.NewCrawlJobStore(),
+		CrawlInternalToken: "shared-secret",
+	})
+	req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
+	req.Header.Set("X-Internal-Token", "wrong")
+	rec := httptest.NewRecorder()
+	h.RoutesCrawlInternal().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 with a wrong token, got %d", rec.Code)
+	}
+}
+
+func TestRoutesCrawlInternal_TokenConfigured_AcceptsCorrectToken(t *testing.T) {
+	h := restapi.New(restapi.Config{
+		Crawler: &fakeCrawler{}, CrawlJobs: domain.NewCrawlJobStore(),
+		CrawlInternalToken: "shared-secret",
+	})
+	req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
+	req.Header.Set("X-Internal-Token", "shared-secret")
+	rec := httptest.NewRecorder()
+	h.RoutesCrawlInternal().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 with the correct token, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestRoutesCrawlInternal_TokenConfigured_HealthzStaysOpen proves /healthz
+// is exempt from the token check -- monitoring shouldn't need a credential
+// to check liveness, same as every other Routes* mux in this codebase.
+func TestRoutesCrawlInternal_TokenConfigured_HealthzStaysOpen(t *testing.T) {
+	h := restapi.New(restapi.Config{
+		Crawler: &fakeCrawler{}, CrawlJobs: domain.NewCrawlJobStore(),
+		CrawlInternalToken: "shared-secret",
+	})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesCrawlInternal().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected /healthz to stay open with no token header, got %d", rec.Code)
+	}
+}
+
 // erroringCrawlJobStore wraps a real ports.CrawlJobStore, letting a test
 // force any one method to fail (and counting how many times it was
 // called) while every other method still call through normally -- proves

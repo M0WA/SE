@@ -129,6 +129,11 @@ type Handler struct {
 	adminPass       string
 	sessions        ports.SessionStore
 	loginLimiter    *loginLimiter
+	// crawlInternalToken, when set, is the shared secret
+	// requireCrawlInternalToken checks RoutesCrawlInternal callers
+	// against -- see its doc comment. Meaningless on RoutesSearch/
+	// RoutesAdmin, which never use it.
+	crawlInternalToken string
 }
 
 // Config wires a Handler's dependencies. Crawler and CrawlJobs are used
@@ -185,6 +190,13 @@ type Config struct {
 	DBDriver        string
 	AdminUser       string
 	AdminPass       string
+	// CrawlInternalToken, when set, is the shared secret
+	// requireCrawlInternalToken enforces on RoutesCrawlInternal (checked
+	// against every caller's X-Internal-Token header) and
+	// internal/adapters/crawlclient.Client sends on every request --
+	// see requireCrawlInternalToken's doc comment for why this exists
+	// and why it's opt-in.
+	CrawlInternalToken string
 }
 
 func New(cfg Config) *Handler {
@@ -193,27 +205,28 @@ func New(cfg Config) *Handler {
 		sessions = newSessionStore()
 	}
 	return &Handler{
-		search:          cfg.Search,
-		crawler:         cfg.Crawler,
-		crawlJobs:       cfg.CrawlJobs,
-		crawlSem:        make(chan struct{}, maxConcurrentCrawls),
-		cancelFuncs:     make(map[string]context.CancelFunc),
-		jobs:            cfg.Jobs,
-		debug:           cfg.Debug,
-		admin:           cfg.Admin,
-		pageRank:        cfg.PageRank,
-		settings:        cfg.Settings,
-		opSettings:      cfg.OpSettings,
-		overrides:       cfg.Overrides,
-		settingsStore:   cfg.SettingsStore,
-		scheduledCrawls: cfg.ScheduledCrawls,
-		health:          cfg.Health,
-		onCrawlComplete: cfg.OnCrawlComplete,
-		dbDriver:        cfg.DBDriver,
-		adminUser:       cfg.AdminUser,
-		adminPass:       cfg.AdminPass,
-		sessions:        sessions,
-		loginLimiter:    newLoginLimiter(),
+		search:             cfg.Search,
+		crawler:            cfg.Crawler,
+		crawlJobs:          cfg.CrawlJobs,
+		crawlSem:           make(chan struct{}, maxConcurrentCrawls),
+		cancelFuncs:        make(map[string]context.CancelFunc),
+		jobs:               cfg.Jobs,
+		debug:              cfg.Debug,
+		admin:              cfg.Admin,
+		pageRank:           cfg.PageRank,
+		settings:           cfg.Settings,
+		opSettings:         cfg.OpSettings,
+		overrides:          cfg.Overrides,
+		settingsStore:      cfg.SettingsStore,
+		scheduledCrawls:    cfg.ScheduledCrawls,
+		health:             cfg.Health,
+		onCrawlComplete:    cfg.OnCrawlComplete,
+		dbDriver:           cfg.DBDriver,
+		adminUser:          cfg.AdminUser,
+		adminPass:          cfg.AdminPass,
+		sessions:           sessions,
+		loginLimiter:       newLoginLimiter(),
+		crawlInternalToken: cfg.CrawlInternalToken,
 	}
 }
 

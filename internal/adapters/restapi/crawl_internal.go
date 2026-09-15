@@ -2,6 +2,7 @@ package restapi
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"log"
 	"net/http"
@@ -18,16 +19,52 @@ const maxConcurrentCrawls = 3
 
 // RoutesCrawlInternal serves the endpoints the crawl-server binary
 // exposes: GET /jobs and GET /jobs/{id} report progress on jobs the
-// scheduler ticker (cmd/crawl/main.go) has started. None of this is ever
-// reachable from nginx or the internet -- admin-server is the only caller,
-// over the network via internal/adapters/crawlclient.
+// scheduler ticker (cmd/crawl/main.go) has started. None of this is meant
+// to be reachable from nginx or the internet -- admin-server is the only
+// intended caller, over the network via internal/adapters/crawlclient --
+// but that's enforced only by network topology (nginx never proxying this
+// port; a default loopback-only bind), not by this API itself, so every
+// route but /healthz also goes through requireCrawlInternalToken as a
+// second, independent layer.
 func (h *Handler) RoutesCrawlInternal() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /jobs", h.handleListCrawlJobs)
-	mux.HandleFunc("GET /jobs/{id}", h.handleGetCrawlJob)
-	mux.HandleFunc("POST /jobs/{id}/cancel", h.handleCancelCrawlJob)
+	mux.HandleFunc("GET /jobs", h.requireCrawlInternalToken(h.handleListCrawlJobs))
+	mux.HandleFunc("GET /jobs/{id}", h.requireCrawlInternalToken(h.handleGetCrawlJob))
+	mux.HandleFunc("POST /jobs/{id}/cancel", h.requireCrawlInternalToken(h.handleCancelCrawlJob))
 	mux.HandleFunc("/healthz", h.handleHealthz)
 	return mux
+}
+
+// requireCrawlInternalToken gates a RoutesCrawlInternal handler behind a
+// shared secret (h.crawlInternalToken, from CRAWL_INTERNAL_TOKEN --
+// see cmd/crawl/main.go/cmd/admin/main.go), checked via constant-time
+// comparison against the caller-supplied X-Internal-Token header.
+//
+// Only enforced when the token is actually configured: an empty
+// h.crawlInternalToken lets every request through unchanged, so a
+// deployment that hasn't set CRAWL_INTERNAL_TOKEN yet keeps working
+// exactly as it did before this check existed -- opt-in hardening on top
+// of the network-topology protection, not a forced breaking change. This
+// deliberately never falls back to a loopback-only check on r.RemoteAddr
+// instead: admin-server and crawl-server aren't necessarily on the same
+// host (CRAWL_LISTEN_ADDR is fully operator-overridable, e.g. for a
+// container-networking setup where crawl-server binds a non-loopback
+// address precisely so a same-host check would be the wrong thing to
+// require), so the shared secret is the one mechanism that works
+// regardless of topology.
+func (h *Handler) requireCrawlInternalToken(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if h.crawlInternalToken == "" {
+			next(w, r)
+			return
+		}
+		got := r.Header.Get("X-Internal-Token")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(h.crawlInternalToken)) != 1 {
+			http.Error(w, "invalid or missing internal token", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
 }
 
 // TriggerScheduledCrawl registers a new crawl job and starts it in the

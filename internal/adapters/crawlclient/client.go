@@ -20,10 +20,16 @@ import (
 type Client struct {
 	BaseURL string
 	HTTP    *http.Client
+	// Token, when set, is sent as the X-Internal-Token header on every
+	// request -- crawl-server's own opt-in shared-secret check (see
+	// restapi.Handler.requireCrawlInternalToken). Left empty, requests
+	// carry no such header, matching a crawl-server that hasn't been
+	// given CRAWL_INTERNAL_TOKEN either.
+	Token string
 }
 
-func New(baseURL string) *Client {
-	return &Client{BaseURL: baseURL, HTTP: &http.Client{}}
+func New(baseURL, token string) *Client {
+	return &Client{BaseURL: baseURL, HTTP: &http.Client{}, Token: token}
 }
 
 func (c *Client) ListCrawlJobs(ctx context.Context) ([]domain.CrawlJobSummary, error) {
@@ -97,6 +103,9 @@ func (c *Client) CancelCrawlJob(ctx context.Context, jobID string) error {
 // do sends req and returns its body and status code, or an error if the
 // request couldn't be made or its response body couldn't be read.
 func (c *Client) do(req *http.Request) ([]byte, int, error) {
+	if c.Token != "" {
+		req.Header.Set("X-Internal-Token", c.Token)
+	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("calling crawl server: %w", err)

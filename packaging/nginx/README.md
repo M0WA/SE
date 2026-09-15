@@ -103,8 +103,13 @@ nginx -t && systemctl reload nginx
   VM blocking other ports, so an app that binds `0.0.0.0` is directly
   reachable from the internet the moment it starts.
 - crawl-server (`127.0.0.1:8082`) must never be proxied or opened
-  publicly -- it has no auth of its own and is only meant to be called
-  by admin-server on localhost.
+  publicly -- it's only meant to be called by admin-server on localhost,
+  and relies on that (this proxy config, plus `CRAWL_LISTEN_ADDR`'s
+  default loopback-only bind) as its main protection. Set
+  `CRAWL_INTERNAL_TOKEN` in `searchengine.env` for a second, independent
+  layer that still holds if either of those is ever misconfigured (e.g.
+  `CRAWL_LISTEN_ADDR` changed to `0.0.0.0` for container networking) --
+  see that file's own comment.
 - If the domain's DNS changes to point at a different host, certbot
   won't be able to renew until the domain resolves back to this
   machine (HTTP-01 validation fetches the challenge from the domain

@@ -749,6 +749,7 @@ paths:
     get:
       tags: [crawl-internal]
       summary: List every crawl job tracked by this crawl-server
+      security: [{}, { internalToken: [] }]
       responses:
         "200":
           description: OK
@@ -761,6 +762,7 @@ paths:
     get:
       tags: [crawl-internal]
       summary: One crawl job's full detail
+      security: [{}, { internalToken: [] }]
       parameters:
         - name: id
           in: path
@@ -781,6 +783,7 @@ paths:
       description: >-
         Called only by admin-server's crawlclient.Client, never directly
         reachable from the internet.
+      security: [{}, { internalToken: [] }]
       parameters:
         - name: id
           in: path
@@ -832,6 +835,18 @@ components:
         Set by POST /login. Backed by a shared "sessions" table (not
         process-local memory), so a session created via admin-server is
         also honored by search-server, and vice versa.
+    internalToken:
+      type: apiKey
+      in: header
+      name: X-Internal-Token
+      description: >-
+        Only used by the crawl-internal /jobs* endpoints, and only
+        enforced when the deployment has set CRAWL_INTERNAL_TOKEN (see
+        packaging/searchengine.env) -- optional, defense-in-depth on top
+        of the network-topology protection (crawl-server never proxied by
+        nginx, loopback-only bind by default) these endpoints otherwise
+        rely on entirely. Never uses sessionCookie: crawl-server has no
+        concept of an admin login session at all.
 
   responses:
     BadRequest:
