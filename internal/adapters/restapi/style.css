@@ -920,6 +920,51 @@ td.actions > * + * { margin-left: 0.6rem; }
   white-space: nowrap;
 }
 
+/* Overview page: the throughput/fetch-outcome stacked bar. Each column is
+   itself a stack of same-hue segments (opacity varied per outcome inline,
+   the same technique buildDonut already uses for its arcs) rather than a
+   single solid fill -- everything else about the column (count above,
+   label below, height scaled to the tallest column) matches .age-bars. */
+.stack-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+  height: 120px;
+  overflow-x: auto;
+}
+
+.stack-bar {
+  width: 1.25rem;
+  display: flex;
+  flex-direction: column-reverse;
+  border-radius: 2px 2px 0 0;
+  overflow: hidden;
+  background: var(--rule);
+}
+
+.stack-seg { width: 100%; background: var(--accent); }
+
+/* Overview page: the documents-indexed and fetch-duration trend lines --
+   a plain accent-colored polyline over a soft area fill, first/last date
+   labels underneath rather than a full axis (this is a glance-level
+   diagnostic chart, not an analytics tool). */
+.line-chart-wrap { width: 100%; }
+
+.line-chart { display: block; width: 100%; height: auto; }
+
+.line-chart-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+  margin-top: 0.25rem;
+}
+
+.line-chart-empty {
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+}
+
 textarea.field {
   display: block;
   width: 100%;

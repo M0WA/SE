@@ -14,6 +14,7 @@ const OVERVIEW_HTML = fs.readFileSync(path.join(__dirname, 'admin.html'), 'utf8'
 async function neutralFetch(url) {
   if (url.includes('/vocabulary')) return { ok: true, json: async () => ({ vocabulary_size: 0 }) };
   if (url.includes('/documents/overview')) return { ok: true, json: async () => ({ total_domains: 0, top_domains: [], age_buckets: [] }) };
+  if (url.includes('/overview/metrics')) return { ok: true, json: async () => ({}) };
   return { ok: true, json: async () => ({ total_docs: 0, avg_doc_len: 0, driver: 'sqlite' }) };
 }
 
@@ -105,6 +106,213 @@ test('buildStoredVersionsBars labels each bar with its stored-version count, sin
   assert.equal(cols[0].querySelector('.age-bar').title, '1 version: 5 documents');
   assert.equal(cols[1].querySelector('.age-bar-label').textContent, '2 versions');
   assert.equal(cols[1].querySelector('.age-bar').title, '2 versions: 2 documents');
+});
+
+test('buildJobOutcomeDonut draws one arc per outcome plus the background track', async () => {
+  const { buildJobOutcomeDonut } = loadFixture();
+  await flush();
+  const svg = buildJobOutcomeDonut([{ status: 'done', count: 3 }, { status: 'failed', count: 1 }], 4);
+  const circles = svg.querySelectorAll('circle');
+  assert.equal(circles.length, 3); // track + 2 arcs
+  assert.equal(circles[1].querySelector('title').textContent, 'done — 3 jobs');
+  assert.equal(circles[2].querySelector('title').textContent, 'failed — 1 job');
+});
+
+test('buildJobOutcomeDonut handles a zero total without dividing by zero', async () => {
+  const { buildJobOutcomeDonut } = loadFixture();
+  await flush();
+  const svg = buildJobOutcomeDonut([{ status: 'done', count: 0 }], 0);
+  assert.equal(svg.querySelectorAll('circle').length, 2);
+});
+
+test('buildJobOutcomeLegend renders one row per outcome with no link', async () => {
+  const { buildJobOutcomeLegend } = loadFixture();
+  await flush();
+  const legend = buildJobOutcomeLegend([{ status: 'done', count: 3 }, { status: 'failed', count: 1 }]);
+  const rows = legend.querySelectorAll('.donut-legend-row');
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].querySelector('a'), null);
+  assert.equal(rows[0].textContent.includes('done'), true);
+  assert.equal(rows[0].querySelector('.domain-metrics').textContent, '3');
+});
+
+test('buildThroughputStackBars scales each column by the largest day total, with one segment per outcome', async () => {
+  const { buildThroughputStackBars } = loadFixture();
+  await flush();
+  const daily = [
+    { date: '2025-01-01', outcomes: { indexed: 8, fetch_failed: 2 } },
+    { date: '2025-01-02', outcomes: { indexed: 5 } },
+  ];
+  const wrap = buildThroughputStackBars(daily);
+  const cols = wrap.querySelectorAll('.age-bar-col');
+  assert.equal(cols.length, 2);
+  assert.equal(cols[0].querySelector('.age-bar-count').textContent, '10');
+  assert.equal(cols[0].querySelector('.age-bar-label').textContent, '01-01');
+  assert.equal(cols[0].querySelectorAll('.stack-seg').length, 2);
+  assert.equal(cols[0].querySelector('.stack-bar').style.height, '80px');
+  assert.equal(cols[1].querySelectorAll('.stack-seg').length, 1);
+  assert.equal(cols[1].querySelector('.stack-bar').style.height, '40px');
+});
+
+test('buildThroughputStackBars omits a segment entirely for a zero-count outcome', async () => {
+  const { buildThroughputStackBars } = loadFixture();
+  await flush();
+  const wrap = buildThroughputStackBars([{ date: '2025-01-01', outcomes: { indexed: 1, thin_content: 0 } }]);
+  assert.equal(wrap.querySelectorAll('.stack-seg').length, 1);
+});
+
+test('buildThroughputStackBars floors an empty day at a 2px bar', async () => {
+  const { buildThroughputStackBars } = loadFixture();
+  await flush();
+  const wrap = buildThroughputStackBars([{ date: '2025-01-01', outcomes: {} }]);
+  assert.equal(wrap.querySelector('.stack-bar').style.height, '2px');
+  assert.equal(wrap.querySelectorAll('.stack-seg').length, 0);
+});
+
+test('buildThroughputStackBars still renders a segment for a status outside FETCH_OUTCOME_ORDER, with a fallback opacity, rather than dropping it', async () => {
+  const { buildThroughputStackBars } = loadFixture();
+  await flush();
+  const wrap = buildThroughputStackBars([{ date: '2025-01-01', outcomes: { indexed: 3, some_future_status: 2 } }]);
+  const segs = wrap.querySelectorAll('.stack-seg');
+  // Both statuses get a segment, so the count label (from the day's raw
+  // total) and the segments' combined flex weight stay consistent -- an
+  // unrecognized status never silently vanishes from the stack while
+  // still counting toward the bar's height/count.
+  assert.equal(segs.length, 2);
+  assert.equal(wrap.querySelector('.age-bar-count').textContent, '5');
+  assert.equal(segs[0].title, '2025-01-01 indexed: 3');
+  assert.equal(segs[1].title, '2025-01-01 some_future_status: 2');
+  assert.equal(segs[1].style.opacity, '0.15');
+});
+
+test('buildPageRankHistogram scales each bar by the largest bucket and labels it', async () => {
+  const { buildPageRankHistogram } = loadFixture();
+  await flush();
+  const wrap = buildPageRankHistogram([{ label: '0e+00–1e-01', count: 8 }, { label: '1e-01–2e-01', count: 2 }]);
+  const cols = wrap.querySelectorAll('.age-bar-col');
+  assert.equal(cols.length, 2);
+  assert.equal(cols[0].querySelector('.age-bar-label').textContent, '0e+00–1e-01');
+  assert.equal(cols[0].querySelector('.age-bar').title, '0e+00–1e-01: 8 documents');
+  assert.equal(cols[0].querySelector('.age-bar').style.height, '80px');
+  assert.equal(cols[1].querySelector('.age-bar').style.height, '20px');
+});
+
+test('buildLineChart reports no data for an empty series without drawing an svg', async () => {
+  const { buildLineChart } = loadFixture();
+  await flush();
+  const wrap = buildLineChart([], (v) => String(v));
+  assert.equal(wrap.querySelector('svg'), null);
+  assert.equal(wrap.classList.contains('line-chart-empty'), true);
+  assert.equal(wrap.textContent, 'No data in this window.');
+});
+
+test('buildLineChart draws one point per entry with a hover title, and first/last date labels', async () => {
+  const { buildLineChart } = loadFixture();
+  await flush();
+  const points = [{ date: '2025-01-01', value: 4 }, { date: '2025-01-02', value: 9 }, { date: '2025-01-03', value: 2 }];
+  const wrap = buildLineChart(points, (v) => v + ' docs');
+  const svg = wrap.querySelector('svg');
+  assert.notEqual(svg, null);
+  const dots = svg.querySelectorAll('circle');
+  assert.equal(dots.length, 3);
+  assert.equal(dots[1].querySelector('title').textContent, '2025-01-02: 9 docs');
+  const labels = wrap.querySelectorAll('.line-chart-labels span');
+  assert.equal(labels[0].textContent, '2025-01-01');
+  assert.equal(labels[1].textContent, '2025-01-03');
+});
+
+test('buildLineChart spaces points by actual elapsed days, not by array index, so a multi-day gap shows up as real horizontal space', async () => {
+  const { buildLineChart } = loadFixture();
+  await flush();
+  // 2025-01-01 -> 2025-01-02 is a 1-day gap; 2025-01-02 -> 2025-01-10 is an
+  // 8-day gap. Index-based spacing would place the middle dot exactly
+  // halfway across; date-based spacing must place it much closer to the
+  // first point instead.
+  const points = [{ date: '2025-01-01', value: 1 }, { date: '2025-01-02', value: 2 }, { date: '2025-01-10', value: 3 }];
+  const wrap = buildLineChart(points, (v) => String(v));
+  const dots = wrap.querySelectorAll('circle');
+  const cx = [...dots].map((d) => Number(d.getAttribute('cx')));
+  assert.equal(cx[0], 8);
+  assert.equal(cx[2], 312);
+  // Expected: 8 + (1/9)*304 = 41.8, not the index-based midpoint (160).
+  assert.equal(cx[1], 41.8);
+});
+
+test('buildLineChart handles a single point without dividing by zero', async () => {
+  const { buildLineChart } = loadFixture();
+  await flush();
+  const wrap = buildLineChart([{ date: '2025-01-01', value: 5 }], (v) => String(v));
+  assert.equal(wrap.querySelectorAll('circle').length, 1);
+});
+
+test('buildLineChart handles every value being equal (zero span) without dividing by zero', async () => {
+  const { buildLineChart } = loadFixture();
+  await flush();
+  const points = [{ date: '2025-01-01', value: 5 }, { date: '2025-01-02', value: 5 }];
+  const wrap = buildLineChart(points, (v) => String(v));
+  assert.equal(wrap.querySelectorAll('circle').length, 2);
+});
+
+test('loadOverviewMetrics reports an error in tilesEl and leaves chartsEl untouched on fetch failure', async () => {
+  const { loadOverviewMetrics } = loadFixture();
+  await flush();
+  global.fetch = async () => ({ ok: false, status: 500, text: async () => 'db down' });
+  const tilesEl = document.createElement('div');
+  const chartsEl = document.createElement('div');
+  await loadOverviewMetrics(tilesEl, chartsEl);
+  assert.equal(tilesEl.textContent.includes('db down'), true);
+  assert.equal(chartsEl.children.length, 0);
+});
+
+test('loadOverviewMetrics renders tiles and appends a second charts row when tier-2 data is present', async () => {
+  const { loadOverviewMetrics } = loadFixture();
+  await flush();
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      running_crawl_jobs: 1,
+      queued_crawl_jobs: 2,
+      running_jobs: [{ id: 'job-1', seed_urls: ['https://a.example'], pages_crawled: 7 }],
+      schedules_enabled: 3,
+      schedules_disabled: 1,
+      schedules_in_progress: 1,
+      schedules_overdue: 1,
+      pool: { max_open_connections: 10, in_use: 2, idle: 3, open_connections: 5 },
+      job_outcomes: [{ status: 'done', count: 3 }],
+      daily_fetch_outcomes: [{ date: '2025-01-01', outcomes: { indexed: 3 } }],
+      documents_by_day: [{ date: '2025-01-01', count: 3 }],
+      fetch_duration_by_day: [{ date: '2025-01-01', avg_duration_ms: 120 }],
+      pagerank_buckets: [{ label: '0e+00–1e-01', count: 3 }],
+      pagerank_orphan_threshold: 0.000001,
+      pagerank_orphan_count: 1,
+      pagerank_orphan_percent: 33.3,
+      pagerank_total_docs: 3,
+    }),
+  });
+  const tilesEl = document.createElement('div');
+  const chartsEl = document.createElement('div');
+  await loadOverviewMetrics(tilesEl, chartsEl);
+
+  const tiles = tilesEl.querySelectorAll('.tile');
+  assert.equal(tiles.length > 0, true);
+  assert.equal(tilesEl.textContent.includes('Running crawl jobs'), true);
+  assert.equal(tilesEl.textContent.includes('2 / 10'), true); // DB connections in use
+  assert.equal(tilesEl.textContent.includes('33.3%'), true);
+
+  assert.equal(chartsEl.children.length, 1);
+  const blocks = chartsEl.querySelectorAll('.overview-block');
+  assert.equal(blocks.length, 6); // running jobs, outcomes, throughput, documents trend, duration trend, pagerank
+});
+
+test('loadOverviewMetrics omits the orphan tile and every tier-2 block when there is no data', async () => {
+  const { loadOverviewMetrics } = loadFixture();
+  await flush();
+  global.fetch = async () => ({ ok: true, json: async () => ({}) });
+  const tilesEl = document.createElement('div');
+  const chartsEl = document.createElement('div');
+  await loadOverviewMetrics(tilesEl, chartsEl);
+  assert.equal(tilesEl.textContent.includes('Orphan pages'), false);
+  assert.equal(chartsEl.children.length, 0);
 });
 
 test('loadCorpusOverview reports an error and stops when the overview fetch fails', async () => {

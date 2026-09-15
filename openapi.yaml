@@ -340,6 +340,29 @@ paths:
                         doc_count: { type: integer }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
+  /admin/api/overview/metrics:
+    get:
+      tags: [admin]
+      summary: Operational health + trend panels for the admin Overview page
+      description: >-
+        Everything the Overview page shows beyond the corpus summary
+        /admin/api/documents/overview already covers: crawl job/schedule
+        health and DB pool utilization (pure aggregation over data other
+        endpoints already expose), plus five trend/breakdown charts each
+        backed by one new aggregate query -- crawl job outcomes (last 30
+        days), fetch throughput by outcome (last 14 days), documents
+        indexed per day (last 30 days), mean fetch duration per day (last
+        14 days), and a PageRank distribution histogram with an orphan-rate
+        stat. running_jobs/schedules_* are zeroed (not an error) if this
+        process has no CrawlJobService/ScheduledCrawlStore configured.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OverviewMetrics" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
   /admin/api/documents/{id}:
     delete:
       tags: [admin]
@@ -1066,6 +1089,96 @@ components:
           type: object
           description: Row count per schema table, keyed by table name.
           additionalProperties: { type: integer }
+
+    OverviewMetrics:
+      type: object
+      properties:
+        running_crawl_jobs: { type: integer }
+        queued_crawl_jobs: { type: integer }
+        running_jobs:
+          type: array
+          description: One entry per currently running crawl job, for the "running jobs" inline detail list.
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              seed_urls: { type: array, items: { type: string } }
+              pages_crawled: { type: integer }
+        schedules_enabled: { type: integer }
+        schedules_disabled: { type: integer }
+        schedules_in_progress: { type: integer }
+        schedules_overdue:
+          type: integer
+          description: Enabled schedules whose next_run_at has already passed.
+        pool:
+          type: object
+          description: Same shape as DatabaseDiagnostics.pool -- the live DB connection pool's current limits and usage.
+          properties:
+            max_open_connections: { type: integer }
+            open_connections: { type: integer }
+            in_use: { type: integer }
+            idle: { type: integer }
+            wait_count: { type: integer }
+            wait_duration_ms: { type: integer }
+            max_idle_closed: { type: integer }
+            max_idle_time_closed: { type: integer }
+            max_lifetime_closed: { type: integer }
+        job_outcomes:
+          type: array
+          description: Crawl jobs in the last 30 days, grouped by terminal status (done/failed/cancelled).
+          items:
+            type: object
+            properties:
+              status: { type: string, enum: [done, failed, cancelled] }
+              count: { type: integer }
+        daily_fetch_outcomes:
+          type: array
+          description: One entry per day (last 14 days) with fetch counts broken down by outcome.
+          items:
+            type: object
+            properties:
+              date: { type: string, description: "YYYY-MM-DD (UTC)" }
+              outcomes:
+                type: object
+                additionalProperties: { type: integer }
+                description: Count per CrawlPageEvent status actually seen that day (a status with zero occurrences is simply absent).
+        documents_by_day:
+          type: array
+          description: How many documents' crawled_at fell on each day, last 30 days. A day with none simply has no entry.
+          items:
+            type: object
+            properties:
+              date: { type: string, description: "YYYY-MM-DD (UTC)" }
+              count: { type: integer }
+        fetch_duration_by_day:
+          type: array
+          description: Mean crawl_job_pages.duration_ms per day, last 14 days. A day with no fetches simply has no entry.
+          items:
+            type: object
+            properties:
+              date: { type: string, description: "YYYY-MM-DD (UTC)" }
+              avg_duration_ms: { type: number }
+        pagerank_buckets:
+          type: array
+          description: >-
+            A histogram of every document's pagerank across
+            PageRankHistogramBuckets (10) equal-width bins spanning the
+            corpus's own observed [min, max] range.
+          items:
+            type: object
+            properties:
+              label: { type: string, description: "Pre-formatted \"lo–hi\" range, e.g. \"1.23e-04–2.46e-04\"." }
+              count: { type: integer }
+        pagerank_orphan_threshold:
+          type: number
+          description: The fixed pagerank cutoff (domain.PageRankOrphanThreshold) pagerank_orphan_count/pagerank_orphan_percent were computed against.
+        pagerank_orphan_count:
+          type: integer
+          description: Documents at or below pagerank_orphan_threshold.
+        pagerank_orphan_percent:
+          type: number
+          description: pagerank_orphan_count as a percentage of pagerank_total_docs (0 for an empty corpus).
+        pagerank_total_docs: { type: integer }
 
     CrawlJobRequest:
       description: A redacted summary of the request that started a job -- HasCookie/HasBasicAuth booleans, never the actual credentials.

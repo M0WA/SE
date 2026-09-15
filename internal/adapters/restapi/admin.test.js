@@ -104,6 +104,14 @@ test('kvRow appends a key/value row with the expected structure', () => {
   assert.equal(row.querySelector('.v').textContent, '42');
 });
 
+test('buildTile builds a .tile with a .k label and a .v value', () => {
+  const { buildTile } = load();
+  const tile = buildTile('Running crawl jobs', '2');
+  assert.equal(tile.className, 'tile');
+  assert.equal(tile.querySelector('.k').textContent, 'Running crawl jobs');
+  assert.equal(tile.querySelector('.v').textContent, '2');
+});
+
 test('checkResponse returns the response as-is when ok', async () => {
   const { checkResponse } = load();
   const resp = { ok: true };

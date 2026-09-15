@@ -52,6 +52,23 @@ type fakeAdminRepo struct {
 	tableRowCounts map[string]int64
 	poolStats      sql.DBStats
 
+	jobOutcomes            []domain.CrawlJobOutcomeCount
+	jobOutcomesErr         error
+	gotJobOutcomesSince    time.Time
+	dailyFetchOutcomes     []domain.DailyFetchOutcome
+	dailyFetchOutcomesErr  error
+	gotFetchOutcomesSince  time.Time
+	documentsByDay         []domain.DailyCount
+	documentsByDayErr      error
+	gotDocumentsByDaySince time.Time
+	fetchDurationByDay     []domain.DailyAvgDuration
+	fetchDurationErr       error
+	gotFetchDurationSince  time.Time
+	pageRankBuckets        []domain.PageRankBucket
+	pageRankOrphanCount    int
+	pageRankTotalDocs      int
+	pageRankHistErr        error
+
 	// mu guards deletedIDs, written from handleAdminDeleteDomainDocuments'
 	// own background goroutine and read back from a test's polling
 	// goroutine -- unlike deletedID above (only ever touched synchronously
@@ -124,6 +141,28 @@ func (f *fakeAdminRepo) TableRowCounts(context.Context) (map[string]int64, error
 func (f *fakeAdminRepo) PoolStats() sql.DBStats {
 	return f.poolStats
 }
+func (f *fakeAdminRepo) CrawlJobOutcomes(_ context.Context, since time.Time) ([]domain.CrawlJobOutcomeCount, error) {
+	f.gotJobOutcomesSince = since
+	return f.jobOutcomes, f.jobOutcomesErr
+}
+func (f *fakeAdminRepo) DailyFetchOutcomes(_ context.Context, since time.Time) ([]domain.DailyFetchOutcome, error) {
+	f.gotFetchOutcomesSince = since
+	return f.dailyFetchOutcomes, f.dailyFetchOutcomesErr
+}
+func (f *fakeAdminRepo) DocumentsIndexedByDay(_ context.Context, since time.Time) ([]domain.DailyCount, error) {
+	f.gotDocumentsByDaySince = since
+	return f.documentsByDay, f.documentsByDayErr
+}
+func (f *fakeAdminRepo) DailyFetchDuration(_ context.Context, since time.Time) ([]domain.DailyAvgDuration, error) {
+	f.gotFetchDurationSince = since
+	return f.fetchDurationByDay, f.fetchDurationErr
+}
+func (f *fakeAdminRepo) PageRankHistogram(context.Context) ([]domain.PageRankBucket, int, int, error) {
+	if f.pageRankHistErr != nil {
+		return nil, 0, 0, f.pageRankHistErr
+	}
+	return f.pageRankBuckets, f.pageRankOrphanCount, f.pageRankTotalDocs, f.err
+}
 
 type fakeDebugSearch struct {
 	results []domain.HybridResult
@@ -150,6 +189,25 @@ func adminAuthedHandlerWithOverrides(t *testing.T, admin ports.AdminRepository, 
 	t.Helper()
 	h := restapi.New(restapi.Config{
 		Admin: admin, Debug: debug, Settings: settings, OpSettings: opSettings, Overrides: overrides, DBDriver: "pgx",
+		AdminUser: testAdminUser, AdminPass: testAdminPass,
+	})
+	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
+	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login failed: %d %s", rec.Code, rec.Body.String())
+	}
+	return h, rec.Result().Cookies()[0]
+}
+
+// adminAuthedHandlerWithOverviewDeps wires up the three dependencies
+// handleAdminOverviewMetrics reads from -- admin (required), jobs and
+// scheduledCrawls (each independently optional; see its own doc comment).
+func adminAuthedHandlerWithOverviewDeps(t *testing.T, admin ports.AdminRepository, jobs ports.CrawlJobService, scheduledCrawls ports.ScheduledCrawlStore) (*restapi.Handler, *http.Cookie) {
+	t.Helper()
+	h := restapi.New(restapi.Config{
+		Admin: admin, Jobs: jobs, ScheduledCrawls: scheduledCrawls, DBDriver: "pgx",
 		AdminUser: testAdminUser, AdminPass: testAdminPass,
 	})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
@@ -688,6 +746,281 @@ func TestHandleAdminDocumentsOverview_ServiceError(t *testing.T) {
 	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminOverviewMetrics_Success(t *testing.T) {
+	now := time.Now().UTC()
+	jobs := &fakeJobService{jobs: []domain.CrawlJobSummary{
+		{ID: "job-running", Status: domain.CrawlJobRunning, PagesCrawled: 7, Request: domain.CrawlJobRequest{SeedURLs: []string{"https://a.example"}}},
+		{ID: "job-queued", Status: domain.CrawlJobQueued},
+		{ID: "job-done", Status: domain.CrawlJobDone},
+	}}
+	schedules := &fakeScheduledCrawlStore{schedules: []domain.ScheduledCrawl{
+		{ID: "s-enabled-overdue", Enabled: true, NextRunAt: now.Add(-time.Hour)},
+		{ID: "s-enabled-future", Enabled: true, NextRunAt: now.Add(time.Hour)},
+		{ID: "s-disabled", Enabled: false, NextRunAt: now.Add(-time.Hour)}, // overdue-looking but disabled -- must not count
+		{ID: "s-in-progress", Enabled: true, InProgress: true, NextRunAt: now.Add(time.Hour)},
+	}}
+	admin := &fakeAdminRepo{
+		poolStats:   sql.DBStats{MaxOpenConnections: 10, OpenConnections: 4, InUse: 2, Idle: 2},
+		jobOutcomes: []domain.CrawlJobOutcomeCount{{Status: domain.CrawlJobDone, Count: 3}, {Status: domain.CrawlJobFailed, Count: 1}},
+		dailyFetchOutcomes: []domain.DailyFetchOutcome{
+			{Date: "2025-01-01", Status: domain.CrawlPageIndexed, Count: 5},
+			{Date: "2025-01-01", Status: domain.CrawlPageFetchFailed, Count: 1},
+			{Date: "2025-01-02", Status: domain.CrawlPageIndexed, Count: 2},
+		},
+		documentsByDay:      []domain.DailyCount{{Date: "2025-01-01", Count: 4}, {Date: "2025-01-02", Count: 6}},
+		fetchDurationByDay:  []domain.DailyAvgDuration{{Date: "2025-01-01", AvgDurationMs: 120.5}},
+		pageRankBuckets:     []domain.PageRankBucket{{Label: "0e+00–1e-01", Count: 9}},
+		pageRankOrphanCount: 1,
+		pageRankTotalDocs:   10,
+	}
+	h, cookie := adminAuthedHandlerWithOverviewDeps(t, admin, jobs, schedules)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview/metrics", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		RunningCrawlJobs int `json:"running_crawl_jobs"`
+		QueuedCrawlJobs  int `json:"queued_crawl_jobs"`
+		RunningJobs      []struct {
+			ID           string   `json:"id"`
+			SeedURLs     []string `json:"seed_urls"`
+			PagesCrawled int      `json:"pages_crawled"`
+		} `json:"running_jobs"`
+		SchedulesEnabled    int `json:"schedules_enabled"`
+		SchedulesDisabled   int `json:"schedules_disabled"`
+		SchedulesInProgress int `json:"schedules_in_progress"`
+		SchedulesOverdue    int `json:"schedules_overdue"`
+		Pool                struct {
+			MaxOpenConnections int `json:"max_open_connections"`
+			InUse              int `json:"in_use"`
+			Idle               int `json:"idle"`
+		} `json:"pool"`
+		JobOutcomes []struct {
+			Status string `json:"status"`
+			Count  int    `json:"count"`
+		} `json:"job_outcomes"`
+		DailyFetchOutcomes []struct {
+			Date     string         `json:"date"`
+			Outcomes map[string]int `json:"outcomes"`
+		} `json:"daily_fetch_outcomes"`
+		DocumentsByDay []struct {
+			Date  string `json:"date"`
+			Count int    `json:"count"`
+		} `json:"documents_by_day"`
+		FetchDurationByDay []struct {
+			Date          string  `json:"date"`
+			AvgDurationMs float64 `json:"avg_duration_ms"`
+		} `json:"fetch_duration_by_day"`
+		PageRankBuckets []struct {
+			Label string `json:"label"`
+			Count int    `json:"count"`
+		} `json:"pagerank_buckets"`
+		PageRankOrphanThreshold float64 `json:"pagerank_orphan_threshold"`
+		PageRankOrphanCount     int     `json:"pagerank_orphan_count"`
+		PageRankOrphanPercent   float64 `json:"pagerank_orphan_percent"`
+		PageRankTotalDocs       int     `json:"pagerank_total_docs"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+
+	if resp.RunningCrawlJobs != 1 || resp.QueuedCrawlJobs != 1 {
+		t.Errorf("expected 1 running and 1 queued job, got running=%d queued=%d", resp.RunningCrawlJobs, resp.QueuedCrawlJobs)
+	}
+	if len(resp.RunningJobs) != 1 || resp.RunningJobs[0].ID != "job-running" || resp.RunningJobs[0].PagesCrawled != 7 ||
+		len(resp.RunningJobs[0].SeedURLs) != 1 || resp.RunningJobs[0].SeedURLs[0] != "https://a.example" {
+		t.Errorf("unexpected running_jobs: %+v", resp.RunningJobs)
+	}
+	if resp.SchedulesEnabled != 3 || resp.SchedulesDisabled != 1 || resp.SchedulesInProgress != 1 || resp.SchedulesOverdue != 1 {
+		t.Errorf("unexpected schedule health: enabled=%d disabled=%d in_progress=%d overdue=%d",
+			resp.SchedulesEnabled, resp.SchedulesDisabled, resp.SchedulesInProgress, resp.SchedulesOverdue)
+	}
+	if resp.Pool.MaxOpenConnections != 10 || resp.Pool.InUse != 2 || resp.Pool.Idle != 2 {
+		t.Errorf("unexpected pool passthrough: %+v", resp.Pool)
+	}
+	if len(resp.JobOutcomes) != 2 || resp.JobOutcomes[0].Status != "done" || resp.JobOutcomes[0].Count != 3 {
+		t.Errorf("unexpected job_outcomes: %+v", resp.JobOutcomes)
+	}
+	if len(resp.DailyFetchOutcomes) != 2 ||
+		resp.DailyFetchOutcomes[0].Date != "2025-01-01" || resp.DailyFetchOutcomes[0].Outcomes["indexed"] != 5 || resp.DailyFetchOutcomes[0].Outcomes["fetch_failed"] != 1 ||
+		resp.DailyFetchOutcomes[1].Date != "2025-01-02" || resp.DailyFetchOutcomes[1].Outcomes["indexed"] != 2 {
+		t.Errorf("unexpected daily_fetch_outcomes grouping: %+v", resp.DailyFetchOutcomes)
+	}
+	if len(resp.DocumentsByDay) != 2 || resp.DocumentsByDay[1].Count != 6 {
+		t.Errorf("unexpected documents_by_day: %+v", resp.DocumentsByDay)
+	}
+	if len(resp.FetchDurationByDay) != 1 || resp.FetchDurationByDay[0].AvgDurationMs != 120.5 {
+		t.Errorf("unexpected fetch_duration_by_day: %+v", resp.FetchDurationByDay)
+	}
+	if len(resp.PageRankBuckets) != 1 || resp.PageRankBuckets[0].Count != 9 {
+		t.Errorf("unexpected pagerank_buckets: %+v", resp.PageRankBuckets)
+	}
+	if resp.PageRankOrphanThreshold != domain.PageRankOrphanThreshold {
+		t.Errorf("expected pagerank_orphan_threshold=%v, got %v", domain.PageRankOrphanThreshold, resp.PageRankOrphanThreshold)
+	}
+	if resp.PageRankOrphanCount != 1 || resp.PageRankTotalDocs != 10 || resp.PageRankOrphanPercent != 10 {
+		t.Errorf("unexpected pagerank orphan stats: count=%d total=%d percent=%v",
+			resp.PageRankOrphanCount, resp.PageRankTotalDocs, resp.PageRankOrphanPercent)
+	}
+
+	// CrawlJobOutcomes' lookback window is documented as 30 days
+	// (overviewJobOutcomeDays) -- assert the cutoff it actually received
+	// reflects that, not some other tier-2 query's window.
+	wantJobOutcomeSince := now.AddDate(0, 0, -30)
+	if admin.gotJobOutcomesSince.Sub(wantJobOutcomeSince).Abs() > time.Minute {
+		t.Errorf("expected CrawlJobOutcomes since ~%v, got %v", wantJobOutcomeSince, admin.gotJobOutcomesSince)
+	}
+}
+
+func TestHandleAdminOverviewMetrics_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithOverviewDeps(t, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview/metrics", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when admin repo isn't configured, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminOverviewMetrics_MethodNotAllowed(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithOverviewDeps(t, &fakeAdminRepo{}, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/overview/metrics", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+// TestHandleAdminOverviewMetrics_JobsAndSchedulesNilDegradeGracefully proves
+// the endpoint still succeeds (with tier-1 crawl-job/schedule fields simply
+// zeroed) when h.jobs/h.scheduledCrawls aren't configured -- only h.admin is
+// required.
+func TestHandleAdminOverviewMetrics_JobsAndSchedulesNilDegradeGracefully(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithOverviewDeps(t, &fakeAdminRepo{}, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview/metrics", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		RunningCrawlJobs int `json:"running_crawl_jobs"`
+		SchedulesEnabled int `json:"schedules_enabled"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.RunningCrawlJobs != 0 || resp.SchedulesEnabled != 0 {
+		t.Errorf("expected zeroed tier-1 fields with jobs/scheduledCrawls unconfigured, got %+v", resp)
+	}
+}
+
+func TestHandleAdminOverviewMetrics_JobsListError(t *testing.T) {
+	jobs := &fakeJobService{listErr: errors.New("boom")}
+	h, cookie := adminAuthedHandlerWithOverviewDeps(t, &fakeAdminRepo{}, jobs, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview/metrics", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminOverviewMetrics_SchedulesListError(t *testing.T) {
+	schedules := &fakeScheduledCrawlStore{listErr: errors.New("boom")}
+	h, cookie := adminAuthedHandlerWithOverviewDeps(t, &fakeAdminRepo{}, nil, schedules)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview/metrics", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminOverviewMetrics_CrawlJobOutcomesError(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithOverviewDeps(t, &fakeAdminRepo{jobOutcomesErr: errors.New("boom")}, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview/metrics", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminOverviewMetrics_DailyFetchOutcomesError(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithOverviewDeps(t, &fakeAdminRepo{dailyFetchOutcomesErr: errors.New("boom")}, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview/metrics", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminOverviewMetrics_DocumentsIndexedByDayError(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithOverviewDeps(t, &fakeAdminRepo{documentsByDayErr: errors.New("boom")}, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview/metrics", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminOverviewMetrics_DailyFetchDurationError(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithOverviewDeps(t, &fakeAdminRepo{fetchDurationErr: errors.New("boom")}, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview/metrics", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminOverviewMetrics_PageRankHistogramError(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithOverviewDeps(t, &fakeAdminRepo{pageRankHistErr: errors.New("boom")}, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview/metrics", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+// TestHandleAdminOverviewMetrics_EmptyPageRankHistogramSkipsPercent proves
+// pagerank_orphan_percent stays 0 (rather than a NaN/divide-by-zero) for an
+// empty corpus, where PageRankHistogram reports totalDocs=0.
+func TestHandleAdminOverviewMetrics_EmptyPageRankHistogramSkipsPercent(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithOverviewDeps(t, &fakeAdminRepo{}, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview/metrics", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		PageRankOrphanPercent float64 `json:"pagerank_orphan_percent"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.PageRankOrphanPercent != 0 {
+		t.Errorf("expected pagerank_orphan_percent=0 for an empty corpus, got %v", resp.PageRankOrphanPercent)
 	}
 }
 

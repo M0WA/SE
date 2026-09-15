@@ -255,6 +255,30 @@ type AdminRepository interface {
 	// usage (see sqlrepo.Repository.PoolStats) -- the admin database
 	// diagnostics page's connection-pool panel.
 	PoolStats() sql.DBStats
+	// CrawlJobOutcomes reports how many crawl jobs created at or after
+	// since finished in each terminal status (done/failed/cancelled) --
+	// the admin Overview page's crawl-outcome donut. A job still queued or
+	// running is excluded (see domain.CrawlJobOutcomeCount).
+	CrawlJobOutcomes(ctx context.Context, since time.Time) ([]domain.CrawlJobOutcomeCount, error)
+	// DailyFetchOutcomes reports, for each day at or after since, how many
+	// crawl_job_pages rows landed in each fetch outcome -- the admin
+	// Overview page's throughput/fetch-outcome stacked bar.
+	DailyFetchOutcomes(ctx context.Context, since time.Time) ([]domain.DailyFetchOutcome, error)
+	// DocumentsIndexedByDay reports how many documents' crawled_at falls on
+	// each day at or after since -- the admin Overview page's
+	// documents-indexed-over-time trend (DocumentsOverview's AgeBuckets
+	// reads the same column bucketed coarsely instead of day-by-day).
+	DocumentsIndexedByDay(ctx context.Context, since time.Time) ([]domain.DailyCount, error)
+	// DailyFetchDuration reports each day's mean crawl_job_pages.duration_ms
+	// at or after since -- the admin Overview page's fetch-duration trend.
+	DailyFetchDuration(ctx context.Context, since time.Time) ([]domain.DailyAvgDuration, error)
+	// PageRankHistogram buckets every document's pagerank into
+	// domain.PageRankHistogramBuckets equal-width bins spanning the
+	// corpus's own observed [min, max] range, alongside how many documents
+	// sit at or below domain.PageRankOrphanThreshold and the corpus's total
+	// document count -- the admin Overview page's PageRank distribution
+	// histogram and orphan-rate stat tile. All zero for an empty corpus.
+	PageRankHistogram(ctx context.Context) (buckets []domain.PageRankBucket, orphanCount, totalDocs int, err error)
 }
 
 // --- Primary (driving) ports ---
