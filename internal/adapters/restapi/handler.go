@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sync"
 
+	"searchengine/internal/bootstrap"
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
 )
@@ -117,6 +118,8 @@ type Handler struct {
 	debug           ports.DebugSearchService
 	admin           ports.AdminRepository
 	pageRank        ports.PageRankRepository
+	embeddingRepo   ports.EmbeddingRepository
+	embedder        ports.EmbeddingProvider
 	settings        *domain.TuningSettings
 	opSettings      *domain.OperationalSettings
 	overrides       *domain.RankingOverrides
@@ -138,6 +141,11 @@ type Handler struct {
 	// encrypts OperationalSettingsValues.EmbeddingHTTPAPIKey with before
 	// persisting it -- see settingscrypto's package doc comment.
 	settingsEncryptionKey []byte
+	// newEmbedder builds a throwaway ports.EmbeddingProvider from a given
+	// settings snapshot -- always bootstrap.NewEmbedder in production (see
+	// New), overridden by tests so testEmbeddingConnectivity never makes a
+	// real network call from the test suite.
+	newEmbedder func(domain.OperationalSettingsValues) ports.EmbeddingProvider
 }
 
 // Config wires a Handler's dependencies. Crawler and CrawlJobs are used
@@ -176,13 +184,29 @@ type Handler struct {
 // concurrency semaphore's release -- see runCrawlJob) should spawn its own
 // goroutine inside the callback; Handler itself makes no such decision.
 type Config struct {
-	Search          ports.SearchService
-	Crawler         ports.CrawlerService
-	CrawlJobs       ports.CrawlJobStore
-	Jobs            ports.CrawlJobService
-	Debug           ports.DebugSearchService
-	Admin           ports.AdminRepository
-	PageRank        ports.PageRankRepository
+	Search    ports.SearchService
+	Crawler   ports.CrawlerService
+	CrawlJobs ports.CrawlJobStore
+	Jobs      ports.CrawlJobService
+	Debug     ports.DebugSearchService
+	Admin     ports.AdminRepository
+	PageRank  ports.PageRankRepository
+	// EmbeddingRepo, when set (admin-server only, its own *sqlrepo.Repository
+	// -- same reasoning as PageRank above), backs the Settings page's
+	// "recompute embeddings" button; without it, that endpoint reports
+	// itself unavailable, same as the other optional dependencies.
+	// Embedder is the actual ports.EmbeddingProvider this recompute calls
+	// Embed against -- the same instance bootstrap.NewEmbedder built for
+	// this process at startup.
+	EmbeddingRepo ports.EmbeddingRepository
+	Embedder      ports.EmbeddingProvider
+	// NewEmbedder builds a throwaway ports.EmbeddingProvider from a given
+	// settings snapshot, used by handleAdminSettings to test-probe a
+	// newly-saved HTTP embedding provider before the process actually
+	// restarts onto it (see testEmbeddingConnectivity). Defaults to
+	// bootstrap.NewEmbedder when nil -- tests override this to avoid a
+	// real network call.
+	NewEmbedder     func(domain.OperationalSettingsValues) ports.EmbeddingProvider
 	Settings        *domain.TuningSettings
 	OpSettings      *domain.OperationalSettings
 	Overrides       *domain.RankingOverrides
@@ -214,6 +238,10 @@ func New(cfg Config) *Handler {
 	if sessions == nil {
 		sessions = newSessionStore()
 	}
+	newEmbedder := cfg.NewEmbedder
+	if newEmbedder == nil {
+		newEmbedder = bootstrap.NewEmbedder
+	}
 	return &Handler{
 		search:                cfg.Search,
 		crawler:               cfg.Crawler,
@@ -224,6 +252,8 @@ func New(cfg Config) *Handler {
 		debug:                 cfg.Debug,
 		admin:                 cfg.Admin,
 		pageRank:              cfg.PageRank,
+		embeddingRepo:         cfg.EmbeddingRepo,
+		embedder:              cfg.Embedder,
 		settings:              cfg.Settings,
 		opSettings:            cfg.OpSettings,
 		overrides:             cfg.Overrides,
@@ -238,6 +268,7 @@ func New(cfg Config) *Handler {
 		loginLimiter:          newLoginLimiter(),
 		crawlInternalToken:    cfg.CrawlInternalToken,
 		settingsEncryptionKey: cfg.SettingsEncryptionKey,
+		newEmbedder:           newEmbedder,
 	}
 }
 
@@ -347,6 +378,8 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("POST /admin/api/schedules/{id}/run", h.requireAuthAPI(h.handleAdminRunScheduleNow))
 	mux.HandleFunc("GET /admin/api/pagerank", h.requireAuthAPI(h.handleAdminPageRank))
 	mux.HandleFunc("POST /admin/api/pagerank/recompute", h.requireAuthAPI(h.handleAdminPageRankRecompute))
+	mux.HandleFunc("GET /admin/api/embeddings/recompute", h.requireAuthAPI(h.handleAdminEmbeddingsRecomputeStatus))
+	mux.HandleFunc("POST /admin/api/embeddings/recompute", h.requireAuthAPI(h.handleAdminEmbeddingsRecomputeStart))
 	mux.HandleFunc("GET /admin/api/database", h.requireAuthAPI(h.handleAdminDatabase))
 	return withSecurityHeaders(mux)
 }

@@ -1224,6 +1224,62 @@ func (r *Repository) DocumentIDsByHost(ctx context.Context, hosts []string) ([]s
 	return ids, rows.Err()
 }
 
+// AllDocumentIDs lists every document ID in the corpus, ordered by id for
+// stable, deterministic pagination -- used by
+// application.RunEmbeddingRecomputeJob to walk the whole corpus in
+// bounded-size batches (via DocumentsByIDs) rather than loading every
+// document's text into memory at once. A plain "SELECT id", with none of
+// ListDocuments' link-stat joins or DocumentIDsByHost's per-host filter --
+// neither is relevant to just enumerating every ID once.
+func (r *Repository) AllDocumentIDs(ctx context.Context) ([]string, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id FROM documents ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("querying all document ids: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning row: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// UpdateEmbedding overwrites one document's embedding (and norm_embedding,
+// recomputed to match) -- the narrow write half of SaveDocument's embedding
+// handling, without touching text/postings/links/document_versions/
+// pagerank/host, none of which change when a document's vector
+// representation is recomputed against its own already-stored text (e.g.
+// after an OperationalSettingsValues.EmbeddingProvider change -- see
+// application.RunEmbeddingRecomputeJob). Also refreshes the Postgres
+// pgvector column when ANN is enabled for this process, mirroring
+// SaveDocument's own handling of that column.
+func (r *Repository) UpdateEmbedding(ctx context.Context, id string, embedding []float32) error {
+	embBlob := EncodeEmbedding(embedding)
+	normEmbedding := domain.VectorNorm(embedding)
+	updateSQL := r.ph(`UPDATE documents SET embedding = %s, norm_embedding = %s WHERE id = %s`, 1, 2, 3)
+	// No rows-affected check: a document deleted between
+	// RunEmbeddingRecomputeJob listing its ID and reaching this call is a
+	// harmless no-op update, not an error worth surfacing -- unlike
+	// RunScheduledCrawlNow/DeleteScheduledCrawl's use of
+	// requireRowsAffected, there's no caller here for whom "the target no
+	// longer exists" is meaningfully different from "nothing to do".
+	if _, err := r.db.ExecContext(ctx, updateSQL, embBlob, normEmbedding, id); err != nil {
+		return fmt.Errorf("updating embedding (%s): %w", id, err)
+	}
+	if r.ann.isAvailable() {
+		vecSQL := r.ph(`UPDATE documents SET embedding_vector = %s::vector WHERE id = %s`, 1, 2)
+		if _, err := r.db.ExecContext(ctx, vecSQL, formatPgVectorLiteral(embedding), id); err != nil {
+			return fmt.Errorf("updating embedding vector (%s): %w", id, err)
+		}
+	}
+	return nil
+}
+
 // DeleteDocument removes a document and every row that references it
 // (postings, archived versions, outbound links). The schema also declares
 // ON DELETE CASCADE for all three, but that's only a backstop here, not

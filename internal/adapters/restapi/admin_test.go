@@ -20,6 +20,7 @@ import (
 	"searchengine/internal/adapters/restapi"
 	"searchengine/internal/adapters/settingscrypto"
 	"searchengine/internal/adapters/sqlrepo"
+	"searchengine/internal/application"
 	"searchengine/internal/bootstrap"
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
@@ -178,6 +179,28 @@ func (f *fakeDebugSearch) Search(_ context.Context, _ string, opts ports.SearchQ
 	return f.results, f.err
 }
 
+// fakeEmbeddingProvider is a minimal ports.EmbeddingProvider a test can
+// inject via restapi.Config.NewEmbedder (see stubNewEmbedder) so
+// handleAdminSettings' embedding-connectivity probe (testEmbeddingConnectivity)
+// never makes a real network call from the test suite.
+type fakeEmbeddingProvider struct {
+	err error
+}
+
+func (f fakeEmbeddingProvider) Embed(context.Context, string) ([]float32, error) {
+	return []float32{1}, f.err
+}
+func (f fakeEmbeddingProvider) Dimensions() int { return 1 }
+
+// stubNewEmbedder returns a restapi.Config.NewEmbedder that always hands
+// back a fakeEmbeddingProvider failing with err (nil for success),
+// regardless of the settings snapshot it's given.
+func stubNewEmbedder(err error) func(domain.OperationalSettingsValues) ports.EmbeddingProvider {
+	return func(domain.OperationalSettingsValues) ports.EmbeddingProvider {
+		return fakeEmbeddingProvider{err: err}
+	}
+}
+
 func adminAuthedHandler(t *testing.T, admin ports.AdminRepository, debug ports.DebugSearchService) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
 	return adminAuthedHandlerWithSettings(t, admin, debug, nil, nil)
@@ -190,10 +213,21 @@ func adminAuthedHandlerWithSettings(t *testing.T, admin ports.AdminRepository, d
 
 func adminAuthedHandlerWithOverrides(t *testing.T, admin ports.AdminRepository, debug ports.DebugSearchService, settings *domain.TuningSettings, opSettings *domain.OperationalSettings, overrides *domain.RankingOverrides) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
-	h := restapi.New(restapi.Config{
+	return adminAuthedHandlerFromConfig(t, restapi.Config{
 		Admin: admin, Debug: debug, Settings: settings, OpSettings: opSettings, Overrides: overrides, DBDriver: "pgx",
-		AdminUser: testAdminUser, AdminPass: testAdminPass,
 	})
+}
+
+// adminAuthedHandlerFromConfig builds a Handler from cfg (forcing in the
+// test admin credentials every other helper here hard-codes) and logs in,
+// for tests that need a Config field none of the narrower helpers expose
+// (e.g. NewEmbedder, to stub out handleAdminSettings' embedding-connectivity
+// probe).
+func adminAuthedHandlerFromConfig(t *testing.T, cfg restapi.Config) (*restapi.Handler, *http.Cookie) {
+	t.Helper()
+	cfg.AdminUser = testAdminUser
+	cfg.AdminPass = testAdminPass
+	h := restapi.New(cfg)
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
@@ -2324,7 +2358,10 @@ func TestHandleAdminSettings_EmbeddingFieldsRoundTrip(t *testing.T) {
 		EmbeddingHTTPModel:      "nomic-embed-text",
 		EmbeddingHTTPDimensions: 768,
 	})
-	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, Settings: settings, OpSettings: opSettings,
+		NewEmbedder: stubNewEmbedder(nil),
+	})
 
 	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
 	getReq.AddCookie(cookie)
@@ -2423,7 +2460,10 @@ func TestHandleAdminSettings_BlankEmbeddingAPIKeyPreservesExisting(t *testing.T)
 	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
 		EmbeddingProvider: domain.EmbeddingProviderHTTP, EmbeddingHTTPAPIKey: "sk-keep-me",
 	})
-	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, domain.NewTuningSettings(0.5, 1.2, 0.75), opSettings)
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, Settings: domain.NewTuningSettings(0.5, 1.2, 0.75), OpSettings: opSettings,
+		NewEmbedder: stubNewEmbedder(nil),
+	})
 
 	body, _ := json.Marshal(map[string]interface{}{
 		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
@@ -2442,6 +2482,96 @@ func TestHandleAdminSettings_BlankEmbeddingAPIKeyPreservesExisting(t *testing.T)
 	}
 	if ov := opSettings.Get(); ov.EmbeddingHTTPAPIKey != "sk-keep-me" {
 		t.Errorf("expected the existing API key to survive a save that left it blank, got %q", ov.EmbeddingHTTPAPIKey)
+	}
+}
+
+// postEmbeddingSettings POSTs a minimal valid settings body with
+// embedding_provider set to provider against h, returning the decoded
+// embedding_test_error field alongside the raw status code.
+func postEmbeddingSettings(t *testing.T, h *restapi.Handler, cookie *http.Cookie, provider string) (int, string) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
+			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
+			"embedding_provider": provider,
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	var resp struct {
+		EmbeddingTestError string `json:"embedding_test_error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	return rec.Code, resp.EmbeddingTestError
+}
+
+// TestHandleAdminSettings_EmbeddingConnectivityTestReportsSuccess proves a
+// save with the HTTP provider configured probes it via NewEmbedder and
+// reports no error when that probe succeeds.
+func TestHandleAdminSettings_EmbeddingConnectivityTestReportsSuccess(t *testing.T) {
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
+		Settings: domain.NewTuningSettings(0.5, 1.2, 0.75), OpSettings: domain.DefaultOperationalSettings(),
+		NewEmbedder: stubNewEmbedder(nil),
+	})
+	code, testErr := postEmbeddingSettings(t, h, cookie, domain.EmbeddingProviderHTTP)
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if testErr != "" {
+		t.Errorf("expected no embedding_test_error on a successful probe, got %q", testErr)
+	}
+}
+
+// TestHandleAdminSettings_EmbeddingConnectivityTestReportsFailure proves a
+// save still succeeds (200, settings persisted) even when the HTTP
+// provider's connectivity probe fails, but surfaces the probe's error in
+// embedding_test_error so the admin sees it immediately instead of only
+// discovering it on the next real search.
+func TestHandleAdminSettings_EmbeddingConnectivityTestReportsFailure(t *testing.T) {
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
+		Settings: domain.NewTuningSettings(0.5, 1.2, 0.75), OpSettings: domain.DefaultOperationalSettings(),
+		NewEmbedder: stubNewEmbedder(errors.New("connection refused")),
+	})
+	code, testErr := postEmbeddingSettings(t, h, cookie, domain.EmbeddingProviderHTTP)
+	if code != http.StatusOK {
+		t.Fatalf("expected 200 even when the connectivity probe fails, got %d", code)
+	}
+	if !strings.Contains(testErr, "connection refused") {
+		t.Errorf("expected embedding_test_error to surface the probe failure, got %q", testErr)
+	}
+}
+
+// TestHandleAdminSettings_EmbeddingConnectivityTestSkippedForHashProvider
+// proves the probe never runs (NewEmbedder never called, no
+// embedding_test_error) when the saved settings configure the hash
+// provider -- it can't fail this way, so there's nothing to test.
+func TestHandleAdminSettings_EmbeddingConnectivityTestSkippedForHashProvider(t *testing.T) {
+	called := false
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
+		Settings: domain.NewTuningSettings(0.5, 1.2, 0.75), OpSettings: domain.DefaultOperationalSettings(),
+		NewEmbedder: func(domain.OperationalSettingsValues) ports.EmbeddingProvider {
+			called = true
+			return fakeEmbeddingProvider{}
+		},
+	})
+	code, testErr := postEmbeddingSettings(t, h, cookie, domain.EmbeddingProviderHash)
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if testErr != "" {
+		t.Errorf("expected no embedding_test_error for the hash provider, got %q", testErr)
+	}
+	if called {
+		t.Error("expected NewEmbedder to never be called for the hash provider")
 	}
 }
 
@@ -2600,6 +2730,7 @@ func adminAuthedHandlerWithSettingsStore(t *testing.T, settings *domain.TuningSe
 		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
 		Settings: settings, OpSettings: opSettings, Overrides: overrides, SettingsStore: store,
 		DBDriver: "sqlite", AdminUser: testAdminUser, AdminPass: testAdminPass,
+		NewEmbedder: stubNewEmbedder(nil),
 	})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
@@ -2681,7 +2812,7 @@ func TestHandleAdminSettings_PostEncryptsEmbeddingAPIKeyAtRest(t *testing.T) {
 		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
 		Settings: settings, OpSettings: opSettings, SettingsStore: repo,
 		DBDriver: "sqlite", AdminUser: testAdminUser, AdminPass: testAdminPass,
-		SettingsEncryptionKey: key,
+		SettingsEncryptionKey: key, NewEmbedder: stubNewEmbedder(nil),
 	})
 	loginBody, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	loginReq := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(loginBody))
@@ -2755,7 +2886,7 @@ func TestHandleAdminSettings_PostFallsBackToPlaintextOnEncryptionError(t *testin
 		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
 		Settings: settings, OpSettings: opSettings, SettingsStore: repo,
 		DBDriver: "sqlite", AdminUser: testAdminUser, AdminPass: testAdminPass,
-		SettingsEncryptionKey: []byte("too-short-for-aes"),
+		SettingsEncryptionKey: []byte("too-short-for-aes"), NewEmbedder: stubNewEmbedder(nil),
 	})
 	loginBody, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	loginReq := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(loginBody))
@@ -3421,5 +3552,307 @@ func TestHandleAdminDatabase_MethodNotAllowed(t *testing.T) {
 	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+// fakeEmbeddingRepo is a minimal ports.EmbeddingRepository for exercising
+// the embeddings-recompute admin handlers without a real DB. UpdateEmbedding
+// is called from handleAdminEmbeddingsRecomputeStart's background goroutine
+// while a test's own polling goroutine reads UpdatedCount, so writes go
+// through mu like fakeAdminRepo's deletedIDs does.
+type fakeEmbeddingRepo struct {
+	ids       []string
+	docs      map[string]domain.Document
+	allIDsErr error
+
+	mu      sync.Mutex
+	updated map[string][]float32
+}
+
+func (r *fakeEmbeddingRepo) AllDocumentIDs(context.Context) ([]string, error) {
+	if r.allIDsErr != nil {
+		return nil, r.allIDsErr
+	}
+	return r.ids, nil
+}
+
+func (r *fakeEmbeddingRepo) DocumentsByIDs(_ context.Context, ids []string) (map[string]domain.Document, error) {
+	out := make(map[string]domain.Document)
+	for _, id := range ids {
+		if doc, ok := r.docs[id]; ok {
+			out[id] = doc
+		}
+	}
+	return out, nil
+}
+
+func (r *fakeEmbeddingRepo) UpdateEmbedding(_ context.Context, id string, vec []float32) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.updated == nil {
+		r.updated = make(map[string][]float32)
+	}
+	r.updated[id] = vec
+	return nil
+}
+
+// UpdatedCount returns how many documents UpdateEmbedding has been called
+// for so far, safe to call concurrently with UpdateEmbedding itself.
+func (r *fakeEmbeddingRepo) UpdatedCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.updated)
+}
+
+// adminAuthedHandlerWithEmbedding mirrors adminAuthedHandlerWithPageRank for
+// the embeddings-recompute dependencies (EmbeddingRepo/Embedder/SettingsStore).
+func adminAuthedHandlerWithEmbedding(t *testing.T, embeddingRepo ports.EmbeddingRepository, embedder ports.EmbeddingProvider, settingsStore ports.SettingsStore) (*restapi.Handler, *http.Cookie) {
+	t.Helper()
+	h := restapi.New(restapi.Config{
+		Admin: &fakeAdminRepo{}, EmbeddingRepo: embeddingRepo, Embedder: embedder, SettingsStore: settingsStore,
+		DBDriver: "pgx", AdminUser: testAdminUser, AdminPass: testAdminPass,
+	})
+	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
+	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login failed: %d %s", rec.Code, rec.Body.String())
+	}
+	return h, rec.Result().Cookies()[0]
+}
+
+// waitForEmbeddingRecomputeDone polls store until
+// application.LoadEmbeddingRecomputeStatus reports a finished run --
+// handleAdminEmbeddingsRecomputeStart's background goroutine runs
+// asynchronously, detached from the request that queued it, exactly like
+// handleAdminDeleteDomainDocuments' (see waitForDeletedCount above) -- or
+// fails the test if it never does.
+func waitForEmbeddingRecomputeDone(t *testing.T, store ports.SettingsStore) domain.EmbeddingRecomputeStatus {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		status := application.LoadEmbeddingRecomputeStatus(context.Background(), store)
+		if !status.InProgress && !status.LastRunAt.IsZero() {
+			return status
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("timed out waiting for the embedding recompute to finish")
+	return domain.EmbeddingRecomputeStatus{}
+}
+
+func TestHandleAdminEmbeddingsRecomputeStatus_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/embeddings/recompute", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when embedding recompute isn't configured, got %d", rec.Code)
+	}
+}
+
+// TestHandleAdminEmbeddingsRecompute_MethodNotAllowed proves a third method
+// (neither of the two -- GET for status, POST for start -- separately
+// registered for this one path) is rejected. GET and POST are each their
+// own registered pattern for /admin/api/embeddings/recompute (see
+// handler.go), so net/http's own mux already 405s anything else without
+// ever reaching either handler's requireMethod check.
+func TestHandleAdminEmbeddingsRecompute_MethodNotAllowed(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithEmbedding(t, &fakeEmbeddingRepo{}, fakeEmbeddingProvider{}, nil)
+	req := httptest.NewRequest(http.MethodPut, "/admin/api/embeddings/recompute", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminEmbeddingsRecomputeStatus_NoRunYetReportsZeroValues(t *testing.T) {
+	repo := &fakeEmbeddingRepo{}
+	adminRepo := &fakeAdminRepo{totalDocs: 42}
+	h := restapi.New(restapi.Config{
+		Admin: adminRepo, EmbeddingRepo: repo, Embedder: fakeEmbeddingProvider{},
+		DBDriver: "pgx", AdminUser: testAdminUser, AdminPass: testAdminPass,
+	})
+	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
+	loginReq := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
+	loginRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(loginRec, loginReq)
+	cookie := loginRec.Result().Cookies()[0]
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/embeddings/recompute", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		TotalDocs  int     `json:"total_docs"`
+		InProgress bool    `json:"in_progress"`
+		LastRunAt  *string `json:"last_run_at"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.TotalDocs != 42 {
+		t.Errorf("expected total_docs=42, got %d", resp.TotalDocs)
+	}
+	if resp.InProgress {
+		t.Error("expected in_progress=false for a process that's never recomputed")
+	}
+	if resp.LastRunAt != nil {
+		t.Errorf("expected no last_run_at for a process that's never recomputed, got %v", *resp.LastRunAt)
+	}
+}
+
+func TestHandleAdminEmbeddingsRecomputeStart_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/embeddings/recompute", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when embedding recompute isn't configured, got %d", rec.Code)
+	}
+}
+
+// TestHandleAdminEmbeddingsRecomputeStart_Success proves the request
+// returns immediately (202) and every document is recomputed via a
+// background goroutine that outlives the request itself, with the result
+// persisted for GET /admin/api/embeddings/recompute to read back.
+func TestHandleAdminEmbeddingsRecomputeStart_Success(t *testing.T) {
+	store := newSettingsStoreTestRepo(t)
+	repo := &fakeEmbeddingRepo{
+		ids: []string{"a", "b"},
+		docs: map[string]domain.Document{
+			"a": {ID: "a", Text: "hello"},
+			"b": {ID: "b", Text: "world"},
+		},
+	}
+	h, cookie := adminAuthedHandlerWithEmbedding(t, repo, fakeEmbeddingProvider{}, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/embeddings/recompute", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	status := waitForEmbeddingRecomputeDone(t, store)
+	if status.Documents != 2 || status.Failed != 0 {
+		t.Errorf("expected 2 documents recomputed, 0 failed, got %+v", status)
+	}
+	if repo.UpdatedCount() != 2 {
+		t.Errorf("expected both documents' embeddings written, got %d", repo.UpdatedCount())
+	}
+}
+
+// TestHandleAdminEmbeddingsRecomputeStart_AlreadyInProgress proves a second
+// trigger while one is already running is rejected (409) rather than
+// starting a redundant concurrent run -- the status is seeded directly
+// into the store rather than relying on a real in-flight goroutine, so the
+// test doesn't race against how fast the fake embedder finishes.
+func TestHandleAdminEmbeddingsRecomputeStart_AlreadyInProgress(t *testing.T) {
+	store := newSettingsStoreTestRepo(t)
+	inProgress, _ := json.Marshal(domain.EmbeddingRecomputeStatus{InProgress: true})
+	if err := store.SaveSetting(context.Background(), ports.SettingsKeyEmbeddingRecomputeStatus, string(inProgress)); err != nil {
+		t.Fatalf("seeding in-progress status: %v", err)
+	}
+	h, cookie := adminAuthedHandlerWithEmbedding(t, &fakeEmbeddingRepo{}, fakeEmbeddingProvider{}, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/embeddings/recompute", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Errorf("expected 409 when a recompute is already in progress, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleAdminEmbeddingsRecomputeStart_JobErrorIsLoggedNotFatal proves a
+// background job error (e.g. AllDocumentIDs failing) is logged rather than
+// crashing the detached goroutine, and still clears in_progress back to
+// false -- see handleAdminEmbeddingsRecomputeStart's log.Printf branch.
+func TestHandleAdminEmbeddingsRecomputeStart_JobErrorIsLoggedNotFatal(t *testing.T) {
+	store := newSettingsStoreTestRepo(t)
+	repo := &fakeEmbeddingRepo{allIDsErr: errors.New("db unavailable")}
+	h, cookie := adminAuthedHandlerWithEmbedding(t, repo, fakeEmbeddingProvider{}, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/embeddings/recompute", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Can't use waitForEmbeddingRecomputeDone here: on this error path
+	// LastRunAt is deliberately never set (see
+	// RunEmbeddingRecomputeJobWithStatus), so that helper's condition
+	// would never be satisfied. Instead wait for the status key to exist
+	// (proving the goroutine's first, in-progress=true save already ran)
+	// and then read back false -- checking "found" rules out the
+	// zero-value default (also InProgress=false) racing this check before
+	// the goroutine has done anything at all.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		raw, found, err := store.GetSetting(context.Background(), ports.SettingsKeyEmbeddingRecomputeStatus)
+		if err == nil && found {
+			var status domain.EmbeddingRecomputeStatus
+			if err := json.Unmarshal([]byte(raw), &status); err == nil && !status.InProgress {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("timed out waiting for in_progress to clear after a job error")
+}
+
+// TestHandleAdminEmbeddingsRecompute_PersistsStatusForGetToRead mirrors
+// TestHandleAdminPageRankRecompute_PersistsStatusForGetToRead: proves the
+// two handlers are actually wired together through the settings store.
+func TestHandleAdminEmbeddingsRecompute_PersistsStatusForGetToRead(t *testing.T) {
+	store := newSettingsStoreTestRepo(t)
+	repo := &fakeEmbeddingRepo{ids: []string{"a"}, docs: map[string]domain.Document{"a": {ID: "a", Text: "hello"}}}
+	h, cookie := adminAuthedHandlerWithEmbedding(t, repo, fakeEmbeddingProvider{}, store)
+
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/embeddings/recompute", nil)
+	postReq.AddCookie(cookie)
+	postRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", postRec.Code, postRec.Body.String())
+	}
+	waitForEmbeddingRecomputeDone(t, store)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/embeddings/recompute", nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+	var resp struct {
+		InProgress bool    `json:"in_progress"`
+		LastRunAt  *string `json:"last_run_at"`
+		Documents  int     `json:"documents"`
+		Failed     int     `json:"failed"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.InProgress {
+		t.Error("expected in_progress=false once the recompute finished")
+	}
+	if resp.LastRunAt == nil {
+		t.Error("expected last_run_at to be set")
+	}
+	if resp.Documents != 1 || resp.Failed != 0 {
+		t.Errorf("expected documents=1, failed=0, got %+v", resp)
 	}
 }

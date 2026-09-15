@@ -323,3 +323,36 @@ func TestSaveDocument_PopulatesVectorColumnWhenANNAvailable(t *testing.T) {
 		t.Errorf("expected doc-1's pgvector column to be populated and found via TopSemanticMatches, got %+v", matches)
 	}
 }
+
+// TestUpdateEmbedding_RefreshesVectorColumnWhenANNAvailable proves
+// UpdateEmbedding keeps the pgvector column in sync too, the same way
+// SaveDocument does -- a document whose embedding was recomputed (see
+// application.RunEmbeddingRecomputeJob) must remain findable via
+// TopSemanticMatches under its new vector, not its stale original one.
+func TestUpdateEmbedding_RefreshesVectorColumnWhenANNAvailable(t *testing.T) {
+	repo := requirePostgresANN(t)
+	ctx := context.Background()
+	doc := domain.Document{ID: "doc-1", URL: "https://example.com/doc-1", Title: "Doc", Text: "hello world"}
+	if err := repo.SaveDocument(ctx, doc, []float32{1, 0}, 100, 2); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := repo.UpdateEmbedding(ctx, "doc-1", []float32{0, 1}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	matches, ok, err := repo.TopSemanticMatches(ctx, []float32{0, 1}, 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true once ANN is available")
+	}
+	match, found := matches["doc-1"]
+	if !found {
+		t.Fatalf("expected doc-1 findable under its recomputed vector, got %+v", matches)
+	}
+	if sim := domain.CosineSimilarity([]float32{0, 1}, match.Vector); sim < 0.999 {
+		t.Errorf("expected doc-1's pgvector column to match the new [0,1] embedding (cosine sim ~1), got %v", sim)
+	}
+}
