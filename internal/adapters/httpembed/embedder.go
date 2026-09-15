@@ -132,7 +132,7 @@ func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
 		return nil, fmt.Errorf("httpembed: reading response body: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("httpembed: embeddings endpoint returned status %d: %s", resp.StatusCode, truncate(body))
+		return nil, fmt.Errorf("httpembed: embeddings endpoint returned status %d: %s", resp.StatusCode, truncate(redact(body, e.apiKey)))
 	}
 
 	var parsed embeddingResponse
@@ -151,11 +151,26 @@ func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
 
 // truncate bounds how much of a non-2xx response body an error message
 // carries, so a large HTML error page doesn't blow up a log line.
-func truncate(body []byte) string {
+func truncate(s string) string {
 	const max = 500
-	s := string(body)
 	if len(s) > max {
 		return s[:max] + "..."
 	}
 	return s
+}
+
+// redact removes every occurrence of apiKey from body before it's ever
+// included in an error -- this error is not just logged, it's persisted to
+// a crawl job's record and shown back in the admin UI (see
+// crawl_loop.go -> the crawl job store -> the admin crawl-job endpoints),
+// so an embeddings endpoint that's malicious, misconfigured, or simply
+// echoes request headers back in its own error bodies (some gateways do)
+// could otherwise round-trip the "Authorization: Bearer <apiKey>" header
+// this same request just sent right back through this app's own
+// error/logging path. An empty apiKey (no key configured) is a no-op.
+func redact(body []byte, apiKey string) string {
+	if apiKey == "" {
+		return string(body)
+	}
+	return strings.ReplaceAll(string(body), apiKey, "[REDACTED]")
 }

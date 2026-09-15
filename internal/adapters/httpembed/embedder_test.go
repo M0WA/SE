@@ -139,6 +139,52 @@ func TestEmbedder_NonOKStatusBodyIsTruncated(t *testing.T) {
 	}
 }
 
+// TestEmbedder_NonOKStatusBodyRedactsAPIKey proves the configured API key
+// never appears verbatim in the error Embed returns -- this error is
+// persisted to a crawl job's record and shown in the admin UI, so if a
+// malicious/misconfigured embeddings endpoint echoes the request's own
+// Authorization header back in its error body (some gateways do), that
+// shouldn't round-trip the real key back out through this app.
+func TestEmbedder_NonOKStatusBodyRedactsAPIKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`invalid request, got Authorization: Bearer sk-super-secret-key`))
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, APIKey: "sk-super-secret-key", Dimensions: 8})
+	_, err := e.Embed(context.Background(), "x")
+	if err == nil {
+		t.Fatal("expected an error for a 401 response")
+	}
+	if strings.Contains(err.Error(), "sk-super-secret-key") {
+		t.Errorf("expected the API key to be redacted from the error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "[REDACTED]") {
+		t.Errorf("expected a [REDACTED] marker in place of the API key, got: %v", err)
+	}
+}
+
+// TestEmbedder_NonOKStatusBodyUnaffectedWithNoAPIKey proves redact is a
+// no-op when no API key is configured -- nothing to scrub, the body passes
+// through unchanged.
+func TestEmbedder_NonOKStatusBodyUnaffectedWithNoAPIKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`upstream unavailable`))
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 8})
+	_, err := e.Embed(context.Background(), "x")
+	if err == nil {
+		t.Fatal("expected an error for a 502 response")
+	}
+	if !strings.Contains(err.Error(), "upstream unavailable") {
+		t.Errorf("expected the response body preserved when no API key is configured, got: %v", err)
+	}
+}
+
 func TestEmbedder_MalformedJSONReturnsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("not json"))
