@@ -49,7 +49,17 @@ func New(ctx context.Context, driverName, dsn string) (*Repository, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening DB (%s): %w", driverName, err)
 	}
-	if err := db.PingContext(ctx); err != nil {
+	// The very first touch of a brand new sqlite file -- this Ping -- can
+	// itself race with another process's own concurrent open/create
+	// (SQLITE_BUSY), before there's even been a connection yet to set
+	// busy_timeout on (that happens further down, once dialect-specific
+	// setup starts) -- observed in practice: search-server's Ping failing
+	// this way while admin-server and crawl-server started at the same
+	// moment against a brand new file. retrySQLiteBusy is a harmless
+	// no-op for every other dialect (isSQLiteBusyError never matches
+	// their error text) and for sqlite once the file already exists (the
+	// overwhelmingly common case after the very first start).
+	if err := retrySQLiteBusy(ctx, func() error { return db.PingContext(ctx) }); err != nil {
 		return nil, fmt.Errorf("DB ping (%s): %w", driverName, err)
 	}
 
