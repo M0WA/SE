@@ -1,0 +1,59 @@
+# Dependabot opens a PR per outdated dependency (or a batched group, see
+# below) proposing a version bump -- it never pushes to main directly, so
+# it goes through the same main-protection ruleset as any other change
+# (PR + green "Build, vet & test" required, no bypass -- see CLAUDE.md's
+# "Branch, PR & release workflow"). Every PR gets the "dependencies" label,
+# which .github/release.yml groups into its own release-notes category.
+version: 2
+updates:
+  # Direct and indirect Go module dependencies (go.mod/go.sum).
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    groups:
+      go-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # internal/adapters/restapi's JS test tooling (package.json/package-lock.json).
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    groups:
+      npm-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # The four workflows under .github/workflows/ -- every `uses:` action is
+  # pinned to a commit SHA with a trailing `# vX.Y.Z` comment (see CLAUDE.md),
+  # which Dependabot's github-actions ecosystem understands: it resolves a
+  # new release back to its commit and proposes updating both the SHA and
+  # the version comment together, the same convention this repo already
+  # follows by hand.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+
+  # The Dockerfile's base images (golang:1.25-bookworm build stage,
+  # gcr.io/distroless/static-debian12 runtime stage).
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
