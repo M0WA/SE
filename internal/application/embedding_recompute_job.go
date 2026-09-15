@@ -137,6 +137,34 @@ func LoadEmbeddingRecomputeStatus(ctx context.Context, settings ports.SettingsSt
 	return status
 }
 
+// ResetStaleEmbeddingRecomputeStatus clears a leftover InProgress=true back
+// to false, without touching LastRunAt/Documents/Failed/DurationMs from
+// whatever run last actually completed -- the same self-healing this
+// codebase already applies to scheduled_crawls.in_progress (see
+// ports.ScheduledCrawlStore.ResetStaleInProgress and its cmd/crawl startup
+// call): admin-server is the only writer of this status, so InProgress
+// still true when THIS process is just starting up can only mean a
+// previous instance was killed (crashed, restarted, redeployed) mid-run,
+// never a genuinely still-running goroutine in this fresh process --
+// otherwise a killed recompute leaves the flag stuck forever, permanently
+// blocking every future trigger with handleAdminEmbeddingsRecomputeStart's
+// "already in progress" 409. Returns whether a stale flag was actually
+// found and cleared, for the caller to log; a nil settings, store error,
+// or nothing-to-reset are all quiet no-ops, matching
+// LoadEmbeddingRecomputeStatus's own error handling.
+func ResetStaleEmbeddingRecomputeStatus(ctx context.Context, settings ports.SettingsStore) bool {
+	if settings == nil {
+		return false
+	}
+	status := LoadEmbeddingRecomputeStatus(ctx, settings)
+	if !status.InProgress {
+		return false
+	}
+	status.InProgress = false
+	saveEmbeddingRecomputeStatus(ctx, settings, status)
+	return true
+}
+
 func saveEmbeddingRecomputeStatus(ctx context.Context, settings ports.SettingsStore, status domain.EmbeddingRecomputeStatus) {
 	if settings == nil {
 		return

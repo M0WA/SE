@@ -52,6 +52,16 @@ func main() {
 
 	debugSvc := application.NewHybridSearchService(repo, embedder, settings, opSettings, overrides, corpusStats, vocabulary)
 
+	// A previous admin-server instance killed mid-recompute (crash, restart,
+	// redeploy) leaves embedding_recompute_status stuck at InProgress=true,
+	// permanently blocking every future trigger -- see
+	// application.ResetStaleEmbeddingRecomputeStatus's doc comment. Mirrors
+	// cmd/crawl's identical ResetStaleInProgress startup call for
+	// scheduled_crawls.
+	if application.ResetStaleEmbeddingRecomputeStatus(ctx, repo) {
+		log.Print("reset a stale embedding recompute status left in-progress from a previous restart")
+	}
+
 	adminUser := bootstrap.GetEnv("ADMIN_USER", "")
 	adminPass := bootstrap.GetEnv("ADMIN_PASSWORD", "")
 	if adminUser == "" || adminPass == "" {
