@@ -1,5 +1,19 @@
 # Changelog
 
+## v4.0.28 - 2026-09-15
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Add 8 Overview-page metrics: crawl health, throughput, PageRank spread by @M0WA in https://github.com/M0WA/SE/pull/23
+* Fix silent mis-parsing of negated phrases and negated site: filters by @M0WA in https://github.com/M0WA/SE/pull/24
+* Add optional support for a real trained embedding model by @M0WA in https://github.com/M0WA/SE/pull/25
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.0.27...v4.0.28
+
+
 ## v4.0.27 - 2026-09-15
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
