@@ -1,5 +1,19 @@
 # Changelog
 
+## v4.0.30 - 2026-09-15
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Add a background image to the public search page by @M0WA in https://github.com/M0WA/SE/pull/40
+* Fix "Search syntax" rendering struck through by the form's divider by @M0WA in https://github.com/M0WA/SE/pull/41
+* Add a recompute-embeddings feature so a provider change doesn't need a re-crawl by @M0WA in https://github.com/M0WA/SE/pull/42
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.0.29...v4.0.30
+
+
 ## v4.0.29 - 2026-09-15
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
