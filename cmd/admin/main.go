@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"searchengine/internal/adapters/crawlclient"
-	"searchengine/internal/adapters/hashembed"
 	"searchengine/internal/adapters/restapi"
 	"searchengine/internal/application"
 	"searchengine/internal/bootstrap"
@@ -27,24 +26,24 @@ func main() {
 	overrides := domain.DefaultRankingOverrides()
 	corpusStats := domain.NewCorpusStatsCache(0, 1)
 	vocabulary := domain.NewVocabularyCache(nil)
-	embedder := hashembed.New(128)
 
-	// See cmd/search's identical block: each of these is an independent
-	// blocking DB round-trip against unrelated tables/state, so running
+	// See cmd/search's identical block: these three are independent
+	// blocking DB round-trips against unrelated tables/state, so running
 	// them concurrently makes startup latency the slowest one rather than
-	// their sum.
+	// their sum. Embedder construction can't join this batch -- it needs
+	// opSettings already synced.
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(3)
 	go func() { defer wg.Done(); bootstrap.SyncSettings(ctx, repo, settings, opSettings, overrides, repo) }()
 	go func() { defer wg.Done(); bootstrap.SyncCorpusStats(ctx, repo, corpusStats) }()
 	go func() { defer wg.Done(); bootstrap.SyncVocabulary(ctx, repo, vocabulary) }()
-	go func() {
-		defer wg.Done()
-		// Enables Postgres pgvector ANN search for this process when
-		// available, never fatal otherwise.
-		repo.EnableANN(ctx, embedder.Dimensions())
-	}()
 	wg.Wait()
+
+	embedder := bootstrap.NewEmbedder(opSettings.Get())
+	// Enables Postgres pgvector ANN search for this process when
+	// available, never fatal otherwise. Must run after embedder is
+	// constructed -- see cmd/search's identical comment.
+	repo.EnableANN(ctx, embedder.Dimensions())
 
 	debugSvc := application.NewHybridSearchService(repo, embedder, settings, opSettings, overrides, corpusStats, vocabulary)
 

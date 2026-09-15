@@ -615,6 +615,26 @@ type operationalValues struct {
 	// indexed token stream, ahead of its body -- see
 	// domain.OperationalSettingsValues for the full doc comment.
 	TitleWeight int `json:"title_weight"`
+	// EmbeddingProvider/EmbeddingHTTPBaseURL/EmbeddingHTTPModel/
+	// EmbeddingHTTPDimensions mirror the same-named
+	// domain.OperationalSettingsValues fields -- see there for the full
+	// doc comment, including why this one setting requires a process
+	// restart to take effect and why switching providers invalidates
+	// every existing stored embedding until documents are re-crawled.
+	EmbeddingProvider       string `json:"embedding_provider"`
+	EmbeddingHTTPBaseURL    string `json:"embedding_http_base_url"`
+	EmbeddingHTTPModel      string `json:"embedding_http_model"`
+	EmbeddingHTTPDimensions int    `json:"embedding_http_dimensions"`
+	// EmbeddingHTTPAPIKey is write-only: toOperationalValues always sends
+	// "" here regardless of what's actually configured, so a GET response
+	// never leaks the stored key. A POST that leaves this blank doesn't
+	// clear the configured key either -- see
+	// domain.OperationalSettings.Set's doc comment. EmbeddingHTTPAPIKeySet
+	// (GET-only; a POST's value for it is ignored) reports whether a key
+	// is currently configured, so the admin UI can reflect that without
+	// ever seeing the key itself.
+	EmbeddingHTTPAPIKey    string `json:"embedding_http_api_key,omitempty"`
+	EmbeddingHTTPAPIKeySet bool   `json:"embedding_http_api_key_set,omitempty"`
 }
 
 func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
@@ -640,6 +660,11 @@ func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 		LinkScope:                        v.LinkScope,
 		MaxDocumentVersions:              v.MaxDocumentVersions,
 		TitleWeight:                      v.TitleWeight,
+		EmbeddingProvider:                v.EmbeddingProvider,
+		EmbeddingHTTPBaseURL:             v.EmbeddingHTTPBaseURL,
+		EmbeddingHTTPModel:               v.EmbeddingHTTPModel,
+		EmbeddingHTTPDimensions:          v.EmbeddingHTTPDimensions,
+		EmbeddingHTTPAPIKeySet:           v.EmbeddingHTTPAPIKey != "",
 	}
 }
 
@@ -666,6 +691,11 @@ func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 		LinkScope:                        o.LinkScope,
 		MaxDocumentVersions:              o.MaxDocumentVersions,
 		TitleWeight:                      o.TitleWeight,
+		EmbeddingProvider:                o.EmbeddingProvider,
+		EmbeddingHTTPBaseURL:             o.EmbeddingHTTPBaseURL,
+		EmbeddingHTTPAPIKey:              o.EmbeddingHTTPAPIKey,
+		EmbeddingHTTPModel:               o.EmbeddingHTTPModel,
+		EmbeddingHTTPDimensions:          o.EmbeddingHTTPDimensions,
 	}
 }
 

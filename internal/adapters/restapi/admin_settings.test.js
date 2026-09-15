@@ -23,6 +23,11 @@ const FULL_SETTINGS = {
     default_top_k: 10,
     semantic_candidate_pool_size: 200,
     ann_search_enabled: true,
+    embedding_provider: 'hash',
+    embedding_http_base_url: '',
+    embedding_http_model: '',
+    embedding_http_dimensions: 128,
+    embedding_http_api_key_set: false,
     max_document_versions: 5,
     db_max_open_conns: 25,
     db_max_idle_conns: 25,
@@ -72,6 +77,117 @@ test('applySettings falls back to "none"/"domain" when renderer/link_scope are u
   applySettings(s);
   assert.equal(document.getElementById('default-renderer').value, 'none');
   assert.equal(document.getElementById('default-link-scope').value, 'domain');
+});
+
+test('applySettings shows the HTTP embedding fields and "no key" hint for the hash provider', () => {
+  const { applySettings } = loadFixture();
+  applySettings(FULL_SETTINGS);
+  assert.equal(document.getElementById('embedding-provider').value, 'hash');
+  assert.equal(document.getElementById('embedding-http-fields').hidden, true);
+  assert.equal(document.getElementById('embedding-http-api-key').value, '');
+  assert.equal(document.getElementById('embedding-http-api-key-hint').textContent, 'No key currently configured.');
+});
+
+test('applySettings reveals the HTTP embedding fields and never fills in the API key, even when one is configured', () => {
+  const { applySettings } = loadFixture();
+  const s = JSON.parse(JSON.stringify(FULL_SETTINGS));
+  s.operational.embedding_provider = 'http';
+  s.operational.embedding_http_base_url = 'http://localhost:11434/v1';
+  s.operational.embedding_http_model = 'nomic-embed-text';
+  s.operational.embedding_http_dimensions = 768;
+  s.operational.embedding_http_api_key_set = true;
+  applySettings(s);
+  assert.equal(document.getElementById('embedding-http-fields').hidden, false);
+  assert.equal(document.getElementById('embedding-http-base-url').value, 'http://localhost:11434/v1');
+  assert.equal(document.getElementById('embedding-http-model').value, 'nomic-embed-text');
+  assert.equal(document.getElementById('embedding-http-dimensions').value, '768');
+  assert.equal(document.getElementById('embedding-http-api-key').value, '');
+  assert.equal(
+    document.getElementById('embedding-http-api-key-hint').textContent,
+    'A key is currently configured. Leave blank to keep it, or type a new one to replace it.',
+  );
+});
+
+test('toggleEmbeddingHTTPFields shows/hides the HTTP fields based on the select value', () => {
+  const { toggleEmbeddingHTTPFields } = loadFixture();
+  const select = document.getElementById('embedding-provider');
+  select.value = 'http';
+  toggleEmbeddingHTTPFields();
+  assert.equal(document.getElementById('embedding-http-fields').hidden, false);
+  select.value = 'hash';
+  toggleEmbeddingHTTPFields();
+  assert.equal(document.getElementById('embedding-http-fields').hidden, true);
+});
+
+test('changing the embedding provider select toggles the HTTP fields visibility', () => {
+  loadFixture();
+  const select = document.getElementById('embedding-provider');
+  select.value = 'http';
+  select.dispatchEvent(new window.Event('change'));
+  assert.equal(document.getElementById('embedding-http-fields').hidden, false);
+});
+
+test('the embedding API key field starts readonly and becomes editable on focus', () => {
+  loadFixture();
+  const input = document.getElementById('embedding-http-api-key');
+  assert.equal(input.hasAttribute('readonly'), true);
+  input.dispatchEvent(new window.Event('focus'));
+  assert.equal(input.hasAttribute('readonly'), false);
+});
+
+test('saveSettings posts a blank embedding API key by default, leaving the stored key untouched', async () => {
+  const { saveSettings } = loadFixture();
+  let gotBody;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/settings')) {
+      gotBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => FULL_SETTINGS };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  await saveSettings();
+  assert.equal(gotBody.operational.embedding_provider, 'hash');
+  assert.equal(gotBody.operational.embedding_http_api_key, '');
+});
+
+test('saveSettings posts a typed embedding API key and the HTTP provider fields', async () => {
+  const { saveSettings } = loadFixture();
+  document.getElementById('embedding-provider').value = 'http';
+  document.getElementById('embedding-http-base-url').value = 'https://api.example.com/v1';
+  document.getElementById('embedding-http-model').value = 'text-embedding-3-small';
+  document.getElementById('embedding-http-dimensions').value = '1536';
+  const keyInput = document.getElementById('embedding-http-api-key');
+  keyInput.removeAttribute('readonly');
+  keyInput.value = 'sk-new-key';
+  let gotBody;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/settings')) {
+      gotBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => FULL_SETTINGS };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  await saveSettings();
+  assert.equal(gotBody.operational.embedding_provider, 'http');
+  assert.equal(gotBody.operational.embedding_http_base_url, 'https://api.example.com/v1');
+  assert.equal(gotBody.operational.embedding_http_model, 'text-embedding-3-small');
+  assert.equal(gotBody.operational.embedding_http_dimensions, 1536);
+  assert.equal(gotBody.operational.embedding_http_api_key, 'sk-new-key');
+});
+
+test('saveSettings posts 0 for an unparseable embedding dimensions field', async () => {
+  const { saveSettings } = loadFixture();
+  document.getElementById('embedding-http-dimensions').value = '';
+  let gotBody;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/settings')) {
+      gotBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => FULL_SETTINGS };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  await saveSettings();
+  assert.equal(gotBody.operational.embedding_http_dimensions, 0);
 });
 
 test('loadSettings applies the fetched settings on success', async () => {
