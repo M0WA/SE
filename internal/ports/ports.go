@@ -483,11 +483,16 @@ type ScheduledCrawlStore interface {
 	// toggle to do it.
 	MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time, enabled, inProgress bool, runCount int) error
 	// RunScheduledCrawlNow marks a schedule due immediately -- sets
-	// NextRunAt to now and re-enables it if it was paused -- without
-	// touching any other field (recurring/interval/run count/options all
-	// stay exactly as they were). crawl-server's own scheduler ticker
-	// (TriggerDueCrawls) picks it up on its next tick, the same path a
-	// freshly created one-off crawl already goes through. Returns
-	// ErrScheduledCrawlNotFound if id doesn't exist.
+	// NextRunAt to now, re-enables it if it was paused, and force-clears
+	// InProgress -- without touching any other field (recurring/interval/
+	// run count/options all stay exactly as they were). crawl-server's own
+	// scheduler ticker (TriggerDueCrawls) picks it up on its next tick, the
+	// same path a freshly created one-off crawl already goes through.
+	// Returns ErrScheduledCrawlNotFound if id doesn't exist.
 	RunScheduledCrawlNow(ctx context.Context, id string, now time.Time) error
+	// ResetStaleInProgress clears InProgress back to false for every
+	// schedule that has it stuck true -- meant to run once at crawl-server
+	// startup, before anything else can query DueScheduledCrawls. Returns
+	// how many rows were reset.
+	ResetStaleInProgress(ctx context.Context) (int, error)
 }

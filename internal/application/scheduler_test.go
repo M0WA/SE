@@ -88,6 +88,10 @@ func (f *fakeScheduledCrawlStore) RunScheduledCrawlNow(context.Context, string, 
 	return errors.New("not implemented")
 }
 
+func (f *fakeScheduledCrawlStore) ResetStaleInProgress(context.Context) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
 var _ ports.ScheduledCrawlStore = (*fakeScheduledCrawlStore)(nil)
 
 func TestTriggerDueCrawls_TriggersOnlyDueEnabledSchedules(t *testing.T) {
