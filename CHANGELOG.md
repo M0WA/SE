@@ -1,5 +1,18 @@
 # Changelog
 
+## v4.0.31 - 2026-09-15
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Prefill the embedding model field from the provider's /models endpoint by @M0WA in https://github.com/M0WA/SE/pull/44
+* Reset a stale in-progress embedding recompute flag left by a killed process by @M0WA in https://github.com/M0WA/SE/pull/45
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.0.30...v4.0.31
+
+
 ## v4.0.30 - 2026-09-15
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
