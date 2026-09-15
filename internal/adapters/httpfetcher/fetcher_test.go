@@ -13,6 +13,31 @@ import (
 	"searchengine/internal/ports"
 )
 
+// newTestFetcher builds a Fetcher exactly like httpfetcher.New, except with
+// the production SSRF guard (netguard.Transport, see New's doc comment)
+// swapped back out for the plain default transport. Every other test in
+// this file fetches from an httptest.Server, which listens on a loopback
+// address -- the guard is verified against separately, in
+// TestFetcher_Fetch_BlocksLoopbackTarget, and every other test needs the
+// unguarded transport to reach its own local test server at all.
+func newTestFetcher(settings *domain.OperationalSettings) *httpfetcher.Fetcher {
+	f := httpfetcher.New(settings)
+	f.Client.Transport = http.DefaultTransport
+	return f
+}
+
+func TestFetcher_Fetch_BlocksLoopbackTarget(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("<html>hello</html>"))
+	}))
+	defer srv.Close()
+
+	f := httpfetcher.New(nil)
+	if _, err := f.Fetch(context.Background(), srv.URL); err == nil {
+		t.Fatal("expected a loopback target to be blocked by the SSRF guard")
+	}
+}
+
 func TestFetcher_Fetch_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("User-Agent") == "" {
@@ -22,7 +47,7 @@ func TestFetcher_Fetch_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f := httpfetcher.New(nil)
+	f := newTestFetcher(nil)
 	body, err := f.Fetch(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -38,21 +63,21 @@ func TestFetcher_Fetch_NonOKStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f := httpfetcher.New(nil)
+	f := newTestFetcher(nil)
 	if _, err := f.Fetch(context.Background(), srv.URL); err == nil {
 		t.Error("expected error for 404 status")
 	}
 }
 
 func TestFetcher_Fetch_InvalidURL(t *testing.T) {
-	f := httpfetcher.New(nil)
+	f := newTestFetcher(nil)
 	if _, err := f.Fetch(context.Background(), "://ungueltig"); err == nil {
 		t.Error("expected error for invalid URL")
 	}
 }
 
 func TestFetcher_Fetch_ConnectionError(t *testing.T) {
-	f := httpfetcher.New(nil)
+	f := newTestFetcher(nil)
 	if _, err := f.Fetch(context.Background(), "http://127.0.0.1:1"); err == nil {
 		t.Error("expected error for unreachable host")
 	}
@@ -71,7 +96,7 @@ func TestFetcher_FetchWithOptions_SetsCookieAndBasicAuth(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f := httpfetcher.New(nil)
+	f := newTestFetcher(nil)
 	_, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{
 		Cookie:        "session=abc123",
 		BasicAuthUser: "alice",
@@ -94,7 +119,7 @@ func TestFetcher_FetchWithOptions_NoOptionsMeansNoHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f := httpfetcher.New(nil)
+	f := newTestFetcher(nil)
 	if _, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -110,7 +135,7 @@ func TestFetcher_FetchWithOptions_UsesSettingsTimeout(t *testing.T) {
 	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
 		FetchTimeout: 5 * time.Millisecond,
 	})
-	f := httpfetcher.New(settings)
+	f := newTestFetcher(settings)
 	if _, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{}); err == nil {
 		t.Error("expected timeout error")
 	}
@@ -131,7 +156,7 @@ func TestFetcher_FetchWithOptions_PerRequestTimeoutOverridesSettings(t *testing.
 	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
 		FetchTimeout: time.Hour,
 	})
-	f := httpfetcher.New(settings)
+	f := newTestFetcher(settings)
 	if _, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{FetchTimeoutSeconds: 1}); err == nil {
 		t.Error("expected the per-request timeout override to fire despite the hour-long global default")
 	}
@@ -149,7 +174,7 @@ func TestFetcher_FetchWithOptions_UsesSettingsUserAgent(t *testing.T) {
 	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
 		UserAgent: "custom-agent/9.0",
 	})
-	f := httpfetcher.New(settings)
+	f := newTestFetcher(settings)
 	if _, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -167,7 +192,7 @@ func TestFetcher_FetchWithOptions_PerRequestUserAgentOverridesSettings(t *testin
 	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
 		UserAgent: "process-default-agent/1.0",
 	})
-	f := httpfetcher.New(settings)
+	f := newTestFetcher(settings)
 	if _, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{UserAgent: "per-crawl-agent/1.0"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -180,7 +205,7 @@ func TestFetcher_FetchWithOptions_RejectsBinaryContentType(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f := httpfetcher.New(nil)
+	f := newTestFetcher(nil)
 	if _, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{}); err == nil {
 		t.Error("expected an error for a non-textual content-type")
 	}
@@ -193,7 +218,7 @@ func TestFetcher_FetchWithOptions_AcceptsHTMLContentType(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f := httpfetcher.New(nil)
+	f := newTestFetcher(nil)
 	if _, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -206,7 +231,7 @@ func TestFetcher_FetchWithOptions_AcceptsXMLContentTypeForSitemaps(t *testing.T)
 	}))
 	defer srv.Close()
 
-	f := httpfetcher.New(nil)
+	f := newTestFetcher(nil)
 	if _, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -219,7 +244,7 @@ func TestFetcher_FetchWithOptions_MissingContentTypeIsAllowed(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f := httpfetcher.New(nil)
+	f := newTestFetcher(nil)
 	if _, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -232,7 +257,7 @@ func TestFetcher_FetchWithOptions_TruncatesBodyAtMaxResponseBytes(t *testing.T) 
 	defer srv.Close()
 
 	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{MaxResponseBytes: 4})
-	f := httpfetcher.New(settings)
+	f := newTestFetcher(settings)
 	body, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -251,7 +276,7 @@ func TestFetcher_FetchWithOptions_PerRequestMaxResponseBytesOverridesSettings(t 
 	defer srv.Close()
 
 	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{MaxResponseBytes: 1024})
-	f := httpfetcher.New(settings)
+	f := newTestFetcher(settings)
 	body, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{MaxResponseBytes: 4})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -268,7 +293,7 @@ func TestFetcher_FetchWithOptions_BodyUnderCapIsNotTruncated(t *testing.T) {
 	defer srv.Close()
 
 	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{MaxResponseBytes: 5 * 1024 * 1024})
-	f := httpfetcher.New(settings)
+	f := newTestFetcher(settings)
 	body, err := f.FetchWithOptions(context.Background(), srv.URL, ports.FetchOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -296,7 +321,7 @@ func TestFetcher_Fetch_BodyReadError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f := httpfetcher.New(nil)
+	f := newTestFetcher(nil)
 	if _, err := f.Fetch(context.Background(), srv.URL); err == nil {
 		t.Error("expected an error when the response body can't be fully read")
 	}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"searchengine/internal/adapters/netguard"
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
 )
@@ -20,8 +21,16 @@ type Fetcher struct {
 // New builds a Fetcher whose timeout and User-Agent are read from settings
 // on every request, so they can be changed live from the admin panel. A
 // nil settings uses the built-in defaults (see domain.OperationalSettings).
+//
+// The Client's Transport routes every dial -- the initial connection and
+// every redirect hop the client follows -- through netguard.SafeDialContext,
+// so a crawl target (or a redirect/DNS-rebind a crawl target points to)
+// that resolves to a loopback/private/reserved address is refused at the
+// TCP layer rather than fetched. This is the only fetcher every crawl path
+// in this app ultimately goes through for plain (non-rendered) requests,
+// including robots.txt (see robots.Checker, which wraps this same Fetcher).
 func New(settings *domain.OperationalSettings) *Fetcher {
-	return &Fetcher{Client: &http.Client{}, settings: settings}
+	return &Fetcher{Client: &http.Client{Transport: netguard.Transport()}, settings: settings}
 }
 
 func (f *Fetcher) Fetch(ctx context.Context, rawURL string) (string, error) {
