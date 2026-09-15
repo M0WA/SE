@@ -39,9 +39,8 @@ function baseSchedule(overrides) {
     prioritize_unindexed: false,
     renderer: 'none',
     user_agent: 'custom-agent',
-    cookie: 'session=abc',
-    basic_auth_user: 'user',
-    basic_auth_pass: 'pass',
+    has_cookie: true,
+    has_basic_auth: true,
     fetch_timeout_seconds: 10,
     min_text_length: 50,
     crawl_delay_ms: 250,
@@ -87,6 +86,63 @@ test('load() applies the fetched schedule to the form and reveals it', async () 
   assert.equal(document.getElementById('schedule-enabled').checked, true);
   const meta = document.getElementById('schedule-meta').textContent;
   assert.equal(meta.includes('Runs so far: 3'), true);
+});
+
+// The server never echoes a stored credential's real value back (see
+// scheduledCrawlResponse) -- these tests prove the form reflects that:
+// blank fields, a placeholder noting a credential is already set, and the
+// "remove" checkboxes only enabled (and never pre-checked) when there's
+// something to remove.
+test('load() never populates credential fields, even when the schedule has them', async () => {
+  loadFixture('sched-1', async () => ({ ok: true, json: async () => baseSchedule() }));
+  await flush();
+  assert.equal(document.getElementById('schedule-cookie').value, '');
+  assert.equal(document.getElementById('schedule-basic-user').value, '');
+  assert.equal(document.getElementById('schedule-basic-pass').value, '');
+  assert.equal(document.getElementById('schedule-cookie').placeholder, '(unchanged — a cookie is already set)');
+  assert.equal(document.getElementById('schedule-basic-user').placeholder, '(unchanged — already set)');
+  const clearCookie = document.getElementById('schedule-clear-cookie');
+  const clearBasicAuth = document.getElementById('schedule-clear-basic-auth');
+  assert.equal(clearCookie.checked, false);
+  assert.equal(clearCookie.disabled, false);
+  assert.equal(clearBasicAuth.checked, false);
+  assert.equal(clearBasicAuth.disabled, false);
+});
+
+test('load() disables the "remove" checkboxes when no credential is set', async () => {
+  loadFixture('sched-1', async () => ({
+    ok: true,
+    json: async () => baseSchedule({ has_cookie: false, has_basic_auth: false }),
+  }));
+  await flush();
+  assert.equal(document.getElementById('schedule-cookie').placeholder, 'session=abc123');
+  assert.equal(document.getElementById('schedule-basic-user').placeholder, '');
+  assert.equal(document.getElementById('schedule-clear-cookie').disabled, true);
+  assert.equal(document.getElementById('schedule-clear-basic-auth').disabled, true);
+});
+
+test('requestBody sends blank credential fields plus the clear flags as unchecked by default', async () => {
+  loadFixture('sched-1', async () => ({ ok: true, json: async () => baseSchedule() }));
+  await flush();
+  const { requestBody } = require('./admin_schedule.js');
+  const body = requestBody();
+  assert.equal(body.cookie, '');
+  assert.equal(body.basic_auth_user, '');
+  assert.equal(body.basic_auth_pass, '');
+  assert.equal(body.clear_cookie, false);
+  assert.equal(body.clear_basic_auth, false);
+});
+
+test('requestBody reflects a newly typed credential and a checked "remove" box', async () => {
+  loadFixture('sched-1', async () => ({ ok: true, json: async () => baseSchedule() }));
+  await flush();
+  document.getElementById('schedule-cookie').value = 'session=new';
+  document.getElementById('schedule-clear-basic-auth').checked = true;
+  const { requestBody } = require('./admin_schedule.js');
+  const body = requestBody();
+  assert.equal(body.cookie, 'session=new');
+  assert.equal(body.clear_cookie, false);
+  assert.equal(body.clear_basic_auth, true);
 });
 
 test('load() URL-decodes the schedule id from the path', async () => {
@@ -141,8 +197,8 @@ test('load() applies a minimal schedule: blank optional fields, no next/last run
   loadFixture('sched-1', async () => ({
     ok: true,
     json: async () => baseSchedule({
-      link_scope: '', renderer: '', user_agent: '', cookie: '',
-      basic_auth_user: '', basic_auth_pass: '', fetch_timeout_seconds: 0,
+      link_scope: '', renderer: '', user_agent: '',
+      has_cookie: false, has_basic_auth: false, fetch_timeout_seconds: 0,
       min_text_length: 0, crawl_delay_ms: 0, max_response_kb: 0,
       interval_minutes: 0, max_runs: 0, next_run_at: '', last_run_at: '',
     }),

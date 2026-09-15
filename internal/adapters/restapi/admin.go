@@ -857,20 +857,32 @@ func (h *Handler) handleAdminCancelCrawlJob(w http.ResponseWriter, r *http.Reque
 // a positive IntervalMinutes means "repeat on this cadence" -- see
 // toScheduledCrawl.
 type scheduledCrawlRequest struct {
-	SeedURLs            []string `json:"seed_urls"`
-	MaxPages            int      `json:"max_pages"`
-	RespectRobots       bool     `json:"respect_robots"`
-	UserAgent           string   `json:"user_agent"`
-	Cookie              string   `json:"cookie"`
-	BasicAuthUser       string   `json:"basic_auth_user"`
-	BasicAuthPass       string   `json:"basic_auth_pass"`
-	UseSitemap          bool     `json:"use_sitemap"`
-	FetchTimeoutSeconds int      `json:"fetch_timeout_seconds"`
-	MinTextLength       int      `json:"min_text_length"`
-	CrawlDelayMs        int      `json:"crawl_delay_ms"`
-	MaxResponseKB       int      `json:"max_response_kb"`
-	PrioritizeUnindexed bool     `json:"prioritize_unindexed"`
-	IntervalMinutes     int      `json:"interval_minutes"`
+	SeedURLs      []string `json:"seed_urls"`
+	MaxPages      int      `json:"max_pages"`
+	RespectRobots bool     `json:"respect_robots"`
+	UserAgent     string   `json:"user_agent"`
+	Cookie        string   `json:"cookie"`
+	BasicAuthUser string   `json:"basic_auth_user"`
+	BasicAuthPass string   `json:"basic_auth_pass"`
+	// ClearCookie/ClearBasicAuth are meaningful only to
+	// handleAdminUpdateSchedule (PATCH): since a GET response never
+	// echoes a stored credential's real value (see scheduledCrawlResponse),
+	// an edit form has no way to distinguish "the admin left this blank
+	// because they don't want to change it" from "the admin wants to
+	// remove it" -- Cookie/BasicAuthUser/BasicAuthPass left blank means
+	// the former (preserve whatever's already stored); these two explicit
+	// flags are how the admin asks for the latter instead. Ignored by
+	// handleAdminSchedules' POST, which has no prior credential to
+	// preserve or clear in the first place.
+	ClearCookie         bool `json:"clear_cookie"`
+	ClearBasicAuth      bool `json:"clear_basic_auth"`
+	UseSitemap          bool `json:"use_sitemap"`
+	FetchTimeoutSeconds int  `json:"fetch_timeout_seconds"`
+	MinTextLength       int  `json:"min_text_length"`
+	CrawlDelayMs        int  `json:"crawl_delay_ms"`
+	MaxResponseKB       int  `json:"max_response_kb"`
+	PrioritizeUnindexed bool `json:"prioritize_unindexed"`
+	IntervalMinutes     int  `json:"interval_minutes"`
 	// LinkScope overrides the Tuning page's global default for how far
 	// this crawl follows discovered links -- "" (domain.LinkScopeDefault)
 	// means "inherit the global default"; "host"/"domain"/"any" choose
@@ -895,14 +907,18 @@ type scheduledCrawlRequest struct {
 }
 
 type scheduledCrawlResponse struct {
-	ID                   string     `json:"id"`
-	SeedURLs             []string   `json:"seed_urls"`
-	MaxPages             int        `json:"max_pages"`
-	RespectRobots        bool       `json:"respect_robots"`
-	UserAgent            string     `json:"user_agent"`
-	Cookie               string     `json:"cookie"`
-	BasicAuthUser        string     `json:"basic_auth_user"`
-	BasicAuthPass        string     `json:"basic_auth_pass"`
+	ID            string   `json:"id"`
+	SeedURLs      []string `json:"seed_urls"`
+	MaxPages      int      `json:"max_pages"`
+	RespectRobots bool     `json:"respect_robots"`
+	UserAgent     string   `json:"user_agent"`
+	// HasCookie/HasBasicAuth report only whether a credential is set, never
+	// its value -- same redacted-summary treatment ports.CrawlJobRequest
+	// already gives a one-off crawl's credentials (see its doc comment),
+	// now applied here too so a scheduled crawl's stored Cookie/
+	// BasicAuthUser/BasicAuthPass never round-trip through a GET response.
+	HasCookie            bool       `json:"has_cookie"`
+	HasBasicAuth         bool       `json:"has_basic_auth"`
 	LinkScope            string     `json:"link_scope"`
 	AllowedDomains       []string   `json:"allowed_domains"`
 	BlockedDomains       []string   `json:"blocked_domains"`
@@ -928,7 +944,7 @@ func toScheduledCrawlResponse(s domain.ScheduledCrawl) scheduledCrawlResponse {
 	return scheduledCrawlResponse{
 		ID: s.ID, SeedURLs: s.SeedURLs, MaxPages: s.MaxPages,
 		RespectRobots: s.RespectRobots, UserAgent: s.UserAgent,
-		Cookie: s.Cookie, BasicAuthUser: s.BasicAuthUser, BasicAuthPass: s.BasicAuthPass,
+		HasCookie: s.Cookie != "", HasBasicAuth: s.BasicAuthUser != "" || s.BasicAuthPass != "",
 		LinkScope: s.LinkScope, UseSitemap: s.UseSitemap,
 		AllowedDomains: s.AllowedDomains, BlockedDomains: s.BlockedDomains,
 		FollowIndexedDomains: s.FollowIndexedDomains,
@@ -1094,6 +1110,14 @@ func (h *Handler) scheduledCrawlIDForSameDomain(ctx context.Context, seedURLs []
 // Editing reschedules it: next_run_at becomes interval_minutes from now,
 // same as a freshly created schedule, rather than trying to preserve a
 // stale cadence computed under the old interval.
+//
+// Cookie/BasicAuthUser/BasicAuthPass are the one exception to "PATCH is a
+// full replace": since a GET response never echoes their real value (see
+// scheduledCrawlResponse), the edit form can't pre-fill them, so a blank
+// submission for one of them means "leave it as it was," not "clear it" --
+// otherwise saving any other change to a schedule that already had
+// credentials would silently wipe them. req.ClearCookie/ClearBasicAuth are
+// the explicit way to actually remove one instead.
 func (h *Handler) handleAdminUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.scheduledCrawls != nil, "scheduled crawls") {
 		return
@@ -1106,8 +1130,21 @@ func (h *Handler) handleAdminUpdateSchedule(w http.ResponseWriter, r *http.Reque
 	if !validateScheduledCrawlRequest(w, req) {
 		return
 	}
-	s := req.toScheduledCrawl(r.PathValue("id"), req.Enabled, time.Now().UTC())
-	err := h.scheduledCrawls.UpdateScheduledCrawl(r.Context(), s)
+	id := r.PathValue("id")
+	existing, err := h.scheduledCrawls.GetScheduledCrawl(r.Context(), id)
+	if err != nil {
+		respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, "scheduled crawl not found", nil)
+		return
+	}
+	s := req.toScheduledCrawl(id, req.Enabled, time.Now().UTC())
+	if req.Cookie == "" && !req.ClearCookie {
+		s.Cookie = existing.Cookie
+	}
+	if req.BasicAuthUser == "" && req.BasicAuthPass == "" && !req.ClearBasicAuth {
+		s.BasicAuthUser = existing.BasicAuthUser
+		s.BasicAuthPass = existing.BasicAuthPass
+	}
+	err = h.scheduledCrawls.UpdateScheduledCrawl(r.Context(), s)
 	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, "scheduled crawl not found", map[string]bool{"ok": true})
 }
 

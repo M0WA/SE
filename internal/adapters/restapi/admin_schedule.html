@@ -91,6 +91,12 @@
       <label for="schedule-cookie">Cookie header</label><br>
       <input id="schedule-cookie" class="field" type="text" placeholder="session=abc123">
     </div>
+    <div class="form-row form-row-check">
+      <label for="schedule-clear-cookie">
+        <input id="schedule-clear-cookie" type="checkbox">
+        Remove the stored cookie
+      </label>
+    </div>
     <div class="form-row">
       <label for="schedule-basic-user">Basic auth username</label><br>
       <input id="schedule-basic-user" class="field" type="text" autocomplete="off">
@@ -98,6 +104,12 @@
     <div class="form-row">
       <label for="schedule-basic-pass">Basic auth password</label><br>
       <input id="schedule-basic-pass" class="field" type="password" autocomplete="new-password">
+    </div>
+    <div class="form-row form-row-check">
+      <label for="schedule-clear-basic-auth">
+        <input id="schedule-clear-basic-auth" type="checkbox">
+        Remove the stored basic auth credentials
+      </label>
     </div>
     <div class="form-row">
       <label for="schedule-fetch-timeout">Fetch timeout (seconds)</label><br>

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -564,7 +565,7 @@ func TestHandleAdminSchedules_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHandleAdminUpdateSchedule_Success(t *testing.T) {
-	store := &fakeScheduledCrawlStore{}
+	store := &fakeScheduledCrawlStore{schedules: []domain.ScheduledCrawl{{ID: "sched-1"}}}
 	h, cookie := adminAuthedHandlerWithSchedules(t, store)
 	body, _ := json.Marshal(map[string]interface{}{
 		"seed_urls": []string{"http://a"}, "max_pages": 5,
@@ -630,6 +631,101 @@ func TestHandleAdminUpdateSchedule_NotConfigured(t *testing.T) {
 	}
 }
 
+func TestHandleAdminUpdateSchedule_GetServiceError(t *testing.T) {
+	store := &fakeScheduledCrawlStore{getErr: errors.New("db unavailable")}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	body, _ := json.Marshal(map[string]interface{}{"seed_urls": []string{"http://a"}})
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/schedules/sched-1", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+// TestHandleAdminUpdateSchedule_BlankCredentialsPreserveExisting proves a
+// PATCH that leaves cookie/basic_auth_user/basic_auth_pass blank (the only
+// way the admin UI's edit form can submit them, since a GET response never
+// echoes their real value -- see scheduledCrawlResponse) keeps the
+// schedule's already-stored credentials rather than wiping them.
+func TestHandleAdminUpdateSchedule_BlankCredentialsPreserveExisting(t *testing.T) {
+	store := &fakeScheduledCrawlStore{schedules: []domain.ScheduledCrawl{{
+		ID: "sched-1", SeedURLs: []string{"http://a"},
+		Cookie: "session=abc", BasicAuthUser: "alice", BasicAuthPass: "hunter2",
+	}}}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	body, _ := json.Marshal(map[string]interface{}{
+		"seed_urls": []string{"http://a"}, "max_pages": 99,
+	})
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/schedules/sched-1", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.updated.Cookie != "session=abc" || store.updated.BasicAuthUser != "alice" || store.updated.BasicAuthPass != "hunter2" {
+		t.Errorf("expected existing credentials preserved, got: %+v", store.updated)
+	}
+	if store.updated.MaxPages != 99 {
+		t.Errorf("expected the non-credential field change to still apply, got max_pages=%d", store.updated.MaxPages)
+	}
+}
+
+// TestHandleAdminUpdateSchedule_NonBlankCredentialsOverwrite proves the
+// preserve-on-blank behavior doesn't prevent an admin from actually
+// changing a credential -- a non-blank value in the request still wins.
+func TestHandleAdminUpdateSchedule_NonBlankCredentialsOverwrite(t *testing.T) {
+	store := &fakeScheduledCrawlStore{schedules: []domain.ScheduledCrawl{{
+		ID: "sched-1", SeedURLs: []string{"http://a"},
+		Cookie: "session=old", BasicAuthUser: "old-user", BasicAuthPass: "old-pass",
+	}}}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	body, _ := json.Marshal(map[string]interface{}{
+		"seed_urls": []string{"http://a"},
+		"cookie":    "session=new", "basic_auth_user": "new-user", "basic_auth_pass": "new-pass",
+	})
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/schedules/sched-1", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.updated.Cookie != "session=new" || store.updated.BasicAuthUser != "new-user" || store.updated.BasicAuthPass != "new-pass" {
+		t.Errorf("expected new credentials applied, got: %+v", store.updated)
+	}
+}
+
+// TestHandleAdminUpdateSchedule_ClearFlagsRemoveCredentials proves
+// clear_cookie/clear_basic_auth are the explicit way to actually remove a
+// stored credential, since a blank field alone means "leave unchanged."
+func TestHandleAdminUpdateSchedule_ClearFlagsRemoveCredentials(t *testing.T) {
+	store := &fakeScheduledCrawlStore{schedules: []domain.ScheduledCrawl{{
+		ID: "sched-1", SeedURLs: []string{"http://a"},
+		Cookie: "session=abc", BasicAuthUser: "alice", BasicAuthPass: "hunter2",
+	}}}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	body, _ := json.Marshal(map[string]interface{}{
+		"seed_urls":    []string{"http://a"},
+		"clear_cookie": true, "clear_basic_auth": true,
+	})
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/schedules/sched-1", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.updated.Cookie != "" || store.updated.BasicAuthUser != "" || store.updated.BasicAuthPass != "" {
+		t.Errorf("expected credentials cleared, got: %+v", store.updated)
+	}
+}
+
 func TestHandleAdminDeleteSchedule_Success(t *testing.T) {
 	store := &fakeScheduledCrawlStore{}
 	h, cookie := adminAuthedHandlerWithSchedules(t, store)
@@ -692,6 +788,53 @@ func TestHandleAdminGetSchedule_Success(t *testing.T) {
 	}
 	if out.ID != "sched-1" || out.MaxPages != 10 || out.LinkScope != domain.LinkScopeHost {
 		t.Errorf("unexpected schedule response: %+v", out)
+	}
+}
+
+// TestHandleAdminGetSchedule_RedactsCredentials proves a stored Cookie/
+// BasicAuthUser/BasicAuthPass never appears in a GET response -- only the
+// has_cookie/has_basic_auth booleans do.
+func TestHandleAdminGetSchedule_RedactsCredentials(t *testing.T) {
+	store := &fakeScheduledCrawlStore{schedules: []domain.ScheduledCrawl{
+		{ID: "sched-1", SeedURLs: []string{"http://a"}, Cookie: "session=secret", BasicAuthUser: "alice", BasicAuthPass: "hunter2"},
+		{ID: "sched-2", SeedURLs: []string{"http://b"}},
+	}}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/schedules/sched-1", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "session=secret") || strings.Contains(rec.Body.String(), "hunter2") {
+		t.Errorf("expected credentials never to appear in the response body, got: %s", rec.Body.String())
+	}
+	var out struct {
+		HasCookie    bool `json:"has_cookie"`
+		HasBasicAuth bool `json:"has_basic_auth"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if !out.HasCookie || !out.HasBasicAuth {
+		t.Errorf("expected has_cookie and has_basic_auth both true, got: %+v", out)
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/admin/api/schedules/sched-2", nil)
+	req2.AddCookie(cookie)
+	rec2 := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec2, req2)
+	var out2 struct {
+		HasCookie    bool `json:"has_cookie"`
+		HasBasicAuth bool `json:"has_basic_auth"`
+	}
+	if err := json.Unmarshal(rec2.Body.Bytes(), &out2); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if out2.HasCookie || out2.HasBasicAuth {
+		t.Errorf("expected has_cookie and has_basic_auth both false for a schedule with no credentials, got: %+v", out2)
 	}
 }
 
