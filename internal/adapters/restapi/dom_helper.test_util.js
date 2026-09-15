@@ -17,7 +17,15 @@ function setupDOM(html) {
   });
   global.window = dom.window;
   global.document = dom.window.document;
-  global.navigator = dom.window.navigator;
+  // Node itself defines a getter-only `navigator` directly on globalThis
+  // (since Node 21) -- a plain assignment throws "Cannot set property
+  // navigator ... which has only a getter" in this file's strict mode.
+  // The property is configurable (just setter-less), so defineProperty
+  // can still replace it with jsdom's own Navigator for the duration of
+  // the test.
+  Object.defineProperty(global, 'navigator', {
+    value: dom.window.navigator, configurable: true, writable: true,
+  });
   return dom;
 }
 
