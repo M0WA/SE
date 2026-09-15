@@ -95,6 +95,25 @@ form {
   padding: 0.2rem 0;
 }
 
+/* A field's own caption -- in this app, often a full descriptive sentence
+   ("Semantic candidate pool size — max documents scored for semantic
+   similarity per search..."), not just a one-word tag. Sized down from
+   body copy (rather than inheriting it at full size) so a long caption
+   reads as supporting text, not as another line of prose competing with
+   real headings; the block display + margin (replacing a bare <br>
+   between label and field across every .form-row) gives the two real
+   separation instead of just a line-break's worth. .form-row-check and
+   .vocab-page-size-label below both override this back to an inline row
+   -- a short checkbox caption or a compact "Per page" field-adjacent
+   label was never the long-description case this rule is for. */
+label {
+  display: block;
+  margin: 0 0 0.35rem;
+  font-size: 0.92rem;
+  font-weight: 400;
+  color: var(--ink);
+}
+
 .field::placeholder { color: var(--ink-muted); }
 
 .field:focus-visible {
@@ -351,10 +370,18 @@ button:focus-visible {
   margin: -1.5rem 0 2rem;
 }
 
+/* Opts back out of the bare `form` rule above (a single-line search-box
+   row's flex layout + its own trailing border-bottom) -- a stacked,
+   multi-section form has no use for either: unset, that border-bottom
+   rendered as a stray, purposeless line after the very last thing in the
+   form (the Save/Sign-in button, or -- on Settings -- below the sticky
+   save bar, which already draws its own border-top right above it). */
 .stacked-form {
   display: flex;
   flex-direction: column;
   gap: 1.3rem;
+  border-bottom: none;
+  padding-bottom: 0;
 }
 
 .form-row { border-bottom: 1px solid var(--rule-strong); padding-bottom: 0.5rem; }
@@ -392,6 +419,7 @@ button:focus-visible {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+  margin: 0;
   color: var(--ink-muted);
   font-size: 0.85rem;
   white-space: nowrap;
@@ -460,6 +488,8 @@ button:focus-visible {
   display: flex;
   align-items: baseline;
   gap: 0.5rem;
+  margin: 0;
+  font-size: 1rem;
   cursor: pointer;
 }
 
@@ -495,8 +525,19 @@ section.panel {
 
 section.panel:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
 
+/* This site's whole heading scale, in one place since the rules
+   themselves live scattered across the page-specific sections below
+   (each only meaningful in its own context): 1.1rem/600 for a heading
+   that announces a whole page section (.panel h2, details.group summary
+   .gh, .domain-head h3, #schedule-title) -- deliberately a notch above
+   .mark/.result-title (1.05rem) and everything else that's merely an
+   individual item's own title, never a heading in its own right; 0.88rem/
+   600/muted for a heading one level down, inside that section (.subpanel
+   h4, .overview-block h3). .result-detail-head h2 (a single document's
+   own title, the entire reason that page exists) stays its own larger
+   size below -- a hero, not a plain section heading. */
 .panel h2 {
-  font-size: 1rem;
+  font-size: 1.1rem;
   font-weight: 600;
   margin: 0 0 1rem;
 }
@@ -560,7 +601,7 @@ details.group summary {
 
 details.group summary::-webkit-details-marker { display: none; }
 
-details.group summary .gh { font-size: 1.02rem; font-weight: 600; color: var(--ink); }
+details.group summary .gh { font-size: 1.1rem; font-weight: 600; color: var(--ink); }
 
 details.group summary .gd { color: var(--ink-muted); font-size: 0.82rem; font-weight: 400; }
 
@@ -575,7 +616,7 @@ details.group summary:hover .gh { color: var(--accent); }
 }
 
 .subpanel h4 {
-  font-size: 0.8rem;
+  font-size: 0.88rem;
   color: var(--ink-muted);
   margin: 0 0 0.7rem;
   font-weight: 600;
@@ -693,9 +734,22 @@ td.actions > * + * { margin-left: 0.6rem; }
 }
 
 .domain-head h3 {
-  font-size: 1.02rem;
+  font-size: 1.1rem;
   font-weight: 600;
   margin: 0;
+}
+
+/* admin_schedule.html's own per-item detail-page title -- the same role
+   as .domain-head h3 (admin_domain.html) and #term-title's (via
+   .domain-head, admin_vocabulary_term.html), but without a .domain-head
+   wrapper of its own (it has no "tail" stats to sit beside), so it needs
+   this explicit rule rather than picking up the scale by context. Without
+   it, this bare <h2> was falling back to the browser's own default h2
+   size -- much bigger than every other heading on the page. */
+#schedule-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0 0 0.75rem;
 }
 
 .domain-head-tail {
@@ -779,8 +833,13 @@ td.actions > * + * { margin-left: 0.6rem; }
 
 .overview-block { flex: 1 1 260px; min-width: 0; }
 
+/* These name a chart tile on the Overview page (e.g. "Pages per domain")
+   with nothing above them -- the "Corpus" heading that used to introduce
+   this whole area was deliberately removed, so each one is this page's
+   real, top-level section label, not a sub-heading -- same scale as
+   .panel h2, not .subpanel h4's. */
 .overview-block h3 {
-  font-size: 0.92rem;
+  font-size: 1.1rem;
   font-weight: 600;
   margin: 0 0 1rem;
 }
