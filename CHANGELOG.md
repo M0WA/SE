@@ -1,5 +1,28 @@
 # Changelog
 
+## v4.0.29 - 2026-09-15
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Document the release PR's recurring action_required gate by @M0WA in https://github.com/M0WA/SE/pull/27
+* Escape crawled text before highlighting search snippets; add CSP/security headers by @M0WA in https://github.com/M0WA/SE/pull/28
+* Block SSRF to loopback/private/reserved targets from every fetch path by @M0WA in https://github.com/M0WA/SE/pull/29
+* Fix shell-injection via template interpolation in release workflows by @M0WA in https://github.com/M0WA/SE/pull/30
+* Redact scheduled-crawl cookie/basic-auth credentials from admin responses by @M0WA in https://github.com/M0WA/SE/pull/31
+* Rate-limit POST /login to stop unthrottled password guessing by @M0WA in https://github.com/M0WA/SE/pull/32
+* Add an opt-in shared-secret check for crawl-server's internal API by @M0WA in https://github.com/M0WA/SE/pull/33
+* Hash session tokens before storing them in the database by @M0WA in https://github.com/M0WA/SE/pull/35
+* Redact the embedding API key from error bodies before they're persisted by @M0WA in https://github.com/M0WA/SE/pull/37
+* Encrypt the embedding HTTP API key at rest by @M0WA in https://github.com/M0WA/SE/pull/34
+* Quote log-injection-prone values written from request input by @M0WA in https://github.com/M0WA/SE/pull/36
+* Fix "Run now" silently doing nothing for a schedule stuck in_progress by @M0WA in https://github.com/M0WA/SE/pull/38
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.0.28...v4.0.29
+
+
 ## v4.0.28 - 2026-09-15
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
