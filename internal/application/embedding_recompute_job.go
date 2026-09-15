@@ -16,6 +16,44 @@ import (
 // bare IDs rather than full documents up front.
 const EmbeddingRecomputeBatchSize = 50
 
+// EmbeddingRecomputeMinInterval paces this job's Embed calls so it stays
+// within a typical HTTP embeddings provider's rate limit rather than
+// firing every document's call back-to-back as fast as this loop
+// naturally would. This matters even with httpembed.Embedder's own
+// retry-on-429/529 backoff: a rate-limited response returns near-
+// instantly (no real inference work done), so an unthrottled loop can
+// spin through a rate-limit condition far faster than any real embedding
+// call ever would, compounding it instead of self-correcting. IONOS's AI
+// Model Hub -- the motivating case, see
+// docs.ionos.com/cloud/ai/ai-model-hub/how-tos/rate-limits -- documents a
+// 5 requests/second steady-state limit; this stays a little under that
+// (≈4.5/s) rather than riding the exact edge. Applied only around each
+// Embed call, timed from just before it to just after -- a slow real
+// inference call that already took longer than this needs no additional
+// wait, and the (fast, local) UpdateEmbedding write that follows isn't
+// rate-limited by anything external, so it's excluded from the timing.
+//
+// A var, not a const, purely so tests can shrink it and avoid real
+// multi-second waits when a run processes many documents -- production
+// code should never modify it.
+var EmbeddingRecomputeMinInterval = 220 * time.Millisecond
+
+// paceEmbedCall blocks for whatever's left of interval beyond elapsed
+// (already-spent time on the Embed call this paces), or returns early if
+// ctx is cancelled first -- callers don't need to check its return value:
+// an early return here just means the very next Embed call fails fast
+// against the same cancelled context instead.
+func paceEmbedCall(ctx context.Context, elapsed, interval time.Duration) {
+	wait := interval - elapsed
+	if wait <= 0 {
+		return
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(wait):
+	}
+}
+
 // EmbeddingRecomputeResult reports what RunEmbeddingRecomputeJob actually
 // did.
 type EmbeddingRecomputeResult struct {
@@ -62,7 +100,9 @@ func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepositor
 				// being fetched -- nothing to recompute.
 				continue
 			}
+			embedStart := time.Now()
 			vec, err := embedder.Embed(ctx, doc.Text)
+			paceEmbedCall(ctx, time.Since(embedStart), EmbeddingRecomputeMinInterval)
 			if err != nil {
 				log.Printf("recomputing embedding for %s: %v", id, err)
 				result.Failed++

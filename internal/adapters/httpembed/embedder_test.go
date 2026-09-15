@@ -413,6 +413,170 @@ func TestEmbedder_ListModelsBodyReadErrorReturnsError(t *testing.T) {
 	}
 }
 
+// TestEmbedder_RetriesOn429ThenSucceeds proves the core rate-limit
+// retry behavior IONOS's own docs call for (see
+// docs.ionos.com/cloud/ai/ai-model-hub/how-tos/rate-limits): a 429 is
+// retried, not treated as a terminal failure, and a subsequent success is
+// returned to the caller as if it had succeeded on the first try.
+func TestEmbedder_RetriesOn429ThenSucceeds(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":"rate limited"}`))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1, 2, 3}}},
+		})
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 3, RateLimitInitialBackoff: time.Millisecond})
+	vec, err := e.Embed(context.Background(), "x")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(vec) != 3 {
+		t.Errorf("unexpected vector: %v", vec)
+	}
+	if calls != 2 {
+		t.Errorf("expected exactly 2 calls (1 rate-limited, 1 success), got %d", calls)
+	}
+}
+
+// TestEmbedder_RetriesExhaustedReturnsRateLimitError proves Embed gives up
+// after RateLimitMaxRetries and surfaces the underlying 429 error, rather
+// than retrying forever and stalling a caller like
+// application.RunEmbeddingRecomputeJob.
+func TestEmbedder_RetriesExhaustedReturnsRateLimitError(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte("rate limited"))
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 3, RateLimitMaxRetries: 2, RateLimitInitialBackoff: time.Millisecond})
+	_, err := e.Embed(context.Background(), "x")
+	if err == nil {
+		t.Fatal("expected an error once retries are exhausted")
+	}
+	if !containsAll(err.Error(), "429") {
+		t.Errorf("expected the final error to mention the 429 status, got: %v", err)
+	}
+	if calls != 3 { // the initial attempt plus 2 retries
+		t.Errorf("expected exactly 3 calls (1 initial + 2 retries), got %d", calls)
+	}
+}
+
+// TestEmbedder_Retries529HonorsRetryAfter proves a 529's own Retry-After
+// header is honored exactly (per IONOS's "retry only after the indicated
+// delay" guidance), not overridden by the exponential backoff sequence
+// used for 429.
+func TestEmbedder_Retries529HonorsRetryAfter(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(529)
+			_, _ = w.Write([]byte("overloaded"))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1}}},
+		})
+	}))
+	defer srv.Close()
+
+	// A large initial backoff proves the wait actually came from
+	// Retry-After (0s) rather than this exponential schedule -- if the
+	// call took anywhere near this long, the fallback path was used
+	// instead.
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 1, RateLimitInitialBackoff: 5 * time.Second})
+	start := time.Now()
+	if _, err := e.Embed(context.Background(), "x"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	gotWait := time.Since(start)
+	if calls != 2 {
+		t.Fatalf("expected exactly 2 calls, got %d", calls)
+	}
+	if gotWait > time.Second {
+		t.Errorf("expected Retry-After: 0 to be honored (a near-instant retry), took %v", gotWait)
+	}
+}
+
+// TestEmbedder_NonRateLimitStatusIsNeverRetried proves an ordinary
+// non-2xx failure (one retrying could never fix) returns immediately on
+// the first attempt.
+func TestEmbedder_NonRateLimitStatusIsNeverRetried(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 1, RateLimitInitialBackoff: time.Millisecond})
+	if _, err := e.Embed(context.Background(), "x"); err == nil {
+		t.Fatal("expected an error")
+	}
+	if calls != 1 {
+		t.Errorf("expected exactly 1 call for a non-retryable status, got %d", calls)
+	}
+}
+
+// TestEmbedder_RetryAbortsOnContextCancellation proves a long backoff
+// wait doesn't outlive the caller's own context.
+func TestEmbedder_RetryAbortsOnContextCancellation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 1, RateLimitInitialBackoff: time.Hour})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := e.Embed(ctx, "x"); err == nil {
+		t.Fatal("expected an error")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("expected the context's own timeout to cut the backoff short, took %v", elapsed)
+	}
+}
+
+func TestListModels_RetriesOn429ThenSucceeds(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"id": "model-a"}},
+		})
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, RateLimitInitialBackoff: time.Millisecond})
+	ids, err := e.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != "model-a" {
+		t.Errorf("unexpected models: %v", ids)
+	}
+	if calls != 2 {
+		t.Errorf("expected exactly 2 calls, got %d", calls)
+	}
+}
+
 func containsAll(s string, substrs ...string) bool {
 	for _, sub := range substrs {
 		if !strings.Contains(s, sub) {
