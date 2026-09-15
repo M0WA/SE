@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"html"
 	"regexp"
 	"strings"
 )
@@ -11,6 +12,15 @@ import (
 // multi-word phrase is marked as one contiguous span, and individual terms
 // are only highlighted outside any span a phrase already covers, so a
 // phrase's own words never end up double-wrapped in nested <mark> tags.
+//
+// text is untrusted (it's the crawled page's own text), and callers render
+// the result as HTML (to keep the <mark> tags live), so every byte of text
+// that ends up in the returned string is HTML-escaped before any <mark> tag
+// is added around it -- escaping happens first so the only literal "<"/">"
+// bytes in the output are the ones this function writes itself. A search
+// term containing an HTML metacharacter (e.g. "AT&T") may fail to highlight
+// against the now-escaped snippet; that's an acceptable tradeoff for never
+// emitting unescaped crawled content.
 func Snippet(text string, phrases, terms []string, maxLen int) string {
 	lower := strings.ToLower(text)
 	pos := indexOfEarliest(lower, phrases)
@@ -19,9 +29,9 @@ func Snippet(text string, phrases, terms []string, maxLen int) string {
 	}
 	if pos == -1 {
 		if len(text) <= maxLen {
-			return text
+			return html.EscapeString(text)
 		}
-		return text[:maxLen] + "…"
+		return html.EscapeString(text[:maxLen]) + "…"
 	}
 
 	start := pos - 60
@@ -32,7 +42,7 @@ func Snippet(text string, phrases, terms []string, maxLen int) string {
 	if end > len(text) {
 		end = len(text)
 	}
-	snippet := text[start:end]
+	snippet := html.EscapeString(text[start:end])
 
 	for _, p := range phrases {
 		snippet = highlight(snippet, p)

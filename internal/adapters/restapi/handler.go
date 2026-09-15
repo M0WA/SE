@@ -215,6 +215,35 @@ func New(cfg Config) *Handler {
 	}
 }
 
+// securityHeaders lists the response headers applied to every request served
+// by RoutesSearch and RoutesAdmin -- a defense-in-depth backstop alongside
+// output escaping (domain.Snippet, template auto-escaping), not a substitute
+// for it. script-src has no 'unsafe-inline' because every page's JS already
+// lives in an external file loaded via <script src="...">; style-src needs
+// 'unsafe-inline' because several admin pages use inline style="" attributes
+// for one-off layout tweaks, and https://fonts.googleapis.com for the
+// Google Fonts stylesheet link; font-src needs https://fonts.gstatic.com for
+// the font files that stylesheet pulls in.
+var securityHeaders = map[string]string{
+	"Content-Security-Policy": "default-src 'self'; script-src 'self'; " +
+		"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+		"font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; " +
+		"connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+	"X-Content-Type-Options": "nosniff",
+	"X-Frame-Options":        "DENY",
+	"Referrer-Policy":        "same-origin",
+}
+
+func withSecurityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		for k, v := range securityHeaders {
+			h.Set(k, v)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // RoutesSearch serves the public-facing search site only: the index page,
 // its stylesheet, and the search API. No admin, login or crawl endpoints --
 // this is the mux the internet-facing search-server binary listens with.
@@ -223,20 +252,20 @@ func New(cfg Config) *Handler {
 // account this site has for now) -- style.css and healthz stay open so an
 // unauthenticated visitor's redirect to /login still renders styled, and
 // monitoring never needs to sign in.
-func (h *Handler) RoutesSearch() *http.ServeMux {
+func (h *Handler) RoutesSearch() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.requireAuthPage(h.handleIndex))
 	mux.HandleFunc("/style.css", h.handleStyle)
 	mux.HandleFunc("/index.js", h.handleIndexJS)
 	mux.HandleFunc("/search", h.requireAuthAPI(h.handleSearch))
 	mux.HandleFunc("/healthz", h.handleHealthz)
-	return mux
+	return withSecurityHeaders(mux)
 }
 
 // RoutesAdmin serves login/session management plus every /admin and
 // /admin/api/* route -- the mux the admin-server binary listens with,
 // reachable only through a local nginx proxy, never directly.
-func (h *Handler) RoutesAdmin() *http.ServeMux {
+func (h *Handler) RoutesAdmin() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/admin.js", h.handleAdminJS)
 	mux.HandleFunc("/login", h.handleLoginRoute)
@@ -293,7 +322,7 @@ func (h *Handler) RoutesAdmin() *http.ServeMux {
 	mux.HandleFunc("GET /admin/api/pagerank", h.requireAuthAPI(h.handleAdminPageRank))
 	mux.HandleFunc("POST /admin/api/pagerank/recompute", h.requireAuthAPI(h.handleAdminPageRankRecompute))
 	mux.HandleFunc("GET /admin/api/database", h.requireAuthAPI(h.handleAdminDatabase))
-	return mux
+	return withSecurityHeaders(mux)
 }
 
 func (h *Handler) handleLoginRoute(w http.ResponseWriter, r *http.Request) {

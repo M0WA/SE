@@ -717,3 +717,37 @@ func TestHandleAdminCancelCrawlJob_NotConfigured(t *testing.T) {
 		t.Errorf("expected 503, got %d", rec.Code)
 	}
 }
+
+func TestRoutesSearch_SetsSecurityHeaders(t *testing.T) {
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+
+	for header, want := range map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":        "DENY",
+		"Referrer-Policy":        "same-origin",
+	} {
+		if got := rec.Header().Get(header); got != want {
+			t.Errorf("%s: expected %q, got %q", header, want, got)
+		}
+	}
+	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'self'") {
+		t.Errorf("expected a default-src 'self' CSP, got %q", csp)
+	}
+}
+
+func TestRoutesAdmin_SetsSecurityHeaders(t *testing.T) {
+	h, _ := authedHandler(t, &fakeSearch{}, nil)
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'self'") {
+		t.Errorf("expected a default-src 'self' CSP, got %q", csp)
+	}
+	if got := rec.Header().Get("X-Frame-Options"); got != "DENY" {
+		t.Errorf("X-Frame-Options: expected DENY, got %q", got)
+	}
+}
