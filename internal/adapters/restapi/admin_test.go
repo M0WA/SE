@@ -6,8 +6,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -1612,6 +1614,74 @@ func (r *erroringOnFirstDeleteRepo) DeleteDocument(ctx context.Context, id strin
 		return errors.New("boom")
 	}
 	return nil
+}
+
+// syncBuffer is a bytes.Buffer safe for one goroutine to write to (via
+// log.SetOutput) while another concurrently reads -- a plain bytes.Buffer
+// isn't safe for that, and the log line under test here is written by a
+// background goroutine the test itself doesn't otherwise synchronize with.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (b *syncBuffer) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Len()
+}
+
+// TestHandleAdminDeleteDomainDocuments_LogsQuoteTheDomainParam proves the
+// ?domain= value written to the log on a delete failure is quoted/escaped
+// (%q), not written out raw (%s) -- otherwise an embedded CR/LF would let
+// a caller forge what looks like a separate, fake log line.
+func TestHandleAdminDeleteDomainDocuments_LogsQuoteTheDomainParam(t *testing.T) {
+	repo := &erroringOnFirstDeleteRepo{
+		fakeAdminRepo: &fakeAdminRepo{docs: []domain.IndexedDocument{{ID: "doc-1"}}},
+	}
+	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
+
+	logBuf := &syncBuffer{}
+	origOutput := log.Writer()
+	origFlags := log.Flags()
+	log.SetOutput(logBuf)
+	log.SetFlags(0)
+	defer func() { log.SetOutput(origOutput); log.SetFlags(origFlags) }()
+
+	maliciousDomain := "evil.example\n2026-09-15T00:00:00 FAKE-ADMIN-LOGIN user=root"
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/documents?"+url.Values{"domain": {maliciousDomain}}.Encode(), nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	waitForDeletedCount(t, repo.fakeAdminRepo, 1)
+
+	// The background goroutine logs asynchronously -- poll briefly for it.
+	deadline := time.Now().Add(time.Second)
+	for logBuf.Len() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	logged := logBuf.String()
+	if strings.Contains(logged, "\nFAKE-ADMIN-LOGIN") || strings.Contains(logged, "\n2026-09-15T00:00:00") {
+		t.Errorf("expected the embedded newline to be escaped, not written raw, got: %q", logged)
+	}
+	if !strings.Contains(logged, `\n2026-09-15T00:00:00 FAKE-ADMIN-LOGIN`) {
+		t.Errorf("expected the log line to contain the quoted/escaped domain value, got: %q", logged)
+	}
 }
 
 func TestHandleAdminDeleteDomainDocuments_EmptyDomain(t *testing.T) {

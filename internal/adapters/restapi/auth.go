@@ -284,7 +284,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if !h.checkCredentials(req.Username, req.Password) {
 		h.loginLimiter.recordFailure(ip, now)
-		log.Printf("failed login attempt for user %q from %s", req.Username, ip)
+		log.Printf("failed login attempt for user %q from %q", req.Username, ip)
 		http.Error(w, "incorrect username or password", http.StatusUnauthorized)
 		return
 	}

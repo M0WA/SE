@@ -288,7 +288,12 @@ func (h *Handler) handleAdminDeleteDomainDocuments(w http.ResponseWriter, r *htt
 		ctx := context.Background()
 		for _, id := range ids {
 			if err := h.admin.DeleteDocument(ctx, id); err != nil {
-				log.Printf("bulk-deleting domain %s: deleting %s: %v", domainName, id, err)
+				// %q, not %s: domainName is straight from the ?domain=
+				// query parameter, so an embedded CR/LF (or any other
+				// control character) would otherwise let a caller forge
+				// what looks like a separate, fake log line -- %q quotes
+				// and escapes it instead of writing it out raw.
+				log.Printf("bulk-deleting domain %q: deleting %q: %v", domainName, id, err)
 			}
 		}
 	}()
