@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.0.32 - 2026-09-15
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Recreate the pgvector column when the embedding dimension changes by @M0WA in https://github.com/M0WA/SE/pull/47
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.0.31...v4.0.32
+
+
 ## v4.0.31 - 2026-09-15
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
