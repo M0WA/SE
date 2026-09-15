@@ -109,8 +109,13 @@ gh pr merge --squash   # or --merge/--rebase; any of the three is allowed
 2. Once its CI run (the same "Build, vet & test" job as always — a real,
    if usually uneventful, check that nothing about `main` is broken right
    before cutting a release from it) goes green, merge it.
-3. Merging triggers `tag-release.yml`, which tags the merge commit as
-   `vX.Y.Z` and dispatches `release.yml` for that tag (a direct tag push
+3. Merging triggers `tag-release.yml`, which first *waits for the merge
+   commit's own "Build, vet & test" run on `main`* to finish (a squash/
+   merge/rebase produces a new commit with its own separate push-triggered
+   CI run — distinct from whatever ran on the PR branch pre-merge, and not
+   necessarily even started yet the instant the merge lands) and aborts,
+   untagged, if that doesn't pass. Only then does it tag the merge commit
+   as `vX.Y.Z` and dispatch `release.yml` for that tag (a direct tag push
    from `tag-release.yml`'s own `GITHUB_TOKEN` deliberately would *not*
    trigger `release.yml`'s push trigger — see the comments on both
    workflows for why `workflow_dispatch` is used instead). `release.yml`

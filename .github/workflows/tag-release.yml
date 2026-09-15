@@ -33,6 +33,37 @@ jobs:
           branch="${{ github.event.pull_request.head.ref }}"
           echo "tag=${branch#release/}" >> "$GITHUB_OUTPUT"
 
+      # A squash/merge/rebase merge creates a brand new commit on main --
+      # its own "Build, vet & test" push-triggered run (ci.yml) is a
+      # separate check from whatever ran on the PR branch before merging,
+      # and hasn't necessarily even started yet the instant this job's
+      # pull_request:closed trigger fires. Without waiting for it here, a
+      # release could be tagged, built and published (and, downstream,
+      # deployed) off a merge commit whose own CI hadn't finished --
+      # or had failed -- despite the PR itself having looked green.
+      - name: Wait for the merge commit's own CI on main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sha="${{ github.event.pull_request.merge_commit_sha }}"
+          for i in $(seq 1 60); do
+            result=$(gh api "repos/${{ github.repository }}/commits/$sha/check-runs" \
+              --jq '[.check_runs[] | select(.name == "Build, vet & test")][0] | "\(.status) \(.conclusion)"' 2>/dev/null || echo "missing missing")
+            status="${result%% *}"
+            conclusion="${result#* }"
+            if [ "$status" = "completed" ]; then
+              if [ "$conclusion" != "success" ]; then
+                echo "main's own CI on the merge commit ($sha) did not pass: $conclusion" >&2
+                exit 1
+              fi
+              echo "main's own CI on the merge commit ($sha) passed"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "timed out waiting for main's own CI on the merge commit ($sha)" >&2
+          exit 1
+
       - name: Tag the merge commit
         run: |
           git config user.name "github-actions[bot]"
