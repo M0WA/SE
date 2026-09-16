@@ -81,6 +81,7 @@ func main() {
 		Admin:                 repo,
 		PageRank:              repo,
 		EmbeddingRepo:         repo,
+		ContentDedupRepo:      repo,
 		Embedders:             embedders,
 		EmbedderRateLimits:    bootstrap.EmbedderRateLimits(endpoints),
 		Settings:              settings,

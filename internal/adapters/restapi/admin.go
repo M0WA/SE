@@ -638,6 +638,14 @@ type operationalValues struct {
 	// OperationalSettingsValues field -- see there for the full doc
 	// comment.
 	URLAliasWWWEnabled bool `json:"url_alias_www_enabled"`
+	// ContentDedupEnabled/ContentDedupMethod/ContentDedupSimHashMaxDistance/
+	// ContentDedupIntervalMinutes mirror the same-named domain.
+	// OperationalSettingsValues fields -- see there for the full doc
+	// comments.
+	ContentDedupEnabled            bool   `json:"content_dedup_enabled"`
+	ContentDedupMethod             string `json:"content_dedup_method"`
+	ContentDedupSimHashMaxDistance int    `json:"content_dedup_simhash_max_distance"`
+	ContentDedupIntervalMinutes    int    `json:"content_dedup_interval_minutes"`
 }
 
 func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
@@ -667,6 +675,10 @@ func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 		EmbeddingSearchWeights:           v.EmbeddingSearchWeights,
 		EmbeddingTitleWeight:             v.EmbeddingTitleWeight,
 		URLAliasWWWEnabled:               v.URLAliasWWWEnabled,
+		ContentDedupEnabled:              v.ContentDedupEnabled,
+		ContentDedupMethod:               v.ContentDedupMethod,
+		ContentDedupSimHashMaxDistance:   v.ContentDedupSimHashMaxDistance,
+		ContentDedupIntervalMinutes:      v.ContentDedupIntervalMinutes,
 	}
 }
 
@@ -697,6 +709,10 @@ func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 		EmbeddingSearchWeights:           o.EmbeddingSearchWeights,
 		EmbeddingTitleWeight:             o.EmbeddingTitleWeight,
 		URLAliasWWWEnabled:               o.URLAliasWWWEnabled,
+		ContentDedupEnabled:              o.ContentDedupEnabled,
+		ContentDedupMethod:               o.ContentDedupMethod,
+		ContentDedupSimHashMaxDistance:   o.ContentDedupSimHashMaxDistance,
+		ContentDedupIntervalMinutes:      o.ContentDedupIntervalMinutes,
 	}
 }
 
@@ -1762,6 +1778,106 @@ func (h *Handler) handleAdminEmbeddingsRecomputeStart(w http.ResponseWriter, r *
 		}
 	}()
 	writeJSON(w, http.StatusAccepted, map[string]bool{"started": true})
+}
+
+type adminContentDedupStatusResponse struct {
+	InProgress bool `json:"in_progress"`
+	// LastRunAt/GroupsFound/DocumentsMerged/DurationMs reflect
+	// domain.ContentDedupStatus, persisted by any process that ran a
+	// recompute (the periodic ticker in cmd/crawl, a post-crawl trigger, or
+	// this page's own "recompute now" button) -- so this shows the real
+	// cross-process state, not just whatever this one browser tab remembers
+	// triggering.
+	LastRunAt       *time.Time `json:"last_run_at,omitempty"`
+	GroupsFound     int        `json:"groups_found"`
+	DocumentsMerged int        `json:"documents_merged"`
+	DurationMs      int64      `json:"duration_ms"`
+}
+
+func (h *Handler) handleAdminContentDedupStatus(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.contentDedupRepo != nil, "content dedup") {
+		return
+	}
+	resp := adminContentDedupStatusResponse{}
+	status := application.LoadContentDedupStatus(r.Context(), h.settingsStore)
+	resp.InProgress = status.InProgress
+	if !status.LastRunAt.IsZero() {
+		lastRunAt := status.LastRunAt
+		resp.LastRunAt = &lastRunAt
+		resp.GroupsFound = status.GroupsFound
+		resp.DocumentsMerged = status.DocumentsMerged
+		resp.DurationMs = status.DurationMs
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleAdminContentDedupRecomputeStart kicks off a full-corpus content
+// dedup pass in the background and returns immediately -- mirrors
+// handleAdminEmbeddingsRecomputeStart's fire-and-forget shape (not
+// PageRank's synchronous one): a corpus-wide fingerprint scan plus, for the
+// simhash method, banding/pairwise comparisons, can take real time on a
+// large corpus. Rejects a second trigger while one is already running
+// (409): a concurrent second pass would just re-scan the same
+// not-yet-merged documents the first one is already working through, for
+// no benefit and real DB contention (each merge is its own transaction).
+func (h *Handler) handleAdminContentDedupRecomputeStart(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.contentDedupRepo != nil, "content dedup") {
+		return
+	}
+	if application.LoadContentDedupStatus(r.Context(), h.settingsStore).InProgress {
+		http.Error(w, "a content dedup recompute is already in progress", http.StatusConflict)
+		return
+	}
+	v := h.opSettings.Get()
+	go func() {
+		ctx := context.Background()
+		if _, err := application.RunContentDedupJobWithStatus(ctx, h.contentDedupRepo, h.settingsStore, v.ContentDedupMethod, v.ContentDedupSimHashMaxDistance); err != nil {
+			log.Printf("recomputing content dedup: %v", err)
+		}
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]bool{"started": true})
+}
+
+// defaultAliasGroupsPageSize is the content-dedup alias-groups page's
+// default items-per-page -- same conventions as defaultVocabularyPageSize.
+const defaultAliasGroupsPageSize = 20
+
+type adminDocumentAliasGroup struct {
+	CanonicalID  string   `json:"canonical_id"`
+	CanonicalURL string   `json:"canonical_url"`
+	AliasURLs    []string `json:"alias_urls"`
+}
+
+type adminAliasGroupsResponse struct {
+	Total  int                       `json:"total"`
+	Groups []adminDocumentAliasGroup `json:"groups"`
+}
+
+// handleAdminContentDedupAliasGroups lists every canonical document that
+// has at least one alias URL merged/folded into it -- the "what actually
+// got merged" transparency listing a black-box merge count can't provide,
+// letting an admin verify a dedup pass did what they expect before trusting
+// it further.
+func (h *Handler) handleAdminContentDedupAliasGroups(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "content dedup") {
+		return
+	}
+	limit := intQueryParam(r, "limit", defaultAliasGroupsPageSize, true)
+	offset := intQueryParam(r, "offset", 0, false)
+	groups, total, err := h.admin.ListDocumentAliasGroups(r.Context(), limit, offset)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := make([]adminDocumentAliasGroup, len(groups))
+	for i, g := range groups {
+		out[i] = adminDocumentAliasGroup{CanonicalID: g.CanonicalID, CanonicalURL: g.CanonicalURL, AliasURLs: g.AliasURLs}
+	}
+	writeJSON(w, http.StatusOK, adminAliasGroupsResponse{Total: total, Groups: out})
+}
+
+func (h *Handler) handleAdminContentDedupPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminContentDedupHTML)
 }
 
 func (h *Handler) handleAdminDatabasePage(w http.ResponseWriter, r *http.Request) {

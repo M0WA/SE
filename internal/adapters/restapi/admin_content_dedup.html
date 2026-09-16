@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — content dedup</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<main>
+  <div class="page-header">
+    <a class="mark" href="/">se.</a>
+    <button id="sign-out" class="text-button" type="button">Sign out</button>
+  </div>
+  <nav class="admin-nav">
+    <a href="/admin">Overview</a>
+    <a href="/admin/documents">Documents</a>
+    <a href="/admin/crawl">Schedule</a>
+    <a href="/admin/jobs">Jobs</a>
+    <a href="/admin/settings">Settings</a>
+    <a href="/admin/search">Search</a>
+    <a href="/admin/pagerank">PageRank</a>
+    <a href="/admin/embeddings">Embeddings</a>
+    <a href="/admin/content_dedup" aria-current="page">Content dedup</a>
+    <a href="/admin/database">Database</a>
+  </nav>
+
+  <p class="lede" style="margin: 0 0 1.5rem;">Finds documents that are byte-identical or near-identical to another already-indexed document (a mirror, a copy under a different host, ...) and merges each group into one canonical document, so a search never lists the same content twice. Turned on and tuned (matching method, near-duplicate threshold, recompute interval) on <a href="/admin/settings">Settings</a>; off by default, since a merge deletes the losing documents' own rows.</p>
+
+  <section class="panel">
+    <h2>Recompute</h2>
+    <p class="tuning-hint">Runs immediately in the background in addition to cmd/crawl's own periodic ticker and post-crawl trigger -- useful right after enabling content dedup for the first time, or after changing its matching method/threshold on Settings, so the existing corpus doesn't wait for the next scheduled pass.</p>
+    <div id="dedup-recompute-summary"></div>
+    <button id="dedup-recompute-btn" type="button">Recompute now</button>
+    <div id="dedup-recompute-status" class="panel-status"></div>
+    <div id="dedup-recompute-result"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Merged documents</h2>
+    <p class="tuning-hint">Every canonical document that has at least one alias URL folded into it (a <code>rel=canonical</code> tag, a www fold, or a content-dedup merge) -- so a merge's effect is always visible, not a black-box count.</p>
+    <div id="dedup-groups-summary"></div>
+    <div id="dedup-groups-table"></div>
+    <div id="dedup-groups-pager" class="pager" hidden>
+      <button id="dedup-groups-prev" type="button">Previous</button>
+      <span id="dedup-groups-page-info"></span>
+      <button id="dedup-groups-next" type="button">Next</button>
+    </div>
+  </section>
+</main>
+<script src="/admin.js"></script>
+<script src="/admin_content_dedup.js"></script>
+</body>
+</html>

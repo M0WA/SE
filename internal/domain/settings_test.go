@@ -222,6 +222,9 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 		EmbeddingSearchWeights:           map[string]float64{domain.EmbeddingProviderHash: 1},
 		EmbeddingTitleWeight:             0.3,
 		URLAliasWWWEnabled:               true,
+		ContentDedupMethod:               domain.ContentDedupMethodExact,
+		ContentDedupSimHashMaxDistance:   3,
+		ContentDedupIntervalMinutes:      120,
 	}
 	if !reflect.DeepEqual(v, want) {
 		t.Errorf("expected defaults %+v, got %+v", want, v)
@@ -349,6 +352,77 @@ func TestOperationalSettings_SetValidLinkScopePreserved(t *testing.T) {
 	s.Set(domain.OperationalSettingsValues{LinkScope: domain.LinkScopeAny})
 	if v := s.Get(); v.LinkScope != domain.LinkScopeAny {
 		t.Errorf("expected LinkScope=any to be preserved, got %q", v.LinkScope)
+	}
+}
+
+func TestOperationalSettings_SetBlankContentDedupMethodFallsBackToExact(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{ContentDedupMethod: ""})
+	if v := s.Get(); v.ContentDedupMethod != domain.ContentDedupMethodExact {
+		t.Errorf("expected a blank ContentDedupMethod to fall back to exact, got %q", v.ContentDedupMethod)
+	}
+}
+
+func TestOperationalSettings_SetInvalidContentDedupMethodFallsBackToExact(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{ContentDedupMethod: "fuzzy-hash"})
+	if v := s.Get(); v.ContentDedupMethod != domain.ContentDedupMethodExact {
+		t.Errorf("expected an unrecognized ContentDedupMethod to fall back to exact, got %q", v.ContentDedupMethod)
+	}
+}
+
+func TestOperationalSettings_SetSimHashContentDedupMethodPreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{ContentDedupMethod: domain.ContentDedupMethodSimHash})
+	if v := s.Get(); v.ContentDedupMethod != domain.ContentDedupMethodSimHash {
+		t.Errorf("expected ContentDedupMethod=simhash to be preserved, got %q", v.ContentDedupMethod)
+	}
+}
+
+func TestOperationalSettings_SetZeroContentDedupSimHashMaxDistanceFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{ContentDedupSimHashMaxDistance: 0})
+	if v := s.Get(); v.ContentDedupSimHashMaxDistance != 3 {
+		t.Errorf("expected a zero ContentDedupSimHashMaxDistance to fall back to the default 3, got %d", v.ContentDedupSimHashMaxDistance)
+	}
+}
+
+func TestOperationalSettings_SetContentDedupSimHashMaxDistanceClampedToRange(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{ContentDedupSimHashMaxDistance: 99})
+	if v := s.Get(); v.ContentDedupSimHashMaxDistance != 10 {
+		t.Errorf("expected ContentDedupSimHashMaxDistance clamped to 10, got %d", v.ContentDedupSimHashMaxDistance)
+	}
+}
+
+func TestOperationalSettings_SetZeroContentDedupIntervalMinutesFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{ContentDedupIntervalMinutes: 0})
+	if v := s.Get(); v.ContentDedupIntervalMinutes != 120 {
+		t.Errorf("expected a zero ContentDedupIntervalMinutes to fall back to the default 120, got %d", v.ContentDedupIntervalMinutes)
+	}
+}
+
+func TestOperationalSettings_SetContentDedupIntervalMinutesBelowFloorClampedUp(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{ContentDedupIntervalMinutes: 1})
+	if v := s.Get(); v.ContentDedupIntervalMinutes != 15 {
+		t.Errorf("expected ContentDedupIntervalMinutes clamped up to the 15-minute floor, got %d", v.ContentDedupIntervalMinutes)
+	}
+}
+
+// TestOperationalSettings_SetContentDedupEnabledPassedThroughUnvalidated
+// proves ContentDedupEnabled (unlike every clamped field above) is simply
+// passed through -- false is both the zero value and a legitimate,
+// deliberate "don't merge anything" choice, not something to self-heal.
+func TestOperationalSettings_SetContentDedupEnabledPassedThroughUnvalidated(t *testing.T) {
+	s := domain.NewOperationalSettings(domain.OperationalSettingsValues{ContentDedupEnabled: true})
+	if v := s.Get(); !v.ContentDedupEnabled {
+		t.Error("expected ContentDedupEnabled=true to be preserved")
+	}
+	s.Set(domain.OperationalSettingsValues{ContentDedupEnabled: false})
+	if v := s.Get(); v.ContentDedupEnabled {
+		t.Error("expected ContentDedupEnabled=false to be preserved, not defaulted back to true")
 	}
 }
 

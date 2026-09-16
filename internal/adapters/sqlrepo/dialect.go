@@ -36,9 +36,9 @@ func (sqliteDialect) UpsertSettingSQL() string {
 	        ON CONFLICT(setting_key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`
 }
 func (sqliteDialect) UpsertDocumentAliasSQL() string {
-	return `INSERT INTO document_aliases (alias_url, canonical_id, reason, created_at) VALUES (?, ?, ?, ?)
+	return `INSERT INTO document_aliases (alias_url, canonical_id, reason, created_at, host) VALUES (?, ?, ?, ?, ?)
 	        ON CONFLICT(alias_url) DO UPDATE SET
-	          canonical_id=excluded.canonical_id, reason=excluded.reason, created_at=excluded.created_at`
+	          canonical_id=excluded.canonical_id, reason=excluded.reason, created_at=excluded.created_at, host=excluded.host`
 }
 func (sqliteDialect) CreateSchemaSQL() []string {
 	return []string{
@@ -58,7 +58,7 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 		`CREATE INDEX IF NOT EXISTS idx_postings_term ON postings(term)`,
 		`CREATE TABLE IF NOT EXISTS document_aliases (
 			alias_url TEXT PRIMARY KEY, canonical_id TEXT NOT NULL,
-			reason TEXT NOT NULL, created_at TEXT NOT NULL
+			reason TEXT NOT NULL, created_at TEXT NOT NULL, host TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_document_aliases_canonical_id ON document_aliases(canonical_id)`,
 		`CREATE TABLE IF NOT EXISTS document_versions (
@@ -146,8 +146,8 @@ func (mysqlDialect) UpsertSettingSQL() string {
 	        ON DUPLICATE KEY UPDATE value=VALUES(value), updated_at=VALUES(updated_at)`
 }
 func (mysqlDialect) UpsertDocumentAliasSQL() string {
-	return `INSERT INTO document_aliases (alias_url, canonical_id, reason, created_at) VALUES (?, ?, ?, ?)
-	        ON DUPLICATE KEY UPDATE canonical_id=VALUES(canonical_id), reason=VALUES(reason), created_at=VALUES(created_at)`
+	return `INSERT INTO document_aliases (alias_url, canonical_id, reason, created_at, host) VALUES (?, ?, ?, ?, ?)
+	        ON DUPLICATE KEY UPDATE canonical_id=VALUES(canonical_id), reason=VALUES(reason), created_at=VALUES(created_at), host=VALUES(host)`
 }
 func (mysqlDialect) CreateSchemaSQL() []string {
 	return []string{
@@ -168,7 +168,7 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 		`CREATE INDEX idx_postings_term ON postings(term)`,
 		`CREATE TABLE IF NOT EXISTS document_aliases (
 			alias_url VARCHAR(767) PRIMARY KEY, canonical_id VARCHAR(64) NOT NULL,
-			reason VARCHAR(32) NOT NULL, created_at VARCHAR(64) NOT NULL
+			reason VARCHAR(32) NOT NULL, created_at VARCHAR(64) NOT NULL, host VARCHAR(255) NOT NULL DEFAULT ''
 		) ENGINE=InnoDB`,
 		`CREATE INDEX idx_document_aliases_canonical_id ON document_aliases(canonical_id)`,
 		`CREATE TABLE IF NOT EXISTS document_versions (
@@ -259,9 +259,9 @@ func (postgresDialect) UpsertSettingSQL() string {
 	        ON CONFLICT (setting_key) DO UPDATE SET value=EXCLUDED.value, updated_at=EXCLUDED.updated_at`
 }
 func (postgresDialect) UpsertDocumentAliasSQL() string {
-	return `INSERT INTO document_aliases (alias_url, canonical_id, reason, created_at) VALUES ($1, $2, $3, $4)
+	return `INSERT INTO document_aliases (alias_url, canonical_id, reason, created_at, host) VALUES ($1, $2, $3, $4, $5)
 	        ON CONFLICT (alias_url) DO UPDATE SET
-	          canonical_id=EXCLUDED.canonical_id, reason=EXCLUDED.reason, created_at=EXCLUDED.created_at`
+	          canonical_id=EXCLUDED.canonical_id, reason=EXCLUDED.reason, created_at=EXCLUDED.created_at, host=EXCLUDED.host`
 }
 func (postgresDialect) CreateSchemaSQL() []string {
 	return []string{
@@ -281,7 +281,7 @@ func (postgresDialect) CreateSchemaSQL() []string {
 		`CREATE INDEX IF NOT EXISTS idx_postings_term ON postings(term)`,
 		`CREATE TABLE IF NOT EXISTS document_aliases (
 			alias_url TEXT PRIMARY KEY, canonical_id TEXT NOT NULL,
-			reason TEXT NOT NULL, created_at TEXT NOT NULL
+			reason TEXT NOT NULL, created_at TEXT NOT NULL, host TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_document_aliases_canonical_id ON document_aliases(canonical_id)`,
 		`CREATE TABLE IF NOT EXISTS document_versions (

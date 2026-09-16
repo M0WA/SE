@@ -63,6 +63,15 @@ type fakeSQLRepo struct {
 	// BM25/semantic candidate set, which -- pre-fix -- could silently miss a
 	// site: match that wasn't a strong BM25/semantic hit).
 	documentIDsByHostCalls int
+	// resolveAliasHostsResult maps a requested site host to the actual host
+	// of its canonical document, standing in for a document_aliases join --
+	// a host absent here simply resolves to nothing, mirroring a host with
+	// no matching alias row. resolveAliasHostsArgs records each call's hosts
+	// argument, so a test can assert both parsed.Sites and
+	// parsed.ExcludedSites were actually resolved.
+	resolveAliasHostsResult map[string]string
+	resolveAliasHostsCalls  int
+	resolveAliasHostsArgs   [][]string
 	// hostsIndexedResult backs HostsIndexed's return value; hostsIndexedErr
 	// lets a test drive its error path; hostsIndexedCalls counts how many
 	// times it was actually called (and, cumulatively, with how many hosts)
@@ -264,6 +273,21 @@ func (r *fakeSQLRepo) DocumentIDsByHost(_ context.Context, hosts []string) ([]st
 		}
 	}
 	return ids, nil
+}
+
+// ResolveAliasHosts mimics the real repository's document_aliases join:
+// each requested host resolves to its configured canonical host (or nothing,
+// if resolveAliasHostsResult has no entry for it).
+func (r *fakeSQLRepo) ResolveAliasHosts(_ context.Context, hosts []string) ([]string, error) {
+	r.resolveAliasHostsCalls++
+	r.resolveAliasHostsArgs = append(r.resolveAliasHostsArgs, hosts)
+	var out []string
+	for _, h := range hosts {
+		if canon, ok := r.resolveAliasHostsResult[h]; ok {
+			out = append(out, canon)
+		}
+	}
+	return out, nil
 }
 
 // HostsIndexed mimics the real repository's exact-or-subdomain host match
@@ -792,6 +816,68 @@ func TestHybridSearch_SiteFilterFindsMatchOutsideBoundedCandidatePool(t *testing
 	}
 	if len(results) != 1 || results[0].DocID != "site-match" {
 		t.Errorf("expected only doc site-match (site:example.com), got %+v", results)
+	}
+}
+
+// TestHybridSearch_SiteFilterMatchesAliasedHost guards against a real
+// regression: after a content-dedup merge (or a www fold), a document's own
+// host can differ entirely from an alias host a user still types in a site:
+// filter. domain.ParsedQuery.SiteAllowed compares the candidate's own host,
+// so without resolving site: through document_aliases first, this document
+// would be silently dropped even though it's an exact BM25 hit.
+func TestHybridSearch_SiteFilterMatchesAliasedHost(t *testing.T) {
+	repo := &fakeSQLRepo{
+		postings: map[string][]domain.PostingStats{
+			"widgets": {{DocID: "site-match", TermFreq: 1, DocLength: 10, DocFreq: 1, TotalDocs: 1, AvgDocLen: 10}},
+		},
+		embeddings: map[string][]float32{"site-match": {1, 0}},
+		docs: map[string]domain.Document{
+			"site-match": {ID: "site-match", URL: "https://canonical.example/about", Title: "Widgets", Text: "Widgets galore"},
+		},
+		resolveAliasHostsResult: map[string]string{"old.example": "canonical.example"},
+	}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
+
+	results, err := svc.Search(context.Background(), "widgets site:old.example", ports.SearchQuery{TopK: 10})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.resolveAliasHostsCalls != 1 {
+		t.Errorf("expected exactly one ResolveAliasHosts call, got %d", repo.resolveAliasHostsCalls)
+	}
+	if len(results) != 1 || results[0].DocID != "site-match" {
+		t.Errorf("expected doc site-match (old.example aliases to its real host canonical.example), got %+v", results)
+	}
+}
+
+// TestHybridSearch_ExcludedSiteFilterExcludesAliasedHost is the -site:
+// counterpart of TestHybridSearch_SiteFilterMatchesAliasedHost: a document
+// whose real host is only reachable from the excluded value via an alias
+// must still be excluded.
+func TestHybridSearch_ExcludedSiteFilterExcludesAliasedHost(t *testing.T) {
+	repo := &fakeSQLRepo{
+		postings: map[string][]domain.PostingStats{
+			"widgets": {{DocID: "site-match", TermFreq: 1, DocLength: 10, DocFreq: 1, TotalDocs: 1, AvgDocLen: 10}},
+		},
+		embeddings: map[string][]float32{"site-match": {1, 0}},
+		docs: map[string]domain.Document{
+			"site-match": {ID: "site-match", URL: "https://canonical.example/about", Title: "Widgets", Text: "Widgets galore"},
+		},
+		resolveAliasHostsResult: map[string]string{"old.example": "canonical.example"},
+	}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
+
+	results, err := svc.Search(context.Background(), "widgets -site:old.example", ports.SearchQuery{TopK: 10})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.resolveAliasHostsCalls != 1 {
+		t.Errorf("expected exactly one ResolveAliasHosts call, got %d", repo.resolveAliasHostsCalls)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected doc site-match to be excluded (old.example aliases to its real host canonical.example), got %+v", results)
 	}
 }
 

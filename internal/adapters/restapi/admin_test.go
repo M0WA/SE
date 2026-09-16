@@ -74,6 +74,12 @@ type fakeAdminRepo struct {
 	pageRankTotalDocs      int
 	pageRankHistErr        error
 
+	aliasGroups      []domain.DocumentAliasGroup
+	aliasGroupsTotal int
+	aliasGroupsErr   error
+	gotAliasLimit    int
+	gotAliasOffset   int
+
 	// mu guards deletedIDs, written from handleAdminDeleteDomainDocuments'
 	// own background goroutine and read back from a test's polling
 	// goroutine -- unlike deletedID above (only ever touched synchronously
@@ -167,6 +173,15 @@ func (f *fakeAdminRepo) PageRankHistogram(context.Context) ([]domain.PageRankBuc
 		return nil, 0, 0, f.pageRankHistErr
 	}
 	return f.pageRankBuckets, f.pageRankOrphanCount, f.pageRankTotalDocs, f.err
+}
+
+func (f *fakeAdminRepo) ListDocumentAliasGroups(_ context.Context, limit, offset int) ([]domain.DocumentAliasGroup, int, error) {
+	f.gotAliasLimit = limit
+	f.gotAliasOffset = offset
+	if f.aliasGroupsErr != nil {
+		return nil, 0, f.aliasGroupsErr
+	}
+	return f.aliasGroups, f.aliasGroupsTotal, nil
 }
 
 type fakeDebugSearch struct {
@@ -2492,6 +2507,65 @@ func TestHandleAdminSettings_URLAliasWWWEnabledFieldRoundTrips(t *testing.T) {
 	}
 }
 
+// TestHandleAdminSettings_ContentDedupFieldsRoundTrip proves the 4
+// content-dedup operational fields round-trip through GET/POST like every
+// other operational field, and that content_dedup_enabled=false is actually
+// applied (not just left at Set's own default, since false is this field's
+// zero value too).
+func TestHandleAdminSettings_ContentDedupFieldsRoundTrip(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
+		ContentDedupEnabled: true, ContentDedupMethod: domain.ContentDedupMethodSimHash,
+		ContentDedupSimHashMaxDistance: 5, ContentDedupIntervalMinutes: 180,
+	})
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", getRec.Code)
+	}
+	var getResp struct {
+		Operational struct {
+			ContentDedupEnabled            bool   `json:"content_dedup_enabled"`
+			ContentDedupMethod             string `json:"content_dedup_method"`
+			ContentDedupSimHashMaxDistance int    `json:"content_dedup_simhash_max_distance"`
+			ContentDedupIntervalMinutes    int    `json:"content_dedup_interval_minutes"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decoding GET response: %v", err)
+	}
+	if !getResp.Operational.ContentDedupEnabled || getResp.Operational.ContentDedupMethod != domain.ContentDedupMethodSimHash ||
+		getResp.Operational.ContentDedupSimHashMaxDistance != 5 || getResp.Operational.ContentDedupIntervalMinutes != 180 {
+		t.Errorf("expected GET to report the configured content-dedup fields, got %+v", getResp.Operational)
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
+			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
+			"content_dedup_enabled": false, "content_dedup_method": "exact",
+			"content_dedup_simhash_max_distance": 4, "content_dedup_interval_minutes": 90,
+		},
+	})
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	postReq.AddCookie(cookie)
+	postRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
+	}
+	ov := opSettings.Get()
+	if ov.ContentDedupEnabled || ov.ContentDedupMethod != domain.ContentDedupMethodExact ||
+		ov.ContentDedupSimHashMaxDistance != 4 || ov.ContentDedupIntervalMinutes != 90 {
+		t.Errorf("expected the posted content-dedup fields to be applied, got %+v", ov)
+	}
+}
+
 // TestHandleAdminSettings_EmbeddingHashEnabledFieldRoundTrips proves
 // EmbeddingHashEnabled round-trips through GET/POST like every other
 // operational field, and that Set no longer forces it back to true (that
@@ -4531,5 +4605,298 @@ func TestHandleAdminEmbeddingsRecompute_PersistsStatusForGetToRead(t *testing.T)
 	}
 	if resp.Documents != 1 || resp.Failed != 0 {
 		t.Errorf("expected documents=1, failed=0, got %+v", resp)
+	}
+}
+
+// fakeContentDedupRepo backs the content-dedup admin handler tests --
+// AllDocumentFingerprints/MergeDocuments are the two ports.
+// ContentDedupRepository methods application.RunContentDedupJob calls.
+type fakeContentDedupRepo struct {
+	fingerprints    []domain.DocumentFingerprint
+	fingerprintsErr error
+	mergeErr        error
+
+	mu     sync.Mutex
+	merges []struct {
+		canonicalID string
+		loserIDs    []string
+		reason      string
+	}
+}
+
+func (r *fakeContentDedupRepo) AllDocumentFingerprints(context.Context) ([]domain.DocumentFingerprint, error) {
+	if r.fingerprintsErr != nil {
+		return nil, r.fingerprintsErr
+	}
+	return r.fingerprints, nil
+}
+
+func (r *fakeContentDedupRepo) MergeDocuments(_ context.Context, canonicalID string, loserIDs []string, reason string) error {
+	if r.mergeErr != nil {
+		return r.mergeErr
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.merges = append(r.merges, struct {
+		canonicalID string
+		loserIDs    []string
+		reason      string
+	}{canonicalID, loserIDs, reason})
+	return nil
+}
+
+func (r *fakeContentDedupRepo) mergeCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.merges)
+}
+
+func adminAuthedHandlerWithContentDedup(t *testing.T, repo ports.ContentDedupRepository, opSettings *domain.OperationalSettings, settingsStore ports.SettingsStore) (*restapi.Handler, *http.Cookie) {
+	t.Helper()
+	h := restapi.New(restapi.Config{
+		Admin: &fakeAdminRepo{}, ContentDedupRepo: repo,
+		OpSettings: opSettings, SettingsStore: settingsStore,
+		DBDriver: "pgx", AdminUser: testAdminUser, AdminPass: testAdminPass,
+	})
+	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
+	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login failed: %d %s", rec.Code, rec.Body.String())
+	}
+	return h, rec.Result().Cookies()[0]
+}
+
+func waitForContentDedupDone(t *testing.T, store ports.SettingsStore) domain.ContentDedupStatus {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		status := application.LoadContentDedupStatus(context.Background(), store)
+		if !status.InProgress && !status.LastRunAt.IsZero() {
+			return status
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("timed out waiting for the content dedup recompute to finish")
+	return domain.ContentDedupStatus{}
+}
+
+func TestHandleAdminContentDedupStatus_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/content-dedup", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when content dedup isn't configured, got %d", rec.Code)
+	}
+}
+
+// TestHandleAdminContentDedup_MethodNotAllowed proves a third method
+// (neither GET for status nor POST for start, separately registered for
+// this one path -- see handler.go) is rejected by net/http's own mux before
+// ever reaching either handler's requireMethod check.
+func TestHandleAdminContentDedup_MethodNotAllowed(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithContentDedup(t, &fakeContentDedupRepo{}, nil, nil)
+	req := httptest.NewRequest(http.MethodPut, "/admin/api/content-dedup", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminContentDedupStatus_NoRunYetReportsZeroValues(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithContentDedup(t, &fakeContentDedupRepo{}, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/content-dedup", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		InProgress bool    `json:"in_progress"`
+		LastRunAt  *string `json:"last_run_at"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.InProgress {
+		t.Error("expected in_progress=false for a process that's never recomputed")
+	}
+	if resp.LastRunAt != nil {
+		t.Errorf("expected no last_run_at for a process that's never recomputed, got %v", *resp.LastRunAt)
+	}
+}
+
+func TestHandleAdminContentDedupRecomputeStart_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/content-dedup/recompute", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when content dedup isn't configured, got %d", rec.Code)
+	}
+}
+
+// TestHandleAdminContentDedupRecomputeStart_Success proves the request
+// returns immediately (202) and the job runs via a background goroutine
+// that outlives the request itself, with the result persisted for GET
+// /admin/api/content-dedup to read back.
+func TestHandleAdminContentDedupRecomputeStart_Success(t *testing.T) {
+	store := newSettingsStoreTestRepo(t)
+	repo := &fakeContentDedupRepo{
+		fingerprints: []domain.DocumentFingerprint{
+			{ID: "a", URL: "https://example.com/a", Host: "example.com", ContentHash: "h1"},
+			{ID: "b", URL: "https://mirror.example/a", Host: "mirror.example", ContentHash: "h1"},
+		},
+	}
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{ContentDedupMethod: domain.ContentDedupMethodExact})
+	h, cookie := adminAuthedHandlerWithContentDedup(t, repo, opSettings, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/content-dedup/recompute", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	status := waitForContentDedupDone(t, store)
+	if status.GroupsFound != 1 || status.DocumentsMerged != 1 {
+		t.Errorf("expected 1 group merged (1 document removed), got %+v", status)
+	}
+	if repo.mergeCount() != 1 {
+		t.Errorf("expected exactly one MergeDocuments call, got %d", repo.mergeCount())
+	}
+}
+
+// TestHandleAdminContentDedupRecomputeStart_AlreadyInProgress proves a
+// second trigger while one is already running is rejected (409) rather
+// than starting a redundant concurrent run.
+func TestHandleAdminContentDedupRecomputeStart_AlreadyInProgress(t *testing.T) {
+	store := newSettingsStoreTestRepo(t)
+	inProgress, _ := json.Marshal(domain.ContentDedupStatus{InProgress: true})
+	if err := store.SaveSetting(context.Background(), ports.SettingsKeyContentDedupStatus, string(inProgress)); err != nil {
+		t.Fatalf("seeding in-progress status: %v", err)
+	}
+	h, cookie := adminAuthedHandlerWithContentDedup(t, &fakeContentDedupRepo{}, nil, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/content-dedup/recompute", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Errorf("expected 409 when a recompute is already in progress, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleAdminContentDedupRecomputeStart_JobErrorIsLoggedNotFatal proves
+// a background job error (e.g. AllDocumentFingerprints failing) is logged
+// rather than crashing the detached goroutine, and still clears
+// in_progress back to false.
+func TestHandleAdminContentDedupRecomputeStart_JobErrorIsLoggedNotFatal(t *testing.T) {
+	store := newSettingsStoreTestRepo(t)
+	repo := &fakeContentDedupRepo{fingerprintsErr: errors.New("db unavailable")}
+	h, cookie := adminAuthedHandlerWithContentDedup(t, repo, nil, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/content-dedup/recompute", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Can't use waitForContentDedupDone here: on this error path LastRunAt
+	// is deliberately never set (see RunContentDedupJobWithStatus), so
+	// that helper's condition would never be satisfied -- same reasoning
+	// as TestHandleAdminEmbeddingsRecomputeStart_JobErrorIsLoggedNotFatal.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		raw, found, err := store.GetSetting(context.Background(), ports.SettingsKeyContentDedupStatus)
+		if err == nil && found {
+			var status domain.ContentDedupStatus
+			if err := json.Unmarshal([]byte(raw), &status); err == nil && !status.InProgress {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("timed out waiting for in_progress to clear after a job error")
+}
+
+func TestHandleAdminContentDedupAliasGroups_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, nil, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/content-dedup/alias-groups", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when admin diagnostics aren't configured, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminContentDedupAliasGroups_MethodNotAllowed(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/content-dedup/alias-groups", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+// TestHandleAdminContentDedupAliasGroups_Success proves the endpoint lists
+// merged groups (the "what actually got merged" transparency listing) and
+// forwards limit/offset to the repository for pagination.
+func TestHandleAdminContentDedupAliasGroups_Success(t *testing.T) {
+	adminRepo := &fakeAdminRepo{
+		aliasGroups: []domain.DocumentAliasGroup{
+			{CanonicalID: "doc-1", CanonicalURL: "https://example.com/a", AliasURLs: []string{"https://www.example.com/a"}},
+		},
+		aliasGroupsTotal: 7,
+	}
+	h, cookie := adminAuthedHandler(t, adminRepo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/content-dedup/alias-groups?limit=5&offset=10", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if adminRepo.gotAliasLimit != 5 || adminRepo.gotAliasOffset != 10 {
+		t.Errorf("expected limit=5 offset=10 forwarded, got limit=%d offset=%d", adminRepo.gotAliasLimit, adminRepo.gotAliasOffset)
+	}
+	var resp struct {
+		Total  int `json:"total"`
+		Groups []struct {
+			CanonicalID  string   `json:"canonical_id"`
+			CanonicalURL string   `json:"canonical_url"`
+			AliasURLs    []string `json:"alias_urls"`
+		} `json:"groups"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.Total != 7 || len(resp.Groups) != 1 || resp.Groups[0].CanonicalID != "doc-1" || len(resp.Groups[0].AliasURLs) != 1 {
+		t.Errorf("unexpected response: %+v", resp)
+	}
+}
+
+func TestHandleAdminContentDedupAliasGroups_ServiceError(t *testing.T) {
+	adminRepo := &fakeAdminRepo{aliasGroupsErr: errors.New("db unavailable")}
+	h, cookie := adminAuthedHandler(t, adminRepo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/content-dedup/alias-groups", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
