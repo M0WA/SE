@@ -1,5 +1,21 @@
 # Changelog
 
+## v4.0.36 - 2026-09-16
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Add real weighted title/body embedding blending by @M0WA in https://github.com/M0WA/SE/pull/56
+* Add independent hash/HTTP embedding enable toggles and storage table (Phase 1/4) by @M0WA in https://github.com/M0WA/SE/pull/57
+* Store, compute, and search both hash and HTTP embeddings simultaneously (Phase 2+3/4) by @M0WA in https://github.com/M0WA/SE/pull/58
+* Add admin UI for independently enabling hash/HTTP embeddings (Phase 4/4) by @M0WA in https://github.com/M0WA/SE/pull/59
+* Fix upgrade regression: existing EmbeddingProvider=http would silently revert to hash by @M0WA in https://github.com/M0WA/SE/pull/60
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.0.35...v4.0.36
+
+
 ## v4.0.35 - 2026-09-16
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
