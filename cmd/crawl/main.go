@@ -203,13 +203,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	embedder := bootstrap.NewEmbedder(bootstrap.DecryptEmbeddingKey(opSettings.Get(), settingsEncryptionKey))
+	embedders := bootstrap.NewEmbedders(bootstrap.DecryptEmbeddingKey(opSettings.Get(), settingsEncryptionKey))
 	// Enables Postgres pgvector ANN search for this process when available
-	// (so SaveDocument populates the vector column below), never fatal
-	// otherwise. Must run after embedder is constructed -- see
+	// (so SaveDocument populates the vector columns below), never fatal
+	// otherwise. Must run after embedders are constructed -- see
 	// cmd/search's identical comment and domain.OperationalSettingsValues.
-	// EmbeddingProvider for why.
-	repo.EnableANN(ctx, embedder.Dimensions())
+	// EmbeddingHashEnabled/EmbeddingHTTPEnabled for why.
+	repo.EnableANN(ctx, bootstrap.EmbedderDimensions(embedders))
 	// fetcher does plain HTTP; wrapping it in RenderAwareFetcher adds an
 	// opt-in real-browser rendering path (see internal/adapters/
 	// browserfetcher) on top, chosen per-crawl or by the Tuning page's
@@ -230,7 +230,7 @@ func main() {
 	parseHTML := func(html, pageURL string) (string, string, []string) {
 		return htmlparser.Parse(strings.NewReader(html), pageURL)
 	}
-	crawlerSvc := application.NewSQLCrawlerService(renderingFetcher, robotsChecker, repo, embedder, parseHTML, opSettings)
+	crawlerSvc := application.NewSQLCrawlerService(renderingFetcher, robotsChecker, repo, embedders, parseHTML, opSettings)
 
 	pageRank := runPageRankScheduler(ctx, repo, repo, opSettings)
 

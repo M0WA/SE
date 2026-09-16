@@ -23,6 +23,7 @@ import (
 	"searchengine/internal/application"
 	"searchengine/internal/bootstrap"
 	"searchengine/internal/domain"
+	"searchengine/internal/ports"
 )
 
 var dsnCounter int64
@@ -78,7 +79,8 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 	robotsChecker := robots.New(fetcher)
 	parse := func(h, u string) (string, string, []string) { return htmlparser.Parse(strings.NewReader(h), u) }
 
-	crawlerSvc := application.NewSQLCrawlerService(fetcher, robotsChecker, repo, embedder, parse, opSettings)
+	embedders := map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}
+	crawlerSvc := application.NewSQLCrawlerService(fetcher, robotsChecker, repo, embedders, parse, opSettings)
 
 	// crawl-server: the only process that actually executes crawls.
 	crawlHandler := restapi.New(restapi.Config{Crawler: crawlerSvc, CrawlJobs: repo, Health: repo})

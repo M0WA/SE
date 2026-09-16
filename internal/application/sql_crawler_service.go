@@ -9,10 +9,16 @@ import (
 )
 
 type sqlCrawlerService struct {
-	fetcher   ports.AuthFetcher
-	robots    ports.RobotsChecker
-	repo      ports.SQLRepository
-	embedder  ports.EmbeddingProvider
+	fetcher ports.AuthFetcher
+	robots  ports.RobotsChecker
+	repo    ports.SQLRepository
+	// embedders holds one ports.EmbeddingProvider per currently-enabled
+	// provider (domain.EmbeddingProviderHash/EmbeddingProviderHTTP -- see
+	// domain.OperationalSettingsValues.EmbeddingHashEnabled/
+	// EmbeddingHTTPEnabled), keyed by provider name -- every enabled
+	// provider gets its own embedding computed and stored for every saved
+	// document, not just whichever one is currently active for search.
+	embedders map[string]ports.EmbeddingProvider
 	parseHTML func(html, pageURL string) (title, text string, links []string)
 	settings  *domain.OperationalSettings
 	// embedRate paces every Embed call this service makes (see its own
@@ -23,17 +29,17 @@ type sqlCrawlerService struct {
 }
 
 // NewSQLCrawlerService is a CrawlerService that persists crawled documents
-// (with their embedding) to a SQL-backed ports.SQLRepository, for use with
+// (with their embeddings) to a SQL-backed ports.SQLRepository, for use with
 // the hybrid (BM25 + semantic) search service.
 func NewSQLCrawlerService(
 	fetcher ports.AuthFetcher,
 	robots ports.RobotsChecker,
 	repo ports.SQLRepository,
-	embedder ports.EmbeddingProvider,
+	embedders map[string]ports.EmbeddingProvider,
 	parseHTML func(string, string) (string, string, []string),
 	settings *domain.OperationalSettings,
 ) ports.CrawlerService {
-	return &sqlCrawlerService{fetcher: fetcher, robots: robots, repo: repo, embedder: embedder, parseHTML: parseHTML, settings: settings}
+	return &sqlCrawlerService{fetcher: fetcher, robots: robots, repo: repo, embedders: embedders, parseHTML: parseHTML, settings: settings}
 }
 
 func (c *sqlCrawlerService) Crawl(ctx context.Context, opts ports.CrawlOptions, onPage func(domain.CrawlPageEvent)) (int, error) {
@@ -52,15 +58,19 @@ func (c *sqlCrawlerService) Crawl(ctx context.Context, opts ports.CrawlOptions, 
 	}
 	return crawlLoop(ctx, c.fetcher, c.robots, c.parseHTML, c.settings, opts, isIndexed, isDomainIndexed, func(ctx context.Context, doc domain.Document) error {
 		v := c.settings.Get()
-		embed := func(ctx context.Context, s string) ([]float32, error) {
-			c.embedRate.wait(ctx, v.EmbeddingRateLimitPerSecond)
-			return c.embedder.Embed(ctx, s)
+		embeddings := make(map[string][]float32, len(c.embedders))
+		for provider, embedder := range c.embedders {
+			embed := func(ctx context.Context, s string) ([]float32, error) {
+				c.embedRate.wait(ctx, v.EmbeddingRateLimitPerSecond)
+				return embedder.Embed(ctx, s)
+			}
+			vec, err := embedTitleWeighted(ctx, embed, doc.Title, doc.Text, v.EmbeddingTitleWeight)
+			if err != nil {
+				return err
+			}
+			embeddings[provider] = vec
 		}
-		embedding, err := embedTitleWeighted(ctx, embed, doc.Title, doc.Text, v.EmbeddingTitleWeight)
-		if err != nil {
-			return err
-		}
-		return c.repo.SaveDocument(ctx, doc, embedding, v.MaxDocumentVersions, v.TitleWeight)
+		return c.repo.SaveDocument(ctx, doc, embeddings, v.MaxDocumentVersions, v.TitleWeight)
 	}, onPage)
 }
 

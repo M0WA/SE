@@ -35,6 +35,12 @@ type fakeEmbeddingRepo struct {
 	documentsByIDsErr  error
 	updateEmbeddingErr map[string]error // per-document UpdateEmbedding error
 	updated            map[string][]float32
+	// updatedEmbeddings records the full per-provider map UpdateEmbedding
+	// was called with, for tests that configure more than one enabled
+	// provider and need to assert on more than just the hash provider's
+	// vector (updated above only ever records that one, for every
+	// existing single-provider test's convenience).
+	updatedEmbeddings map[string]map[string][]float32
 }
 
 func (r *fakeEmbeddingRepo) AllDocumentIDs(context.Context) ([]string, error) {
@@ -57,14 +63,21 @@ func (r *fakeEmbeddingRepo) DocumentsByIDs(_ context.Context, ids []string) (map
 	return out, nil
 }
 
-func (r *fakeEmbeddingRepo) UpdateEmbedding(_ context.Context, id string, vec []float32) error {
+func (r *fakeEmbeddingRepo) UpdateEmbedding(_ context.Context, id string, embeddings map[string][]float32) error {
 	if err, ok := r.updateEmbeddingErr[id]; ok {
 		return err
 	}
 	if r.updated == nil {
 		r.updated = make(map[string][]float32)
 	}
-	r.updated[id] = vec
+	if r.updatedEmbeddings == nil {
+		r.updatedEmbeddings = make(map[string]map[string][]float32)
+	}
+	r.updatedEmbeddings[id] = embeddings
+	// Every test in this file configures exactly one enabled provider
+	// (hash) unless it says otherwise, so recording that one provider's
+	// vector preserves every existing single-vector assertion unchanged.
+	r.updated[id] = embeddings[domain.EmbeddingProviderHash]
 	return nil
 }
 
@@ -102,7 +115,7 @@ func TestRunEmbeddingRecomputeJob_RecomputesEveryDocument(t *testing.T) {
 	}
 	embedder := &fakeRecomputeEmbedder{}
 
-	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, embedder, noRateLimit, noTitleWeight)
+	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, noRateLimit, noTitleWeight)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -130,7 +143,7 @@ func TestRunEmbeddingRecomputeJob_BatchesAcrossMultipleFetches(t *testing.T) {
 	repo := &fakeEmbeddingRepo{ids: ids, docs: docs}
 	embedder := &fakeRecomputeEmbedder{}
 
-	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, embedder, noRateLimit, noTitleWeight)
+	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, noRateLimit, noTitleWeight)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -151,7 +164,7 @@ func TestRunEmbeddingRecomputeJob_PerDocumentEmbedFailureIsCountedNotFatal(t *te
 	}
 	embedder := &fakeRecomputeEmbedder{errByText: map[string]error{"bad": errors.New("embed failed")}}
 
-	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, embedder, noRateLimit, noTitleWeight)
+	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, noRateLimit, noTitleWeight)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -176,7 +189,7 @@ func TestRunEmbeddingRecomputeJob_PerDocumentUpdateFailureIsCountedNotFatal(t *t
 	}
 	embedder := &fakeRecomputeEmbedder{}
 
-	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, embedder, noRateLimit, noTitleWeight)
+	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, noRateLimit, noTitleWeight)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -196,7 +209,7 @@ func TestRunEmbeddingRecomputeJob_SkipsDocumentDeletedBetweenListAndFetch(t *tes
 	}
 	embedder := &fakeRecomputeEmbedder{}
 
-	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, embedder, noRateLimit, noTitleWeight)
+	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, noRateLimit, noTitleWeight)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -207,7 +220,7 @@ func TestRunEmbeddingRecomputeJob_SkipsDocumentDeletedBetweenListAndFetch(t *tes
 
 func TestRunEmbeddingRecomputeJob_EmptyCorpusIsANoop(t *testing.T) {
 	repo := &fakeEmbeddingRepo{}
-	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, &fakeRecomputeEmbedder{}, noRateLimit, noTitleWeight)
+	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: &fakeRecomputeEmbedder{}}, noRateLimit, noTitleWeight)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -231,7 +244,7 @@ func TestRunEmbeddingRecomputeJob_PacesEmbedCalls(t *testing.T) {
 		},
 	}
 	start := time.Now()
-	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, &fakeRecomputeEmbedder{}, ratePerSecond, noTitleWeight); err != nil {
+	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: &fakeRecomputeEmbedder{}}, ratePerSecond, noTitleWeight); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// 3 documents, each paced to at least 50ms (the fake embedder returns
@@ -252,7 +265,7 @@ func TestRunEmbeddingRecomputeJob_NoExtraWaitWhenEmbedAlreadySlow(t *testing.T) 
 	repo := &fakeEmbeddingRepo{ids: []string{"a"}, docs: map[string]domain.Document{"a": {ID: "a", Text: "x"}}}
 	slowEmbedder := &fakeRecomputeEmbedder{delay: 100 * time.Millisecond}
 	start := time.Now()
-	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, slowEmbedder, ratePerSecond, noTitleWeight); err != nil {
+	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: slowEmbedder}, ratePerSecond, noTitleWeight); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
@@ -271,7 +284,7 @@ func TestRunEmbeddingRecomputeJob_NonPositiveRateDisablesPacing(t *testing.T) {
 		docs: map[string]domain.Document{"a": {ID: "a", Text: "1"}, "b": {ID: "b", Text: "2"}, "c": {ID: "c", Text: "3"}, "d": {ID: "d", Text: "4"}, "e": {ID: "e", Text: "5"}},
 	}
 	start := time.Now()
-	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, &fakeRecomputeEmbedder{}, noRateLimit, noTitleWeight); err != nil {
+	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: &fakeRecomputeEmbedder{}}, noRateLimit, noTitleWeight); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
@@ -282,7 +295,7 @@ func TestRunEmbeddingRecomputeJob_NonPositiveRateDisablesPacing(t *testing.T) {
 func TestRunEmbeddingRecomputeJob_PropagatesAllDocumentIDsError(t *testing.T) {
 	wantErr := errors.New("db unavailable")
 	repo := &fakeEmbeddingRepo{allIDsErr: wantErr}
-	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, &fakeRecomputeEmbedder{}, noRateLimit, noTitleWeight); !errors.Is(err, wantErr) {
+	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: &fakeRecomputeEmbedder{}}, noRateLimit, noTitleWeight); !errors.Is(err, wantErr) {
 		t.Errorf("expected AllDocumentIDs error to propagate, got %v", err)
 	}
 }
@@ -290,7 +303,7 @@ func TestRunEmbeddingRecomputeJob_PropagatesAllDocumentIDsError(t *testing.T) {
 func TestRunEmbeddingRecomputeJob_PropagatesDocumentsByIDsError(t *testing.T) {
 	wantErr := errors.New("db unavailable")
 	repo := &fakeEmbeddingRepo{ids: []string{"a"}, documentsByIDsErr: wantErr}
-	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, &fakeRecomputeEmbedder{}, noRateLimit, noTitleWeight); !errors.Is(err, wantErr) {
+	if _, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: &fakeRecomputeEmbedder{}}, noRateLimit, noTitleWeight); !errors.Is(err, wantErr) {
 		t.Errorf("expected DocumentsByIDs error to propagate, got %v", err)
 	}
 }
@@ -326,7 +339,7 @@ func TestRunEmbeddingRecomputeJob_BlendsTitleAndBodyWhenWeightConfigured(t *test
 		"Body text":  {0, 1},
 	}}
 
-	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, embedder, noRateLimit, 0.25)
+	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, noRateLimit, 0.25)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -340,6 +353,37 @@ func TestRunEmbeddingRecomputeJob_BlendsTitleAndBodyWhenWeightConfigured(t *test
 	}
 }
 
+// TestRunEmbeddingRecomputeJob_RecomputesEveryEnabledProviderNotJustOne
+// proves a recompute refreshes EVERY currently-enabled provider's vector
+// per document, not just whichever is active for search -- so switching
+// which one is active never needs a second recompute, because both were
+// already brought current by this one run.
+func TestRunEmbeddingRecomputeJob_RecomputesEveryEnabledProviderNotJustOne(t *testing.T) {
+	repo := &fakeEmbeddingRepo{
+		ids:  []string{"a"},
+		docs: map[string]domain.Document{"a": {ID: "a", Text: "hello"}},
+	}
+	embedders := map[string]ports.EmbeddingProvider{
+		domain.EmbeddingProviderHash: &fakeRecomputeEmbedder{},
+		domain.EmbeddingProviderHTTP: &textAwareRecomputeEmbedder{vecByText: map[string][]float32{"hello": {9, 9, 9, 9}}},
+	}
+
+	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, embedders, noRateLimit, noTitleWeight)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Documents != 1 || result.Failed != 0 {
+		t.Fatalf("expected 1 document recomputed, got %+v", result)
+	}
+	saved := repo.updatedEmbeddings["a"]
+	if got := saved[domain.EmbeddingProviderHash]; len(got) != 3 {
+		t.Errorf("expected the hash provider's own vector recomputed, got %v", got)
+	}
+	if got := saved[domain.EmbeddingProviderHTTP]; len(got) != 4 || got[0] != 9 {
+		t.Errorf("expected the http provider's own (differently-shaped) vector recomputed too, got %v", got)
+	}
+}
+
 func TestRunEmbeddingRecomputeJobWithStatus_RecordsCompletedRun(t *testing.T) {
 	repo := &fakeEmbeddingRepo{
 		ids:  []string{"a", "b"},
@@ -347,7 +391,7 @@ func TestRunEmbeddingRecomputeJobWithStatus_RecordsCompletedRun(t *testing.T) {
 	}
 	settings := newFakeSettingsStore()
 
-	result, err := application.RunEmbeddingRecomputeJobWithStatus(context.Background(), repo, &fakeRecomputeEmbedder{}, settings, noRateLimit, noTitleWeight)
+	result, err := application.RunEmbeddingRecomputeJobWithStatus(context.Background(), repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: &fakeRecomputeEmbedder{}}, settings, noRateLimit, noTitleWeight)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -370,7 +414,7 @@ func TestRunEmbeddingRecomputeJobWithStatus_SetsInProgressBeforeRunning(t *testi
 	repo := &fakeEmbeddingRepo{ids: []string{"a"}, docs: map[string]domain.Document{"a": {ID: "a", Text: "x"}}}
 	settings := newFakeSettingsStore()
 
-	if _, err := application.RunEmbeddingRecomputeJobWithStatus(context.Background(), repo, &fakeRecomputeEmbedder{}, settings, noRateLimit, noTitleWeight); err != nil {
+	if _, err := application.RunEmbeddingRecomputeJobWithStatus(context.Background(), repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: &fakeRecomputeEmbedder{}}, settings, noRateLimit, noTitleWeight); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(settings.saveCalls) < 2 {
@@ -391,13 +435,13 @@ func TestRunEmbeddingRecomputeJobWithStatus_ErrorClearsInProgressButKeepsLastRes
 		docs: map[string]domain.Document{"a": {ID: "a", Text: "x"}},
 	}
 	settings := newFakeSettingsStore()
-	if _, err := application.RunEmbeddingRecomputeJobWithStatus(context.Background(), repo, &fakeRecomputeEmbedder{}, settings, noRateLimit, noTitleWeight); err != nil {
+	if _, err := application.RunEmbeddingRecomputeJobWithStatus(context.Background(), repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: &fakeRecomputeEmbedder{}}, settings, noRateLimit, noTitleWeight); err != nil {
 		t.Fatalf("unexpected error on first (successful) run: %v", err)
 	}
 	successStatus := application.LoadEmbeddingRecomputeStatus(context.Background(), settings)
 
 	repo.allIDsErr = errors.New("db unavailable")
-	if _, err := application.RunEmbeddingRecomputeJobWithStatus(context.Background(), repo, &fakeRecomputeEmbedder{}, settings, noRateLimit, noTitleWeight); err == nil {
+	if _, err := application.RunEmbeddingRecomputeJobWithStatus(context.Background(), repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: &fakeRecomputeEmbedder{}}, settings, noRateLimit, noTitleWeight); err == nil {
 		t.Fatal("expected the second run's error to propagate")
 	}
 
@@ -412,7 +456,7 @@ func TestRunEmbeddingRecomputeJobWithStatus_ErrorClearsInProgressButKeepsLastRes
 
 func TestRunEmbeddingRecomputeJobWithStatus_NilSettingsStoreIsANoop(t *testing.T) {
 	repo := &fakeEmbeddingRepo{ids: []string{"a"}, docs: map[string]domain.Document{"a": {ID: "a", Text: "x"}}}
-	if _, err := application.RunEmbeddingRecomputeJobWithStatus(context.Background(), repo, &fakeRecomputeEmbedder{}, nil, noRateLimit, noTitleWeight); err != nil {
+	if _, err := application.RunEmbeddingRecomputeJobWithStatus(context.Background(), repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: &fakeRecomputeEmbedder{}}, nil, noRateLimit, noTitleWeight); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

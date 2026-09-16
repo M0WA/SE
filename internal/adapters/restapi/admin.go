@@ -1456,7 +1456,7 @@ type adminEmbeddingRecomputeStatusResponse struct {
 }
 
 func (h *Handler) handleAdminEmbeddingsRecomputeStatus(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.embeddingRepo != nil && h.embedder != nil, "embedding recompute") {
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.embeddingRepo != nil && len(h.embedders) > 0, "embedding recompute") {
 		return
 	}
 	resp := adminEmbeddingRecomputeStatusResponse{}
@@ -1494,7 +1494,7 @@ func (h *Handler) handleAdminEmbeddingsRecomputeStatus(w http.ResponseWriter, r 
 // rate-limit budget) for no benefit, since the second run would just
 // recompute the same documents the first one is already working through.
 func (h *Handler) handleAdminEmbeddingsRecomputeStart(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.embeddingRepo != nil && h.embedder != nil, "embedding recompute") {
+	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.embeddingRepo != nil && len(h.embedders) > 0, "embedding recompute") {
 		return
 	}
 	if application.LoadEmbeddingRecomputeStatus(r.Context(), h.settingsStore).InProgress {
@@ -1504,7 +1504,7 @@ func (h *Handler) handleAdminEmbeddingsRecomputeStart(w http.ResponseWriter, r *
 	v := h.opSettings.Get()
 	go func() {
 		ctx := context.Background()
-		if _, err := application.RunEmbeddingRecomputeJobWithStatus(ctx, h.embeddingRepo, h.embedder, h.settingsStore, v.EmbeddingRateLimitPerSecond, v.EmbeddingTitleWeight); err != nil {
+		if _, err := application.RunEmbeddingRecomputeJobWithStatus(ctx, h.embeddingRepo, h.embedders, h.settingsStore, v.EmbeddingRateLimitPerSecond, v.EmbeddingTitleWeight); err != nil {
 			log.Printf("recomputing embeddings: %v", err)
 		}
 	}()

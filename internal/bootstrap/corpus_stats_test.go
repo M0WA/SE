@@ -29,7 +29,7 @@ func TestSyncCorpusStats_SeedsCacheFromExistingDocuments(t *testing.T) {
 		{ID: "doc-2", URL: "http://b", Title: "B", Text: "one two three four five six seven"},
 	}
 	for _, d := range docs {
-		if err := repo.SaveDocument(ctx, d, []float32{1}, 100, 2); err != nil {
+		if err := repo.SaveDocument(ctx, d, map[string][]float32{domain.EmbeddingProviderHash: {1}}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
 		}
 	}
@@ -57,7 +57,7 @@ func TestSyncCorpusStats_ReReadsOnEachCall(t *testing.T) {
 	}
 
 	doc := domain.Document{ID: "doc-1", URL: "http://a", Title: "A", Text: "some text here"}
-	if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
+	if err := repo.SaveDocument(ctx, doc, map[string][]float32{domain.EmbeddingProviderHash: {1}}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
