@@ -24,7 +24,7 @@
   const embeddingHTTPAPIKeyHintEl = document.getElementById('embedding-http-api-key-hint');
   const embeddingHTTPModelOptionsEl = document.getElementById('embedding-http-model-options');
   const embeddingHTTPModelHintEl = document.getElementById('embedding-http-model-hint');
-  const embeddingRecomputeRateLimitEl = document.getElementById('embedding-recompute-rate-limit');
+  const embeddingRateLimitEl = document.getElementById('embedding-rate-limit');
   const maxDocumentVersionsEl = document.getElementById('max-document-versions');
   const dbMaxOpenConnsEl = document.getElementById('db-max-open-conns');
   const dbMaxIdleConnsEl = document.getElementById('db-max-idle-conns');
@@ -149,7 +149,7 @@
     embeddingHTTPBaseURLEl.value = s.operational.embedding_http_base_url || '';
     embeddingHTTPModelEl.value = s.operational.embedding_http_model || '';
     embeddingHTTPDimensionsEl.value = s.operational.embedding_http_dimensions || '';
-    embeddingRecomputeRateLimitEl.value = s.operational.embedding_recompute_rate_limit_per_second || '';
+    embeddingRateLimitEl.value = s.operational.embedding_rate_limit_per_second || '';
     // The real key is never sent back (see toOperationalValues in admin.go)
     // -- this field always starts blank, only ever showing whether one is
     // currently configured, never the value itself.
@@ -214,7 +214,7 @@
         embedding_http_base_url: embeddingHTTPBaseURLEl.value,
         embedding_http_model: embeddingHTTPModelEl.value,
         embedding_http_dimensions: parseInt(embeddingHTTPDimensionsEl.value, 10) || 0,
-        embedding_recompute_rate_limit_per_second: parseInt(embeddingRecomputeRateLimitEl.value, 10) || 0,
+        embedding_rate_limit_per_second: parseInt(embeddingRateLimitEl.value, 10) || 0,
         embedding_http_api_key: embeddingHTTPAPIKeyEl.value,
         max_document_versions: parseInt(maxDocumentVersionsEl.value, 10),
         db_max_open_conns: parseInt(dbMaxOpenConnsEl.value, 10),

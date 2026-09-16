@@ -2370,12 +2370,12 @@ func TestHandleAdminSettings_TitleWeightFieldRoundTrips(t *testing.T) {
 	}
 }
 
-// TestHandleAdminSettings_EmbeddingRecomputeRateLimitFieldRoundTrips
+// TestHandleAdminSettings_EmbeddingRateLimitFieldRoundTrips
 // mirrors TestHandleAdminSettings_TitleWeightFieldRoundTrips for the new
 // rate-limit knob.
-func TestHandleAdminSettings_EmbeddingRecomputeRateLimitFieldRoundTrips(t *testing.T) {
+func TestHandleAdminSettings_EmbeddingRateLimitFieldRoundTrips(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
-	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingRecomputeRateLimitPerSecond: 5})
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingRateLimitPerSecond: 5})
 	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
 
 	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
@@ -2387,14 +2387,14 @@ func TestHandleAdminSettings_EmbeddingRecomputeRateLimitFieldRoundTrips(t *testi
 	}
 	var getResp struct {
 		Operational struct {
-			EmbeddingRecomputeRateLimitPerSecond int `json:"embedding_recompute_rate_limit_per_second"`
+			EmbeddingRateLimitPerSecond int `json:"embedding_rate_limit_per_second"`
 		} `json:"operational"`
 	}
 	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
 		t.Fatalf("decoding GET response: %v", err)
 	}
-	if getResp.Operational.EmbeddingRecomputeRateLimitPerSecond != 5 {
-		t.Errorf("expected GET to report embedding_recompute_rate_limit_per_second=5, got %+v", getResp.Operational)
+	if getResp.Operational.EmbeddingRateLimitPerSecond != 5 {
+		t.Errorf("expected GET to report embedding_rate_limit_per_second=5, got %+v", getResp.Operational)
 	}
 
 	body, _ := json.Marshal(map[string]interface{}{
@@ -2402,7 +2402,7 @@ func TestHandleAdminSettings_EmbeddingRecomputeRateLimitFieldRoundTrips(t *testi
 		"operational": map[string]interface{}{
 			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
 			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
-			"embedding_recompute_rate_limit_per_second": 20,
+			"embedding_rate_limit_per_second": 20,
 		},
 	})
 	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
@@ -2413,20 +2413,20 @@ func TestHandleAdminSettings_EmbeddingRecomputeRateLimitFieldRoundTrips(t *testi
 		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
 	}
 
-	if ov := opSettings.Get(); ov.EmbeddingRecomputeRateLimitPerSecond != 20 {
-		t.Errorf("expected embedding_recompute_rate_limit_per_second=20 to be applied, got %+v", ov)
+	if ov := opSettings.Get(); ov.EmbeddingRateLimitPerSecond != 20 {
+		t.Errorf("expected embedding_rate_limit_per_second=20 to be applied, got %+v", ov)
 	}
 
 	var postResp struct {
 		Operational struct {
-			EmbeddingRecomputeRateLimitPerSecond int `json:"embedding_recompute_rate_limit_per_second"`
+			EmbeddingRateLimitPerSecond int `json:"embedding_rate_limit_per_second"`
 		} `json:"operational"`
 	}
 	if err := json.Unmarshal(postRec.Body.Bytes(), &postResp); err != nil {
 		t.Fatalf("decoding POST response: %v", err)
 	}
-	if postResp.Operational.EmbeddingRecomputeRateLimitPerSecond != 20 {
-		t.Errorf("expected the POST response to echo back embedding_recompute_rate_limit_per_second=20, got %+v", postResp.Operational)
+	if postResp.Operational.EmbeddingRateLimitPerSecond != 20 {
+		t.Errorf("expected the POST response to echo back embedding_rate_limit_per_second=20, got %+v", postResp.Operational)
 	}
 }
 

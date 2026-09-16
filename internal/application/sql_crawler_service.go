@@ -15,6 +15,11 @@ type sqlCrawlerService struct {
 	embedder  ports.EmbeddingProvider
 	parseHTML func(html, pageURL string) (title, text string, links []string)
 	settings  *domain.OperationalSettings
+	// embedRate paces every Embed call this service makes (see its own
+	// doc comment) -- one instance shared across every concurrently
+	// running crawl job, since a single sqlCrawlerService is constructed
+	// once and reused for all of them (see cmd/crawl/main.go).
+	embedRate embedRateLimiter
 }
 
 // NewSQLCrawlerService is a CrawlerService that persists crawled documents
@@ -28,7 +33,7 @@ func NewSQLCrawlerService(
 	parseHTML func(string, string) (string, string, []string),
 	settings *domain.OperationalSettings,
 ) ports.CrawlerService {
-	return &sqlCrawlerService{fetcher, robots, repo, embedder, parseHTML, settings}
+	return &sqlCrawlerService{fetcher: fetcher, robots: robots, repo: repo, embedder: embedder, parseHTML: parseHTML, settings: settings}
 }
 
 func (c *sqlCrawlerService) Crawl(ctx context.Context, opts ports.CrawlOptions, onPage func(domain.CrawlPageEvent)) (int, error) {
@@ -46,6 +51,7 @@ func (c *sqlCrawlerService) Crawl(ctx context.Context, opts ports.CrawlOptions, 
 		isDomainIndexed = c.buildDomainIndexed(ctx)
 	}
 	return crawlLoop(ctx, c.fetcher, c.robots, c.parseHTML, c.settings, opts, isIndexed, isDomainIndexed, func(ctx context.Context, doc domain.Document) error {
+		c.embedRate.wait(ctx, c.settings.Get().EmbeddingRateLimitPerSecond)
 		embedding, err := c.embedder.Embed(ctx, doc.Title+" "+doc.Text)
 		if err != nil {
 			return err

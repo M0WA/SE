@@ -17,7 +17,7 @@ import (
 const EmbeddingRecomputeBatchSize = 50
 
 // embedRateLimitInterval converts ratePerSecond (see
-// domain.OperationalSettingsValues.EmbeddingRecomputeRateLimitPerSecond)
+// domain.OperationalSettingsValues.EmbeddingRateLimitPerSecond)
 // into the minimum interval paceEmbedCall enforces between Embed calls --
 // pacing this job so it stays within a typical HTTP embeddings provider's
 // rate limit rather than firing every document's call back-to-back as
@@ -78,7 +78,7 @@ type EmbeddingRecomputeResult struct {
 // through a large corpus.
 //
 // ratePerSecond (see
-// domain.OperationalSettingsValues.EmbeddingRecomputeRateLimitPerSecond)
+// domain.OperationalSettingsValues.EmbeddingRateLimitPerSecond)
 // paces Embed calls to that rate -- see embedRateLimitInterval.
 func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepository, embedder ports.EmbeddingProvider, ratePerSecond int) (EmbeddingRecomputeResult, error) {
 	interval := embedRateLimitInterval(ratePerSecond)
