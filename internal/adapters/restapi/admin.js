@@ -52,6 +52,17 @@ function kvRow(container, key, value) {
   container.appendChild(row);
 }
 
+// listItem appends one plain row with no key column -- for a flat list of
+// same-kind values (e.g. the model names an embedding endpoint reports)
+// where every kvRow would repeat the same label, reading as a redundant
+// two-column table rather than a list.
+function listItem(container, value) {
+  const row = document.createElement('div');
+  row.className = 'list-item';
+  row.textContent = value;
+  container.appendChild(row);
+}
+
 // buildTile builds one ".tile" box (see style.css's ".tiles" grid, used by
 // the Settings page's at-a-glance summary and the Overview page's
 // operational-health stats) -- a compact key/value pair, distinct from
@@ -410,7 +421,7 @@ function wireVocabularySearch() {
 // internal/adapters/restapi/admin.test.js.
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    clear, setButtonLoading, normalizeURL, kvRow, buildTile, checkResponse,
+    clear, setButtonLoading, normalizeURL, kvRow, listItem, buildTile, checkResponse,
     getJSON, postJSON, deleteRequest, patchJSON,
     textCell, snippetCell, urlCell, seedSummary, formatTimestamp, buildTable,
     linesToText, parseLines,

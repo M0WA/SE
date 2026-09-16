@@ -2792,6 +2792,133 @@ func TestHandleAdminEmbeddingsTest_BlankBaseURLSkipsProbe(t *testing.T) {
 	}
 }
 
+// TestHandleAdminEmbeddingsTest_FallsBackToStoredAPIKeyByID proves
+// resolveCandidateAPIKey's whole reason for existing: the endpoint edit
+// page never re-populates the API key field with an already-saved
+// endpoint's real value (see embeddingEndpointResponse), so testing it
+// without retyping the key must still probe with the real stored key, not
+// an empty one -- otherwise every saved endpoint would always fail "Test
+// connection" with an auth error regardless of whether its actual stored
+// credentials work.
+func TestHandleAdminEmbeddingsTest_FallsBackToStoredAPIKeyByID(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	if err := repo.CreateEmbeddingEndpoint(context.Background(), domain.EmbeddingHTTPEndpoint{
+		ID: "ionos", Name: "IONOS", BaseURL: "https://example.com", APIKey: "real-stored-key", Model: "m", Dimensions: 4, Enabled: true,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var gotAPIKey string
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, EmbeddingEndpoints: repo,
+		NewEmbedder: func(e domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider {
+			gotAPIKey = e.APIKey
+			return fakeEmbeddingProvider{}
+		},
+	})
+	code, testErr := postEmbeddingTest(t, h, cookie, map[string]interface{}{
+		"id": "ionos", "base_url": "https://example.com", "api_key": "",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if testErr != "" {
+		t.Errorf("expected no error, got %q", testErr)
+	}
+	if gotAPIKey != "real-stored-key" {
+		t.Errorf("expected the probe to use the real stored API key, got %q", gotAPIKey)
+	}
+}
+
+// TestHandleAdminEmbeddingsTest_TypedAPIKeyOverridesStored proves a
+// newly-typed key always wins over whatever's already stored -- an admin
+// actively changing the key (not just re-testing the existing one) must
+// probe with what they just typed.
+func TestHandleAdminEmbeddingsTest_TypedAPIKeyOverridesStored(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	if err := repo.CreateEmbeddingEndpoint(context.Background(), domain.EmbeddingHTTPEndpoint{
+		ID: "ionos", Name: "IONOS", BaseURL: "https://example.com", APIKey: "old-key", Model: "m", Dimensions: 4, Enabled: true,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var gotAPIKey string
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, EmbeddingEndpoints: repo,
+		NewEmbedder: func(e domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider {
+			gotAPIKey = e.APIKey
+			return fakeEmbeddingProvider{}
+		},
+	})
+	postEmbeddingTest(t, h, cookie, map[string]interface{}{
+		"id": "ionos", "base_url": "https://example.com", "api_key": "newly-typed-key",
+	})
+	if gotAPIKey != "newly-typed-key" {
+		t.Errorf("expected the newly typed key to win over the stored one, got %q", gotAPIKey)
+	}
+}
+
+// TestHandleAdminEmbeddingsTest_UnknownIDFallsBackToBlankAPIKey proves an
+// id naming an endpoint that no longer exists (deleted concurrently, or a
+// stale page) degrades to the same blank-key behavior as a brand new
+// endpoint, rather than erroring the request.
+func TestHandleAdminEmbeddingsTest_UnknownIDFallsBackToBlankAPIKey(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	var gotAPIKey string
+	gotAPIKeySet := false
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, EmbeddingEndpoints: repo,
+		NewEmbedder: func(e domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider {
+			gotAPIKey = e.APIKey
+			gotAPIKeySet = true
+			return fakeEmbeddingProvider{}
+		},
+	})
+	code, testErr := postEmbeddingTest(t, h, cookie, map[string]interface{}{
+		"id": "gone", "base_url": "https://example.com", "api_key": "",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if testErr != "" {
+		t.Errorf("expected no error, got %q", testErr)
+	}
+	if !gotAPIKeySet || gotAPIKey != "" {
+		t.Errorf("expected a blank API key for an unknown id, got %q", gotAPIKey)
+	}
+}
+
+// TestHandleAdminEmbeddingsModels_FallsBackToStoredAPIKeyByID mirrors
+// TestHandleAdminEmbeddingsTest_FallsBackToStoredAPIKeyByID for the "List
+// available models" probe, which needs the same fallback for the same
+// reason.
+func TestHandleAdminEmbeddingsModels_FallsBackToStoredAPIKeyByID(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	if err := repo.CreateEmbeddingEndpoint(context.Background(), domain.EmbeddingHTTPEndpoint{
+		ID: "ionos", Name: "IONOS", BaseURL: "https://example.com", APIKey: "real-stored-key", Model: "m", Dimensions: 4, Enabled: true,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var gotAPIKey string
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, EmbeddingEndpoints: repo,
+		NewEmbedder: func(e domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider {
+			gotAPIKey = e.APIKey
+			return fakeEmbeddingProviderWithModels{}
+		},
+	})
+	code, resp := postEmbeddingModels(t, h, cookie, map[string]interface{}{
+		"id": "ionos", "base_url": "https://example.com", "api_key": "",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if resp.Error != "" {
+		t.Errorf("expected no error, got %q", resp.Error)
+	}
+	if gotAPIKey != "real-stored-key" {
+		t.Errorf("expected the probe to use the real stored API key, got %q", gotAPIKey)
+	}
+}
+
 // embeddingEndpointResp mirrors admin.go's unexported embeddingEndpointResponse
 // wire shape, for decoding test responses.
 type embeddingEndpointResp struct {

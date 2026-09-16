@@ -11,7 +11,7 @@ function baseSettings(operationalOverrides) {
   return {
     operational: Object.assign({
       embedding_hash_enabled: true,
-      embedding_provider: 'hash',
+      embedding_search_weights: { hash: 1 },
       embedding_title_weight: 0.3,
     }, operationalOverrides),
   };
@@ -63,20 +63,35 @@ function kvValuesByKey(container) {
   return values;
 }
 
-test('activeProviderLabel names the hash provider', () => {
-  const { activeProviderLabel } = loadFixture();
-  assert.equal(activeProviderLabel('hash', []), 'Hash (dependency-free)');
+test('providerLabel names the hash provider', () => {
+  const { providerLabel } = loadFixture();
+  assert.equal(providerLabel('hash', []), 'Hash (dependency-free)');
 });
 
-test('activeProviderLabel names a matching endpoint by name and id', () => {
-  const { activeProviderLabel } = loadFixture();
+test('providerLabel names a matching endpoint by name and id', () => {
+  const { providerLabel } = loadFixture();
   const endpoints = [{ id: 'ionos_bge_m3', name: 'IONOS bge-m3' }];
-  assert.equal(activeProviderLabel('ionos_bge_m3', endpoints), 'IONOS bge-m3 (ionos_bge_m3)');
+  assert.equal(providerLabel('ionos_bge_m3', endpoints), 'IONOS bge-m3 (ionos_bge_m3)');
 });
 
-test('activeProviderLabel falls back to the raw id when no endpoint matches (e.g. a deleted one)', () => {
-  const { activeProviderLabel } = loadFixture();
-  assert.equal(activeProviderLabel('gone', []), 'gone');
+test('providerLabel falls back to the raw id when no endpoint matches (e.g. a deleted one)', () => {
+  const { providerLabel } = loadFixture();
+  assert.equal(providerLabel('gone', []), 'gone');
+});
+
+test('activeSearchWeightsLabel shows "none" when nothing is weighted', () => {
+  const { activeSearchWeightsLabel } = loadFixture();
+  assert.equal(activeSearchWeightsLabel({}, []), 'none');
+  assert.equal(activeSearchWeightsLabel({ hash: 0 }, []), 'none');
+});
+
+test('activeSearchWeightsLabel lists every positively-weighted provider with its weight', () => {
+  const { activeSearchWeightsLabel } = loadFixture();
+  const endpoints = [{ id: 'ionos', name: 'IONOS bge-m3' }];
+  assert.equal(
+    activeSearchWeightsLabel({ hash: 0.3, ionos: 0.7, unused: 0 }, endpoints),
+    'Hash (dependency-free) (0.3), IONOS bge-m3 (ionos) (0.7)',
+  );
 });
 
 test('renderConfig shows only hash enabled when no endpoints are configured', () => {
@@ -84,7 +99,7 @@ test('renderConfig shows only hash enabled when no endpoints are configured', ()
   renderConfig(baseSettings().operational, []);
   const values = kvValuesByKey(document.getElementById('embeddings-config'));
   assert.equal(values['Enabled providers'], 'hash');
-  assert.equal(values['Active for search'], 'Hash (dependency-free)');
+  assert.equal(values['Active for search'], 'Hash (dependency-free) (1)');
   assert.equal(values['HTTP endpoints configured'], '0');
   assert.equal(values['Title weight'].includes('0.3'), true);
 });
@@ -95,10 +110,10 @@ test('renderConfig lists every enabled endpoint by name alongside hash', () => {
     { id: 'ionos', name: 'IONOS bge-m3', enabled: true },
     { id: 'local', name: 'Local Ollama', enabled: false },
   ];
-  renderConfig(baseSettings({ embedding_provider: 'ionos' }).operational, endpoints);
+  renderConfig(baseSettings({ embedding_search_weights: { ionos: 1 } }).operational, endpoints);
   const values = kvValuesByKey(document.getElementById('embeddings-config'));
   assert.equal(values['Enabled providers'], 'hash, IONOS bge-m3');
-  assert.equal(values['Active for search'], 'IONOS bge-m3 (ionos)');
+  assert.equal(values['Active for search'], 'IONOS bge-m3 (ionos) (1)');
   assert.equal(values['HTTP endpoints configured'], '2');
 });
 
