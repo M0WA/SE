@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.0.35 - 2026-09-16
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* add admin embeddings page by @M0WA in https://github.com/M0WA/SE/pull/54
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.0.34...v4.0.35
+
+
 ## v4.0.34 - 2026-09-16
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
