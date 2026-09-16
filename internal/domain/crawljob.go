@@ -36,6 +36,12 @@ const (
 	CrawlPageThinContent      CrawlPageStatus = "thin_content"
 	CrawlPageRobotsDisallowed CrawlPageStatus = "robots_disallowed"
 	CrawlPageFetchFailed      CrawlPageStatus = "fetch_failed"
+	// CrawlPageAliased marks a page whose <link rel="canonical"> points at
+	// a different URL (see application.crawlLoop) -- its own outbound links
+	// are still followed, but it never gets a document row of its own, so
+	// (unlike CrawlPageIndexed) this status does not advance a job's
+	// PagesCrawled count.
+	CrawlPageAliased CrawlPageStatus = "aliased"
 )
 
 // CrawlPageEvent reports what happened to one URL a crawl job visited, with

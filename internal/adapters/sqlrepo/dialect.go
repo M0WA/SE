@@ -8,6 +8,7 @@ type Dialect interface {
 	UpsertDocumentSQL() string
 	UpsertDocumentEmbeddingSQL() string
 	UpsertSettingSQL() string
+	UpsertDocumentAliasSQL() string
 	CreateSchemaSQL() []string
 }
 
@@ -16,13 +17,14 @@ type sqliteDialect struct{}
 func (sqliteDialect) Name() string             { return "sqlite" }
 func (sqliteDialect) Placeholder(_ int) string { return "?" }
 func (sqliteDialect) UpsertDocumentSQL() string {
-	return `INSERT INTO documents (id, url, title, text, doc_length, embedding, norm_embedding, pagerank, host, version, crawled_at)
-	        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	return `INSERT INTO documents (id, url, title, text, doc_length, embedding, norm_embedding, pagerank, host, version, crawled_at, content_hash, simhash)
+	        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	        ON CONFLICT(id) DO UPDATE SET
 	          url=excluded.url, title=excluded.title, text=excluded.text,
 	          doc_length=excluded.doc_length, embedding=excluded.embedding,
 	          norm_embedding=excluded.norm_embedding, pagerank=excluded.pagerank,
-	          host=excluded.host, version=excluded.version, crawled_at=excluded.crawled_at`
+	          host=excluded.host, version=excluded.version, crawled_at=excluded.crawled_at,
+	          content_hash=excluded.content_hash, simhash=excluded.simhash`
 }
 func (sqliteDialect) UpsertDocumentEmbeddingSQL() string {
 	return `INSERT INTO document_embeddings (doc_id, provider, embedding, norm_embedding) VALUES (?, ?, ?, ?)
@@ -33,6 +35,11 @@ func (sqliteDialect) UpsertSettingSQL() string {
 	return `INSERT INTO app_settings (setting_key, value, updated_at) VALUES (?, ?, ?)
 	        ON CONFLICT(setting_key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`
 }
+func (sqliteDialect) UpsertDocumentAliasSQL() string {
+	return `INSERT INTO document_aliases (alias_url, canonical_id, reason, created_at) VALUES (?, ?, ?, ?)
+	        ON CONFLICT(alias_url) DO UPDATE SET
+	          canonical_id=excluded.canonical_id, reason=excluded.reason, created_at=excluded.created_at`
+}
 func (sqliteDialect) CreateSchemaSQL() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS documents (
@@ -41,13 +48,19 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			norm_embedding REAL NOT NULL DEFAULT 0,
 			pagerank REAL NOT NULL DEFAULT 0,
 			host TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1,
-			crawled_at TEXT NOT NULL DEFAULT ''
+			crawled_at TEXT NOT NULL DEFAULT '',
+			content_hash TEXT NOT NULL DEFAULT '', simhash TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE TABLE IF NOT EXISTS postings (
 			term TEXT NOT NULL, doc_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
 			term_freq INTEGER NOT NULL, PRIMARY KEY (term, doc_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_postings_term ON postings(term)`,
+		`CREATE TABLE IF NOT EXISTS document_aliases (
+			alias_url TEXT PRIMARY KEY, canonical_id TEXT NOT NULL,
+			reason TEXT NOT NULL, created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_document_aliases_canonical_id ON document_aliases(canonical_id)`,
 		`CREATE TABLE IF NOT EXISTS document_versions (
 			doc_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
 			version INTEGER NOT NULL, title TEXT, text TEXT,
@@ -115,13 +128,14 @@ type mysqlDialect struct{}
 func (mysqlDialect) Name() string             { return "mysql" }
 func (mysqlDialect) Placeholder(_ int) string { return "?" }
 func (mysqlDialect) UpsertDocumentSQL() string {
-	return `INSERT INTO documents (id, url, title, text, doc_length, embedding, norm_embedding, pagerank, host, version, crawled_at)
-	        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	return `INSERT INTO documents (id, url, title, text, doc_length, embedding, norm_embedding, pagerank, host, version, crawled_at, content_hash, simhash)
+	        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	        ON DUPLICATE KEY UPDATE
 	          url=VALUES(url), title=VALUES(title), text=VALUES(text),
 	          doc_length=VALUES(doc_length), embedding=VALUES(embedding),
 	          norm_embedding=VALUES(norm_embedding), pagerank=VALUES(pagerank),
-	          host=VALUES(host), version=VALUES(version), crawled_at=VALUES(crawled_at)`
+	          host=VALUES(host), version=VALUES(version), crawled_at=VALUES(crawled_at),
+	          content_hash=VALUES(content_hash), simhash=VALUES(simhash)`
 }
 func (mysqlDialect) UpsertDocumentEmbeddingSQL() string {
 	return `INSERT INTO document_embeddings (doc_id, provider, embedding, norm_embedding) VALUES (?, ?, ?, ?)
@@ -131,6 +145,10 @@ func (mysqlDialect) UpsertSettingSQL() string {
 	return `INSERT INTO app_settings (setting_key, value, updated_at) VALUES (?, ?, ?)
 	        ON DUPLICATE KEY UPDATE value=VALUES(value), updated_at=VALUES(updated_at)`
 }
+func (mysqlDialect) UpsertDocumentAliasSQL() string {
+	return `INSERT INTO document_aliases (alias_url, canonical_id, reason, created_at) VALUES (?, ?, ?, ?)
+	        ON DUPLICATE KEY UPDATE canonical_id=VALUES(canonical_id), reason=VALUES(reason), created_at=VALUES(created_at)`
+}
 func (mysqlDialect) CreateSchemaSQL() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS documents (
@@ -139,7 +157,8 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			norm_embedding DOUBLE NOT NULL DEFAULT 0,
 			pagerank DOUBLE NOT NULL DEFAULT 0,
 			host VARCHAR(255) NOT NULL DEFAULT '', version INT NOT NULL DEFAULT 1,
-			crawled_at VARCHAR(64) NOT NULL DEFAULT ''
+			crawled_at VARCHAR(64) NOT NULL DEFAULT '',
+			content_hash VARCHAR(64) NOT NULL DEFAULT '', simhash VARCHAR(16) NOT NULL DEFAULT ''
 		) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS postings (
 			term VARCHAR(128) NOT NULL, doc_id VARCHAR(64) NOT NULL,
@@ -147,6 +166,11 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			FOREIGN KEY (doc_id) REFERENCES documents(id) ON DELETE CASCADE
 		) ENGINE=InnoDB`,
 		`CREATE INDEX idx_postings_term ON postings(term)`,
+		`CREATE TABLE IF NOT EXISTS document_aliases (
+			alias_url VARCHAR(767) PRIMARY KEY, canonical_id VARCHAR(64) NOT NULL,
+			reason VARCHAR(32) NOT NULL, created_at VARCHAR(64) NOT NULL
+		) ENGINE=InnoDB`,
+		`CREATE INDEX idx_document_aliases_canonical_id ON document_aliases(canonical_id)`,
 		`CREATE TABLE IF NOT EXISTS document_versions (
 			doc_id VARCHAR(64) NOT NULL, version INT NOT NULL,
 			title TEXT, text LONGTEXT, doc_length INT NOT NULL, crawled_at VARCHAR(64) NOT NULL,
@@ -216,13 +240,14 @@ func (postgresDialect) Placeholder(pos int) string {
 	return "$" + strconv.Itoa(pos)
 }
 func (postgresDialect) UpsertDocumentSQL() string {
-	return `INSERT INTO documents (id, url, title, text, doc_length, embedding, norm_embedding, pagerank, host, version, crawled_at)
-	        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	return `INSERT INTO documents (id, url, title, text, doc_length, embedding, norm_embedding, pagerank, host, version, crawled_at, content_hash, simhash)
+	        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	        ON CONFLICT (id) DO UPDATE SET
 	          url=EXCLUDED.url, title=EXCLUDED.title, text=EXCLUDED.text,
 	          doc_length=EXCLUDED.doc_length, embedding=EXCLUDED.embedding,
 	          norm_embedding=EXCLUDED.norm_embedding, pagerank=EXCLUDED.pagerank,
-	          host=EXCLUDED.host, version=EXCLUDED.version, crawled_at=EXCLUDED.crawled_at`
+	          host=EXCLUDED.host, version=EXCLUDED.version, crawled_at=EXCLUDED.crawled_at,
+	          content_hash=EXCLUDED.content_hash, simhash=EXCLUDED.simhash`
 }
 func (postgresDialect) UpsertDocumentEmbeddingSQL() string {
 	return `INSERT INTO document_embeddings (doc_id, provider, embedding, norm_embedding) VALUES ($1, $2, $3, $4)
@@ -233,6 +258,11 @@ func (postgresDialect) UpsertSettingSQL() string {
 	return `INSERT INTO app_settings (setting_key, value, updated_at) VALUES ($1, $2, $3)
 	        ON CONFLICT (setting_key) DO UPDATE SET value=EXCLUDED.value, updated_at=EXCLUDED.updated_at`
 }
+func (postgresDialect) UpsertDocumentAliasSQL() string {
+	return `INSERT INTO document_aliases (alias_url, canonical_id, reason, created_at) VALUES ($1, $2, $3, $4)
+	        ON CONFLICT (alias_url) DO UPDATE SET
+	          canonical_id=EXCLUDED.canonical_id, reason=EXCLUDED.reason, created_at=EXCLUDED.created_at`
+}
 func (postgresDialect) CreateSchemaSQL() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS documents (
@@ -241,13 +271,19 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			norm_embedding DOUBLE PRECISION NOT NULL DEFAULT 0,
 			pagerank DOUBLE PRECISION NOT NULL DEFAULT 0,
 			host TEXT NOT NULL DEFAULT '', version INT NOT NULL DEFAULT 1,
-			crawled_at TEXT NOT NULL DEFAULT ''
+			crawled_at TEXT NOT NULL DEFAULT '',
+			content_hash TEXT NOT NULL DEFAULT '', simhash TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE TABLE IF NOT EXISTS postings (
 			term TEXT NOT NULL, doc_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
 			term_freq INT NOT NULL, PRIMARY KEY (term, doc_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_postings_term ON postings(term)`,
+		`CREATE TABLE IF NOT EXISTS document_aliases (
+			alias_url TEXT PRIMARY KEY, canonical_id TEXT NOT NULL,
+			reason TEXT NOT NULL, created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_document_aliases_canonical_id ON document_aliases(canonical_id)`,
 		`CREATE TABLE IF NOT EXISTS document_versions (
 			doc_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
 			version INT NOT NULL, title TEXT, text TEXT,

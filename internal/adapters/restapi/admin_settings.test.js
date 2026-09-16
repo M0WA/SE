@@ -20,6 +20,7 @@ const FULL_SETTINGS = {
     max_retained_crawl_jobs: 200,
     default_renderer: 'none',
     link_scope: 'domain',
+    url_alias_www_enabled: true,
     default_top_k: 10,
     semantic_candidate_pool_size: 200,
     ann_search_enabled: true,
@@ -284,6 +285,28 @@ test('saveSettings posts parsed tuning/operational values and re-applies the res
   assert.equal(gotBody.operational.ann_search_enabled, false);
   assert.equal(gotBody.operational.user_agent, 'custom-agent');
   assert.equal(document.getElementById('alpha').value, '0.6');
+});
+
+test('applySettings checks the url-alias-www-enabled box', () => {
+  const { applySettings } = loadFixture();
+  applySettings(FULL_SETTINGS);
+  assert.equal(document.getElementById('url-alias-www-enabled').checked, true);
+});
+
+test('saveSettings posts an unchecked url-alias-www-enabled box as false', async () => {
+  const { saveSettings } = loadFixture();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  document.getElementById('url-alias-www-enabled').checked = false;
+  let gotBody;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/settings')) {
+      gotBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => FULL_SETTINGS };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  await saveSettings();
+  assert.equal(gotBody.operational.url_alias_www_enabled, false);
 });
 
 test('applyOverrides fills blocked/boosted textareas from the response', () => {

@@ -634,6 +634,10 @@ type operationalValues struct {
 	// domain.OperationalSettingsValues field -- see there for the full
 	// doc comment.
 	EmbeddingTitleWeight float64 `json:"embedding_title_weight"`
+	// URLAliasWWWEnabled mirrors the same-named domain.
+	// OperationalSettingsValues field -- see there for the full doc
+	// comment.
+	URLAliasWWWEnabled bool `json:"url_alias_www_enabled"`
 }
 
 func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
@@ -662,6 +666,7 @@ func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 		EmbeddingHashEnabled:             v.EmbeddingHashEnabled,
 		EmbeddingSearchWeights:           v.EmbeddingSearchWeights,
 		EmbeddingTitleWeight:             v.EmbeddingTitleWeight,
+		URLAliasWWWEnabled:               v.URLAliasWWWEnabled,
 	}
 }
 
@@ -691,6 +696,7 @@ func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 		EmbeddingHashEnabled:             o.EmbeddingHashEnabled,
 		EmbeddingSearchWeights:           o.EmbeddingSearchWeights,
 		EmbeddingTitleWeight:             o.EmbeddingTitleWeight,
+		URLAliasWWWEnabled:               o.URLAliasWWWEnabled,
 	}
 }
 

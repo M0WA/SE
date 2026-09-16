@@ -128,6 +128,9 @@ func (r *benchHybridRepo) ListDocuments(context.Context, int, string) ([]domain.
 }
 
 func (r *benchHybridRepo) DeleteDocument(context.Context, string) error { return nil }
+func (r *benchHybridRepo) RecordDocumentAlias(context.Context, string, string, string) error {
+	return nil
+}
 
 var _ ports.SQLRepository = (*benchHybridRepo)(nil)
 

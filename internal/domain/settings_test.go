@@ -221,6 +221,7 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 		EmbeddingHashEnabled:             true,
 		EmbeddingSearchWeights:           map[string]float64{domain.EmbeddingProviderHash: 1},
 		EmbeddingTitleWeight:             0.3,
+		URLAliasWWWEnabled:               true,
 	}
 	if !reflect.DeepEqual(v, want) {
 		t.Errorf("expected defaults %+v, got %+v", want, v)

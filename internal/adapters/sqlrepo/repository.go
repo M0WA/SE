@@ -537,7 +537,16 @@ func (r *Repository) migrateDocumentColumns(ctx context.Context) error {
 	if err := addColumn("pagerank", "pagerank REAL NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	if err := addColumn("content_hash", "content_hash TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := addColumn("simhash", "simhash TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	if err := r.backfillHost(ctx); err != nil {
+		return err
+	}
+	if err := r.backfillContentFingerprints(ctx); err != nil {
 		return err
 	}
 	return r.backfillPageRank(ctx)
@@ -612,6 +621,44 @@ func (r *Repository) backfillHost(ctx context.Context) error {
 	for _, iu := range pending {
 		if _, err := r.db.ExecContext(ctx, updateSQL, hostOf(iu.url), iu.id); err != nil {
 			return fmt.Errorf("backfilling host for %s: %w", iu.id, err)
+		}
+	}
+	return nil
+}
+
+// backfillContentFingerprints fills in content_hash/simhash for any row
+// saved before those columns existed (they default to ”), computed
+// directly from that row's already-stored text -- no re-crawl needed. This
+// is what lets application.RunContentDedupJob find duplicates among
+// content crawled before this feature ever existed, the moment it's first
+// enabled, rather than only catching duplicates crawled from here on. A
+// no-op once every row has a fingerprint.
+func (r *Repository) backfillContentFingerprints(ctx context.Context) error {
+	rows, err := r.db.QueryContext(ctx, r.ph(`SELECT id, text FROM documents WHERE content_hash = %s`, 1), "")
+	if err != nil {
+		return fmt.Errorf("finding rows needing a content fingerprint backfill: %w", err)
+	}
+	type idText struct{ id, text string }
+	var pending []idText
+	for rows.Next() {
+		var it idText
+		if err := rows.Scan(&it.id, &it.text); err != nil {
+			rows.Close()
+			return fmt.Errorf("scanning row: %w", err)
+		}
+		pending = append(pending, it)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	updateSQL := r.ph(`UPDATE documents SET content_hash = %s, simhash = %s WHERE id = %s`, 1, 2, 3)
+	for _, it := range pending {
+		contentHash := domain.ContentHash(it.text)
+		simhash := domain.EncodeSimHash64(domain.SimHash64(it.text))
+		if _, err := r.db.ExecContext(ctx, updateSQL, contentHash, simhash, it.id); err != nil {
+			return fmt.Errorf("backfilling content fingerprint for %s: %w", it.id, err)
 		}
 	}
 	return nil
@@ -757,8 +804,17 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 		}
 	}
 
+	// content_hash/simhash are always computed, regardless of whether the
+	// content-dedup feature is enabled -- mirrors host/pagerank's own
+	// always-populated treatment. application.RunContentDedupJob is what
+	// actually acts on a match; this is just keeping every document's
+	// fingerprint current so that job never needs a separate backfill pass
+	// once it's turned on.
+	contentHash := domain.ContentHash(doc.Text)
+	simhash := domain.EncodeSimHash64(domain.SimHash64(doc.Text))
+
 	if _, err := tx.ExecContext(ctx, r.dialect.UpsertDocumentSQL(),
-		doc.ID, doc.URL, doc.Title, doc.Text, len(tokens), embBlob, normEmbedding, pagerank, host, version, now,
+		doc.ID, doc.URL, doc.Title, doc.Text, len(tokens), embBlob, normEmbedding, pagerank, host, version, now, contentHash, simhash,
 	); err != nil {
 		return fmt.Errorf("saving document: %w", err)
 	}
@@ -1438,6 +1494,17 @@ func (r *Repository) DeleteDocument(ctx context.Context, docID string) error {
 	}
 
 	return tx.Commit()
+}
+
+// RecordDocumentAlias upserts one document_aliases row -- see
+// ports.SQLRepository's own doc comment for why canonicalID is never
+// required to already name an existing documents row.
+func (r *Repository) RecordDocumentAlias(ctx context.Context, aliasURL, canonicalID, reason string) error {
+	now := time.Now().UTC().Format(crawledAtLayout)
+	if _, err := r.db.ExecContext(ctx, r.dialect.UpsertDocumentAliasSQL(), aliasURL, canonicalID, reason, now); err != nil {
+		return fmt.Errorf("recording document alias: %w", err)
+	}
+	return nil
 }
 
 // ListDocuments lists indexed pages, most recent ID first, optionally

@@ -185,7 +185,14 @@
             <option value="any">Any domain</option>
           </select>
         </div>
-        <p class="tuning-hint">Defaults: 8s timeout, 20 pages, 50 characters minimum, 250ms delay, 5120 KB (5 MB) response cap, 200 retained crawl jobs, no rendering, seed's domain including subdomains. Rendering a page in a real browser is much slower than a plain fetch (each page opens its own browser tab) and downloads that browser engine the first time it's ever used -- turn it on only for sites whose real content needs JavaScript to appear. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org. "Same domain, any subdomain, any top-level domain" is broader still — from a seed of example.com it also follows example.org and www.example.de (the same domain name, any subdomain, under any TLD), but not other.com.</p>
+        <div class="form-row form-row-check">
+          <label for="url-alias-www-enabled">
+            <input id="url-alias-www-enabled" type="checkbox">
+            Treat www. and the bare domain as the same page
+          </label>
+          <p class="tuning-hint">When crawling a page, folds a leading "www." off its host before deciding its identity — so www.example.com/x and example.com/x are always the same document (stored under the bare-domain URL), never crawled or indexed twice. Only affects future crawls; already-indexed duplicates from before this was enabled (or before it existed) are found and merged separately by content dedup, not by this setting. Turn off only for a site that genuinely serves different content at www. than at its bare domain.</p>
+        </div>
+        <p class="tuning-hint">Defaults: 8s timeout, 20 pages, 50 characters minimum, 250ms delay, 5120 KB (5 MB) response cap, 200 retained crawl jobs, no rendering, seed's domain including subdomains, www. folding on. Rendering a page in a real browser is much slower than a plain fetch (each page opens its own browser tab) and downloads that browser engine the first time it's ever used -- turn it on only for sites whose real content needs JavaScript to appear. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org. "Same domain, any subdomain, any top-level domain" is broader still — from a seed of example.com it also follows example.org and www.example.de (the same domain name, any subdomain, under any TLD), but not other.com.</p>
       </div>
 
       <div class="subpanel">

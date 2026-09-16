@@ -117,3 +117,27 @@ func TestAllDialects_UpsertSettingSQLNonEmpty(t *testing.T) {
 		}
 	}
 }
+
+func TestAllDialects_CreateSchemaSQLIncludesDocumentAliases(t *testing.T) {
+	for _, driver := range []string{"sqlite", "mysql", "postgres"} {
+		stmts := sqlrepo.NewDialect(driver).CreateSchemaSQL()
+		found := false
+		for _, stmt := range stmts {
+			if strings.Contains(stmt, "document_aliases") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected a document_aliases table statement for %s", driver)
+		}
+	}
+}
+
+func TestAllDialects_UpsertDocumentAliasSQLNonEmpty(t *testing.T) {
+	for _, driver := range []string{"sqlite", "mysql", "postgres"} {
+		if sqlrepo.NewDialect(driver).UpsertDocumentAliasSQL() == "" {
+			t.Errorf("expected an upsert-document-alias statement for %s", driver)
+		}
+	}
+}

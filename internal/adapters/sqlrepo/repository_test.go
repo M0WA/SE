@@ -1043,6 +1043,90 @@ func TestDeleteDocument_NotFound(t *testing.T) {
 	}
 }
 
+// TestRecordDocumentAlias_UpsertsRow proves a basic alias round-trips.
+func TestRecordDocumentAlias_UpsertsRow(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testalias%d?mode=memory&cache=shared", n)
+	raw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open raw connection: %v", err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+
+	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to create test repository: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	ctx := context.Background()
+	if err := repo.RecordDocumentAlias(ctx, "https://www.example.com/x", "doc-canonical", domain.DocumentAliasReasonCanonicalTag); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var canonicalID, reason string
+	if err := raw.QueryRow(`SELECT canonical_id, reason FROM document_aliases WHERE alias_url = 'https://www.example.com/x'`).Scan(&canonicalID, &reason); err != nil {
+		t.Fatalf("unexpected error querying the alias row: %v", err)
+	}
+	if canonicalID != "doc-canonical" || reason != domain.DocumentAliasReasonCanonicalTag {
+		t.Errorf("expected canonical_id=doc-canonical, reason=%s, got canonical_id=%s, reason=%s",
+			domain.DocumentAliasReasonCanonicalTag, canonicalID, reason)
+	}
+}
+
+// TestRecordDocumentAlias_ToleratesForwardDeclaredCanonicalID proves the
+// whole reason document_aliases has no foreign key on canonical_id: the
+// canonical target may not be crawled yet when its alias is discovered.
+func TestRecordDocumentAlias_ToleratesForwardDeclaredCanonicalID(t *testing.T) {
+	repo := newTestRepo(t)
+	err := repo.RecordDocumentAlias(context.Background(), "https://www.example.com/x", "doc-not-yet-crawled", domain.DocumentAliasReasonCanonicalTag)
+	if err != nil {
+		t.Errorf("expected no error recording an alias for a not-yet-existing canonical document, got %v", err)
+	}
+}
+
+// TestRecordDocumentAlias_UpsertReplacesExisting proves recording the same
+// alias URL again (e.g. a re-crawl finding a different canonical target)
+// replaces the previous mapping rather than erroring or duplicating.
+func TestRecordDocumentAlias_UpsertReplacesExisting(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testaliasupsert%d?mode=memory&cache=shared", n)
+	raw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open raw connection: %v", err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+
+	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to create test repository: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	ctx := context.Background()
+	if err := repo.RecordDocumentAlias(ctx, "https://www.example.com/x", "doc-old", domain.DocumentAliasReasonCanonicalTag); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := repo.RecordDocumentAlias(ctx, "https://www.example.com/x", "doc-new", domain.DocumentAliasReasonContentExact); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var count int
+	if err := raw.QueryRow(`SELECT COUNT(*) FROM document_aliases WHERE alias_url = 'https://www.example.com/x'`).Scan(&count); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected exactly one row (upserted, not duplicated), got %d", count)
+	}
+	var canonicalID string
+	if err := raw.QueryRow(`SELECT canonical_id FROM document_aliases WHERE alias_url = 'https://www.example.com/x'`).Scan(&canonicalID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if canonicalID != "doc-new" {
+		t.Errorf("expected the second call's canonical_id to win, got %q", canonicalID)
+	}
+}
+
 func TestListDocuments_RespectsLimit(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
@@ -1487,6 +1571,48 @@ func TestSaveDocument_SetsHostFromURL(t *testing.T) {
 	}
 }
 
+// TestSaveDocument_ComputesContentFingerprints proves SaveDocument always
+// writes content_hash/simhash, regardless of whether the content-dedup
+// feature is enabled -- see domain.ContentHash/SimHash64. Uses a direct
+// sqlite connection (rather than newTestRepo, which also transparently
+// runs this suite against Postgres) since verifying these columns needs
+// raw SQL access this port doesn't otherwise expose -- the pure Go
+// fingerprint functions themselves are dialect-independent, so this is
+// only ever testing SaveDocument's own wiring, not dialect-specific SQL.
+func TestSaveDocument_ComputesContentFingerprints(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testfingerprint%d?mode=memory&cache=shared", n)
+	raw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open raw connection: %v", err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+
+	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to create test repository: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	ctx := context.Background()
+	const text = "Some Freshly Crawled Text Content"
+	doc := domain.Document{ID: "doc-1", URL: "https://example.com/page", Title: "A", Text: text}
+	if err := repo.SaveDocument(ctx, doc, map[string][]float32{domain.EmbeddingProviderHash: {1}}, 5, 1); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var contentHash, simhash string
+	if err := raw.QueryRow(`SELECT content_hash, simhash FROM documents WHERE id = 'doc-1'`).Scan(&contentHash, &simhash); err != nil {
+		t.Fatalf("unexpected error querying fingerprints: %v", err)
+	}
+	if want := domain.ContentHash(text); contentHash != want {
+		t.Errorf("expected content_hash=%q, got %q", want, contentHash)
+	}
+	if want := domain.EncodeSimHash64(domain.SimHash64(text)); simhash != want {
+		t.Errorf("expected simhash=%q, got %q", want, simhash)
+	}
+}
+
 func TestSaveDocument_UnchangedContentKeepsVersion(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
@@ -1892,6 +2018,51 @@ func TestMigrateDocumentColumns_BackfillsHostOnPreExistingRows(t *testing.T) {
 	}
 	if docs[0].Version != 1 {
 		t.Errorf("expected a backfilled row to default to version 1, got %d", docs[0].Version)
+	}
+}
+
+// TestMigrateDocumentColumns_BackfillsContentFingerprintsOnPreExistingRows
+// proves a database created before content_hash/simhash existed gets both
+// computed directly from the row's already-stored text, with no re-crawl
+// needed -- exactly what lets application.RunContentDedupJob find
+// duplicates among content crawled before this feature ever existed.
+func TestMigrateDocumentColumns_BackfillsContentFingerprintsOnPreExistingRows(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testmigratefingerprint%d?mode=memory&cache=shared", n)
+
+	pre, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open pre-migration DB: %v", err)
+	}
+	if _, err := pre.Exec(`CREATE TABLE documents (
+		id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT, text TEXT,
+		doc_length INTEGER NOT NULL, embedding BLOB NOT NULL
+	)`); err != nil {
+		t.Fatalf("failed to create legacy schema: %v", err)
+	}
+	const legacyText = "Some Pre-Existing Crawled Text"
+	if _, err := pre.Exec(`INSERT INTO documents (id, url, title, text, doc_length, embedding)
+	                       VALUES ('doc-1', 'https://old.example/page', 'Old', ?, 10, ?)`,
+		legacyText, sqlrepo.EncodeEmbedding(nil)); err != nil {
+		t.Fatalf("failed to insert legacy row: %v", err)
+	}
+	t.Cleanup(func() { _ = pre.Close() })
+
+	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("expected New to migrate the legacy schema without error, got: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	var contentHash, simhash string
+	if err := pre.QueryRow(`SELECT content_hash, simhash FROM documents WHERE id = 'doc-1'`).Scan(&contentHash, &simhash); err != nil {
+		t.Fatalf("unexpected error querying backfilled fingerprints: %v", err)
+	}
+	if want := domain.ContentHash(legacyText); contentHash != want {
+		t.Errorf("expected content_hash backfilled to %q, got %q", want, contentHash)
+	}
+	if want := domain.EncodeSimHash64(domain.SimHash64(legacyText)); simhash != want {
+		t.Errorf("expected simhash backfilled to %q, got %q", want, simhash)
 	}
 }
 

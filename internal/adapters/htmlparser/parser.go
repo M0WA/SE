@@ -8,10 +8,17 @@ import (
 	"golang.org/x/net/html"
 )
 
-func Parse(r io.Reader, pageURL string) (title, text string, links []string) {
+// Parse extracts a page's title, visible text, outbound links, and its
+// declared canonical URL (from <link rel="canonical" href="...">, if
+// present) -- see application.crawlLoop, which skips ever creating a
+// document row for a page whose canonical points elsewhere. canonicalURL
+// is "" when no such tag exists, resolved the same way <a href> links are
+// (relative to pageURL, fragment dropped), and only kept if it resolves to
+// an http/https URL.
+func Parse(r io.Reader, pageURL string) (title, text string, links []string, canonicalURL string) {
 	doc, err := html.Parse(r)
 	if err != nil {
-		return "", "", nil
+		return "", "", nil, ""
 	}
 
 	base, _ := url.Parse(pageURL)
@@ -45,6 +52,25 @@ func Parse(r io.Reader, pageURL string) (title, text string, links []string) {
 						}
 					}
 				}
+			case "link":
+				var rel, href string
+				for _, a := range n.Attr {
+					switch strings.ToLower(a.Key) {
+					case "rel":
+						rel = strings.ToLower(strings.TrimSpace(a.Val))
+					case "href":
+						href = a.Val
+					}
+				}
+				if rel == "canonical" && href != "" {
+					if u, err := url.Parse(href); err == nil && base != nil {
+						abs := base.ResolveReference(u)
+						abs.Fragment = ""
+						if abs.Scheme == "http" || abs.Scheme == "https" {
+							canonicalURL = abs.String()
+						}
+					}
+				}
 			}
 		}
 
@@ -67,5 +93,5 @@ func Parse(r io.Reader, pageURL string) (title, text string, links []string) {
 	if title == "" {
 		title = pageURL
 	}
-	return title, text, links
+	return title, text, links, canonicalURL
 }

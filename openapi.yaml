@@ -1311,6 +1311,18 @@ components:
                 "hash", a local computation with no rate limit of its own.
                 Only takes effect for documents crawled, re-crawled, or
                 explicitly recomputed after the change -- not retroactive.
+            url_alias_www_enabled:
+              type: boolean
+              description: >-
+                When crawling a page, folds a leading "www." off its host
+                before deciding its canonical identity, so
+                www.example.com/x and example.com/x are always the same
+                document (stored under the bare-domain URL) -- never
+                crawled or indexed twice. Defaults true. Only affects
+                future crawls; an already-indexed www/bare-domain
+                duplicate pair from before this was enabled (or before it
+                existed) is found and merged separately by content dedup,
+                not retroactively by this setting.
 
     Overrides:
       type: object

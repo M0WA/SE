@@ -181,6 +181,18 @@ type SQLRepository interface {
 	HostsIndexed(ctx context.Context, hosts []string) (map[string]bool, error)
 	ListDocuments(ctx context.Context, limit int, host string) ([]domain.IndexedDocument, error)
 	DeleteDocument(ctx context.Context, docID string) error
+	// RecordDocumentAlias upserts one document_aliases row: aliasURL's
+	// content lives under canonicalID, not its own document row -- called
+	// by application.crawlLoop when a fetched page's <link rel="canonical">
+	// points elsewhere (reason domain.DocumentAliasReasonCanonicalTag), and
+	// by application.RunContentDedupJob's MergeDocuments when two
+	// independently-crawled documents turn out to have duplicate/near-
+	// duplicate content (reason domain.DocumentAliasReasonContentExact/
+	// ContentSimHash). canonicalID is deliberately NOT required to already
+	// exist in documents -- the canonical target may not be crawled yet
+	// (a forward-declared alias); it resolves itself once that document is
+	// actually saved.
+	RecordDocumentAlias(ctx context.Context, aliasURL, canonicalID, reason string) error
 }
 
 // PageRankRepository is the narrow port application.RunPageRankJob needs:

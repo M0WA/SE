@@ -12,6 +12,7 @@
   const maxRetainedCrawlJobsEl = document.getElementById('max-retained-crawl-jobs');
   const defaultRendererEl = document.getElementById('default-renderer');
   const defaultLinkScopeEl = document.getElementById('default-link-scope');
+  const urlAliasWWWEnabledEl = document.getElementById('url-alias-www-enabled');
   const defaultTopKEl = document.getElementById('default-top-k');
   const semanticPoolSizeEl = document.getElementById('semantic-pool-size');
   const annSearchEnabledEl = document.getElementById('ann-search-enabled');
@@ -168,6 +169,7 @@
     maxRetainedCrawlJobsEl.value = s.operational.max_retained_crawl_jobs;
     defaultRendererEl.value = s.operational.default_renderer || 'none';
     defaultLinkScopeEl.value = s.operational.link_scope || 'domain';
+    urlAliasWWWEnabledEl.checked = s.operational.url_alias_www_enabled;
     defaultTopKEl.value = s.operational.default_top_k;
     semanticPoolSizeEl.value = s.operational.semantic_candidate_pool_size;
     annSearchEnabledEl.checked = s.operational.ann_search_enabled;
@@ -225,6 +227,7 @@
         max_retained_crawl_jobs: parseInt(maxRetainedCrawlJobsEl.value, 10),
         default_renderer: defaultRendererEl.value,
         link_scope: defaultLinkScopeEl.value,
+        url_alias_www_enabled: urlAliasWWWEnabledEl.checked,
         default_top_k: parseInt(defaultTopKEl.value, 10),
         semantic_candidate_pool_size: parseInt(semanticPoolSizeEl.value, 10),
         ann_search_enabled: annSearchEnabledEl.checked,
