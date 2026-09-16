@@ -1310,6 +1310,10 @@ func (h *Handler) handleAdminPageRankPage(w http.ResponseWriter, r *http.Request
 	serveStatic(w, r, "text/html; charset=utf-8", adminPageRankHTML)
 }
 
+func (h *Handler) handleAdminEmbeddingsPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminEmbeddingsHTML)
+}
+
 type adminPageRankResponse struct {
 	TotalDocs   int     `json:"total_docs"`
 	MinPageRank float64 `json:"min_pagerank"`

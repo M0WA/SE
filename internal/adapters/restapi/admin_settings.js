@@ -47,9 +47,6 @@
   const tileCrawlDefaultEl = document.getElementById('tile-crawl-default');
   const tileBlockedEl = document.getElementById('tile-blocked');
   const tileBoostedEl = document.getElementById('tile-boosted');
-  const embeddingRecomputeBtnEl = document.getElementById('embedding-recompute-btn');
-  const embeddingRecomputeStatusEl = document.getElementById('embedding-recompute-status');
-  const embeddingRecomputeResultEl = document.getElementById('embedding-recompute-result');
 
   // renderSettingsSummary/renderOverridesSummary fill the read-only "at a
   // glance" tiles above the (collapsed-by-default) settings groups, so the
@@ -302,69 +299,9 @@
     }
   }
 
-  // embeddingRecomputePollTimer keeps polling GET
-  // /admin/api/embeddings/recompute while a recompute is in progress --
-  // triggered by ANY admin-server instance, not just this browser's own
-  // click below -- mirroring admin_pagerank.js's pollTimer for the same
-  // reason: this page should reflect real cross-process state.
-  let embeddingRecomputePollTimer = null;
-
-  function renderEmbeddingRecomputeStatus(s) {
-    setButtonLoading(embeddingRecomputeBtnEl, s.in_progress, 'Recomputing…');
-    if (s.in_progress) {
-      embeddingRecomputeStatusEl.textContent = 'Recomputing… (' + s.total_docs + ' documents in the corpus)';
-      clear(embeddingRecomputeResultEl);
-      if (!embeddingRecomputePollTimer) {
-        embeddingRecomputePollTimer = setTimeout(() => { embeddingRecomputePollTimer = null; loadEmbeddingRecomputeStatus(); }, 2000);
-      }
-      return;
-    }
-    if (embeddingRecomputePollTimer) {
-      clearTimeout(embeddingRecomputePollTimer);
-      embeddingRecomputePollTimer = null;
-    }
-    if (!s.last_run_at) {
-      embeddingRecomputeStatusEl.textContent = 'No recompute has run yet on this instance.';
-      clear(embeddingRecomputeResultEl);
-      return;
-    }
-    embeddingRecomputeStatusEl.textContent = 'Last run: ' + new Date(s.last_run_at).toLocaleString();
-    clear(embeddingRecomputeResultEl);
-    kvRow(embeddingRecomputeResultEl, 'Documents recomputed', String(s.documents));
-    kvRow(embeddingRecomputeResultEl, 'Failed', String(s.failed));
-    kvRow(embeddingRecomputeResultEl, 'Duration', s.duration_ms + ' ms');
-  }
-
-  async function loadEmbeddingRecomputeStatus() {
-    try {
-      renderEmbeddingRecomputeStatus(await getJSON('/admin/api/embeddings/recompute'));
-    } catch (err) {
-      embeddingRecomputeStatusEl.textContent = 'Could not load embedding recompute status: ' + err.message;
-    }
-  }
-
-  // The recompute itself runs in the background on the server (see
-  // handleAdminEmbeddingsRecomputeStart) -- this click only starts it and
-  // switches to polling loadEmbeddingRecomputeStatus for the result, unlike
-  // saveSettings's plain await-then-render (PageRank's own recompute is
-  // synchronous; this one, one Embed call per document, is not).
-  embeddingRecomputeBtnEl.addEventListener('click', async () => {
-    setButtonLoading(embeddingRecomputeBtnEl, true, 'Recomputing…');
-    embeddingRecomputeStatusEl.textContent = 'Starting…';
-    clear(embeddingRecomputeResultEl);
-    try {
-      await postJSON('/admin/api/embeddings/recompute', {});
-      await loadEmbeddingRecomputeStatus();
-    } catch (err) {
-      embeddingRecomputeStatusEl.textContent = 'Could not start recompute: ' + err.message;
-      setButtonLoading(embeddingRecomputeBtnEl, false);
-    }
-  });
-
   wireSignOut();
   loadSettings();
   loadOverrides();
-  loadEmbeddingRecomputeStatus();
 
   // Exports for the Node test runner only -- `typeof module` is undefined in
   // a browser's <script> tag, so this is a no-op there. See
@@ -376,7 +313,6 @@
       factorsToText, parseFactorLines,
       renderSettingsSummary, renderOverridesSummary,
       toggleEmbeddingHTTPFields,
-      renderEmbeddingRecomputeStatus, loadEmbeddingRecomputeStatus,
       loadEmbeddingModels,
     };
   }
