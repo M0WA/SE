@@ -34,6 +34,11 @@ const schedulerPollInterval = 3 * time.Second
 // is independent of any individual scheduled crawl's own interval.
 const pageRankPollInterval = 60 * time.Second
 
+// contentDedupPollInterval is how often runContentDedupScheduler checks
+// whether the admin-configured recompute interval has elapsed -- mirrors
+// pageRankPollInterval.
+const contentDedupPollInterval = 60 * time.Second
+
 // crawlJobPrunePollInterval is how often runCrawlJobPruner deletes crawl
 // jobs beyond the admin-configured retention limit -- infrequent, since
 // unlike the old in-memory store's per-Create trim, persistent storage
@@ -127,6 +132,84 @@ func (p *pageRankRecomputer) lastRun() time.Time {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.last
+}
+
+// runContentDedupScheduler recomputes content-dedup merges once immediately
+// (so a fresh process doesn't wait a full interval before the first pass
+// runs, mirroring runPageRankScheduler), then again every time at least
+// opSettings.ContentDedupIntervalMinutes has elapsed since the last run --
+// checked on a fixed, shorter poll tick so an admin edit to that interval
+// takes effect promptly. A recompute triggered by a just-completed crawl
+// (see restapi.Config.OnCrawlComplete in main below) also resets this
+// timer. Unlike PageRank, this whole pass is opt-in and destructive (see
+// domain.OperationalSettingsValues.ContentDedupEnabled) -- every actual run
+// is gated on it inside contentDedupRecomputer.recompute, so both this
+// scheduler's own startup/ticker calls and an external trigger (the
+// post-crawl hook, or the admin page's own "recompute now" button, which
+// calls application.RunContentDedupJobWithStatus directly rather than
+// through this recomputer) are safe to call unconditionally.
+func runContentDedupScheduler(ctx context.Context, repo ports.ContentDedupRepository, settingsStore ports.SettingsStore, opSettings *domain.OperationalSettings) *contentDedupRecomputer {
+	cd := &contentDedupRecomputer{ctx: ctx, repo: repo, settingsStore: settingsStore, opSettings: opSettings}
+	go cd.recompute()
+
+	go func() {
+		ticker := time.NewTicker(contentDedupPollInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				interval := time.Duration(opSettings.Get().ContentDedupIntervalMinutes) * time.Minute
+				if time.Since(cd.lastRun()) >= interval {
+					cd.recompute()
+				}
+			}
+		}
+	}()
+	return cd
+}
+
+// contentDedupRecomputer tracks when application.RunContentDedupJob last
+// ran -- see pageRankRecomputer's identical doc comment for why this
+// shared-clock/running-guard shape exists.
+type contentDedupRecomputer struct {
+	ctx           context.Context
+	repo          ports.ContentDedupRepository
+	settingsStore ports.SettingsStore
+	opSettings    *domain.OperationalSettings
+	mu            sync.Mutex
+	last          time.Time
+	running       bool
+}
+
+func (c *contentDedupRecomputer) recompute() {
+	v := c.opSettings.Get()
+	if !v.ContentDedupEnabled {
+		return
+	}
+	c.mu.Lock()
+	if c.running {
+		c.mu.Unlock()
+		return
+	}
+	c.running = true
+	c.mu.Unlock()
+
+	if _, err := application.RunContentDedupJobWithStatus(c.ctx, c.repo, c.settingsStore, v.ContentDedupMethod, v.ContentDedupSimHashMaxDistance); err != nil {
+		log.Printf("recomputing content dedup: %v", err)
+	}
+
+	c.mu.Lock()
+	c.running = false
+	c.last = time.Now()
+	c.mu.Unlock()
+}
+
+func (c *contentDedupRecomputer) lastRun() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.last
 }
 
 // runScheduler triggers every scheduled crawl that's due, once immediately
@@ -234,16 +317,19 @@ func main() {
 	crawlerSvc := application.NewSQLCrawlerService(renderingFetcher, robotsChecker, repo, embedders, bootstrap.EmbedderRateLimits(endpoints), parseHTML, opSettings)
 
 	pageRank := runPageRankScheduler(ctx, repo, repo, opSettings)
+	contentDedup := runContentDedupScheduler(ctx, repo, repo, opSettings)
 
 	handler := restapi.New(restapi.Config{
 		Crawler:   crawlerSvc,
 		CrawlJobs: repo,
 		Health:    repo,
-		// A crawl just changed the link graph -- recompute right away
-		// (in the background, so a slow recompute never delays the crawl
-		// job's own reported completion or the concurrency semaphore's
-		// release) in addition to pageRank's own periodic ticker.
-		OnCrawlComplete: func() { go pageRank.recompute() },
+		// A crawl just changed the corpus -- recompute right away (in the
+		// background, so a slow recompute never delays the crawl job's own
+		// reported completion or the concurrency semaphore's release) in
+		// addition to each recomputer's own periodic ticker.
+		// contentDedup.recompute() is a no-op when ContentDedupEnabled is
+		// off (see its own doc comment).
+		OnCrawlComplete: func() { go pageRank.recompute(); go contentDedup.recompute() },
 		// See requireCrawlInternalToken's doc comment: opt-in shared
 		// secret admin-server's crawlclient.Client must send back --
 		// empty by default, so an existing deployment that hasn't set

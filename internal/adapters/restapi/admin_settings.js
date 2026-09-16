@@ -13,6 +13,10 @@
   const defaultRendererEl = document.getElementById('default-renderer');
   const defaultLinkScopeEl = document.getElementById('default-link-scope');
   const urlAliasWWWEnabledEl = document.getElementById('url-alias-www-enabled');
+  const contentDedupEnabledEl = document.getElementById('content-dedup-enabled');
+  const contentDedupMethodEl = document.getElementById('content-dedup-method');
+  const contentDedupSimHashMaxDistanceEl = document.getElementById('content-dedup-simhash-max-distance');
+  const contentDedupIntervalEl = document.getElementById('content-dedup-interval');
   const defaultTopKEl = document.getElementById('default-top-k');
   const semanticPoolSizeEl = document.getElementById('semantic-pool-size');
   const annSearchEnabledEl = document.getElementById('ann-search-enabled');
@@ -170,6 +174,10 @@
     defaultRendererEl.value = s.operational.default_renderer || 'none';
     defaultLinkScopeEl.value = s.operational.link_scope || 'domain';
     urlAliasWWWEnabledEl.checked = s.operational.url_alias_www_enabled;
+    contentDedupEnabledEl.checked = s.operational.content_dedup_enabled;
+    contentDedupMethodEl.value = s.operational.content_dedup_method || 'exact';
+    contentDedupSimHashMaxDistanceEl.value = s.operational.content_dedup_simhash_max_distance;
+    contentDedupIntervalEl.value = s.operational.content_dedup_interval_minutes;
     defaultTopKEl.value = s.operational.default_top_k;
     semanticPoolSizeEl.value = s.operational.semantic_candidate_pool_size;
     annSearchEnabledEl.checked = s.operational.ann_search_enabled;
@@ -228,6 +236,10 @@
         default_renderer: defaultRendererEl.value,
         link_scope: defaultLinkScopeEl.value,
         url_alias_www_enabled: urlAliasWWWEnabledEl.checked,
+        content_dedup_enabled: contentDedupEnabledEl.checked,
+        content_dedup_method: contentDedupMethodEl.value,
+        content_dedup_simhash_max_distance: parseInt(contentDedupSimHashMaxDistanceEl.value, 10),
+        content_dedup_interval_minutes: parseInt(contentDedupIntervalEl.value, 10),
         default_top_k: parseInt(defaultTopKEl.value, 10),
         semantic_candidate_pool_size: parseInt(semanticPoolSizeEl.value, 10),
         ann_search_enabled: annSearchEnabledEl.checked,

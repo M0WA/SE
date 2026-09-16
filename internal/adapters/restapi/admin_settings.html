@@ -24,6 +24,7 @@
     <a href="/admin/search">Search</a>
     <a href="/admin/pagerank">PageRank</a>
     <a href="/admin/embeddings">Embeddings</a>
+    <a href="/admin/content_dedup">Content dedup</a>
     <a href="/admin/database">Database</a>
   </nav>
 
@@ -202,6 +203,33 @@
           <input id="max-document-versions" class="field" type="number" step="1" min="1" required>
         </div>
         <p class="tuning-hint">Default: 5. A document that's never changed always has exactly one version regardless of this setting -- it only bounds how much prior history a frequently-changing page accumulates. Lowering it prunes existing extra versions the next time that document is re-crawled, not immediately.</p>
+      </div>
+
+      <div class="subpanel">
+        <h4>Content dedup</h4>
+        <div class="form-row form-row-check">
+          <label for="content-dedup-enabled">
+            <input id="content-dedup-enabled" type="checkbox">
+            Merge duplicate/near-duplicate documents
+          </label>
+          <p class="tuning-hint">Finds documents that are byte-identical or near-identical to another already-indexed document (a mirror, a copy under a different host, ...) and merges each group into one canonical document, so a search never lists the same content twice. Off by default: a merge deletes the losing documents' own rows (their own link/version/embedding history is discarded, not migrated to the survivor), so review the results on <a href="/admin/content_dedup">Content dedup</a> after turning this on for the first time. See that page to trigger an immediate recompute and see exactly what got merged.</p>
+        </div>
+        <div class="form-row">
+          <label for="content-dedup-method">Matching method</label><br>
+          <select id="content-dedup-method" class="field">
+            <option value="exact">Exact — identical normalized text only</option>
+            <option value="simhash">Near-duplicate — SimHash fingerprint within a distance threshold</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="content-dedup-simhash-max-distance">Near-duplicate threshold — max SimHash Hamming distance still considered a match (only used by the near-duplicate method)</label><br>
+          <input id="content-dedup-simhash-max-distance" class="field" type="number" step="1" min="1" max="10" required>
+        </div>
+        <div class="form-row">
+          <label for="content-dedup-interval">Recompute interval — minutes between automatic content-dedup passes</label><br>
+          <input id="content-dedup-interval" class="field" type="number" step="1" min="15" required>
+        </div>
+        <p class="tuning-hint">Defaults: off, exact method, distance 3, 120 minute interval (minimum 15). A recompute also always runs right after a crawl finishes, once enabled.</p>
       </div>
     </details>
 

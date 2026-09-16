@@ -109,6 +109,12 @@ func (r *benchHybridRepo) DocumentIDsByHost(context.Context, []string) ([]string
 	return nil, nil
 }
 
+// ResolveAliasHosts is unused by this benchmark (no aliases exist here) --
+// a no-op stub only to satisfy ports.SQLRepository.
+func (r *benchHybridRepo) ResolveAliasHosts(context.Context, []string) ([]string, error) {
+	return nil, nil
+}
+
 // HostsIndexed is unused by this benchmark (no crawling happens here) --
 // a no-op stub only to satisfy ports.SQLRepository.
 func (r *benchHybridRepo) HostsIndexed(context.Context, []string) (map[string]bool, error) {

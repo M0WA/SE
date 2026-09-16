@@ -593,6 +593,65 @@ paths:
           description: A recompute is already running (triggered by this or another admin-server instance).
         "503": { $ref: "#/components/responses/NotConfigured" }
 
+  /admin/api/content-dedup:
+    get:
+      tags: [admin]
+      summary: Content-dedup recompute status
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContentDedupStatus" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/content-dedup/recompute:
+    post:
+      tags: [admin]
+      summary: Start a full-corpus content-dedup pass in the background
+      description: >-
+        Scans every document's content fingerprint, groups duplicates/
+        near-duplicates per the configured method and threshold (see
+        Settings), and merges each group into one canonical document --
+        deleting the losing documents' own rows. Fire-and-forget, like
+        embedding recompute: the response returns immediately (202) and the
+        run continues in the background, its progress visible via GET on
+        this same path.
+      responses:
+        "202":
+          description: Accepted -- the recompute has started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { started: { type: boolean } }
+        "409":
+          description: A recompute is already running (triggered by this or another process).
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/content-dedup/alias-groups:
+    get:
+      tags: [admin]
+      summary: List merged canonical documents and their alias URLs
+      description: >-
+        The "what actually got merged" transparency listing -- every
+        canonical document with at least one alias URL folded into it (a
+        rel=canonical tag, a www fold, or a content-dedup merge), paginated.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AliasGroupsResponse" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
   /admin/api/embeddings/models:
     post:
       tags: [admin]
@@ -1323,6 +1382,40 @@ components:
                 duplicate pair from before this was enabled (or before it
                 existed) is found and merged separately by content dedup,
                 not retroactively by this setting.
+            content_dedup_enabled:
+              type: boolean
+              description: >-
+                Whether the periodic content-dedup pass (cmd/crawl's
+                ticker, plus a post-crawl trigger, plus GET/POST
+                /admin/api/content-dedup/recompute) actually merges
+                duplicate/near-duplicate documents. Defaults false: a merge
+                deletes the losing documents' own rows, so this is opt-in
+                rather than on by default like url_alias_www_enabled.
+            content_dedup_method:
+              type: string
+              enum: [exact, simhash]
+              description: >-
+                "exact" matches only byte-identical normalized text (a
+                sha256 content hash); "simhash" additionally matches
+                near-duplicates within content_dedup_simhash_max_distance
+                Hamming distance of each other's SimHash fingerprint.
+                Defaults "exact"; an invalid value self-heals to "exact" on
+                the next save.
+            content_dedup_simhash_max_distance:
+              type: integer
+              description: >-
+                Max SimHash Hamming distance (out of 64 bits) still
+                considered a near-duplicate match -- only used when
+                content_dedup_method is "simhash". Defaults 3, clamped to
+                [1,10].
+            content_dedup_interval_minutes:
+              type: integer
+              description: >-
+                How often cmd/crawl's ticker runs an automatic content-dedup
+                pass, independent of the post-crawl trigger and any
+                explicit "recompute now" click. Defaults 120, floored at 15
+                -- coarser than pagerank_recompute_interval_minutes's
+                60/5, since this is a heavier, destructive pass.
 
     Overrides:
       type: object
@@ -1392,6 +1485,39 @@ components:
         documents: { type: integer, description: "How many documents that run successfully re-embedded." }
         failed: { type: integer, description: "How many documents that run failed to re-embed (a flaky endpoint, a rate limit, a since-deleted document) -- logged, not fatal to the run." }
         duration_ms: { type: integer }
+
+    ContentDedupStatus:
+      type: object
+      properties:
+        in_progress:
+          type: boolean
+          description: >-
+            Whether a recompute is currently running, triggered by anything
+            -- cmd/crawl's periodic ticker, a post-crawl trigger, or an
+            admin's "recompute now" click on any process -- not just this
+            request's own caller.
+        last_run_at:
+          type: string
+          format: date-time
+          description: When the last completed run finished. Absent if none has ever run on this instance.
+        groups_found: { type: integer, description: "How many duplicate/near-duplicate groups that run merged." }
+        documents_merged: { type: integer, description: "Total non-canonical documents removed across every merged group." }
+        duration_ms: { type: integer }
+
+    AliasGroupsResponse:
+      type: object
+      properties:
+        total: { type: integer, description: "Total number of canonical documents with at least one alias, independent of this page's limit/offset." }
+        groups:
+          type: array
+          items:
+            type: object
+            properties:
+              canonical_id: { type: string }
+              canonical_url: { type: string }
+              alias_urls:
+                type: array
+                items: { type: string }
 
     EmbeddingCandidateRequest:
       type: object

@@ -1127,6 +1127,270 @@ func TestRecordDocumentAlias_UpsertReplacesExisting(t *testing.T) {
 	}
 }
 
+func TestAllDocumentFingerprints_ReturnsEveryDocument(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	docs := []domain.Document{
+		{ID: "doc-a", URL: "https://a.example/x", Title: "A", Text: "hello world"},
+		{ID: "doc-b", URL: "https://b.example/y", Title: "B", Text: "goodbye world"},
+	}
+	for _, d := range docs {
+		if err := repo.SaveDocument(ctx, d, map[string][]float32{domain.EmbeddingProviderHash: {1}}, 100, 2); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	fingerprints, err := repo.AllDocumentFingerprints(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(fingerprints) != 2 {
+		t.Fatalf("expected 2 fingerprints, got %d: %+v", len(fingerprints), fingerprints)
+	}
+	byID := make(map[string]domain.DocumentFingerprint, len(fingerprints))
+	for _, f := range fingerprints {
+		byID[f.ID] = f
+	}
+	a, ok := byID["doc-a"]
+	if !ok {
+		t.Fatalf("expected doc-a present, got %+v", fingerprints)
+	}
+	if a.URL != "https://a.example/x" || a.Host != "a.example" {
+		t.Errorf("expected doc-a's URL/Host populated, got %+v", a)
+	}
+	if a.ContentHash != domain.ContentHash("hello world") {
+		t.Errorf("expected doc-a's ContentHash to match domain.ContentHash, got %q", a.ContentHash)
+	}
+	if a.SimHash != domain.EncodeSimHash64(domain.SimHash64("hello world")) {
+		t.Errorf("expected doc-a's SimHash to match domain.SimHash64, got %q", a.SimHash)
+	}
+	if a.CrawledAt.IsZero() {
+		t.Error("expected doc-a's CrawledAt to be set")
+	}
+}
+
+// TestMergeDocuments_CascadesLoserRows proves a merged-away loser's row,
+// and everything referencing it by doc_id (postings, document_versions,
+// document_embeddings, links), are all gone -- and that a document_aliases
+// row survives mapping its URL to the canonical document.
+func TestMergeDocuments_CascadesLoserRows(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testmerge%d?mode=memory&cache=shared", n)
+	raw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open raw connection: %v", err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+
+	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to create test repository: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	ctx := context.Background()
+	canonical := domain.Document{ID: "doc-canonical", URL: "https://canonical.example/", Title: "C", Text: "shared content"}
+	loser := domain.Document{
+		ID: "doc-loser", URL: "https://loser.example/", Title: "L", Text: "shared content",
+		Links: []string{"https://elsewhere.example/z"},
+	}
+	for _, d := range []domain.Document{canonical, loser} {
+		if err := repo.SaveDocument(ctx, d, map[string][]float32{domain.EmbeddingProviderHash: {1}}, 100, 2); err != nil {
+			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
+		}
+	}
+
+	if err := repo.MergeDocuments(ctx, "doc-canonical", []string{"doc-loser"}, domain.DocumentAliasReasonContentExact); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var docCount int
+	if err := raw.QueryRow(`SELECT COUNT(*) FROM documents WHERE id = 'doc-loser'`).Scan(&docCount); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if docCount != 0 {
+		t.Error("expected the loser's documents row removed")
+	}
+	for _, table := range []string{"postings", "document_versions", "document_embeddings", "links"} {
+		var count int
+		col := "doc_id"
+		if table == "links" {
+			col = "from_id"
+		}
+		if err := raw.QueryRow(`SELECT COUNT(*) FROM ` + table + ` WHERE ` + col + ` = 'doc-loser'`).Scan(&count); err != nil {
+			t.Fatalf("unexpected error querying %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Errorf("expected no %s rows left for the merged-away loser, got %d", table, count)
+		}
+	}
+
+	var canonicalID, reason string
+	if err := raw.QueryRow(`SELECT canonical_id, reason FROM document_aliases WHERE alias_url = 'https://loser.example/'`).Scan(&canonicalID, &reason); err != nil {
+		t.Fatalf("unexpected error querying the alias row: %v", err)
+	}
+	if canonicalID != "doc-canonical" || reason != domain.DocumentAliasReasonContentExact {
+		t.Errorf("expected an alias to doc-canonical with reason=content_exact, got canonical_id=%s reason=%s", canonicalID, reason)
+	}
+
+	got, err := repo.ListDocuments(ctx, 10, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "doc-canonical" {
+		t.Errorf("expected only the canonical document to remain indexed, got %+v", got)
+	}
+}
+
+// TestMergeDocuments_RepointsExistingAliasOfLoser proves path compression:
+// an alias that already pointed at the loser (e.g. a rel=canonical alias
+// recorded before this document was itself found to be a content
+// duplicate) is repointed straight to the surviving canonical document,
+// never left pointing at a now-deleted ID.
+func TestMergeDocuments_RepointsExistingAliasOfLoser(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	for _, d := range []domain.Document{
+		{ID: "doc-canonical", URL: "https://canonical.example/", Title: "C", Text: "shared content"},
+		{ID: "doc-loser", URL: "https://loser.example/", Title: "L", Text: "shared content"},
+	} {
+		if err := repo.SaveDocument(ctx, d, map[string][]float32{domain.EmbeddingProviderHash: {1}}, 100, 2); err != nil {
+			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
+		}
+	}
+	if err := repo.RecordDocumentAlias(ctx, "https://old-alias.example/", "doc-loser", domain.DocumentAliasReasonCanonicalTag); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := repo.MergeDocuments(ctx, "doc-canonical", []string{"doc-loser"}, domain.DocumentAliasReasonContentExact); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	groups, total, err := repo.ListDocumentAliasGroups(ctx, 10, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("expected exactly one canonical group (both aliases repointed to the same survivor), got total=%d groups=%+v", total, groups)
+	}
+	if len(groups) != 1 || groups[0].CanonicalID != "doc-canonical" {
+		t.Fatalf("expected the one group's canonical to be doc-canonical, got %+v", groups)
+	}
+	wantAliases := map[string]bool{"https://loser.example/": true, "https://old-alias.example/": true}
+	if len(groups[0].AliasURLs) != 2 {
+		t.Fatalf("expected 2 alias URLs (the loser's own URL, plus the repointed pre-existing alias), got %+v", groups[0].AliasURLs)
+	}
+	for _, u := range groups[0].AliasURLs {
+		if !wantAliases[u] {
+			t.Errorf("unexpected alias URL %q", u)
+		}
+	}
+}
+
+// TestMergeDocuments_SkipsLoserEqualToCanonical proves a (defensive,
+// shouldn't-happen-in-practice) loserIDs entry naming the canonical itself
+// is simply skipped, not an error.
+func TestMergeDocuments_SkipsLoserEqualToCanonical(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	doc := domain.Document{ID: "doc-a", URL: "https://a.example/", Title: "A", Text: "content"}
+	if err := repo.SaveDocument(ctx, doc, map[string][]float32{domain.EmbeddingProviderHash: {1}}, 100, 2); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := repo.MergeDocuments(ctx, "doc-a", []string{"doc-a"}, domain.DocumentAliasReasonContentExact); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got, err := repo.ListDocuments(ctx, 10, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("expected the document untouched, got %+v", got)
+	}
+}
+
+// TestMergeDocuments_SkipsAlreadyRemovedLoser proves a loserIDs entry
+// naming a document that no longer exists (removed by a concurrent run)
+// is silently skipped rather than erroring the whole merge.
+func TestMergeDocuments_SkipsAlreadyRemovedLoser(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	doc := domain.Document{ID: "doc-a", URL: "https://a.example/", Title: "A", Text: "content"}
+	if err := repo.SaveDocument(ctx, doc, map[string][]float32{domain.EmbeddingProviderHash: {1}}, 100, 2); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	err := repo.MergeDocuments(ctx, "doc-a", []string{"doc-never-existed"}, domain.DocumentAliasReasonContentExact)
+	if err != nil {
+		t.Errorf("expected no error for a loser that no longer exists, got %v", err)
+	}
+}
+
+func TestListDocumentAliasGroups_EmptyWhenNoAliasesExist(t *testing.T) {
+	repo := newTestRepo(t)
+	groups, total, err := repo.ListDocumentAliasGroups(context.Background(), 10, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if total != 0 || len(groups) != 0 {
+		t.Errorf("expected no groups on a fresh DB, got total=%d groups=%+v", total, groups)
+	}
+}
+
+// TestListDocumentAliasGroups_ForwardDeclaredCanonicalHasEmptyURL proves a
+// group whose canonical document hasn't actually been crawled yet (a
+// forward-declared alias) reports an empty CanonicalURL rather than
+// erroring -- see RecordDocumentAlias's own doc comment.
+func TestListDocumentAliasGroups_ForwardDeclaredCanonicalHasEmptyURL(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	if err := repo.RecordDocumentAlias(ctx, "https://alias.example/", "doc-not-yet-crawled", domain.DocumentAliasReasonCanonicalTag); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	groups, total, err := repo.ListDocumentAliasGroups(ctx, 10, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if total != 1 || len(groups) != 1 {
+		t.Fatalf("expected exactly one group, got total=%d groups=%+v", total, groups)
+	}
+	if groups[0].CanonicalURL != "" {
+		t.Errorf("expected an empty CanonicalURL for a not-yet-crawled canonical, got %q", groups[0].CanonicalURL)
+	}
+	if len(groups[0].AliasURLs) != 1 || groups[0].AliasURLs[0] != "https://alias.example/" {
+		t.Errorf("expected the one alias URL listed, got %+v", groups[0].AliasURLs)
+	}
+}
+
+// TestListDocumentAliasGroups_PaginatesByCanonicalID proves limit/offset
+// page over distinct canonical groups, not raw alias rows.
+func TestListDocumentAliasGroups_PaginatesByCanonicalID(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	for _, canonicalID := range []string{"doc-1", "doc-2", "doc-3"} {
+		if err := repo.RecordDocumentAlias(ctx, "https://alias-"+canonicalID+".example/", canonicalID, domain.DocumentAliasReasonCanonicalTag); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	groups, total, err := repo.ListDocumentAliasGroups(ctx, 2, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if total != 3 {
+		t.Errorf("expected total=3 regardless of the page size, got %d", total)
+	}
+	if len(groups) != 2 {
+		t.Errorf("expected exactly 2 groups on a page of size 2, got %d: %+v", len(groups), groups)
+	}
+
+	page2, total2, err := repo.ListDocumentAliasGroups(ctx, 2, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if total2 != 3 || len(page2) != 1 {
+		t.Errorf("expected the second page to hold the remaining 1 group, got total=%d groups=%+v", total2, page2)
+	}
+}
+
 func TestListDocuments_RespectsLimit(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
@@ -2066,6 +2330,46 @@ func TestMigrateDocumentColumns_BackfillsContentFingerprintsOnPreExistingRows(t 
 	}
 }
 
+// TestMigrateDocumentAliasColumns_BackfillsHostOnPreExistingRows proves a
+// document_aliases table created before its host column existed (this
+// feature's very first release) gets it backfilled from each row's own
+// alias_url -- needed for DocumentIDsByHost's alias-aware site: matching
+// to find rows written before this column existed.
+func TestMigrateDocumentAliasColumns_BackfillsHostOnPreExistingRows(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testmigratealiashost%d?mode=memory&cache=shared", n)
+
+	pre, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open pre-migration DB: %v", err)
+	}
+	if _, err := pre.Exec(`CREATE TABLE document_aliases (
+		alias_url TEXT PRIMARY KEY, canonical_id TEXT NOT NULL,
+		reason TEXT NOT NULL, created_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("failed to create legacy schema: %v", err)
+	}
+	if _, err := pre.Exec(`INSERT INTO document_aliases (alias_url, canonical_id, reason, created_at)
+	                       VALUES ('https://old.example/page', 'doc-1', 'canonical_tag', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("failed to insert legacy row: %v", err)
+	}
+	t.Cleanup(func() { _ = pre.Close() })
+
+	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("expected New to migrate the legacy schema without error, got: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	var host string
+	if err := pre.QueryRow(`SELECT host FROM document_aliases WHERE alias_url = 'https://old.example/page'`).Scan(&host); err != nil {
+		t.Fatalf("unexpected error querying backfilled host: %v", err)
+	}
+	if host != "old.example" {
+		t.Errorf("expected host backfilled to old.example, got %q", host)
+	}
+}
+
 // TestMigrateDocumentColumns_LegacyEmbeddingBlobIsNotAutoMigrated documents
 // a deliberate choice: documents.embedding/norm_embedding are retired now
 // that every provider's vector lives in document_embeddings instead (see
@@ -2448,6 +2752,130 @@ func TestDocumentIDsByHost_MatchesExactAndSubdomainNotUnrelated(t *testing.T) {
 	}
 }
 
+// TestDocumentIDsByHost_FindsCanonicalThroughAliasedHost proves a merged-
+// away (or www-folded) document is still findable via site: through
+// whichever host it was actually aliased from, even though the surviving
+// canonical document's own host differs entirely.
+func TestDocumentIDsByHost_FindsCanonicalThroughAliasedHost(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-canonical", URL: "https://canonical.example/x", Title: "t", Text: "text"},
+		map[string][]float32{domain.EmbeddingProviderHash: {1}}, 100, 2); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := repo.RecordDocumentAlias(ctx, "https://aliased.example/x", "doc-canonical", domain.DocumentAliasReasonContentExact); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	ids, err := repo.DocumentIDsByHost(ctx, []string{"aliased.example"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != "doc-canonical" {
+		t.Errorf("expected site:aliased.example to resolve to the canonical document, got %v", ids)
+	}
+}
+
+// TestDocumentIDsByHost_DoesNotDuplicateWhenBothDirectAndAliasMatch proves
+// a document matching by its own host AND, coincidentally, by an alias
+// pointing at it, is still only reported once.
+func TestDocumentIDsByHost_DoesNotDuplicateWhenBothDirectAndAliasMatch(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-canonical", URL: "https://example.com/x", Title: "t", Text: "text"},
+		map[string][]float32{domain.EmbeddingProviderHash: {1}}, 100, 2); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := repo.RecordDocumentAlias(ctx, "https://example.com/y", "doc-canonical", domain.DocumentAliasReasonContentExact); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	ids, err := repo.DocumentIDsByHost(ctx, []string{"example.com"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != "doc-canonical" {
+		t.Errorf("expected doc-canonical reported exactly once, got %v", ids)
+	}
+}
+
+// TestResolveAliasHosts_ReturnsCanonicalDocumentsRealHost proves the
+// hybrid_search_service site:/-site: expansion fix's underlying lookup:
+// given an alias host, it resolves to the actual documents.host of the
+// document that alias's content now lives under -- not the alias's own
+// host, and not the canonical document's ID.
+func TestResolveAliasHosts_ReturnsCanonicalDocumentsRealHost(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-canonical", URL: "https://canonical.example/x", Title: "t", Text: "text"},
+		map[string][]float32{domain.EmbeddingProviderHash: {1}}, 100, 2); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := repo.RecordDocumentAlias(ctx, "https://aliased.example/x", "doc-canonical", domain.DocumentAliasReasonContentExact); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	hosts, err := repo.ResolveAliasHosts(ctx, []string{"aliased.example"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(hosts) != 1 || hosts[0] != "canonical.example" {
+		t.Errorf("expected [canonical.example], got %v", hosts)
+	}
+}
+
+// TestResolveAliasHosts_MatchesSubdomainOfRequestedHost proves the same
+// exact-or-subdomain matching rule as hostMatchConditions/DocumentIDsByHost
+// applies to the alias's own host, not just an exact match.
+func TestResolveAliasHosts_MatchesSubdomainOfRequestedHost(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveDocument(ctx, domain.Document{ID: "doc-canonical", URL: "https://canonical.example/x", Title: "t", Text: "text"},
+		map[string][]float32{domain.EmbeddingProviderHash: {1}}, 100, 2); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := repo.RecordDocumentAlias(ctx, "https://old.aliased.example/x", "doc-canonical", domain.DocumentAliasReasonContentExact); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	hosts, err := repo.ResolveAliasHosts(ctx, []string{"aliased.example"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(hosts) != 1 || hosts[0] != "canonical.example" {
+		t.Errorf("expected [canonical.example] via old.aliased.example being a subdomain of aliased.example, got %v", hosts)
+	}
+}
+
+// TestResolveAliasHosts_NoMatchingAliasReturnsEmpty proves a host with no
+// document_aliases row at all (the common case -- most site: filters name a
+// document's own real host, never merged or aliased) resolves to nothing,
+// not an error.
+func TestResolveAliasHosts_NoMatchingAliasReturnsEmpty(t *testing.T) {
+	repo := newTestRepo(t)
+	hosts, err := repo.ResolveAliasHosts(context.Background(), []string{"never-aliased.example"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(hosts) != 0 {
+		t.Errorf("expected no resolved hosts, got %v", hosts)
+	}
+}
+
+// TestResolveAliasHosts_EmptyHostsReturnsEmptyWithoutQuerying mirrors
+// TestHostsIndexed_EmptyHostsReturnsEmptyWithoutQuerying/
+// DocumentIDsByHost's own nil-hosts short circuit.
+func TestResolveAliasHosts_EmptyHostsReturnsEmptyWithoutQuerying(t *testing.T) {
+	repo := newTestRepo(t)
+	hosts, err := repo.ResolveAliasHosts(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(hosts) != 0 {
+		t.Errorf("expected no resolved hosts, got %v", hosts)
+	}
+}
+
 func TestHostsIndexed_EmptyHostsReturnsEmptyWithoutQuerying(t *testing.T) {
 	repo := newTestRepo(t)
 	result, err := repo.HostsIndexed(context.Background(), nil)
@@ -2697,6 +3125,37 @@ func TestRepository_LinkGraph(t *testing.T) {
 	}
 	if _, ok := graph["doc-c"]; ok {
 		t.Errorf("expected doc-c (no outbound links) to have no adjacency entry, got %v", graph["doc-c"])
+	}
+}
+
+// TestRepository_LinkGraph_ResolvesLinksThroughAliases proves a link to a
+// URL that's since become an alias (rather than its own indexed document)
+// still contributes to the alias's canonical document's inbound link
+// count -- otherwise a merge would silently erase that PageRank
+// contribution the moment MergeDocuments runs.
+func TestRepository_LinkGraph_ResolvesLinksThroughAliases(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	docs := []domain.Document{
+		{ID: "doc-a", URL: "https://a.example/", Title: "A", Text: "text",
+			Links: []string{"https://merged-away.example/"}},
+		{ID: "doc-canonical", URL: "https://canonical.example/", Title: "C", Text: "text"},
+	}
+	for _, d := range docs {
+		if err := repo.SaveDocument(ctx, d, map[string][]float32{domain.EmbeddingProviderHash: []float32{1}}, 100, 2); err != nil {
+			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
+		}
+	}
+	if err := repo.RecordDocumentAlias(ctx, "https://merged-away.example/", "doc-canonical", domain.DocumentAliasReasonContentExact); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	graph, err := repo.LinkGraph(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(graph["doc-a"]) != 1 || graph["doc-a"][0] != "doc-canonical" {
+		t.Errorf("expected doc-a's link to the aliased URL resolved to doc-canonical, got %v", graph["doc-a"])
 	}
 }
 

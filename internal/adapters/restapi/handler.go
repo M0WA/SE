@@ -65,6 +65,9 @@ var adminEmbeddingEndpointHTML []byte
 //go:embed admin_database.html
 var adminDatabaseHTML []byte
 
+//go:embed admin_content_dedup.html
+var adminContentDedupHTML []byte
+
 //go:embed style.css
 var styleCSS []byte
 
@@ -81,6 +84,9 @@ var adminPageJS []byte
 
 //go:embed admin_database.js
 var adminDatabaseJS []byte
+
+//go:embed admin_content_dedup.js
+var adminContentDedupJS []byte
 
 //go:embed admin_documents.js
 var adminDocumentsJS []byte
@@ -139,7 +145,12 @@ type Handler struct {
 	admin         ports.AdminRepository
 	pageRank      ports.PageRankRepository
 	embeddingRepo ports.EmbeddingRepository
-	embedders     map[string]ports.EmbeddingProvider
+	// contentDedupRepo, when set (admin-server only, its own
+	// *sqlrepo.Repository -- same reasoning as pageRank/embeddingRepo
+	// above), backs the content-dedup admin page's status/recompute
+	// endpoints; without it, those endpoints report themselves unavailable.
+	contentDedupRepo ports.ContentDedupRepository
+	embedders        map[string]ports.EmbeddingProvider
 	// embedderRateLimits gives each provider in embedders its own
 	// requests-per-second cap -- see application.RunEmbeddingRecomputeJob's
 	// rateLimits parameter. Built once at startup from the same enabled
@@ -236,6 +247,12 @@ type Config struct {
 	EmbeddingRepo      ports.EmbeddingRepository
 	Embedders          map[string]ports.EmbeddingProvider
 	EmbedderRateLimits map[string]float64
+	// ContentDedupRepo, when set (admin-server only, its own
+	// *sqlrepo.Repository -- same reasoning as PageRank above), backs the
+	// content-dedup admin page's status display and "recompute now" button;
+	// without it, those endpoints report themselves unavailable, same as
+	// the other optional dependencies.
+	ContentDedupRepo ports.ContentDedupRepository
 	// NewEmbedder builds a throwaway ports.EmbeddingProvider from a given
 	// candidate endpoint config, used by the embedding endpoint CRUD
 	// handlers to test-probe a base URL/model/API key combination before
@@ -293,6 +310,7 @@ func New(cfg Config) *Handler {
 		admin:                 cfg.Admin,
 		pageRank:              cfg.PageRank,
 		embeddingRepo:         cfg.EmbeddingRepo,
+		contentDedupRepo:      cfg.ContentDedupRepo,
 		embedders:             cfg.Embedders,
 		embedderRateLimits:    cfg.EmbedderRateLimits,
 		settings:              cfg.Settings,
@@ -402,6 +420,8 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("/admin_embedding_endpoint.js", h.handleAdminEmbeddingEndpointJS)
 	mux.HandleFunc("/admin/database", h.requireAuthPage(h.handleAdminDatabasePage))
 	mux.HandleFunc("/admin_database.js", h.handleAdminDatabaseJS)
+	mux.HandleFunc("/admin/content_dedup", h.requireAuthPage(h.handleAdminContentDedupPage))
+	mux.HandleFunc("/admin_content_dedup.js", h.handleAdminContentDedupJS)
 
 	mux.HandleFunc("/admin/api/stats", h.requireAuthAPI(h.handleAdminStats))
 	mux.HandleFunc("/admin/api/vocabulary", h.requireAuthAPI(h.handleAdminVocabulary))
@@ -435,6 +455,9 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("GET /admin/api/embeddings/recompute", h.requireAuthAPI(h.handleAdminEmbeddingsRecomputeStatus))
 	mux.HandleFunc("POST /admin/api/embeddings/recompute", h.requireAuthAPI(h.handleAdminEmbeddingsRecomputeStart))
 	mux.HandleFunc("GET /admin/api/database", h.requireAuthAPI(h.handleAdminDatabase))
+	mux.HandleFunc("GET /admin/api/content-dedup", h.requireAuthAPI(h.handleAdminContentDedupStatus))
+	mux.HandleFunc("POST /admin/api/content-dedup/recompute", h.requireAuthAPI(h.handleAdminContentDedupRecomputeStart))
+	mux.HandleFunc("GET /admin/api/content-dedup/alias-groups", h.requireAuthAPI(h.handleAdminContentDedupAliasGroups))
 	return withSecurityHeaders(mux)
 }
 
@@ -476,6 +499,10 @@ func (h *Handler) handleAdminPageJS(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleAdminDatabaseJS(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/javascript; charset=utf-8", adminDatabaseJS)
+}
+
+func (h *Handler) handleAdminContentDedupJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminContentDedupJS)
 }
 
 func (h *Handler) handleAdminDocumentsJS(w http.ResponseWriter, r *http.Request) {

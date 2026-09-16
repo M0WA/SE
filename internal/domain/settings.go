@@ -209,6 +209,40 @@ type OperationalSettingsValues struct {
 	// overwhelming majority of sites; a site that genuinely serves
 	// different content at www vs. bare can turn it off.
 	URLAliasWWWEnabled bool
+	// ContentDedupEnabled turns on application.RunContentDedupJob's
+	// periodic/on-demand batch pass, which finds documents with
+	// duplicate/near-duplicate content across different URLs (URLAliasWWWEnabled
+	// above only ever handles the www-vs-bare-host case, and only for
+	// future crawls) and merges each group into one canonical document --
+	// see MergeDocuments. Defaults false: unlike every other field here,
+	// turning this on can delete existing documents rows (the merged-away
+	// losers), so it's an explicit admin opt-in rather than an
+	// automatically-safe default.
+	ContentDedupEnabled bool
+	// ContentDedupMethod is "exact" (byte-identical normalized text, via
+	// domain.ContentHash) or "simhash" (a similarity fingerprint tolerant
+	// of minor differences -- tracking params, a different ad slot -- via
+	// domain.SimHash64/ContentDedupSimHashMaxDistance below). Self-heals to
+	// "exact" on an unrecognized value the same way DefaultRenderer/LinkScope
+	// do for their own enums.
+	ContentDedupMethod string
+	// ContentDedupSimHashMaxDistance is the maximum Hamming distance (out
+	// of 64 bits) two documents' domain.SimHash64 fingerprints may differ
+	// by and still be considered near-duplicates, when ContentDedupMethod
+	// is "simhash". Clamped to [1,10]: 0 would only ever match bit-for-bit
+	// identical fingerprints (indistinguishable from the "exact" method,
+	// but slower), and above 10 starts merging documents whose content is
+	// only superficially similar.
+	ContentDedupSimHashMaxDistance int
+	// ContentDedupIntervalMinutes is how often cmd/crawl's periodic ticker
+	// runs RunContentDedupJob, mirroring PageRankRecomputeIntervalMinutes'
+	// own ticker -- in addition to that, a run always happens once right
+	// after a crawl job completes successfully, when ContentDedupEnabled.
+	// Clamped to a minimum of 15 minutes (coarser than PageRank's 5-minute
+	// floor: a corpus-wide fingerprint comparison is heavier, and a merge
+	// is a destructive write, so an overly aggressive interval is worth
+	// guarding against more conservatively here).
+	ContentDedupIntervalMinutes int
 }
 
 // defaultUserAgent mimics a standard desktop Firefox so crawled sites treat
@@ -247,6 +281,20 @@ const (
 	// minutes even if an admin asks for tighter.
 	defaultPageRankRecomputeIntervalMinutes = 60
 	minPageRankRecomputeIntervalMinutes     = 5
+	// defaultContentDedupSimHashMaxDistance is a moderately conservative
+	// starting threshold -- close enough to catch real near-duplicates
+	// (a changed timestamp/ad slot) without merging documents that only
+	// happen to share some vocabulary.
+	defaultContentDedupSimHashMaxDistance = 3
+	minContentDedupSimHashMaxDistance     = 1
+	maxContentDedupSimHashMaxDistance     = 10
+	// defaultContentDedupIntervalMinutes/minContentDedupIntervalMinutes
+	// bound how often the batch dedup pass runs: every two hours by
+	// default, never more often than every 15 minutes -- see
+	// OperationalSettingsValues.ContentDedupIntervalMinutes for why this
+	// floor is higher than PageRank's.
+	defaultContentDedupIntervalMinutes = 120
+	minContentDedupIntervalMinutes     = 15
 	// defaultMaxRetainedCrawlJobs matches the old in-memory store's
 	// hard-coded cap, kept as the default now that it's just a starting
 	// point rather than a hard limit -- persistent storage can comfortably
@@ -295,6 +343,9 @@ func defaultOperationalSettings() OperationalSettingsValues {
 		EmbeddingSearchWeights:           map[string]float64{EmbeddingProviderHash: 1},
 		EmbeddingTitleWeight:             defaultEmbeddingTitleWeight,
 		URLAliasWWWEnabled:               true,
+		ContentDedupMethod:               ContentDedupMethodExact,
+		ContentDedupSimHashMaxDistance:   defaultContentDedupSimHashMaxDistance,
+		ContentDedupIntervalMinutes:      defaultContentDedupIntervalMinutes,
 	}
 }
 
@@ -421,6 +472,23 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 		v.EmbeddingTitleWeight = 0
 	} else if v.EmbeddingTitleWeight > 1 {
 		v.EmbeddingTitleWeight = 1
+	}
+	// An unrecognized ContentDedupMethod self-heals to the always-valid
+	// "exact" method, same convention as DefaultRenderer/LinkScope above.
+	if v.ContentDedupMethod != ContentDedupMethodExact && v.ContentDedupMethod != ContentDedupMethodSimHash {
+		v.ContentDedupMethod = ContentDedupMethodExact
+	}
+	if v.ContentDedupSimHashMaxDistance <= 0 {
+		v.ContentDedupSimHashMaxDistance = d.ContentDedupSimHashMaxDistance
+	} else if v.ContentDedupSimHashMaxDistance < minContentDedupSimHashMaxDistance {
+		v.ContentDedupSimHashMaxDistance = minContentDedupSimHashMaxDistance
+	} else if v.ContentDedupSimHashMaxDistance > maxContentDedupSimHashMaxDistance {
+		v.ContentDedupSimHashMaxDistance = maxContentDedupSimHashMaxDistance
+	}
+	if v.ContentDedupIntervalMinutes <= 0 {
+		v.ContentDedupIntervalMinutes = d.ContentDedupIntervalMinutes
+	} else if v.ContentDedupIntervalMinutes < minContentDedupIntervalMinutes {
+		v.ContentDedupIntervalMinutes = minContentDedupIntervalMinutes
 	}
 
 	s.mu.Lock()

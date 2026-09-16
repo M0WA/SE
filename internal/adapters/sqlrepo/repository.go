@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -200,6 +201,9 @@ func (r *Repository) migrate(ctx context.Context) error {
 	if err := r.migrateDocumentColumns(ctx); err != nil {
 		return err
 	}
+	if err := r.migrateDocumentAliasColumns(ctx); err != nil {
+		return err
+	}
 	if err := r.migrateScheduledCrawlColumns(ctx); err != nil {
 		return err
 	}
@@ -209,7 +213,10 @@ func (r *Repository) migrate(ctx context.Context) error {
 	if err := r.ensureHostIndex(ctx); err != nil {
 		return err
 	}
-	return r.ensureCrawledAtIndex(ctx)
+	if err := r.ensureCrawledAtIndex(ctx); err != nil {
+		return err
+	}
+	return r.ensureDocumentAliasHostIndex(ctx)
 }
 
 // migrateScheduledCrawlColumns adds the per-crawl override columns (fetch
@@ -408,24 +415,35 @@ func (r *Repository) migrateLegacyHTTPEmbeddingConfig(ctx context.Context) error
 // the first) and the concurrent-migration race on Postgres/SQLite
 // (isAlreadyExistsError).
 func (r *Repository) ensureHostIndex(ctx context.Context) error {
-	return r.ensureIndex(ctx, "idx_documents_host", "host")
+	return r.ensureIndex(ctx, "documents", "idx_documents_host", "host")
 }
 
 func (r *Repository) ensureCrawledAtIndex(ctx context.Context) error {
-	return r.ensureIndex(ctx, "idx_documents_crawled_at", "crawled_at")
+	return r.ensureIndex(ctx, "documents", "idx_documents_crawled_at", "crawled_at")
 }
 
-// ensureIndex creates a single-column index on documents(column) if it
-// doesn't already exist, tolerating both MySQL's lack of IF NOT EXISTS and
-// the benign concurrent-creation race the other dialects can hit when
+// ensureDocumentAliasHostIndex creates document_aliases(host)'s index only
+// after migrateDocumentAliasColumns has guaranteed that column exists --
+// unlike a fresh install's CREATE TABLE (which already includes host),
+// creating this index in the same static CreateSchemaSQL() list would fail
+// outright against a document_aliases table from before this column
+// existed, since CREATE TABLE IF NOT EXISTS is a no-op there and the
+// column-adding ALTER TABLE hasn't run yet at that point in migrate().
+func (r *Repository) ensureDocumentAliasHostIndex(ctx context.Context) error {
+	return r.ensureIndex(ctx, "document_aliases", "idx_document_aliases_host", "host")
+}
+
+// ensureIndex creates a single-column index on table(column) if it doesn't
+// already exist, tolerating both MySQL's lack of IF NOT EXISTS and the
+// benign concurrent-creation race the other dialects can hit when
 // search/admin/crawl all migrate on startup at once (see
 // isAlreadyExistsError).
-func (r *Repository) ensureIndex(ctx context.Context, indexName, column string) error {
+func (r *Repository) ensureIndex(ctx context.Context, table, indexName, column string) error {
 	if r.dialect.Name() == "mysql" {
-		_, _ = r.db.ExecContext(ctx, "CREATE INDEX "+indexName+" ON documents("+column+")")
+		_, _ = r.db.ExecContext(ctx, "CREATE INDEX "+indexName+" ON "+table+"("+column+")")
 		return nil
 	}
-	if _, err := r.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS "+indexName+" ON documents("+column+")"); err != nil && !isAlreadyExistsError(err) {
+	if _, err := r.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS "+indexName+" ON "+table+"("+column+")"); err != nil && !isAlreadyExistsError(err) {
 		return fmt.Errorf("creating %s: %w", indexName, err)
 	}
 	return nil
@@ -550,6 +568,57 @@ func (r *Repository) migrateDocumentColumns(ctx context.Context) error {
 		return err
 	}
 	return r.backfillPageRank(ctx)
+}
+
+// migrateDocumentAliasColumns adds host to a document_aliases table that
+// predates it (this table itself is new enough that every fresh install's
+// CREATE TABLE IF NOT EXISTS above already includes it -- this only
+// matters for a database that ran this feature's very first release,
+// before host existed on this table). Backfilled from each row's own
+// alias_url the same way documents.host is backfilled from url -- see
+// backfillDocumentAliasHosts.
+func (r *Repository) migrateDocumentAliasColumns(ctx context.Context) error {
+	existing, err := r.existingColumns(ctx, "document_aliases")
+	if err != nil {
+		return err
+	}
+	if !existing["host"] {
+		if _, err := r.db.ExecContext(ctx, "ALTER TABLE document_aliases ADD COLUMN host TEXT NOT NULL DEFAULT ''"); err != nil && !isAlreadyExistsError(err) {
+			return fmt.Errorf("adding host column to document_aliases: %w", err)
+		}
+	}
+	return r.backfillDocumentAliasHosts(ctx)
+}
+
+// backfillDocumentAliasHosts fills in host for any document_aliases row
+// saved before that column existed (it defaults to an empty string) --
+// see migrateDocumentAliasColumns. A no-op once every row has it.
+func (r *Repository) backfillDocumentAliasHosts(ctx context.Context) error {
+	rows, err := r.db.QueryContext(ctx, r.ph(`SELECT alias_url FROM document_aliases WHERE host = %s`, 1), "")
+	if err != nil {
+		return fmt.Errorf("finding document_aliases rows needing a host backfill: %w", err)
+	}
+	var pending []string
+	for rows.Next() {
+		var aliasURL string
+		if err := rows.Scan(&aliasURL); err != nil {
+			rows.Close()
+			return fmt.Errorf("scanning row: %w", err)
+		}
+		pending = append(pending, aliasURL)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	updateSQL := r.ph(`UPDATE document_aliases SET host = %s WHERE alias_url = %s`, 1, 2)
+	for _, aliasURL := range pending {
+		if _, err := r.db.ExecContext(ctx, updateSQL, hostOf(aliasURL), aliasURL); err != nil {
+			return fmt.Errorf("backfilling host for alias %s: %w", aliasURL, err)
+		}
+	}
+	return nil
 }
 
 // existingColumns introspects which columns a table actually has, so
@@ -1355,22 +1424,38 @@ func (r *Repository) DocumentsByIDsSortedByCrawledAt(ctx context.Context, ids []
 // the user's own intent, not a general relevance sample.
 const maxDocumentIDsByHost = 5000
 
+// hostMatchConditions builds the "column = ? OR column LIKE ?" clauses
+// (one pair per host, ORed together) that DocumentIDsByHost and its
+// document_aliases counterpart both need against their own host column --
+// exact match or a subdomain of it, mirroring domain.ParsedQuery.
+// SiteAllowed's matching rule. startPos is the first placeholder position
+// to use (queries appending this after other placeholders pass their own
+// next position); the returned nextPos is where the caller's own
+// following placeholder (e.g. a trailing LIMIT) should start from.
+func (r *Repository) hostMatchConditions(column string, hosts []string, startPos int) (conditions []string, args []interface{}, nextPos int) {
+	conditions = make([]string, 0, len(hosts))
+	args = make([]interface{}, 0, len(hosts)*2)
+	pos := startPos
+	for _, h := range hosts {
+		conditions = append(conditions, fmt.Sprintf("(%s = %s OR %s LIKE %s)", column, r.dialect.Placeholder(pos), column, r.dialect.Placeholder(pos+1)))
+		args = append(args, h, "%."+h)
+		pos += 2
+	}
+	return conditions, args, pos
+}
+
 // DocumentIDsByHost returns the IDs of documents whose host exactly
-// matches one of hosts, or is a subdomain of one (host = ? OR host LIKE
-// '%.'+?), mirroring domain.ParsedQuery.SiteAllowed's matching rule.
-// Served by idx_documents_host rather than a full table scan.
+// matches one of hosts, or is a subdomain of one, served by
+// idx_documents_host rather than a full table scan -- plus, unioned in,
+// the canonical_id of any document_alias whose own host matches: a
+// document merged away (or www-folded) under one of the requested hosts
+// is still findable by site: through whichever host it was actually
+// aliased from, even though its surviving document's own host differs.
 func (r *Repository) DocumentIDsByHost(ctx context.Context, hosts []string) ([]string, error) {
 	if len(hosts) == 0 {
 		return nil, nil
 	}
-	conditions := make([]string, 0, len(hosts))
-	args := make([]interface{}, 0, len(hosts)*2)
-	pos := 1
-	for _, h := range hosts {
-		conditions = append(conditions, fmt.Sprintf("(host = %s OR host LIKE %s)", r.dialect.Placeholder(pos), r.dialect.Placeholder(pos+1)))
-		args = append(args, h, "%."+h)
-		pos += 2
-	}
+	conditions, args, pos := r.hostMatchConditions("host", hosts, 1)
 	query := `SELECT id FROM documents WHERE ` + strings.Join(conditions, " OR ") +
 		r.ph(` LIMIT %s`, pos)
 	args = append(args, maxDocumentIDsByHost)
@@ -1379,17 +1464,74 @@ func (r *Repository) DocumentIDsByHost(ctx context.Context, hosts []string) ([]s
 	if err != nil {
 		return nil, fmt.Errorf("querying document ids by host: %w", err)
 	}
-	defer rows.Close()
-
+	seen := make(map[string]bool)
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
+			rows.Close()
 			return nil, fmt.Errorf("scanning row: %w", err)
 		}
-		ids = append(ids, id)
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
 	}
-	return ids, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	aliasConditions, aliasArgs, aliasPos := r.hostMatchConditions("host", hosts, 1)
+	aliasQuery := `SELECT DISTINCT canonical_id FROM document_aliases WHERE ` + strings.Join(aliasConditions, " OR ") +
+		r.ph(` LIMIT %s`, aliasPos)
+	aliasArgs = append(aliasArgs, maxDocumentIDsByHost)
+	aliasRows, err := r.db.QueryContext(ctx, aliasQuery, aliasArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("querying document ids by alias host: %w", err)
+	}
+	defer aliasRows.Close()
+	for aliasRows.Next() {
+		var id string
+		if err := aliasRows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning alias row: %w", err)
+		}
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	return ids, aliasRows.Err()
+}
+
+// ResolveAliasHosts returns the actual documents.host of every canonical
+// document reachable through a document_aliases row whose own host matches
+// one of hosts (exact or subdomain, same rule as hostMatchConditions) -- see
+// ports.SQLRepository.ResolveAliasHosts.
+func (r *Repository) ResolveAliasHosts(ctx context.Context, hosts []string) ([]string, error) {
+	if len(hosts) == 0 {
+		return nil, nil
+	}
+	conditions, args, pos := r.hostMatchConditions("da.host", hosts, 1)
+	query := `SELECT DISTINCT d.host FROM document_aliases da ` +
+		`JOIN documents d ON d.id = da.canonical_id WHERE ` + strings.Join(conditions, " OR ") +
+		r.ph(` LIMIT %s`, pos)
+	args = append(args, maxDocumentIDsByHost)
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("resolving alias hosts: %w", err)
+	}
+	defer rows.Close()
+	var hostsOut []string
+	for rows.Next() {
+		var host string
+		if err := rows.Scan(&host); err != nil {
+			return nil, fmt.Errorf("scanning row: %w", err)
+		}
+		hostsOut = append(hostsOut, host)
+	}
+	return hostsOut, rows.Err()
 }
 
 // AllDocumentIDs lists every document ID in the corpus, ordered by id for
@@ -1501,10 +1643,198 @@ func (r *Repository) DeleteDocument(ctx context.Context, docID string) error {
 // required to already name an existing documents row.
 func (r *Repository) RecordDocumentAlias(ctx context.Context, aliasURL, canonicalID, reason string) error {
 	now := time.Now().UTC().Format(crawledAtLayout)
-	if _, err := r.db.ExecContext(ctx, r.dialect.UpsertDocumentAliasSQL(), aliasURL, canonicalID, reason, now); err != nil {
+	if _, err := r.db.ExecContext(ctx, r.dialect.UpsertDocumentAliasSQL(), aliasURL, canonicalID, reason, now, hostOf(aliasURL)); err != nil {
 		return fmt.Errorf("recording document alias: %w", err)
 	}
 	return nil
+}
+
+// AllDocumentFingerprints lists every document's identity/fingerprint
+// fields in one query -- see ports.ContentDedupRepository's own doc
+// comment for why this doesn't fetch full domain.Document rows.
+func (r *Repository) AllDocumentFingerprints(ctx context.Context) ([]domain.DocumentFingerprint, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id, url, host, content_hash, simhash, crawled_at FROM documents`)
+	if err != nil {
+		return nil, fmt.Errorf("querying document fingerprints: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.DocumentFingerprint
+	for rows.Next() {
+		var f domain.DocumentFingerprint
+		var crawledAt string
+		if err := rows.Scan(&f.ID, &f.URL, &f.Host, &f.ContentHash, &f.SimHash, &crawledAt); err != nil {
+			return nil, fmt.Errorf("scanning row: %w", err)
+		}
+		f.CrawledAt = parseCrawledAt(crawledAt)
+		out = append(out, f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// MergeDocuments folds every document in loserIDs into canonicalID, all in
+// one transaction: each loser's own pre-existing document_aliases entries
+// are repointed straight to canonicalID (path compression -- a loser that
+// was itself already an alias target, e.g. from a www-fold or a
+// rel=canonical tag, must resolve in a single lookup, never a chain), a
+// fresh alias row is recorded for the loser's own URL, and the loser's
+// document row is removed. loserIDs naming canonicalID itself, or a
+// document already removed by a concurrent run (no longer found), are
+// silently skipped rather than erroring the whole merge.
+//
+// Every child table referencing the loser by doc_id (postings,
+// document_versions, document_embeddings, links) is deleted explicitly,
+// the same per-table pattern DeleteDocument already uses -- not a bare
+// DELETE FROM documents relying on the schema's ON DELETE CASCADE, since
+// this driver never enables SQLite's foreign-key enforcement (no
+// PRAGMA foreign_keys = ON anywhere in this package), so CASCADE is a
+// silent no-op there.
+func (r *Repository) MergeDocuments(ctx context.Context, canonicalID string, loserIDs []string, reason string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	now := time.Now().UTC().Format(crawledAtLayout)
+	selectSQL := r.ph(`SELECT url FROM documents WHERE id = %s`, 1)
+	repointSQL := r.ph(`UPDATE document_aliases SET canonical_id = %s WHERE canonical_id = %s`, 1, 2)
+
+	for _, loserID := range loserIDs {
+		if loserID == canonicalID {
+			continue
+		}
+		var loserURL string
+		switch err := tx.QueryRowContext(ctx, selectSQL, loserID).Scan(&loserURL); {
+		case errors.Is(err, sql.ErrNoRows):
+			continue // already merged/removed by a concurrent run
+		case err != nil:
+			return fmt.Errorf("looking up loser document %s: %w", loserID, err)
+		}
+
+		if _, err := tx.ExecContext(ctx, repointSQL, canonicalID, loserID); err != nil {
+			return fmt.Errorf("repointing existing aliases of %s: %w", loserID, err)
+		}
+		if _, err := tx.ExecContext(ctx, r.dialect.UpsertDocumentAliasSQL(), loserURL, canonicalID, reason, now, hostOf(loserURL)); err != nil {
+			return fmt.Errorf("recording alias for %s: %w", loserID, err)
+		}
+		for _, table := range []string{"postings", "document_versions", "document_embeddings"} {
+			stmt := r.ph(`DELETE FROM `+table+` WHERE doc_id = %s`, 1)
+			if _, err := tx.ExecContext(ctx, stmt, loserID); err != nil {
+				return fmt.Errorf("deleting %s for %s: %w", table, loserID, err)
+			}
+		}
+		if _, err := tx.ExecContext(ctx, r.ph(`DELETE FROM links WHERE from_id = %s`, 1), loserID); err != nil {
+			return fmt.Errorf("deleting links for %s: %w", loserID, err)
+		}
+		if _, err := tx.ExecContext(ctx, r.ph(`DELETE FROM documents WHERE id = %s`, 1), loserID); err != nil {
+			return fmt.Errorf("deleting document %s: %w", loserID, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// ListDocumentAliasGroups pages through every canonical document that
+// currently has at least one alias -- see ports.AdminRepository's own doc
+// comment. Grouping happens in Go (fetch every (canonical_id, alias_url)
+// pair ordered by canonical_id, then group consecutive rows) rather than a
+// dialect-specific GROUP_CONCAT/STRING_AGG, since those aggregate
+// functions differ enough across sqlite/mysql/postgres to not be worth the
+// portability cost for what's ultimately just an admin diagnostics page.
+func (r *Repository) ListDocumentAliasGroups(ctx context.Context, limit, offset int) ([]domain.DocumentAliasGroup, int, error) {
+	var total int
+	countSQL := `SELECT COUNT(DISTINCT canonical_id) FROM document_aliases`
+	if err := r.db.QueryRowContext(ctx, countSQL).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("counting alias groups: %w", err)
+	}
+	if total == 0 {
+		return nil, 0, nil
+	}
+
+	idsSQL := r.ph(`SELECT DISTINCT canonical_id FROM document_aliases ORDER BY canonical_id LIMIT %s OFFSET %s`, 1, 2)
+	idRows, err := r.db.QueryContext(ctx, idsSQL, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("listing alias group canonical ids: %w", err)
+	}
+	var canonicalIDs []string
+	for idRows.Next() {
+		var id string
+		if err := idRows.Scan(&id); err != nil {
+			idRows.Close()
+			return nil, 0, fmt.Errorf("scanning canonical id: %w", err)
+		}
+		canonicalIDs = append(canonicalIDs, id)
+	}
+	idRows.Close()
+	if err := idRows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(canonicalIDs) == 0 {
+		return nil, total, nil
+	}
+
+	placeholders := make([]string, len(canonicalIDs))
+	args := make([]interface{}, len(canonicalIDs))
+	for i, id := range canonicalIDs {
+		placeholders[i] = r.dialect.Placeholder(i + 1)
+		args[i] = id
+	}
+	aliasSQL := `SELECT canonical_id, alias_url FROM document_aliases WHERE canonical_id IN (` +
+		strings.Join(placeholders, ",") + `) ORDER BY canonical_id, alias_url`
+	aliasRows, err := r.db.QueryContext(ctx, aliasSQL, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("listing aliases for groups: %w", err)
+	}
+	byCanonical := make(map[string][]string, len(canonicalIDs))
+	for aliasRows.Next() {
+		var canonicalID, aliasURL string
+		if err := aliasRows.Scan(&canonicalID, &aliasURL); err != nil {
+			aliasRows.Close()
+			return nil, 0, fmt.Errorf("scanning alias row: %w", err)
+		}
+		byCanonical[canonicalID] = append(byCanonical[canonicalID], aliasURL)
+	}
+	aliasRows.Close()
+	if err := aliasRows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	urlPlaceholders := make([]string, len(canonicalIDs))
+	for i, id := range canonicalIDs {
+		urlPlaceholders[i] = r.dialect.Placeholder(i + 1)
+		args[i] = id
+	}
+	urlSQL := `SELECT id, url FROM documents WHERE id IN (` + strings.Join(urlPlaceholders, ",") + `)`
+	urlRows, err := r.db.QueryContext(ctx, urlSQL, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("looking up canonical document URLs: %w", err)
+	}
+	canonicalURLs := make(map[string]string, len(canonicalIDs))
+	for urlRows.Next() {
+		var id, url string
+		if err := urlRows.Scan(&id, &url); err != nil {
+			urlRows.Close()
+			return nil, 0, fmt.Errorf("scanning canonical document row: %w", err)
+		}
+		canonicalURLs[id] = url
+	}
+	urlRows.Close()
+	if err := urlRows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	groups := make([]domain.DocumentAliasGroup, len(canonicalIDs))
+	for i, id := range canonicalIDs {
+		groups[i] = domain.DocumentAliasGroup{
+			CanonicalID:  id,
+			CanonicalURL: canonicalURLs[id],
+			AliasURLs:    byCanonical[id],
+		}
+	}
+	return groups, total, nil
 }
 
 // ListDocuments lists indexed pages, most recent ID first, optionally
@@ -1681,7 +2011,18 @@ func (r *Repository) attachLinkStats(ctx context.Context, docs []domain.IndexedD
 // since a self-loop is meaningless for PageRank. Loaded in one query
 // rather than one row at a time.
 func (r *Repository) LinkGraph(ctx context.Context) (map[string][]string, error) {
-	query := `SELECT l.from_id, d.id FROM links l JOIN documents d ON d.url = l.to_url`
+	// A link's to_url is resolved against documents.url directly first;
+	// when that misses but to_url instead names a known alias (a page
+	// merged away by application.RunContentDedupJob, or folded by
+	// domain.CanonicalizeURL's www rule after this link was recorded),
+	// document_aliases.canonical_id is used instead -- so a link to a
+	// since-merged-away URL still contributes its PageRank weight to
+	// whichever document actually survived, rather than silently
+	// disappearing the moment the target is merged away.
+	query := `SELECT l.from_id, COALESCE(d.id, da.canonical_id) FROM links l
+	          LEFT JOIN documents d ON d.url = l.to_url
+	          LEFT JOIN document_aliases da ON da.alias_url = l.to_url
+	          WHERE d.id IS NOT NULL OR da.canonical_id IS NOT NULL`
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("querying link graph: %w", err)

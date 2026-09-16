@@ -21,6 +21,10 @@ const FULL_SETTINGS = {
     default_renderer: 'none',
     link_scope: 'domain',
     url_alias_www_enabled: true,
+    content_dedup_enabled: false,
+    content_dedup_method: 'exact',
+    content_dedup_simhash_max_distance: 3,
+    content_dedup_interval_minutes: 120,
     default_top_k: 10,
     semantic_candidate_pool_size: 200,
     ann_search_enabled: true,
@@ -307,6 +311,37 @@ test('saveSettings posts an unchecked url-alias-www-enabled box as false', async
   };
   await saveSettings();
   assert.equal(gotBody.operational.url_alias_www_enabled, false);
+});
+
+test('applySettings fills the content-dedup fields from the response', () => {
+  const { applySettings } = loadFixture();
+  applySettings(FULL_SETTINGS);
+  assert.equal(document.getElementById('content-dedup-enabled').checked, false);
+  assert.equal(document.getElementById('content-dedup-method').value, 'exact');
+  assert.equal(document.getElementById('content-dedup-simhash-max-distance').value, '3');
+  assert.equal(document.getElementById('content-dedup-interval').value, '120');
+});
+
+test('saveSettings posts the edited content-dedup fields', async () => {
+  const { saveSettings } = loadFixture();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  document.getElementById('content-dedup-enabled').checked = true;
+  document.getElementById('content-dedup-method').value = 'simhash';
+  document.getElementById('content-dedup-simhash-max-distance').value = '5';
+  document.getElementById('content-dedup-interval').value = '90';
+  let gotBody;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/settings')) {
+      gotBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => FULL_SETTINGS };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  await saveSettings();
+  assert.equal(gotBody.operational.content_dedup_enabled, true);
+  assert.equal(gotBody.operational.content_dedup_method, 'simhash');
+  assert.equal(gotBody.operational.content_dedup_simhash_max_distance, 5);
+  assert.equal(gotBody.operational.content_dedup_interval_minutes, 90);
 });
 
 test('applyOverrides fills blocked/boosted textareas from the response', () => {

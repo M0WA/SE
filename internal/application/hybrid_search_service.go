@@ -216,6 +216,26 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 	for id := range bm25PerDoc {
 		bm25HitIDs = append(bm25HitIDs, id)
 	}
+	// A site:/-site: host may only exist as a document_aliases row now (the
+	// content merged, or www-folded, into a document under a different real
+	// host) -- domain.ParsedQuery.SiteAllowed compares a candidate's own
+	// (canonical) host, so it would otherwise never match either list here.
+	// Expanding both lists with the resolved canonical host keeps the filter
+	// correct without touching SiteAllowed itself.
+	if len(parsed.Sites) > 0 {
+		aliasHosts, err := s.repo.ResolveAliasHosts(ctx, parsed.Sites)
+		if err != nil {
+			return nil, err
+		}
+		parsed.Sites = append(parsed.Sites, aliasHosts...)
+	}
+	if len(parsed.ExcludedSites) > 0 {
+		aliasHosts, err := s.repo.ResolveAliasHosts(ctx, parsed.ExcludedSites)
+		if err != nil {
+			return nil, err
+		}
+		parsed.ExcludedSites = append(parsed.ExcludedSites, aliasHosts...)
+	}
 	// A site: filter must never depend on whether its matches happen to be
 	// a BM25 hit or land in the semantic sample below -- forcing them into
 	// the fetch set here guarantees every document on the requested site(s)

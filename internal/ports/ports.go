@@ -172,6 +172,17 @@ type SQLRepository interface {
 	// search candidate set directly, since they otherwise have no guarantee
 	// of appearing in the BM25-hit set or the bounded semantic sample.
 	DocumentIDsByHost(ctx context.Context, hosts []string) ([]string, error)
+	// ResolveAliasHosts returns the actual documents.host of every canonical
+	// document reachable through a document_aliases row whose own host
+	// exactly matches one of hosts, or is a subdomain of one (same matching
+	// rule as DocumentIDsByHost/domain.ParsedQuery.SiteAllowed). Used to
+	// expand a query's site:/-site: host list before SiteAllowed filtering,
+	// since SiteAllowed compares a candidate's own (canonical) host, which
+	// no longer matches an alias host a user might type after a merge or a
+	// www fold -- DocumentIDsByHost alone gets the canonical document into
+	// the candidate set, but SiteAllowed still needs its real host in the
+	// list to keep it there.
+	ResolveAliasHosts(ctx context.Context, hosts []string) ([]string, error)
 	// HostsIndexed reports, for each of hosts, whether any document is
 	// already indexed for it (exact host match or a subdomain of it, same
 	// matching rule as DocumentIDsByHost) -- used by a crawl's
@@ -216,6 +227,30 @@ type PageRankRepository interface {
 	// left untouched, keeping whatever neutral default or prior score it
 	// already had rather than being zeroed out.
 	UpdatePageRanks(ctx context.Context, scores map[string]float64) error
+}
+
+// ContentDedupRepository is the narrow port application.RunContentDedupJob
+// needs: read every document's fingerprint, then merge whatever groups of
+// duplicates it finds. Implemented by the same *sqlrepo.Repository every
+// process already opens -- cmd/crawl (which owns the periodic recompute
+// ticker, and triggers one more run right after each crawl completes,
+// mirroring PageRankRepository's own cmd/crawl wiring) is the only caller.
+type ContentDedupRepository interface {
+	// AllDocumentFingerprints lists every document's id/url/host/
+	// content_hash/simhash/crawled_at in one query -- just enough for
+	// RunContentDedupJob to group duplicates and report a human-readable
+	// merge result, not the full domain.Document (text/embeddings would be
+	// wasted memory across an entire corpus scan).
+	AllDocumentFingerprints(ctx context.Context) ([]domain.DocumentFingerprint, error)
+	// MergeDocuments folds every loserIDs document into canonicalID: each
+	// loser's own document_aliases entries are repointed to canonicalID
+	// (path compression, for a document that itself was already an alias
+	// target), a fresh alias row is recorded for the loser's own URL, and
+	// the loser's document row (and its postings/document_versions/
+	// document_embeddings/links, the same cascade DeleteDocument already
+	// performs) is removed. reason is domain.DocumentAliasReasonContentExact
+	// or ContentSimHash, recorded on every alias row this call creates.
+	MergeDocuments(ctx context.Context, canonicalID string, loserIDs []string, reason string) error
 }
 
 // EmbeddingRepository is the narrow slice of *sqlrepo.Repository
@@ -326,6 +361,13 @@ type AdminRepository interface {
 	// document count -- the admin Overview page's PageRank distribution
 	// histogram and orphan-rate stat tile. All zero for an empty corpus.
 	PageRankHistogram(ctx context.Context) (buckets []domain.PageRankBucket, orphanCount, totalDocs int, err error)
+	// ListDocumentAliasGroups pages through every canonical document that
+	// currently has at least one alias, grouped directly from the live
+	// document_aliases table (not a single run's in-memory result) so the
+	// admin content-dedup page's "what got merged" listing stays accurate
+	// across processes and over time. total is the total number of such
+	// groups (for pagination), independent of limit/offset.
+	ListDocumentAliasGroups(ctx context.Context, limit, offset int) (groups []domain.DocumentAliasGroup, total int, err error)
 }
 
 // --- Primary (driving) ports ---
@@ -503,6 +545,10 @@ const (
 	// wrongly re-run (and resurrect the deleted endpoint) on the next
 	// restart.
 	SettingsKeyEmbeddingEndpointsMigrated = "embedding_endpoints_migrated"
+	// SettingsKeyContentDedupStatus holds a domain.ContentDedupStatus --
+	// the same runtime-status pattern as SettingsKeyPageRankStatus, written
+	// by application.RunContentDedupJobWithStatus.
+	SettingsKeyContentDedupStatus = "content_dedup_status"
 )
 
 // SettingsStore persists the admin-configurable tuning/operational/ranking
