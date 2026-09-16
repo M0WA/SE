@@ -94,9 +94,9 @@
           </label>
         </div>
         <div class="form-row">
-          <label for="embedding-provider">Active for search — which enabled provider's stored vectors a query is actually compared against</label><br>
-          <select id="embedding-provider" class="field"></select>
-          <p class="tuning-hint">Configure additional HTTP embedding endpoints (any number, each independently enabled) on <a href="/admin/embeddings/endpoints">HTTP endpoints</a>. Any enabled provider may be kept warm at once, so switching which one is active here never needs a recompute -- the others are already kept warm on every crawl. At least one provider must stay enabled overall.</p>
+          <label for="embedding-search-weights">Active for search — weight each enabled provider gets in the blended semantic score (0 = not used)</label><br>
+          <div id="embedding-search-weights"></div>
+          <p class="tuning-hint">A search's semantic score is a weighted blend of every provider given a weight above -- weights are relative to each other, not absolute (1 and 1 weighs two providers equally, the same as 10 and 10 would). Configure additional HTTP embedding endpoints (any number, each independently enabled) on <a href="/admin/embeddings/endpoints">HTTP endpoints</a>. Any enabled provider may be kept warm at once, so reweighting here never needs a recompute -- the others are already kept warm on every crawl. Any search request may override these weights for itself via <code>?semantic=</code>.</p>
         </div>
         <div class="form-row">
           <label for="embedding-title-weight">Title weight in embeddings — 0 embeds the body only, 1 the title only; in between, blends two separate Embed calls (see Embeddings)</label><br>

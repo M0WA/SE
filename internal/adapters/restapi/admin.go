@@ -541,7 +541,7 @@ func (h *Handler) handleAdminSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	query := r.URL.Query().Get("q")
 	topK := intQueryParam(r, "top_k", h.opSettings.Get().DefaultTopK, false)
-	results, err := h.debug.Search(r.Context(), query, ports.SearchQuery{TopK: topK, Sort: parseSortParam(r)})
+	results, err := h.debug.Search(r.Context(), query, ports.SearchQuery{TopK: topK, Sort: parseSortParam(r), ProviderWeights: parseProviderWeightsParam(r)})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -621,15 +621,15 @@ type operationalValues struct {
 	// indexed token stream, ahead of its body -- see
 	// domain.OperationalSettingsValues for the full doc comment.
 	TitleWeight int `json:"title_weight"`
-	// EmbeddingHashEnabled/EmbeddingProvider mirror the same-named
+	// EmbeddingHashEnabled/EmbeddingSearchWeights mirror the same-named
 	// domain.OperationalSettingsValues fields -- see there for the full
 	// doc comment, including why EmbeddingHashEnabled requires a process
-	// restart to take effect and why EmbeddingProvider must name a
-	// currently-enabled provider. Every configured HTTP endpoint is
-	// managed separately via GET/POST /admin/api/embeddings/endpoints,
-	// not through this settings payload.
-	EmbeddingHashEnabled bool   `json:"embedding_hash_enabled"`
-	EmbeddingProvider    string `json:"embedding_provider"`
+	// restart to take effect and why every key in EmbeddingSearchWeights
+	// must name a currently-enabled provider. Every configured HTTP
+	// endpoint is managed separately via GET/POST
+	// /admin/api/embeddings/endpoints, not through this settings payload.
+	EmbeddingHashEnabled   bool               `json:"embedding_hash_enabled"`
+	EmbeddingSearchWeights map[string]float64 `json:"embedding_search_weights"`
 	// EmbeddingTitleWeight mirrors the same-named
 	// domain.OperationalSettingsValues field -- see there for the full
 	// doc comment.
@@ -660,7 +660,7 @@ func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 		MaxDocumentVersions:              v.MaxDocumentVersions,
 		TitleWeight:                      v.TitleWeight,
 		EmbeddingHashEnabled:             v.EmbeddingHashEnabled,
-		EmbeddingProvider:                v.EmbeddingProvider,
+		EmbeddingSearchWeights:           v.EmbeddingSearchWeights,
 		EmbeddingTitleWeight:             v.EmbeddingTitleWeight,
 	}
 }
@@ -689,7 +689,7 @@ func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 		MaxDocumentVersions:              o.MaxDocumentVersions,
 		TitleWeight:                      o.TitleWeight,
 		EmbeddingHashEnabled:             o.EmbeddingHashEnabled,
-		EmbeddingProvider:                o.EmbeddingProvider,
+		EmbeddingSearchWeights:           o.EmbeddingSearchWeights,
 		EmbeddingTitleWeight:             o.EmbeddingTitleWeight,
 	}
 }
@@ -1079,7 +1079,7 @@ func (h *Handler) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		h.settings.Set(req.Tuning.Alpha, req.Tuning.K1, req.Tuning.B)
 		h.settings.SetPageRankWeight(req.Tuning.PageRankWeight)
 		v := req.Operational.toSettingsValues()
-		v.EmbeddingProvider = domain.ReconcileActiveProvider(v.EmbeddingProvider, v.EmbeddingHashEnabled, h.currentEmbeddingEndpoints(r.Context()))
+		v.EmbeddingSearchWeights = domain.ReconcileSearchWeights(v.EmbeddingSearchWeights, v.EmbeddingHashEnabled, h.currentEmbeddingEndpoints(r.Context()))
 		h.opSettings.Set(v)
 		h.persistSetting(r.Context(), ports.SettingsKeyTuning, h.settings.Values())
 		h.persistSetting(r.Context(), ports.SettingsKeyOperational, h.opSettings.Get())

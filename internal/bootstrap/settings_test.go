@@ -79,15 +79,19 @@ func TestSyncSettings_AppliesStoredOperationalOnStartup(t *testing.T) {
 	}
 }
 
-// TestSyncSettings_ReconcilesEmbeddingProviderAgainstLiveEndpoints proves
-// the choke point domain.ReconcileActiveProvider is meant to run at: a
-// stored EmbeddingProvider naming an endpoint that's since been disabled
-// (or deleted) is self-healed back to hash on the very next sync tick,
-// same as it used to be self-healed inside OperationalSettings.Set before
-// provider validity depended on a dynamically configured table.
-func TestSyncSettings_ReconcilesEmbeddingProviderAgainstLiveEndpoints(t *testing.T) {
+// TestSyncSettings_ReconcilesEmbeddingSearchWeightsAgainstLiveEndpoints
+// proves the choke point domain.ReconcileSearchWeights is meant to run at:
+// a stored EmbeddingSearchWeights entry naming an endpoint that's since
+// been disabled (or deleted) is dropped, self-healing to hash, on the very
+// next sync tick -- same as it used to be self-healed inside
+// OperationalSettings.Set before provider validity depended on a
+// dynamically configured table.
+func TestSyncSettings_ReconcilesEmbeddingSearchWeightsAgainstLiveEndpoints(t *testing.T) {
 	repo := newTestRepo(t)
-	stored := domain.OperationalSettingsValues{EmbeddingHashEnabled: true, EmbeddingProvider: "gone"}
+	stored := domain.OperationalSettingsValues{
+		EmbeddingHashEnabled:   true,
+		EmbeddingSearchWeights: map[string]float64{"gone": 1},
+	}
 	data, _ := json.Marshal(stored)
 	if err := repo.SaveSetting(context.Background(), ports.SettingsKeyOperational, string(data)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -96,14 +100,15 @@ func TestSyncSettings_ReconcilesEmbeddingProviderAgainstLiveEndpoints(t *testing
 	op := domain.DefaultOperationalSettings()
 	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, nil, repo)
 
-	if got := op.Get().EmbeddingProvider; got != domain.EmbeddingProviderHash {
-		t.Errorf("expected EmbeddingProvider naming a nonexistent endpoint to self-heal to hash, got %q", got)
+	got := op.Get().EmbeddingSearchWeights
+	if len(got) != 1 || got[domain.EmbeddingProviderHash] != 1 {
+		t.Errorf("expected a weight naming a nonexistent endpoint to self-heal to {hash: 1}, got %+v", got)
 	}
 }
 
 // TestSyncSettings_ReconciliationPreservesAnEnabledEndpoint proves the
 // reconciliation doesn't clobber a genuinely valid, currently-enabled
-// endpoint choice.
+// endpoint's weight.
 func TestSyncSettings_ReconciliationPreservesAnEnabledEndpoint(t *testing.T) {
 	repo := newTestRepo(t)
 	if err := repo.CreateEmbeddingEndpoint(context.Background(), domain.EmbeddingHTTPEndpoint{
@@ -111,7 +116,7 @@ func TestSyncSettings_ReconciliationPreservesAnEnabledEndpoint(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	stored := domain.OperationalSettingsValues{EmbeddingProvider: "ionos"}
+	stored := domain.OperationalSettingsValues{EmbeddingSearchWeights: map[string]float64{"ionos": 0.7}}
 	data, _ := json.Marshal(stored)
 	if err := repo.SaveSetting(context.Background(), ports.SettingsKeyOperational, string(data)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -120,8 +125,40 @@ func TestSyncSettings_ReconciliationPreservesAnEnabledEndpoint(t *testing.T) {
 	op := domain.DefaultOperationalSettings()
 	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, nil, repo)
 
-	if got := op.Get().EmbeddingProvider; got != "ionos" {
-		t.Errorf("expected the enabled endpoint to stay active, got %q", got)
+	got := op.Get().EmbeddingSearchWeights
+	if len(got) != 1 || got["ionos"] != 0.7 {
+		t.Errorf("expected the enabled endpoint's weight preserved, got %+v", got)
+	}
+}
+
+// TestSyncSettings_MigratesLegacyEmbeddingProviderToSearchWeights proves
+// the upgrade-safety migration: a settings blob saved before
+// EmbeddingSearchWeights existed (so it decodes to an empty map) but
+// naming a real, currently-enabled provider via the deprecated
+// EmbeddingProvider field carries that provider over as a weight-1 entry,
+// rather than resetting to the hard-coded {hash: 1} default and silently
+// discarding a real live config -- mirrors the PR #60 precedent.
+func TestSyncSettings_MigratesLegacyEmbeddingProviderToSearchWeights(t *testing.T) {
+	repo := newTestRepo(t)
+	if err := repo.CreateEmbeddingEndpoint(context.Background(), domain.EmbeddingHTTPEndpoint{
+		ID: "ionos", Name: "IONOS", BaseURL: "https://example.com", Model: "m", Dimensions: 4, Enabled: true,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Simulate a pre-upgrade blob: EmbeddingProvider set, EmbeddingSearchWeights
+	// absent entirely (decodes to nil/empty, not just zero-valued).
+	stored := map[string]interface{}{"EmbeddingProvider": "ionos"}
+	data, _ := json.Marshal(stored)
+	if err := repo.SaveSetting(context.Background(), ports.SettingsKeyOperational, string(data)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	op := domain.DefaultOperationalSettings()
+	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, nil, repo)
+
+	got := op.Get().EmbeddingSearchWeights
+	if len(got) != 1 || got["ionos"] != 1 {
+		t.Errorf("expected the legacy EmbeddingProvider to migrate to {ionos: 1}, got %+v", got)
 	}
 }
 

@@ -45,9 +45,9 @@ type PoolConfigurer interface {
 // connection pool to manage (e.g. a test that only cares about tuning).
 //
 // embeddingEndpoints (typically the same *sqlrepo.Repository as pool), when
-// non-nil, is consulted on every tick to keep op.EmbeddingProvider valid: a
-// stored value naming a provider that's since been disabled or had its
-// endpoint deleted is self-healed via domain.ReconcileActiveProvider before
+// non-nil, is consulted on every tick to keep op.EmbeddingSearchWeights
+// valid: any entry naming a provider that's since been disabled or had its
+// endpoint deleted is self-healed via domain.ReconcileSearchWeights before
 // being applied -- op.Set itself can't do this (see its own doc comment),
 // since provider validity now depends on this dynamically configured list,
 // not a fixed enum. nil skips reconciliation entirely (e.g. a test that
@@ -66,9 +66,18 @@ func applySettingsOnce(ctx context.Context, store ports.SettingsStore, tuning *d
 	if op != nil {
 		var v domain.OperationalSettingsValues
 		if loadSetting(ctx, store, ports.SettingsKeyOperational, &v) {
+			// Upgrade-safety migration: a settings blob saved before
+			// EmbeddingSearchWeights existed still decodes the deprecated
+			// EmbeddingProvider field (see its own doc comment) -- seed the
+			// new map from it, once, so an already-configured active
+			// provider carries over as a weight-1 entry instead of
+			// resetting to the hard-coded default.
+			if len(v.EmbeddingSearchWeights) == 0 && v.EmbeddingProvider != "" {
+				v.EmbeddingSearchWeights = map[string]float64{v.EmbeddingProvider: 1}
+			}
 			if embeddingEndpoints != nil {
 				if endpoints, err := embeddingEndpoints.ListEmbeddingEndpoints(ctx); err == nil {
-					v.EmbeddingProvider = domain.ReconcileActiveProvider(v.EmbeddingProvider, v.EmbeddingHashEnabled, endpoints)
+					v.EmbeddingSearchWeights = domain.ReconcileSearchWeights(v.EmbeddingSearchWeights, v.EmbeddingHashEnabled, endpoints)
 				} else {
 					log.Printf("listing embedding endpoints: %v", err)
 				}

@@ -54,7 +54,7 @@ func main() {
 	// constructed -- see cmd/search's identical comment.
 	repo.EnableANN(ctx, bootstrap.EmbedderDimensions(embedders))
 
-	debugSvc := application.NewHybridSearchService(repo, embedders[opSettings.Get().EmbeddingProvider], settings, opSettings, overrides, corpusStats, vocabulary)
+	debugSvc := application.NewHybridSearchService(repo, embedders, settings, opSettings, overrides, corpusStats, vocabulary)
 
 	// A previous admin-server instance killed mid-recompute (crash, restart,
 	// redeploy) leaves embedding_recompute_status stuck at InProgress=true,

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -379,6 +380,60 @@ func TestHandleSearch_UnrecognizedSortFallsBackToRelevance(t *testing.T) {
 	h.RoutesSearch().ServeHTTP(rec, req)
 	if fs.gotOpts.Sort != ports.SortRelevance {
 		t.Errorf("expected an unrecognized sort value to fall back to relevance, got %q", fs.gotOpts.Sort)
+	}
+}
+
+func TestHandleSearch_AbsentSemanticParamLeavesProviderWeightsNil(t *testing.T) {
+	fs := &fakeSearch{}
+	h, cookie := authedHandler(t, fs, nil)
+	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+	if fs.gotOpts.ProviderWeights != nil {
+		t.Errorf("expected no ?semantic= param to leave ProviderWeights nil (admin default used), got %+v", fs.gotOpts.ProviderWeights)
+	}
+}
+
+func TestHandleSearch_SemanticParamParsesWeightedPairs(t *testing.T) {
+	fs := &fakeSearch{}
+	h, cookie := authedHandler(t, fs, nil)
+	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen&semantic=hash:0.3,ionos:0.7", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+	want := map[string]float64{"hash": 0.3, "ionos": 0.7}
+	if !reflect.DeepEqual(fs.gotOpts.ProviderWeights, want) {
+		t.Errorf("expected ProviderWeights %+v, got %+v", want, fs.gotOpts.ProviderWeights)
+	}
+}
+
+func TestHandleSearch_SemanticParamBareProviderDefaultsToWeightOne(t *testing.T) {
+	fs := &fakeSearch{}
+	h, cookie := authedHandler(t, fs, nil)
+	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen&semantic=ionos", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+	want := map[string]float64{"ionos": 1}
+	if !reflect.DeepEqual(fs.gotOpts.ProviderWeights, want) {
+		t.Errorf("expected a bare provider to default to weight 1, got %+v", fs.gotOpts.ProviderWeights)
+	}
+}
+
+func TestHandleSearch_SemanticParamSkipsMalformedEntriesIndividually(t *testing.T) {
+	fs := &fakeSearch{}
+	h, cookie := authedHandler(t, fs, nil)
+	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen&semantic=hash:not-a-number,:0.5,,ionos:0.7", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected malformed entries to be skipped rather than 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	want := map[string]float64{"ionos": 0.7}
+	if !reflect.DeepEqual(fs.gotOpts.ProviderWeights, want) {
+		t.Errorf("expected only the well-formed pair to survive, got %+v", fs.gotOpts.ProviderWeights)
 	}
 }
 

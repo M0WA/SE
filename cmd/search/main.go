@@ -62,7 +62,7 @@ func main() {
 	// settings sync above.
 	repo.EnableANN(ctx, bootstrap.EmbedderDimensions(embedders))
 
-	searchSvc := application.NewHybridAsSearchService(repo, embedders[opSettings.Get().EmbeddingProvider], settings, opSettings, overrides, corpusStats, vocabulary)
+	searchSvc := application.NewHybridAsSearchService(repo, embedders, settings, opSettings, overrides, corpusStats, vocabulary)
 
 	handler := restapi.New(restapi.Config{
 		Search:     searchSvc,

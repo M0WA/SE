@@ -138,27 +138,43 @@ type OperationalSettingsValues struct {
 	// EmbeddingHTTPEndpoint's real, continuous cost against its own
 	// RateLimitPerSecond.
 	EmbeddingHashEnabled bool
-	// EmbeddingProvider selects which enabled provider -- EmbeddingProviderHash
-	// or an enabled EmbeddingHTTPEndpoint.ID -- search actually compares a
-	// query against. See domain.ReconcileActiveProvider for how an invalid
-	// or no-longer-enabled value is self-healed; OperationalSettings.Set
-	// itself can't do that here; unlike every other field it clamps,
+	// EmbeddingSearchWeights maps a provider -- EmbeddingProviderHash or an
+	// enabled EmbeddingHTTPEndpoint.ID -- to its weight in the search-time
+	// semantic score (see application.hybridSearchService.Search). A
+	// provider absent, or present with weight <= 0, doesn't contribute to
+	// the blend. Weights are normalized to sum 1 at scoring time (the same
+	// convention as TuningSettings' alpha blending BM25 against semantic),
+	// so relative magnitudes matter, not absolute scale -- {hash: 1,
+	// ionos: 1} weighs them equally, the same as {hash: 10, ionos: 10}
+	// would. Any request may override this map entirely for itself (see
+	// ports.SearchQuery.ProviderWeights); this is only the default.
+	//
+	// See domain.ReconcileSearchWeights for how a provider naming an
+	// invalid or no-longer-enabled entry is self-healed; OperationalSettings.
+	// Set itself can't do that here, unlike every other field it clamps,
 	// because validity now depends on the dynamically configured
 	// embedding_http_endpoints table, not a fixed enum. This doesn't
-	// require a restart or a recompute to take effect once the target
+	// require a restart or a recompute to take effect once every weighted
 	// provider is already being kept warm -- it's just choosing which
-	// already-current stored vector to read.
+	// already-current stored vectors to read and how to blend them.
 	//
-	// Switching to a provider that was previously disabled (so it has no
+	// Weighting in a provider that was previously unweighted (so it has no
 	// stored vectors yet, or stale ones from before it was last enabled)
-	// changes the vector space entirely -- a similarity score between an
-	// embedding computed by one provider/model and one computed by
-	// another is meaningless. Like TitleWeight above, there is no
-	// automatic re-embed here beyond whatever's been kept current while
-	// enabled -- semantic ranking for a freshly re-enabled provider
-	// degrades until either it's been enabled long enough to catch up via
-	// ongoing crawls, or an explicit recompute brings it current
-	// immediately.
+	// dilutes the blend with noise for that provider's share until it's
+	// been enabled long enough to catch up via ongoing crawls, or an
+	// explicit recompute brings it current immediately -- like TitleWeight
+	// above, there is no automatic re-embed.
+	EmbeddingSearchWeights map[string]float64
+	// EmbeddingProvider is deprecated: it named the single active provider
+	// before EmbeddingSearchWeights generalized "active for search" to a
+	// weighted set. Kept only so a settings blob saved before this existed
+	// still decodes -- bootstrap.applySettingsOnce seeds
+	// EmbeddingSearchWeights from it once, on first load, if the latter is
+	// still empty (protecting an already-configured active provider across
+	// this upgrade, the same "don't silently discard a real live config"
+	// precedent as the EmbeddingHashEnabled/EmbeddingHTTPEnabled migration
+	// before it). Never read anywhere else, and no longer settable through
+	// the admin API.
 	EmbeddingProvider string
 	// EmbeddingTitleWeight blends a document's title into its stored
 	// embedding as a weighted combination of two separate Embed calls --
@@ -263,7 +279,7 @@ func defaultOperationalSettings() OperationalSettingsValues {
 		MaxDocumentVersions:              defaultMaxDocumentVersions,
 		TitleWeight:                      defaultTitleWeight,
 		EmbeddingHashEnabled:             true,
-		EmbeddingProvider:                EmbeddingProviderHash,
+		EmbeddingSearchWeights:           map[string]float64{EmbeddingProviderHash: 1},
 		EmbeddingTitleWeight:             defaultEmbeddingTitleWeight,
 	}
 }

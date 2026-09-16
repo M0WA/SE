@@ -10,8 +10,14 @@ import (
 )
 
 type hybridSearchService struct {
-	repo        ports.SQLRepository
-	embedder    ports.EmbeddingProvider
+	repo ports.SQLRepository
+	// embedders holds one ports.EmbeddingProvider per currently-enabled
+	// provider (domain.EmbeddingProviderHash, or a configured
+	// domain.EmbeddingHTTPEndpoint's ID) -- mirrors sqlCrawlerService's
+	// identical field. Search embeds the query against every provider that
+	// currently has a non-zero weight (see resolveProviderWeights), not
+	// just one -- see its own doc comment for why.
+	embedders   map[string]ports.EmbeddingProvider
 	settings    *domain.TuningSettings
 	opSettings  *domain.OperationalSettings
 	corpusStats *domain.CorpusStatsCache
@@ -19,8 +25,33 @@ type hybridSearchService struct {
 	vocabulary  *domain.VocabularyCache
 }
 
-func NewHybridSearchService(repo ports.SQLRepository, embedder ports.EmbeddingProvider, settings *domain.TuningSettings, opSettings *domain.OperationalSettings, overrides *domain.RankingOverrides, corpusStats *domain.CorpusStatsCache, vocabulary *domain.VocabularyCache) *hybridSearchService {
-	return &hybridSearchService{repo: repo, embedder: embedder, settings: settings, opSettings: opSettings, corpusStats: corpusStats, overrides: overrides, vocabulary: vocabulary}
+func NewHybridSearchService(repo ports.SQLRepository, embedders map[string]ports.EmbeddingProvider, settings *domain.TuningSettings, opSettings *domain.OperationalSettings, overrides *domain.RankingOverrides, corpusStats *domain.CorpusStatsCache, vocabulary *domain.VocabularyCache) *hybridSearchService {
+	return &hybridSearchService{repo: repo, embedders: embedders, settings: settings, opSettings: opSettings, corpusStats: corpusStats, overrides: overrides, vocabulary: vocabulary}
+}
+
+// resolveProviderWeights returns the provider->weight map this request
+// actually scores semantic similarity with: opts.ProviderWeights if the
+// caller supplied one (a full replacement of the admin default, the same
+// "the param replaces, it doesn't blend" convention opts.TopK already
+// follows), else opValues.EmbeddingSearchWeights. Either way, the result
+// is filtered down to providers this process actually has a live embedder
+// for (weight <= 0, or a provider unknown to s.embedders, is dropped
+// silently -- s.embedders only ever contains providers this process
+// itself has enabled/configured, so a stale or foreign provider ID here
+// is simply ignored rather than erroring the request). An empty result
+// means "no semantic scoring for this request" (pure BM25), not an error.
+func (s *hybridSearchService) resolveProviderWeights(opts ports.SearchQuery, opValues domain.OperationalSettingsValues) map[string]float64 {
+	weights := opValues.EmbeddingSearchWeights
+	if opts.ProviderWeights != nil {
+		weights = opts.ProviderWeights
+	}
+	active := make(map[string]float64, len(weights))
+	for provider, w := range weights {
+		if w > 0 && s.embedders[provider] != nil {
+			active[provider] = w
+		}
+	}
+	return active
 }
 
 // fetchPostings runs the BM25 side of a search: one batched postings
@@ -96,39 +127,55 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 	}
 
 	opValues := s.opSettings.Get()
+	active := s.resolveProviderWeights(opts, opValues)
 
 	// The BM25 side (postings lookup, plus fuzzy-match fallback) and the
-	// semantic side's query embedding are entirely independent of each
+	// semantic side's query embedding(s) are entirely independent of each
 	// other -- neither reads anything the other produces -- until both
-	// feed into the semantic candidate pool below. For the HTTP embedding
+	// feed into the semantic candidate pool below. For an HTTP embedding
 	// provider in particular, Embed is a real network round-trip, so
-	// running it concurrently with the postings fetch (rather than only
-	// starting it once BM25 scoring has fully finished) shaves that
-	// latency off the request instead of paying for it twice.
+	// running every active provider's Embed call concurrently with each
+	// other and with the postings fetch (rather than sequentially, or only
+	// starting them once BM25 scoring has fully finished) shaves that
+	// latency off the request instead of paying for it once per provider.
 	var (
 		wg             sync.WaitGroup
 		postingsByTerm map[string][]domain.PostingStats
 		scoringTerm    map[string]string
 		correctedTerms []domain.CorrectedTerm
 		postingsErr    error
-		queryVec       []float32
-		embedErr       error
+		queryVecs      = make(map[string][]float32, len(active))
+		embedErrsMu    sync.Mutex
+		embedErrs      []error
 	)
-	wg.Add(2)
+	wg.Add(1 + len(active))
 	go func() {
 		defer wg.Done()
 		postingsByTerm, scoringTerm, correctedTerms, postingsErr = s.fetchPostings(ctx, uniqueTerms, opValues)
 	}()
-	go func() {
-		defer wg.Done()
-		queryVec, embedErr = s.embedder.Embed(ctx, query)
-	}()
+	var queryVecsMu sync.Mutex
+	for provider := range active {
+		provider := provider
+		go func() {
+			defer wg.Done()
+			vec, err := s.embedders[provider].Embed(ctx, query)
+			if err != nil {
+				embedErrsMu.Lock()
+				embedErrs = append(embedErrs, err)
+				embedErrsMu.Unlock()
+				return
+			}
+			queryVecsMu.Lock()
+			queryVecs[provider] = vec
+			queryVecsMu.Unlock()
+		}()
+	}
 	wg.Wait()
 	if postingsErr != nil {
 		return nil, postingsErr
 	}
-	if embedErr != nil {
-		return nil, embedErr
+	if len(embedErrs) > 0 {
+		return nil, embedErrs[0]
 	}
 
 	totalDocs, avgDocLen := s.corpusStats.Get()
@@ -152,9 +199,12 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 	}
 
 	// Computed once per Search call rather than inside every per-candidate
-	// cosine-similarity comparison below -- the query vector never changes
+	// cosine-similarity comparison below -- a query vector never changes
 	// across those comparisons within one request.
-	queryNorm := domain.VectorNorm(queryVec)
+	queryNorms := make(map[string]float64, len(queryVecs))
+	for provider, vec := range queryVecs {
+		queryNorms[provider] = domain.VectorNorm(vec)
+	}
 
 	// Score the semantic side against a bounded candidate set rather than
 	// the entire corpus: every BM25 hit (however many that is -- bounded by
@@ -177,48 +227,59 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 		}
 		bm25HitIDs = append(bm25HitIDs, siteIDs...)
 	}
-	embeddings, err := s.repo.EmbeddingsForDocs(ctx, bm25HitIDs, opValues.EmbeddingProvider)
-	if err != nil {
-		return nil, err
-	}
-	// Fill the rest of the semantic candidate pool via Postgres pgvector's
-	// ANN index when it's both admin-enabled (ANNSearchEnabled) and
-	// actually available for this repository (ok -- see
-	// sqlrepo.Repository.EnableANN/TopSemanticMatches: false for any
-	// non-Postgres dialect, a Postgres server without the pgvector
-	// extension, or a process where EnableANN never succeeded), falling
-	// back to the existing bounded brute-force SampleEmbeddings sample
-	// exactly as before ANN existed whenever it isn't.
+	// embeddings is keyed [provider][docID] -- one independent vector space
+	// per active provider, since embeddings from different models can never
+	// be compared directly (only their independently-computed similarity
+	// scores can be blended -- see the scoring loop below).
+	embeddings := make(map[string]map[string]domain.EmbeddedVector, len(active))
 	poolSize := opValues.SemanticCandidatePoolSize
-	var sampled map[string]domain.EmbeddedVector
-	if opValues.ANNSearchEnabled {
-		annMatches, ok, annErr := s.repo.TopSemanticMatches(ctx, queryVec, poolSize, opValues.EmbeddingProvider)
-		if annErr != nil {
-			return nil, annErr
-		}
-		if ok {
-			sampled = annMatches
-		}
-	}
-	if sampled == nil {
-		var sampleErr error
-		sampled, sampleErr = s.repo.SampleEmbeddings(ctx, poolSize, opValues.EmbeddingProvider)
-		if sampleErr != nil {
-			return nil, sampleErr
-		}
-	}
-	for id, vec := range sampled {
-		if _, ok := embeddings[id]; !ok {
-			embeddings[id] = vec
-		}
-	}
-
-	candidateIDs := make(map[string]bool)
+	candidateIDs := make(map[string]bool, len(bm25PerDoc))
 	for id := range bm25PerDoc {
 		candidateIDs[id] = true
 	}
-	for id := range embeddings {
-		candidateIDs[id] = true
+	for provider := range active {
+		providerEmbeddings, err := s.repo.EmbeddingsForDocs(ctx, bm25HitIDs, provider)
+		if err != nil {
+			return nil, err
+		}
+		// Fill the rest of this provider's share of the semantic candidate
+		// pool via Postgres pgvector's ANN index when it's both
+		// admin-enabled (ANNSearchEnabled) and actually available for this
+		// provider (ok -- see sqlrepo.Repository.EnableANN/
+		// TopSemanticMatches: false for any non-Postgres dialect, a
+		// Postgres server without the pgvector extension, or a process
+		// where EnableANN never succeeded for this provider), falling back
+		// to the existing bounded brute-force SampleEmbeddings sample
+		// exactly as before ANN existed whenever it isn't. Every active
+		// provider's own candidate IDs are unioned together below, so a
+		// document need only turn up in ANY one provider's pool to be
+		// scored against every active provider.
+		var sampled map[string]domain.EmbeddedVector
+		if opValues.ANNSearchEnabled {
+			annMatches, ok, annErr := s.repo.TopSemanticMatches(ctx, queryVecs[provider], poolSize, provider)
+			if annErr != nil {
+				return nil, annErr
+			}
+			if ok {
+				sampled = annMatches
+			}
+		}
+		if sampled == nil {
+			var sampleErr error
+			sampled, sampleErr = s.repo.SampleEmbeddings(ctx, poolSize, provider)
+			if sampleErr != nil {
+				return nil, sampleErr
+			}
+		}
+		for id, vec := range sampled {
+			if _, ok := providerEmbeddings[id]; !ok {
+				providerEmbeddings[id] = vec
+			}
+		}
+		embeddings[provider] = providerEmbeddings
+		for id := range providerEmbeddings {
+			candidateIDs[id] = true
+		}
 	}
 
 	overrides := s.overrides.Get()
@@ -298,10 +359,35 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 	candidates := make([]domain.HybridResult, 0, len(candidateIDs))
 	for id := range candidateIDs {
 		bm25 := domain.BM25ScoreDocument(bm25PerDoc[id], k1, b)
-		ev := embeddings[id]
-		semantic := domain.CosineSimilarityWithNorms(queryVec, ev.Vector, queryNorm, ev.Norm)
+		// Blend every active provider's independently-computed cosine
+		// similarity by its configured weight, normalized so the combined
+		// score stays on the same [-1,1]-ish scale regardless of how many
+		// providers are active or their raw weight magnitudes -- the same
+		// weighted-sum-to-1 convention domain.CombineScores itself uses for
+		// alpha below. A provider missing this candidate's embedding (not
+		// yet recomputed for it) contributes 0 for its own share rather
+		// than being excluded from the normalization -- self-heals as a
+		// recompute catches the document up.
+		//
+		// PageRank is a per-document value redundantly joined onto every
+		// provider's own row for that doc (see domain.EmbeddedVector), not
+		// a per-provider quantity -- read it from whichever active
+		// provider happens to have this candidate at all.
+		var semantic, totalWeight, pageRank float64
+		for provider, w := range active {
+			totalWeight += w
+			ev, ok := embeddings[provider][id]
+			if !ok {
+				continue
+			}
+			semantic += w * domain.CosineSimilarityWithNorms(queryVecs[provider], ev.Vector, queryNorms[provider], ev.Norm)
+			pageRank = ev.PageRank
+		}
+		if totalWeight > 0 {
+			semantic /= totalWeight
+		}
 		candidates = append(candidates, domain.HybridResult{
-			DocID: id, BM25Score: bm25, SemanticSim: semantic, PageRank: ev.PageRank,
+			DocID: id, BM25Score: bm25, SemanticSim: semantic, PageRank: pageRank,
 			CrawledAt: docCache[id].CrawledAt, CorrectedTerms: correctedTerms,
 			Alpha: alpha, K1: k1, B: b, PageRankWeight: pageRankWeight,
 		})

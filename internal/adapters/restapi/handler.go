@@ -5,6 +5,8 @@ import (
 	_ "embed"
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 
 	"searchengine/internal/bootstrap"
@@ -557,7 +559,7 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
 	topK := intQueryParam(r, "top_k", h.opSettings.Get().DefaultTopK, false)
 
-	results, err := h.search.Search(r.Context(), query, ports.SearchQuery{TopK: topK, Sort: parseSortParam(r)})
+	results, err := h.search.Search(r.Context(), query, ports.SearchQuery{TopK: topK, Sort: parseSortParam(r), ProviderWeights: parseProviderWeightsParam(r)})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -573,6 +575,46 @@ func parseSortParam(r *http.Request) string {
 		return ports.SortRecency
 	}
 	return ports.SortRelevance
+}
+
+// parseProviderWeightsParam reads the optional ?semantic= query parameter
+// -- a comma-separated list of "provider:weight" pairs (a bare "provider"
+// with no ":weight" defaults to weight 1), e.g.
+// "semantic=hash:0.3,ionos:0.7" -- into a ports.SearchQuery.ProviderWeights
+// override. Returns nil (meaning "use the admin-configured default," see
+// hybridSearchService.resolveProviderWeights) when the parameter is
+// absent entirely. A malformed entry (empty provider name, an unparseable
+// weight) is skipped individually rather than failing the whole request --
+// the same tolerant, never-400-on-a-query-param style intQueryParam
+// already follows -- so a typo in one pair still lets the rest, or a pure
+// BM25 fallback, through.
+func parseProviderWeightsParam(r *http.Request) map[string]float64 {
+	raw := r.URL.Query().Get("semantic")
+	if raw == "" {
+		return nil
+	}
+	weights := make(map[string]float64)
+	for _, pair := range strings.Split(raw, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		provider, weightStr, hasWeight := strings.Cut(pair, ":")
+		provider = strings.TrimSpace(provider)
+		if provider == "" {
+			continue
+		}
+		weight := 1.0
+		if hasWeight {
+			parsed, err := strconv.ParseFloat(strings.TrimSpace(weightStr), 64)
+			if err != nil {
+				continue
+			}
+			weight = parsed
+		}
+		weights[provider] = weight
+	}
+	return weights
 }
 
 type healthResponse struct {

@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -218,10 +219,10 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 		MaxDocumentVersions:              5,
 		TitleWeight:                      2,
 		EmbeddingHashEnabled:             true,
-		EmbeddingProvider:                domain.EmbeddingProviderHash,
+		EmbeddingSearchWeights:           map[string]float64{domain.EmbeddingProviderHash: 1},
 		EmbeddingTitleWeight:             0.3,
 	}
-	if v != want {
+	if !reflect.DeepEqual(v, want) {
 		t.Errorf("expected defaults %+v, got %+v", want, v)
 	}
 }
@@ -350,13 +351,41 @@ func TestOperationalSettings_SetValidLinkScopePreserved(t *testing.T) {
 	}
 }
 
+// TestOperationalSettings_SetEmbeddingSearchWeightsPassedThroughUnvalidated
+// proves Set doesn't self-heal EmbeddingSearchWeights itself (an entry
+// naming an unrecognized or not-currently-enabled provider, or an empty
+// map) -- that validation is domain.ReconcileSearchWeights' job (see its
+// own tests), applied by callers that have both the settings and the live
+// embedding_http_endpoints list at hand, since provider validity depends
+// on that dynamically configured table rather than a fixed enum Set could
+// check on its own.
+func TestOperationalSettings_SetEmbeddingSearchWeightsPassedThroughUnvalidated(t *testing.T) {
+	cases := []map[string]float64{
+		nil,
+		{},
+		{"ouija-board": 1},
+		{"some-deleted-endpoint-id": 0.5, domain.EmbeddingProviderHash: 0.5},
+	}
+	for _, weights := range cases {
+		s := domain.DefaultOperationalSettings()
+		s.Set(domain.OperationalSettingsValues{EmbeddingSearchWeights: weights})
+		got := s.Get().EmbeddingSearchWeights
+		if len(got) != len(weights) {
+			t.Errorf("Set(EmbeddingSearchWeights=%v): expected it passed through unchanged, got %v", weights, got)
+			continue
+		}
+		for k, v := range weights {
+			if got[k] != v {
+				t.Errorf("Set(EmbeddingSearchWeights=%v): expected it passed through unchanged, got %v", weights, got)
+			}
+		}
+	}
+}
+
 // TestOperationalSettings_SetEmbeddingProviderPassedThroughUnvalidated proves
-// Set no longer self-heals EmbeddingProvider itself (blank, unrecognized,
-// or naming a not-currently-enabled provider) -- that validation moved to
-// domain.ReconcileActiveProvider (see its own tests), applied by callers
-// that have both the settings and the live embedding_http_endpoints list at
-// hand, since provider validity now depends on that dynamically configured
-// table rather than a fixed two-value enum Set could check on its own.
+// the deprecated EmbeddingProvider field (kept only so a settings blob
+// saved before EmbeddingSearchWeights existed still decodes -- see its own
+// doc comment) is likewise never touched by Set.
 func TestOperationalSettings_SetEmbeddingProviderPassedThroughUnvalidated(t *testing.T) {
 	cases := []string{"", "ouija-board", "some-deleted-endpoint-id"}
 	for _, name := range cases {

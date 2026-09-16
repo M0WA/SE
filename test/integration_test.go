@@ -91,7 +91,7 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 	overrides := domain.DefaultRankingOverrides()
 	corpusStats := domain.NewCorpusStatsCache(0, 1)
 	vocabulary := domain.NewVocabularyCache(nil)
-	searchSvc := application.NewHybridAsSearchService(repo, embedder, settings, opSettings, overrides, corpusStats, vocabulary)
+	searchSvc := application.NewHybridAsSearchService(repo, embedders, settings, opSettings, overrides, corpusStats, vocabulary)
 
 	// search-server and admin-server, standing in for the two separate
 	// production processes -- admin-server reaches crawl-server the same

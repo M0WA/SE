@@ -24,7 +24,7 @@ const FULL_SETTINGS = {
     semantic_candidate_pool_size: 200,
     ann_search_enabled: true,
     embedding_hash_enabled: true,
-    embedding_provider: 'hash',
+    embedding_search_weights: { hash: 1 },
     embedding_title_weight: 0.3,
     max_document_versions: 5,
     db_max_open_conns: 25,
@@ -57,7 +57,7 @@ function flush() {
 }
 
 test.afterEach(async () => {
-  // applySettings kicks off loadEmbeddingProviderOptions as fire-and-forget
+  // applySettings kicks off loadEmbeddingSearchWeights as fire-and-forget
   // (it doesn't block rendering the rest of the form on that fetch) --
   // flush before tearing down so that pending promise settles against
   // *this* test's own fetch mock/DOM, rather than rejecting asynchronously
@@ -140,11 +140,12 @@ test('saveSettings posts 0 for an unparseable embedding title weight field', asy
   assert.equal(gotBody.operational.embedding_title_weight, 0);
 });
 
-test('saveSettings posts the checked state of the hash-enabled checkbox and the chosen active provider', async () => {
-  const { saveSettings } = loadFixture([{ id: 'ionos', name: 'IONOS', enabled: true }]);
+test('saveSettings posts the checked state of the hash-enabled checkbox and the collected weights', async () => {
+  const { saveSettings, weightInputID } = loadFixture([{ id: 'ionos', name: 'IONOS', enabled: true }]);
   await flush();
   document.getElementById('embedding-hash-enabled').checked = false;
-  document.getElementById('embedding-provider').value = 'ionos';
+  document.getElementById(weightInputID('hash')).value = '0';
+  document.getElementById(weightInputID('ionos')).value = '2.5';
   let gotBody;
   global.fetch = async (url, opts) => {
     if (url.includes('/admin/api/settings')) {
@@ -155,19 +156,20 @@ test('saveSettings posts the checked state of the hash-enabled checkbox and the 
   };
   await saveSettings();
   assert.equal(gotBody.operational.embedding_hash_enabled, false);
-  assert.equal(gotBody.operational.embedding_provider, 'ionos');
+  assert.deepEqual(gotBody.operational.embedding_search_weights, { ionos: 2.5 });
 });
 
-test('loadEmbeddingProviderOptions offers hash when no endpoints are configured', async () => {
-  const { loadEmbeddingProviderOptions } = loadFixture();
+test('loadEmbeddingSearchWeights offers a hash weight input when no endpoints are configured', async () => {
+  const { loadEmbeddingSearchWeights } = loadFixture();
   await flush();
-  await loadEmbeddingProviderOptions('hash');
-  const options = Array.from(document.getElementById('embedding-provider').options).map((o) => o.value);
-  assert.deepEqual(options, ['hash']);
+  await loadEmbeddingSearchWeights({ hash: 1 });
+  const inputs = Array.from(document.querySelectorAll('#embedding-search-weights input[data-provider]'));
+  assert.deepEqual(inputs.map((i) => i.dataset.provider), ['hash']);
+  assert.equal(inputs[0].value, '1');
 });
 
-test('loadEmbeddingProviderOptions lists only enabled endpoints, not disabled ones', async () => {
-  const { loadEmbeddingProviderOptions } = loadFixture();
+test('loadEmbeddingSearchWeights lists a weight input for every enabled endpoint, not disabled ones', async () => {
+  const { loadEmbeddingSearchWeights } = loadFixture();
   await flush();
   global.fetch = async (url) => {
     if (url.includes('/admin/api/embeddings/endpoints')) {
@@ -181,17 +183,15 @@ test('loadEmbeddingProviderOptions lists only enabled endpoints, not disabled on
     }
     return { ok: true, json: async () => ({}) };
   };
-  await loadEmbeddingProviderOptions('hash');
-  const select = document.getElementById('embedding-provider');
-  const options = Array.from(select.options).map((o) => ({ value: o.value, text: o.textContent }));
-  assert.deepEqual(options, [
-    { value: 'hash', text: 'Hash (dependency-free)' },
-    { value: 'ionos', text: 'IONOS bge-m3 (ionos)' },
-  ]);
+  await loadEmbeddingSearchWeights({ hash: 1, ionos: 0.5 });
+  const inputs = Array.from(document.querySelectorAll('#embedding-search-weights input[data-provider]'));
+  assert.deepEqual(inputs.map((i) => i.dataset.provider), ['hash', 'ionos']);
+  assert.equal(inputs[0].value, '1');
+  assert.equal(inputs[1].value, '0.5');
 });
 
-test('loadEmbeddingProviderOptions selects the given active provider once it is populated', async () => {
-  const { loadEmbeddingProviderOptions } = loadFixture();
+test('loadEmbeddingSearchWeights defaults an unweighted enabled endpoint to 0', async () => {
+  const { loadEmbeddingSearchWeights, weightInputID } = loadFixture();
   await flush();
   global.fetch = async (url) => {
     if (url.includes('/admin/api/embeddings/endpoints')) {
@@ -199,38 +199,56 @@ test('loadEmbeddingProviderOptions selects the given active provider once it is 
     }
     return { ok: true, json: async () => ({}) };
   };
-  await loadEmbeddingProviderOptions('ionos');
-  assert.equal(document.getElementById('embedding-provider').value, 'ionos');
+  await loadEmbeddingSearchWeights({ hash: 1 });
+  assert.equal(document.getElementById(weightInputID('ionos')).value, '0');
 });
 
-// A provider that's since been disabled or deleted is added anyway as a
-// clearly-labeled stale option, so the select doesn't silently jump to hash
-// under an admin who hasn't saved yet -- the next save still resolves this
-// server-side via domain.ReconcileActiveProvider.
-test('loadEmbeddingProviderOptions keeps a no-longer-enabled active provider visible as a stale option', async () => {
-  const { loadEmbeddingProviderOptions } = loadFixture();
+// A weight naming a provider that's since been disabled or deleted is shown
+// anyway as a clearly-labeled, disabled (locked) input, so the form doesn't
+// silently drop it out from under an admin who hasn't saved yet -- the next
+// save still resolves this server-side via domain.ReconcileSearchWeights,
+// and collectEmbeddingSearchWeights never resubmits a disabled input.
+test('loadEmbeddingSearchWeights keeps a no-longer-enabled provider visible as a locked, stale input', async () => {
+  const { loadEmbeddingSearchWeights, collectEmbeddingSearchWeights, weightInputID } = loadFixture();
   await flush();
   global.fetch = async (url) => {
     if (url.includes('/admin/api/embeddings/endpoints')) return { ok: true, json: async () => [] };
     return { ok: true, json: async () => ({}) };
   };
-  await loadEmbeddingProviderOptions('gone');
-  const select = document.getElementById('embedding-provider');
-  assert.equal(select.value, 'gone');
-  assert.equal(select.options.length, 2);
-  assert.equal(select.options[1].textContent.includes('not currently enabled'), true);
+  await loadEmbeddingSearchWeights({ hash: 1, gone: 0.7 });
+  const staleInput = document.getElementById(weightInputID('gone'));
+  assert.equal(staleInput.value, '0.7');
+  assert.equal(staleInput.disabled, true);
+  assert.equal(staleInput.closest('.form-row').textContent.includes('not currently enabled'), true);
+  // The stale, disabled "gone" entry is never resubmitted on save; the
+  // always-offered, still-enabled "hash" input still is.
+  assert.deepEqual(collectEmbeddingSearchWeights(), { hash: 1 });
 });
 
-test('loadEmbeddingProviderOptions falls back to hash-only when the endpoints fetch fails', async () => {
-  const { loadEmbeddingProviderOptions } = loadFixture();
+test('loadEmbeddingSearchWeights falls back to hash-only when the endpoints fetch fails', async () => {
+  const { loadEmbeddingSearchWeights } = loadFixture();
   await flush();
   global.fetch = async (url) => {
     if (url.includes('/admin/api/embeddings/endpoints')) throw new Error('network down');
     return { ok: true, json: async () => ({}) };
   };
-  await loadEmbeddingProviderOptions('hash');
-  const options = Array.from(document.getElementById('embedding-provider').options).map((o) => o.value);
-  assert.deepEqual(options, ['hash']);
+  await loadEmbeddingSearchWeights({ hash: 1 });
+  const inputs = Array.from(document.querySelectorAll('#embedding-search-weights input[data-provider]'));
+  assert.deepEqual(inputs.map((i) => i.dataset.provider), ['hash']);
+});
+
+test('collectEmbeddingSearchWeights omits weights left at or parsed as 0 or below', async () => {
+  const { loadEmbeddingSearchWeights, collectEmbeddingSearchWeights, weightInputID } = loadFixture();
+  await flush();
+  global.fetch = async (url) => {
+    if (url.includes('/admin/api/embeddings/endpoints')) {
+      return { ok: true, json: async () => [{ id: 'ionos', name: 'IONOS', enabled: true }] };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  await loadEmbeddingSearchWeights({ hash: 0, ionos: 1.5 });
+  document.getElementById(weightInputID('hash')).value = '-1';
+  assert.deepEqual(collectEmbeddingSearchWeights(), { ionos: 1.5 });
 });
 
 test('loadSettings applies the fetched settings on success', async () => {
@@ -441,4 +459,3 @@ test('a failing settings save still lets the overrides save succeed', async () =
   assert.equal(text.includes('settings: settings write failed'), true);
   assert.equal(text.includes('overrides:'), false);
 });
-
