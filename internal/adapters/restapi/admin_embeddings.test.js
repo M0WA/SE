@@ -10,6 +10,8 @@ const EMBEDDINGS_HTML = fs.readFileSync(path.join(__dirname, 'admin_embeddings.h
 function baseSettings(operationalOverrides) {
   return {
     operational: Object.assign({
+      embedding_hash_enabled: true,
+      embedding_http_enabled: false,
       embedding_provider: 'hash',
       embedding_http_base_url: '',
       embedding_http_model: '',
@@ -57,16 +59,6 @@ test('load() fetches config and recompute status on page load', async () => {
   assert.equal(document.getElementById('embeddings-recompute-summary').textContent.includes('42'), true);
 });
 
-test('renderConfig shows the hash provider without http-only fields', () => {
-  const { renderConfig } = loadFixture();
-  renderConfig(baseSettings());
-  const text = document.getElementById('embeddings-config').textContent;
-  assert.equal(text.includes('Hash'), true);
-  assert.equal(text.includes('Base URL'), false);
-  assert.equal(text.includes('req/s'), true);
-  assert.equal(text.includes('0.3'), true);
-});
-
 function kvValuesByKey(container) {
   const values = {};
   container.querySelectorAll('.kv-row').forEach((row) => {
@@ -75,10 +67,23 @@ function kvValuesByKey(container) {
   return values;
 }
 
+test('renderConfig shows only hash enabled, without http-only fields, when http is disabled', () => {
+  const { renderConfig } = loadFixture();
+  renderConfig(baseSettings());
+  const values = kvValuesByKey(document.getElementById('embeddings-config'));
+  assert.equal(values['Enabled providers'], 'hash');
+  assert.equal(values['Active for search'], 'Hash (dependency-free)');
+  assert.equal('Base URL' in values, false);
+  assert.equal(values['Rate limit'].includes('req/s'), true);
+  assert.equal(values['Title weight'].includes('0.3'), true);
+});
+
 test('renderConfig shows http provider fields including base URL, model, dimensions, and api key state', () => {
   const { renderConfig } = loadFixture();
   const baseURL = 'https://openai.inference.de-txl.ionos.com/v1';
   renderConfig(baseSettings({
+    embedding_hash_enabled: false,
+    embedding_http_enabled: true,
     embedding_provider: 'http',
     embedding_http_base_url: baseURL,
     embedding_http_model: 'BAAI/bge-m3',
@@ -88,7 +93,8 @@ test('renderConfig shows http provider fields including base URL, model, dimensi
     embedding_title_weight: 0.25,
   }));
   const values = kvValuesByKey(document.getElementById('embeddings-config'));
-  assert.equal(values.Provider, 'HTTP (trained model)');
+  assert.equal(values['Enabled providers'], 'http');
+  assert.equal(values['Active for search'], 'HTTP (trained model)');
   assert.equal(values['Base URL'], baseURL);
   assert.equal(values.Model, 'BAAI/bge-m3');
   assert.equal(values.Dimensions, '1024');
@@ -96,9 +102,28 @@ test('renderConfig shows http provider fields including base URL, model, dimensi
   assert.equal(values['Title weight'], '0.25 (0 = body only, 1 = title only)');
 });
 
+// TestRenderConfig proves both providers can be enabled at once, and that
+// the http-only fields still show even though hash is the one active for
+// search -- the whole point of this feature: HTTP stays kept warm without
+// needing to be the active provider.
+test('renderConfig shows both providers enabled, with http fields visible, even when hash is active', () => {
+  const { renderConfig } = loadFixture();
+  renderConfig(baseSettings({
+    embedding_hash_enabled: true,
+    embedding_http_enabled: true,
+    embedding_provider: 'hash',
+    embedding_http_base_url: 'https://example.com/v1',
+  }));
+  const values = kvValuesByKey(document.getElementById('embeddings-config'));
+  assert.equal(values['Enabled providers'], 'hash, http');
+  assert.equal(values['Active for search'], 'Hash (dependency-free)');
+  assert.equal(values['Base URL'], 'https://example.com/v1');
+});
+
 test('renderConfig shows "(not set)" for an unconfigured http base URL, model, and unconfigured api key', () => {
   const { renderConfig } = loadFixture();
   renderConfig(baseSettings({
+    embedding_http_enabled: true,
     embedding_provider: 'http',
     embedding_http_base_url: '',
     embedding_http_model: '',

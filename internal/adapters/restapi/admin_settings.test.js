@@ -23,6 +23,8 @@ const FULL_SETTINGS = {
     default_top_k: 10,
     semantic_candidate_pool_size: 200,
     ann_search_enabled: true,
+    embedding_hash_enabled: true,
+    embedding_http_enabled: false,
     embedding_provider: 'hash',
     embedding_http_base_url: '',
     embedding_http_model: '',
@@ -82,9 +84,11 @@ test('applySettings falls back to "none"/"domain" when renderer/link_scope are u
   assert.equal(document.getElementById('default-link-scope').value, 'domain');
 });
 
-test('applySettings shows the HTTP embedding fields and "no key" hint for the hash provider', () => {
+test('applySettings hides the HTTP embedding fields and shows the "no key" hint when only hash is enabled', () => {
   const { applySettings } = loadFixture();
   applySettings(FULL_SETTINGS);
+  assert.equal(document.getElementById('embedding-hash-enabled').checked, true);
+  assert.equal(document.getElementById('embedding-http-enabled').checked, false);
   assert.equal(document.getElementById('embedding-provider').value, 'hash');
   assert.equal(document.getElementById('embedding-http-fields').hidden, true);
   assert.equal(document.getElementById('embedding-http-api-key').value, '');
@@ -94,12 +98,13 @@ test('applySettings shows the HTTP embedding fields and "no key" hint for the ha
 test('applySettings reveals the HTTP embedding fields and never fills in the API key, even when one is configured', () => {
   const { applySettings } = loadFixture();
   const s = JSON.parse(JSON.stringify(FULL_SETTINGS));
-  s.operational.embedding_provider = 'http';
+  s.operational.embedding_http_enabled = true;
   s.operational.embedding_http_base_url = 'http://localhost:11434/v1';
   s.operational.embedding_http_model = 'nomic-embed-text';
   s.operational.embedding_http_dimensions = 768;
   s.operational.embedding_http_api_key_set = true;
   applySettings(s);
+  assert.equal(document.getElementById('embedding-http-enabled').checked, true);
   assert.equal(document.getElementById('embedding-http-fields').hidden, false);
   assert.equal(document.getElementById('embedding-http-base-url').value, 'http://localhost:11434/v1');
   assert.equal(document.getElementById('embedding-http-model').value, 'nomic-embed-text');
@@ -154,22 +159,22 @@ test('saveSettings posts 0 for an unparseable embedding title weight field', asy
   assert.equal(gotBody.operational.embedding_title_weight, 0);
 });
 
-test('toggleEmbeddingHTTPFields shows/hides the HTTP fields based on the select value', () => {
+test('toggleEmbeddingHTTPFields shows/hides the HTTP fields based on the http-enabled checkbox', () => {
   const { toggleEmbeddingHTTPFields } = loadFixture();
-  const select = document.getElementById('embedding-provider');
-  select.value = 'http';
+  const checkbox = document.getElementById('embedding-http-enabled');
+  checkbox.checked = true;
   toggleEmbeddingHTTPFields();
   assert.equal(document.getElementById('embedding-http-fields').hidden, false);
-  select.value = 'hash';
+  checkbox.checked = false;
   toggleEmbeddingHTTPFields();
   assert.equal(document.getElementById('embedding-http-fields').hidden, true);
 });
 
-test('changing the embedding provider select toggles the HTTP fields visibility', () => {
+test('checking the http-enabled checkbox toggles the HTTP fields visibility', () => {
   loadFixture();
-  const select = document.getElementById('embedding-provider');
-  select.value = 'http';
-  select.dispatchEvent(new window.Event('change'));
+  const checkbox = document.getElementById('embedding-http-enabled');
+  checkbox.checked = true;
+  checkbox.dispatchEvent(new window.Event('change'));
   assert.equal(document.getElementById('embedding-http-fields').hidden, false);
 });
 
@@ -196,8 +201,26 @@ test('saveSettings posts a blank embedding API key by default, leaving the store
   assert.equal(gotBody.operational.embedding_http_api_key, '');
 });
 
+test('saveSettings posts the checked state of both embedding-enabled checkboxes', async () => {
+  const { saveSettings } = loadFixture();
+  document.getElementById('embedding-hash-enabled').checked = false;
+  document.getElementById('embedding-http-enabled').checked = true;
+  let gotBody;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/settings')) {
+      gotBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => FULL_SETTINGS };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  await saveSettings();
+  assert.equal(gotBody.operational.embedding_hash_enabled, false);
+  assert.equal(gotBody.operational.embedding_http_enabled, true);
+});
+
 test('saveSettings posts a typed embedding API key and the HTTP provider fields', async () => {
   const { saveSettings } = loadFixture();
+  document.getElementById('embedding-http-enabled').checked = true;
   document.getElementById('embedding-provider').value = 'http';
   document.getElementById('embedding-http-base-url').value = 'https://api.example.com/v1';
   document.getElementById('embedding-http-model').value = 'text-embedding-3-small';
@@ -214,6 +237,7 @@ test('saveSettings posts a typed embedding API key and the HTTP provider fields'
     return { ok: true, json: async () => ({}) };
   };
   await saveSettings();
+  assert.equal(gotBody.operational.embedding_http_enabled, true);
   assert.equal(gotBody.operational.embedding_provider, 'http');
   assert.equal(gotBody.operational.embedding_http_base_url, 'https://api.example.com/v1');
   assert.equal(gotBody.operational.embedding_http_model, 'text-embedding-3-small');
@@ -493,11 +517,11 @@ test('a failing settings save still lets the overrides save succeed', async () =
   assert.equal(text.includes('overrides:'), false);
 });
 
-test('loadEmbeddingModels does not fetch when the provider is not http', async () => {
+test('loadEmbeddingModels does not fetch when http is not enabled', async () => {
   let called = false;
   const { loadEmbeddingModels } = loadFixture();
   global.fetch = async () => { called = true; return { ok: true, json: async () => ({ models: ['x'] }) }; };
-  await loadEmbeddingModels({ operational: { embedding_provider: 'hash', embedding_http_base_url: 'https://example.com' } });
+  await loadEmbeddingModels({ operational: { embedding_http_enabled: false, embedding_http_base_url: 'https://example.com' } });
   assert.equal(called, false);
   assert.equal(document.getElementById('embedding-http-model-options').children.length, 0);
 });
@@ -506,7 +530,7 @@ test('loadEmbeddingModels does not fetch when the base URL is blank', async () =
   let called = false;
   const { loadEmbeddingModels } = loadFixture();
   global.fetch = async () => { called = true; return { ok: true, json: async () => ({ models: ['x'] }) }; };
-  await loadEmbeddingModels({ operational: { embedding_provider: 'http', embedding_http_base_url: '' } });
+  await loadEmbeddingModels({ operational: { embedding_http_enabled: true, embedding_http_base_url: '' } });
   assert.equal(called, false);
 });
 
@@ -518,7 +542,7 @@ test('loadEmbeddingModels populates the datalist and hint on success', async () 
     }
     return { ok: true, json: async () => ({}) };
   };
-  await loadEmbeddingModels({ operational: { embedding_provider: 'http', embedding_http_base_url: 'https://example.com/v1' } });
+  await loadEmbeddingModels({ operational: { embedding_http_enabled: true, embedding_http_base_url: 'https://example.com/v1' } });
   const options = Array.from(document.getElementById('embedding-http-model-options').children).map((o) => o.value);
   assert.deepEqual(options, ['intfloat/e5-large-v2', 'Qwen/Qwen3-VL-Embedding-8B']);
   assert.equal(document.getElementById('embedding-http-model-hint').textContent, '2 model(s) available from this endpoint.');
@@ -534,7 +558,7 @@ test('loadEmbeddingModels clears stale options before repopulating', async () =>
     if (url === '/admin/api/embeddings/models') return { ok: true, json: async () => ({ models: ['fresh-model'] }) };
     return { ok: true, json: async () => ({}) };
   };
-  await loadEmbeddingModels({ operational: { embedding_provider: 'http', embedding_http_base_url: 'https://example.com/v1' } });
+  await loadEmbeddingModels({ operational: { embedding_http_enabled: true, embedding_http_base_url: 'https://example.com/v1' } });
   const options = Array.from(optionsEl.children).map((o) => o.value);
   assert.deepEqual(options, ['fresh-model']);
 });
@@ -545,7 +569,7 @@ test('loadEmbeddingModels shows the error hint on a soft failure from the server
     if (url === '/admin/api/embeddings/models') return { ok: true, json: async () => ({ error: '401 unauthorized' }) };
     return { ok: true, json: async () => ({}) };
   };
-  await loadEmbeddingModels({ operational: { embedding_provider: 'http', embedding_http_base_url: 'https://example.com/v1' } });
+  await loadEmbeddingModels({ operational: { embedding_http_enabled: true, embedding_http_base_url: 'https://example.com/v1' } });
   assert.equal(document.getElementById('embedding-http-model-hint').textContent, 'Could not list models: 401 unauthorized');
   assert.equal(document.getElementById('embedding-http-model-options').children.length, 0);
 });
@@ -556,6 +580,6 @@ test('loadEmbeddingModels shows the error hint on a network failure', async () =
     if (url === '/admin/api/embeddings/models') throw new Error('network down');
     return { ok: true, json: async () => ({}) };
   };
-  await loadEmbeddingModels({ operational: { embedding_provider: 'http', embedding_http_base_url: 'https://example.com/v1' } });
+  await loadEmbeddingModels({ operational: { embedding_http_enabled: true, embedding_http_base_url: 'https://example.com/v1' } });
   assert.equal(document.getElementById('embedding-http-model-hint').textContent, 'Could not list models: network down');
 });

@@ -583,13 +583,16 @@ paths:
       tags: [admin]
       summary: List the models the currently-configured HTTP embedding endpoint reports
       description: >-
-        Calls GET {base_url}/models against the saved embedding_provider
-        "http" configuration (including its saved API key) so the Settings
-        page can prefill the model field's suggestions instead of the admin
-        having to already know a valid model ID. Always 200: an empty
-        models list (no error) when the provider isn't "http" or no base
-        URL is saved yet -- there's nothing to ask -- and a populated
-        `error` string (models still empty) for a real failure calling the
+        Calls GET {base_url}/models against the saved "http" embedding
+        configuration (including its saved API key) so the Settings page
+        can prefill the model field's suggestions instead of the admin
+        having to already know a valid model ID. Gated on
+        embedding_http_enabled, not on whether "http" is the provider
+        currently active for search -- listing models is meaningful
+        whenever it's enabled at all. Always 200: an empty models list (no
+        error) when the http provider isn't enabled or no base URL is
+        saved yet -- there's nothing to ask -- and a populated `error`
+        string (models still empty) for a real failure calling the
         endpoint (bad credentials, endpoint doesn't implement /models,
         network error), since the model field stays usable as free text
         either way.
@@ -1201,13 +1204,15 @@ components:
           type: string
           readOnly: true
           description: >-
-            POST-only: set when operational.embedding_provider is "http" and
-            a real Embed call against the just-saved base
-            URL/model/API key fails, so a misconfiguration is visible
-            immediately rather than only on the next real search. The save
-            itself still succeeds either way -- this is a warning, not a
-            validation error. Absent (not just empty) on a GET, and on a
-            POST whose probe succeeds or whose provider isn't "http".
+            POST-only: set when operational.embedding_http_enabled is true
+            and a real Embed call against the just-saved base URL/model/API
+            key fails, so a misconfiguration is visible immediately rather
+            than only on the next real search. Gated on
+            embedding_http_enabled, not on whether "http" is the provider
+            currently active for search. The save itself still succeeds
+            either way -- this is a warning, not a validation error. Absent
+            (not just empty) on a GET, and on a POST whose probe succeeds
+            or whose http provider isn't enabled.
 
     Overrides:
       type: object

@@ -27,7 +27,7 @@
     <a href="/admin/database">Database</a>
   </nav>
 
-  <p class="lede" style="margin: 0 0 1.5rem;">Semantic search's vector space: the currently-configured provider, which models it actually serves, and recomputing the corpus after a provider/model change. Provider/URL/key/dimensions/rate limit are configured on <a href="/admin/settings">Settings</a>.</p>
+  <p class="lede" style="margin: 0 0 1.5rem;">Semantic search's vector space: which provider(s) are enabled and which one is active for search, which models the HTTP endpoint actually serves, and recomputing the corpus after a change. Enabled providers/URL/key/dimensions/rate limit are configured on <a href="/admin/settings">Settings</a>.</p>
 
   <section class="panel">
     <h2>Current configuration</h2>
@@ -44,7 +44,7 @@
 
   <section class="panel">
     <h2>Recompute embeddings</h2>
-    <p class="tuning-hint">Re-embeds every document's already-stored text against the currently-configured provider -- no re-crawl needed, since the indexed text itself doesn't change. Necessary after switching provider, model, or dimensions on Settings.</p>
+    <p class="tuning-hint">Re-embeds every document's already-stored text against every currently-enabled provider -- no re-crawl needed, since the indexed text itself doesn't change. Necessary after enabling a provider or changing its model/dimensions on Settings; switching which already-enabled provider is active for search never needs this, since both are kept warm on every crawl.</p>
     <div id="embeddings-recompute-summary"></div>
     <button id="embeddings-recompute-btn" type="button">Recompute embeddings</button>
     <div id="embeddings-recompute-status" class="panel-status"></div>

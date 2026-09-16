@@ -87,11 +87,24 @@
 
       <div class="subpanel">
         <h4>Embeddings</h4>
+        <div class="form-row form-row-check">
+          <label for="embedding-hash-enabled">
+            <input id="embedding-hash-enabled" type="checkbox">
+            Compute hash embeddings — dependency-free feature hashing (default; not a trained model)
+          </label>
+        </div>
+        <div class="form-row form-row-check">
+          <label for="embedding-http-enabled">
+            <input id="embedding-http-enabled" type="checkbox">
+            Compute HTTP embeddings — a real trained model via an OpenAI-compatible embeddings endpoint
+          </label>
+          <p class="tuning-hint">Both may be enabled at once, so search can switch which one it reads (below) without ever needing a recompute -- the other is already kept warm on every crawl. At least one must stay enabled. Enabling this one means every crawl (and any recompute) also pays for an HTTP Embed call per document, against the rate limit below, even while it isn't the one active for search.</p>
+        </div>
         <div class="form-row">
-          <label for="embedding-provider">Embedding provider — how documents and queries are turned into vectors for semantic search</label><br>
+          <label for="embedding-provider">Active for search — which enabled provider's stored vectors a query is actually compared against</label><br>
           <select id="embedding-provider" class="field">
-            <option value="hash">Hash — dependency-free feature hashing (default; not a trained model)</option>
-            <option value="http">HTTP — a real trained model via an OpenAI-compatible embeddings endpoint</option>
+            <option value="hash">Hash</option>
+            <option value="http">HTTP</option>
           </select>
         </div>
         <div id="embedding-http-fields">

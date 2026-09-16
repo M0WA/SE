@@ -2778,11 +2778,14 @@ func TestHandleAdminSettings_EmbeddingConnectivityTestReportsFailure(t *testing.
 	}
 }
 
-// TestHandleAdminSettings_EmbeddingConnectivityTestSkippedForHashProvider
+// TestHandleAdminSettings_EmbeddingConnectivityTestSkippedWhenHTTPNotEnabled
 // proves the probe never runs (NewEmbedder never called, no
-// embedding_test_error) when the saved settings configure the hash
-// provider -- it can't fail this way, so there's nothing to test.
-func TestHandleAdminSettings_EmbeddingConnectivityTestSkippedForHashProvider(t *testing.T) {
+// embedding_test_error) when the http provider isn't enabled -- gated on
+// EmbeddingHTTPEnabled, not on which provider is active for search (see
+// testEmbeddingConnectivity's doc comment): there's no HTTP config to test
+// if it's disabled, even if EmbeddingProvider still names it as active
+// (which self-heals away on the next Set anyway).
+func TestHandleAdminSettings_EmbeddingConnectivityTestSkippedWhenHTTPNotEnabled(t *testing.T) {
 	called := false
 	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
 		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
@@ -2792,15 +2795,32 @@ func TestHandleAdminSettings_EmbeddingConnectivityTestSkippedForHashProvider(t *
 			return fakeEmbeddingProvider{}
 		},
 	})
-	code, testErr := postEmbeddingSettings(t, h, cookie, domain.EmbeddingProviderHash)
-	if code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", code)
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
+			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
+			"embedding_hash_enabled": true, "embedding_http_enabled": false, "embedding_provider": "hash",
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if testErr != "" {
-		t.Errorf("expected no embedding_test_error for the hash provider, got %q", testErr)
+	var resp struct {
+		EmbeddingTestError string `json:"embedding_test_error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.EmbeddingTestError != "" {
+		t.Errorf("expected no embedding_test_error when http isn't enabled, got %q", resp.EmbeddingTestError)
 	}
 	if called {
-		t.Error("expected NewEmbedder to never be called for the hash provider")
+		t.Error("expected NewEmbedder to never be called when http isn't enabled")
 	}
 }
 
@@ -2879,7 +2899,7 @@ func TestHandleAdminEmbeddingsModels_BlankBaseURLReturnsEmptyWithoutCalling(t *t
 	called := false
 	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
 		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
-		OpSettings: domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHTTP, EmbeddingHTTPBaseURL: ""}),
+		OpSettings: domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHTTP, EmbeddingHTTPEnabled: true, EmbeddingHTTPBaseURL: ""}),
 		NewEmbedder: func(domain.OperationalSettingsValues) ports.EmbeddingProvider {
 			called = true
 			return fakeEmbeddingProviderWithModels{}
@@ -2927,6 +2947,30 @@ func TestHandleAdminEmbeddingsModels_Success(t *testing.T) {
 	}
 	if resp.Error != "" {
 		t.Errorf("expected no error on success, got %q", resp.Error)
+	}
+}
+
+// TestHandleAdminEmbeddingsModels_ListsWhenHTTPEnabledEvenIfHashIsActive
+// proves listing is gated on EmbeddingHTTPEnabled, not on which provider
+// is currently active for search -- an admin with both providers enabled
+// and hash still active for search can list the http endpoint's models
+// (e.g. to decide whether to switch), without needing to flip the active
+// provider first.
+func TestHandleAdminEmbeddingsModels_ListsWhenHTTPEnabledEvenIfHashIsActive(t *testing.T) {
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
+		OpSettings: domain.NewOperationalSettings(domain.OperationalSettingsValues{
+			EmbeddingProvider: domain.EmbeddingProviderHash, EmbeddingHashEnabled: true,
+			EmbeddingHTTPEnabled: true, EmbeddingHTTPBaseURL: "https://example.com/v1",
+		}),
+		NewEmbedder: stubNewEmbedderWithModels([]string{"BAAI/bge-m3"}, nil),
+	})
+	code, resp := getEmbeddingModels(t, h, cookie)
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if len(resp.Models) != 1 || resp.Models[0] != "BAAI/bge-m3" {
+		t.Errorf("expected the http endpoint's models listed despite hash being active, got %+v", resp)
 	}
 }
 
