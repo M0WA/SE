@@ -24,7 +24,7 @@ type sqlCrawlerService struct {
 	// <= 0 -- a local computation with no rate limit of its own). A
 	// provider missing from this map is treated the same as 0 (unlimited).
 	rateLimits map[string]float64
-	parseHTML  func(html, pageURL string) (title, text string, links []string)
+	parseHTML  func(html, pageURL string) (title, text string, links []string, canonicalURL string)
 	settings   *domain.OperationalSettings
 	// embedRates paces every Embed call this service makes, one
 	// *embedRateLimiter per provider in embedders (see its own doc
@@ -47,7 +47,7 @@ func NewSQLCrawlerService(
 	repo ports.SQLRepository,
 	embedders map[string]ports.EmbeddingProvider,
 	rateLimits map[string]float64,
-	parseHTML func(string, string) (string, string, []string),
+	parseHTML func(string, string) (string, string, []string, string),
 	settings *domain.OperationalSettings,
 ) ports.CrawlerService {
 	embedRates := make(map[string]*embedRateLimiter, len(embedders))
@@ -93,6 +93,8 @@ func (c *sqlCrawlerService) Crawl(ctx context.Context, opts ports.CrawlOptions, 
 			embeddings[provider] = vec
 		}
 		return c.repo.SaveDocument(ctx, doc, embeddings, v.MaxDocumentVersions, v.TitleWeight)
+	}, func(ctx context.Context, aliasURL, canonicalID string) error {
+		return c.repo.RecordDocumentAlias(ctx, aliasURL, canonicalID, domain.DocumentAliasReasonCanonicalTag)
 	}, onPage)
 }
 
@@ -152,7 +154,8 @@ func (c *sqlCrawlerService) buildIsIndexed(ctx context.Context, seeds []string) 
 	for _, id := range ids {
 		indexed[id] = true
 	}
+	stripWWW := c.settings.Get().URLAliasWWWEnabled
 	return func(rawURL string) bool {
-		return indexed[documentID(rawURL)]
+		return indexed[documentID(rawURL, stripWWW)]
 	}, nil
 }

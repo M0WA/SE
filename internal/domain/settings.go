@@ -196,6 +196,19 @@ type OperationalSettingsValues struct {
 	// TitleWeight, a change here only takes effect for documents crawled,
 	// re-crawled, or explicitly recomputed afterward.
 	EmbeddingTitleWeight float64
+	// URLAliasWWWEnabled folds a leading "www." host label into the bare
+	// domain when computing a crawled URL's canonical identity (see
+	// domain.CanonicalizeURL, application.documentID) -- so
+	// www.example.com/x and example.com/x always resolve to the exact same
+	// document, crawled under whichever host was seen first, with the
+	// bare-domain form as the stored URL. Purely a future-crawl identity
+	// rule: it never touches documents already saved under separate rows
+	// before this was enabled (or before this feature existed at all) --
+	// content_dedup_job.go's content-hash/simhash batch merge is what
+	// reconciles those. Defaults true since it's lossless for the
+	// overwhelming majority of sites; a site that genuinely serves
+	// different content at www vs. bare can turn it off.
+	URLAliasWWWEnabled bool
 }
 
 // defaultUserAgent mimics a standard desktop Firefox so crawled sites treat
@@ -281,6 +294,7 @@ func defaultOperationalSettings() OperationalSettingsValues {
 		EmbeddingHashEnabled:             true,
 		EmbeddingSearchWeights:           map[string]float64{EmbeddingProviderHash: 1},
 		EmbeddingTitleWeight:             defaultEmbeddingTitleWeight,
+		URLAliasWWWEnabled:               true,
 	}
 }
 

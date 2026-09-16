@@ -2443,6 +2443,55 @@ func TestHandleAdminSettings_EmbeddingTitleWeightFieldRoundTrips(t *testing.T) {
 	}
 }
 
+// TestHandleAdminSettings_URLAliasWWWEnabledFieldRoundTrips proves
+// url_alias_www_enabled round-trips through GET/POST like every other
+// operational field, and that a false value is actually applied (not just
+// left at Set's own default, since false is this field's zero value too --
+// see domain.OperationalSettingsValues.URLAliasWWWEnabled).
+func TestHandleAdminSettings_URLAliasWWWEnabledFieldRoundTrips(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{URLAliasWWWEnabled: true})
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", getRec.Code)
+	}
+	var getResp struct {
+		Operational struct {
+			URLAliasWWWEnabled bool `json:"url_alias_www_enabled"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decoding GET response: %v", err)
+	}
+	if !getResp.Operational.URLAliasWWWEnabled {
+		t.Errorf("expected GET to report url_alias_www_enabled=true, got %+v", getResp.Operational)
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
+			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
+			"url_alias_www_enabled": false,
+		},
+	})
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	postReq.AddCookie(cookie)
+	postRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
+	}
+	if ov := opSettings.Get(); ov.URLAliasWWWEnabled {
+		t.Errorf("expected url_alias_www_enabled=false to be applied, got %+v", ov)
+	}
+}
+
 // TestHandleAdminSettings_EmbeddingHashEnabledFieldRoundTrips proves
 // EmbeddingHashEnabled round-trips through GET/POST like every other
 // operational field, and that Set no longer forces it back to true (that

@@ -77,7 +77,7 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 	embedder := hashembed.New(8)
 	opSettings := domain.DefaultOperationalSettings()
 	robotsChecker := robots.New(fetcher)
-	parse := func(h, u string) (string, string, []string) { return htmlparser.Parse(strings.NewReader(h), u) }
+	parse := func(h, u string) (string, string, []string, string) { return htmlparser.Parse(strings.NewReader(h), u) }
 
 	embedders := map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}
 	crawlerSvc := application.NewSQLCrawlerService(fetcher, robotsChecker, repo, embedders, nil, parse, opSettings)

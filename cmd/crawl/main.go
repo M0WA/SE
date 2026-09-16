@@ -228,7 +228,7 @@ func main() {
 		},
 	}
 	robotsChecker := robots.New(renderingFetcher)
-	parseHTML := func(html, pageURL string) (string, string, []string) {
+	parseHTML := func(html, pageURL string) (string, string, []string, string) {
 		return htmlparser.Parse(strings.NewReader(html), pageURL)
 	}
 	crawlerSvc := application.NewSQLCrawlerService(renderingFetcher, robotsChecker, repo, embedders, bootstrap.EmbedderRateLimits(endpoints), parseHTML, opSettings)

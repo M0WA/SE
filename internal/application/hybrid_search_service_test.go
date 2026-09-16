@@ -287,6 +287,9 @@ func (r *fakeSQLRepo) ListDocuments(context.Context, int, string) ([]domain.Inde
 	return nil, nil
 }
 func (r *fakeSQLRepo) DeleteDocument(context.Context, string) error { return nil }
+func (r *fakeSQLRepo) RecordDocumentAlias(context.Context, string, string, string) error {
+	return nil
+}
 
 type fakeEmbedder struct {
 	vec []float32

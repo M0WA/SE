@@ -25,7 +25,7 @@ func crawlLoop(
 	ctx context.Context,
 	fetcher ports.AuthFetcher,
 	robots ports.RobotsChecker,
-	parseHTML func(html, pageURL string) (title, text string, links []string),
+	parseHTML func(html, pageURL string) (title, text string, links []string, canonicalURL string),
 	settings *domain.OperationalSettings,
 	opts ports.CrawlOptions,
 	isIndexed func(url string) bool,
@@ -36,6 +36,14 @@ func crawlLoop(
 	// isIndexed above).
 	isDomainIndexed func(hosts []string) map[string]bool,
 	save func(ctx context.Context, doc domain.Document) error,
+	// recordAlias persists that aliasURL's content lives under canonicalID
+	// -- see ports.SQLRepository.RecordDocumentAlias -- called instead of
+	// save whenever a fetched page's own <link rel="canonical"> resolves to
+	// a different URL than the one just fetched. nil-safe (same convention
+	// as isIndexed/isDomainIndexed): a caller with no alias store just never
+	// gets this bookkeeping, and every aliased page falls through to being
+	// saved as its own document instead (the pre-this-feature behavior).
+	recordAlias func(ctx context.Context, aliasURL, canonicalID string) error,
 	onPage func(domain.CrawlPageEvent),
 ) (int, error) {
 	v := settings.Get()
@@ -222,7 +230,7 @@ func crawlLoop(
 			continue
 		}
 
-		title, text, links := parseHTML(html, u)
+		title, text, links, canonicalURL := parseHTML(html, u)
 		trimmed := strings.TrimSpace(text)
 		if len(trimmed) < minTextLength {
 			emit(domain.CrawlPageEvent{
@@ -234,7 +242,27 @@ func crawlLoop(
 			continue
 		}
 
-		doc := domain.Document{ID: documentID(u), URL: u, Title: title, Text: text, Links: links}
+		selfURL := domain.CanonicalizeURL(u, v.URLAliasWWWEnabled)
+		// A <link rel="canonical"> naming a different URL means this page's
+		// content is only ever indexed under that other URL -- this fetch
+		// still counted (a real network round-trip happened) and its own
+		// outbound links are still worth discovering, but no document row
+		// is created for u itself, matching a real search engine's
+		// canonical-tag behavior.
+		if recordAlias != nil && canonicalURL != "" {
+			if canon := domain.CanonicalizeURL(canonicalURL, v.URLAliasWWWEnabled); canon != selfURL {
+				_ = recordAlias(ctx, selfURL, documentID(canon, v.URLAliasWWWEnabled))
+				emit(domain.CrawlPageEvent{
+					URL: u, Status: domain.CrawlPageAliased, Title: title,
+					DocLength: len(trimmed), LinksFound: len(links),
+					FetchedAt: attemptedAt, DurationMs: durationMs,
+				})
+				enqueue(links)
+				continue
+			}
+		}
+
+		doc := domain.Document{ID: documentID(selfURL, v.URLAliasWWWEnabled), URL: selfURL, Title: title, Text: text, Links: links}
 		if err := save(ctx, doc); err != nil {
 			return crawled, err
 		}
@@ -419,7 +447,11 @@ func isHTTP(raw string) bool {
 // documentID derives a stable ID from a URL, so re-crawling the same page
 // always upserts the same row instead of creating a duplicate under a new
 // ID -- the SQL repository's uniqueness/versioning relies on this.
-func documentID(rawURL string) string {
-	sum := sha256.Sum256([]byte(rawURL))
+// rawURL is hashed after domain.CanonicalizeURL, so two URLs that
+// canonicalize identically (e.g. www.example.com/x and example.com/x, when
+// stripWWW is true) always produce the same ID with no separate alias
+// bookkeeping needed for that case.
+func documentID(rawURL string, stripWWW bool) string {
+	sum := sha256.Sum256([]byte(domain.CanonicalizeURL(rawURL, stripWWW)))
 	return "doc-" + hex.EncodeToString(sum[:8])
 }

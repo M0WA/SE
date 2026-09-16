@@ -77,11 +77,11 @@ func TestSQLCrawlerService_Crawl_HappyPath(t *testing.T) {
 	repo := &recordingSQLRepo{}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 
-	parse := func(html, pageURL string) (string, string, []string) {
+	parse := func(html, pageURL string) (string, string, []string, string) {
 		if pageURL == "http://a/" {
-			return "A", "genuegend inhalt text fuer die seite a hier bitte danke", []string{"http://a/b"}
+			return "A", "genuegend inhalt text fuer die seite a hier bitte danke", []string{"http://a/b"}, ""
 		}
-		return "B", "genuegend inhalt text fuer die seite b hier auch danke", nil
+		return "B", "genuegend inhalt text fuer die seite b hier auch danke", nil, ""
 	}
 
 	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, nil)
@@ -113,8 +113,8 @@ func TestSQLCrawlerService_Crawl_PrioritizeUnindexedConsultsDocumentIDsByHost(t 
 	robots := &fakeRobots{}
 	repo := &recordingSQLRepo{}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	parse := func(html, pageURL string) (string, string, []string) {
-		return "A", "genuegend inhalt text fuer die seite a hier bitte danke", nil
+	parse := func(html, pageURL string) (string, string, []string, string) {
+		return "A", "genuegend inhalt text fuer die seite a hier bitte danke", nil, ""
 	}
 
 	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, nil)
@@ -137,8 +137,8 @@ func TestSQLCrawlerService_Crawl_PrioritizeUnindexedFalseSkipsTheLookup(t *testi
 	robots := &fakeRobots{}
 	repo := &recordingSQLRepo{}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	parse := func(html, pageURL string) (string, string, []string) {
-		return "A", "genuegend inhalt text fuer die seite a hier bitte danke", nil
+	parse := func(html, pageURL string) (string, string, []string, string) {
+		return "A", "genuegend inhalt text fuer die seite a hier bitte danke", nil, ""
 	}
 
 	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, nil)
@@ -165,11 +165,11 @@ func TestSQLCrawlerService_Crawl_FollowIndexedDomainsConsultsHostsIndexed(t *tes
 	robots := &fakeRobots{}
 	repo := &recordingSQLRepo{fakeSQLRepo: fakeSQLRepo{hostsIndexedResult: map[string]bool{"indexed.test": true}}}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	parse := func(html, pageURL string) (string, string, []string) {
+	parse := func(html, pageURL string) (string, string, []string, string) {
 		if pageURL == "http://a/" {
-			return "A", "genuegend inhalt text fuer die seite a hier bitte danke", []string{"http://indexed.test/"}
+			return "A", "genuegend inhalt text fuer die seite a hier bitte danke", []string{"http://indexed.test/"}, ""
 		}
-		return "B", "genuegend inhalt text fuer die seite b hier auch danke", nil
+		return "B", "genuegend inhalt text fuer die seite b hier auch danke", nil, ""
 	}
 
 	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, nil)
@@ -195,8 +195,8 @@ func TestSQLCrawlerService_Crawl_FollowIndexedDomainsFalseSkipsTheLookup(t *test
 	robots := &fakeRobots{}
 	repo := &recordingSQLRepo{}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	parse := func(html, pageURL string) (string, string, []string) {
-		return "A", "genuegend inhalt text fuer die seite a hier bitte danke", nil
+	parse := func(html, pageURL string) (string, string, []string, string) {
+		return "A", "genuegend inhalt text fuer die seite a hier bitte danke", nil, ""
 	}
 
 	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, nil)
@@ -214,8 +214,8 @@ func TestSQLCrawlerService_Crawl_RespectsRobots(t *testing.T) {
 	robots := &fakeRobots{disallowed: map[string]bool{"http://a": true}}
 	repo := &recordingSQLRepo{}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	parse := func(html, pageURL string) (string, string, []string) {
-		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil
+	parse := func(html, pageURL string) (string, string, []string, string) {
+		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil, ""
 	}
 
 	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, nil)
@@ -230,8 +230,8 @@ func TestSQLCrawlerService_Crawl_IgnoresRobotsByDefault(t *testing.T) {
 	robots := &fakeRobots{disallowed: map[string]bool{"http://a": true}}
 	repo := &recordingSQLRepo{}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	parse := func(html, pageURL string) (string, string, []string) {
-		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil
+	parse := func(html, pageURL string) (string, string, []string, string) {
+		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil, ""
 	}
 
 	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, nil)
@@ -246,7 +246,7 @@ func TestSQLCrawlerService_Crawl_SkipsThinContent(t *testing.T) {
 	robots := &fakeRobots{}
 	repo := &recordingSQLRepo{}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	parse := func(html, pageURL string) (string, string, []string) { return "A", "zu kurz", nil }
+	parse := func(html, pageURL string) (string, string, []string, string) { return "A", "zu kurz", nil, "" }
 
 	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, nil)
 	count, _ := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5}, nil)
@@ -260,8 +260,8 @@ func TestSQLCrawlerService_Crawl_SaveErrorPropagates(t *testing.T) {
 	robots := &fakeRobots{}
 	repo := &recordingSQLRepo{saveErr: errors.New("disk full")}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	parse := func(html, pageURL string) (string, string, []string) {
-		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil
+	parse := func(html, pageURL string) (string, string, []string, string) {
+		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil, ""
 	}
 
 	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, nil)
@@ -276,8 +276,8 @@ func TestSQLCrawlerService_Crawl_EmbedErrorPropagates(t *testing.T) {
 	robots := &fakeRobots{}
 	repo := &recordingSQLRepo{}
 	embedder := &erroringEmbedder{}
-	parse := func(html, pageURL string) (string, string, []string) {
-		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil
+	parse := func(html, pageURL string) (string, string, []string, string) {
+		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil, ""
 	}
 
 	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, nil)
@@ -300,14 +300,14 @@ func TestSQLCrawlerService_Crawl_PacesEmbedCalls(t *testing.T) {
 	robots := &fakeRobots{}
 	repo := &recordingSQLRepo{}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	parse := func(html, pageURL string) (string, string, []string) {
+	parse := func(html, pageURL string) (string, string, []string, string) {
 		switch pageURL {
 		case "http://a/":
-			return "A", "genuegend inhalt text fuer die seite a hier bitte danke", []string{"http://a/b"}
+			return "A", "genuegend inhalt text fuer die seite a hier bitte danke", []string{"http://a/b"}, ""
 		case "http://a/b":
-			return "B", "genuegend inhalt text fuer die seite b hier auch danke", []string{"http://a/c"}
+			return "B", "genuegend inhalt text fuer die seite b hier auch danke", []string{"http://a/c"}, ""
 		default:
-			return "C", "genuegend inhalt text fuer die seite c hier auch danke", nil
+			return "C", "genuegend inhalt text fuer die seite c hier auch danke", nil, ""
 		}
 	}
 	rateLimits := map[string]float64{domain.EmbeddingProviderHash: 10} // 100ms/call
@@ -357,9 +357,9 @@ func TestSQLCrawlerService_Crawl_SharesRateLimitAcrossConcurrentCrawls(t *testin
 		"http://x/":  {"X", "genuegend inhalt text fuer die seite x hier bitte danke", []string{"http://x/y"}},
 		"http://x/y": {"Y", "genuegend inhalt text fuer die seite y hier auch danke", nil},
 	}
-	parse := func(_, pageURL string) (string, string, []string) {
+	parse := func(_, pageURL string) (string, string, []string, string) {
 		c := content[pageURL]
-		return c.title, c.text, c.links
+		return c.title, c.text, c.links, ""
 	}
 	rateLimits := map[string]float64{domain.EmbeddingProviderHash: 10} // 100ms/call, shared across both jobs below
 
@@ -420,8 +420,8 @@ func TestSQLCrawlerService_Crawl_BlendsTitleAndBodyEmbeddingsWhenWeightConfigure
 		"Title text": {1, 0},
 		"Body text":  {0, 1},
 	}}
-	parse := func(html, pageURL string) (string, string, []string) {
-		return "Title text", "Body text", nil
+	parse := func(html, pageURL string) (string, string, []string, string) {
+		return "Title text", "Body text", nil, ""
 	}
 	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingTitleWeight: 0.25})
 
@@ -450,8 +450,8 @@ func TestSQLCrawlerService_Crawl_PacesBothTitleAndBodyEmbedCallsSeparately(t *te
 	robots := &fakeRobots{}
 	repo := &recordingSQLRepo{}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	parse := func(html, pageURL string) (string, string, []string) {
-		return "A", "genuegend inhalt text fuer die seite a hier bitte danke", nil
+	parse := func(html, pageURL string) (string, string, []string, string) {
+		return "A", "genuegend inhalt text fuer die seite a hier bitte danke", nil, ""
 	}
 	rateLimits := map[string]float64{domain.EmbeddingProviderHash: 10} // 100ms/call
 	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
@@ -485,8 +485,8 @@ func TestSQLCrawlerService_Crawl_ComputesEveryEnabledProviderNotJustOne(t *testi
 	repo := &recordingSQLRepo{}
 	hashEmbedder := &fakeEmbedder{vec: []float32{1, 0}}
 	httpEmbedder := &fakeEmbedder{vec: []float32{0, 1, 0, 0}}
-	parse := func(html, pageURL string) (string, string, []string) {
-		return "A", "genuegend inhalt text fuer die seite a hier bitte danke", nil
+	parse := func(html, pageURL string) (string, string, []string, string) {
+		return "A", "genuegend inhalt text fuer die seite a hier bitte danke", nil, ""
 	}
 	embedders := map[string]ports.EmbeddingProvider{
 		domain.EmbeddingProviderHash: hashEmbedder,
