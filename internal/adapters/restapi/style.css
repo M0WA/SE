@@ -375,7 +375,16 @@ button:focus-visible {
    multi-section form has no use for either: unset, that border-bottom
    rendered as a stray, purposeless line after the very last thing in the
    form (the Save/Sign-in button, or -- on Settings -- below the sticky
-   save bar, which already draws its own border-top right above it). */
+   save bar, which already draws its own border-top right above it).
+   Every real multi-row .crawl-form (crawl.html/admin_schedule.html/
+   admin_embedding_endpoint.html) carries this class too, alongside
+   .crawl-form -- without it, every .form-row inside one of those forms
+   was laid out as a side-by-side flex item of the bare `form` rule's row
+   direction instead of stacked, reading as a cramped table of cells
+   rather than a list of settings. admin_documents.html's single-input
+   domain-search-form deliberately keeps plain .crawl-form alone (just
+   for .field's font-size), since that one genuinely is the single-line
+   search-box case the bare `form` rule is for. */
 .stacked-form {
   display: flex;
   flex-direction: column;
