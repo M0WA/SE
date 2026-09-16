@@ -16,7 +16,7 @@
   const semanticPoolSizeEl = document.getElementById('semantic-pool-size');
   const annSearchEnabledEl = document.getElementById('ann-search-enabled');
   const embeddingHashEnabledEl = document.getElementById('embedding-hash-enabled');
-  const embeddingProviderEl = document.getElementById('embedding-provider');
+  const embeddingSearchWeightsEl = document.getElementById('embedding-search-weights');
   const embeddingTitleWeightEl = document.getElementById('embedding-title-weight');
   const maxDocumentVersionsEl = document.getElementById('max-document-versions');
   const dbMaxOpenConnsEl = document.getElementById('db-max-open-conns');
@@ -69,46 +69,89 @@
       ' · ' + countLabel(Object.keys(o.boosted_domains || {}).length, 'domain');
   }
 
-  // loadEmbeddingProviderOptions populates the "Active for search" select
-  // with hash (always offered) plus every currently *enabled* HTTP
-  // endpoint (fetched fresh -- endpoints are managed on their own page, not
-  // this form), then restores whichever one activeProvider names. A
-  // provider no longer in this list (an endpoint deleted or disabled since
-  // this value was set) is added anyway as a disabled, clearly-labeled
-  // option, so the select doesn't silently jump to hash out from under an
-  // admin who hasn't saved yet -- the next save still resolves it via
-  // domain.ReconcileActiveProvider server-side either way.
-  async function loadEmbeddingProviderOptions(activeProvider) {
-    clear(embeddingProviderEl);
-    const hashOpt = document.createElement('option');
-    hashOpt.value = 'hash';
-    hashOpt.textContent = 'Hash (dependency-free)';
-    embeddingProviderEl.appendChild(hashOpt);
+  // weightInputID is the DOM id for provider's weight <input>, shared
+  // between building the list (loadEmbeddingSearchWeights) and reading it
+  // back (collectEmbeddingSearchWeights) -- also readable off the input's
+  // own data-provider attribute, but a stable id is handy for direct
+  // lookups (see the test suite).
+  function weightInputID(provider) {
+    return 'embedding-search-weight-' + provider;
+  }
+
+  function addEmbeddingWeightRow(provider, label, weight, stale) {
+    const row = document.createElement('div');
+    row.className = 'form-row';
+    const labelEl = document.createElement('label');
+    labelEl.setAttribute('for', weightInputID(provider));
+    labelEl.textContent = label;
+    row.appendChild(labelEl);
+    row.appendChild(document.createElement('br'));
+    const input = document.createElement('input');
+    input.id = weightInputID(provider);
+    input.className = 'field';
+    input.type = 'number';
+    input.step = 'any';
+    input.min = '0';
+    input.value = weight;
+    input.dataset.provider = provider;
+    input.disabled = !!stale;
+    row.appendChild(input);
+    embeddingSearchWeightsEl.appendChild(row);
+  }
+
+  // loadEmbeddingSearchWeights populates one weight <input> per provider:
+  // hash (always offered) plus every currently *enabled* HTTP endpoint
+  // (fetched fresh -- endpoints are managed on their own page, not this
+  // form), pre-filled from weights (0 for anything not already weighted).
+  // A weight entry naming a provider that's no longer enabled (its
+  // endpoint deleted or disabled since this value was saved) is shown
+  // anyway, locked and clearly labeled, so the form doesn't silently drop
+  // it out from under an admin who hasn't saved yet -- but it's excluded
+  // from collectEmbeddingSearchWeights's resubmission, since the next save
+  // would have it dropped by domain.ReconcileSearchWeights server-side
+  // either way.
+  async function loadEmbeddingSearchWeights(weights) {
+    weights = weights || {};
+    clear(embeddingSearchWeightsEl);
+    addEmbeddingWeightRow('hash', 'Hash (dependency-free)', weights.hash || 0, false);
 
     let endpoints = [];
     try {
       const r = await getJSON('/admin/api/embeddings/endpoints');
       if (Array.isArray(r)) endpoints = r;
     } catch (err) {
-      // The endpoints list is a convenience for populating this select --
+      // The endpoints list is a convenience for populating this section --
       // a failed (or unexpectedly-shaped) fetch just means "hash only, for
       // now," not a reason to block the rest of the settings page from
       // loading.
     }
+    const enabledIDs = new Set(['hash']);
     endpoints.filter((e) => e.enabled).forEach((e) => {
-      const opt = document.createElement('option');
-      opt.value = e.id;
-      opt.textContent = e.name + ' (' + e.id + ')';
-      embeddingProviderEl.appendChild(opt);
+      enabledIDs.add(e.id);
+      addEmbeddingWeightRow(e.id, e.name + ' (' + e.id + ')', weights[e.id] || 0, false);
     });
 
-    if (activeProvider && activeProvider !== 'hash' && !endpoints.some((e) => e.enabled && e.id === activeProvider)) {
-      const staleOpt = document.createElement('option');
-      staleOpt.value = activeProvider;
-      staleOpt.textContent = activeProvider + ' (not currently enabled — will self-heal to hash on save)';
-      embeddingProviderEl.appendChild(staleOpt);
-    }
-    embeddingProviderEl.value = activeProvider || 'hash';
+    Object.keys(weights).forEach((provider) => {
+      if (!enabledIDs.has(provider)) {
+        addEmbeddingWeightRow(provider, provider + ' (not currently enabled — will self-heal on save)', weights[provider], true);
+      }
+    });
+  }
+
+  // collectEmbeddingSearchWeights reads every non-stale weight <input>
+  // back into a provider->weight map, omitting anything left at (or
+  // parsed as) 0 or below -- a 0 weight simply isn't part of the active
+  // set, the same as omitting the provider entirely.
+  function collectEmbeddingSearchWeights() {
+    const weights = {};
+    embeddingSearchWeightsEl.querySelectorAll('input[data-provider]').forEach((input) => {
+      if (input.disabled) return;
+      const w = parseFloat(input.value);
+      if (!Number.isNaN(w) && w > 0) {
+        weights[input.dataset.provider] = w;
+      }
+    });
+    return weights;
   }
 
   function applySettings(s) {
@@ -133,7 +176,7 @@
     // blending disabled -- see the field's own doc comment in admin.go),
     // so it's assigned directly rather than falling back to '' on falsy.
     embeddingTitleWeightEl.value = s.operational.embedding_title_weight;
-    loadEmbeddingProviderOptions(s.operational.embedding_provider);
+    loadEmbeddingSearchWeights(s.operational.embedding_search_weights);
     maxDocumentVersionsEl.value = s.operational.max_document_versions;
     dbMaxOpenConnsEl.value = s.operational.db_max_open_conns;
     dbMaxIdleConnsEl.value = s.operational.db_max_idle_conns;
@@ -186,7 +229,7 @@
         semantic_candidate_pool_size: parseInt(semanticPoolSizeEl.value, 10),
         ann_search_enabled: annSearchEnabledEl.checked,
         embedding_hash_enabled: embeddingHashEnabledEl.checked,
-        embedding_provider: embeddingProviderEl.value,
+        embedding_search_weights: collectEmbeddingSearchWeights(),
         embedding_title_weight: parseFloat(embeddingTitleWeightEl.value) || 0,
         max_document_versions: parseInt(maxDocumentVersionsEl.value, 10),
         db_max_open_conns: parseInt(dbMaxOpenConnsEl.value, 10),
@@ -279,6 +322,6 @@
       saveOverrides, applyOverrides, loadOverrides,
       factorsToText, parseFactorLines,
       renderSettingsSummary, renderOverridesSummary,
-      loadEmbeddingProviderOptions,
+      loadEmbeddingSearchWeights, collectEmbeddingSearchWeights, weightInputID,
     };
   }

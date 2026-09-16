@@ -14,8 +14,8 @@ type hybridSearchAdapter struct {
 // NewHybridAsSearchService adapts a hybrid (BM25 + semantic) search service to
 // the plain ports.SearchService contract expected by the HTTP layer, mapping
 // each domain.HybridResult's blended score into a domain.SearchResult.
-func NewHybridAsSearchService(repo ports.SQLRepository, embedder ports.EmbeddingProvider, settings *domain.TuningSettings, opSettings *domain.OperationalSettings, overrides *domain.RankingOverrides, corpusStats *domain.CorpusStatsCache, vocabulary *domain.VocabularyCache) ports.SearchService {
-	return &hybridSearchAdapter{hybrid: NewHybridSearchService(repo, embedder, settings, opSettings, overrides, corpusStats, vocabulary)}
+func NewHybridAsSearchService(repo ports.SQLRepository, embedders map[string]ports.EmbeddingProvider, settings *domain.TuningSettings, opSettings *domain.OperationalSettings, overrides *domain.RankingOverrides, corpusStats *domain.CorpusStatsCache, vocabulary *domain.VocabularyCache) ports.SearchService {
+	return &hybridSearchAdapter{hybrid: NewHybridSearchService(repo, embedders, settings, opSettings, overrides, corpusStats, vocabulary)}
 }
 
 func (a *hybridSearchAdapter) Search(ctx context.Context, query string, opts ports.SearchQuery) ([]domain.SearchResult, error) {

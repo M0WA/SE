@@ -333,6 +333,12 @@ const (
 type SearchQuery struct {
 	TopK int
 	Sort string
+	// ProviderWeights, when non-nil, fully replaces domain.
+	// OperationalSettingsValues.EmbeddingSearchWeights for this request
+	// only -- see hybridSearchService.Search. nil means "use the admin
+	// default"; an empty-but-non-nil map means "no semantic scoring at
+	// all for this request" (pure BM25), same as every weight being <= 0.
+	ProviderWeights map[string]float64
 }
 
 type SearchService interface {

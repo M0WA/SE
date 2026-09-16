@@ -104,38 +104,53 @@ func NewEmbeddingEndpointID(name string, existing map[string]bool) string {
 	}
 }
 
-// ReconcileActiveProvider returns a valid choice for
-// OperationalSettingsValues.EmbeddingProvider given the currently enabled
-// provider set: active itself, if it still names EmbeddingProviderHash
-// (with hashEnabled true) or an enabled entry in endpoints; otherwise
-// EmbeddingProviderHash if hashEnabled, else the first enabled endpoint's
-// ID, else EmbeddingProviderHash regardless (search always needs something
-// to name, even in the degenerate case where nothing is actually enabled --
-// callers reading with nothing enabled get no results either way, but at
-// least don't crash on an empty/dangling provider string).
+// ReconcileSearchWeights returns a valid choice for
+// OperationalSettingsValues.EmbeddingSearchWeights given the currently
+// enabled provider set: every entry in weights that still names an
+// enabled provider (EmbeddingProviderHash with hashEnabled true, or an
+// enabled entry in endpoints) survives with its original weight; every
+// other entry (a disabled or deleted provider) is dropped. If nothing
+// survives -- weights was empty/nil, or every entry it named has since
+// been disabled -- falls back to {EmbeddingProviderHash: 1} if hashEnabled,
+// else the first enabled endpoint at weight 1, else {EmbeddingProviderHash:
+// 1} regardless (search always needs something to try, even in the
+// degenerate case where nothing is actually enabled -- callers reading
+// with nothing enabled get no results either way, but at least don't
+// silently score against a dangling provider).
 //
 // OperationalSettings.Set() cannot do this self-healing itself, unlike
 // every other field it clamps, because provider validity now depends on
 // the dynamically configured embedding_http_endpoints table rather than a
-// fixed two-value enum. Callers apply this wherever both the settings and
-// the live endpoint list are already being read together -- see
-// bootstrap.NewEmbedders and admin.go's settings handlers.
-func ReconcileActiveProvider(active string, hashEnabled bool, endpoints []EmbeddingHTTPEndpoint) string {
-	if active == EmbeddingProviderHash && hashEnabled {
-		return active
-	}
-	for _, e := range endpoints {
-		if e.Enabled && e.ID == active {
-			return active
-		}
-	}
+// fixed enum. Callers apply this wherever both the settings and the live
+// endpoint list are already read together -- see bootstrap.applySettingsOnce
+// and admin.go's settings handlers.
+func ReconcileSearchWeights(weights map[string]float64, hashEnabled bool, endpoints []EmbeddingHTTPEndpoint) map[string]float64 {
+	enabled := make(map[string]bool, len(endpoints)+1)
 	if hashEnabled {
-		return EmbeddingProviderHash
+		enabled[EmbeddingProviderHash] = true
 	}
 	for _, e := range endpoints {
 		if e.Enabled {
-			return e.ID
+			enabled[e.ID] = true
 		}
 	}
-	return EmbeddingProviderHash
+
+	survivors := make(map[string]float64, len(weights))
+	for provider, w := range weights {
+		if enabled[provider] {
+			survivors[provider] = w
+		}
+	}
+	if len(survivors) > 0 {
+		return survivors
+	}
+	if hashEnabled {
+		return map[string]float64{EmbeddingProviderHash: 1}
+	}
+	for _, e := range endpoints {
+		if e.Enabled {
+			return map[string]float64{e.ID: 1}
+		}
+	}
+	return map[string]float64{EmbeddingProviderHash: 1}
 }

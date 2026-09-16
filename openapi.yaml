@@ -74,6 +74,17 @@ paths:
         - name: sort
           in: query
           schema: { type: string, enum: [relevance, recency], default: relevance }
+        - name: semantic
+          in: query
+          schema: { type: string }
+          example: "hash:0.3,ionos:0.7"
+          description: >-
+            Comma-separated `provider:weight` pairs (a bare `provider` with
+            no `:weight` defaults to weight 1) that fully replace
+            operational.embedding_search_weights for this request only --
+            see /admin/api/settings' embedding_search_weights. A malformed
+            entry is skipped individually rather than failing the request.
+            Omit entirely to use the admin-configured default.
       responses:
         "200":
           description: Search results
@@ -448,6 +459,10 @@ paths:
         - name: sort
           in: query
           schema: { type: string, enum: [relevance, recency] }
+        - name: semantic
+          in: query
+          schema: { type: string }
+          description: Same `provider:weight` override as GET /search's own `semantic` parameter.
       responses:
         "200":
           description: OK
@@ -641,8 +656,9 @@ paths:
         enabled and rate-limited -- alongside the always-available built-in
         hash provider (see operational.embedding_hash_enabled on
         /admin/api/settings). Every enabled one is kept warm (embedded and
-        stored) on every crawl/recompute, so switching which one is active
-        for search (operational.embedding_provider) is instant.
+        stored) on every crawl/recompute, so reweighting which one(s) are
+        active for search (operational.embedding_search_weights) is
+        instant.
       responses:
         "200":
           description: OK
@@ -1243,33 +1259,40 @@ components:
                 provider is computed and stored for every document,
                 independently of however many HTTP endpoints are
                 separately configured and enabled (see
-                /admin/api/embeddings/endpoints). embedding_provider below
-                just picks which of the currently-enabled provider(s)
-                search reads. NOT applied live -- read once at process
-                startup, since enabling a provider that wasn't running
-                before requires constructing its embedder and sizing its
-                own pgvector column/index.
-            embedding_provider:
-              type: string
+                /admin/api/embeddings/endpoints). embedding_search_weights
+                below just picks which of the currently-enabled
+                provider(s), and how heavily, search reads. NOT applied
+                live -- read once at process startup, since enabling a
+                provider that wasn't running before requires constructing
+                its embedder and sizing its own pgvector column/index.
+            embedding_search_weights:
+              type: object
+              additionalProperties: { type: number }
               description: >-
-                Which enabled provider -- the literal "hash" or an enabled
-                HTTP endpoint's id (see /admin/api/embeddings/endpoints) --
-                search actually compares a query against. Self-healed
-                (falls back to hash, or the first enabled endpoint) if it
-                names a provider that isn't currently enabled/configured --
-                that validity now depends on the dynamically configured
-                endpoint list, not a fixed enum, so unlike
-                embedding_hash_enabled this self-healing happens wherever
-                both this value and the live endpoint list are read
-                together, not as a POST-time field validation. Doesn't
-                require a restart or a recompute to take effect once the
-                target provider is already being kept warm -- it's just
-                choosing which already-current stored vector to read.
-                Switching to a provider that was previously disabled (so
-                it has no stored vectors yet, or stale ones) changes the
-                vector space entirely until it's been enabled long enough
-                to catch up, or an explicit recompute brings it current
-                immediately.
+                Maps a provider -- the literal "hash" or an enabled HTTP
+                endpoint's id (see /admin/api/embeddings/endpoints) -- to
+                its weight in the search-time semantic score. A provider
+                absent, or present with weight <= 0, doesn't contribute; a
+                search blends every remaining provider's cosine similarity
+                by its weight, normalized to sum 1 (so {"hash": 1, "ionos":
+                1} weighs them equally, the same as {"hash": 10, "ionos":
+                10} would). Any GET /search or GET /admin/api/search
+                request may override this map entirely for itself via its
+                own `semantic` query parameter. Self-healed (drops an
+                entry naming a provider that isn't currently
+                enabled/configured, falling back to hash or the first
+                enabled endpoint if nothing survives) wherever this value
+                and the live endpoint list are read together, not as a
+                POST-time field validation -- validity depends on the
+                dynamically configured endpoint list, not a fixed enum.
+                Doesn't require a restart or a recompute to take effect
+                once every weighted provider is already being kept warm --
+                it's just choosing which already-current stored vectors to
+                read and how to blend them. Weighting in a provider that
+                was previously unweighted (so it has no stored vectors
+                yet, or stale ones) dilutes the blend with noise for its
+                share until it's been enabled long enough to catch up, or
+                an explicit recompute brings it current immediately.
             embedding_title_weight:
               type: number
               format: double

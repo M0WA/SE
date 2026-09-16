@@ -85,14 +85,24 @@ type fakeSQLRepo struct {
 	topSemanticMatchesCalls int
 	sampleEmbeddingsCalls   int
 
-	// embeddingsForDocsProvider/sampleEmbeddingsProvider/
-	// topSemanticMatchesProvider record the provider argument each method
-	// was last called with, so a test can assert Search passes through
-	// opValues.EmbeddingProvider (the active provider) rather than a
-	// hardcoded value.
-	embeddingsForDocsProvider  string
-	sampleEmbeddingsProvider   string
-	topSemanticMatchesProvider string
+	// embeddingsForDocsProviders/sampleEmbeddingsProviders/
+	// topSemanticMatchesProviders record, in call order, the provider
+	// argument each method was called with -- a multi-provider search calls
+	// each of these once per active provider, so a test can assert Search
+	// queried every provider EmbeddingSearchWeights actually names, in
+	// addition to a single-provider test asserting the one active provider
+	// (rather than a hardcoded value).
+	embeddingsForDocsProviders  []string
+	sampleEmbeddingsProviders   []string
+	topSemanticMatchesProviders []string
+
+	// embeddingsByProvider, when non-nil, backs EmbeddingsForDocs/
+	// SampleEmbeddings with per-provider vectors (embeddingsByProvider[provider][docID])
+	// instead of the single flat embeddings map every other test uses --
+	// needed to prove a weighted multi-provider blend actually combines
+	// independent per-provider similarity scores rather than reading the
+	// same vectors for every provider.
+	embeddingsByProvider map[string]map[string][]float32
 }
 
 // TopSemanticMatches mimics ports.SQLRepository's ANN entry point: reports
@@ -100,7 +110,7 @@ type fakeSQLRepo struct {
 // annOK, exactly like a repository whose EnableANN never succeeded.
 func (r *fakeSQLRepo) TopSemanticMatches(_ context.Context, _ []float32, _ int, provider string) (map[string]domain.EmbeddedVector, bool, error) {
 	r.topSemanticMatchesCalls++
-	r.topSemanticMatchesProvider = provider
+	r.topSemanticMatchesProviders = append(r.topSemanticMatchesProviders, provider)
 	if r.annErr != nil {
 		return nil, false, r.annErr
 	}
@@ -143,14 +153,24 @@ func (r *fakeSQLRepo) AllTerms(context.Context) ([]domain.TermStat, error) {
 // norm is computed on the way out, standing in for a real repository's
 // precomputed norm_embedding column.
 func (r *fakeSQLRepo) EmbeddingsForDocs(_ context.Context, ids []string, provider string) (map[string]domain.EmbeddedVector, error) {
-	r.embeddingsForDocsProvider = provider
+	r.embeddingsForDocsProviders = append(r.embeddingsForDocsProviders, provider)
+	src := r.embeddingsSource(provider)
 	out := make(map[string]domain.EmbeddedVector)
 	for _, id := range ids {
-		if v, ok := r.embeddings[id]; ok {
+		if v, ok := src[id]; ok {
 			out[id] = domain.EmbeddedVector{Vector: v, Norm: r.normFor(id, v), PageRank: r.pageranks[id]}
 		}
 	}
 	return out, nil
+}
+
+// embeddingsSource returns provider's own vector set when embeddingsByProvider
+// is in use, otherwise the single flat embeddings map every other test uses.
+func (r *fakeSQLRepo) embeddingsSource(provider string) map[string][]float32 {
+	if r.embeddingsByProvider != nil {
+		return r.embeddingsByProvider[provider]
+	}
+	return r.embeddings
 }
 
 // normFor returns the injected override norm for id if embeddingNorms sets
@@ -169,12 +189,13 @@ func (r *fakeSQLRepo) normFor(id string, v []float32) float64 {
 // tests exercising a small pool size can rely on a deterministic subset.
 func (r *fakeSQLRepo) SampleEmbeddings(_ context.Context, limit int, provider string) (map[string]domain.EmbeddedVector, error) {
 	r.sampleEmbeddingsCalls++
-	r.sampleEmbeddingsProvider = provider
+	r.sampleEmbeddingsProviders = append(r.sampleEmbeddingsProviders, provider)
 	if limit <= 0 {
 		return map[string]domain.EmbeddedVector{}, nil
 	}
-	ids := make([]string, 0, len(r.embeddings))
-	for id := range r.embeddings {
+	src := r.embeddingsSource(provider)
+	ids := make([]string, 0, len(src))
+	for id := range src {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
@@ -183,7 +204,7 @@ func (r *fakeSQLRepo) SampleEmbeddings(_ context.Context, limit int, provider st
 	}
 	out := make(map[string]domain.EmbeddedVector, len(ids))
 	for _, id := range ids {
-		out[id] = domain.EmbeddedVector{Vector: r.embeddings[id], Norm: r.normFor(id, r.embeddings[id]), PageRank: r.pageranks[id]}
+		out[id] = domain.EmbeddedVector{Vector: src[id], Norm: r.normFor(id, src[id]), PageRank: r.pageranks[id]}
 	}
 	return out, nil
 }
@@ -297,7 +318,7 @@ func TestHybridSearch_CombinesBM25AndSemantic(t *testing.T) {
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
 	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -323,7 +344,7 @@ func TestHybridSearch_ResultsCarryTuningParamsAndBM25Breakdown(t *testing.T) {
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 	settings := domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B)
-	svc := application.NewHybridSearchService(repo, embedder, settings, nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, settings, nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
 
 	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -373,7 +394,7 @@ func TestHybridSearch_PageRankWeightSetsNormalizedPageRankOnResults(t *testing.T
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 	settings := domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B)
 	settings.SetPageRankWeight(0.3)
-	svc := application.NewHybridSearchService(repo, embedder, settings, nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, settings, nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
 
 	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -407,7 +428,7 @@ func TestHybridSearch_NonPositiveTopKDefaultsToTen(t *testing.T) {
 		docs:       map[string]domain.Document{"1": {ID: "1", URL: "http://a", Title: "Katzen", Text: "Katzen sind toll"}},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
 
 	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 0})
 	if err != nil {
@@ -430,7 +451,7 @@ func TestHybridSearch_DuplicateQueryTermsCountedOnce(t *testing.T) {
 		docs:       map[string]domain.Document{"1": {ID: "1", URL: "http://a", Title: "Katzen", Text: "Katzen sind toll"}},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
 
 	if _, err := svc.Search(context.Background(), "katzen katzen katzen", ports.SearchQuery{TopK: 10}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -448,7 +469,7 @@ func TestHybridSearch_FindsSemanticOnlyMatch(t *testing.T) {
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.3, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, nil, nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.3, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, nil, nil)
 	results, err := svc.Search(context.Background(), "quantenphysik", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -459,7 +480,7 @@ func TestHybridSearch_FindsSemanticOnlyMatch(t *testing.T) {
 }
 
 func TestHybridSearch_EmptyQueryRejected(t *testing.T) {
-	svc := application.NewHybridSearchService(&fakeSQLRepo{}, &fakeEmbedder{}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, nil, nil)
+	svc := application.NewHybridSearchService(&fakeSQLRepo{}, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: &fakeEmbedder{}}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, nil, nil)
 	_, err := svc.Search(context.Background(), "   ", ports.SearchQuery{TopK: 10})
 	if err == nil {
 		t.Error("expected error for empty query")
@@ -481,7 +502,7 @@ func TestHybridSearch_RequiredWordFiltersOutNonMatching(t *testing.T) {
 		},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
 
 	results, err := svc.Search(context.Background(), "katzen +haustiere", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -507,7 +528,7 @@ func TestHybridSearch_ExcludedWordFiltersOutMatching(t *testing.T) {
 		},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
 
 	results, err := svc.Search(context.Background(), "katzen -zoo", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -533,7 +554,7 @@ func TestHybridSearch_PhraseFiltersOutNonMatching(t *testing.T) {
 		},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
 
 	results, err := svc.Search(context.Background(), `katzen "sehr verspielt"`, ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -556,7 +577,7 @@ func TestHybridSearch_ConstraintDocumentFetchErrorSkipsCandidate(t *testing.T) {
 		// than failing the whole search.
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
 
 	results, err := svc.Search(context.Background(), "katzen +erforderlich", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -583,7 +604,7 @@ func TestHybridSearch_BlockedDomainExcludesDocument(t *testing.T) {
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 	overrides := domain.NewRankingOverrides(domain.RankingOverridesValues{BlockedDomains: []string{"spammy.example"}})
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, overrides, domain.NewCorpusStatsCache(2, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, overrides, domain.NewCorpusStatsCache(2, 10), nil)
 
 	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -610,7 +631,7 @@ func TestHybridSearch_BlockedTermExcludesDocument(t *testing.T) {
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 	overrides := domain.NewRankingOverrides(domain.RankingOverridesValues{BlockedTerms: []string{"casino"}})
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, overrides, domain.NewCorpusStatsCache(2, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, overrides, domain.NewCorpusStatsCache(2, 10), nil)
 
 	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -638,7 +659,7 @@ func TestHybridSearch_BoostedDomainReordersResults(t *testing.T) {
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 
 	// Without any boost, doc 1's higher term frequency ranks it first.
-	plainSvc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(1.0, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
+	plainSvc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(1.0, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
 	plainResults, err := plainSvc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -648,7 +669,7 @@ func TestHybridSearch_BoostedDomainReordersResults(t *testing.T) {
 	}
 
 	overrides := domain.NewRankingOverrides(domain.RankingOverridesValues{BoostedDomains: map[string]float64{"trusted.example": 10.0}})
-	boostedSvc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(1.0, domain.DefaultBM25K1, domain.DefaultBM25B), nil, overrides, domain.NewCorpusStatsCache(2, 10), nil)
+	boostedSvc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(1.0, domain.DefaultBM25K1, domain.DefaultBM25B), nil, overrides, domain.NewCorpusStatsCache(2, 10), nil)
 	boostedResults, err := boostedSvc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -667,7 +688,7 @@ func TestHybridSearch_NilOverridesBehavesUnrestricted(t *testing.T) {
 		docs:       map[string]domain.Document{"1": {ID: "1", URL: "http://a", Title: "Katzen", Text: "Katzen sind toll"}},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
 
 	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -693,7 +714,7 @@ func TestHybridSearch_SiteFilterExcludesNonMatchingHost(t *testing.T) {
 		},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
 
 	results, err := svc.Search(context.Background(), "katzen site:example.com", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -715,7 +736,7 @@ func TestHybridSearch_SiteFilterAllowsSubdomain(t *testing.T) {
 		},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
 
 	results, err := svc.Search(context.Background(), "katzen site:example.com", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -756,8 +777,8 @@ func TestHybridSearch_SiteFilterFindsMatchOutsideBoundedCandidatePool(t *testing
 		},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{SemanticCandidatePoolSize: 1})
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), opSettings, nil, domain.NewCorpusStatsCache(3, 10), nil)
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{SemanticCandidatePoolSize: 1, EmbeddingSearchWeights: map[string]float64{domain.EmbeddingProviderHash: 1}})
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), opSettings, nil, domain.NewCorpusStatsCache(3, 10), nil)
 
 	results, err := svc.Search(context.Background(), "widgets site:example.com", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -795,7 +816,7 @@ func TestHybridSearch_RecencySortOrdersByCrawledAtDescending(t *testing.T) {
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(1.0, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(3, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(1.0, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(3, 10), nil)
 
 	relevance, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10, Sort: ports.SortRelevance})
 	if err != nil {
@@ -862,7 +883,7 @@ func TestHybridSearch_ResultHydrationUsesBatchedFetchNotPerResult(t *testing.T) 
 		},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(4, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(4, 10), nil)
 
 	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -901,7 +922,7 @@ func TestHybridSearch_ConstrainedQueryReusesDocCacheForHydration(t *testing.T) {
 		},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
 
 	results, err := svc.Search(context.Background(), "katzen +haustiere", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -924,7 +945,7 @@ func TestHybridSearch_UnrecognizedSortFallsBackToRelevance(t *testing.T) {
 		docs:       map[string]domain.Document{"1": {ID: "1", URL: "http://a", Title: "Katzen", Text: "Katzen sind toll"}},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
 
 	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10, Sort: "bogus"})
 	if err != nil {
@@ -946,7 +967,7 @@ func TestHybridSearch_TopKLimitsResults(t *testing.T) {
 		},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, nil, nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, nil, nil)
 	results, _ := svc.Search(context.Background(), "test", ports.SearchQuery{TopK: 2})
 	if len(results) != 2 {
 		t.Errorf("expected topK=2, got %d", len(results))
@@ -972,8 +993,8 @@ func TestHybridSearch_SemanticCandidatePoolSizeBoundsSampledCandidates(t *testin
 		},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{SemanticCandidatePoolSize: 2})
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), opSettings, nil, nil, nil)
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{SemanticCandidatePoolSize: 2, EmbeddingSearchWeights: map[string]float64{domain.EmbeddingProviderHash: 1}})
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), opSettings, nil, nil, nil)
 
 	results, err := svc.Search(context.Background(), "quantenphysik", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -1012,8 +1033,8 @@ func TestHybridSearch_BM25HitsAlwaysScoredRegardlessOfPoolSize(t *testing.T) {
 		},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{SemanticCandidatePoolSize: 1})
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), opSettings, nil, domain.NewCorpusStatsCache(1, 10), nil)
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{SemanticCandidatePoolSize: 1, EmbeddingSearchWeights: map[string]float64{domain.EmbeddingProviderHash: 1}})
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), opSettings, nil, domain.NewCorpusStatsCache(1, 10), nil)
 
 	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -1045,7 +1066,7 @@ func TestHybridSearch_PostingsForTermsCalledOnceForMultiTermQuery(t *testing.T) 
 		docs:       map[string]domain.Document{"1": {ID: "1", URL: "http://a", Title: "Tiere", Text: "Katzen Hunde Vogel"}},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
 
 	_, err := svc.Search(context.Background(), "katzen hunde vogel", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -1077,7 +1098,7 @@ func TestHybridSearch_PostingsAndEmbeddingFetchedConcurrently(t *testing.T) {
 		postingsDelay: delay,
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}, delay: delay}
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
 
 	start := time.Now()
 	if _, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10}); err != nil {
@@ -1096,7 +1117,7 @@ func TestHybridSearch_PropagatesEmbedError(t *testing.T) {
 		postings: map[string][]domain.PostingStats{"katzen": {{DocID: "1", TermFreq: 1, DocLength: 10, DocFreq: 1}}},
 		docs:     map[string]domain.Document{"1": {ID: "1", URL: "http://a", Title: "Katzen", Text: "Katzen"}},
 	}
-	svc := application.NewHybridSearchService(repo, erroringEmbedder{}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: erroringEmbedder{}}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
 
 	if _, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10}); err == nil {
 		t.Fatal("expected the embedding error to propagate")
@@ -1119,13 +1140,13 @@ func TestHybridSearch_BM25ScoringUsesCorpusStatsCacheValues(t *testing.T) {
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 
-	smallCorpus := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(10, 10), nil)
+	smallCorpus := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(10, 10), nil)
 	smallResults, err := smallCorpus.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	largeCorpus := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(100000, 10), nil)
+	largeCorpus := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(100000, 10), nil)
 	largeResults, err := largeCorpus.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1162,7 +1183,7 @@ func newFuzzyTestRepo() *fakeSQLRepo {
 func TestHybridSearch_FuzzyMatch_CorrectsTypoAndFindsMatch(t *testing.T) {
 	vocabulary := domain.NewVocabularyCache([]domain.TermStat{{Term: "katzen", DocFreq: 1, TotalFreq: 5}})
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(newFuzzyTestRepo(), embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), vocabulary)
+	svc := application.NewHybridSearchService(newFuzzyTestRepo(), map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), vocabulary)
 
 	results, err := svc.Search(context.Background(), "katzn", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -1189,7 +1210,7 @@ func TestHybridSearch_FuzzyMatch_CorrectsTypoAndFindsMatch(t *testing.T) {
 func TestHybridSearch_FuzzyMatch_HighlightsTheCorrectedSpellingNotTheTypo(t *testing.T) {
 	vocabulary := domain.NewVocabularyCache([]domain.TermStat{{Term: "katzen", DocFreq: 1, TotalFreq: 5}})
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(newFuzzyTestRepo(), embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), vocabulary)
+	svc := application.NewHybridSearchService(newFuzzyTestRepo(), map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), vocabulary)
 
 	results, err := svc.Search(context.Background(), "katzn", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -1214,13 +1235,13 @@ func TestHybridSearch_FuzzyMatch_ScoreMatchesCorrectlySpelledQuery(t *testing.T)
 	vocabulary := domain.NewVocabularyCache([]domain.TermStat{{Term: "katzen", DocFreq: 1, TotalFreq: 5}})
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 
-	typoSvc := application.NewHybridSearchService(newFuzzyTestRepo(), embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), vocabulary)
+	typoSvc := application.NewHybridSearchService(newFuzzyTestRepo(), map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), vocabulary)
 	typoResults, err := typoSvc.Search(context.Background(), "katzn", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	correctSvc := application.NewHybridSearchService(newFuzzyTestRepo(), embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), vocabulary)
+	correctSvc := application.NewHybridSearchService(newFuzzyTestRepo(), map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), vocabulary)
 	correctResults, err := correctSvc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1242,7 +1263,7 @@ func TestHybridSearch_FuzzyMatch_ScoreMatchesCorrectlySpelledQuery(t *testing.T)
 func TestHybridSearch_FuzzyMatch_NoCloseVocabularyTermLeftUncorrected(t *testing.T) {
 	vocabulary := domain.NewVocabularyCache([]domain.TermStat{{Term: "katzen", DocFreq: 1, TotalFreq: 5}})
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(newFuzzyTestRepo(), embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), vocabulary)
+	svc := application.NewHybridSearchService(newFuzzyTestRepo(), map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), vocabulary)
 
 	results, err := svc.Search(context.Background(), "katzen quixoticnonsense", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -1273,7 +1294,7 @@ func TestHybridSearch_FuzzyMatch_NeverTouchesATermThatAlreadyMatched(t *testing.
 	// that already has postings hits.
 	vocabulary := domain.NewVocabularyCache([]domain.TermStat{{Term: "katzem", DocFreq: 100, TotalFreq: 500}})
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(2, 10), vocabulary)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(2, 10), vocabulary)
 
 	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -1295,9 +1316,9 @@ func TestHybridSearch_FuzzyMatch_NeverTouchesATermThatAlreadyMatched(t *testing.
 func TestHybridSearch_FuzzyMatch_DisabledSkipsCorrectionEntirely(t *testing.T) {
 	vocabulary := domain.NewVocabularyCache([]domain.TermStat{{Term: "katzen", DocFreq: 1, TotalFreq: 5}})
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{FuzzyMatchEnabled: false})
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{FuzzyMatchEnabled: false, EmbeddingSearchWeights: map[string]float64{domain.EmbeddingProviderHash: 1}})
 	repo := newFuzzyTestRepo()
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), opSettings, nil, domain.NewCorpusStatsCache(1, 10), vocabulary)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), opSettings, nil, domain.NewCorpusStatsCache(1, 10), vocabulary)
 
 	// Doc 1 is still found -- via the unbounded semantic candidate pool,
 	// not BM25 -- since disabling fuzzy correction doesn't disable search
@@ -1338,7 +1359,7 @@ func TestHybridSearch_SemanticScoringUsesRepoSuppliedNorm(t *testing.T) {
 		docs:           map[string]domain.Document{"1": {ID: "1", URL: "http://a", Title: "Katzen", Text: "Katzen sind toll"}},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, domain.NewCorpusStatsCache(1, 10), nil)
 
 	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -1375,7 +1396,7 @@ func TestHybridSearch_PageRankWeightZeroLeavesRankingUnchanged(t *testing.T) {
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 	settings := domain.NewTuningSettings(1.0, domain.DefaultBM25K1, domain.DefaultBM25B)
 	// PageRankWeight defaults to 0 -- left untouched here on purpose.
-	svc := application.NewHybridSearchService(newRepo(), embedder, settings, nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
+	svc := application.NewHybridSearchService(newRepo(), map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, settings, nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
 	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1406,7 +1427,7 @@ func TestHybridSearch_PageRankWeightBlendsIntoFinalScore(t *testing.T) {
 	// normalized pagerank overtake it.
 	settings := domain.NewTuningSettings(1.0, domain.DefaultBM25K1, domain.DefaultBM25B)
 	settings.SetPageRankWeight(0.9)
-	svc := application.NewHybridSearchService(newRepo(), embedder, settings, nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
+	svc := application.NewHybridSearchService(newRepo(), map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, settings, nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
 	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1433,7 +1454,7 @@ func TestHybridSearch_PageRankWeightIgnoredWhenNoCandidateHasAPositivePageRank(t
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 	settings := domain.NewTuningSettings(1.0, domain.DefaultBM25K1, domain.DefaultBM25B)
 	settings.SetPageRankWeight(0.9)
-	svc := application.NewHybridSearchService(repo, embedder, settings, nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, settings, nil, nil, domain.NewCorpusStatsCache(2, 10), nil)
 	results, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1458,7 +1479,7 @@ func TestHybridSearch_ANNUsedWhenAvailableAndEnabled(t *testing.T) {
 		docs: map[string]domain.Document{"2": {ID: "2", URL: "http://b", Title: "Physik", Text: "Physik-Artikel"}},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.3, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, nil, nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.3, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, nil, nil)
 
 	results, err := svc.Search(context.Background(), "quantenphysik", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -1496,8 +1517,8 @@ func TestHybridSearch_ANNSearchDisabledForcesBruteForceFallback(t *testing.T) {
 		},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{ANNSearchEnabled: false, SemanticCandidatePoolSize: 200})
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.3, domain.DefaultBM25K1, domain.DefaultBM25B), opSettings, nil, nil, nil)
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{ANNSearchEnabled: false, SemanticCandidatePoolSize: 200, EmbeddingSearchWeights: map[string]float64{domain.EmbeddingProviderHash: 1}})
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.3, domain.DefaultBM25K1, domain.DefaultBM25B), opSettings, nil, nil, nil)
 
 	results, err := svc.Search(context.Background(), "quantenphysik", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -1527,7 +1548,7 @@ func TestHybridSearch_ANNUnavailableFallsBackToSampleEmbeddings(t *testing.T) {
 		docs:       map[string]domain.Document{"9": {ID: "9", URL: "http://z", Title: "Brute", Text: "doc"}},
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.3, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, nil, nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.3, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, nil, nil)
 
 	results, err := svc.Search(context.Background(), "quantenphysik", ports.SearchQuery{TopK: 10})
 	if err != nil {
@@ -1555,7 +1576,7 @@ func TestHybridSearch_ANNQueryErrorPropagates(t *testing.T) {
 		annErr:   errors.New("ann query failed"),
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.3, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, nil, nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.3, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, nil, nil)
 
 	if _, err := svc.Search(context.Background(), "quantenphysik", ports.SearchQuery{TopK: 10}); err == nil {
 		t.Fatal("expected the ANN query failure to propagate as a search error")
@@ -1564,7 +1585,7 @@ func TestHybridSearch_ANNQueryErrorPropagates(t *testing.T) {
 
 // TestHybridSearch_PassesActiveProviderToRepoEmbeddingMethods proves
 // EmbeddingsForDocs/SampleEmbeddings/TopSemanticMatches are all called
-// with whichever provider opValues.EmbeddingProvider currently names as
+// with whichever provider opValues.EmbeddingSearchWeights currently names as
 // active -- not a hardcoded value -- so a search reads the right stored
 // vectors even when hash and a configured HTTP endpoint are both enabled
 // simultaneously and the endpoint happens to be the active one.
@@ -1581,19 +1602,130 @@ func TestHybridSearch_PassesActiveProviderToRepoEmbeddingMethods(t *testing.T) {
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
-		EmbeddingProvider: activeProvider,
-		ANNSearchEnabled:  true,
+		EmbeddingSearchWeights: map[string]float64{activeProvider: 1},
+		ANNSearchEnabled:       true,
 	})
 
-	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), opSettings, nil, domain.NewCorpusStatsCache(2, 10), nil)
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{activeProvider: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), opSettings, nil, domain.NewCorpusStatsCache(2, 10), nil)
 	if _, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if repo.embeddingsForDocsProvider != activeProvider {
-		t.Errorf("expected EmbeddingsForDocs called with the active provider %q, got %q", activeProvider, repo.embeddingsForDocsProvider)
+	if want := []string{activeProvider}; !reflect.DeepEqual(repo.embeddingsForDocsProviders, want) {
+		t.Errorf("expected EmbeddingsForDocs called with the active provider %q, got %v", activeProvider, repo.embeddingsForDocsProviders)
 	}
-	if repo.topSemanticMatchesProvider != activeProvider {
-		t.Errorf("expected TopSemanticMatches called with the active provider %q, got %q", activeProvider, repo.topSemanticMatchesProvider)
+	if want := []string{activeProvider}; !reflect.DeepEqual(repo.topSemanticMatchesProviders, want) {
+		t.Errorf("expected TopSemanticMatches called with the active provider %q, got %v", activeProvider, repo.topSemanticMatchesProviders)
+	}
+}
+
+// TestHybridSearch_WeightedBlendAcrossMultipleProviders proves the
+// weighted-sum-of-per-provider-similarity-scores blend actually combines
+// two independently-queried providers, rather than reading one provider's
+// vectors for every active provider: p1 and p2 use different vector
+// dimensions (2 and 3) -- proving different embedding models' incompatible
+// vector spaces are never blended directly, only their scores are -- and
+// are weighted equally. Doc "both" matches both providers' query vector
+// (cosine similarity 1 in each), so its blended semantic score is 1; docs
+// "p1-only"/"p2-only" each match only one provider (similarity 1 there, 0
+// -- a missing embedding for the other active provider -- in the other),
+// so their blended score is 0.5. "both" must outrank both ties.
+func TestHybridSearch_WeightedBlendAcrossMultipleProviders(t *testing.T) {
+	repo := &fakeSQLRepo{
+		postings: map[string][]domain.PostingStats{"widgets": {}},
+		docs: map[string]domain.Document{
+			"both":    {ID: "both", URL: "http://a"},
+			"p1-only": {ID: "p1-only", URL: "http://b"},
+			"p2-only": {ID: "p2-only", URL: "http://c"},
+		},
+		embeddingsByProvider: map[string]map[string][]float32{
+			"p1": {
+				"both":    {1, 0},
+				"p1-only": {1, 0},
+				"p2-only": {0, 1},
+			},
+			"p2": {
+				"both":    {1, 0, 0},
+				"p2-only": {1, 0, 0},
+				"p1-only": {0, 1, 0},
+			},
+		},
+	}
+	embedders := map[string]ports.EmbeddingProvider{
+		"p1": &fakeEmbedder{vec: []float32{1, 0}},
+		"p2": &fakeEmbedder{vec: []float32{1, 0, 0}},
+	}
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
+		EmbeddingSearchWeights: map[string]float64{"p1": 1, "p2": 1},
+	})
+	svc := application.NewHybridSearchService(repo, embedders, domain.NewTuningSettings(0, domain.DefaultBM25K1, domain.DefaultBM25B), opSettings, nil, domain.NewCorpusStatsCache(3, 10), nil)
+
+	results, err := svc.Search(context.Background(), "widgets", ports.SearchQuery{TopK: 10})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected all 3 candidates scored, got %d: %+v", len(results), results)
+	}
+	if results[0].DocID != "both" || results[0].SemanticSim != 1 {
+		t.Errorf("expected doc \"both\" to rank first with a blended semantic score of 1, got %+v", results[0])
+	}
+	for _, r := range results[1:] {
+		if r.SemanticSim != 0.5 {
+			t.Errorf("expected %q's blended semantic score to be 0.5 (matches only one of two equally-weighted providers), got %v", r.DocID, r.SemanticSim)
+		}
+	}
+	for _, want := range []string{"p1", "p2"} {
+		if !containsString(repo.embeddingsForDocsProviders, want) {
+			t.Errorf("expected EmbeddingsForDocs called for provider %q, got %v", want, repo.embeddingsForDocsProviders)
+		}
+	}
+}
+
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
+
+// TestHybridSearch_PerRequestProviderWeightsOverrideAdminDefault proves
+// ports.SearchQuery.ProviderWeights fully replaces the admin-configured
+// default for that one request, rather than blending with it -- the same
+// "the param replaces, it doesn't blend" convention TopK's query param
+// already follows. The admin default weights only "p1"; the request
+// overrides to weight only "p2" instead, so a doc that only matches p2
+// must be found even though it's absent from the admin default entirely.
+func TestHybridSearch_PerRequestProviderWeightsOverrideAdminDefault(t *testing.T) {
+	repo := &fakeSQLRepo{
+		postings: map[string][]domain.PostingStats{"widgets": {}},
+		docs: map[string]domain.Document{
+			"p2-match": {ID: "p2-match", URL: "http://a"},
+		},
+		embeddingsByProvider: map[string]map[string][]float32{
+			"p1": {},
+			"p2": {"p2-match": {1, 0}},
+		},
+	}
+	embedders := map[string]ports.EmbeddingProvider{
+		"p1": &fakeEmbedder{vec: []float32{1, 0}},
+		"p2": &fakeEmbedder{vec: []float32{1, 0}},
+	}
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
+		EmbeddingSearchWeights: map[string]float64{"p1": 1},
+	})
+	svc := application.NewHybridSearchService(repo, embedders, domain.NewTuningSettings(0, domain.DefaultBM25K1, domain.DefaultBM25B), opSettings, nil, domain.NewCorpusStatsCache(1, 10), nil)
+
+	results, err := svc.Search(context.Background(), "widgets", ports.SearchQuery{TopK: 10, ProviderWeights: map[string]float64{"p2": 1}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 || results[0].DocID != "p2-match" || results[0].SemanticSim != 1 {
+		t.Errorf("expected the request's ProviderWeights override to search p2 instead of the admin default's p1, got %+v", results)
+	}
+	if containsString(repo.embeddingsForDocsProviders, "p1") {
+		t.Errorf("expected the admin default provider p1 to never be queried once the request overrides ProviderWeights, got %v", repo.embeddingsForDocsProviders)
 	}
 }

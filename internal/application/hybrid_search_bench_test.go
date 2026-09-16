@@ -204,8 +204,8 @@ func BenchmarkHybridSearch_Combine(b *testing.B) {
 		corpusStats := domain.NewCorpusStatsCache(n, 120)
 
 		for _, c := range cases {
-			opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{SemanticCandidatePoolSize: c.size(n)})
-			svc := application.NewHybridSearchService(repo, embedder, settings, opSettings, nil, corpusStats, nil)
+			opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{SemanticCandidatePoolSize: c.size(n), EmbeddingSearchWeights: map[string]float64{domain.EmbeddingProviderHash: 1}})
+			svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, settings, opSettings, nil, corpusStats, nil)
 			b.Run(fmt.Sprintf("Docs=%d/%s", n, c.label), func(b *testing.B) {
 				ctx := context.Background()
 				b.ReportAllocs()

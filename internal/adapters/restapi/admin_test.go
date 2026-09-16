@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1463,6 +1464,31 @@ func TestHandleAdminSearch_UnrecognizedSortFallsBackToRelevance(t *testing.T) {
 	}
 }
 
+func TestHandleAdminSearch_SemanticParamParsesWeightedPairs(t *testing.T) {
+	fd := &fakeDebugSearch{}
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, fd)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/search?q=katzen&semantic=hash:0.3,ionos:0.7", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	want := map[string]float64{"hash": 0.3, "ionos": 0.7}
+	if !reflect.DeepEqual(fd.gotOpts.ProviderWeights, want) {
+		t.Errorf("expected ProviderWeights %+v, got %+v", want, fd.gotOpts.ProviderWeights)
+	}
+}
+
+func TestHandleAdminSearch_AbsentSemanticParamLeavesProviderWeightsNil(t *testing.T) {
+	fd := &fakeDebugSearch{}
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, fd)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/search?q=katzen", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if fd.gotOpts.ProviderWeights != nil {
+		t.Errorf("expected no ?semantic= param to leave ProviderWeights nil (admin default used), got %+v", fd.gotOpts.ProviderWeights)
+	}
+}
+
 func TestHandleAdminSearch_NotConfigured(t *testing.T) {
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, nil)
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/search?q=katzen", nil)
@@ -2451,7 +2477,7 @@ func TestHandleAdminSettings_EmbeddingHashEnabledFieldRoundTrips(t *testing.T) {
 		"operational": map[string]interface{}{
 			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
 			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
-			"embedding_hash_enabled": false, "embedding_provider": "hash",
+			"embedding_hash_enabled": false,
 		},
 	})
 	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
@@ -2466,12 +2492,12 @@ func TestHandleAdminSettings_EmbeddingHashEnabledFieldRoundTrips(t *testing.T) {
 	}
 }
 
-// TestHandleAdminSettings_EmbeddingProviderReconciledAgainstNonexistentEndpoint
-// proves domain.ReconcileActiveProvider's self-healing is actually
-// reachable through the HTTP API: posting an embedding_provider naming an
+// TestHandleAdminSettings_EmbeddingSearchWeightsReconciledAgainstNonexistentEndpoint
+// proves domain.ReconcileSearchWeights's self-healing is actually reachable
+// through the HTTP API: posting an embedding_search_weights entry naming an
 // endpoint that isn't configured (deleted, mistyped, or simply invented)
-// comes back as hash.
-func TestHandleAdminSettings_EmbeddingProviderReconciledAgainstNonexistentEndpoint(t *testing.T) {
+// comes back as {hash: 1}.
+func TestHandleAdminSettings_EmbeddingSearchWeightsReconciledAgainstNonexistentEndpoint(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	opSettings := domain.DefaultOperationalSettings()
 	repo := newSettingsStoreTestRepo(t)
@@ -2485,7 +2511,7 @@ func TestHandleAdminSettings_EmbeddingProviderReconciledAgainstNonexistentEndpoi
 		"operational": map[string]interface{}{
 			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
 			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
-			"embedding_hash_enabled": true, "embedding_provider": "some-deleted-endpoint",
+			"embedding_hash_enabled": true, "embedding_search_weights": map[string]float64{"some-deleted-endpoint": 1},
 		},
 	})
 	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
@@ -2495,15 +2521,15 @@ func TestHandleAdminSettings_EmbeddingProviderReconciledAgainstNonexistentEndpoi
 	if postRec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
 	}
-	if ov := opSettings.Get(); ov.EmbeddingProvider != domain.EmbeddingProviderHash {
-		t.Errorf("expected an embedding_provider naming a nonexistent endpoint to self-heal to hash, got %q", ov.EmbeddingProvider)
+	if ov := opSettings.Get(); len(ov.EmbeddingSearchWeights) != 1 || ov.EmbeddingSearchWeights[domain.EmbeddingProviderHash] != 1 {
+		t.Errorf("expected weights naming a nonexistent endpoint to self-heal to {hash: 1}, got %+v", ov.EmbeddingSearchWeights)
 	}
 }
 
-// TestHandleAdminSettings_EmbeddingProviderReconciliationPreservesEnabledEndpoint
+// TestHandleAdminSettings_EmbeddingSearchWeightsReconciliationPreservesEnabledEndpoint
 // proves the reconciliation doesn't clobber a genuinely valid, currently-
-// enabled endpoint choice.
-func TestHandleAdminSettings_EmbeddingProviderReconciliationPreservesEnabledEndpoint(t *testing.T) {
+// enabled endpoint's weight.
+func TestHandleAdminSettings_EmbeddingSearchWeightsReconciliationPreservesEnabledEndpoint(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	opSettings := domain.DefaultOperationalSettings()
 	repo := newSettingsStoreTestRepo(t)
@@ -2522,7 +2548,7 @@ func TestHandleAdminSettings_EmbeddingProviderReconciliationPreservesEnabledEndp
 		"operational": map[string]interface{}{
 			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
 			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
-			"embedding_provider": "ionos",
+			"embedding_search_weights": map[string]float64{"ionos": 1},
 		},
 	})
 	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
@@ -2532,8 +2558,8 @@ func TestHandleAdminSettings_EmbeddingProviderReconciliationPreservesEnabledEndp
 	if postRec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
 	}
-	if ov := opSettings.Get(); ov.EmbeddingProvider != "ionos" {
-		t.Errorf("expected the enabled endpoint to stay active, got %q", ov.EmbeddingProvider)
+	if ov := opSettings.Get(); len(ov.EmbeddingSearchWeights) != 1 || ov.EmbeddingSearchWeights["ionos"] != 1 {
+		t.Errorf("expected the enabled endpoint's weight to stay active, got %+v", ov.EmbeddingSearchWeights)
 	}
 }
 

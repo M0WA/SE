@@ -71,59 +71,65 @@ func TestNewEmbeddingEndpointID_NeverCollidesWithReservedHash(t *testing.T) {
 	}
 }
 
-func TestReconcileActiveProvider_HashActiveAndEnabledStays(t *testing.T) {
-	got := domain.ReconcileActiveProvider(domain.EmbeddingProviderHash, true, nil)
-	if got != domain.EmbeddingProviderHash {
-		t.Errorf("expected hash to stay active when enabled, got %q", got)
+func TestReconcileSearchWeights_HashWeightedAndEnabledSurvives(t *testing.T) {
+	got := domain.ReconcileSearchWeights(map[string]float64{domain.EmbeddingProviderHash: 1}, true, nil)
+	if got[domain.EmbeddingProviderHash] != 1 || len(got) != 1 {
+		t.Errorf("expected hash's weight to survive unchanged, got %+v", got)
 	}
 }
 
-func TestReconcileActiveProvider_HashActiveButDisabledFallsBackToEnabledEndpoint(t *testing.T) {
-	endpoints := []domain.EmbeddingHTTPEndpoint{{ID: "ionos", Enabled: true}}
-	got := domain.ReconcileActiveProvider(domain.EmbeddingProviderHash, false, endpoints)
-	if got != "ionos" {
-		t.Errorf("expected fallback to the one enabled endpoint, got %q", got)
+func TestReconcileSearchWeights_MultipleEnabledProvidersAllSurvive(t *testing.T) {
+	endpoints := []domain.EmbeddingHTTPEndpoint{{ID: "ionos", Enabled: true}, {ID: "local", Enabled: true}}
+	weights := map[string]float64{domain.EmbeddingProviderHash: 0.5, "ionos": 0.3, "local": 0.2}
+	got := domain.ReconcileSearchWeights(weights, true, endpoints)
+	if len(got) != 3 || got[domain.EmbeddingProviderHash] != 0.5 || got["ionos"] != 0.3 || got["local"] != 0.2 {
+		t.Errorf("expected every enabled provider's weight preserved, got %+v", got)
 	}
 }
 
-func TestReconcileActiveProvider_EnabledEndpointStaysActive(t *testing.T) {
-	endpoints := []domain.EmbeddingHTTPEndpoint{{ID: "ionos", Enabled: true}}
-	got := domain.ReconcileActiveProvider("ionos", true, endpoints)
-	if got != "ionos" {
-		t.Errorf("expected the enabled endpoint to stay active even with hash also enabled, got %q", got)
-	}
-}
-
-func TestReconcileActiveProvider_DisabledEndpointFallsBackToHash(t *testing.T) {
+func TestReconcileSearchWeights_DisabledEntryDropped(t *testing.T) {
 	endpoints := []domain.EmbeddingHTTPEndpoint{{ID: "ionos", Enabled: false}}
-	got := domain.ReconcileActiveProvider("ionos", true, endpoints)
-	if got != domain.EmbeddingProviderHash {
-		t.Errorf("expected a disabled endpoint to self-heal to hash, got %q", got)
+	weights := map[string]float64{domain.EmbeddingProviderHash: 0.5, "ionos": 0.5}
+	got := domain.ReconcileSearchWeights(weights, true, endpoints)
+	if len(got) != 1 || got[domain.EmbeddingProviderHash] != 0.5 {
+		t.Errorf("expected the disabled endpoint's weight dropped, hash's preserved, got %+v", got)
 	}
 }
 
-func TestReconcileActiveProvider_DeletedEndpointFallsBackToHash(t *testing.T) {
-	got := domain.ReconcileActiveProvider("some-deleted-id", true, nil)
-	if got != domain.EmbeddingProviderHash {
-		t.Errorf("expected a deleted/unknown endpoint ID to self-heal to hash, got %q", got)
+func TestReconcileSearchWeights_HashDisabledEntryDropped(t *testing.T) {
+	endpoints := []domain.EmbeddingHTTPEndpoint{{ID: "ionos", Enabled: true}}
+	weights := map[string]float64{domain.EmbeddingProviderHash: 0.5, "ionos": 0.5}
+	got := domain.ReconcileSearchWeights(weights, false, endpoints)
+	if len(got) != 1 || got["ionos"] != 0.5 {
+		t.Errorf("expected hash's weight dropped once hash is disabled, ionos's preserved, got %+v", got)
 	}
 }
 
-func TestReconcileActiveProvider_DeletedEndpointFallsBackToFirstEnabledWhenHashDisabled(t *testing.T) {
+func TestReconcileSearchWeights_EmptyFallsBackToHashWhenEnabled(t *testing.T) {
+	got := domain.ReconcileSearchWeights(nil, true, nil)
+	if len(got) != 1 || got[domain.EmbeddingProviderHash] != 1 {
+		t.Errorf("expected fallback to {hash: 1}, got %+v", got)
+	}
+}
+
+func TestReconcileSearchWeights_EveryEntryDroppedFallsBackToFirstEnabledEndpoint(t *testing.T) {
 	endpoints := []domain.EmbeddingHTTPEndpoint{{ID: "a", Enabled: false}, {ID: "b", Enabled: true}}
-	got := domain.ReconcileActiveProvider("some-deleted-id", false, endpoints)
-	if got != "b" {
-		t.Errorf("expected fallback to the first enabled endpoint, got %q", got)
+	// Names only disabled/deleted providers -- nothing survives reconciliation.
+	weights := map[string]float64{"some-deleted-id": 1, "a": 1}
+	got := domain.ReconcileSearchWeights(weights, false, endpoints)
+	if len(got) != 1 || got["b"] != 1 {
+		t.Errorf("expected fallback to {b: 1}, got %+v", got)
 	}
 }
 
-// TestReconcileActiveProvider_NothingEnabledFallsBackToHashAnyway proves the
+// TestReconcileSearchWeights_NothingEnabledFallsBackToHashAnyway proves the
 // degenerate case (hash disabled, no endpoint enabled) still returns a
-// non-empty, well-known value rather than an empty string -- search finds
-// nothing either way, but callers never have to special-case "" downstream.
-func TestReconcileActiveProvider_NothingEnabledFallsBackToHashAnyway(t *testing.T) {
-	got := domain.ReconcileActiveProvider("anything", false, nil)
-	if got != domain.EmbeddingProviderHash {
-		t.Errorf("expected the degenerate nothing-enabled case to still return hash, got %q", got)
+// non-empty, well-known map rather than one that's empty -- search finds
+// nothing either way, but callers never have to special-case an empty map
+// downstream.
+func TestReconcileSearchWeights_NothingEnabledFallsBackToHashAnyway(t *testing.T) {
+	got := domain.ReconcileSearchWeights(map[string]float64{"anything": 1}, false, nil)
+	if len(got) != 1 || got[domain.EmbeddingProviderHash] != 1 {
+		t.Errorf("expected the degenerate nothing-enabled case to still return {hash: 1}, got %+v", got)
 	}
 }
