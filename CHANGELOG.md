@@ -1,5 +1,18 @@
 # Changelog
 
+## v4.0.40 - 2026-09-16
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Declare browser-rendering runtime library dependencies for the .deb package by @M0WA in https://github.com/M0WA/SE/pull/70
+* Fix multi-row admin forms rendering as a cramped row instead of a stacked list by @M0WA in https://github.com/M0WA/SE/pull/71
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.0.39...v4.0.40
+
+
 ## v4.0.39 - 2026-09-16
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
