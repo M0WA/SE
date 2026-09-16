@@ -51,7 +51,7 @@ func TestSyncSettings_AppliesStoredTuningOnStartup(t *testing.T) {
 	}
 
 	tuning := domain.NewTuningSettings(0.5, 1.2, 0.75)
-	bootstrap.SyncSettings(syncContext(t), repo, tuning, nil, nil, nil)
+	bootstrap.SyncSettings(syncContext(t), repo, tuning, nil, nil, nil, nil)
 
 	alpha, k1, b := tuning.Get()
 	if alpha != 0.9 || k1 != 2.0 || b != 0.3 {
@@ -71,11 +71,57 @@ func TestSyncSettings_AppliesStoredOperationalOnStartup(t *testing.T) {
 	}
 
 	op := domain.DefaultOperationalSettings()
-	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, nil)
+	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, nil, nil)
 
 	got := op.Get()
 	if got.UserAgent != "stored-agent" || got.DefaultMaxPages != 42 || got.CrawlDelayMs != 10 {
 		t.Errorf("expected the stored operational values to be applied, got %+v", got)
+	}
+}
+
+// TestSyncSettings_ReconcilesEmbeddingProviderAgainstLiveEndpoints proves
+// the choke point domain.ReconcileActiveProvider is meant to run at: a
+// stored EmbeddingProvider naming an endpoint that's since been disabled
+// (or deleted) is self-healed back to hash on the very next sync tick,
+// same as it used to be self-healed inside OperationalSettings.Set before
+// provider validity depended on a dynamically configured table.
+func TestSyncSettings_ReconcilesEmbeddingProviderAgainstLiveEndpoints(t *testing.T) {
+	repo := newTestRepo(t)
+	stored := domain.OperationalSettingsValues{EmbeddingHashEnabled: true, EmbeddingProvider: "gone"}
+	data, _ := json.Marshal(stored)
+	if err := repo.SaveSetting(context.Background(), ports.SettingsKeyOperational, string(data)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	op := domain.DefaultOperationalSettings()
+	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, nil, repo)
+
+	if got := op.Get().EmbeddingProvider; got != domain.EmbeddingProviderHash {
+		t.Errorf("expected EmbeddingProvider naming a nonexistent endpoint to self-heal to hash, got %q", got)
+	}
+}
+
+// TestSyncSettings_ReconciliationPreservesAnEnabledEndpoint proves the
+// reconciliation doesn't clobber a genuinely valid, currently-enabled
+// endpoint choice.
+func TestSyncSettings_ReconciliationPreservesAnEnabledEndpoint(t *testing.T) {
+	repo := newTestRepo(t)
+	if err := repo.CreateEmbeddingEndpoint(context.Background(), domain.EmbeddingHTTPEndpoint{
+		ID: "ionos", Name: "IONOS", BaseURL: "https://example.com", Model: "m", Dimensions: 4, Enabled: true,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	stored := domain.OperationalSettingsValues{EmbeddingProvider: "ionos"}
+	data, _ := json.Marshal(stored)
+	if err := repo.SaveSetting(context.Background(), ports.SettingsKeyOperational, string(data)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	op := domain.DefaultOperationalSettings()
+	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, nil, repo)
+
+	if got := op.Get().EmbeddingProvider; got != "ionos" {
+		t.Errorf("expected the enabled endpoint to stay active, got %q", got)
 	}
 }
 
@@ -88,7 +134,7 @@ func TestSyncSettings_AppliesStoredOverridesOnStartup(t *testing.T) {
 	}
 
 	overrides := domain.DefaultRankingOverrides()
-	bootstrap.SyncSettings(syncContext(t), repo, nil, nil, overrides, nil)
+	bootstrap.SyncSettings(syncContext(t), repo, nil, nil, overrides, nil, nil)
 
 	got := overrides.Get()
 	if len(got.BlockedTerms) != 1 || got.BlockedTerms[0] != "casino" {
@@ -102,7 +148,7 @@ func TestSyncSettings_LeavesDefaultsWhenNothingStored(t *testing.T) {
 	op := domain.DefaultOperationalSettings()
 	overrides := domain.DefaultRankingOverrides()
 
-	bootstrap.SyncSettings(syncContext(t), repo, tuning, op, overrides, nil)
+	bootstrap.SyncSettings(syncContext(t), repo, tuning, op, overrides, nil, nil)
 
 	alpha, k1, b := tuning.Get()
 	if alpha != 0.5 || k1 != 1.2 || b != 0.75 {
@@ -140,7 +186,7 @@ func TestSyncSettings_GetSettingErrorLeavesDefaults(t *testing.T) {
 	store := &fakeSettingsStore{getErr: errors.New("db unavailable")}
 	tuning := domain.NewTuningSettings(0.5, 1.2, 0.75)
 
-	bootstrap.SyncSettings(syncContext(t), store, tuning, nil, nil, nil)
+	bootstrap.SyncSettings(syncContext(t), store, tuning, nil, nil, nil, nil)
 
 	if alpha, k1, b := tuning.Get(); alpha != 0.5 || k1 != 1.2 || b != 0.75 {
 		t.Errorf("expected tuning untouched on a GetSetting error, got (%v, %v, %v)", alpha, k1, b)
@@ -154,7 +200,7 @@ func TestSyncSettings_MalformedStoredValueLeavesDefaults(t *testing.T) {
 	store := &fakeSettingsStore{rawJSON: "{not valid json", found: true}
 	tuning := domain.NewTuningSettings(0.5, 1.2, 0.75)
 
-	bootstrap.SyncSettings(syncContext(t), store, tuning, nil, nil, nil)
+	bootstrap.SyncSettings(syncContext(t), store, tuning, nil, nil, nil, nil)
 
 	if alpha, k1, b := tuning.Get(); alpha != 0.5 || k1 != 1.2 || b != 0.75 {
 		t.Errorf("expected tuning untouched on a malformed stored value, got (%v, %v, %v)", alpha, k1, b)
@@ -169,7 +215,7 @@ func TestSyncSettings_NilInstancesAreSkipped(t *testing.T) {
 	}
 	// Passing nil for every instance must not panic (e.g. crawl-server has
 	// no tuning/overrides instance at all).
-	bootstrap.SyncSettings(syncContext(t), repo, nil, nil, nil, nil)
+	bootstrap.SyncSettings(syncContext(t), repo, nil, nil, nil, nil, nil)
 }
 
 // fakePoolConfigurer records every ConfigurePool call it receives, so tests
@@ -200,7 +246,7 @@ func TestSyncSettings_AppliesPoolSettingsOnStartup(t *testing.T) {
 
 	op := domain.DefaultOperationalSettings()
 	pool := &fakePoolConfigurer{}
-	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, pool)
+	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, pool, nil)
 
 	if len(pool.calls) != 1 {
 		t.Fatalf("expected exactly one ConfigurePool call, got %d", len(pool.calls))
@@ -215,7 +261,7 @@ func TestSyncSettings_ReappliesPoolSettingsOnLaterPoll(t *testing.T) {
 	repo := newTestRepo(t)
 	op := domain.DefaultOperationalSettings()
 	pool := &fakePoolConfigurer{}
-	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, pool)
+	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, pool, nil)
 	if len(pool.calls) != 1 {
 		t.Fatalf("expected one ConfigurePool call after startup, got %d", len(pool.calls))
 	}
@@ -225,7 +271,7 @@ func TestSyncSettings_ReappliesPoolSettingsOnLaterPoll(t *testing.T) {
 	if err := repo.SaveSetting(context.Background(), ports.SettingsKeyOperational, string(data)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, pool)
+	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, pool, nil)
 
 	if len(pool.calls) != 2 {
 		t.Fatalf("expected a second ConfigurePool call simulating the next poll tick, got %d", len(pool.calls))
@@ -240,7 +286,7 @@ func TestSyncSettings_NilPoolConfigurerIsSkipped(t *testing.T) {
 	repo := newTestRepo(t)
 	op := domain.DefaultOperationalSettings()
 	// Must not panic when no pool is supplied.
-	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, nil)
+	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, nil, nil)
 }
 
 func TestSyncSettings_ReReadsOnEachCall(t *testing.T) {
@@ -251,7 +297,7 @@ func TestSyncSettings_ReReadsOnEachCall(t *testing.T) {
 	if err := repo.SaveSetting(context.Background(), ports.SettingsKeyTuning, string(first)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	bootstrap.SyncSettings(syncContext(t), repo, tuning, nil, nil, nil)
+	bootstrap.SyncSettings(syncContext(t), repo, tuning, nil, nil, nil, nil)
 	if alpha, _, _ := tuning.Get(); alpha != 0.6 {
 		t.Fatalf("expected alpha 0.6 after first sync, got %v", alpha)
 	}
@@ -260,7 +306,7 @@ func TestSyncSettings_ReReadsOnEachCall(t *testing.T) {
 	if err := repo.SaveSetting(context.Background(), ports.SettingsKeyTuning, string(second)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	bootstrap.SyncSettings(syncContext(t), repo, tuning, nil, nil, nil)
+	bootstrap.SyncSettings(syncContext(t), repo, tuning, nil, nil, nil, nil)
 	if alpha, _, _ := tuning.Get(); alpha != 0.7 {
 		t.Errorf("expected a later SyncSettings call (simulating the next poll tick) to pick up the new value, got %v", alpha)
 	}

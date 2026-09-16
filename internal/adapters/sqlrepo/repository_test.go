@@ -429,7 +429,7 @@ func TestSaveDocument_StoresBothProvidersIndependently(t *testing.T) {
 	doc := domain.Document{ID: "doc-1", URL: "http://a", Title: "Cats", Text: "Cats are great pets"}
 	embeddings := map[string][]float32{
 		domain.EmbeddingProviderHash: {1, 0, 0},
-		domain.EmbeddingProviderHTTP: {0, 1, 0, 0},
+		"http":                       {0, 1, 0, 0},
 	}
 	if err := repo.SaveDocument(ctx, doc, embeddings, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -443,7 +443,7 @@ func TestSaveDocument_StoresBothProvidersIndependently(t *testing.T) {
 		t.Errorf("expected the hash provider's own vector back, got %v", got)
 	}
 
-	httpResult, err := repo.EmbeddingsForDocs(ctx, []string{"doc-1"}, domain.EmbeddingProviderHTTP)
+	httpResult, err := repo.EmbeddingsForDocs(ctx, []string{"doc-1"}, "http")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestSaveDocument_UpdatingOneProviderLeavesTheOtherUntouched(t *testing.T) {
 	doc := domain.Document{ID: "doc-1", URL: "http://a", Title: "Cats", Text: "Cats are great pets"}
 	if err := repo.SaveDocument(ctx, doc, map[string][]float32{
 		domain.EmbeddingProviderHash: {1, 0},
-		domain.EmbeddingProviderHTTP: {0, 1},
+		"http":                       {0, 1},
 	}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -476,7 +476,7 @@ func TestSaveDocument_UpdatingOneProviderLeavesTheOtherUntouched(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	httpResult, err := repo.EmbeddingsForDocs(ctx, []string{"doc-1"}, domain.EmbeddingProviderHTTP)
+	httpResult, err := repo.EmbeddingsForDocs(ctx, []string{"doc-1"}, "http")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -495,7 +495,7 @@ func TestUpdateEmbedding_UpdatesOnlyTheGivenProviders(t *testing.T) {
 	doc := domain.Document{ID: "doc-1", URL: "http://a", Title: "Cats", Text: "Cats are great pets"}
 	if err := repo.SaveDocument(ctx, doc, map[string][]float32{
 		domain.EmbeddingProviderHash: {1, 0},
-		domain.EmbeddingProviderHTTP: {0, 1},
+		"http":                       {0, 1},
 	}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -511,7 +511,7 @@ func TestUpdateEmbedding_UpdatesOnlyTheGivenProviders(t *testing.T) {
 	if got := hashResult["doc-1"].Vector; len(got) != 2 || got[0] != 9 {
 		t.Errorf("expected the hash provider's vector updated, got %v", got)
 	}
-	httpResult, err := repo.EmbeddingsForDocs(ctx, []string{"doc-1"}, domain.EmbeddingProviderHTTP)
+	httpResult, err := repo.EmbeddingsForDocs(ctx, []string{"doc-1"}, "http")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

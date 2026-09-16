@@ -11,13 +11,7 @@ function baseSettings(operationalOverrides) {
   return {
     operational: Object.assign({
       embedding_hash_enabled: true,
-      embedding_http_enabled: false,
       embedding_provider: 'hash',
-      embedding_http_base_url: '',
-      embedding_http_model: '',
-      embedding_http_dimensions: 256,
-      embedding_http_api_key_set: false,
-      embedding_rate_limit_per_second: 5,
       embedding_title_weight: 0.3,
     }, operationalOverrides),
   };
@@ -40,6 +34,7 @@ function loadFixture(fetchImpl) {
   Object.assign(global, adminHelpers);
   global.fetch = fetchImpl || (async (url) => {
     if (url === '/admin/api/settings') return { ok: true, json: async () => baseSettings() };
+    if (url === '/admin/api/embeddings/endpoints') return { ok: true, json: async () => [] };
     return { ok: true, json: async () => baseEmbeddingStatus() };
   });
   return requireFresh('./admin_embeddings.js');
@@ -53,6 +48,7 @@ test.afterEach(() => {
 test('load() fetches config and recompute status on page load', async () => {
   loadFixture(async (url) => {
     if (url === '/admin/api/settings') return { ok: true, json: async () => baseSettings() };
+    if (url === '/admin/api/embeddings/endpoints') return { ok: true, json: async () => [] };
     return { ok: true, json: async () => baseEmbeddingStatus({ total_docs: 42 }) };
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -67,82 +63,71 @@ function kvValuesByKey(container) {
   return values;
 }
 
-test('renderConfig shows only hash enabled, without http-only fields, when http is disabled', () => {
+test('activeProviderLabel names the hash provider', () => {
+  const { activeProviderLabel } = loadFixture();
+  assert.equal(activeProviderLabel('hash', []), 'Hash (dependency-free)');
+});
+
+test('activeProviderLabel names a matching endpoint by name and id', () => {
+  const { activeProviderLabel } = loadFixture();
+  const endpoints = [{ id: 'ionos_bge_m3', name: 'IONOS bge-m3' }];
+  assert.equal(activeProviderLabel('ionos_bge_m3', endpoints), 'IONOS bge-m3 (ionos_bge_m3)');
+});
+
+test('activeProviderLabel falls back to the raw id when no endpoint matches (e.g. a deleted one)', () => {
+  const { activeProviderLabel } = loadFixture();
+  assert.equal(activeProviderLabel('gone', []), 'gone');
+});
+
+test('renderConfig shows only hash enabled when no endpoints are configured', () => {
   const { renderConfig } = loadFixture();
-  renderConfig(baseSettings());
+  renderConfig(baseSettings().operational, []);
   const values = kvValuesByKey(document.getElementById('embeddings-config'));
   assert.equal(values['Enabled providers'], 'hash');
   assert.equal(values['Active for search'], 'Hash (dependency-free)');
-  assert.equal('Base URL' in values, false);
-  assert.equal(values['Rate limit'].includes('req/s'), true);
+  assert.equal(values['HTTP endpoints configured'], '0');
   assert.equal(values['Title weight'].includes('0.3'), true);
 });
 
-test('renderConfig shows http provider fields including base URL, model, dimensions, and api key state', () => {
+test('renderConfig lists every enabled endpoint by name alongside hash', () => {
   const { renderConfig } = loadFixture();
-  const baseURL = 'https://openai.inference.de-txl.ionos.com/v1';
-  renderConfig(baseSettings({
-    embedding_hash_enabled: false,
-    embedding_http_enabled: true,
-    embedding_provider: 'http',
-    embedding_http_base_url: baseURL,
-    embedding_http_model: 'BAAI/bge-m3',
-    embedding_http_dimensions: 1024,
-    embedding_http_api_key_set: true,
-    embedding_rate_limit_per_second: 5,
-    embedding_title_weight: 0.25,
-  }));
+  const endpoints = [
+    { id: 'ionos', name: 'IONOS bge-m3', enabled: true },
+    { id: 'local', name: 'Local Ollama', enabled: false },
+  ];
+  renderConfig(baseSettings({ embedding_provider: 'ionos' }).operational, endpoints);
   const values = kvValuesByKey(document.getElementById('embeddings-config'));
-  assert.equal(values['Enabled providers'], 'http');
-  assert.equal(values['Active for search'], 'HTTP (trained model)');
-  assert.equal(values['Base URL'], baseURL);
-  assert.equal(values.Model, 'BAAI/bge-m3');
-  assert.equal(values.Dimensions, '1024');
-  assert.equal(values['API key'], 'configured');
-  assert.equal(values['Title weight'], '0.25 (0 = body only, 1 = title only)');
+  assert.equal(values['Enabled providers'], 'hash, IONOS bge-m3');
+  assert.equal(values['Active for search'], 'IONOS bge-m3 (ionos)');
+  assert.equal(values['HTTP endpoints configured'], '2');
 });
 
-// TestRenderConfig proves both providers can be enabled at once, and that
-// the http-only fields still show even though hash is the one active for
-// search -- the whole point of this feature: HTTP stays kept warm without
-// needing to be the active provider.
-test('renderConfig shows both providers enabled, with http fields visible, even when hash is active', () => {
+test('renderConfig shows "none" for enabled providers when hash is disabled and no endpoint is enabled', () => {
   const { renderConfig } = loadFixture();
-  renderConfig(baseSettings({
-    embedding_hash_enabled: true,
-    embedding_http_enabled: true,
-    embedding_provider: 'hash',
-    embedding_http_base_url: 'https://example.com/v1',
-  }));
+  const endpoints = [{ id: 'local', name: 'Local Ollama', enabled: false }];
+  renderConfig(baseSettings({ embedding_hash_enabled: false }).operational, endpoints);
   const values = kvValuesByKey(document.getElementById('embeddings-config'));
-  assert.equal(values['Enabled providers'], 'hash, http');
-  assert.equal(values['Active for search'], 'Hash (dependency-free)');
-  assert.equal(values['Base URL'], 'https://example.com/v1');
+  assert.equal(values['Enabled providers'], 'none');
 });
 
-test('renderConfig shows "(not set)" for an unconfigured http base URL, model, and unconfigured api key', () => {
-  const { renderConfig } = loadFixture();
-  renderConfig(baseSettings({
-    embedding_http_enabled: true,
-    embedding_provider: 'http',
-    embedding_http_base_url: '',
-    embedding_http_model: '',
-    embedding_http_dimensions: 256,
-    embedding_http_api_key_set: false,
-    embedding_rate_limit_per_second: 5,
-  }));
-  const text = document.getElementById('embeddings-config').textContent;
-  assert.equal(text.includes('(not set)'), true);
-  assert.equal(text.includes('not configured'), true);
-});
-
-test('loadConfig reports the error message on a failed fetch', async () => {
+test('loadConfig reports the error message on a failed settings fetch', async () => {
   loadFixture(async (url) => {
     if (url === '/admin/api/settings') return { ok: false, status: 500, text: async () => 'db down' };
+    if (url === '/admin/api/embeddings/endpoints') return { ok: true, json: async () => [] };
     return { ok: true, json: async () => baseEmbeddingStatus() };
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(document.getElementById('embeddings-config').textContent.includes('db down'), true);
+});
+
+test('loadConfig reports the error message on a failed endpoints fetch', async () => {
+  loadFixture(async (url) => {
+    if (url === '/admin/api/settings') return { ok: true, json: async () => baseSettings() };
+    if (url === '/admin/api/embeddings/endpoints') return { ok: false, status: 500, text: async () => 'endpoints down' };
+    return { ok: true, json: async () => baseEmbeddingStatus() };
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('embeddings-config').textContent.includes('endpoints down'), true);
 });
 
 test('renderRecomputeStatus shows "no recompute yet" when this instance has never run one', () => {
@@ -193,6 +178,7 @@ test('renderRecomputeStatus schedules exactly one poll while in progress, and cl
 test('loadRecomputeStatus reports the error message on a failed fetch', async () => {
   loadFixture(async (url) => {
     if (url === '/admin/api/settings') return { ok: true, json: async () => baseSettings() };
+    if (url === '/admin/api/embeddings/endpoints') return { ok: true, json: async () => [] };
     return { ok: false, status: 500, text: async () => 'job store down' };
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -246,83 +232,4 @@ test('clicking Recompute embeddings reports the error and stops the button loadi
     'Could not start recompute: an embedding recompute is already in progress',
   );
   assert.equal(document.getElementById('embeddings-recompute-btn').disabled, false);
-});
-
-test('clicking List available models renders each returned model', async () => {
-  loadFixture();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  global.fetch = async (url) => {
-    if (url === '/admin/api/embeddings/models') {
-      return { ok: true, json: async () => ({ models: ['BAAI/bge-m3', 'text-embedding-3-small'] }) };
-    }
-    return { ok: true, json: async () => ({}) };
-  };
-  document.getElementById('embeddings-models-btn').dispatchEvent(new window.Event('click'));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(document.getElementById('embeddings-models-status').textContent, '2 model(s) available from this endpoint.');
-  const resultText = document.getElementById('embeddings-models-result').textContent;
-  assert.equal(resultText.includes('BAAI/bge-m3'), true);
-  assert.equal(resultText.includes('text-embedding-3-small'), true);
-  assert.equal(document.getElementById('embeddings-models-btn').disabled, false);
-});
-
-test('clicking List available models shows a message when none are reported', async () => {
-  loadFixture();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  global.fetch = async (url) => {
-    if (url === '/admin/api/embeddings/models') return { ok: true, json: async () => ({ models: [] }) };
-    return { ok: true, json: async () => ({}) };
-  };
-  document.getElementById('embeddings-models-btn').dispatchEvent(new window.Event('click'));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(
-    document.getElementById('embeddings-models-status').textContent.includes('No models reported'),
-    true,
-  );
-});
-
-test('clicking List available models shows the endpoint-reported error', async () => {
-  loadFixture();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  global.fetch = async (url) => {
-    if (url === '/admin/api/embeddings/models') return { ok: true, json: async () => ({ error: 'unauthorized' }) };
-    return { ok: true, json: async () => ({}) };
-  };
-  document.getElementById('embeddings-models-btn').dispatchEvent(new window.Event('click'));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(document.getElementById('embeddings-models-status').textContent, 'Could not list models: unauthorized');
-  assert.equal(document.getElementById('embeddings-models-btn').disabled, false);
-});
-
-test('clicking List available models shows the empty message when the models field is missing entirely', async () => {
-  loadFixture();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  global.fetch = async (url) => {
-    if (url === '/admin/api/embeddings/models') return { ok: true, json: async () => ({}) };
-    return { ok: true, json: async () => ({}) };
-  };
-  document.getElementById('embeddings-models-btn').dispatchEvent(new window.Event('click'));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(
-    document.getElementById('embeddings-models-status').textContent.includes('No models reported'),
-    true,
-  );
-});
-
-test('clicking List available models reports a network/fetch failure', async () => {
-  loadFixture();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  global.fetch = async (url) => {
-    if (url === '/admin/api/embeddings/models') return { ok: false, status: 500, text: async () => 'internal error' };
-    return { ok: true, json: async () => ({}) };
-  };
-  document.getElementById('embeddings-models-btn').dispatchEvent(new window.Event('click'));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(document.getElementById('embeddings-models-status').textContent.includes('internal error'), true);
-  assert.equal(document.getElementById('embeddings-models-btn').disabled, false);
 });

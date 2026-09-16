@@ -621,32 +621,15 @@ type operationalValues struct {
 	// indexed token stream, ahead of its body -- see
 	// domain.OperationalSettingsValues for the full doc comment.
 	TitleWeight int `json:"title_weight"`
-	// EmbeddingHashEnabled/EmbeddingHTTPEnabled/EmbeddingProvider/
-	// EmbeddingHTTPBaseURL/EmbeddingHTTPModel/EmbeddingHTTPDimensions
-	// mirror the same-named domain.OperationalSettingsValues fields -- see
-	// there for the full doc comment, including why the two Enabled flags
-	// require a process restart to take effect and why EmbeddingProvider
-	// must name one of them.
-	EmbeddingHashEnabled    bool   `json:"embedding_hash_enabled"`
-	EmbeddingHTTPEnabled    bool   `json:"embedding_http_enabled"`
-	EmbeddingProvider       string `json:"embedding_provider"`
-	EmbeddingHTTPBaseURL    string `json:"embedding_http_base_url"`
-	EmbeddingHTTPModel      string `json:"embedding_http_model"`
-	EmbeddingHTTPDimensions int    `json:"embedding_http_dimensions"`
-	// EmbeddingHTTPAPIKey is write-only: toOperationalValues always sends
-	// "" here regardless of what's actually configured, so a GET response
-	// never leaks the stored key. A POST that leaves this blank doesn't
-	// clear the configured key either -- see
-	// domain.OperationalSettings.Set's doc comment. EmbeddingHTTPAPIKeySet
-	// (GET-only; a POST's value for it is ignored) reports whether a key
-	// is currently configured, so the admin UI can reflect that without
-	// ever seeing the key itself.
-	EmbeddingHTTPAPIKey    string `json:"embedding_http_api_key,omitempty"`
-	EmbeddingHTTPAPIKeySet bool   `json:"embedding_http_api_key_set,omitempty"`
-	// EmbeddingRateLimitPerSecond mirrors the same-named
-	// domain.OperationalSettingsValues field -- see there for the full
-	// doc comment.
-	EmbeddingRateLimitPerSecond int `json:"embedding_rate_limit_per_second"`
+	// EmbeddingHashEnabled/EmbeddingProvider mirror the same-named
+	// domain.OperationalSettingsValues fields -- see there for the full
+	// doc comment, including why EmbeddingHashEnabled requires a process
+	// restart to take effect and why EmbeddingProvider must name a
+	// currently-enabled provider. Every configured HTTP endpoint is
+	// managed separately via GET/POST /admin/api/embeddings/endpoints,
+	// not through this settings payload.
+	EmbeddingHashEnabled bool   `json:"embedding_hash_enabled"`
+	EmbeddingProvider    string `json:"embedding_provider"`
 	// EmbeddingTitleWeight mirrors the same-named
 	// domain.OperationalSettingsValues field -- see there for the full
 	// doc comment.
@@ -677,13 +660,7 @@ func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 		MaxDocumentVersions:              v.MaxDocumentVersions,
 		TitleWeight:                      v.TitleWeight,
 		EmbeddingHashEnabled:             v.EmbeddingHashEnabled,
-		EmbeddingHTTPEnabled:             v.EmbeddingHTTPEnabled,
 		EmbeddingProvider:                v.EmbeddingProvider,
-		EmbeddingHTTPBaseURL:             v.EmbeddingHTTPBaseURL,
-		EmbeddingHTTPModel:               v.EmbeddingHTTPModel,
-		EmbeddingHTTPDimensions:          v.EmbeddingHTTPDimensions,
-		EmbeddingHTTPAPIKeySet:           v.EmbeddingHTTPAPIKey != "",
-		EmbeddingRateLimitPerSecond:      v.EmbeddingRateLimitPerSecond,
 		EmbeddingTitleWeight:             v.EmbeddingTitleWeight,
 	}
 }
@@ -712,13 +689,7 @@ func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 		MaxDocumentVersions:              o.MaxDocumentVersions,
 		TitleWeight:                      o.TitleWeight,
 		EmbeddingHashEnabled:             o.EmbeddingHashEnabled,
-		EmbeddingHTTPEnabled:             o.EmbeddingHTTPEnabled,
 		EmbeddingProvider:                o.EmbeddingProvider,
-		EmbeddingHTTPBaseURL:             o.EmbeddingHTTPBaseURL,
-		EmbeddingHTTPAPIKey:              o.EmbeddingHTTPAPIKey,
-		EmbeddingHTTPModel:               o.EmbeddingHTTPModel,
-		EmbeddingHTTPDimensions:          o.EmbeddingHTTPDimensions,
-		EmbeddingRateLimitPerSecond:      o.EmbeddingRateLimitPerSecond,
 		EmbeddingTitleWeight:             o.EmbeddingTitleWeight,
 	}
 }
@@ -726,20 +697,10 @@ func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 type settingsResponse struct {
 	Tuning      tuningValues      `json:"tuning"`
 	Operational operationalValues `json:"operational"`
-	// EmbeddingTestError is set only by a POST that leaves the embedding
-	// provider configured as EmbeddingProviderHTTP (see
-	// testEmbeddingConnectivity) -- a GET never populates it. The save
-	// itself still succeeds either way (see OperationalSettings.Set's doc
-	// comment on why this is a best-effort convenience, not a rejected
-	// submission): this only tells the admin their new HTTP endpoint/
-	// model/API key combination doesn't actually work, since that
-	// otherwise wouldn't surface until the next real search request long
-	// after the settings page was closed.
-	EmbeddingTestError string `json:"embedding_test_error,omitempty"`
 }
 
-// embeddingConnectivityTestTimeout bounds a single probe call against the
-// configured HTTP embedding provider -- testEmbeddingConnectivity's Embed
+// embeddingConnectivityTestTimeout bounds a single probe call against a
+// candidate HTTP embedding endpoint -- testEmbeddingConnectivity's Embed
 // call and handleAdminEmbeddingsModels' ListModels call alike -- short
 // enough that a hung/unreachable endpoint doesn't stall the request for
 // too long, generous enough for a real (if slow) inference call to finish.
@@ -754,40 +715,57 @@ type modelLister interface {
 	ListModels(ctx context.Context) ([]string, error)
 }
 
+// embeddingCandidateRequest is a not-yet-saved HTTP endpoint config --
+// handleAdminEmbeddingsModels and handleAdminEmbeddingsTest both probe
+// exactly this shape, so the admin's "Test connection"/"List models"
+// buttons on the endpoint add/edit subpage work against whatever's
+// currently typed into the form, before (or instead of) saving it.
+type embeddingCandidateRequest struct {
+	BaseURL    string `json:"base_url"`
+	APIKey     string `json:"api_key"`
+	Model      string `json:"model"`
+	Dimensions int    `json:"dimensions"`
+}
+
+func (req embeddingCandidateRequest) toEndpoint() domain.EmbeddingHTTPEndpoint {
+	return domain.EmbeddingHTTPEndpoint{BaseURL: req.BaseURL, APIKey: req.APIKey, Model: req.Model, Dimensions: req.Dimensions}
+}
+
 type adminEmbeddingModelsResponse struct {
 	Models []string `json:"models"`
-	// Error is set when the provider is "http" and a base URL is
-	// configured, but the ListModels call itself fails (bad credentials,
-	// endpoint doesn't implement /models, network error) -- a soft
-	// failure the admin Settings page shows as "couldn't fetch model
-	// list," not a hard error, since the model field always stays usable
-	// as free text either way.
+	// Error is set when base_url is non-empty but the ListModels call
+	// itself fails (bad credentials, endpoint doesn't implement /models,
+	// network error) -- a soft failure the admin UI shows as "couldn't
+	// fetch model list," not a hard error, since the model field always
+	// stays usable as free text either way.
 	Error string `json:"error,omitempty"`
 }
 
-// handleAdminEmbeddingsModels lists the models the currently-configured
-// HTTP embedding endpoint reports (GET {base_url}/models), so the Settings
-// page can prefill the model field's suggestions instead of the admin
-// having to already know (or guess/mistype) a valid model ID. Uses the
-// live, saved opSettings -- including its real, plaintext API key -- the
-// same way testEmbeddingConnectivity does, so this reuses whatever
-// credentials are already configured rather than asking the admin to
-// resupply them just to list models. Returns an empty list (200, no
-// error) rather than attempting a call at all when no base URL is
-// configured yet, or the http provider isn't enabled -- there's nothing to
-// ask. Gated on EmbeddingHTTPEnabled, not EmbeddingProvider (which one is
-// active for search): listing models is meaningful whenever http is being
-// computed at all, even while hash is the one actually active.
+// handleAdminEmbeddingsModels lists the models a candidate HTTP endpoint
+// config (in the request body, not yet saved) reports (GET
+// {base_url}/models), so the endpoint add/edit subpage can prefill the
+// model field's suggestions instead of the admin having to already know
+// (or guess/mistype) a valid model ID. Returns an empty list (200, no
+// error) rather than attempting a call at all when base_url is blank --
+// there's nothing to ask. Unlike most admin endpoints, this has no
+// "not configured" state to gate on: h.newEmbedder is always set by New
+// (defaulting to bootstrap.NewHTTPEmbedder), since probing a candidate
+// endpoint has no optional cross-cutting dependency the way, say,
+// ScheduledCrawls does.
 func (h *Handler) handleAdminEmbeddingsModels(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.opSettings != nil && h.newEmbedder != nil, "embedding models") {
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-	v := h.opSettings.Get()
-	if !v.EmbeddingHTTPEnabled || v.EmbeddingHTTPBaseURL == "" {
+	var req embeddingCandidateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if req.BaseURL == "" {
 		writeJSON(w, http.StatusOK, adminEmbeddingModelsResponse{})
 		return
 	}
-	lister, ok := h.newEmbedder(v).(modelLister)
+	lister, ok := h.newEmbedder(req.toEndpoint()).(modelLister)
 	if !ok {
 		writeJSON(w, http.StatusOK, adminEmbeddingModelsResponse{Error: "this provider doesn't support listing models"})
 		return
@@ -802,25 +780,44 @@ func (h *Handler) handleAdminEmbeddingsModels(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, adminEmbeddingModelsResponse{Models: models})
 }
 
-// testEmbeddingConnectivity makes one real Embed call (via h.newEmbedder --
-// bootstrap.NewEmbedder in production, faked out in tests) against v's
-// currently-configured HTTP embedding provider so a settings save can tell
-// the admin immediately if the endpoint/model/API key they just entered
-// doesn't actually work, rather than that only surfacing on the next real
-// search. A no-op (empty string, no network call) when the http provider
-// isn't enabled (EmbeddingHTTPEnabled) -- the hash provider can't fail
-// this way, and there's no HTTP config to test if it's disabled even when
-// EmbeddingProvider still happens to name it as active (self-healed away
-// on the next Set anyway, see domain.OperationalSettings.Set) -- or when
-// h.newEmbedder itself isn't set (a Handler built without going through
-// New, e.g. a test fixture that doesn't care about this feature).
-func (h *Handler) testEmbeddingConnectivity(ctx context.Context, v domain.OperationalSettingsValues) string {
-	if !v.EmbeddingHTTPEnabled || h.newEmbedder == nil {
+type adminEmbeddingTestResponse struct {
+	// Error is empty on a successful connection test.
+	Error string `json:"error,omitempty"`
+}
+
+// handleAdminEmbeddingsTest makes one real Embed call (via h.newEmbedder --
+// bootstrap.NewHTTPEmbedder in production, faked out in tests) against a
+// candidate HTTP endpoint config (in the request body, not yet saved) so
+// the endpoint add/edit subpage can tell the admin immediately if the
+// base URL/model/API key they just entered doesn't actually work, rather
+// than that only surfacing on the next real search or recompute. See
+// handleAdminEmbeddingsModels' doc comment for why there's no "not
+// configured" gate here.
+func (h *Handler) handleAdminEmbeddingsTest(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	var req embeddingCandidateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, adminEmbeddingTestResponse{Error: h.testEmbeddingConnectivity(r.Context(), req.toEndpoint())})
+}
+
+// testEmbeddingConnectivity makes one real Embed call (via h.newEmbedder)
+// against e so a caller can tell immediately if a base URL/model/API key
+// combination doesn't actually work. A no-op (empty string, no network
+// call) when e.BaseURL is blank, or h.newEmbedder itself isn't set (a
+// Handler built without going through New, e.g. a test fixture that
+// doesn't care about this feature).
+func (h *Handler) testEmbeddingConnectivity(ctx context.Context, e domain.EmbeddingHTTPEndpoint) string {
+	if e.BaseURL == "" || h.newEmbedder == nil {
 		return ""
 	}
 	testCtx, cancel := context.WithTimeout(ctx, embeddingConnectivityTestTimeout)
 	defer cancel()
-	if _, err := h.newEmbedder(v).Embed(testCtx, "connection test"); err != nil {
+	if _, err := h.newEmbedder(e).Embed(testCtx, "connection test"); err != nil {
 		return err.Error()
 	}
 	return ""
@@ -846,21 +843,216 @@ func (h *Handler) persistSetting(ctx context.Context, key string, v interface{})
 	}
 }
 
-// encryptedOperationalValues returns h.opSettings' current values with
-// EmbeddingHTTPAPIKey sealed via settingscrypto (a no-op passthrough when
-// h.settingsEncryptionKey is nil -- see Encrypt's doc comment), for
-// persistSetting to save. The in-memory h.opSettings itself is left
-// untouched -- this process still needs the real plaintext key for its own
-// use (see bootstrap.NewEmbedder), only the persisted copy is protected.
-func (h *Handler) encryptedOperationalValues() domain.OperationalSettingsValues {
-	v := h.opSettings.Get()
-	enc, err := settingscrypto.Encrypt(h.settingsEncryptionKey, v.EmbeddingHTTPAPIKey)
-	if err != nil {
-		log.Printf("encrypting embedding API key: %v", err)
-		return v
+type embeddingEndpointRequest struct {
+	Name               string  `json:"name"`
+	BaseURL            string  `json:"base_url"`
+	APIKey             string  `json:"api_key"`
+	Model              string  `json:"model"`
+	Dimensions         int     `json:"dimensions"`
+	RateLimitPerSecond float64 `json:"rate_limit_per_second"`
+	Enabled            bool    `json:"enabled"`
+	// ClearAPIKey is meaningful only to handleAdminUpdateEmbeddingEndpoint
+	// (PATCH): since a GET response never echoes a stored key's real value
+	// (see embeddingEndpointResponse), an edit form has no way to
+	// distinguish "the admin left this blank because they don't want to
+	// change it" from "the admin wants to remove it" -- APIKey left blank
+	// means the former (preserve whatever's already stored); this explicit
+	// flag is how the admin asks for the latter instead. Ignored by
+	// handleAdminEmbeddingEndpoints' POST, which has no prior key to
+	// preserve or clear in the first place.
+	ClearAPIKey bool `json:"clear_api_key"`
+}
+
+type embeddingEndpointResponse struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	BaseURL string `json:"base_url"`
+	// HasAPIKey reports only whether a key is set, never its value -- same
+	// redacted-summary treatment scheduledCrawlResponse already gives a
+	// schedule's stored credentials.
+	HasAPIKey          bool      `json:"has_api_key"`
+	Model              string    `json:"model"`
+	Dimensions         int       `json:"dimensions"`
+	RateLimitPerSecond float64   `json:"rate_limit_per_second"`
+	Enabled            bool      `json:"enabled"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+
+func toEmbeddingEndpointResponse(e domain.EmbeddingHTTPEndpoint) embeddingEndpointResponse {
+	return embeddingEndpointResponse{
+		ID: e.ID, Name: e.Name, BaseURL: e.BaseURL, HasAPIKey: e.APIKey != "",
+		Model: e.Model, Dimensions: e.Dimensions, RateLimitPerSecond: e.RateLimitPerSecond,
+		Enabled: e.Enabled, CreatedAt: e.CreatedAt,
 	}
-	v.EmbeddingHTTPAPIKey = enc
-	return v
+}
+
+func validateEmbeddingEndpointRequest(w http.ResponseWriter, req embeddingEndpointRequest) bool {
+	if req.Name == "" {
+		http.Error(w, "name must not be empty", http.StatusBadRequest)
+		return false
+	}
+	if req.BaseURL == "" {
+		http.Error(w, "base_url must not be empty", http.StatusBadRequest)
+		return false
+	}
+	if req.Dimensions <= 0 {
+		http.Error(w, "dimensions must be positive", http.StatusBadRequest)
+		return false
+	}
+	if req.RateLimitPerSecond < 0 {
+		http.Error(w, "rate_limit_per_second must not be negative", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// encryptAPIKey seals apiKey via settingscrypto for storage (a no-op
+// passthrough when h.settingsEncryptionKey is nil, or apiKey is already
+// empty -- see Encrypt's doc comment).
+func (h *Handler) encryptAPIKey(apiKey string) string {
+	enc, err := settingscrypto.Encrypt(h.settingsEncryptionKey, apiKey)
+	if err != nil {
+		log.Printf("encrypting embedding endpoint API key: %v", err)
+		return apiKey
+	}
+	return enc
+}
+
+// handleAdminEmbeddingEndpoints lists (GET) or creates (POST) HTTP
+// embedding endpoint configs -- see domain.EmbeddingHTTPEndpoint. A
+// freshly created endpoint's ID is minted from its name (see
+// domain.NewEmbeddingEndpointID), deduped against every existing endpoint
+// ID plus the reserved "hash" (the built-in provider's own ID), so it can
+// never collide with either.
+func (h *Handler) handleAdminEmbeddingEndpoints(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.embeddingEndpoints != nil, "embedding endpoints") {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		endpoints, err := h.embeddingEndpoints.ListEmbeddingEndpoints(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		out := make([]embeddingEndpointResponse, len(endpoints))
+		for i, e := range endpoints {
+			out[i] = toEmbeddingEndpointResponse(e)
+		}
+		writeJSON(w, http.StatusOK, out)
+	case http.MethodPost:
+		var req embeddingEndpointRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		if !validateEmbeddingEndpointRequest(w, req) {
+			return
+		}
+		existing, err := h.embeddingEndpoints.ListEmbeddingEndpoints(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		existingIDs := map[string]bool{domain.EmbeddingProviderHash: true}
+		for _, e := range existing {
+			existingIDs[e.ID] = true
+		}
+		e := domain.EmbeddingHTTPEndpoint{
+			ID:   domain.NewEmbeddingEndpointID(req.Name, existingIDs),
+			Name: req.Name, BaseURL: req.BaseURL, APIKey: h.encryptAPIKey(req.APIKey),
+			Model: req.Model, Dimensions: req.Dimensions, RateLimitPerSecond: req.RateLimitPerSecond,
+			Enabled: req.Enabled, CreatedAt: time.Now().UTC(),
+		}
+		if err := h.embeddingEndpoints.CreateEmbeddingEndpoint(r.Context(), e); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusCreated, toEmbeddingEndpointResponse(e))
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *Handler) handleAdminGetEmbeddingEndpoint(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.embeddingEndpoints != nil, "embedding endpoints") {
+		return
+	}
+	e, err := h.embeddingEndpoints.GetEmbeddingEndpoint(r.Context(), r.PathValue("id"))
+	respondOrNotFound(w, err, ports.ErrEmbeddingEndpointNotFound, "embedding endpoint not found", toEmbeddingEndpointResponse(e))
+}
+
+// handleAdminUpdateEmbeddingEndpoint replaces an endpoint's editable fields
+// -- name, base URL, model, dimensions, rate limit, enabled. APIKey is the
+// one exception to "PATCH is a full replace": since a GET response never
+// echoes its real value, a blank submission means "leave it as it was,"
+// not "clear it" -- req.ClearAPIKey is the explicit way to actually remove
+// it instead. The endpoint's ID is never editable once created (it's baked
+// into document_embeddings.provider and the ANN column/index names for
+// every vector already stored under it).
+func (h *Handler) handleAdminUpdateEmbeddingEndpoint(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.embeddingEndpoints != nil, "embedding endpoints") {
+		return
+	}
+	var req embeddingEndpointRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if !validateEmbeddingEndpointRequest(w, req) {
+		return
+	}
+	id := r.PathValue("id")
+	existing, err := h.embeddingEndpoints.GetEmbeddingEndpoint(r.Context(), id)
+	if err != nil {
+		respondOrNotFound(w, err, ports.ErrEmbeddingEndpointNotFound, "embedding endpoint not found", nil)
+		return
+	}
+	apiKey := existing.APIKey
+	if req.APIKey != "" {
+		apiKey = h.encryptAPIKey(req.APIKey)
+	} else if req.ClearAPIKey {
+		apiKey = ""
+	}
+	e := domain.EmbeddingHTTPEndpoint{
+		ID: id, Name: req.Name, BaseURL: req.BaseURL, APIKey: apiKey,
+		Model: req.Model, Dimensions: req.Dimensions, RateLimitPerSecond: req.RateLimitPerSecond,
+		Enabled: req.Enabled, CreatedAt: existing.CreatedAt,
+	}
+	err = h.embeddingEndpoints.UpdateEmbeddingEndpoint(r.Context(), e)
+	respondOrNotFound(w, err, ports.ErrEmbeddingEndpointNotFound, "embedding endpoint not found", toEmbeddingEndpointResponse(e))
+}
+
+func (h *Handler) handleAdminDeleteEmbeddingEndpoint(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.embeddingEndpoints != nil, "embedding endpoints") {
+		return
+	}
+	err := h.embeddingEndpoints.DeleteEmbeddingEndpoint(r.Context(), r.PathValue("id"))
+	respondOrNotFound(w, err, ports.ErrEmbeddingEndpointNotFound, "embedding endpoint not found", map[string]bool{"ok": true})
+}
+
+func (h *Handler) handleAdminEmbeddingEndpointPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminEmbeddingEndpointHTML)
+}
+
+func (h *Handler) handleAdminEmbeddingEndpointsPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminEmbeddingEndpointsHTML)
+}
+
+// currentEmbeddingEndpoints lists every configured HTTP embedding endpoint,
+// or an empty slice if h.embeddingEndpoints isn't configured or the list
+// fails -- the same "degrade gracefully, never fail the caller over this"
+// convention used throughout this file for optional dependencies.
+func (h *Handler) currentEmbeddingEndpoints(ctx context.Context) []domain.EmbeddingHTTPEndpoint {
+	if h.embeddingEndpoints == nil {
+		return nil
+	}
+	endpoints, err := h.embeddingEndpoints.ListEmbeddingEndpoints(ctx)
+	if err != nil {
+		log.Printf("listing embedding endpoints: %v", err)
+		return nil
+	}
+	return endpoints
 }
 
 func (h *Handler) currentSettings() settingsResponse {
@@ -886,12 +1078,12 @@ func (h *Handler) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		h.settings.Set(req.Tuning.Alpha, req.Tuning.K1, req.Tuning.B)
 		h.settings.SetPageRankWeight(req.Tuning.PageRankWeight)
-		h.opSettings.Set(req.Operational.toSettingsValues())
+		v := req.Operational.toSettingsValues()
+		v.EmbeddingProvider = domain.ReconcileActiveProvider(v.EmbeddingProvider, v.EmbeddingHashEnabled, h.currentEmbeddingEndpoints(r.Context()))
+		h.opSettings.Set(v)
 		h.persistSetting(r.Context(), ports.SettingsKeyTuning, h.settings.Values())
-		h.persistSetting(r.Context(), ports.SettingsKeyOperational, h.encryptedOperationalValues())
-		resp := h.currentSettings()
-		resp.EmbeddingTestError = h.testEmbeddingConnectivity(r.Context(), h.opSettings.Get())
-		writeJSON(w, http.StatusOK, resp)
+		h.persistSetting(r.Context(), ports.SettingsKeyOperational, h.opSettings.Get())
+		writeJSON(w, http.StatusOK, h.currentSettings())
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -1510,7 +1702,7 @@ func (h *Handler) handleAdminEmbeddingsRecomputeStart(w http.ResponseWriter, r *
 	v := h.opSettings.Get()
 	go func() {
 		ctx := context.Background()
-		if _, err := application.RunEmbeddingRecomputeJobWithStatus(ctx, h.embeddingRepo, h.embedders, h.settingsStore, v.EmbeddingRateLimitPerSecond, v.EmbeddingTitleWeight); err != nil {
+		if _, err := application.RunEmbeddingRecomputeJobWithStatus(ctx, h.embeddingRepo, h.embedders, h.settingsStore, h.embedderRateLimits, v.EmbeddingTitleWeight); err != nil {
 			log.Printf("recomputing embeddings: %v", err)
 		}
 	}()

@@ -17,21 +17,20 @@ import (
 const EmbeddingRecomputeBatchSize = 50
 
 // embedRateLimitInterval converts ratePerSecond (see
-// domain.OperationalSettingsValues.EmbeddingRateLimitPerSecond)
-// into the minimum interval paceEmbedCall enforces between Embed calls --
-// pacing this job so it stays within a typical HTTP embeddings provider's
-// rate limit rather than firing every document's call back-to-back as
-// fast as this loop naturally would. This matters even with
-// httpembed.Embedder's own retry-on-429/529 backoff: a rate-limited
-// response returns near-instantly (no real inference work done), so an
-// unthrottled loop can spin through a rate-limit condition far faster
-// than any real embedding call ever would, compounding it instead of
-// self-correcting. ratePerSecond <= 0 disables pacing entirely (interval
-// 0) -- domain.OperationalSettings.Set never actually produces that in
-// production (it self-heals to a positive default), but tests exercising
-// RunEmbeddingRecomputeJob's other behavior rely on being able to opt out
-// of real waits this way.
-func embedRateLimitInterval(ratePerSecond int) time.Duration {
+// domain.EmbeddingHTTPEndpoint.RateLimitPerSecond) into the minimum
+// interval paceEmbedCall enforces between Embed calls -- pacing this job so
+// it stays within a typical HTTP embeddings provider's rate limit rather
+// than firing every document's call back-to-back as fast as this loop
+// naturally would. This matters even with httpembed.Embedder's own
+// retry-on-429/529 backoff: a rate-limited response returns near-instantly
+// (no real inference work done), so an unthrottled loop can spin through a
+// rate-limit condition far faster than any real embedding call ever would,
+// compounding it instead of self-correcting. ratePerSecond <= 0 disables
+// pacing entirely (interval 0) -- the built-in hash provider, or an HTTP
+// endpoint configured with no rate limit of its own (e.g. a local Ollama
+// server), and tests exercising RunEmbeddingRecomputeJob's other behavior
+// rely on being able to opt out of real waits this way.
+func embedRateLimitInterval(ratePerSecond float64) time.Duration {
 	if ratePerSecond <= 0 {
 		return 0
 	}
@@ -77,20 +76,22 @@ type EmbeddingRecomputeResult struct {
 // harmful than aborting a recompute that's otherwise most of the way
 // through a large corpus.
 //
-// ratePerSecond (see
-// domain.OperationalSettingsValues.EmbeddingRateLimitPerSecond)
-// paces Embed calls to that rate -- see embedRateLimitInterval.
-// titleWeight (see domain.OperationalSettingsValues.EmbeddingTitleWeight)
-// blends each document's title into its recomputed vector the same way
+// rateLimits gives each provider in embedders its own requests-per-second
+// cap (domain.EmbeddingHTTPEndpoint.RateLimitPerSecond; a provider absent
+// from this map, e.g. the built-in hash provider, is treated as
+// unlimited) -- see embedRateLimitInterval. titleWeight (see
+// domain.OperationalSettingsValues.EmbeddingTitleWeight) blends each
+// document's title into its recomputed vector the same way
 // sqlCrawlerService.Crawl does at crawl time -- see embedTitleWeighted.
 // embedders holds one ports.EmbeddingProvider per currently-enabled
-// provider (see domain.OperationalSettingsValues.EmbeddingHashEnabled/
-// EmbeddingHTTPEnabled) -- every document gets a freshly recomputed vector
-// for every one of them, not just whichever is currently active for
-// search, so switching which one is active never needs a second recompute.
-func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepository, embedders map[string]ports.EmbeddingProvider, ratePerSecond int, titleWeight float64) (EmbeddingRecomputeResult, error) {
-	interval := embedRateLimitInterval(ratePerSecond)
-	embedFor := func(embedder ports.EmbeddingProvider) func(context.Context, string) ([]float32, error) {
+// provider (see domain.OperationalSettingsValues.EmbeddingHashEnabled and
+// every enabled domain.EmbeddingHTTPEndpoint) -- every document gets a
+// freshly recomputed vector for every one of them, not just whichever is
+// currently active for search, so switching which one is active never
+// needs a second recompute.
+func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepository, embedders map[string]ports.EmbeddingProvider, rateLimits map[string]float64, titleWeight float64) (EmbeddingRecomputeResult, error) {
+	embedFor := func(provider string, embedder ports.EmbeddingProvider) func(context.Context, string) ([]float32, error) {
+		interval := embedRateLimitInterval(rateLimits[provider])
 		return func(ctx context.Context, s string) ([]float32, error) {
 			embedStart := time.Now()
 			vec, err := embedder.Embed(ctx, s)
@@ -124,7 +125,7 @@ func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepositor
 			embeddings := make(map[string][]float32, len(embedders))
 			var embedErr error
 			for provider, embedder := range embedders {
-				vec, err := embedTitleWeighted(ctx, embedFor(embedder), doc.Title, doc.Text, titleWeight)
+				vec, err := embedTitleWeighted(ctx, embedFor(provider, embedder), doc.Title, doc.Text, titleWeight)
 				if err != nil {
 					log.Printf("recomputing %s embedding for %s: %v", provider, id, err)
 					embedErr = err
@@ -163,13 +164,13 @@ func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepositor
 // caller: recomputing a real corpus means one Embed call per document,
 // each a network round-trip against an HTTP embeddings endpoint, so the
 // whole run can easily take minutes -- see handleAdminEmbeddingsRecompute.
-func RunEmbeddingRecomputeJobWithStatus(ctx context.Context, repo ports.EmbeddingRepository, embedders map[string]ports.EmbeddingProvider, settings ports.SettingsStore, ratePerSecond int, titleWeight float64) (EmbeddingRecomputeResult, error) {
+func RunEmbeddingRecomputeJobWithStatus(ctx context.Context, repo ports.EmbeddingRepository, embedders map[string]ports.EmbeddingProvider, settings ports.SettingsStore, rateLimits map[string]float64, titleWeight float64) (EmbeddingRecomputeResult, error) {
 	start := time.Now()
 	status := LoadEmbeddingRecomputeStatus(ctx, settings)
 	status.InProgress = true
 	saveEmbeddingRecomputeStatus(ctx, settings, status)
 
-	result, err := RunEmbeddingRecomputeJob(ctx, repo, embedders, ratePerSecond, titleWeight)
+	result, err := RunEmbeddingRecomputeJob(ctx, repo, embedders, rateLimits, titleWeight)
 
 	status.InProgress = false
 	if err == nil {

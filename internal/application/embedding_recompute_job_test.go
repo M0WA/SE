@@ -14,11 +14,11 @@ import (
 )
 
 // noRateLimit is passed to RunEmbeddingRecomputeJob(WithStatus) by every
-// test that isn't specifically exercising pacing -- 0 disables it
-// entirely (see embedRateLimitInterval's doc comment), so a test
-// processing many documents (the batching test alone processes over 100)
-// never waits out a real per-document delay.
-const noRateLimit = 0
+// test that isn't specifically exercising pacing -- a nil map means every
+// provider is treated as unlimited (see embedRateLimitInterval's doc
+// comment), so a test processing many documents (the batching test alone
+// processes over 100) never waits out a real per-document delay.
+var noRateLimit map[string]float64
 
 // noTitleWeight is passed to RunEmbeddingRecomputeJob(WithStatus) by every
 // test that isn't specifically exercising title/body blending -- 0
@@ -236,7 +236,7 @@ func TestRunEmbeddingRecomputeJob_EmptyCorpusIsANoop(t *testing.T) {
 // docs.ionos.com/cloud/ai/ai-model-hub/how-tos/rate-limits) instead of
 // flooding it.
 func TestRunEmbeddingRecomputeJob_PacesEmbedCalls(t *testing.T) {
-	const ratePerSecond = 20 // 50ms/call
+	ratePerSecond := map[string]float64{domain.EmbeddingProviderHash: 20} // 50ms/call
 	repo := &fakeEmbeddingRepo{
 		ids: []string{"a", "b", "c"},
 		docs: map[string]domain.Document{
@@ -261,7 +261,7 @@ func TestRunEmbeddingRecomputeJob_PacesEmbedCalls(t *testing.T) {
 // took at least as long as the configured interval -- pacing should never
 // make an already-slow provider slower.
 func TestRunEmbeddingRecomputeJob_NoExtraWaitWhenEmbedAlreadySlow(t *testing.T) {
-	const ratePerSecond = 100 // 10ms/call
+	ratePerSecond := map[string]float64{domain.EmbeddingProviderHash: 100} // 10ms/call
 	repo := &fakeEmbeddingRepo{ids: []string{"a"}, docs: map[string]domain.Document{"a": {ID: "a", Text: "x"}}}
 	slowEmbedder := &fakeRecomputeEmbedder{delay: 100 * time.Millisecond}
 	start := time.Now()
@@ -365,7 +365,7 @@ func TestRunEmbeddingRecomputeJob_RecomputesEveryEnabledProviderNotJustOne(t *te
 	}
 	embedders := map[string]ports.EmbeddingProvider{
 		domain.EmbeddingProviderHash: &fakeRecomputeEmbedder{},
-		domain.EmbeddingProviderHTTP: &textAwareRecomputeEmbedder{vecByText: map[string][]float32{"hello": {9, 9, 9, 9}}},
+		"http":                       &textAwareRecomputeEmbedder{vecByText: map[string][]float32{"hello": {9, 9, 9, 9}}},
 	}
 
 	result, err := application.RunEmbeddingRecomputeJob(context.Background(), repo, embedders, noRateLimit, noTitleWeight)
@@ -379,7 +379,7 @@ func TestRunEmbeddingRecomputeJob_RecomputesEveryEnabledProviderNotJustOne(t *te
 	if got := saved[domain.EmbeddingProviderHash]; len(got) != 3 {
 		t.Errorf("expected the hash provider's own vector recomputed, got %v", got)
 	}
-	if got := saved[domain.EmbeddingProviderHTTP]; len(got) != 4 || got[0] != 9 {
+	if got := saved["http"]; len(got) != 4 || got[0] != 9 {
 		t.Errorf("expected the http provider's own (differently-shaped) vector recomputed too, got %v", got)
 	}
 }

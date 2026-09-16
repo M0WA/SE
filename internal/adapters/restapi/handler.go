@@ -54,6 +54,12 @@ var adminPageRankHTML []byte
 //go:embed admin_embeddings.html
 var adminEmbeddingsHTML []byte
 
+//go:embed admin_embedding_endpoints.html
+var adminEmbeddingEndpointsHTML []byte
+
+//go:embed admin_embedding_endpoint.html
+var adminEmbeddingEndpointHTML []byte
+
 //go:embed admin_database.html
 var adminDatabaseHTML []byte
 
@@ -86,6 +92,12 @@ var adminPageRankJS []byte
 //go:embed admin_embeddings.js
 var adminEmbeddingsJS []byte
 
+//go:embed admin_embedding_endpoints.js
+var adminEmbeddingEndpointsJS []byte
+
+//go:embed admin_embedding_endpoint.js
+var adminEmbeddingEndpointJS []byte
+
 //go:embed admin_schedule.js
 var adminScheduleJS []byte
 
@@ -114,44 +126,54 @@ var indexJS []byte
 var loginJS []byte
 
 type Handler struct {
-	search          ports.SearchService
-	crawler         ports.CrawlerService
-	crawlJobs       ports.CrawlJobStore
-	crawlSem        chan struct{}
-	cancelMu        sync.Mutex
-	cancelFuncs     map[string]context.CancelFunc
-	jobs            ports.CrawlJobService
-	debug           ports.DebugSearchService
-	admin           ports.AdminRepository
-	pageRank        ports.PageRankRepository
-	embeddingRepo   ports.EmbeddingRepository
-	embedders       map[string]ports.EmbeddingProvider
-	settings        *domain.TuningSettings
-	opSettings      *domain.OperationalSettings
-	overrides       *domain.RankingOverrides
-	settingsStore   ports.SettingsStore
-	scheduledCrawls ports.ScheduledCrawlStore
-	health          ports.HealthChecker
-	onCrawlComplete func()
-	dbDriver        string
-	adminUser       string
-	adminPass       string
-	sessions        ports.SessionStore
-	loginLimiter    *loginLimiter
+	search        ports.SearchService
+	crawler       ports.CrawlerService
+	crawlJobs     ports.CrawlJobStore
+	crawlSem      chan struct{}
+	cancelMu      sync.Mutex
+	cancelFuncs   map[string]context.CancelFunc
+	jobs          ports.CrawlJobService
+	debug         ports.DebugSearchService
+	admin         ports.AdminRepository
+	pageRank      ports.PageRankRepository
+	embeddingRepo ports.EmbeddingRepository
+	embedders     map[string]ports.EmbeddingProvider
+	// embedderRateLimits gives each provider in embedders its own
+	// requests-per-second cap -- see application.RunEmbeddingRecomputeJob's
+	// rateLimits parameter. Built once at startup from the same enabled
+	// domain.EmbeddingHTTPEndpoint list embedders itself was built from
+	// (bootstrap.NewEmbedders' caller).
+	embedderRateLimits map[string]float64
+	settings           *domain.TuningSettings
+	opSettings         *domain.OperationalSettings
+	overrides          *domain.RankingOverrides
+	settingsStore      ports.SettingsStore
+	scheduledCrawls    ports.ScheduledCrawlStore
+	// embeddingEndpoints backs the admin API's HTTP embedding endpoint CRUD
+	// (GET/POST/PATCH/DELETE /admin/api/embeddings/endpoints...) -- set on
+	// admin-server only, the same *sqlrepo.Repository ScheduledCrawls uses.
+	embeddingEndpoints ports.EmbeddingEndpointStore
+	health             ports.HealthChecker
+	onCrawlComplete    func()
+	dbDriver           string
+	adminUser          string
+	adminPass          string
+	sessions           ports.SessionStore
+	loginLimiter       *loginLimiter
 	// crawlInternalToken, when set, is the shared secret
 	// requireCrawlInternalToken checks RoutesCrawlInternal callers
 	// against -- see its doc comment. Meaningless on RoutesSearch/
 	// RoutesAdmin, which never use it.
 	crawlInternalToken string
-	// settingsEncryptionKey, when set, is the key handleAdminSettings
-	// encrypts OperationalSettingsValues.EmbeddingHTTPAPIKey with before
-	// persisting it -- see settingscrypto's package doc comment.
+	// settingsEncryptionKey, when set, is the key the embedding endpoint
+	// CRUD handlers encrypt each domain.EmbeddingHTTPEndpoint.APIKey with
+	// before persisting it -- see settingscrypto's package doc comment.
 	settingsEncryptionKey []byte
 	// newEmbedder builds a throwaway ports.EmbeddingProvider from a given
-	// settings snapshot -- always bootstrap.NewEmbedder in production (see
-	// New), overridden by tests so testEmbeddingConnectivity never makes a
-	// real network call from the test suite.
-	newEmbedder func(domain.OperationalSettingsValues) ports.EmbeddingProvider
+	// candidate endpoint config -- always bootstrap.NewHTTPEmbedder in
+	// production (see New), overridden by tests so testEmbeddingConnectivity
+	// never makes a real network call from the test suite.
+	newEmbedder func(domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider
 }
 
 // Config wires a Handler's dependencies. Crawler and CrawlJobs are used
@@ -205,27 +227,35 @@ type Config struct {
 	// provider this recompute calls Embed against -- the same map
 	// bootstrap.NewEmbedders built for this process at startup, so a
 	// recompute always refreshes every enabled provider's vectors, not
-	// just whichever is currently active for search.
-	EmbeddingRepo ports.EmbeddingRepository
-	Embedders     map[string]ports.EmbeddingProvider
+	// just whichever is currently active for search. EmbedderRateLimits
+	// gives each of those providers its own requests-per-second cap -- see
+	// bootstrap.NewEmbedders' caller for how it's built from the same
+	// enabled domain.EmbeddingHTTPEndpoint list.
+	EmbeddingRepo      ports.EmbeddingRepository
+	Embedders          map[string]ports.EmbeddingProvider
+	EmbedderRateLimits map[string]float64
 	// NewEmbedder builds a throwaway ports.EmbeddingProvider from a given
-	// settings snapshot, used by handleAdminSettings to test-probe a
-	// newly-saved HTTP embedding provider before the process actually
-	// restarts onto it (see testEmbeddingConnectivity). Defaults to
-	// bootstrap.NewEmbedder when nil -- tests override this to avoid a
+	// candidate endpoint config, used by the embedding endpoint CRUD
+	// handlers to test-probe a base URL/model/API key combination before
+	// it's saved (see testEmbeddingConnectivity). Defaults to
+	// bootstrap.NewHTTPEmbedder when nil -- tests override this to avoid a
 	// real network call.
-	NewEmbedder     func(domain.OperationalSettingsValues) ports.EmbeddingProvider
+	NewEmbedder     func(domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider
 	Settings        *domain.TuningSettings
 	OpSettings      *domain.OperationalSettings
 	Overrides       *domain.RankingOverrides
 	SettingsStore   ports.SettingsStore
 	ScheduledCrawls ports.ScheduledCrawlStore
-	Health          ports.HealthChecker
-	Sessions        ports.SessionStore
-	OnCrawlComplete func()
-	DBDriver        string
-	AdminUser       string
-	AdminPass       string
+	// EmbeddingEndpoints is set on admin-server only, backing the HTTP
+	// embedding endpoint CRUD API -- the same *sqlrepo.Repository
+	// ScheduledCrawls uses.
+	EmbeddingEndpoints ports.EmbeddingEndpointStore
+	Health             ports.HealthChecker
+	Sessions           ports.SessionStore
+	OnCrawlComplete    func()
+	DBDriver           string
+	AdminUser          string
+	AdminPass          string
 	// CrawlInternalToken, when set, is the shared secret
 	// requireCrawlInternalToken enforces on RoutesCrawlInternal (checked
 	// against every caller's X-Internal-Token header) and
@@ -234,10 +264,10 @@ type Config struct {
 	// and why it's opt-in.
 	CrawlInternalToken string
 	// SettingsEncryptionKey, when set (see settingscrypto.ParseKey), is
-	// the key handleAdminSettings encrypts
-	// OperationalSettingsValues.EmbeddingHTTPAPIKey with before persisting
-	// it. Meaningless on crawl-server/search-server, which never call
-	// handleAdminSettings.
+	// the key the embedding endpoint CRUD handlers encrypt each
+	// domain.EmbeddingHTTPEndpoint.APIKey with before persisting it.
+	// Meaningless on crawl-server/search-server, which never call those
+	// handlers.
 	SettingsEncryptionKey []byte
 }
 
@@ -248,7 +278,7 @@ func New(cfg Config) *Handler {
 	}
 	newEmbedder := cfg.NewEmbedder
 	if newEmbedder == nil {
-		newEmbedder = bootstrap.NewEmbedder
+		newEmbedder = bootstrap.NewHTTPEmbedder
 	}
 	return &Handler{
 		search:                cfg.Search,
@@ -262,11 +292,13 @@ func New(cfg Config) *Handler {
 		pageRank:              cfg.PageRank,
 		embeddingRepo:         cfg.EmbeddingRepo,
 		embedders:             cfg.Embedders,
+		embedderRateLimits:    cfg.EmbedderRateLimits,
 		settings:              cfg.Settings,
 		opSettings:            cfg.OpSettings,
 		overrides:             cfg.Overrides,
 		settingsStore:         cfg.SettingsStore,
 		scheduledCrawls:       cfg.ScheduledCrawls,
+		embeddingEndpoints:    cfg.EmbeddingEndpoints,
 		health:                cfg.Health,
 		onCrawlComplete:       cfg.OnCrawlComplete,
 		dbDriver:              cfg.DBDriver,
@@ -362,6 +394,10 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("/admin_pagerank.js", h.handleAdminPageRankJS)
 	mux.HandleFunc("/admin/embeddings", h.requireAuthPage(h.handleAdminEmbeddingsPage))
 	mux.HandleFunc("/admin_embeddings.js", h.handleAdminEmbeddingsJS)
+	mux.HandleFunc("/admin/embeddings/endpoints", h.requireAuthPage(h.handleAdminEmbeddingEndpointsPage))
+	mux.HandleFunc("/admin_embedding_endpoints.js", h.handleAdminEmbeddingEndpointsJS)
+	mux.HandleFunc("/admin/embeddings/endpoint/{id}", h.requireAuthPage(h.handleAdminEmbeddingEndpointPage))
+	mux.HandleFunc("/admin_embedding_endpoint.js", h.handleAdminEmbeddingEndpointJS)
 	mux.HandleFunc("/admin/database", h.requireAuthPage(h.handleAdminDatabasePage))
 	mux.HandleFunc("/admin_database.js", h.handleAdminDatabaseJS)
 
@@ -377,7 +413,12 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("/admin/api/postings", h.requireAuthAPI(h.handleAdminPostings))
 	mux.HandleFunc("/admin/api/search", h.requireAuthAPI(h.handleAdminSearch))
 	mux.HandleFunc("/admin/api/settings", h.requireAuthAPI(h.handleAdminSettings))
-	mux.HandleFunc("GET /admin/api/embeddings/models", h.requireAuthAPI(h.handleAdminEmbeddingsModels))
+	mux.HandleFunc("POST /admin/api/embeddings/models", h.requireAuthAPI(h.handleAdminEmbeddingsModels))
+	mux.HandleFunc("POST /admin/api/embeddings/test", h.requireAuthAPI(h.handleAdminEmbeddingsTest))
+	mux.HandleFunc("/admin/api/embeddings/endpoints", h.requireAuthAPI(h.handleAdminEmbeddingEndpoints))
+	mux.HandleFunc("GET /admin/api/embeddings/endpoints/{id}", h.requireAuthAPI(h.handleAdminGetEmbeddingEndpoint))
+	mux.HandleFunc("PATCH /admin/api/embeddings/endpoints/{id}", h.requireAuthAPI(h.handleAdminUpdateEmbeddingEndpoint))
+	mux.HandleFunc("DELETE /admin/api/embeddings/endpoints/{id}", h.requireAuthAPI(h.handleAdminDeleteEmbeddingEndpoint))
 	mux.HandleFunc("/admin/api/overrides", h.requireAuthAPI(h.handleAdminOverrides))
 	mux.HandleFunc("/admin/api/crawl/jobs", h.requireAuthAPI(h.handleAdminCrawlJobs))
 	mux.HandleFunc("GET /admin/api/crawl/jobs/{id}", h.requireAuthAPI(h.handleAdminCrawlJob))
@@ -449,6 +490,14 @@ func (h *Handler) handleAdminPageRankJS(w http.ResponseWriter, r *http.Request) 
 
 func (h *Handler) handleAdminEmbeddingsJS(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/javascript; charset=utf-8", adminEmbeddingsJS)
+}
+
+func (h *Handler) handleAdminEmbeddingEndpointsJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminEmbeddingEndpointsJS)
+}
+
+func (h *Handler) handleAdminEmbeddingEndpointJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminEmbeddingEndpointJS)
 }
 
 func (h *Handler) handleAdminScheduleJS(w http.ResponseWriter, r *http.Request) {

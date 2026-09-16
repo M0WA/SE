@@ -11,30 +11,10 @@ import (
 	"searchengine/internal/ports"
 )
 
-func TestNewEmbedder_DefaultsToHash(t *testing.T) {
-	e := bootstrap.NewEmbedder(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHash})
-	if _, ok := e.(*hashembed.Embedder); !ok {
-		t.Fatalf("expected *hashembed.Embedder, got %T", e)
-	}
-	if e.Dimensions() != 128 {
-		t.Errorf("expected 128 dimensions, got %d", e.Dimensions())
-	}
-}
-
-func TestNewEmbedder_BlankProviderDefaultsToHash(t *testing.T) {
-	e := bootstrap.NewEmbedder(domain.OperationalSettingsValues{})
-	if _, ok := e.(*hashembed.Embedder); !ok {
-		t.Fatalf("expected *hashembed.Embedder for a zero-value settings snapshot, got %T", e)
-	}
-}
-
-func TestNewEmbedder_HTTPProviderBuildsHTTPEmbedder(t *testing.T) {
-	e := bootstrap.NewEmbedder(domain.OperationalSettingsValues{
-		EmbeddingProvider:       domain.EmbeddingProviderHTTP,
-		EmbeddingHTTPBaseURL:    "http://localhost:11434/v1",
-		EmbeddingHTTPAPIKey:     "sk-test",
-		EmbeddingHTTPModel:      "nomic-embed-text",
-		EmbeddingHTTPDimensions: 768,
+func TestNewHTTPEmbedder_BuildsHTTPEmbedder(t *testing.T) {
+	e := bootstrap.NewHTTPEmbedder(domain.EmbeddingHTTPEndpoint{
+		BaseURL: "http://localhost:11434/v1", APIKey: "sk-test",
+		Model: "nomic-embed-text", Dimensions: 768,
 	})
 	he, ok := e.(*httpembed.Embedder)
 	if !ok {
@@ -46,7 +26,7 @@ func TestNewEmbedder_HTTPProviderBuildsHTTPEmbedder(t *testing.T) {
 }
 
 func TestNewEmbedders_HashOnlyByDefault(t *testing.T) {
-	embedders := bootstrap.NewEmbedders(domain.OperationalSettingsValues{EmbeddingHashEnabled: true})
+	embedders := bootstrap.NewEmbedders(true, nil)
 	if len(embedders) != 1 {
 		t.Fatalf("expected exactly one embedder, got %d: %+v", len(embedders), embedders)
 	}
@@ -56,61 +36,57 @@ func TestNewEmbedders_HashOnlyByDefault(t *testing.T) {
 }
 
 func TestNewEmbedders_NeitherEnabledReturnsEmptyMap(t *testing.T) {
-	embedders := bootstrap.NewEmbedders(domain.OperationalSettingsValues{})
+	embedders := bootstrap.NewEmbedders(false, nil)
 	if len(embedders) != 0 {
-		t.Errorf("expected no embedders when neither is enabled, got %+v", embedders)
+		t.Errorf("expected no embedders when nothing is enabled, got %+v", embedders)
 	}
 }
 
-func TestNewEmbedders_HTTPOnlyBuildsJustHTTPEmbedder(t *testing.T) {
-	embedders := bootstrap.NewEmbedders(domain.OperationalSettingsValues{
-		EmbeddingHTTPEnabled:    true,
-		EmbeddingHTTPBaseURL:    "http://localhost:11434/v1",
-		EmbeddingHTTPModel:      "nomic-embed-text",
-		EmbeddingHTTPDimensions: 768,
-	})
+func TestNewEmbedders_OnlyEnabledEndpointsIncluded(t *testing.T) {
+	endpoints := []domain.EmbeddingHTTPEndpoint{
+		{ID: "enabled-one", BaseURL: "http://localhost:11434/v1", Dimensions: 768, Enabled: true},
+		{ID: "disabled-one", BaseURL: "http://localhost:11435/v1", Dimensions: 512, Enabled: false},
+	}
+	embedders := bootstrap.NewEmbedders(false, endpoints)
 	if len(embedders) != 1 {
 		t.Fatalf("expected exactly one embedder, got %d: %+v", len(embedders), embedders)
 	}
-	he, ok := embedders[domain.EmbeddingProviderHTTP].(*httpembed.Embedder)
+	he, ok := embedders["enabled-one"].(*httpembed.Embedder)
 	if !ok {
-		t.Fatalf("expected a *httpembed.Embedder under %q, got %+v", domain.EmbeddingProviderHTTP, embedders)
+		t.Fatalf("expected a *httpembed.Embedder under %q, got %+v", "enabled-one", embedders)
 	}
 	if he.Dimensions() != 768 {
 		t.Errorf("expected 768 dimensions, got %d", he.Dimensions())
 	}
+	if _, ok := embedders["disabled-one"]; ok {
+		t.Error("expected the disabled endpoint to be absent")
+	}
 }
 
-func TestNewEmbedders_BothEnabledBuildsBoth(t *testing.T) {
-	embedders := bootstrap.NewEmbedders(domain.OperationalSettingsValues{
-		EmbeddingHashEnabled:    true,
-		EmbeddingHTTPEnabled:    true,
-		EmbeddingHTTPBaseURL:    "http://localhost:11434/v1",
-		EmbeddingHTTPDimensions: 768,
-	})
-	if len(embedders) != 2 {
-		t.Fatalf("expected both embedders, got %d: %+v", len(embedders), embedders)
+func TestNewEmbedders_HashPlusMultipleEndpoints(t *testing.T) {
+	endpoints := []domain.EmbeddingHTTPEndpoint{
+		{ID: "a", BaseURL: "http://a", Dimensions: 768, Enabled: true},
+		{ID: "b", BaseURL: "http://b", Dimensions: 512, Enabled: true},
 	}
-	if _, ok := embedders[domain.EmbeddingProviderHash]; !ok {
-		t.Error("expected the hash provider present")
+	embedders := bootstrap.NewEmbedders(true, endpoints)
+	if len(embedders) != 3 {
+		t.Fatalf("expected hash + both endpoints, got %d: %+v", len(embedders), embedders)
 	}
-	if _, ok := embedders[domain.EmbeddingProviderHTTP]; !ok {
-		t.Error("expected the http provider present")
+	for _, id := range []string{domain.EmbeddingProviderHash, "a", "b"} {
+		if _, ok := embedders[id]; !ok {
+			t.Errorf("expected provider %q present, got %+v", id, embedders)
+		}
 	}
 }
 
 func TestEmbedderDimensions_ReflectsEachEmbeddersOwnDimensions(t *testing.T) {
-	embedders := bootstrap.NewEmbedders(domain.OperationalSettingsValues{
-		EmbeddingHashEnabled:    true,
-		EmbeddingHTTPEnabled:    true,
-		EmbeddingHTTPBaseURL:    "http://localhost:11434/v1",
-		EmbeddingHTTPDimensions: 768,
-	})
+	endpoints := []domain.EmbeddingHTTPEndpoint{{ID: "http", BaseURL: "http://localhost:11434/v1", Dimensions: 768, Enabled: true}}
+	embedders := bootstrap.NewEmbedders(true, endpoints)
 	dims := bootstrap.EmbedderDimensions(embedders)
 	if dims[domain.EmbeddingProviderHash] != 128 {
 		t.Errorf("expected hash dims=128, got %+v", dims)
 	}
-	if dims[domain.EmbeddingProviderHTTP] != 768 {
+	if dims["http"] != 768 {
 		t.Errorf("expected http dims=768, got %+v", dims)
 	}
 }
@@ -122,14 +98,28 @@ func TestEmbedderDimensions_EmptyMapForEmptyEmbedders(t *testing.T) {
 	}
 }
 
-func TestDecryptEmbeddingKey_NilKeyPassesPlaintextThrough(t *testing.T) {
-	v := bootstrap.DecryptEmbeddingKey(domain.OperationalSettingsValues{EmbeddingHTTPAPIKey: "sk-plain"}, nil)
-	if v.EmbeddingHTTPAPIKey != "sk-plain" {
-		t.Errorf("expected the plaintext key unchanged, got %q", v.EmbeddingHTTPAPIKey)
+func TestEmbedderRateLimits_ReflectsEachEndpointsOwnLimit(t *testing.T) {
+	endpoints := []domain.EmbeddingHTTPEndpoint{
+		{ID: "a", RateLimitPerSecond: 5},
+		{ID: "b", RateLimitPerSecond: 0},
+	}
+	limits := bootstrap.EmbedderRateLimits(endpoints)
+	if limits["a"] != 5 {
+		t.Errorf("expected a's limit=5, got %+v", limits)
+	}
+	if limits["b"] != 0 {
+		t.Errorf("expected b's limit=0, got %+v", limits)
 	}
 }
 
-func TestDecryptEmbeddingKey_DecryptsAnEncryptedValue(t *testing.T) {
+func TestDecryptEndpointAPIKey_NilKeyPassesPlaintextThrough(t *testing.T) {
+	e := bootstrap.DecryptEndpointAPIKey(domain.EmbeddingHTTPEndpoint{APIKey: "sk-plain"}, nil)
+	if e.APIKey != "sk-plain" {
+		t.Errorf("expected the plaintext key unchanged, got %q", e.APIKey)
+	}
+}
+
+func TestDecryptEndpointAPIKey_DecryptsAnEncryptedValue(t *testing.T) {
 	key, err := settingscrypto.ParseKey(hex64())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -138,13 +128,13 @@ func TestDecryptEmbeddingKey_DecryptsAnEncryptedValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	v := bootstrap.DecryptEmbeddingKey(domain.OperationalSettingsValues{EmbeddingHTTPAPIKey: enc}, key)
-	if v.EmbeddingHTTPAPIKey != "sk-real-secret" {
-		t.Errorf("expected the decrypted key, got %q", v.EmbeddingHTTPAPIKey)
+	e := bootstrap.DecryptEndpointAPIKey(domain.EmbeddingHTTPEndpoint{APIKey: enc}, key)
+	if e.APIKey != "sk-real-secret" {
+		t.Errorf("expected the decrypted key, got %q", e.APIKey)
 	}
 }
 
-func TestDecryptEmbeddingKey_FailureClearsTheKeyRatherThanLeakingCiphertext(t *testing.T) {
+func TestDecryptEndpointAPIKey_FailureClearsTheKeyRatherThanLeakingCiphertext(t *testing.T) {
 	key, err := settingscrypto.ParseKey(hex64())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -154,11 +144,19 @@ func TestDecryptEmbeddingKey_FailureClearsTheKeyRatherThanLeakingCiphertext(t *t
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// Decrypting with no key configured, even though the stored value IS
-	// encrypted, must not hand the raw ciphertext to NewEmbedder as if it
-	// were a usable API key.
-	v := bootstrap.DecryptEmbeddingKey(domain.OperationalSettingsValues{EmbeddingHTTPAPIKey: enc}, nil)
-	if v.EmbeddingHTTPAPIKey != "" {
-		t.Errorf("expected the key cleared on a decryption failure, got %q", v.EmbeddingHTTPAPIKey)
+	// encrypted, must not hand the raw ciphertext to NewHTTPEmbedder as if
+	// it were a usable API key.
+	e := bootstrap.DecryptEndpointAPIKey(domain.EmbeddingHTTPEndpoint{APIKey: enc}, nil)
+	if e.APIKey != "" {
+		t.Errorf("expected the key cleared on a decryption failure, got %q", e.APIKey)
+	}
+}
+
+func TestDecryptEndpointAPIKeys_AppliesToEveryEndpoint(t *testing.T) {
+	endpoints := []domain.EmbeddingHTTPEndpoint{{ID: "a", APIKey: "sk-a"}, {ID: "b", APIKey: "sk-b"}}
+	out := bootstrap.DecryptEndpointAPIKeys(endpoints, nil)
+	if len(out) != 2 || out[0].APIKey != "sk-a" || out[1].APIKey != "sk-b" {
+		t.Errorf("expected both endpoints' keys passed through unchanged (nil key), got %+v", out)
 	}
 }
 

@@ -181,8 +181,8 @@ func (f *fakeDebugSearch) Search(_ context.Context, _ string, opts ports.SearchQ
 
 // fakeEmbeddingProvider is a minimal ports.EmbeddingProvider a test can
 // inject via restapi.Config.NewEmbedder (see stubNewEmbedder) so
-// handleAdminSettings' embedding-connectivity probe (testEmbeddingConnectivity)
-// never makes a real network call from the test suite.
+// testEmbeddingConnectivity (the embedding endpoint connectivity-test
+// probe) never makes a real network call from the test suite.
 type fakeEmbeddingProvider struct {
 	err error
 }
@@ -194,9 +194,9 @@ func (f fakeEmbeddingProvider) Dimensions() int { return 1 }
 
 // stubNewEmbedder returns a restapi.Config.NewEmbedder that always hands
 // back a fakeEmbeddingProvider failing with err (nil for success),
-// regardless of the settings snapshot it's given.
-func stubNewEmbedder(err error) func(domain.OperationalSettingsValues) ports.EmbeddingProvider {
-	return func(domain.OperationalSettingsValues) ports.EmbeddingProvider {
+// regardless of the candidate endpoint config it's given.
+func stubNewEmbedder(err error) func(domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider {
+	return func(domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider {
 		return fakeEmbeddingProvider{err: err}
 	}
 }
@@ -219,8 +219,8 @@ func (f fakeEmbeddingProviderWithModels) ListModels(context.Context) ([]string, 
 
 // stubNewEmbedderWithModels mirrors stubNewEmbedder, for a
 // restapi.Config.NewEmbedder whose embedder also supports ListModels.
-func stubNewEmbedderWithModels(models []string, modelsErr error) func(domain.OperationalSettingsValues) ports.EmbeddingProvider {
-	return func(domain.OperationalSettingsValues) ports.EmbeddingProvider {
+func stubNewEmbedderWithModels(models []string, modelsErr error) func(domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider {
+	return func(domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider {
 		return fakeEmbeddingProviderWithModels{models: models, modelsErr: modelsErr}
 	}
 }
@@ -2370,190 +2370,9 @@ func TestHandleAdminSettings_TitleWeightFieldRoundTrips(t *testing.T) {
 	}
 }
 
-// TestHandleAdminSettings_EmbeddingRateLimitFieldRoundTrips
-// mirrors TestHandleAdminSettings_TitleWeightFieldRoundTrips for the new
-// rate-limit knob.
-func TestHandleAdminSettings_EmbeddingRateLimitFieldRoundTrips(t *testing.T) {
-	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
-	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingRateLimitPerSecond: 5})
-	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
-
-	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
-	getReq.AddCookie(cookie)
-	getRec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(getRec, getReq)
-	if getRec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", getRec.Code)
-	}
-	var getResp struct {
-		Operational struct {
-			EmbeddingRateLimitPerSecond int `json:"embedding_rate_limit_per_second"`
-		} `json:"operational"`
-	}
-	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
-		t.Fatalf("decoding GET response: %v", err)
-	}
-	if getResp.Operational.EmbeddingRateLimitPerSecond != 5 {
-		t.Errorf("expected GET to report embedding_rate_limit_per_second=5, got %+v", getResp.Operational)
-	}
-
-	body, _ := json.Marshal(map[string]interface{}{
-		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
-		"operational": map[string]interface{}{
-			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
-			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
-			"embedding_rate_limit_per_second": 20,
-		},
-	})
-	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
-	postReq.AddCookie(cookie)
-	postRec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(postRec, postReq)
-	if postRec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
-	}
-
-	if ov := opSettings.Get(); ov.EmbeddingRateLimitPerSecond != 20 {
-		t.Errorf("expected embedding_rate_limit_per_second=20 to be applied, got %+v", ov)
-	}
-
-	var postResp struct {
-		Operational struct {
-			EmbeddingRateLimitPerSecond int `json:"embedding_rate_limit_per_second"`
-		} `json:"operational"`
-	}
-	if err := json.Unmarshal(postRec.Body.Bytes(), &postResp); err != nil {
-		t.Fatalf("decoding POST response: %v", err)
-	}
-	if postResp.Operational.EmbeddingRateLimitPerSecond != 20 {
-		t.Errorf("expected the POST response to echo back embedding_rate_limit_per_second=20, got %+v", postResp.Operational)
-	}
-}
-
-// TestHandleAdminSettings_EmbeddingEnabledTogglesFieldRoundTrip proves
-// EmbeddingHashEnabled/EmbeddingHTTPEnabled round-trip through GET/POST
-// like every other operational field, and that a POST enabling both keeps
-// the explicitly-requested active EmbeddingProvider rather than
-// self-healing it away.
-func TestHandleAdminSettings_EmbeddingEnabledTogglesFieldRoundTrip(t *testing.T) {
-	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
-	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingHashEnabled: true})
-	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
-
-	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
-	getReq.AddCookie(cookie)
-	getRec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(getRec, getReq)
-	if getRec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", getRec.Code)
-	}
-	var getResp struct {
-		Operational struct {
-			EmbeddingHashEnabled bool `json:"embedding_hash_enabled"`
-			EmbeddingHTTPEnabled bool `json:"embedding_http_enabled"`
-		} `json:"operational"`
-	}
-	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
-		t.Fatalf("decoding GET response: %v", err)
-	}
-	if !getResp.Operational.EmbeddingHashEnabled || getResp.Operational.EmbeddingHTTPEnabled {
-		t.Errorf("expected GET to report hash_enabled=true, http_enabled=false, got %+v", getResp.Operational)
-	}
-
-	body, _ := json.Marshal(map[string]interface{}{
-		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
-		"operational": map[string]interface{}{
-			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
-			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
-			"embedding_hash_enabled": true, "embedding_http_enabled": true, "embedding_provider": "http",
-		},
-	})
-	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
-	postReq.AddCookie(cookie)
-	postRec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(postRec, postReq)
-	if postRec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
-	}
-
-	ov := opSettings.Get()
-	if !ov.EmbeddingHashEnabled || !ov.EmbeddingHTTPEnabled {
-		t.Errorf("expected both providers to be enabled after the POST, got %+v", ov)
-	}
-	if ov.EmbeddingProvider != domain.EmbeddingProviderHTTP {
-		t.Errorf("expected the explicitly-requested active provider to be preserved since it's now enabled, got %q", ov.EmbeddingProvider)
-	}
-}
-
-// TestHandleAdminSettings_EmbeddingProviderSelfHealsWhenPostedInvalid
-// proves the wire-level self-healing from OperationalSettings.Set is
-// actually reachable through the HTTP API, not just the Go type directly:
-// posting an unrecognized embedding_provider value comes back as hash.
-func TestHandleAdminSettings_EmbeddingProviderSelfHealsWhenPostedInvalid(t *testing.T) {
-	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
-	opSettings := domain.DefaultOperationalSettings()
-	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
-
-	body, _ := json.Marshal(map[string]interface{}{
-		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
-		"operational": map[string]interface{}{
-			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
-			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
-			"embedding_provider": "not-a-real-provider",
-		},
-	})
-	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
-	postReq.AddCookie(cookie)
-	postRec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(postRec, postReq)
-	if postRec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
-	}
-	if ov := opSettings.Get(); ov.EmbeddingProvider != domain.EmbeddingProviderHash {
-		t.Errorf("expected an unrecognized embedding_provider to self-heal to hash, got %q", ov.EmbeddingProvider)
-	}
-}
-
-// TestHandleAdminSettings_PostedHTTPProviderWithoutEnabledFlagsEnablesHTTP
-// is the HTTP-API-level counterpart of
-// domain's TestOperationalSettings_SetPreExistingHTTPConfigWithBothFlagsUnsetEnablesHTTP
-// regression test: posting embedding_provider=http without either enabled
-// flag in the request body (the exact shape a pre-Phase-1 admin UI, or any
-// client that doesn't yet know about the two Enabled fields, would send)
-// must enable http rather than silently reverting to hash and discarding
-// a real HTTP configuration.
-func TestHandleAdminSettings_PostedHTTPProviderWithoutEnabledFlagsEnablesHTTP(t *testing.T) {
-	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
-	opSettings := domain.DefaultOperationalSettings()
-	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
-
-	body, _ := json.Marshal(map[string]interface{}{
-		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
-		"operational": map[string]interface{}{
-			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
-			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
-			"embedding_provider": "http",
-		},
-	})
-	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
-	postReq.AddCookie(cookie)
-	postRec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(postRec, postReq)
-	if postRec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
-	}
-	ov := opSettings.Get()
-	if !ov.EmbeddingHTTPEnabled {
-		t.Errorf("expected embedding_provider=http with no enabled flags posted to self-heal to http enabled, got %+v", ov)
-	}
-	if ov.EmbeddingProvider != domain.EmbeddingProviderHTTP {
-		t.Errorf("expected embedding_provider to remain http, not be silently reverted to hash, got %q", ov.EmbeddingProvider)
-	}
-}
-
 // TestHandleAdminSettings_EmbeddingTitleWeightFieldRoundTrips mirrors
-// TestHandleAdminSettings_EmbeddingRateLimitFieldRoundTrips for the new
-// title/body embedding blend weight.
+// TestHandleAdminSettings_TitleWeightFieldRoundTrips for the title/body
+// embedding blend weight.
 func TestHandleAdminSettings_EmbeddingTitleWeightFieldRoundTrips(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingTitleWeight: 0.2})
@@ -2593,40 +2412,20 @@ func TestHandleAdminSettings_EmbeddingTitleWeightFieldRoundTrips(t *testing.T) {
 	if postRec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
 	}
-
 	if ov := opSettings.Get(); ov.EmbeddingTitleWeight != 0.6 {
 		t.Errorf("expected embedding_title_weight=0.6 to be applied, got %+v", ov)
 	}
-
-	var postResp struct {
-		Operational struct {
-			EmbeddingTitleWeight float64 `json:"embedding_title_weight"`
-		} `json:"operational"`
-	}
-	if err := json.Unmarshal(postRec.Body.Bytes(), &postResp); err != nil {
-		t.Fatalf("decoding POST response: %v", err)
-	}
-	if postResp.Operational.EmbeddingTitleWeight != 0.6 {
-		t.Errorf("expected the POST response to echo back embedding_title_weight=0.6, got %+v", postResp.Operational)
-	}
 }
 
-// TestHandleAdminSettings_EmbeddingFieldsRoundTrip mirrors
-// TestHandleAdminSettings_TitleWeightFieldRoundTrips for the new
-// embedding-provider knobs: GET reports the non-secret fields as currently
-// set, and a POST updates all of them (including the API key).
-func TestHandleAdminSettings_EmbeddingFieldsRoundTrip(t *testing.T) {
+// TestHandleAdminSettings_EmbeddingHashEnabledFieldRoundTrips proves
+// EmbeddingHashEnabled round-trips through GET/POST like every other
+// operational field, and that Set no longer forces it back to true (that
+// self-healing moved to a live-endpoint-list-aware check -- see
+// domain.ReconcileActiveProvider).
+func TestHandleAdminSettings_EmbeddingHashEnabledFieldRoundTrips(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
-	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
-		EmbeddingProvider:       domain.EmbeddingProviderHash,
-		EmbeddingHTTPBaseURL:    "http://localhost:11434/v1",
-		EmbeddingHTTPModel:      "nomic-embed-text",
-		EmbeddingHTTPDimensions: 768,
-	})
-	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
-		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, Settings: settings, OpSettings: opSettings,
-		NewEmbedder: stubNewEmbedder(nil),
-	})
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingHashEnabled: true})
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
 
 	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
 	getReq.AddCookie(cookie)
@@ -2637,20 +2436,14 @@ func TestHandleAdminSettings_EmbeddingFieldsRoundTrip(t *testing.T) {
 	}
 	var getResp struct {
 		Operational struct {
-			EmbeddingProvider       string `json:"embedding_provider"`
-			EmbeddingHTTPBaseURL    string `json:"embedding_http_base_url"`
-			EmbeddingHTTPModel      string `json:"embedding_http_model"`
-			EmbeddingHTTPDimensions int    `json:"embedding_http_dimensions"`
+			EmbeddingHashEnabled bool `json:"embedding_hash_enabled"`
 		} `json:"operational"`
 	}
 	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
 		t.Fatalf("decoding GET response: %v", err)
 	}
-	if getResp.Operational.EmbeddingProvider != domain.EmbeddingProviderHash ||
-		getResp.Operational.EmbeddingHTTPBaseURL != "http://localhost:11434/v1" ||
-		getResp.Operational.EmbeddingHTTPModel != "nomic-embed-text" ||
-		getResp.Operational.EmbeddingHTTPDimensions != 768 {
-		t.Errorf("unexpected GET response: %+v", getResp.Operational)
+	if !getResp.Operational.EmbeddingHashEnabled {
+		t.Errorf("expected GET to report embedding_hash_enabled=true, got %+v", getResp.Operational)
 	}
 
 	body, _ := json.Marshal(map[string]interface{}{
@@ -2658,9 +2451,7 @@ func TestHandleAdminSettings_EmbeddingFieldsRoundTrip(t *testing.T) {
 		"operational": map[string]interface{}{
 			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
 			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
-			"embedding_provider": "http", "embedding_http_enabled": true, "embedding_http_base_url": "https://api.example.com/v1",
-			"embedding_http_model": "text-embedding-3-small", "embedding_http_dimensions": 1536,
-			"embedding_http_api_key": "sk-new-key",
+			"embedding_hash_enabled": false, "embedding_provider": "hash",
 		},
 	})
 	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
@@ -2670,64 +2461,23 @@ func TestHandleAdminSettings_EmbeddingFieldsRoundTrip(t *testing.T) {
 	if postRec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
 	}
-
-	ov := opSettings.Get()
-	if ov.EmbeddingProvider != domain.EmbeddingProviderHTTP || ov.EmbeddingHTTPBaseURL != "https://api.example.com/v1" ||
-		ov.EmbeddingHTTPModel != "text-embedding-3-small" || ov.EmbeddingHTTPDimensions != 1536 ||
-		ov.EmbeddingHTTPAPIKey != "sk-new-key" {
-		t.Errorf("expected embedding settings to be applied, got %+v", ov)
+	if ov := opSettings.Get(); ov.EmbeddingHashEnabled {
+		t.Errorf("expected embedding_hash_enabled=false to be applied, got %+v", ov)
 	}
 }
 
-// TestHandleAdminSettings_EmbeddingAPIKeyNeverInGETResponse proves a
-// configured EmbeddingHTTPAPIKey never appears in a GET response body, only
-// a boolean indicating one is set -- the same "never echo a real credential
-// back" treatment as ScheduledCrawl's Cookie/BasicAuthPass, applied more
-// strictly here per this field's own requirement.
-func TestHandleAdminSettings_EmbeddingAPIKeyNeverInGETResponse(t *testing.T) {
-	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
-		EmbeddingProvider: domain.EmbeddingProviderHTTP, EmbeddingHTTPAPIKey: "sk-super-secret",
-	})
-	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, domain.NewTuningSettings(0.5, 1.2, 0.75), opSettings)
-
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-	if strings.Contains(rec.Body.String(), "sk-super-secret") {
-		t.Errorf("expected the GET response to never contain the configured API key, got: %s", rec.Body.String())
-	}
-	var resp struct {
-		Operational struct {
-			EmbeddingHTTPAPIKey    string `json:"embedding_http_api_key"`
-			EmbeddingHTTPAPIKeySet bool   `json:"embedding_http_api_key_set"`
-		} `json:"operational"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decoding GET response: %v", err)
-	}
-	if resp.Operational.EmbeddingHTTPAPIKey != "" {
-		t.Errorf("expected embedding_http_api_key to be blank in the GET response, got %q", resp.Operational.EmbeddingHTTPAPIKey)
-	}
-	if !resp.Operational.EmbeddingHTTPAPIKeySet {
-		t.Error("expected embedding_http_api_key_set to report true when a key is configured")
-	}
-}
-
-// TestHandleAdminSettings_BlankEmbeddingAPIKeyPreservesExisting proves a
-// settings save that doesn't touch the API key field (the normal case,
-// since the form never shows the real value) doesn't wipe out whatever key
-// is already configured.
-func TestHandleAdminSettings_BlankEmbeddingAPIKeyPreservesExisting(t *testing.T) {
-	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
-		EmbeddingProvider: domain.EmbeddingProviderHTTP, EmbeddingHTTPAPIKey: "sk-keep-me",
-	})
+// TestHandleAdminSettings_EmbeddingProviderReconciledAgainstNonexistentEndpoint
+// proves domain.ReconcileActiveProvider's self-healing is actually
+// reachable through the HTTP API: posting an embedding_provider naming an
+// endpoint that isn't configured (deleted, mistyped, or simply invented)
+// comes back as hash.
+func TestHandleAdminSettings_EmbeddingProviderReconciledAgainstNonexistentEndpoint(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	opSettings := domain.DefaultOperationalSettings()
+	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
-		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, Settings: domain.NewTuningSettings(0.5, 1.2, 0.75), OpSettings: opSettings,
-		NewEmbedder: stubNewEmbedder(nil),
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, Settings: settings, OpSettings: opSettings,
+		EmbeddingEndpoints: repo, DBDriver: "sqlite",
 	})
 
 	body, _ := json.Marshal(map[string]interface{}{
@@ -2735,134 +2485,67 @@ func TestHandleAdminSettings_BlankEmbeddingAPIKeyPreservesExisting(t *testing.T)
 		"operational": map[string]interface{}{
 			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
 			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
-			"embedding_provider": "http",
+			"embedding_hash_enabled": true, "embedding_provider": "some-deleted-endpoint",
 		},
 	})
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	postReq.AddCookie(cookie)
+	postRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
 	}
-	if ov := opSettings.Get(); ov.EmbeddingHTTPAPIKey != "sk-keep-me" {
-		t.Errorf("expected the existing API key to survive a save that left it blank, got %q", ov.EmbeddingHTTPAPIKey)
+	if ov := opSettings.Get(); ov.EmbeddingProvider != domain.EmbeddingProviderHash {
+		t.Errorf("expected an embedding_provider naming a nonexistent endpoint to self-heal to hash, got %q", ov.EmbeddingProvider)
 	}
 }
 
-// postEmbeddingSettings POSTs a minimal valid settings body with
-// embedding_provider set to provider against h, returning the decoded
-// embedding_test_error field alongside the raw status code.
-func postEmbeddingSettings(t *testing.T, h *restapi.Handler, cookie *http.Cookie, provider string) (int, string) {
+// TestHandleAdminSettings_EmbeddingProviderReconciliationPreservesEnabledEndpoint
+// proves the reconciliation doesn't clobber a genuinely valid, currently-
+// enabled endpoint choice.
+func TestHandleAdminSettings_EmbeddingProviderReconciliationPreservesEnabledEndpoint(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	opSettings := domain.DefaultOperationalSettings()
+	repo := newSettingsStoreTestRepo(t)
+	if err := repo.CreateEmbeddingEndpoint(context.Background(), domain.EmbeddingHTTPEndpoint{
+		ID: "ionos", Name: "IONOS", BaseURL: "https://example.com", Model: "m", Dimensions: 4, Enabled: true,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, Settings: settings, OpSettings: opSettings,
+		EmbeddingEndpoints: repo, DBDriver: "sqlite",
+	})
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
+			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
+			"embedding_provider": "ionos",
+		},
+	})
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	postReq.AddCookie(cookie)
+	postRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
+	}
+	if ov := opSettings.Get(); ov.EmbeddingProvider != "ionos" {
+		t.Errorf("expected the enabled endpoint to stay active, got %q", ov.EmbeddingProvider)
+	}
+}
+
+type adminEmbeddingModelsResp struct {
+	Models []string `json:"models"`
+	Error  string   `json:"error"`
+}
+
+func postEmbeddingModels(t *testing.T, h *restapi.Handler, cookie *http.Cookie, body map[string]interface{}) (int, adminEmbeddingModelsResp) {
 	t.Helper()
-	body, _ := json.Marshal(map[string]interface{}{
-		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
-		"operational": map[string]interface{}{
-			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
-			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
-			"embedding_provider": provider, "embedding_hash_enabled": true, "embedding_http_enabled": true,
-		},
-	})
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	var resp struct {
-		EmbeddingTestError string `json:"embedding_test_error"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decoding response: %v", err)
-	}
-	return rec.Code, resp.EmbeddingTestError
-}
-
-// TestHandleAdminSettings_EmbeddingConnectivityTestReportsSuccess proves a
-// save with the HTTP provider configured probes it via NewEmbedder and
-// reports no error when that probe succeeds.
-func TestHandleAdminSettings_EmbeddingConnectivityTestReportsSuccess(t *testing.T) {
-	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
-		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
-		Settings: domain.NewTuningSettings(0.5, 1.2, 0.75), OpSettings: domain.DefaultOperationalSettings(),
-		NewEmbedder: stubNewEmbedder(nil),
-	})
-	code, testErr := postEmbeddingSettings(t, h, cookie, domain.EmbeddingProviderHTTP)
-	if code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", code)
-	}
-	if testErr != "" {
-		t.Errorf("expected no embedding_test_error on a successful probe, got %q", testErr)
-	}
-}
-
-// TestHandleAdminSettings_EmbeddingConnectivityTestReportsFailure proves a
-// save still succeeds (200, settings persisted) even when the HTTP
-// provider's connectivity probe fails, but surfaces the probe's error in
-// embedding_test_error so the admin sees it immediately instead of only
-// discovering it on the next real search.
-func TestHandleAdminSettings_EmbeddingConnectivityTestReportsFailure(t *testing.T) {
-	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
-		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
-		Settings: domain.NewTuningSettings(0.5, 1.2, 0.75), OpSettings: domain.DefaultOperationalSettings(),
-		NewEmbedder: stubNewEmbedder(errors.New("connection refused")),
-	})
-	code, testErr := postEmbeddingSettings(t, h, cookie, domain.EmbeddingProviderHTTP)
-	if code != http.StatusOK {
-		t.Fatalf("expected 200 even when the connectivity probe fails, got %d", code)
-	}
-	if !strings.Contains(testErr, "connection refused") {
-		t.Errorf("expected embedding_test_error to surface the probe failure, got %q", testErr)
-	}
-}
-
-// TestHandleAdminSettings_EmbeddingConnectivityTestSkippedWhenHTTPNotEnabled
-// proves the probe never runs (NewEmbedder never called, no
-// embedding_test_error) when the http provider isn't enabled -- gated on
-// EmbeddingHTTPEnabled, not on which provider is active for search (see
-// testEmbeddingConnectivity's doc comment): there's no HTTP config to test
-// if it's disabled, even if EmbeddingProvider still names it as active
-// (which self-heals away on the next Set anyway).
-func TestHandleAdminSettings_EmbeddingConnectivityTestSkippedWhenHTTPNotEnabled(t *testing.T) {
-	called := false
-	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
-		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
-		Settings: domain.NewTuningSettings(0.5, 1.2, 0.75), OpSettings: domain.DefaultOperationalSettings(),
-		NewEmbedder: func(domain.OperationalSettingsValues) ports.EmbeddingProvider {
-			called = true
-			return fakeEmbeddingProvider{}
-		},
-	})
-	body, _ := json.Marshal(map[string]interface{}{
-		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
-		"operational": map[string]interface{}{
-			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
-			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
-			"embedding_hash_enabled": true, "embedding_http_enabled": false, "embedding_provider": "hash",
-		},
-	})
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	var resp struct {
-		EmbeddingTestError string `json:"embedding_test_error"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decoding response: %v", err)
-	}
-	if resp.EmbeddingTestError != "" {
-		t.Errorf("expected no embedding_test_error when http isn't enabled, got %q", resp.EmbeddingTestError)
-	}
-	if called {
-		t.Error("expected NewEmbedder to never be called when http isn't enabled")
-	}
-}
-
-func getEmbeddingModels(t *testing.T, h *restapi.Handler, cookie *http.Cookie) (int, adminEmbeddingModelsResp) {
-	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/embeddings/models", nil)
+	data, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/embeddings/models", bytes.NewReader(data))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -2873,28 +2556,28 @@ func getEmbeddingModels(t *testing.T, h *restapi.Handler, cookie *http.Cookie) (
 	return rec.Code, resp
 }
 
-type adminEmbeddingModelsResp struct {
-	Models []string `json:"models"`
-	Error  string   `json:"error"`
-}
-
-func TestHandleAdminEmbeddingsModels_NotConfigured(t *testing.T) {
+// TestHandleAdminEmbeddingsModels_AlwaysAvailable proves this endpoint has
+// no "not configured" state -- unlike most admin endpoints, a Handler with
+// no OpSettings/Admin/etc. configured at all still serves it, since probing
+// a candidate config has no optional dependency to gate on (h.newEmbedder
+// is always set by New).
+func TestHandleAdminEmbeddingsModels_AlwaysAvailable(t *testing.T) {
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/embeddings/models", nil)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/embeddings/models", bytes.NewReader([]byte("{}")))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("expected 503 when opSettings isn't configured, got %d", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 even with no optional dependencies configured, got %d", rec.Code)
 	}
 }
 
 func TestHandleAdminEmbeddingsModels_MethodNotAllowed(t *testing.T) {
 	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
-		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, OpSettings: domain.DefaultOperationalSettings(),
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
 		NewEmbedder: stubNewEmbedderWithModels(nil, nil),
 	})
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/embeddings/models", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/embeddings/models", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -2903,45 +2586,33 @@ func TestHandleAdminEmbeddingsModels_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-// TestHandleAdminEmbeddingsModels_HashProviderReturnsEmptyWithoutCalling
-// proves no network call is attempted (NewEmbedder never even called) for
-// the hash provider -- there's no remote catalog to list.
-func TestHandleAdminEmbeddingsModels_HashProviderReturnsEmptyWithoutCalling(t *testing.T) {
-	called := false
+func TestHandleAdminEmbeddingsModels_InvalidJSON(t *testing.T) {
 	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
 		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
-		OpSettings: domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHash}),
-		NewEmbedder: func(domain.OperationalSettingsValues) ports.EmbeddingProvider {
-			called = true
-			return fakeEmbeddingProviderWithModels{}
-		},
+		NewEmbedder: stubNewEmbedderWithModels(nil, nil),
 	})
-	code, resp := getEmbeddingModels(t, h, cookie)
-	if code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", code)
-	}
-	if len(resp.Models) != 0 || resp.Error != "" {
-		t.Errorf("expected an empty response for the hash provider, got %+v", resp)
-	}
-	if called {
-		t.Error("expected NewEmbedder to never be called for the hash provider")
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/embeddings/models", bytes.NewReader([]byte("{not json")))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
 	}
 }
 
 // TestHandleAdminEmbeddingsModels_BlankBaseURLReturnsEmptyWithoutCalling
-// proves the "prefill only when the endpoint has already been filled in"
+// proves the "only probe once the endpoint has actually been filled in"
 // rule is enforced server-side too, not just left to the frontend.
 func TestHandleAdminEmbeddingsModels_BlankBaseURLReturnsEmptyWithoutCalling(t *testing.T) {
 	called := false
 	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
 		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
-		OpSettings: domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHTTP, EmbeddingHTTPEnabled: true, EmbeddingHTTPBaseURL: ""}),
-		NewEmbedder: func(domain.OperationalSettingsValues) ports.EmbeddingProvider {
+		NewEmbedder: func(domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider {
 			called = true
 			return fakeEmbeddingProviderWithModels{}
 		},
 	})
-	code, resp := getEmbeddingModels(t, h, cookie)
+	code, resp := postEmbeddingModels(t, h, cookie, map[string]interface{}{"base_url": ""})
 	if code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", code)
 	}
@@ -2956,10 +2627,9 @@ func TestHandleAdminEmbeddingsModels_BlankBaseURLReturnsEmptyWithoutCalling(t *t
 func TestHandleAdminEmbeddingsModels_ProviderWithoutListModelsSupport(t *testing.T) {
 	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
 		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
-		OpSettings:  domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHTTP, EmbeddingHTTPEnabled: true, EmbeddingHTTPBaseURL: "https://example.com/v1"}),
 		NewEmbedder: stubNewEmbedder(nil),
 	})
-	code, resp := getEmbeddingModels(t, h, cookie)
+	code, resp := postEmbeddingModels(t, h, cookie, map[string]interface{}{"base_url": "https://example.com/v1"})
 	if code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", code)
 	}
@@ -2971,10 +2641,9 @@ func TestHandleAdminEmbeddingsModels_ProviderWithoutListModelsSupport(t *testing
 func TestHandleAdminEmbeddingsModels_Success(t *testing.T) {
 	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
 		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
-		OpSettings:  domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHTTP, EmbeddingHTTPEnabled: true, EmbeddingHTTPBaseURL: "https://example.com/v1"}),
 		NewEmbedder: stubNewEmbedderWithModels([]string{"intfloat/e5-large-v2", "Qwen/Qwen3-VL-Embedding-8B"}, nil),
 	})
-	code, resp := getEmbeddingModels(t, h, cookie)
+	code, resp := postEmbeddingModels(t, h, cookie, map[string]interface{}{"base_url": "https://example.com/v1"})
 	if code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", code)
 	}
@@ -2986,42 +2655,540 @@ func TestHandleAdminEmbeddingsModels_Success(t *testing.T) {
 	}
 }
 
-// TestHandleAdminEmbeddingsModels_ListsWhenHTTPEnabledEvenIfHashIsActive
-// proves listing is gated on EmbeddingHTTPEnabled, not on which provider
-// is currently active for search -- an admin with both providers enabled
-// and hash still active for search can list the http endpoint's models
-// (e.g. to decide whether to switch), without needing to flip the active
-// provider first.
-func TestHandleAdminEmbeddingsModels_ListsWhenHTTPEnabledEvenIfHashIsActive(t *testing.T) {
-	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
-		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
-		OpSettings: domain.NewOperationalSettings(domain.OperationalSettingsValues{
-			EmbeddingProvider: domain.EmbeddingProviderHash, EmbeddingHashEnabled: true,
-			EmbeddingHTTPEnabled: true, EmbeddingHTTPBaseURL: "https://example.com/v1",
-		}),
-		NewEmbedder: stubNewEmbedderWithModels([]string{"BAAI/bge-m3"}, nil),
-	})
-	code, resp := getEmbeddingModels(t, h, cookie)
-	if code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", code)
-	}
-	if len(resp.Models) != 1 || resp.Models[0] != "BAAI/bge-m3" {
-		t.Errorf("expected the http endpoint's models listed despite hash being active, got %+v", resp)
-	}
-}
-
 func TestHandleAdminEmbeddingsModels_ListModelsErrorIsSoftFailure(t *testing.T) {
 	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
 		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
-		OpSettings:  domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHTTP, EmbeddingHTTPEnabled: true, EmbeddingHTTPBaseURL: "https://example.com/v1"}),
 		NewEmbedder: stubNewEmbedderWithModels(nil, errors.New("401 unauthorized")),
 	})
-	code, resp := getEmbeddingModels(t, h, cookie)
+	code, resp := postEmbeddingModels(t, h, cookie, map[string]interface{}{"base_url": "https://example.com/v1"})
 	if code != http.StatusOK {
 		t.Fatalf("expected 200 (a soft failure, not a hard error), got %d", code)
 	}
 	if len(resp.Models) != 0 || resp.Error != "401 unauthorized" {
 		t.Errorf("expected the ListModels error surfaced, got %+v", resp)
+	}
+}
+
+func postEmbeddingTest(t *testing.T, h *restapi.Handler, cookie *http.Cookie, body map[string]interface{}) (int, string) {
+	t.Helper()
+	data, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/embeddings/test", bytes.NewReader(data))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	var resp struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	return rec.Code, resp.Error
+}
+
+// TestHandleAdminEmbeddingsTest_AlwaysAvailable mirrors
+// TestHandleAdminEmbeddingsModels_AlwaysAvailable -- this endpoint has no
+// "not configured" state either. base_url is deliberately blank so this
+// never attempts a real network call even with the real
+// bootstrap.NewHTTPEmbedder (adminAuthedHandler sets no NewEmbedder stub).
+func TestHandleAdminEmbeddingsTest_AlwaysAvailable(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	code, testErr := postEmbeddingTest(t, h, cookie, map[string]interface{}{"base_url": ""})
+	if code != http.StatusOK {
+		t.Errorf("expected 200 even with no optional dependencies configured, got %d", code)
+	}
+	if testErr != "" {
+		t.Errorf("expected no error for a blank base URL, got %q", testErr)
+	}
+}
+
+func TestHandleAdminEmbeddingsTest_MethodNotAllowed(t *testing.T) {
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, NewEmbedder: stubNewEmbedder(nil),
+	})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/embeddings/test", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+// TestHandleAdminEmbeddingsTest_Success proves a candidate config probes
+// via NewEmbedder and reports no error when the probe succeeds.
+func TestHandleAdminEmbeddingsTest_Success(t *testing.T) {
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, NewEmbedder: stubNewEmbedder(nil),
+	})
+	code, testErr := postEmbeddingTest(t, h, cookie, map[string]interface{}{"base_url": "https://example.com/v1"})
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if testErr != "" {
+		t.Errorf("expected no error on a successful probe, got %q", testErr)
+	}
+}
+
+// TestHandleAdminEmbeddingsTest_Failure proves the probe's error is
+// surfaced in the response (still 200 -- a failed test is a reported
+// result, not a request error).
+func TestHandleAdminEmbeddingsTest_Failure(t *testing.T) {
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, NewEmbedder: stubNewEmbedder(errors.New("connection refused")),
+	})
+	code, testErr := postEmbeddingTest(t, h, cookie, map[string]interface{}{"base_url": "https://example.com/v1"})
+	if code != http.StatusOK {
+		t.Fatalf("expected 200 even when the connectivity probe fails, got %d", code)
+	}
+	if !strings.Contains(testErr, "connection refused") {
+		t.Errorf("expected the probe failure surfaced, got %q", testErr)
+	}
+}
+
+func TestHandleAdminEmbeddingsTest_BlankBaseURLSkipsProbe(t *testing.T) {
+	called := false
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
+		NewEmbedder: func(domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider {
+			called = true
+			return fakeEmbeddingProvider{}
+		},
+	})
+	code, testErr := postEmbeddingTest(t, h, cookie, map[string]interface{}{"base_url": ""})
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if testErr != "" {
+		t.Errorf("expected no error for a blank base URL, got %q", testErr)
+	}
+	if called {
+		t.Error("expected NewEmbedder to never be called for a blank base URL")
+	}
+}
+
+// embeddingEndpointResp mirrors admin.go's unexported embeddingEndpointResponse
+// wire shape, for decoding test responses.
+type embeddingEndpointResp struct {
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	BaseURL            string    `json:"base_url"`
+	HasAPIKey          bool      `json:"has_api_key"`
+	Model              string    `json:"model"`
+	Dimensions         int       `json:"dimensions"`
+	RateLimitPerSecond float64   `json:"rate_limit_per_second"`
+	Enabled            bool      `json:"enabled"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+
+func adminAuthedHandlerWithEmbeddingEndpoints(t *testing.T, repo ports.EmbeddingEndpointStore) (*restapi.Handler, *http.Cookie) {
+	t.Helper()
+	return adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, EmbeddingEndpoints: repo,
+		NewEmbedder: stubNewEmbedder(nil),
+	})
+}
+
+func createTestEmbeddingEndpoint(t *testing.T, h *restapi.Handler, cookie *http.Cookie, body map[string]interface{}) (int, embeddingEndpointResp) {
+	t.Helper()
+	data, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/embeddings/endpoints", bytes.NewReader(data))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	var resp embeddingEndpointResp
+	if rec.Code == http.StatusCreated {
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decoding create response: %v", err)
+		}
+	}
+	return rec.Code, resp
+}
+
+func TestHandleAdminEmbeddingEndpoints_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/embeddings/endpoints", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when embedding endpoints aren't configured, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminEmbeddingEndpoints_MethodNotAllowed(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithEmbeddingEndpoints(t, repo)
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/embeddings/endpoints", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminEmbeddingEndpoints_CreateInvalidJSON(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithEmbeddingEndpoints(t, repo)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/embeddings/endpoints", bytes.NewReader([]byte("{not json")))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminEmbeddingEndpoints_CreateValidation(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithEmbeddingEndpoints(t, repo)
+
+	cases := []struct {
+		name string
+		body map[string]interface{}
+	}{
+		{"missing name", map[string]interface{}{"base_url": "https://example.com", "dimensions": 4}},
+		{"missing base_url", map[string]interface{}{"name": "x", "dimensions": 4}},
+		{"zero dimensions", map[string]interface{}{"name": "x", "base_url": "https://example.com", "dimensions": 0}},
+		{"negative dimensions", map[string]interface{}{"name": "x", "base_url": "https://example.com", "dimensions": -1}},
+		{"negative rate limit", map[string]interface{}{"name": "x", "base_url": "https://example.com", "dimensions": 4, "rate_limit_per_second": -1}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, _ := json.Marshal(tc.body)
+			req := httptest.NewRequest(http.MethodPost, "/admin/api/embeddings/endpoints", bytes.NewReader(data))
+			req.AddCookie(cookie)
+			rec := httptest.NewRecorder()
+			h.RoutesAdmin().ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestHandleAdminEmbeddingEndpoints_CreateThenList proves a created
+// endpoint's ID is minted from its name, it never echoes the API key back,
+// and it shows up in a subsequent list.
+func TestHandleAdminEmbeddingEndpoints_CreateThenList(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithEmbeddingEndpoints(t, repo)
+
+	code, created := createTestEmbeddingEndpoint(t, h, cookie, map[string]interface{}{
+		"name": "IONOS bge-m3", "base_url": "https://example.com/v1", "api_key": "sk-test",
+		"model": "BAAI/bge-m3", "dimensions": 1024, "rate_limit_per_second": 5, "enabled": true,
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", code)
+	}
+	if created.ID != "ionos_bge_m3" {
+		t.Errorf("expected the ID minted from the name, got %q", created.ID)
+	}
+	if !created.HasAPIKey {
+		t.Errorf("expected has_api_key=true, got %+v", created)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/admin/api/embeddings/endpoints", nil)
+	listReq.AddCookie(cookie)
+	listRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", listRec.Code)
+	}
+	if strings.Contains(listRec.Body.String(), "sk-test") {
+		t.Errorf("expected the list response to never contain the API key, got: %s", listRec.Body.String())
+	}
+	var list []embeddingEndpointResp
+	if err := json.Unmarshal(listRec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decoding list response: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != "ionos_bge_m3" {
+		t.Errorf("expected the created endpoint listed, got %+v", list)
+	}
+}
+
+// TestHandleAdminEmbeddingEndpoints_CreateDedupesIDOnNameCollision proves
+// two endpoints created with the same name get distinct IDs, per
+// domain.NewEmbeddingEndpointID's dedupe rule.
+func TestHandleAdminEmbeddingEndpoints_CreateDedupesIDOnNameCollision(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithEmbeddingEndpoints(t, repo)
+
+	_, first := createTestEmbeddingEndpoint(t, h, cookie, map[string]interface{}{
+		"name": "Ollama", "base_url": "https://a.example", "dimensions": 4,
+	})
+	_, second := createTestEmbeddingEndpoint(t, h, cookie, map[string]interface{}{
+		"name": "Ollama", "base_url": "https://b.example", "dimensions": 8,
+	})
+	if first.ID == second.ID {
+		t.Errorf("expected distinct IDs for two endpoints named the same, got both %q", first.ID)
+	}
+}
+
+func TestHandleAdminGetEmbeddingEndpoint_Success(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithEmbeddingEndpoints(t, repo)
+	_, created := createTestEmbeddingEndpoint(t, h, cookie, map[string]interface{}{
+		"name": "IONOS", "base_url": "https://example.com/v1", "dimensions": 4,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/embeddings/endpoints/"+created.ID, nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got embeddingEndpointResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if got.ID != created.ID {
+		t.Errorf("expected the created endpoint, got %+v", got)
+	}
+}
+
+func TestHandleAdminGetEmbeddingEndpoint_NotFound(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithEmbeddingEndpoints(t, repo)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/embeddings/endpoints/missing", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminGetEmbeddingEndpoint_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/embeddings/endpoints/anything", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func patchEmbeddingEndpoint(t *testing.T, h *restapi.Handler, cookie *http.Cookie, id string, body map[string]interface{}) *httptest.ResponseRecorder {
+	t.Helper()
+	data, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/embeddings/endpoints/"+id, bytes.NewReader(data))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	return rec
+}
+
+// TestHandleAdminUpdateEmbeddingEndpoint_ReplacesEditableFields proves a
+// PATCH replaces every editable field (not the ID).
+func TestHandleAdminUpdateEmbeddingEndpoint_ReplacesEditableFields(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithEmbeddingEndpoints(t, repo)
+	_, created := createTestEmbeddingEndpoint(t, h, cookie, map[string]interface{}{
+		"name": "IONOS", "base_url": "https://old.example/v1", "model": "old-model", "dimensions": 4, "enabled": true,
+	})
+
+	rec := patchEmbeddingEndpoint(t, h, cookie, created.ID, map[string]interface{}{
+		"name": "Renamed", "base_url": "https://new.example/v1", "model": "new-model",
+		"dimensions": 8, "rate_limit_per_second": 3, "enabled": false,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	got, err := repo.GetEmbeddingEndpoint(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Name != "Renamed" || got.BaseURL != "https://new.example/v1" || got.Model != "new-model" ||
+		got.Dimensions != 8 || got.RateLimitPerSecond != 3 || got.Enabled {
+		t.Errorf("expected every editable field replaced, got %+v", got)
+	}
+}
+
+// TestHandleAdminUpdateEmbeddingEndpoint_BlankAPIKeyPreservesExisting proves
+// a PATCH that leaves api_key blank (the normal case, since the edit form
+// never shows the real value) doesn't wipe out whatever key is already
+// configured.
+func TestHandleAdminUpdateEmbeddingEndpoint_BlankAPIKeyPreservesExisting(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithEmbeddingEndpoints(t, repo)
+	_, created := createTestEmbeddingEndpoint(t, h, cookie, map[string]interface{}{
+		"name": "IONOS", "base_url": "https://example.com/v1", "api_key": "sk-keep-me", "dimensions": 4,
+	})
+
+	rec := patchEmbeddingEndpoint(t, h, cookie, created.ID, map[string]interface{}{
+		"name": "IONOS", "base_url": "https://example.com/v1", "dimensions": 4,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	got, err := repo.GetEmbeddingEndpoint(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.APIKey != "sk-keep-me" {
+		t.Errorf("expected the existing API key to survive a PATCH that left it blank, got %q", got.APIKey)
+	}
+}
+
+// TestHandleAdminUpdateEmbeddingEndpoint_ClearAPIKeyRemovesIt proves
+// clear_api_key is the explicit way to actually remove a configured key.
+func TestHandleAdminUpdateEmbeddingEndpoint_ClearAPIKeyRemovesIt(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithEmbeddingEndpoints(t, repo)
+	_, created := createTestEmbeddingEndpoint(t, h, cookie, map[string]interface{}{
+		"name": "IONOS", "base_url": "https://example.com/v1", "api_key": "sk-remove-me", "dimensions": 4,
+	})
+
+	rec := patchEmbeddingEndpoint(t, h, cookie, created.ID, map[string]interface{}{
+		"name": "IONOS", "base_url": "https://example.com/v1", "dimensions": 4, "clear_api_key": true,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	got, err := repo.GetEmbeddingEndpoint(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.APIKey != "" {
+		t.Errorf("expected clear_api_key to remove the stored key, got %q", got.APIKey)
+	}
+}
+
+func TestHandleAdminUpdateEmbeddingEndpoint_NotFound(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithEmbeddingEndpoints(t, repo)
+	rec := patchEmbeddingEndpoint(t, h, cookie, "missing", map[string]interface{}{
+		"name": "x", "base_url": "https://example.com", "dimensions": 4,
+	})
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminUpdateEmbeddingEndpoint_InvalidJSON(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithEmbeddingEndpoints(t, repo)
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/embeddings/endpoints/anything", bytes.NewReader([]byte("{not json")))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminUpdateEmbeddingEndpoint_ValidationFailureBeforeLookup(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithEmbeddingEndpoints(t, repo)
+	rec := patchEmbeddingEndpoint(t, h, cookie, "missing", map[string]interface{}{"name": ""})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDeleteEmbeddingEndpoint_Success(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithEmbeddingEndpoints(t, repo)
+	_, created := createTestEmbeddingEndpoint(t, h, cookie, map[string]interface{}{
+		"name": "IONOS", "base_url": "https://example.com/v1", "dimensions": 4,
+	})
+
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/embeddings/endpoints/"+created.ID, nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if _, err := repo.GetEmbeddingEndpoint(context.Background(), created.ID); !errors.Is(err, ports.ErrEmbeddingEndpointNotFound) {
+		t.Errorf("expected the endpoint gone after delete, got err=%v", err)
+	}
+}
+
+func TestHandleAdminDeleteEmbeddingEndpoint_NotFound(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithEmbeddingEndpoints(t, repo)
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/embeddings/endpoints/missing", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDeleteEmbeddingEndpoint_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/embeddings/endpoints/anything", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+// TestHandleAdminEmbeddingEndpoints_APIKeyEncryptedAtRest proves that when
+// SettingsEncryptionKey is configured, an endpoint's API key is persisted
+// encrypted (never the plaintext, anywhere in the stored row) -- mirroring
+// this codebase's existing settingscrypto precedent.
+func TestHandleAdminEmbeddingEndpoints_APIKeyEncryptedAtRest(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	key, err := settingscrypto.ParseKey(testSettingsEncryptionKey)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, EmbeddingEndpoints: repo,
+		SettingsEncryptionKey: key, NewEmbedder: stubNewEmbedder(nil),
+	})
+
+	code, created := createTestEmbeddingEndpoint(t, h, cookie, map[string]interface{}{
+		"name": "IONOS", "base_url": "https://example.com/v1", "api_key": "sk-super-secret", "dimensions": 4,
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", code)
+	}
+
+	stored, err := repo.GetEmbeddingEndpoint(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stored.APIKey == "sk-super-secret" {
+		t.Error("expected the stored API key to be encrypted, not plaintext")
+	}
+	if !strings.HasPrefix(stored.APIKey, "enc:v1:") {
+		t.Errorf("expected the stored key to carry settingscrypto's enc:v1: prefix, got %q", stored.APIKey)
+	}
+	dec, err := settingscrypto.Decrypt(key, stored.APIKey)
+	if err != nil {
+		t.Fatalf("unexpected error decrypting the stored value: %v", err)
+	}
+	if dec != "sk-super-secret" {
+		t.Errorf("expected the stored value to decrypt back to the real key, got %q", dec)
+	}
+}
+
+// TestHandleAdminEmbeddingEndpoints_APIKeyPlaintextWithoutEncryptionKey
+// proves the opt-in, non-breaking default: with no SettingsEncryptionKey
+// configured, the API key is stored exactly as submitted.
+func TestHandleAdminEmbeddingEndpoints_APIKeyPlaintextWithoutEncryptionKey(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithEmbeddingEndpoints(t, repo)
+
+	_, created := createTestEmbeddingEndpoint(t, h, cookie, map[string]interface{}{
+		"name": "IONOS", "base_url": "https://example.com/v1", "api_key": "sk-plain-key", "dimensions": 4,
+	})
+	stored, err := repo.GetEmbeddingEndpoint(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stored.APIKey != "sk-plain-key" {
+		t.Errorf("expected the plaintext key stored with no encryption key configured, got %q", stored.APIKey)
 	}
 }
 
@@ -3244,175 +3411,6 @@ func TestHandleAdminSettings_PostPersistsToSettingsStore(t *testing.T) {
 // well-formed hex of the right length.
 const testSettingsEncryptionKey = "00000000000000000000000000000000000000000000000000000000000000ab"
 
-// TestHandleAdminSettings_PostEncryptsEmbeddingAPIKeyAtRest proves that
-// when SettingsEncryptionKey is configured, the embedding API key is
-// persisted encrypted (never the plaintext, anywhere in the stored value)
-// while the in-memory opSettings a handler actually uses keeps the real
-// plaintext -- see Handler.encryptedOperationalValues' doc comment for why
-// only the persisted copy is touched.
-func TestHandleAdminSettings_PostEncryptsEmbeddingAPIKeyAtRest(t *testing.T) {
-	repo := newSettingsStoreTestRepo(t)
-	key, err := settingscrypto.ParseKey(testSettingsEncryptionKey)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
-	opSettings := domain.DefaultOperationalSettings()
-	h := restapi.New(restapi.Config{
-		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
-		Settings: settings, OpSettings: opSettings, SettingsStore: repo,
-		DBDriver: "sqlite", AdminUser: testAdminUser, AdminPass: testAdminPass,
-		SettingsEncryptionKey: key, NewEmbedder: stubNewEmbedder(nil),
-	})
-	loginBody, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
-	loginReq := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(loginBody))
-	loginRec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(loginRec, loginReq)
-	if loginRec.Code != http.StatusOK {
-		t.Fatalf("login failed: %d %s", loginRec.Code, loginRec.Body.String())
-	}
-	cookie := loginRec.Result().Cookies()[0]
-
-	body, _ := json.Marshal(map[string]interface{}{
-		"tuning": map[string]float64{"alpha": 0.9, "k1": 2.0, "b": 0.2},
-		"operational": map[string]interface{}{
-			"fetch_timeout_seconds": 3, "user_agent": "x", "default_max_pages": 5,
-			"min_text_length": 1, "default_top_k": 1, "session_ttl_hours": 1,
-			"crawl_delay_ms": 1, "max_response_kb": 1,
-			"embedding_provider": "http", "embedding_http_api_key": "sk-super-secret",
-			"embedding_http_base_url": "http://localhost/v1", "embedding_http_model": "m",
-			"embedding_http_dimensions": 8,
-		},
-	})
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	rawOp, found, err := repo.GetSetting(context.Background(), ports.SettingsKeyOperational)
-	if err != nil || !found {
-		t.Fatalf("expected the operational setting to be persisted, found=%v err=%v", found, err)
-	}
-	if strings.Contains(rawOp, "sk-super-secret") {
-		t.Errorf("expected the persisted value to never contain the plaintext API key, got: %s", rawOp)
-	}
-	var storedOp domain.OperationalSettingsValues
-	if err := json.Unmarshal([]byte(rawOp), &storedOp); err != nil {
-		t.Fatalf("failed to decode persisted operational settings: %v", err)
-	}
-	if !strings.HasPrefix(storedOp.EmbeddingHTTPAPIKey, "enc:v1:") {
-		t.Errorf("expected the persisted key to carry settingscrypto's enc:v1: prefix, got %q", storedOp.EmbeddingHTTPAPIKey)
-	}
-	dec, err := settingscrypto.Decrypt(key, storedOp.EmbeddingHTTPAPIKey)
-	if err != nil {
-		t.Fatalf("unexpected error decrypting the persisted value: %v", err)
-	}
-	if dec != "sk-super-secret" {
-		t.Errorf("expected the persisted value to decrypt back to the real key, got %q", dec)
-	}
-
-	// The in-memory settings this same process would use to build its own
-	// embedder still hold the real plaintext -- only the persisted copy
-	// was encrypted.
-	if opSettings.Get().EmbeddingHTTPAPIKey != "sk-super-secret" {
-		t.Errorf("expected the in-memory settings to keep the plaintext key, got %q", opSettings.Get().EmbeddingHTTPAPIKey)
-	}
-}
-
-// TestHandleAdminSettings_PostFallsBackToPlaintextOnEncryptionError proves
-// a save still succeeds (persisting the plaintext key, exactly as it
-// would with no key configured) if settingscrypto.Encrypt itself ever
-// errors -- forced here via a malformed key that bypasses
-// settingscrypto.ParseKey's own validation, which is only enforced at
-// startup (see cmd/*/main.go), not by Handler itself.
-func TestHandleAdminSettings_PostFallsBackToPlaintextOnEncryptionError(t *testing.T) {
-	repo := newSettingsStoreTestRepo(t)
-	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
-	opSettings := domain.DefaultOperationalSettings()
-	h := restapi.New(restapi.Config{
-		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
-		Settings: settings, OpSettings: opSettings, SettingsStore: repo,
-		DBDriver: "sqlite", AdminUser: testAdminUser, AdminPass: testAdminPass,
-		SettingsEncryptionKey: []byte("too-short-for-aes"), NewEmbedder: stubNewEmbedder(nil),
-	})
-	loginBody, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
-	loginReq := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(loginBody))
-	loginRec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(loginRec, loginReq)
-	if loginRec.Code != http.StatusOK {
-		t.Fatalf("login failed: %d %s", loginRec.Code, loginRec.Body.String())
-	}
-	cookie := loginRec.Result().Cookies()[0]
-
-	body, _ := json.Marshal(map[string]interface{}{
-		"tuning": map[string]float64{"alpha": 0.9, "k1": 2.0, "b": 0.2},
-		"operational": map[string]interface{}{
-			"fetch_timeout_seconds": 3, "user_agent": "x", "default_max_pages": 5,
-			"min_text_length": 1, "default_top_k": 1, "session_ttl_hours": 1,
-			"crawl_delay_ms": 1, "max_response_kb": 1,
-			"embedding_provider": "http", "embedding_http_api_key": "sk-plain-key",
-			"embedding_http_base_url": "http://localhost/v1", "embedding_http_model": "m",
-			"embedding_http_dimensions": 8,
-		},
-	})
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	rawOp, found, err := repo.GetSetting(context.Background(), ports.SettingsKeyOperational)
-	if err != nil || !found {
-		t.Fatalf("expected the operational setting to be persisted, found=%v err=%v", found, err)
-	}
-	if !strings.Contains(rawOp, "sk-plain-key") {
-		t.Errorf("expected the fallback-to-plaintext behavior on an encryption error, got: %s", rawOp)
-	}
-}
-
-// TestHandleAdminSettings_PostWithoutEncryptionKeyStoresPlaintext proves
-// the opt-in, non-breaking default: with no SettingsEncryptionKey
-// configured, the embedding API key is persisted exactly as before this
-// feature existed.
-func TestHandleAdminSettings_PostWithoutEncryptionKeyStoresPlaintext(t *testing.T) {
-	repo := newSettingsStoreTestRepo(t)
-	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
-	opSettings := domain.DefaultOperationalSettings()
-	h, cookie := adminAuthedHandlerWithSettingsStore(t, settings, opSettings, nil, repo)
-
-	body, _ := json.Marshal(map[string]interface{}{
-		"tuning": map[string]float64{"alpha": 0.9, "k1": 2.0, "b": 0.2},
-		"operational": map[string]interface{}{
-			"fetch_timeout_seconds": 3, "user_agent": "x", "default_max_pages": 5,
-			"min_text_length": 1, "default_top_k": 1, "session_ttl_hours": 1,
-			"crawl_delay_ms": 1, "max_response_kb": 1,
-			"embedding_provider": "http", "embedding_http_api_key": "sk-plain-key",
-			"embedding_http_base_url": "http://localhost/v1", "embedding_http_model": "m",
-			"embedding_http_dimensions": 8,
-		},
-	})
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	rawOp, found, err := repo.GetSetting(context.Background(), ports.SettingsKeyOperational)
-	if err != nil || !found {
-		t.Fatalf("expected the operational setting to be persisted, found=%v err=%v", found, err)
-	}
-	if !strings.Contains(rawOp, "sk-plain-key") {
-		t.Errorf("expected the persisted value to contain the plaintext key with no encryption key configured, got: %s", rawOp)
-	}
-}
-
 func TestHandleAdminSettings_PostWithoutSettingsStoreStillSucceeds(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	h, cookie := adminAuthedHandlerWithSettingsStore(t, settings, domain.DefaultOperationalSettings(), nil, nil)
@@ -3524,7 +3522,7 @@ func TestSyncSettings_PicksUpAdminPersistedValues(t *testing.T) {
 	otherProcessSettings := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	syncCtx, cancelSync := context.WithCancel(context.Background())
 	t.Cleanup(cancelSync)
-	bootstrap.SyncSettings(syncCtx, repo, otherProcessSettings, nil, nil, nil)
+	bootstrap.SyncSettings(syncCtx, repo, otherProcessSettings, nil, nil, nil, nil)
 	alpha, k1, b := otherProcessSettings.Get()
 	if alpha != 0.42 || k1 != 1.5 || b != 0.6 {
 		t.Errorf("expected another process's settings to pick up the admin edit, got (%v, %v, %v)", alpha, k1, b)

@@ -579,29 +579,171 @@ paths:
         "503": { $ref: "#/components/responses/NotConfigured" }
 
   /admin/api/embeddings/models:
-    get:
+    post:
       tags: [admin]
-      summary: List the models the currently-configured HTTP embedding endpoint reports
+      summary: List the models a candidate HTTP endpoint config reports
       description: >-
-        Calls GET {base_url}/models against the saved "http" embedding
-        configuration (including its saved API key) so the Settings page
-        can prefill the model field's suggestions instead of the admin
-        having to already know a valid model ID. Gated on
-        embedding_http_enabled, not on whether "http" is the provider
-        currently active for search -- listing models is meaningful
-        whenever it's enabled at all. Always 200: an empty models list (no
-        error) when the http provider isn't enabled or no base URL is
-        saved yet -- there's nothing to ask -- and a populated `error`
-        string (models still empty) for a real failure calling the
-        endpoint (bad credentials, endpoint doesn't implement /models,
-        network error), since the model field stays usable as free text
-        either way.
+        Calls GET {base_url}/models against a not-yet-saved candidate
+        endpoint config (in the request body -- base_url/api_key/model/
+        dimensions, the same shape a real domain.EmbeddingHTTPEndpoint
+        has), so the endpoint add/edit subpage can prefill the model
+        field's suggestions before (or without) saving. Always 200: an
+        empty models list (no error) when base_url is blank -- there's
+        nothing to ask -- and a populated `error` string (models still
+        empty) for a real failure calling the endpoint (bad credentials,
+        endpoint doesn't implement /models, network error), since the
+        model field stays usable as free text either way.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EmbeddingCandidateRequest" }
       responses:
         "200":
           description: OK
           content:
             application/json:
               schema: { $ref: "#/components/schemas/EmbeddingModelsList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /admin/api/embeddings/test:
+    post:
+      tags: [admin]
+      summary: Test connectivity against a candidate HTTP endpoint config
+      description: >-
+        Makes one real Embed call against a not-yet-saved candidate
+        endpoint config (the same shape as POST .../models' request body),
+        so the endpoint add/edit subpage can tell the admin immediately if
+        a base URL/model/API key combination doesn't actually work, rather
+        than that only surfacing on the next real search or recompute.
+        Always 200 (a failed test is a reported result, not a request
+        error) except for a blank base_url, which is a no-op success (no
+        call attempted -- error is empty).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EmbeddingCandidateRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EmbeddingConnectivityTestResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /admin/api/embeddings/endpoints:
+    get:
+      tags: [admin]
+      summary: List every configured HTTP embedding endpoint
+      description: >-
+        Any number of endpoints may be configured, each independently
+        enabled and rate-limited -- alongside the always-available built-in
+        hash provider (see operational.embedding_hash_enabled on
+        /admin/api/settings). Every enabled one is kept warm (embedded and
+        stored) on every crawl/recompute, so switching which one is active
+        for search (operational.embedding_provider) is instant.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/EmbeddingHTTPEndpoint" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    post:
+      tags: [admin]
+      summary: Create an HTTP embedding endpoint
+      description: >-
+        The new endpoint's id is minted server-side from its name (see
+        domain.NewEmbeddingEndpointID), deduped against every existing
+        endpoint id plus the reserved "hash" (the built-in provider's own
+        id), so it can never collide with either -- the response's id is
+        the one to use for every subsequent GET/PATCH/DELETE on this
+        endpoint, not the submitted name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EmbeddingHTTPEndpointRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EmbeddingHTTPEndpoint" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/embeddings/endpoints/{id}:
+    get:
+      tags: [admin]
+      summary: Get one HTTP embedding endpoint's full config
+      description: Backs the admin endpoint edit subpage's initial load.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EmbeddingHTTPEndpoint" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    patch:
+      tags: [admin]
+      summary: Replace an HTTP embedding endpoint's editable fields
+      description: >-
+        Full replace, not a merge, for every field except id (never
+        editable once created -- it's baked into document_embeddings.
+        provider and the ANN column/index names for every vector already
+        stored under it) and api_key: since a GET/POST/PATCH response never
+        echoes the real key (see has_api_key), leaving api_key blank here
+        preserves whatever's already stored rather than clearing it --
+        clear_api_key is the explicit way to actually remove it.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EmbeddingHTTPEndpointRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EmbeddingHTTPEndpoint" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    delete:
+      tags: [admin]
+      summary: Delete an HTTP embedding endpoint's configuration
+      description: >-
+        Removes only the configured endpoint itself -- its already-stored
+        document_embeddings rows and ANN column are left in place, unused,
+        same non-destructive convention as disabling a provider. Search and
+        any future recompute can no longer use this provider afterward.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+        "404": { $ref: "#/components/responses/NotFound" }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
   /admin/api/database:
@@ -1098,96 +1240,36 @@ components:
               type: boolean
               description: >-
                 Whether the dependency-free "hash" feature-hashing
-                provider is computed and stored for every document.
-                Together with embedding_http_enabled, controls which
-                provider(s) are actually kept current -- embedding_provider
-                below just picks which of the enabled one(s) search reads.
-                At least one must stay enabled; if both are left false (or
-                omitted, as a request from before these two fields existed
-                would) while embedding_provider already names "http", that
-                self-heals to http_enabled=true instead -- preserving a
-                real, already-configured HTTP setup rather than silently
-                discarding it -- only a genuinely unset/invalid
-                embedding_provider falls back to hash_enabled=true here.
-                Like embedding_http_enabled, NOT applied live -- read once
-                at process startup, since enabling a provider that wasn't
-                running before requires constructing its embedder and
-                sizing its own pgvector column/index.
-            embedding_http_enabled:
-              type: boolean
-              description: >-
-                Whether the "http" (OpenAI-compatible embeddings endpoint)
-                provider is computed and stored for every document -- see
-                embedding_hash_enabled. Enabling this means every crawl (and
-                any recompute) also pays for an HTTP Embed call per document
-                even while embedding_provider is still "hash" -- real,
-                continuous cost against embedding_rate_limit_per_second, not
-                a one-time migration cost, since it's what keeps the HTTP
-                vectors warm enough to switch to instantly via
-                embedding_provider.
+                provider is computed and stored for every document,
+                independently of however many HTTP endpoints are
+                separately configured and enabled (see
+                /admin/api/embeddings/endpoints). embedding_provider below
+                just picks which of the currently-enabled provider(s)
+                search reads. NOT applied live -- read once at process
+                startup, since enabling a provider that wasn't running
+                before requires constructing its embedder and sizing its
+                own pgvector column/index.
             embedding_provider:
               type: string
-              enum: [hash, http]
               description: >-
-                Which of the enabled provider(s) above (see
-                embedding_hash_enabled/embedding_http_enabled) search
-                actually compares a query against. Self-healed to an
-                enabled provider (preferring hash) if it names one that
-                isn't. Unlike the two Enabled flags, this doesn't require a
-                restart or a recompute to take effect once both providers
-                are already being kept warm -- it's just choosing which
-                already-current stored vector to read. Switching to a
-                provider that was previously disabled (so it has no stored
-                vectors yet, or stale ones) changes the vector space
-                entirely until it's been enabled long enough to catch up,
-                or an explicit recompute brings it current immediately.
-            embedding_http_base_url:
-              type: string
-              description: >-
-                The "http" embedding provider's OpenAI-compatible base URL,
-                e.g. "http://localhost:11434/v1" for a local Ollama server.
-                Requests go to "<embedding_http_base_url>/embeddings".
-                Meaningless unless embedding_provider is "http".
-            embedding_http_model:
-              type: string
-              description: Sent as the embeddings request body's "model" field.
-            embedding_http_dimensions:
-              type: integer
-              description: >-
-                Expected embedding vector length; a mismatch against the
-                API's actual response fails clearly rather than corrupting
-                search. A value below 1 falls back to the default (128).
-            embedding_http_api_key:
-              type: string
-              description: >-
-                Write-only: sent as an "Authorization: Bearer" header on
-                every embeddings request. A GET response always reports
-                this as "" regardless of what's configured -- see
-                embedding_http_api_key_set for whether a key is set. A POST
-                that leaves this blank leaves the currently configured key
-                unchanged rather than clearing it.
-            embedding_http_api_key_set:
-              type: boolean
-              readOnly: true
-              description: >-
-                GET-only: whether an embedding_http_api_key is currently
-                configured, without revealing the key itself.
-            embedding_rate_limit_per_second:
-              type: integer
-              description: >-
-                Caps how many Embed calls per second this process issues
-                against the "http" provider, shared across every caller:
-                POST /admin/api/embeddings/recompute's corpus-wide
-                recompute, and (on cmd/crawl) every concurrently-running
-                crawl job saving a newly-fetched page -- so neither a
-                recompute nor a burst of crawling floods a real hosted
-                provider's own rate limit (IONOS's AI Model Hub, the
-                motivating case, documents 5 requests/second -- see
-                docs.ionos.com/cloud/ai/ai-model-hub/how-tos/rate-limits). A
-                value below 1 falls back to the default (5). Meaningless for
-                a local server with no rate limit of its own -- raise this
-                well above whatever it can sustain to make pacing a no-op
-                there.
+                Which enabled provider -- the literal "hash" or an enabled
+                HTTP endpoint's id (see /admin/api/embeddings/endpoints) --
+                search actually compares a query against. Self-healed
+                (falls back to hash, or the first enabled endpoint) if it
+                names a provider that isn't currently enabled/configured --
+                that validity now depends on the dynamically configured
+                endpoint list, not a fixed enum, so unlike
+                embedding_hash_enabled this self-healing happens wherever
+                both this value and the live endpoint list are read
+                together, not as a POST-time field validation. Doesn't
+                require a restart or a recompute to take effect once the
+                target provider is already being kept warm -- it's just
+                choosing which already-current stored vector to read.
+                Switching to a provider that was previously disabled (so
+                it has no stored vectors yet, or stale ones) changes the
+                vector space entirely until it's been enabled long enough
+                to catch up, or an explicit recompute brings it current
+                immediately.
             embedding_title_weight:
               type: number
               format: double
@@ -1202,23 +1284,10 @@ components:
                 other field here, a real, meaningful value, not "unset")
                 skips the extra Embed call and embeds the body alone; 1
                 embeds the title alone. Doubles Embed call volume against
-                the "http" provider whenever non-zero -- free for "hash",
-                a local computation with no rate limit of its own. Only
-                takes effect for documents crawled, re-crawled, or
+                any enabled HTTP endpoint whenever non-zero -- free for
+                "hash", a local computation with no rate limit of its own.
+                Only takes effect for documents crawled, re-crawled, or
                 explicitly recomputed after the change -- not retroactive.
-        embedding_test_error:
-          type: string
-          readOnly: true
-          description: >-
-            POST-only: set when operational.embedding_http_enabled is true
-            and a real Embed call against the just-saved base URL/model/API
-            key fails, so a misconfiguration is visible immediately rather
-            than only on the next real search. Gated on
-            embedding_http_enabled, not on whether "http" is the provider
-            currently active for search. The save itself still succeeds
-            either way -- this is a warning, not a validation error. Absent
-            (not just empty) on a GET, and on a POST whose probe succeeds
-            or whose http provider isn't enabled.
 
     Overrides:
       type: object
@@ -1289,6 +1358,19 @@ components:
         failed: { type: integer, description: "How many documents that run failed to re-embed (a flaky endpoint, a rate limit, a since-deleted document) -- logged, not fatal to the run." }
         duration_ms: { type: integer }
 
+    EmbeddingCandidateRequest:
+      type: object
+      description: >-
+        A not-yet-saved (or being-edited) HTTP endpoint config, as probed
+        by POST .../models and POST .../test -- just the fields a real
+        Embed/ListModels call needs, independent of whether this candidate
+        is ultimately saved as a new endpoint or an edit to an existing one.
+      properties:
+        base_url: { type: string, description: 'Blank means "nothing to probe" -- both endpoints return a no-op success rather than attempting a call.' }
+        api_key: { type: string }
+        model: { type: string }
+        dimensions: { type: integer }
+
     EmbeddingModelsList:
       type: object
       properties:
@@ -1299,10 +1381,61 @@ components:
         error:
           type: string
           description: >-
-            Set only when listing models was actually attempted (the
-            provider is "http" and a base URL is saved) but failed --
-            models stays an empty array in that case. Never set alongside
-            a populated models array.
+            Set only when listing models was actually attempted (base_url
+            was non-empty) but failed -- models stays an empty array in
+            that case. Never set alongside a populated models array.
+
+    EmbeddingConnectivityTestResult:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Empty on a successful connection test (or a no-op blank base_url); otherwise the probe's own error.
+
+    EmbeddingHTTPEndpointOptions:
+      type: object
+      required: [name, base_url, dimensions]
+      properties:
+        name: { type: string, description: "Display name -- also the source domain.NewEmbeddingEndpointID slugifies into this endpoint's id on creation (POST only; ignored by PATCH)." }
+        base_url: { type: string, description: 'The OpenAI-compatible embeddings API base URL -- requests go to "<base_url>/embeddings".' }
+        model: { type: string, description: 'Sent as the embeddings request body''s "model" field.' }
+        dimensions: { type: integer, description: "Expected embedding vector length; a mismatch against the API's actual response fails clearly rather than corrupting search. Must be positive." }
+        rate_limit_per_second: { type: number, description: "Caps how many Embed calls per second this process issues against this endpoint specifically. 0 (the default) means unlimited. Must not be negative." }
+        enabled: { type: boolean, description: "Whether this endpoint's embedding is actually computed and stored for every document. Disabling never deletes its already-stored vectors." }
+
+    EmbeddingHTTPEndpointRequest:
+      description: >-
+        The request shape for creating (POST) or replacing (PATCH) an HTTP
+        embedding endpoint. api_key is write-only -- an EmbeddingHTTPEndpoint
+        response never echoes it back (see its own has_api_key). For PATCH
+        specifically, leaving it blank means "keep whatever is already
+        stored," not "clear it" -- clear_api_key is the explicit way to
+        actually remove it; ignored by POST, which has no prior key to
+        preserve or clear.
+      allOf:
+        - $ref: "#/components/schemas/EmbeddingHTTPEndpointOptions"
+        - type: object
+          properties:
+            api_key: { type: string, description: "Sent as an Authorization: Bearer header; optional. PATCH: blank preserves the existing value unless clear_api_key is set." }
+            clear_api_key: { type: boolean, default: false, description: "PATCH only: removes the stored key instead of preserving it when api_key is left blank." }
+
+    EmbeddingHTTPEndpoint:
+      allOf:
+        - $ref: "#/components/schemas/EmbeddingHTTPEndpointOptions"
+        - type: object
+          properties:
+            id:
+              type: string
+              description: >-
+                Minted from name at creation (see domain.
+                NewEmbeddingEndpointID) and never changed afterward, even
+                if name is edited later -- this is the
+                document_embeddings.provider value and the pgvector ANN
+                column/index name suffix for every vector stored under it.
+            has_api_key:
+              type: boolean
+              description: Whether an API key is stored for this endpoint -- its actual value is never returned.
+            created_at: { type: string, format: date-time }
 
     DatabaseDiagnostics:
       type: object

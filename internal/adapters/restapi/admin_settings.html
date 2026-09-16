@@ -93,50 +93,16 @@
             Compute hash embeddings — dependency-free feature hashing (default; not a trained model)
           </label>
         </div>
-        <div class="form-row form-row-check">
-          <label for="embedding-http-enabled">
-            <input id="embedding-http-enabled" type="checkbox">
-            Compute HTTP embeddings — a real trained model via an OpenAI-compatible embeddings endpoint
-          </label>
-          <p class="tuning-hint">Both may be enabled at once, so search can switch which one it reads (below) without ever needing a recompute -- the other is already kept warm on every crawl. At least one must stay enabled. Enabling this one means every crawl (and any recompute) also pays for an HTTP Embed call per document, against the rate limit below, even while it isn't the one active for search.</p>
-        </div>
         <div class="form-row">
           <label for="embedding-provider">Active for search — which enabled provider's stored vectors a query is actually compared against</label><br>
-          <select id="embedding-provider" class="field">
-            <option value="hash">Hash</option>
-            <option value="http">HTTP</option>
-          </select>
-        </div>
-        <div id="embedding-http-fields">
-          <div class="form-row">
-            <label for="embedding-http-base-url">Base URL — the embeddings API's base URL, e.g. a local Ollama server or a hosted provider</label><br>
-            <input id="embedding-http-base-url" class="field" type="text" placeholder="http://localhost:11434/v1">
-          </div>
-          <div class="form-row">
-            <label for="embedding-http-model">Model name — sent as the request's "model" field</label><br>
-            <input id="embedding-http-model" class="field" type="text" placeholder="nomic-embed-text" list="embedding-http-model-options">
-            <datalist id="embedding-http-model-options"></datalist>
-            <p class="tuning-hint" id="embedding-http-model-hint"></p>
-          </div>
-          <div class="form-row">
-            <label for="embedding-http-dimensions">Dimensions — the model's embedding vector length; a mismatch fails clearly rather than corrupting search</label><br>
-            <input id="embedding-http-dimensions" class="field" type="number" step="1" min="1">
-          </div>
-          <div class="form-row">
-            <label for="embedding-http-api-key">API key — sent as an Authorization header; optional, leave blank for a server that needs none</label><br>
-            <input id="embedding-http-api-key" class="field" type="password" autocomplete="new-password" readonly>
-            <p class="tuning-hint" id="embedding-http-api-key-hint"></p>
-          </div>
-          <div class="form-row">
-            <label for="embedding-rate-limit">Rate limit — max Embed calls per second, shared by a recompute run and ongoing crawling; keep at or below your provider's own limit</label><br>
-            <input id="embedding-rate-limit" class="field" type="number" step="1" min="1" placeholder="5">
-          </div>
+          <select id="embedding-provider" class="field"></select>
+          <p class="tuning-hint">Configure additional HTTP embedding endpoints (any number, each independently enabled) on <a href="/admin/embeddings/endpoints">HTTP endpoints</a>. Any enabled provider may be kept warm at once, so switching which one is active here never needs a recompute -- the others are already kept warm on every crawl. At least one provider must stay enabled overall.</p>
         </div>
         <div class="form-row">
           <label for="embedding-title-weight">Title weight in embeddings — 0 embeds the body only, 1 the title only; in between, blends two separate Embed calls (see Embeddings)</label><br>
           <input id="embedding-title-weight" class="field" type="number" step="0.05" min="0" max="1">
         </div>
-        <p class="tuning-hint">Default: hash. Switching providers takes effect only after every process (search, admin, crawl) is restarted -- unlike every other setting on this page, it isn't picked up live, since the embedding column's size is fixed at process startup. It also changes the vector space entirely: existing stored embeddings become meaningless to compare against newly computed ones until every document's embedding is recomputed -- no re-crawl needed, since the indexed text itself doesn't change. See <a href="/admin/embeddings">Embeddings</a> to list available models or trigger a recompute.</p>
+        <p class="tuning-hint">Default: hash. Switching which provider is active for search takes effect live, without a restart -- it's just choosing which already-current stored vector to read. Enabling a provider that wasn't already enabled (or adding a new HTTP endpoint) changes the vector space entirely for it: existing stored embeddings from a different provider are meaningless to compare against, until every document's embedding is recomputed for the newly enabled one -- no re-crawl needed, since the indexed text itself doesn't change. See <a href="/admin/embeddings">Embeddings</a> to trigger a recompute.</p>
       </div>
 
       <div class="subpanel">

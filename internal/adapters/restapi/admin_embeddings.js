@@ -1,36 +1,38 @@
   const configEl = document.getElementById('embeddings-config');
-  const modelsBtn = document.getElementById('embeddings-models-btn');
-  const modelsStatusEl = document.getElementById('embeddings-models-status');
-  const modelsResultEl = document.getElementById('embeddings-models-result');
   const recomputeSummaryEl = document.getElementById('embeddings-recompute-summary');
   const recomputeBtn = document.getElementById('embeddings-recompute-btn');
   const recomputeStatusEl = document.getElementById('embeddings-recompute-status');
   const recomputeResultEl = document.getElementById('embeddings-recompute-result');
 
-  function renderConfig(s) {
+  // activeProviderLabel resolves op.embedding_provider (either the literal
+  // "hash" or a configured HTTP endpoint's ID) against the fetched endpoint
+  // list to a human name -- falling back to the raw ID if it names an
+  // endpoint that's been deleted since (self-heals on the next settings
+  // sync, see domain.ReconcileActiveProvider).
+  function activeProviderLabel(providerID, endpoints) {
+    if (providerID === 'hash') return 'Hash (dependency-free)';
+    const match = endpoints.find((e) => e.id === providerID);
+    return match ? match.name + ' (' + match.id + ')' : providerID;
+  }
+
+  function renderConfig(op, endpoints) {
     clear(configEl);
-    const op = s.operational;
     const enabled = [];
     if (op.embedding_hash_enabled) enabled.push('hash');
-    if (op.embedding_http_enabled) enabled.push('http');
+    endpoints.filter((e) => e.enabled).forEach((e) => enabled.push(e.name));
     kvRow(configEl, 'Enabled providers', enabled.length ? enabled.join(', ') : 'none');
-    kvRow(configEl, 'Active for search', op.embedding_provider === 'http' ? 'HTTP (trained model)' : 'Hash (dependency-free)');
-    // The HTTP-only fields below are shown whenever that provider is
-    // enabled (computed) -- not only when it's the one active for search,
-    // since both may be enabled at once (see the two rows above).
-    if (op.embedding_http_enabled) {
-      kvRow(configEl, 'Base URL', op.embedding_http_base_url || '(not set)');
-      kvRow(configEl, 'Model', op.embedding_http_model || '(not set)');
-      kvRow(configEl, 'Dimensions', String(op.embedding_http_dimensions));
-      kvRow(configEl, 'API key', op.embedding_http_api_key_set ? 'configured' : 'not configured');
-    }
-    kvRow(configEl, 'Rate limit', op.embedding_rate_limit_per_second + ' req/s (shared by recompute and crawling)');
+    kvRow(configEl, 'Active for search', activeProviderLabel(op.embedding_provider, endpoints));
+    kvRow(configEl, 'HTTP endpoints configured', String(endpoints.length));
     kvRow(configEl, 'Title weight', op.embedding_title_weight + ' (0 = body only, 1 = title only)');
   }
 
   async function loadConfig() {
     try {
-      renderConfig(await getJSON('/admin/api/settings'));
+      const [settings, endpoints] = await Promise.all([
+        getJSON('/admin/api/settings'),
+        getJSON('/admin/api/embeddings/endpoints'),
+      ]);
+      renderConfig(settings.operational, endpoints);
     } catch (err) {
       configEl.textContent = 'Could not load configuration: ' + err.message;
     }
@@ -95,30 +97,6 @@
     }
   });
 
-  // Listing models is a real network call against whatever endpoint is
-  // configured (and can fail, e.g. bad credentials) -- a deliberate click,
-  // not something fetched automatically on page load.
-  modelsBtn.addEventListener('click', async () => {
-    setButtonLoading(modelsBtn, true, 'Listing…');
-    modelsStatusEl.textContent = '';
-    clear(modelsResultEl);
-    try {
-      const r = await getJSON('/admin/api/embeddings/models');
-      if (r.error) {
-        modelsStatusEl.textContent = 'Could not list models: ' + r.error;
-      } else if (!r.models || r.models.length === 0) {
-        modelsStatusEl.textContent = 'No models reported -- either the provider is "hash", no base URL is saved yet, or this endpoint does not support listing models.';
-      } else {
-        modelsStatusEl.textContent = r.models.length + ' model(s) available from this endpoint.';
-        r.models.forEach((id) => kvRow(modelsResultEl, 'Model', id));
-      }
-    } catch (err) {
-      modelsStatusEl.textContent = 'Could not list models: ' + err.message;
-    } finally {
-      setButtonLoading(modelsBtn, false);
-    }
-  });
-
   wireSignOut();
   loadConfig();
   loadRecomputeStatus();
@@ -127,7 +105,7 @@
   // a browser's <script> tag, so this is a no-op there. See admin_embeddings.test.js.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-      renderConfig, loadConfig,
+      activeProviderLabel, renderConfig, loadConfig,
       renderRecomputeStatus, loadRecomputeStatus,
     };
   }

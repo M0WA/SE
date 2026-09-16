@@ -117,104 +117,49 @@ type OperationalSettingsValues struct {
 	// afterward -- it isn't retroactively applied to already-indexed
 	// content.
 	TitleWeight int
-	// EmbeddingHashEnabled and EmbeddingHTTPEnabled independently control
-	// which ports.EmbeddingProvider implementation(s) get computed and
-	// stored for every document -- EmbeddingProviderHash (hashembed.
-	// Embedder's dependency-free feature-hashing pseudo-embedding,
-	// "semantic" only in that documents sharing tokens score similarly)
-	// and/or EmbeddingProviderHTTP (httpembed.Embedder: an OpenAI-
-	// compatible embeddings HTTP endpoint -- a local inference server such
-	// as Ollama/llama.cpp/LM Studio, or a hosted API -- for a real trained
-	// model). Both may be enabled at once, so switching which one EmbeddingProvider
-	// below actually searches against never needs a recompute -- the other
-	// one's vectors are already there, kept warm the whole time. At least
-	// one must stay enabled: Set forces EmbeddingHashEnabled back to true
-	// if both are left false, since search always needs something to read.
+	// EmbeddingHashEnabled controls whether the built-in EmbeddingProviderHash
+	// (hashembed.Embedder's dependency-free feature-hashing pseudo-
+	// embedding, "semantic" only in that documents sharing tokens score
+	// similarly) gets computed and stored for every document, independently
+	// of however many EmbeddingHTTPEndpoint rows are separately configured
+	// and enabled (see internal/domain/embedding_endpoint.go) -- any number
+	// of providers may be enabled at once, so switching which one
+	// EmbeddingProvider below actually searches against never needs a
+	// recompute, as long as the one being switched to has been kept warm.
 	//
-	// Like EmbeddingProvider below, these are NOT picked up live by
-	// bootstrap.SyncSettings: each process reads them exactly once, at
+	// Like EmbeddingProvider below, this is NOT picked up live by
+	// bootstrap.SyncSettings: each process reads it exactly once, at
 	// startup, to decide which embedder(s) to construct before calling
 	// sqlrepo.Repository.EnableANN, which sizes one pgvector column/HNSW
-	// index per enabled provider to that provider's own Dimensions() --
-	// enabling a provider that wasn't running before only takes effect the
-	// next time each of cmd/search/cmd/admin/cmd/crawl is restarted.
-	// Enabling EmbeddingHTTPEnabled means every crawl (and any recompute)
-	// now also pays for an HTTP Embed call per document even while
-	// EmbeddingProvider is still "hash" -- real, continuous cost against
-	// EmbeddingRateLimitPerSecond, not a one-time migration cost, since
-	// it's what keeps the HTTP vectors warm enough to switch to instantly.
-	// EmbeddingHashEnabled costs nothing extra either way -- a local
-	// computation with no rate limit of its own.
+	// index per enabled provider -- enabling a provider that wasn't running
+	// before only takes effect the next time each of cmd/search/cmd/admin/
+	// cmd/crawl is restarted. Costs nothing extra either way -- a local
+	// computation with no rate limit of its own, unlike an
+	// EmbeddingHTTPEndpoint's real, continuous cost against its own
+	// RateLimitPerSecond.
 	EmbeddingHashEnabled bool
-	EmbeddingHTTPEnabled bool
-	// EmbeddingProvider selects which of the enabled provider(s) above
-	// search actually compares a query against (EmbeddingProviderHash or
-	// EmbeddingProviderHTTP) -- self-healed to an enabled provider
-	// (preferring hash) if it names one that isn't. Unlike
-	// EmbeddingHashEnabled/EmbeddingHTTPEnabled, this doesn't require a
-	// restart or a recompute to take effect once both providers are
-	// already being kept warm -- it's just choosing which already-current
-	// stored vector to read.
+	// EmbeddingProvider selects which enabled provider -- EmbeddingProviderHash
+	// or an enabled EmbeddingHTTPEndpoint.ID -- search actually compares a
+	// query against. See domain.ReconcileActiveProvider for how an invalid
+	// or no-longer-enabled value is self-healed; OperationalSettings.Set
+	// itself can't do that here; unlike every other field it clamps,
+	// because validity now depends on the dynamically configured
+	// embedding_http_endpoints table, not a fixed enum. This doesn't
+	// require a restart or a recompute to take effect once the target
+	// provider is already being kept warm -- it's just choosing which
+	// already-current stored vector to read.
 	//
 	// Switching to a provider that was previously disabled (so it has no
 	// stored vectors yet, or stale ones from before it was last enabled)
 	// changes the vector space entirely -- a similarity score between an
 	// embedding computed by one provider/model and one computed by
 	// another is meaningless. Like TitleWeight above, there is no
-	// automatic re-embed here beyond whatever EmbeddingHTTPEnabled/
-	// EmbeddingHashEnabled have been keeping current -- semantic ranking
-	// for a freshly re-enabled provider degrades until either it's been
-	// enabled long enough to catch up via ongoing crawls, or an explicit
-	// recompute brings it current immediately.
+	// automatic re-embed here beyond whatever's been kept current while
+	// enabled -- semantic ranking for a freshly re-enabled provider
+	// degrades until either it's been enabled long enough to catch up via
+	// ongoing crawls, or an explicit recompute brings it current
+	// immediately.
 	EmbeddingProvider string
-	// EmbeddingHTTPBaseURL is the OpenAI-compatible embeddings API's base
-	// URL (e.g. "http://localhost:11434/v1" for a local Ollama server, or a
-	// hosted provider's own base URL) -- httpembed.Embedder POSTs to
-	// "<EmbeddingHTTPBaseURL>/embeddings". Meaningless unless
-	// EmbeddingProvider is EmbeddingProviderHTTP.
-	EmbeddingHTTPBaseURL string
-	// EmbeddingHTTPAPIKey is sent as an "Authorization: Bearer <key>"
-	// header on every embeddings request -- optional, since a local
-	// inference server often needs none. This is a real credential, so
-	// (like ScheduledCrawl's Cookie/BasicAuthPass) it's handled as one:
-	// admin.go's operationalValues wire format never echoes the stored
-	// value back in a GET response, and it's never logged. An empty value
-	// passed to OperationalSettings.Set leaves whatever key is already
-	// configured unchanged rather than clearing it -- see Set's doc
-	// comment for why. This value in memory (here) is always plaintext;
-	// restapi.Handler.encryptedOperationalValues seals it (via
-	// settingscrypto, when SETTINGS_ENCRYPTION_KEY is configured) only in
-	// the copy that gets persisted to the shared app_settings table, and
-	// bootstrap.DecryptEmbeddingKey reverses that right before
-	// bootstrap.NewEmbedder reads it back out at startup.
-	EmbeddingHTTPAPIKey string
-	// EmbeddingHTTPModel is sent as the embeddings request body's "model"
-	// field.
-	EmbeddingHTTPModel string
-	// EmbeddingHTTPDimensions is the expected embedding vector length --
-	// httpembed.Embedder errors clearly if an API response's actual vector
-	// length doesn't match this, rather than silently corrupting every
-	// downstream cosine-similarity calculation. Also what Dimensions()
-	// reports to EnableANN for pgvector column sizing.
-	EmbeddingHTTPDimensions int
-	// EmbeddingRateLimitPerSecond caps how many Embed calls per second
-	// this process issues against EmbeddingProviderHTTP, shared across
-	// every caller: application.RunEmbeddingRecomputeJob's corpus-wide
-	// recompute, and (on cmd/crawl) every concurrently-running crawl job
-	// saving a newly-fetched page -- see sqlCrawlerService's embedRateLimiter,
-	// shared across up to maxConcurrentCrawls simultaneous jobs so their
-	// combined rate, not just one job's own, respects this cap. A real
-	// hosted provider (IONOS's AI Model Hub, the motivating case, documents
-	// a 5 requests/second steady-state limit -- see
-	// docs.ionos.com/cloud/ai/ai-model-hub/how-tos/rate-limits) rejects an
-	// unthrottled flood of requests with 429s, and a rate-limited response
-	// returns near-instantly (no real inference work done), so an unpaced
-	// caller spins through the failure condition far faster than any real
-	// embedding call ever would, compounding it instead of self-correcting.
-	// Meaningless for a local server with no rate limit of its own (e.g.
-	// Ollama) -- raise this well above whatever throughput it can actually
-	// sustain to make pacing a no-op there.
-	EmbeddingRateLimitPerSecond int
 	// EmbeddingTitleWeight blends a document's title into its stored
 	// embedding as a weighted combination of two separate Embed calls --
 	// titleWeight*titleVector + (1-titleWeight)*bodyVector (see
@@ -227,11 +172,11 @@ type OperationalSettingsValues struct {
 	// above, this is a genuine, unclamped-by-saturation weight -- there's
 	// no BM25-style k1 tempering it, so a value close to 1 can make a
 	// document's semantic vector nearly indifferent to its actual body
-	// content. Doubles this process's Embed call volume against
-	// EmbeddingProviderHTTP whenever it's non-zero (see
-	// EmbeddingRateLimitPerSecond, which paces every individual Embed
-	// call, title and body alike) -- free for EmbeddingProviderHash, since
-	// that's a local computation with no rate limit of its own. Like
+	// content. Doubles this process's Embed call volume against any enabled
+	// HTTP endpoint whenever it's non-zero (see EmbeddingHTTPEndpoint.
+	// RateLimitPerSecond, which paces every individual Embed call, title
+	// and body alike, per endpoint) -- free for EmbeddingProviderHash,
+	// since that's a local computation with no rate limit of its own. Like
 	// TitleWeight, a change here only takes effect for documents crawled,
 	// re-crawled, or explicitly recomputed afterward.
 	EmbeddingTitleWeight float64
@@ -287,18 +232,6 @@ const (
 	// of however many times they separately occur in the body), not an
 	// aggressive one.
 	defaultTitleWeight = 2
-	// defaultEmbeddingHTTPDimensions matches hashembed's own default, so an
-	// admin switching EmbeddingProvider to EmbeddingProviderHTTP without
-	// having yet set a dimensions count still gets a sane non-zero value
-	// (EnableANN treats dims<=0 as "ANN unavailable") rather than silently
-	// disabling ANN until they do.
-	defaultEmbeddingHTTPDimensions = 128
-	// defaultEmbeddingRateLimitPerSecond matches IONOS's AI Model
-	// Hub's own documented base rate limit (see
-	// EmbeddingRateLimitPerSecond's doc comment) -- a safe default
-	// for the motivating hosted provider; a deployment using a local,
-	// unlimited server can raise it.
-	defaultEmbeddingRateLimitPerSecond = 5
 	// defaultEmbeddingTitleWeight is a modest edge, matching
 	// defaultTitleWeight's own "modest, not aggressive" philosophy --
 	// title carries real topical signal, but a document's semantic vector
@@ -330,10 +263,7 @@ func defaultOperationalSettings() OperationalSettingsValues {
 		MaxDocumentVersions:              defaultMaxDocumentVersions,
 		TitleWeight:                      defaultTitleWeight,
 		EmbeddingHashEnabled:             true,
-		EmbeddingHTTPEnabled:             false,
 		EmbeddingProvider:                EmbeddingProviderHash,
-		EmbeddingHTTPDimensions:          defaultEmbeddingHTTPDimensions,
-		EmbeddingRateLimitPerSecond:      defaultEmbeddingRateLimitPerSecond,
 		EmbeddingTitleWeight:             defaultEmbeddingTitleWeight,
 	}
 }
@@ -446,46 +376,14 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 	if v.LinkScope == LinkScopeDefault || !ValidLinkScope(v.LinkScope) {
 		v.LinkScope = LinkScopeDomain
 	}
-	if !ValidEmbeddingProvider(v.EmbeddingProvider) {
-		v.EmbeddingProvider = EmbeddingProviderHash
-	}
-	// Search always needs something to read -- if an admin submits both
-	// toggles off (or a caller never set them), enable one. This is also
-	// the exact signature of settings stored before these two fields
-	// existed (a JSON blob with no embedding_hash_enabled/
-	// embedding_http_enabled keys at all decodes both to their Go zero
-	// value, false) -- in that case EmbeddingProvider already names
-	// whichever provider was actually configured and working, so enable
-	// THAT one rather than silently discarding a real, working HTTP setup
-	// in favor of hash the moment this feature ships. Only a genuinely
-	// fresh install (EmbeddingProvider itself unset, already self-healed
-	// to hash above) falls back to hash here.
-	if !v.EmbeddingHashEnabled && !v.EmbeddingHTTPEnabled {
-		if v.EmbeddingProvider == EmbeddingProviderHTTP {
-			v.EmbeddingHTTPEnabled = true
-		} else {
-			v.EmbeddingHashEnabled = true
-		}
-	}
-	// EmbeddingProvider must name a provider that's actually enabled (and
-	// therefore actually has stored vectors to read) -- self-heal to
-	// whichever is enabled, preferring hash, the same way DefaultRenderer/
-	// LinkScope above self-heal an otherwise-valid-looking but
-	// inapplicable value.
-	if (v.EmbeddingProvider == EmbeddingProviderHash && !v.EmbeddingHashEnabled) ||
-		(v.EmbeddingProvider == EmbeddingProviderHTTP && !v.EmbeddingHTTPEnabled) {
-		if v.EmbeddingHashEnabled {
-			v.EmbeddingProvider = EmbeddingProviderHash
-		} else {
-			v.EmbeddingProvider = EmbeddingProviderHTTP
-		}
-	}
-	if v.EmbeddingHTTPDimensions <= 0 {
-		v.EmbeddingHTTPDimensions = d.EmbeddingHTTPDimensions
-	}
-	if v.EmbeddingRateLimitPerSecond <= 0 {
-		v.EmbeddingRateLimitPerSecond = d.EmbeddingRateLimitPerSecond
-	}
+	// EmbeddingProvider's validity now depends on the dynamically
+	// configured embedding_http_endpoints table, which this pure value
+	// transform has no access to -- see domain.ReconcileActiveProvider,
+	// applied by callers that have both this and the live endpoint list at
+	// hand (bootstrap.NewEmbedders, admin.go's settings handlers), rather
+	// than here. An empty/unset value is left as-is; those same callers
+	// treat "" the same as any other not-currently-enabled value.
+	//
 	// 0 is a legitimate, meaningful value here (disables title blending
 	// entirely -- see the field's own doc comment), so it's clamped rather
 	// than substituted with the default the way every <=0 field above is.
@@ -496,18 +394,6 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 	}
 
 	s.mu.Lock()
-	// EmbeddingHTTPAPIKey is a secret that's never round-tripped back to
-	// the admin UI (see the field's own doc comment and admin.go's
-	// toOperationalValues) -- the settings page always resubmits every
-	// field on every save, including ones the admin didn't touch, so an
-	// empty value here means "the admin didn't type a new one," not "clear
-	// the configured key," and is replaced with whatever's already stored
-	// rather than wiping it. There is deliberately no way to explicitly
-	// clear a configured key back to empty through this API; switching
-	// EmbeddingProvider away from EmbeddingProviderHTTP makes it moot.
-	if v.EmbeddingHTTPAPIKey == "" {
-		v.EmbeddingHTTPAPIKey = s.v.EmbeddingHTTPAPIKey
-	}
 	defer s.mu.Unlock()
 	s.v = v
 }

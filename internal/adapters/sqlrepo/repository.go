@@ -203,6 +203,9 @@ func (r *Repository) migrate(ctx context.Context) error {
 	if err := r.migrateScheduledCrawlColumns(ctx); err != nil {
 		return err
 	}
+	if err := r.migrateLegacyHTTPEmbeddingConfig(ctx); err != nil {
+		return err
+	}
 	if err := r.ensureHostIndex(ctx); err != nil {
 		return err
 	}
@@ -306,6 +309,90 @@ func (r *Repository) migrateScheduledCrawlColumns(ctx context.Context) error {
 	// why the two must never be conflated. Defaults to false for a
 	// pre-existing row: nothing was mid-run when this column didn't exist.
 	return addColumn("in_progress", "in_progress BOOLEAN NOT NULL DEFAULT false")
+}
+
+// legacyHTTPEmbeddingSettings decodes just the handful of fields this
+// migration cares about from a stored operational-settings JSON blob --
+// deliberately its own small struct, not domain.OperationalSettingsValues,
+// since these fields (EmbeddingHTTPBaseURL/APIKey/Model/Dimensions/Enabled,
+// EmbeddingRateLimitPerSecond) no longer exist on that struct at all. The
+// stored JSON was produced by a plain json.Marshal of the old struct (no
+// json tags anywhere on it), so these Go field names decode by exact name
+// match regardless of what fields the *current* struct has or lacks.
+type legacyHTTPEmbeddingSettings struct {
+	EmbeddingHTTPEnabled        bool
+	EmbeddingHTTPBaseURL        string
+	EmbeddingHTTPAPIKey         string
+	EmbeddingHTTPModel          string
+	EmbeddingHTTPDimensions     int
+	EmbeddingRateLimitPerSecond float64
+}
+
+// migrateLegacyHTTPEmbeddingConfig is a one-time migration for an install
+// that configured the old single-HTTP-endpoint feature (EmbeddingHTTPBaseURL
+// et al. on OperationalSettingsValues, removed in favor of the
+// embedding_http_endpoints table) before upgrading to this version -- it
+// creates one endpoint row from that old flat config so the admin's live
+// HTTP provider setup isn't silently lost across the upgrade, mirroring
+// this codebase's established "protect an existing live config across a
+// breaking settings change" precedent. ID "http" for continuity with any
+// document_embeddings rows a pre-upgrade install already tagged
+// provider="http". Guarded to run at most once via
+// SettingsKeyEmbeddingEndpointsMigrated -- deliberately not "skip if
+// embedding_http_endpoints has any rows," since an admin deleting the
+// migrated endpoint afterward would make that table empty again, and a
+// row-count-based guard would then wrongly resurrect it on the next
+// restart.
+func (r *Repository) migrateLegacyHTTPEmbeddingConfig(ctx context.Context) error {
+	// Guarded by SettingsKeyEmbeddingEndpointsMigrated, not by whether
+	// embedding_http_endpoints currently has any rows -- an admin deleting
+	// the migrated "http" endpoint afterward would otherwise make that
+	// table empty again, and a later restart would wrongly re-run this and
+	// resurrect the endpoint the admin deliberately removed.
+	_, migrated, err := r.GetSetting(ctx, ports.SettingsKeyEmbeddingEndpointsMigrated)
+	if err != nil {
+		return fmt.Errorf("checking embedding endpoints migration marker: %w", err)
+	}
+	if migrated {
+		return nil
+	}
+	raw, found, err := r.GetSetting(ctx, ports.SettingsKeyOperational)
+	if err != nil {
+		return fmt.Errorf("reading legacy operational settings: %w", err)
+	}
+	if !found {
+		return r.SaveSetting(ctx, ports.SettingsKeyEmbeddingEndpointsMigrated, "true")
+	}
+	var legacy legacyHTTPEmbeddingSettings
+	if err := json.Unmarshal([]byte(raw), &legacy); err != nil {
+		// A stored settings blob that doesn't even parse as JSON is a
+		// pre-existing problem bootstrap.SyncSettings already tolerates
+		// (logs and skips) -- not something this migration should turn into
+		// a hard startup failure over. Still mark migrated, since retrying
+		// against the same unparseable blob on every future restart would
+		// never succeed anyway.
+		return r.SaveSetting(ctx, ports.SettingsKeyEmbeddingEndpointsMigrated, "true")
+	}
+	if legacy.EmbeddingHTTPBaseURL != "" {
+		name := legacy.EmbeddingHTTPModel
+		if name == "" {
+			name = "HTTP"
+		}
+		if err := r.CreateEmbeddingEndpoint(ctx, domain.EmbeddingHTTPEndpoint{
+			ID:                 "http",
+			Name:               name,
+			BaseURL:            legacy.EmbeddingHTTPBaseURL,
+			APIKey:             legacy.EmbeddingHTTPAPIKey,
+			Model:              legacy.EmbeddingHTTPModel,
+			Dimensions:         legacy.EmbeddingHTTPDimensions,
+			RateLimitPerSecond: legacy.EmbeddingRateLimitPerSecond,
+			Enabled:            legacy.EmbeddingHTTPEnabled,
+			CreatedAt:          time.Now(),
+		}); err != nil {
+			return err
+		}
+	}
+	return r.SaveSetting(ctx, ports.SettingsKeyEmbeddingEndpointsMigrated, "true")
 }
 
 // ensureHostIndex and ensureCrawledAtIndex both run after
@@ -953,7 +1040,7 @@ func (r *Repository) PageRankDistribution(ctx context.Context) (min, max, avg fl
 // page shows them.
 var diagnosticsTables = []string{
 	"documents", "postings", "document_versions", "document_embeddings", "links",
-	"app_settings", "scheduled_crawls", "crawl_jobs", "crawl_job_pages", "sessions",
+	"app_settings", "scheduled_crawls", "embedding_http_endpoints", "crawl_jobs", "crawl_job_pages", "sessions",
 }
 
 // TableRowCounts reports how many rows each of diagnosticsTables currently
@@ -2091,6 +2178,108 @@ func (r *Repository) ResetStaleInProgress(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("counting reset in_progress flags: %w", err)
 	}
 	return int(n), nil
+}
+
+const embeddingEndpointColumns = `id, name, base_url, api_key, model, dimensions, rate_limit_per_second, enabled, created_at`
+
+// CreateEmbeddingEndpoint inserts a new admin-configured HTTP embedding
+// endpoint (see domain.EmbeddingHTTPEndpoint).
+func (r *Repository) CreateEmbeddingEndpoint(ctx context.Context, e domain.EmbeddingHTTPEndpoint) error {
+	insertSQL := r.ph(`INSERT INTO embedding_http_endpoints (`+embeddingEndpointColumns+`)
+	                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)`, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	_, err := r.db.ExecContext(ctx, insertSQL,
+		e.ID, e.Name, e.BaseURL, e.APIKey, e.Model, e.Dimensions, e.RateLimitPerSecond, e.Enabled,
+		e.CreatedAt.UTC().Format(crawledAtLayout),
+	)
+	if err != nil {
+		return fmt.Errorf("creating embedding endpoint: %w", err)
+	}
+	return nil
+}
+
+// GetEmbeddingEndpoint returns the single endpoint with the given id, or
+// ports.ErrEmbeddingEndpointNotFound if none exists.
+func (r *Repository) GetEmbeddingEndpoint(ctx context.Context, id string) (domain.EmbeddingHTTPEndpoint, error) {
+	row := r.db.QueryRowContext(ctx, r.ph(`SELECT `+embeddingEndpointColumns+` FROM embedding_http_endpoints WHERE id = %s`, 1), id)
+	e, err := scanEmbeddingEndpoint(row)
+	if err == sql.ErrNoRows {
+		return domain.EmbeddingHTTPEndpoint{}, ports.ErrEmbeddingEndpointNotFound
+	}
+	if err != nil {
+		return domain.EmbeddingHTTPEndpoint{}, fmt.Errorf("querying embedding endpoint (%s): %w", id, err)
+	}
+	return e, nil
+}
+
+// ListEmbeddingEndpoints lists every configured endpoint, oldest first.
+func (r *Repository) ListEmbeddingEndpoints(ctx context.Context) ([]domain.EmbeddingHTTPEndpoint, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+embeddingEndpointColumns+` FROM embedding_http_endpoints ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("querying embedding endpoints: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.EmbeddingHTTPEndpoint
+	for rows.Next() {
+		e, err := scanEmbeddingEndpoint(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning embedding endpoint: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// UpdateEmbeddingEndpoint replaces e's editable fields (everything but
+// ID/CreatedAt, which never change after creation).
+func (r *Repository) UpdateEmbeddingEndpoint(ctx context.Context, e domain.EmbeddingHTTPEndpoint) error {
+	updateSQL := r.ph(`UPDATE embedding_http_endpoints SET
+	                      name = %s, base_url = %s, api_key = %s, model = %s,
+	                      dimensions = %s, rate_limit_per_second = %s, enabled = %s
+	                    WHERE id = %s`, 1, 2, 3, 4, 5, 6, 7, 8)
+	res, err := r.db.ExecContext(ctx, updateSQL,
+		e.Name, e.BaseURL, e.APIKey, e.Model, e.Dimensions, e.RateLimitPerSecond, e.Enabled, e.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("updating embedding endpoint (%s): %w", e.ID, err)
+	}
+	return requireEmbeddingEndpointRowsAffected(res, e.ID)
+}
+
+// DeleteEmbeddingEndpoint removes an endpoint's configuration -- its
+// already-stored document_embeddings rows and ANN column are left in
+// place, unused, same non-destructive convention as disabling a provider
+// (see EmbeddingHTTPEndpoint.Enabled's doc comment); only the configured
+// endpoint itself, which controls whether it's still computed going
+// forward, is removed here.
+func (r *Repository) DeleteEmbeddingEndpoint(ctx context.Context, id string) error {
+	res, err := r.db.ExecContext(ctx, r.ph(`DELETE FROM embedding_http_endpoints WHERE id = %s`, 1), id)
+	if err != nil {
+		return fmt.Errorf("deleting embedding endpoint (%s): %w", id, err)
+	}
+	return requireEmbeddingEndpointRowsAffected(res, id)
+}
+
+func requireEmbeddingEndpointRowsAffected(res sql.Result, id string) error {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking result for %s: %w", id, err)
+	}
+	if n == 0 {
+		return ports.ErrEmbeddingEndpointNotFound
+	}
+	return nil
+}
+
+func scanEmbeddingEndpoint(row scanner) (domain.EmbeddingHTTPEndpoint, error) {
+	var e domain.EmbeddingHTTPEndpoint
+	var createdAt string
+	if err := row.Scan(&e.ID, &e.Name, &e.BaseURL, &e.APIKey, &e.Model,
+		&e.Dimensions, &e.RateLimitPerSecond, &e.Enabled, &createdAt); err != nil {
+		return domain.EmbeddingHTTPEndpoint{}, err
+	}
+	e.CreatedAt = parseCrawledAt(createdAt)
+	return e, nil
 }
 
 func nullableTimeString(t *time.Time) sql.NullString {

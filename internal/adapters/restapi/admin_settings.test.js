@@ -24,13 +24,7 @@ const FULL_SETTINGS = {
     semantic_candidate_pool_size: 200,
     ann_search_enabled: true,
     embedding_hash_enabled: true,
-    embedding_http_enabled: false,
     embedding_provider: 'hash',
-    embedding_http_base_url: '',
-    embedding_http_model: '',
-    embedding_http_dimensions: 128,
-    embedding_http_api_key_set: false,
-    embedding_rate_limit_per_second: 5,
     embedding_title_weight: 0.3,
     max_document_versions: 5,
     db_max_open_conns: 25,
@@ -45,19 +39,30 @@ const FULL_SETTINGS = {
 
 const EMPTY_OVERRIDES = { blocked_terms: [], blocked_domains: [], boosted_terms: {}, boosted_domains: {} };
 
-function loadFixture() {
+function loadFixture(endpoints) {
   setupDOM(SETTINGS_HTML);
   const adminHelpers = requireFresh('./admin.js');
   Object.assign(global, adminHelpers);
   global.fetch = async (url) => {
     if (url.includes('/admin/api/settings')) return { ok: true, json: async () => FULL_SETTINGS };
     if (url.includes('/admin/api/overrides')) return { ok: true, json: async () => EMPTY_OVERRIDES };
+    if (url.includes('/admin/api/embeddings/endpoints')) return { ok: true, json: async () => endpoints || [] };
     return { ok: true, json: async () => ({}) };
   };
   return requireFresh('./admin_settings.js');
 }
 
-test.afterEach(() => {
+function flush() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+test.afterEach(async () => {
+  // applySettings kicks off loadEmbeddingProviderOptions as fire-and-forget
+  // (it doesn't block rendering the rest of the form on that fetch) --
+  // flush before tearing down so that pending promise settles against
+  // *this* test's own fetch mock/DOM, rather than rejecting asynchronously
+  // once the next test has already replaced both.
+  await flush();
   teardownDOM();
   delete global.fetch;
 });
@@ -84,43 +89,17 @@ test('applySettings falls back to "none"/"domain" when renderer/link_scope are u
   assert.equal(document.getElementById('default-link-scope').value, 'domain');
 });
 
-test('applySettings hides the HTTP embedding fields and shows the "no key" hint when only hash is enabled', () => {
+test('applySettings checks the hash-enabled box and populates the title weight', async () => {
   const { applySettings } = loadFixture();
   applySettings(FULL_SETTINGS);
+  await flush();
   assert.equal(document.getElementById('embedding-hash-enabled').checked, true);
-  assert.equal(document.getElementById('embedding-http-enabled').checked, false);
-  assert.equal(document.getElementById('embedding-provider').value, 'hash');
-  assert.equal(document.getElementById('embedding-http-fields').hidden, true);
-  assert.equal(document.getElementById('embedding-http-api-key').value, '');
-  assert.equal(document.getElementById('embedding-http-api-key-hint').textContent, 'No key currently configured.');
+  assert.equal(document.getElementById('embedding-title-weight').value, '0.3');
 });
 
-test('applySettings reveals the HTTP embedding fields and never fills in the API key, even when one is configured', () => {
-  const { applySettings } = loadFixture();
-  const s = JSON.parse(JSON.stringify(FULL_SETTINGS));
-  s.operational.embedding_http_enabled = true;
-  s.operational.embedding_http_base_url = 'http://localhost:11434/v1';
-  s.operational.embedding_http_model = 'nomic-embed-text';
-  s.operational.embedding_http_dimensions = 768;
-  s.operational.embedding_http_api_key_set = true;
-  applySettings(s);
-  assert.equal(document.getElementById('embedding-http-enabled').checked, true);
-  assert.equal(document.getElementById('embedding-http-fields').hidden, false);
-  assert.equal(document.getElementById('embedding-http-base-url').value, 'http://localhost:11434/v1');
-  assert.equal(document.getElementById('embedding-http-model').value, 'nomic-embed-text');
-  assert.equal(document.getElementById('embedding-http-dimensions').value, '768');
-  assert.equal(document.getElementById('embedding-rate-limit').value, '5');
-  assert.equal(document.getElementById('embedding-http-api-key').value, '');
-  assert.equal(
-    document.getElementById('embedding-http-api-key-hint').textContent,
-    'A key is currently configured. Leave blank to keep it, or type a new one to replace it.',
-  );
-});
-
-// applySettings shows 0 in the title-weight field, not a blank -- unlike
-// embedding-rate-limit (which falls back to '' on a falsy 0, since 0 isn't
-// a meaningful rate), 0 here is a real, meaningful "disabled" value that
-// must round-trip visibly.
+// applySettings shows 0 in the title-weight field, not a blank -- 0 here is
+// a real, meaningful "disabled" value (see the field's own doc comment in
+// admin.go) that must round-trip visibly.
 test('applySettings shows a zero embedding title weight as "0", not blank', () => {
   const { applySettings } = loadFixture();
   const s = JSON.parse(JSON.stringify(FULL_SETTINGS));
@@ -131,6 +110,7 @@ test('applySettings shows a zero embedding title weight as "0", not blank', () =
 
 test('saveSettings posts the configured embedding title weight', async () => {
   const { saveSettings } = loadFixture();
+  await flush();
   document.getElementById('embedding-title-weight').value = '0.6';
   let gotBody;
   global.fetch = async (url, opts) => {
@@ -146,6 +126,7 @@ test('saveSettings posts the configured embedding title weight', async () => {
 
 test('saveSettings posts 0 for an unparseable embedding title weight field', async () => {
   const { saveSettings } = loadFixture();
+  await flush();
   document.getElementById('embedding-title-weight').value = '';
   let gotBody;
   global.fetch = async (url, opts) => {
@@ -159,52 +140,11 @@ test('saveSettings posts 0 for an unparseable embedding title weight field', asy
   assert.equal(gotBody.operational.embedding_title_weight, 0);
 });
 
-test('toggleEmbeddingHTTPFields shows/hides the HTTP fields based on the http-enabled checkbox', () => {
-  const { toggleEmbeddingHTTPFields } = loadFixture();
-  const checkbox = document.getElementById('embedding-http-enabled');
-  checkbox.checked = true;
-  toggleEmbeddingHTTPFields();
-  assert.equal(document.getElementById('embedding-http-fields').hidden, false);
-  checkbox.checked = false;
-  toggleEmbeddingHTTPFields();
-  assert.equal(document.getElementById('embedding-http-fields').hidden, true);
-});
-
-test('checking the http-enabled checkbox toggles the HTTP fields visibility', () => {
-  loadFixture();
-  const checkbox = document.getElementById('embedding-http-enabled');
-  checkbox.checked = true;
-  checkbox.dispatchEvent(new window.Event('change'));
-  assert.equal(document.getElementById('embedding-http-fields').hidden, false);
-});
-
-test('the embedding API key field starts readonly and becomes editable on focus', () => {
-  loadFixture();
-  const input = document.getElementById('embedding-http-api-key');
-  assert.equal(input.hasAttribute('readonly'), true);
-  input.dispatchEvent(new window.Event('focus'));
-  assert.equal(input.hasAttribute('readonly'), false);
-});
-
-test('saveSettings posts a blank embedding API key by default, leaving the stored key untouched', async () => {
-  const { saveSettings } = loadFixture();
-  let gotBody;
-  global.fetch = async (url, opts) => {
-    if (url.includes('/admin/api/settings')) {
-      gotBody = JSON.parse(opts.body);
-      return { ok: true, json: async () => FULL_SETTINGS };
-    }
-    return { ok: true, json: async () => ({}) };
-  };
-  await saveSettings();
-  assert.equal(gotBody.operational.embedding_provider, 'hash');
-  assert.equal(gotBody.operational.embedding_http_api_key, '');
-});
-
-test('saveSettings posts the checked state of both embedding-enabled checkboxes', async () => {
-  const { saveSettings } = loadFixture();
+test('saveSettings posts the checked state of the hash-enabled checkbox and the chosen active provider', async () => {
+  const { saveSettings } = loadFixture([{ id: 'ionos', name: 'IONOS', enabled: true }]);
+  await flush();
   document.getElementById('embedding-hash-enabled').checked = false;
-  document.getElementById('embedding-http-enabled').checked = true;
+  document.getElementById('embedding-provider').value = 'ionos';
   let gotBody;
   global.fetch = async (url, opts) => {
     if (url.includes('/admin/api/settings')) {
@@ -215,79 +155,82 @@ test('saveSettings posts the checked state of both embedding-enabled checkboxes'
   };
   await saveSettings();
   assert.equal(gotBody.operational.embedding_hash_enabled, false);
-  assert.equal(gotBody.operational.embedding_http_enabled, true);
+  assert.equal(gotBody.operational.embedding_provider, 'ionos');
 });
 
-test('saveSettings posts a typed embedding API key and the HTTP provider fields', async () => {
-  const { saveSettings } = loadFixture();
-  document.getElementById('embedding-http-enabled').checked = true;
-  document.getElementById('embedding-provider').value = 'http';
-  document.getElementById('embedding-http-base-url').value = 'https://api.example.com/v1';
-  document.getElementById('embedding-http-model').value = 'text-embedding-3-small';
-  document.getElementById('embedding-http-dimensions').value = '1536';
-  const keyInput = document.getElementById('embedding-http-api-key');
-  keyInput.removeAttribute('readonly');
-  keyInput.value = 'sk-new-key';
-  let gotBody;
-  global.fetch = async (url, opts) => {
-    if (url.includes('/admin/api/settings')) {
-      gotBody = JSON.parse(opts.body);
-      return { ok: true, json: async () => FULL_SETTINGS };
+test('loadEmbeddingProviderOptions offers hash when no endpoints are configured', async () => {
+  const { loadEmbeddingProviderOptions } = loadFixture();
+  await flush();
+  await loadEmbeddingProviderOptions('hash');
+  const options = Array.from(document.getElementById('embedding-provider').options).map((o) => o.value);
+  assert.deepEqual(options, ['hash']);
+});
+
+test('loadEmbeddingProviderOptions lists only enabled endpoints, not disabled ones', async () => {
+  const { loadEmbeddingProviderOptions } = loadFixture();
+  await flush();
+  global.fetch = async (url) => {
+    if (url.includes('/admin/api/embeddings/endpoints')) {
+      return {
+        ok: true,
+        json: async () => [
+          { id: 'ionos', name: 'IONOS bge-m3', enabled: true },
+          { id: 'local', name: 'Local Ollama', enabled: false },
+        ],
+      };
     }
     return { ok: true, json: async () => ({}) };
   };
-  await saveSettings();
-  assert.equal(gotBody.operational.embedding_http_enabled, true);
-  assert.equal(gotBody.operational.embedding_provider, 'http');
-  assert.equal(gotBody.operational.embedding_http_base_url, 'https://api.example.com/v1');
-  assert.equal(gotBody.operational.embedding_http_model, 'text-embedding-3-small');
-  assert.equal(gotBody.operational.embedding_http_dimensions, 1536);
-  assert.equal(gotBody.operational.embedding_http_api_key, 'sk-new-key');
+  await loadEmbeddingProviderOptions('hash');
+  const select = document.getElementById('embedding-provider');
+  const options = Array.from(select.options).map((o) => ({ value: o.value, text: o.textContent }));
+  assert.deepEqual(options, [
+    { value: 'hash', text: 'Hash (dependency-free)' },
+    { value: 'ionos', text: 'IONOS bge-m3 (ionos)' },
+  ]);
 });
 
-test('saveSettings posts 0 for an unparseable embedding dimensions field', async () => {
-  const { saveSettings } = loadFixture();
-  document.getElementById('embedding-http-dimensions').value = '';
-  let gotBody;
-  global.fetch = async (url, opts) => {
-    if (url.includes('/admin/api/settings')) {
-      gotBody = JSON.parse(opts.body);
-      return { ok: true, json: async () => FULL_SETTINGS };
+test('loadEmbeddingProviderOptions selects the given active provider once it is populated', async () => {
+  const { loadEmbeddingProviderOptions } = loadFixture();
+  await flush();
+  global.fetch = async (url) => {
+    if (url.includes('/admin/api/embeddings/endpoints')) {
+      return { ok: true, json: async () => [{ id: 'ionos', name: 'IONOS', enabled: true }] };
     }
     return { ok: true, json: async () => ({}) };
   };
-  await saveSettings();
-  assert.equal(gotBody.operational.embedding_http_dimensions, 0);
+  await loadEmbeddingProviderOptions('ionos');
+  assert.equal(document.getElementById('embedding-provider').value, 'ionos');
 });
 
-test('saveSettings posts the configured embedding recompute rate limit', async () => {
-  const { saveSettings } = loadFixture();
-  document.getElementById('embedding-rate-limit').value = '20';
-  let gotBody;
-  global.fetch = async (url, opts) => {
-    if (url.includes('/admin/api/settings')) {
-      gotBody = JSON.parse(opts.body);
-      return { ok: true, json: async () => FULL_SETTINGS };
-    }
+// A provider that's since been disabled or deleted is added anyway as a
+// clearly-labeled stale option, so the select doesn't silently jump to hash
+// under an admin who hasn't saved yet -- the next save still resolves this
+// server-side via domain.ReconcileActiveProvider.
+test('loadEmbeddingProviderOptions keeps a no-longer-enabled active provider visible as a stale option', async () => {
+  const { loadEmbeddingProviderOptions } = loadFixture();
+  await flush();
+  global.fetch = async (url) => {
+    if (url.includes('/admin/api/embeddings/endpoints')) return { ok: true, json: async () => [] };
     return { ok: true, json: async () => ({}) };
   };
-  await saveSettings();
-  assert.equal(gotBody.operational.embedding_rate_limit_per_second, 20);
+  await loadEmbeddingProviderOptions('gone');
+  const select = document.getElementById('embedding-provider');
+  assert.equal(select.value, 'gone');
+  assert.equal(select.options.length, 2);
+  assert.equal(select.options[1].textContent.includes('not currently enabled'), true);
 });
 
-test('saveSettings posts 0 for an unparseable embedding recompute rate limit field', async () => {
-  const { saveSettings } = loadFixture();
-  document.getElementById('embedding-rate-limit').value = '';
-  let gotBody;
-  global.fetch = async (url, opts) => {
-    if (url.includes('/admin/api/settings')) {
-      gotBody = JSON.parse(opts.body);
-      return { ok: true, json: async () => FULL_SETTINGS };
-    }
+test('loadEmbeddingProviderOptions falls back to hash-only when the endpoints fetch fails', async () => {
+  const { loadEmbeddingProviderOptions } = loadFixture();
+  await flush();
+  global.fetch = async (url) => {
+    if (url.includes('/admin/api/embeddings/endpoints')) throw new Error('network down');
     return { ok: true, json: async () => ({}) };
   };
-  await saveSettings();
-  assert.equal(gotBody.operational.embedding_rate_limit_per_second, 0);
+  await loadEmbeddingProviderOptions('hash');
+  const options = Array.from(document.getElementById('embedding-provider').options).map((o) => o.value);
+  assert.deepEqual(options, ['hash']);
 });
 
 test('loadSettings applies the fetched settings on success', async () => {
@@ -450,7 +393,7 @@ test('submitting the form saves both settings and overrides, reporting "Saved." 
       overridesPosted = true;
       return { ok: true, json: async () => EMPTY_OVERRIDES };
     }
-    return { ok: true, json: async () => ({}) };
+    return { ok: true, json: async () => [] };
   };
   document.getElementById('settings-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -458,24 +401,6 @@ test('submitting the form saves both settings and overrides, reporting "Saved." 
   assert.equal(overridesPosted, true);
   assert.equal(document.getElementById('settings-status').textContent, 'Saved.');
   void mod;
-});
-
-test('a settings response carrying embedding_test_error reports "Saved, but..." instead of plain "Saved."', async () => {
-  loadFixture();
-  global.fetch = async (url, opts) => {
-    if (url.includes('/admin/api/settings') && opts.method === 'POST') {
-      return { ok: true, json: async () => ({ ...FULL_SETTINGS, embedding_test_error: 'dial tcp: connection refused' }) };
-    }
-    if (url.includes('/admin/api/overrides') && opts.method === 'POST') {
-      return { ok: true, json: async () => EMPTY_OVERRIDES };
-    }
-    return { ok: true, json: async () => ({}) };
-  };
-  document.getElementById('settings-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  const text = document.getElementById('settings-status').textContent;
-  assert.equal(text.includes('Saved, but'), true);
-  assert.equal(text.includes('embedding provider test failed: dial tcp: connection refused'), true);
 });
 
 test('one endpoint failing does not stop the other from being tried, and both errors are reported', async () => {
@@ -487,7 +412,7 @@ test('one endpoint failing does not stop the other from being tried, and both er
     if (url.includes('/admin/api/overrides') && opts.method === 'POST') {
       return { ok: false, status: 500, text: async () => 'overrides write failed' };
     }
-    return { ok: true, json: async () => ({}) };
+    return { ok: true, json: async () => [] };
   };
   document.getElementById('settings-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -507,7 +432,7 @@ test('a failing settings save still lets the overrides save succeed', async () =
       overridesPosted = true;
       return { ok: true, json: async () => EMPTY_OVERRIDES };
     }
-    return { ok: true, json: async () => ({}) };
+    return { ok: true, json: async () => [] };
   };
   document.getElementById('settings-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -517,69 +442,3 @@ test('a failing settings save still lets the overrides save succeed', async () =
   assert.equal(text.includes('overrides:'), false);
 });
 
-test('loadEmbeddingModels does not fetch when http is not enabled', async () => {
-  let called = false;
-  const { loadEmbeddingModels } = loadFixture();
-  global.fetch = async () => { called = true; return { ok: true, json: async () => ({ models: ['x'] }) }; };
-  await loadEmbeddingModels({ operational: { embedding_http_enabled: false, embedding_http_base_url: 'https://example.com' } });
-  assert.equal(called, false);
-  assert.equal(document.getElementById('embedding-http-model-options').children.length, 0);
-});
-
-test('loadEmbeddingModels does not fetch when the base URL is blank', async () => {
-  let called = false;
-  const { loadEmbeddingModels } = loadFixture();
-  global.fetch = async () => { called = true; return { ok: true, json: async () => ({ models: ['x'] }) }; };
-  await loadEmbeddingModels({ operational: { embedding_http_enabled: true, embedding_http_base_url: '' } });
-  assert.equal(called, false);
-});
-
-test('loadEmbeddingModels populates the datalist and hint on success', async () => {
-  const { loadEmbeddingModels } = loadFixture();
-  global.fetch = async (url) => {
-    if (url === '/admin/api/embeddings/models') {
-      return { ok: true, json: async () => ({ models: ['intfloat/e5-large-v2', 'Qwen/Qwen3-VL-Embedding-8B'] }) };
-    }
-    return { ok: true, json: async () => ({}) };
-  };
-  await loadEmbeddingModels({ operational: { embedding_http_enabled: true, embedding_http_base_url: 'https://example.com/v1' } });
-  const options = Array.from(document.getElementById('embedding-http-model-options').children).map((o) => o.value);
-  assert.deepEqual(options, ['intfloat/e5-large-v2', 'Qwen/Qwen3-VL-Embedding-8B']);
-  assert.equal(document.getElementById('embedding-http-model-hint').textContent, '2 model(s) available from this endpoint.');
-});
-
-test('loadEmbeddingModels clears stale options before repopulating', async () => {
-  const { loadEmbeddingModels } = loadFixture();
-  const optionsEl = document.getElementById('embedding-http-model-options');
-  const stale = document.createElement('option');
-  stale.value = 'stale-model';
-  optionsEl.appendChild(stale);
-  global.fetch = async (url) => {
-    if (url === '/admin/api/embeddings/models') return { ok: true, json: async () => ({ models: ['fresh-model'] }) };
-    return { ok: true, json: async () => ({}) };
-  };
-  await loadEmbeddingModels({ operational: { embedding_http_enabled: true, embedding_http_base_url: 'https://example.com/v1' } });
-  const options = Array.from(optionsEl.children).map((o) => o.value);
-  assert.deepEqual(options, ['fresh-model']);
-});
-
-test('loadEmbeddingModels shows the error hint on a soft failure from the server', async () => {
-  const { loadEmbeddingModels } = loadFixture();
-  global.fetch = async (url) => {
-    if (url === '/admin/api/embeddings/models') return { ok: true, json: async () => ({ error: '401 unauthorized' }) };
-    return { ok: true, json: async () => ({}) };
-  };
-  await loadEmbeddingModels({ operational: { embedding_http_enabled: true, embedding_http_base_url: 'https://example.com/v1' } });
-  assert.equal(document.getElementById('embedding-http-model-hint').textContent, 'Could not list models: 401 unauthorized');
-  assert.equal(document.getElementById('embedding-http-model-options').children.length, 0);
-});
-
-test('loadEmbeddingModels shows the error hint on a network failure', async () => {
-  const { loadEmbeddingModels } = loadFixture();
-  global.fetch = async (url) => {
-    if (url === '/admin/api/embeddings/models') throw new Error('network down');
-    return { ok: true, json: async () => ({}) };
-  };
-  await loadEmbeddingModels({ operational: { embedding_http_enabled: true, embedding_http_base_url: 'https://example.com/v1' } });
-  assert.equal(document.getElementById('embedding-http-model-hint').textContent, 'Could not list models: network down');
-});
