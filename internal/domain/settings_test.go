@@ -217,6 +217,7 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 		LinkScope:                        domain.LinkScopeDomain,
 		MaxDocumentVersions:              5,
 		TitleWeight:                      2,
+		EmbeddingHashEnabled:             true,
 		EmbeddingProvider:                domain.EmbeddingProviderHash,
 		EmbeddingHTTPDimensions:          128,
 		EmbeddingRateLimitPerSecond:      5,
@@ -369,9 +370,59 @@ func TestOperationalSettings_SetInvalidEmbeddingProviderFallsBackToHash(t *testi
 
 func TestOperationalSettings_SetValidEmbeddingProviderPreserved(t *testing.T) {
 	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHTTP})
+	s.Set(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHTTP, EmbeddingHTTPEnabled: true})
 	if v := s.Get(); v.EmbeddingProvider != domain.EmbeddingProviderHTTP {
 		t.Errorf("expected EmbeddingProvider=http to be preserved, got %q", v.EmbeddingProvider)
+	}
+}
+
+// TestOperationalSettings_SetEmbeddingProviderNamingADisabledProviderSelfHeals
+// proves EmbeddingProvider must name an actually-enabled provider --
+// naming "http" while EmbeddingHTTPEnabled is left false (the zero value)
+// self-heals to "hash" rather than pointing search at a provider with no
+// stored vectors to read.
+func TestOperationalSettings_SetEmbeddingProviderNamingADisabledProviderSelfHeals(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHTTP})
+	if v := s.Get(); v.EmbeddingProvider != domain.EmbeddingProviderHash {
+		t.Errorf("expected EmbeddingProvider=http (disabled) to self-heal to hash, got %q", v.EmbeddingProvider)
+	}
+}
+
+// TestOperationalSettings_SetEmbeddingProviderNamingHashWhileOnlyHTTPEnabledSelfHeals
+// mirrors the above the other direction: EmbeddingProvider defaults to
+// "hash" (the Go zero value's implicit choice isn't actually zero here,
+// but an explicit "hash" naming it while only HTTP is enabled) must
+// self-heal to the one provider that's actually enabled.
+func TestOperationalSettings_SetEmbeddingProviderNamingHashWhileOnlyHTTPEnabledSelfHeals(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHash, EmbeddingHashEnabled: false, EmbeddingHTTPEnabled: true})
+	if v := s.Get(); v.EmbeddingProvider != domain.EmbeddingProviderHTTP {
+		t.Errorf("expected EmbeddingProvider=hash (disabled) to self-heal to http, got %q", v.EmbeddingProvider)
+	}
+}
+
+func TestOperationalSettings_SetBothEmbeddingProvidersDisabledFallsBackToHashEnabled(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{EmbeddingHashEnabled: false, EmbeddingHTTPEnabled: false})
+	v := s.Get()
+	if !v.EmbeddingHashEnabled {
+		t.Errorf("expected both disabled to fall back to EmbeddingHashEnabled=true, got %+v", v)
+	}
+	if v.EmbeddingProvider != domain.EmbeddingProviderHash {
+		t.Errorf("expected EmbeddingProvider to self-heal to hash alongside it, got %q", v.EmbeddingProvider)
+	}
+}
+
+func TestOperationalSettings_SetBothEmbeddingProvidersEnabledPreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{EmbeddingHashEnabled: true, EmbeddingHTTPEnabled: true, EmbeddingProvider: domain.EmbeddingProviderHTTP})
+	v := s.Get()
+	if !v.EmbeddingHashEnabled || !v.EmbeddingHTTPEnabled {
+		t.Errorf("expected both providers to stay enabled, got %+v", v)
+	}
+	if v.EmbeddingProvider != domain.EmbeddingProviderHTTP {
+		t.Errorf("expected the explicitly chosen active provider to be preserved when it's enabled, got %q", v.EmbeddingProvider)
 	}
 }
 

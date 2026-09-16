@@ -48,6 +48,12 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			doc_length INTEGER NOT NULL, crawled_at TEXT NOT NULL,
 			PRIMARY KEY (doc_id, version)
 		)`,
+		`CREATE TABLE IF NOT EXISTS document_embeddings (
+			doc_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+			provider TEXT NOT NULL, embedding BLOB NOT NULL,
+			norm_embedding REAL NOT NULL DEFAULT 0,
+			PRIMARY KEY (doc_id, provider)
+		)`,
 		`CREATE TABLE IF NOT EXISTS links (
 			from_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
 			to_url TEXT NOT NULL, to_host TEXT NOT NULL,
@@ -129,6 +135,12 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			doc_id VARCHAR(64) NOT NULL, version INT NOT NULL,
 			title TEXT, text LONGTEXT, doc_length INT NOT NULL, crawled_at VARCHAR(64) NOT NULL,
 			PRIMARY KEY (doc_id, version),
+			FOREIGN KEY (doc_id) REFERENCES documents(id) ON DELETE CASCADE
+		) ENGINE=InnoDB`,
+		`CREATE TABLE IF NOT EXISTS document_embeddings (
+			doc_id VARCHAR(64) NOT NULL, provider VARCHAR(16) NOT NULL,
+			embedding LONGBLOB NOT NULL, norm_embedding DOUBLE NOT NULL DEFAULT 0,
+			PRIMARY KEY (doc_id, provider),
 			FOREIGN KEY (doc_id) REFERENCES documents(id) ON DELETE CASCADE
 		) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS links (
@@ -214,6 +226,12 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			version INT NOT NULL, title TEXT, text TEXT,
 			doc_length INT NOT NULL, crawled_at TEXT NOT NULL,
 			PRIMARY KEY (doc_id, version)
+		)`,
+		`CREATE TABLE IF NOT EXISTS document_embeddings (
+			doc_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+			provider TEXT NOT NULL, embedding BYTEA NOT NULL,
+			norm_embedding DOUBLE PRECISION NOT NULL DEFAULT 0,
+			PRIMARY KEY (doc_id, provider)
 		)`,
 		`CREATE TABLE IF NOT EXISTS links (
 			from_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,

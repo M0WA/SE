@@ -1091,25 +1091,47 @@ components:
                 edge in BM25 scoring. A value below 1 falls back to the
                 default (2). Only takes effect for documents crawled or
                 re-crawled after the change -- not retroactive.
+            embedding_hash_enabled:
+              type: boolean
+              description: >-
+                Whether the dependency-free "hash" feature-hashing
+                provider is computed and stored for every document.
+                Together with embedding_http_enabled, controls which
+                provider(s) are actually kept current -- embedding_provider
+                below just picks which of the enabled one(s) search reads.
+                At least one must stay enabled; both false self-heals to
+                hash_enabled=true. Like embedding_http_enabled, NOT applied
+                live -- read once at process startup, since enabling a
+                provider that wasn't running before requires constructing
+                its embedder and sizing its own pgvector column/index.
+            embedding_http_enabled:
+              type: boolean
+              description: >-
+                Whether the "http" (OpenAI-compatible embeddings endpoint)
+                provider is computed and stored for every document -- see
+                embedding_hash_enabled. Enabling this means every crawl (and
+                any recompute) also pays for an HTTP Embed call per document
+                even while embedding_provider is still "hash" -- real,
+                continuous cost against embedding_rate_limit_per_second, not
+                a one-time migration cost, since it's what keeps the HTTP
+                vectors warm enough to switch to instantly via
+                embedding_provider.
             embedding_provider:
               type: string
               enum: [hash, http]
               description: >-
-                Which embedding implementation every process (search,
-                admin, crawl) constructs at startup: "hash" (the default --
-                dependency-free feature hashing, not a trained model) or
-                "http" (calls an OpenAI-compatible embeddings HTTP
-                endpoint -- a local inference server or a hosted API -- for
-                a real trained model). Unlike every other field here, this
-                is NOT applied live: it's read once at process startup, so
-                a change only takes effect the next time search/admin/crawl
-                are restarted. Switching providers also changes the vector
-                space entirely -- existing stored embeddings become
-                meaningless to compare against newly computed ones until
-                every document's embedding is recomputed against its
-                already-stored text (POST /admin/api/embeddings/recompute --
-                no re-crawl needed, since the indexed text itself doesn't
-                change).
+                Which of the enabled provider(s) above (see
+                embedding_hash_enabled/embedding_http_enabled) search
+                actually compares a query against. Self-healed to an
+                enabled provider (preferring hash) if it names one that
+                isn't. Unlike the two Enabled flags, this doesn't require a
+                restart or a recompute to take effect once both providers
+                are already being kept warm -- it's just choosing which
+                already-current stored vector to read. Switching to a
+                provider that was previously disabled (so it has no stored
+                vectors yet, or stale ones) changes the vector space
+                entirely until it's been enabled long enough to catch up,
+                or an explicit recompute brings it current immediately.
             embedding_http_base_url:
               type: string
               description: >-

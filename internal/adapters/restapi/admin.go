@@ -621,12 +621,14 @@ type operationalValues struct {
 	// indexed token stream, ahead of its body -- see
 	// domain.OperationalSettingsValues for the full doc comment.
 	TitleWeight int `json:"title_weight"`
-	// EmbeddingProvider/EmbeddingHTTPBaseURL/EmbeddingHTTPModel/
-	// EmbeddingHTTPDimensions mirror the same-named
-	// domain.OperationalSettingsValues fields -- see there for the full
-	// doc comment, including why this one setting requires a process
-	// restart to take effect and why switching providers invalidates
-	// every existing stored embedding until documents are re-crawled.
+	// EmbeddingHashEnabled/EmbeddingHTTPEnabled/EmbeddingProvider/
+	// EmbeddingHTTPBaseURL/EmbeddingHTTPModel/EmbeddingHTTPDimensions
+	// mirror the same-named domain.OperationalSettingsValues fields -- see
+	// there for the full doc comment, including why the two Enabled flags
+	// require a process restart to take effect and why EmbeddingProvider
+	// must name one of them.
+	EmbeddingHashEnabled    bool   `json:"embedding_hash_enabled"`
+	EmbeddingHTTPEnabled    bool   `json:"embedding_http_enabled"`
 	EmbeddingProvider       string `json:"embedding_provider"`
 	EmbeddingHTTPBaseURL    string `json:"embedding_http_base_url"`
 	EmbeddingHTTPModel      string `json:"embedding_http_model"`
@@ -674,6 +676,8 @@ func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 		LinkScope:                        v.LinkScope,
 		MaxDocumentVersions:              v.MaxDocumentVersions,
 		TitleWeight:                      v.TitleWeight,
+		EmbeddingHashEnabled:             v.EmbeddingHashEnabled,
+		EmbeddingHTTPEnabled:             v.EmbeddingHTTPEnabled,
 		EmbeddingProvider:                v.EmbeddingProvider,
 		EmbeddingHTTPBaseURL:             v.EmbeddingHTTPBaseURL,
 		EmbeddingHTTPModel:               v.EmbeddingHTTPModel,
@@ -707,6 +711,8 @@ func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 		LinkScope:                        o.LinkScope,
 		MaxDocumentVersions:              o.MaxDocumentVersions,
 		TitleWeight:                      o.TitleWeight,
+		EmbeddingHashEnabled:             o.EmbeddingHashEnabled,
+		EmbeddingHTTPEnabled:             o.EmbeddingHTTPEnabled,
 		EmbeddingProvider:                o.EmbeddingProvider,
 		EmbeddingHTTPBaseURL:             o.EmbeddingHTTPBaseURL,
 		EmbeddingHTTPAPIKey:              o.EmbeddingHTTPAPIKey,

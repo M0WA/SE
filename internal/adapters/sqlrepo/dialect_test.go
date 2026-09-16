@@ -78,6 +78,22 @@ func TestAllDialects_CreateSchemaSQLIncludesAppSettings(t *testing.T) {
 	}
 }
 
+func TestAllDialects_CreateSchemaSQLIncludesDocumentEmbeddings(t *testing.T) {
+	for _, driver := range []string{"sqlite", "mysql", "postgres"} {
+		stmts := sqlrepo.NewDialect(driver).CreateSchemaSQL()
+		found := false
+		for _, stmt := range stmts {
+			if strings.Contains(stmt, "document_embeddings") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected a document_embeddings table statement for %s", driver)
+		}
+	}
+}
+
 func TestAllDialects_CreateSchemaSQLIncludesScheduledCrawls(t *testing.T) {
 	for _, driver := range []string{"sqlite", "mysql", "postgres"} {
 		stmts := sqlrepo.NewDialect(driver).CreateSchemaSQL()
