@@ -232,19 +232,19 @@ func TestEnableANN_MaintainsTwoProvidersOfDifferentDimensionsIndependently(t *te
 
 	repo.EnableANN(ctx, map[string]int{
 		domain.EmbeddingProviderHash: 2,
-		domain.EmbeddingProviderHTTP: 4,
+		"http":                       4,
 	})
 	if !repo.ANNAvailable(domain.EmbeddingProviderHash) {
 		t.Skip("pgvector extension not available on this Postgres server; skipping ANN test")
 	}
-	if !repo.ANNAvailable(domain.EmbeddingProviderHTTP) {
+	if !repo.ANNAvailable("http") {
 		t.Fatal("expected ANN to be available for the http provider too")
 	}
 
 	doc := domain.Document{ID: "doc-1", URL: "https://example.com/doc-1", Title: "Doc", Text: "hello world"}
 	if err := repo.SaveDocument(ctx, doc, map[string][]float32{
 		domain.EmbeddingProviderHash: {1, 0},
-		domain.EmbeddingProviderHTTP: {0, 1, 0, 0},
+		"http":                       {0, 1, 0, 0},
 	}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestEnableANN_MaintainsTwoProvidersOfDifferentDimensionsIndependently(t *te
 		t.Errorf("expected the hash provider's own 2-dim vector back, got %v", got)
 	}
 
-	httpMatches, ok, err := repo.TopSemanticMatches(ctx, []float32{0, 1, 0, 0}, 10, domain.EmbeddingProviderHTTP)
+	httpMatches, ok, err := repo.TopSemanticMatches(ctx, []float32{0, 1, 0, 0}, 10, "http")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -269,6 +269,65 @@ func TestEnableANN_MaintainsTwoProvidersOfDifferentDimensionsIndependently(t *te
 	}
 	if got := httpMatches["doc-1"].Vector; len(got) != 4 {
 		t.Errorf("expected the http provider's own 4-dim vector back, got %v", got)
+	}
+}
+
+// TestEnableANN_MaintainsThreeProvidersIndependently proves the ANN layer
+// genuinely scales past two providers -- hash plus two independently
+// configured HTTP endpoints (the actual "add more embeddings from other
+// models and endpoints" feature this generalizes to) -- each with its own
+// dimensions, ANN column/index, and stored vector, none of them
+// interfering with any other.
+func TestEnableANN_MaintainsThreeProvidersIndependently(t *testing.T) {
+	if os.Getenv(testPostgresDSNEnv) == "" {
+		t.Skip("TEST_POSTGRES_DSN not set; skipping pgvector ANN test")
+	}
+	repo := newTestRepo(t)
+	ctx := context.Background()
+
+	repo.EnableANN(ctx, map[string]int{
+		domain.EmbeddingProviderHash: 2,
+		"ionos_bge_m3":               4,
+		"local_ollama":               3,
+	})
+	if !repo.ANNAvailable(domain.EmbeddingProviderHash) {
+		t.Skip("pgvector extension not available on this Postgres server; skipping ANN test")
+	}
+	for _, provider := range []string{"ionos_bge_m3", "local_ollama"} {
+		if !repo.ANNAvailable(provider) {
+			t.Fatalf("expected ANN to be available for provider %q too", provider)
+		}
+	}
+
+	doc := domain.Document{ID: "doc-1", URL: "https://example.com/doc-1", Title: "Doc", Text: "hello world"}
+	if err := repo.SaveDocument(ctx, doc, map[string][]float32{
+		domain.EmbeddingProviderHash: {1, 0},
+		"ionos_bge_m3":               {0, 1, 0, 0},
+		"local_ollama":               {0, 0, 1},
+	}, 100, 2); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cases := []struct {
+		provider string
+		query    []float32
+		wantDims int
+	}{
+		{domain.EmbeddingProviderHash, []float32{1, 0}, 2},
+		{"ionos_bge_m3", []float32{0, 1, 0, 0}, 4},
+		{"local_ollama", []float32{0, 0, 1}, 3},
+	}
+	for _, tc := range cases {
+		matches, ok, err := repo.TopSemanticMatches(ctx, tc.query, 10, tc.provider)
+		if err != nil {
+			t.Fatalf("provider %q: unexpected error: %v", tc.provider, err)
+		}
+		if !ok {
+			t.Fatalf("provider %q: expected ok=true", tc.provider)
+		}
+		if got := matches["doc-1"].Vector; len(got) != tc.wantDims {
+			t.Errorf("provider %q: expected its own %d-dim vector back, got %v", tc.provider, tc.wantDims, got)
+		}
 	}
 }
 

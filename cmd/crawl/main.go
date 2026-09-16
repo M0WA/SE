@@ -197,13 +197,14 @@ func main() {
 	defer repo.Close()
 
 	opSettings := domain.DefaultOperationalSettings()
-	bootstrap.SyncSettings(ctx, repo, nil, opSettings, nil, repo)
+	bootstrap.SyncSettings(ctx, repo, nil, opSettings, nil, repo, repo)
 
 	settingsEncryptionKey, err := settingscrypto.ParseKey(bootstrap.GetEnv("SETTINGS_ENCRYPTION_KEY", ""))
 	if err != nil {
 		log.Fatal(err)
 	}
-	embedders := bootstrap.NewEmbedders(bootstrap.DecryptEmbeddingKey(opSettings.Get(), settingsEncryptionKey))
+	endpoints := bootstrap.LoadEmbeddingEndpoints(ctx, repo, settingsEncryptionKey)
+	embedders := bootstrap.NewEmbedders(opSettings.Get().EmbeddingHashEnabled, endpoints)
 	// Enables Postgres pgvector ANN search for this process when available
 	// (so SaveDocument populates the vector columns below), never fatal
 	// otherwise. Must run after embedders are constructed -- see
@@ -230,7 +231,7 @@ func main() {
 	parseHTML := func(html, pageURL string) (string, string, []string) {
 		return htmlparser.Parse(strings.NewReader(html), pageURL)
 	}
-	crawlerSvc := application.NewSQLCrawlerService(renderingFetcher, robotsChecker, repo, embedders, parseHTML, opSettings)
+	crawlerSvc := application.NewSQLCrawlerService(renderingFetcher, robotsChecker, repo, embedders, bootstrap.EmbedderRateLimits(endpoints), parseHTML, opSettings)
 
 	pageRank := runPageRankScheduler(ctx, repo, repo, opSettings)
 

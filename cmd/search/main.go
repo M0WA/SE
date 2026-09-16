@@ -31,12 +31,15 @@ func main() {
 	// tables/state, and none depends on another's result -- run them
 	// concurrently so startup latency is the slowest one of the three
 	// rather than their sum. Embedder construction (below) needs
-	// opSettings already synced from the settings store (it picks
-	// hashembed vs. httpembed off opSettings.EmbeddingProvider), so it
-	// can't join this same batch.
+	// opSettings already synced from the settings store (it picks whether
+	// the built-in hash provider is enabled off opSettings.
+	// EmbeddingHashEnabled), so it can't join this same batch.
 	var wg sync.WaitGroup
 	wg.Add(3)
-	go func() { defer wg.Done(); bootstrap.SyncSettings(ctx, repo, settings, opSettings, overrides, repo) }()
+	go func() {
+		defer wg.Done()
+		bootstrap.SyncSettings(ctx, repo, settings, opSettings, overrides, repo, repo)
+	}()
 	go func() { defer wg.Done(); bootstrap.SyncCorpusStats(ctx, repo, corpusStats) }()
 	go func() { defer wg.Done(); bootstrap.SyncVocabulary(ctx, repo, vocabulary) }()
 	wg.Wait()
@@ -45,15 +48,17 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	embedders := bootstrap.NewEmbedders(bootstrap.DecryptEmbeddingKey(opSettings.Get(), settingsEncryptionKey))
+	endpoints := bootstrap.LoadEmbeddingEndpoints(ctx, repo, settingsEncryptionKey)
+	embedders := bootstrap.NewEmbedders(opSettings.Get().EmbeddingHashEnabled, endpoints)
 	// Attempt to enable Postgres pgvector-backed ANN semantic search -- a
 	// no-op on SQLite/MySQL, and never fatal even on Postgres without the
 	// extension installed (see sqlrepo.Repository.EnableANN): this process
 	// just keeps using the brute-force SampleEmbeddings fallback either
 	// way. Must run after embedders are constructed, since each provider's
 	// vector column is sized to its own Dimensions() -- see domain.
-	// OperationalSettingsValues.EmbeddingHashEnabled/EmbeddingHTTPEnabled
-	// for why that means this can no longer run concurrently with the
+	// OperationalSettingsValues.EmbeddingHashEnabled/domain.
+	// EmbeddingHTTPEndpoint.Enabled for why that means this can no longer
+	// run concurrently with the
 	// settings sync above.
 	repo.EnableANN(ctx, bootstrap.EmbedderDimensions(embedders))
 

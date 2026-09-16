@@ -35,7 +35,10 @@ func main() {
 	// opSettings already synced.
 	var wg sync.WaitGroup
 	wg.Add(3)
-	go func() { defer wg.Done(); bootstrap.SyncSettings(ctx, repo, settings, opSettings, overrides, repo) }()
+	go func() {
+		defer wg.Done()
+		bootstrap.SyncSettings(ctx, repo, settings, opSettings, overrides, repo, repo)
+	}()
 	go func() { defer wg.Done(); bootstrap.SyncCorpusStats(ctx, repo, corpusStats) }()
 	go func() { defer wg.Done(); bootstrap.SyncVocabulary(ctx, repo, vocabulary) }()
 	wg.Wait()
@@ -44,7 +47,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	embedders := bootstrap.NewEmbedders(bootstrap.DecryptEmbeddingKey(opSettings.Get(), settingsEncryptionKey))
+	endpoints := bootstrap.LoadEmbeddingEndpoints(ctx, repo, settingsEncryptionKey)
+	embedders := bootstrap.NewEmbedders(opSettings.Get().EmbeddingHashEnabled, endpoints)
 	// Enables Postgres pgvector ANN search for this process when
 	// available, never fatal otherwise. Must run after embedders are
 	// constructed -- see cmd/search's identical comment.
@@ -78,11 +82,13 @@ func main() {
 		PageRank:              repo,
 		EmbeddingRepo:         repo,
 		Embedders:             embedders,
+		EmbedderRateLimits:    bootstrap.EmbedderRateLimits(endpoints),
 		Settings:              settings,
 		OpSettings:            opSettings,
 		Overrides:             overrides,
 		SettingsStore:         repo,
 		ScheduledCrawls:       repo,
+		EmbeddingEndpoints:    repo,
 		Health:                repo,
 		Sessions:              repo,
 		DBDriver:              driver,

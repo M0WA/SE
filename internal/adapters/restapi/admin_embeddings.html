@@ -27,19 +27,12 @@
     <a href="/admin/database">Database</a>
   </nav>
 
-  <p class="lede" style="margin: 0 0 1.5rem;">Semantic search's vector space: which provider(s) are enabled and which one is active for search, which models the HTTP endpoint actually serves, and recomputing the corpus after a change. Enabled providers/URL/key/dimensions/rate limit are configured on <a href="/admin/settings">Settings</a>.</p>
+  <p class="lede" style="margin: 0 0 1.5rem;">Semantic search's vector space: the built-in hash provider plus any number of configured HTTP embedding endpoints, which one(s) are enabled, and which one is active for search. The hash toggle and active-for-search choice are configured on <a href="/admin/settings">Settings</a>; each HTTP endpoint's own base URL/model/key/dimensions/rate limit is managed on <a href="/admin/embeddings/endpoints">HTTP endpoints</a>.</p>
 
   <section class="panel">
     <h2>Current configuration</h2>
     <div id="embeddings-config"></div>
-  </section>
-
-  <section class="panel">
-    <h2>Available models</h2>
-    <p class="tuning-hint">Fetched from the configured endpoint's own /models list, using the base URL/API key already saved on Settings.</p>
-    <button id="embeddings-models-btn" type="button">List available models</button>
-    <div id="embeddings-models-status" class="panel-status"></div>
-    <div id="embeddings-models-result"></div>
+    <a class="text-button" href="/admin/embeddings/endpoints">Manage HTTP endpoints</a>
   </section>
 
   <section class="panel">

@@ -1566,10 +1566,10 @@ func TestHybridSearch_ANNQueryErrorPropagates(t *testing.T) {
 // EmbeddingsForDocs/SampleEmbeddings/TopSemanticMatches are all called
 // with whichever provider opValues.EmbeddingProvider currently names as
 // active -- not a hardcoded value -- so a search reads the right stored
-// vectors even when both hash and http are enabled simultaneously (see
-// domain.OperationalSettingsValues.EmbeddingHashEnabled/
-// EmbeddingHTTPEnabled) and http happens to be the active one.
+// vectors even when hash and a configured HTTP endpoint are both enabled
+// simultaneously and the endpoint happens to be the active one.
 func TestHybridSearch_PassesActiveProviderToRepoEmbeddingMethods(t *testing.T) {
+	const activeProvider = "ionos"
 	repo := &fakeSQLRepo{
 		postings: map[string][]domain.PostingStats{
 			"katzen": {{DocID: "1", TermFreq: 5, DocLength: 10, DocFreq: 1, TotalDocs: 2, AvgDocLen: 10}},
@@ -1581,9 +1581,8 @@ func TestHybridSearch_PassesActiveProviderToRepoEmbeddingMethods(t *testing.T) {
 	}
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
-		EmbeddingHTTPEnabled: true,
-		EmbeddingProvider:    domain.EmbeddingProviderHTTP,
-		ANNSearchEnabled:     true,
+		EmbeddingProvider: activeProvider,
+		ANNSearchEnabled:  true,
 	})
 
 	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), opSettings, nil, domain.NewCorpusStatsCache(2, 10), nil)
@@ -1591,10 +1590,10 @@ func TestHybridSearch_PassesActiveProviderToRepoEmbeddingMethods(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if repo.embeddingsForDocsProvider != domain.EmbeddingProviderHTTP {
-		t.Errorf("expected EmbeddingsForDocs called with the active provider %q, got %q", domain.EmbeddingProviderHTTP, repo.embeddingsForDocsProvider)
+	if repo.embeddingsForDocsProvider != activeProvider {
+		t.Errorf("expected EmbeddingsForDocs called with the active provider %q, got %q", activeProvider, repo.embeddingsForDocsProvider)
 	}
-	if repo.topSemanticMatchesProvider != domain.EmbeddingProviderHTTP {
-		t.Errorf("expected TopSemanticMatches called with the active provider %q, got %q", domain.EmbeddingProviderHTTP, repo.topSemanticMatchesProvider)
+	if repo.topSemanticMatchesProvider != activeProvider {
+		t.Errorf("expected TopSemanticMatches called with the active provider %q, got %q", activeProvider, repo.topSemanticMatchesProvider)
 	}
 }

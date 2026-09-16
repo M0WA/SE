@@ -16,17 +16,7 @@
   const semanticPoolSizeEl = document.getElementById('semantic-pool-size');
   const annSearchEnabledEl = document.getElementById('ann-search-enabled');
   const embeddingHashEnabledEl = document.getElementById('embedding-hash-enabled');
-  const embeddingHTTPEnabledEl = document.getElementById('embedding-http-enabled');
   const embeddingProviderEl = document.getElementById('embedding-provider');
-  const embeddingHTTPFieldsEl = document.getElementById('embedding-http-fields');
-  const embeddingHTTPBaseURLEl = document.getElementById('embedding-http-base-url');
-  const embeddingHTTPModelEl = document.getElementById('embedding-http-model');
-  const embeddingHTTPDimensionsEl = document.getElementById('embedding-http-dimensions');
-  const embeddingHTTPAPIKeyEl = document.getElementById('embedding-http-api-key');
-  const embeddingHTTPAPIKeyHintEl = document.getElementById('embedding-http-api-key-hint');
-  const embeddingHTTPModelOptionsEl = document.getElementById('embedding-http-model-options');
-  const embeddingHTTPModelHintEl = document.getElementById('embedding-http-model-hint');
-  const embeddingRateLimitEl = document.getElementById('embedding-rate-limit');
   const embeddingTitleWeightEl = document.getElementById('embedding-title-weight');
   const maxDocumentVersionsEl = document.getElementById('max-document-versions');
   const dbMaxOpenConnsEl = document.getElementById('db-max-open-conns');
@@ -68,26 +58,6 @@
     tileCrawlDefaultEl.textContent = s.operational.default_max_pages + ' pages';
   }
 
-  // toggleEmbeddingHTTPFields shows the HTTP-provider-only fields only
-  // when that provider is actually enabled (computed) -- driven by the
-  // "compute HTTP embeddings" checkbox, not by which provider is active
-  // for search: these fields (base URL, model, dimensions, API key) are
-  // meaningful whenever HTTP is being computed at all, even while hash is
-  // the one actually active.
-  function toggleEmbeddingHTTPFields() {
-    embeddingHTTPFieldsEl.hidden = !embeddingHTTPEnabledEl.checked;
-  }
-  embeddingHTTPEnabledEl.addEventListener('change', toggleEmbeddingHTTPFields);
-
-  // The API key field starts readonly and only becomes editable on focus --
-  // same reasoning as crawl.html's Basic auth password field (see
-  // admin_crawl.js): a browser won't offer to autofill a saved login into a
-  // field that's readonly when the page loads. Unlike that one-off crawl
-  // form, this field also never shows the real stored value (see
-  // applySettings/embeddingHTTPAPIKeyHintEl below) -- leaving it blank on
-  // save means "keep whatever's already configured," not "clear it."
-  embeddingHTTPAPIKeyEl.addEventListener('focus', () => embeddingHTTPAPIKeyEl.removeAttribute('readonly'), { once: true });
-
   function countLabel(n, noun) {
     return n + ' ' + noun + (n === 1 ? '' : 's');
   }
@@ -99,38 +69,46 @@
       ' · ' + countLabel(Object.keys(o.boosted_domains || {}).length, 'domain');
   }
 
-  // loadEmbeddingModels prefills the model field's <datalist> suggestions
-  // from GET /admin/api/embeddings/models, using whatever base URL/API key
-  // are already saved server-side (see handleAdminEmbeddingsModels) --
-  // never values just typed into the form but not yet saved. Only
-  // attempted when the HTTP provider is enabled (computed) and a base URL
-  // is already saved -- there's nothing to ask otherwise, so a
-  // freshly-typed base URL needs a save first before this prefills
-  // anything. Gated on embedding_http_enabled, not embedding_provider
-  // (which one is active for search) -- see toggleEmbeddingHTTPFields.
-  async function loadEmbeddingModels(s) {
-    clear(embeddingHTTPModelOptionsEl);
-    embeddingHTTPModelHintEl.textContent = '';
-    if (!s.operational.embedding_http_enabled || !s.operational.embedding_http_base_url) {
-      return;
-    }
+  // loadEmbeddingProviderOptions populates the "Active for search" select
+  // with hash (always offered) plus every currently *enabled* HTTP
+  // endpoint (fetched fresh -- endpoints are managed on their own page, not
+  // this form), then restores whichever one activeProvider names. A
+  // provider no longer in this list (an endpoint deleted or disabled since
+  // this value was set) is added anyway as a disabled, clearly-labeled
+  // option, so the select doesn't silently jump to hash out from under an
+  // admin who hasn't saved yet -- the next save still resolves it via
+  // domain.ReconcileActiveProvider server-side either way.
+  async function loadEmbeddingProviderOptions(activeProvider) {
+    clear(embeddingProviderEl);
+    const hashOpt = document.createElement('option');
+    hashOpt.value = 'hash';
+    hashOpt.textContent = 'Hash (dependency-free)';
+    embeddingProviderEl.appendChild(hashOpt);
+
+    let endpoints = [];
     try {
-      const r = await getJSON('/admin/api/embeddings/models');
-      if (r.error) {
-        embeddingHTTPModelHintEl.textContent = 'Could not list models: ' + r.error;
-        return;
-      }
-      (r.models || []).forEach((id) => {
-        const opt = document.createElement('option');
-        opt.value = id;
-        embeddingHTTPModelOptionsEl.appendChild(opt);
-      });
-      if (r.models && r.models.length > 0) {
-        embeddingHTTPModelHintEl.textContent = r.models.length + ' model(s) available from this endpoint.';
-      }
+      const r = await getJSON('/admin/api/embeddings/endpoints');
+      if (Array.isArray(r)) endpoints = r;
     } catch (err) {
-      embeddingHTTPModelHintEl.textContent = 'Could not list models: ' + err.message;
+      // The endpoints list is a convenience for populating this select --
+      // a failed (or unexpectedly-shaped) fetch just means "hash only, for
+      // now," not a reason to block the rest of the settings page from
+      // loading.
     }
+    endpoints.filter((e) => e.enabled).forEach((e) => {
+      const opt = document.createElement('option');
+      opt.value = e.id;
+      opt.textContent = e.name + ' (' + e.id + ')';
+      embeddingProviderEl.appendChild(opt);
+    });
+
+    if (activeProvider && activeProvider !== 'hash' && !endpoints.some((e) => e.enabled && e.id === activeProvider)) {
+      const staleOpt = document.createElement('option');
+      staleOpt.value = activeProvider;
+      staleOpt.textContent = activeProvider + ' (not currently enabled — will self-heal to hash on save)';
+      embeddingProviderEl.appendChild(staleOpt);
+    }
+    embeddingProviderEl.value = activeProvider || 'hash';
   }
 
   function applySettings(s) {
@@ -151,25 +129,11 @@
     semanticPoolSizeEl.value = s.operational.semantic_candidate_pool_size;
     annSearchEnabledEl.checked = s.operational.ann_search_enabled;
     embeddingHashEnabledEl.checked = s.operational.embedding_hash_enabled;
-    embeddingHTTPEnabledEl.checked = s.operational.embedding_http_enabled;
-    embeddingProviderEl.value = s.operational.embedding_provider || 'hash';
-    embeddingHTTPBaseURLEl.value = s.operational.embedding_http_base_url || '';
-    embeddingHTTPModelEl.value = s.operational.embedding_http_model || '';
-    embeddingHTTPDimensionsEl.value = s.operational.embedding_http_dimensions || '';
-    embeddingRateLimitEl.value = s.operational.embedding_rate_limit_per_second || '';
     // Unlike the fields above, 0 is a real, meaningful value here (title
     // blending disabled -- see the field's own doc comment in admin.go),
     // so it's assigned directly rather than falling back to '' on falsy.
     embeddingTitleWeightEl.value = s.operational.embedding_title_weight;
-    // The real key is never sent back (see toOperationalValues in admin.go)
-    // -- this field always starts blank, only ever showing whether one is
-    // currently configured, never the value itself.
-    embeddingHTTPAPIKeyEl.value = '';
-    embeddingHTTPAPIKeyHintEl.textContent = s.operational.embedding_http_api_key_set
-      ? 'A key is currently configured. Leave blank to keep it, or type a new one to replace it.'
-      : 'No key currently configured.';
-    toggleEmbeddingHTTPFields();
-    loadEmbeddingModels(s);
+    loadEmbeddingProviderOptions(s.operational.embedding_provider);
     maxDocumentVersionsEl.value = s.operational.max_document_versions;
     dbMaxOpenConnsEl.value = s.operational.db_max_open_conns;
     dbMaxIdleConnsEl.value = s.operational.db_max_idle_conns;
@@ -222,14 +186,8 @@
         semantic_candidate_pool_size: parseInt(semanticPoolSizeEl.value, 10),
         ann_search_enabled: annSearchEnabledEl.checked,
         embedding_hash_enabled: embeddingHashEnabledEl.checked,
-        embedding_http_enabled: embeddingHTTPEnabledEl.checked,
         embedding_provider: embeddingProviderEl.value,
-        embedding_http_base_url: embeddingHTTPBaseURLEl.value,
-        embedding_http_model: embeddingHTTPModelEl.value,
-        embedding_http_dimensions: parseInt(embeddingHTTPDimensionsEl.value, 10) || 0,
-        embedding_rate_limit_per_second: parseInt(embeddingRateLimitEl.value, 10) || 0,
         embedding_title_weight: parseFloat(embeddingTitleWeightEl.value) || 0,
-        embedding_http_api_key: embeddingHTTPAPIKeyEl.value,
         max_document_versions: parseInt(maxDocumentVersionsEl.value, 10),
         db_max_open_conns: parseInt(dbMaxOpenConnsEl.value, 10),
         db_max_idle_conns: parseInt(dbMaxIdleConnsEl.value, 10),
@@ -241,7 +199,6 @@
       },
     });
     applySettings(s);
-    return s.embedding_test_error || '';
   }
 
   async function saveOverrides() {
@@ -258,12 +215,8 @@
     e.preventDefault();
     status.textContent = '';
     const errors = [];
-    const warnings = [];
     try {
-      const embeddingTestError = await saveSettings();
-      if (embeddingTestError) {
-        warnings.push('embedding provider test failed: ' + embeddingTestError);
-      }
+      await saveSettings();
     } catch (err) {
       errors.push('settings: ' + err.message);
     }
@@ -275,9 +228,6 @@
     if (errors.length > 0) {
       status.style.color = 'var(--accent)';
       status.textContent = 'Could not save ' + errors.join('; ');
-    } else if (warnings.length > 0) {
-      status.style.color = 'var(--accent)';
-      status.textContent = 'Saved, but ' + warnings.join('; ');
     } else {
       status.style.color = 'var(--ink-muted)';
       status.textContent = 'Saved.';
@@ -329,7 +279,6 @@
       saveOverrides, applyOverrides, loadOverrides,
       factorsToText, parseFactorLines,
       renderSettingsSummary, renderOverridesSummary,
-      toggleEmbeddingHTTPFields,
-      loadEmbeddingModels,
+      loadEmbeddingProviderOptions,
     };
   }

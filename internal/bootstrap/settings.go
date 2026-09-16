@@ -43,11 +43,20 @@ type PoolConfigurer interface {
 // admin-configured value at every later poll tick without needing its own
 // separate change-detection. pool may be nil for a caller with no
 // connection pool to manage (e.g. a test that only cares about tuning).
-func SyncSettings(ctx context.Context, store ports.SettingsStore, tuning *domain.TuningSettings, op *domain.OperationalSettings, overrides *domain.RankingOverrides, pool PoolConfigurer) {
-	pollRefresh(ctx, settingsPollInterval, func() { applySettingsOnce(ctx, store, tuning, op, overrides, pool) })
+//
+// embeddingEndpoints (typically the same *sqlrepo.Repository as pool), when
+// non-nil, is consulted on every tick to keep op.EmbeddingProvider valid: a
+// stored value naming a provider that's since been disabled or had its
+// endpoint deleted is self-healed via domain.ReconcileActiveProvider before
+// being applied -- op.Set itself can't do this (see its own doc comment),
+// since provider validity now depends on this dynamically configured list,
+// not a fixed enum. nil skips reconciliation entirely (e.g. a test that
+// only cares about the rest of op).
+func SyncSettings(ctx context.Context, store ports.SettingsStore, tuning *domain.TuningSettings, op *domain.OperationalSettings, overrides *domain.RankingOverrides, pool PoolConfigurer, embeddingEndpoints ports.EmbeddingEndpointStore) {
+	pollRefresh(ctx, settingsPollInterval, func() { applySettingsOnce(ctx, store, tuning, op, overrides, pool, embeddingEndpoints) })
 }
 
-func applySettingsOnce(ctx context.Context, store ports.SettingsStore, tuning *domain.TuningSettings, op *domain.OperationalSettings, overrides *domain.RankingOverrides, pool PoolConfigurer) {
+func applySettingsOnce(ctx context.Context, store ports.SettingsStore, tuning *domain.TuningSettings, op *domain.OperationalSettings, overrides *domain.RankingOverrides, pool PoolConfigurer, embeddingEndpoints ports.EmbeddingEndpointStore) {
 	if tuning != nil {
 		var v domain.TuningValues
 		if loadSetting(ctx, store, ports.SettingsKeyTuning, &v) {
@@ -57,6 +66,13 @@ func applySettingsOnce(ctx context.Context, store ports.SettingsStore, tuning *d
 	if op != nil {
 		var v domain.OperationalSettingsValues
 		if loadSetting(ctx, store, ports.SettingsKeyOperational, &v) {
+			if embeddingEndpoints != nil {
+				if endpoints, err := embeddingEndpoints.ListEmbeddingEndpoints(ctx); err == nil {
+					v.EmbeddingProvider = domain.ReconcileActiveProvider(v.EmbeddingProvider, v.EmbeddingHashEnabled, endpoints)
+				} else {
+					log.Printf("listing embedding endpoints: %v", err)
+				}
+			}
 			op.Set(v)
 		}
 		if pool != nil {

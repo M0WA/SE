@@ -84,7 +84,7 @@ func TestSQLCrawlerService_Crawl_HappyPath(t *testing.T) {
 		return "B", "genuegend inhalt text fuer die seite b hier auch danke", nil
 	}
 
-	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, parse, nil)
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, nil)
 	count, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a/"}, MaxPages: 5}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -117,7 +117,7 @@ func TestSQLCrawlerService_Crawl_PrioritizeUnindexedConsultsDocumentIDsByHost(t 
 		return "A", "genuegend inhalt text fuer die seite a hier bitte danke", nil
 	}
 
-	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, parse, nil)
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, nil)
 	_, err := svc.Crawl(context.Background(), ports.CrawlOptions{
 		SeedURLs: []string{"http://a/"}, MaxPages: 5, PrioritizeUnindexed: true,
 	}, nil)
@@ -141,7 +141,7 @@ func TestSQLCrawlerService_Crawl_PrioritizeUnindexedFalseSkipsTheLookup(t *testi
 		return "A", "genuegend inhalt text fuer die seite a hier bitte danke", nil
 	}
 
-	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, parse, nil)
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, nil)
 	_, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a/"}, MaxPages: 5}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -172,7 +172,7 @@ func TestSQLCrawlerService_Crawl_FollowIndexedDomainsConsultsHostsIndexed(t *tes
 		return "B", "genuegend inhalt text fuer die seite b hier auch danke", nil
 	}
 
-	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, parse, nil)
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, nil)
 	count, err := svc.Crawl(context.Background(), ports.CrawlOptions{
 		SeedURLs: []string{"http://a/"}, MaxPages: 5, LinkScope: domain.LinkScopeHost, FollowIndexedDomains: true,
 	}, nil)
@@ -199,7 +199,7 @@ func TestSQLCrawlerService_Crawl_FollowIndexedDomainsFalseSkipsTheLookup(t *test
 		return "A", "genuegend inhalt text fuer die seite a hier bitte danke", nil
 	}
 
-	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, parse, nil)
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, nil)
 	_, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a/"}, MaxPages: 5}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -218,7 +218,7 @@ func TestSQLCrawlerService_Crawl_RespectsRobots(t *testing.T) {
 		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil
 	}
 
-	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, parse, nil)
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, nil)
 	count, _ := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5, RespectRobots: true}, nil)
 	if count != 0 {
 		t.Errorf("expected 0 crawled (robots disallow), got %d", count)
@@ -234,7 +234,7 @@ func TestSQLCrawlerService_Crawl_IgnoresRobotsByDefault(t *testing.T) {
 		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil
 	}
 
-	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, parse, nil)
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, nil)
 	count, _ := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5}, nil)
 	if count != 1 {
 		t.Errorf("expected robots.txt to be ignored by default, got count=%d", count)
@@ -248,7 +248,7 @@ func TestSQLCrawlerService_Crawl_SkipsThinContent(t *testing.T) {
 	embedder := &fakeEmbedder{vec: []float32{1, 0}}
 	parse := func(html, pageURL string) (string, string, []string) { return "A", "zu kurz", nil }
 
-	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, parse, nil)
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, nil)
 	count, _ := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5}, nil)
 	if count != 0 {
 		t.Errorf("expected thin content skipped, got %d", count)
@@ -264,7 +264,7 @@ func TestSQLCrawlerService_Crawl_SaveErrorPropagates(t *testing.T) {
 		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil
 	}
 
-	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, parse, nil)
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, nil)
 	_, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5}, nil)
 	if err == nil {
 		t.Error("expected repo error to propagate")
@@ -280,7 +280,7 @@ func TestSQLCrawlerService_Crawl_EmbedErrorPropagates(t *testing.T) {
 		return "A", "genuegend inhalt text fuer diese seite bitte danke", nil
 	}
 
-	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, parse, nil)
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, nil)
 	_, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a"}, MaxPages: 5}, nil)
 	if err == nil {
 		t.Error("expected embed error to propagate")
@@ -288,9 +288,9 @@ func TestSQLCrawlerService_Crawl_EmbedErrorPropagates(t *testing.T) {
 }
 
 // TestSQLCrawlerService_Crawl_PacesEmbedCalls proves a single crawl job's
-// own Embed calls are paced to domain.OperationalSettingsValues.
-// EmbeddingRateLimitPerSecond, the same real-provider-rate-limit concern
-// application.RunEmbeddingRecomputeJob already paces for.
+// own Embed calls are paced to the hash provider's own entry in
+// NewSQLCrawlerService's rateLimits map, the same real-provider-rate-limit
+// concern application.RunEmbeddingRecomputeJob already paces for.
 func TestSQLCrawlerService_Crawl_PacesEmbedCalls(t *testing.T) {
 	fetcher := &fakeFetcher{pages: map[string]string{
 		"http://a/":  "<html>a</html>",
@@ -310,10 +310,9 @@ func TestSQLCrawlerService_Crawl_PacesEmbedCalls(t *testing.T) {
 			return "C", "genuegend inhalt text fuer die seite c hier auch danke", nil
 		}
 	}
-	const ratePerSecond = 10 // 100ms/call
-	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingRateLimitPerSecond: ratePerSecond})
+	rateLimits := map[string]float64{domain.EmbeddingProviderHash: 10} // 100ms/call
 
-	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, parse, settings)
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, rateLimits, parse, nil)
 	start := time.Now()
 	if _, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a/"}, MaxPages: 5}, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -362,10 +361,9 @@ func TestSQLCrawlerService_Crawl_SharesRateLimitAcrossConcurrentCrawls(t *testin
 		c := content[pageURL]
 		return c.title, c.text, c.links
 	}
-	const ratePerSecond = 10 // 100ms/call, shared across both jobs below
-	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingRateLimitPerSecond: ratePerSecond})
+	rateLimits := map[string]float64{domain.EmbeddingProviderHash: 10} // 100ms/call, shared across both jobs below
 
-	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, parse, settings)
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, rateLimits, parse, nil)
 
 	start := time.Now()
 	var wg sync.WaitGroup
@@ -427,7 +425,7 @@ func TestSQLCrawlerService_Crawl_BlendsTitleAndBodyEmbeddingsWhenWeightConfigure
 	}
 	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingTitleWeight: 0.25})
 
-	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, parse, settings)
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, nil, parse, settings)
 	if _, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a/"}, MaxPages: 5}, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -445,8 +443,8 @@ func TestSQLCrawlerService_Crawl_BlendsTitleAndBodyEmbeddingsWhenWeightConfigure
 // proves a non-zero EmbeddingTitleWeight's extra Embed call is paced just
 // like the first one, not exempted from the rate limit -- otherwise a
 // document with both a title and body would silently double this
-// process's real request rate against the configured provider without
-// EmbeddingRateLimitPerSecond actually bounding it.
+// process's real request rate against the configured provider without its
+// rate limit actually bounding it.
 func TestSQLCrawlerService_Crawl_PacesBothTitleAndBodyEmbedCallsSeparately(t *testing.T) {
 	fetcher := &fakeFetcher{pages: map[string]string{"http://a/": "<html>a</html>"}}
 	robots := &fakeRobots{}
@@ -455,13 +453,12 @@ func TestSQLCrawlerService_Crawl_PacesBothTitleAndBodyEmbedCallsSeparately(t *te
 	parse := func(html, pageURL string) (string, string, []string) {
 		return "A", "genuegend inhalt text fuer die seite a hier bitte danke", nil
 	}
-	const ratePerSecond = 10 // 100ms/call
+	rateLimits := map[string]float64{domain.EmbeddingProviderHash: 10} // 100ms/call
 	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
-		EmbeddingRateLimitPerSecond: ratePerSecond,
-		EmbeddingTitleWeight:        0.5,
+		EmbeddingTitleWeight: 0.5,
 	})
 
-	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, parse, settings)
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, rateLimits, parse, settings)
 	start := time.Now()
 	if _, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a/"}, MaxPages: 5}, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -477,10 +474,11 @@ func TestSQLCrawlerService_Crawl_PacesBothTitleAndBodyEmbedCallsSeparately(t *te
 // TestSQLCrawlerService_Crawl_ComputesEveryEnabledProviderNotJustOne
 // proves the crawler embeds a page with EVERY currently-enabled provider,
 // not just whichever is active for search -- the whole point of storing
-// both hash and http embeddings simultaneously (see
-// domain.OperationalSettingsValues.EmbeddingHashEnabled/
-// EmbeddingHTTPEnabled) is that switching which one is active never needs
-// a recompute, because both were already kept warm on every crawl.
+// every enabled provider's embedding simultaneously (see
+// domain.OperationalSettingsValues.EmbeddingHashEnabled and
+// domain.EmbeddingHTTPEndpoint.Enabled) is that switching which one is
+// active never needs a recompute, because all of them were already kept
+// warm on every crawl.
 func TestSQLCrawlerService_Crawl_ComputesEveryEnabledProviderNotJustOne(t *testing.T) {
 	fetcher := &fakeFetcher{pages: map[string]string{"http://a/": "<html>a</html>"}}
 	robots := &fakeRobots{}
@@ -492,10 +490,10 @@ func TestSQLCrawlerService_Crawl_ComputesEveryEnabledProviderNotJustOne(t *testi
 	}
 	embedders := map[string]ports.EmbeddingProvider{
 		domain.EmbeddingProviderHash: hashEmbedder,
-		domain.EmbeddingProviderHTTP: httpEmbedder,
+		"http":                       httpEmbedder,
 	}
 
-	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedders, parse, nil)
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedders, nil, parse, nil)
 	if _, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a/"}, MaxPages: 5}, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -507,7 +505,7 @@ func TestSQLCrawlerService_Crawl_ComputesEveryEnabledProviderNotJustOne(t *testi
 	if got := saved[domain.EmbeddingProviderHash]; len(got) != 2 || got[0] != 1 {
 		t.Errorf("expected the hash provider's own vector saved, got %v", got)
 	}
-	if got := saved[domain.EmbeddingProviderHTTP]; len(got) != 4 || got[1] != 1 {
+	if got := saved["http"]; len(got) != 4 || got[1] != 1 {
 		t.Errorf("expected the http provider's own (differently-shaped) vector saved too, got %v", got)
 	}
 }

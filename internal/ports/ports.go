@@ -88,10 +88,10 @@ type SQLRepository interface {
 	// how many times the title is counted into the indexed token stream
 	// ahead of the body -- see domain.OperationalSettingsValues.TitleWeight.
 	// embeddings holds one vector per currently-enabled provider (see
-	// domain.OperationalSettingsValues.EmbeddingHashEnabled/
-	// EmbeddingHTTPEnabled, keyed by domain.EmbeddingProviderHash/
-	// EmbeddingProviderHTTP) -- every one of them is upserted into
-	// document_embeddings in the same write.
+	// domain.OperationalSettingsValues.EmbeddingHashEnabled and every
+	// enabled domain.EmbeddingHTTPEndpoint, keyed by domain.
+	// EmbeddingProviderHash or the endpoint's own ID) -- every one of them
+	// is upserted into document_embeddings in the same write.
 	SaveDocument(ctx context.Context, doc domain.Document, embeddings map[string][]float32, maxVersions, titleWeight int) error
 	// PostingsForTerms batch-fetches postings for every given term in a
 	// single query (a "WHERE term IN (...)" join against documents), so a
@@ -128,9 +128,10 @@ type SQLRepository interface {
 	// norm alongside its vector (see domain.EmbeddedVector) -- precomputed
 	// once, at SaveDocument time, rather than recomputed from scratch on
 	// every request that scores the document. provider is
-	// domain.EmbeddingProviderHash/EmbeddingProviderHTTP -- typically
-	// whichever domain.OperationalSettingsValues.EmbeddingProvider names as
-	// active for search.
+	// domain.EmbeddingProviderHash or a configured domain.
+	// EmbeddingHTTPEndpoint.ID -- typically whichever domain.
+	// OperationalSettingsValues.EmbeddingProvider names as active for
+	// search.
 	EmbeddingsForDocs(ctx context.Context, ids []string, provider string) (map[string]domain.EmbeddedVector, error)
 	// SampleEmbeddings returns up to limit of provider's embeddings from
 	// across the corpus, so a purely semantic match (no BM25 hits at all)
@@ -475,6 +476,15 @@ const (
 	// as SettingsKeyPageRankStatus, written by
 	// application.RunEmbeddingRecomputeJobWithStatus.
 	SettingsKeyEmbeddingRecomputeStatus = "embedding_recompute_status"
+	// SettingsKeyEmbeddingEndpointsMigrated holds the plain string "true"
+	// once the one-time legacy-HTTP-config-to-embedding_http_endpoints
+	// migration (sqlrepo.Repository.migrateLegacyHTTPEmbeddingConfig) has
+	// run -- a marker distinct from "does embedding_http_endpoints have any
+	// rows," since an admin deleting the migrated endpoint afterward would
+	// otherwise make that table empty again and the migration would
+	// wrongly re-run (and resurrect the deleted endpoint) on the next
+	// restart.
+	SettingsKeyEmbeddingEndpointsMigrated = "embedding_endpoints_migrated"
 )
 
 // SettingsStore persists the admin-configurable tuning/operational/ranking
@@ -534,4 +544,29 @@ type ScheduledCrawlStore interface {
 	// startup, before anything else can query DueScheduledCrawls. Returns
 	// how many rows were reset.
 	ResetStaleInProgress(ctx context.Context) (int, error)
+}
+
+// ErrEmbeddingEndpointNotFound is returned by EmbeddingEndpointStore's
+// Update and Delete when no endpoint with the given ID exists.
+var ErrEmbeddingEndpointNotFound = errors.New("embedding endpoint not found")
+
+// EmbeddingEndpointStore persists the admin-configured HTTP embedding
+// endpoints (see domain.EmbeddingHTTPEndpoint) -- one row per endpoint an
+// admin has added, each independently enabled and rate-limited, alongside
+// the always-available built-in hash provider. Implemented by the same
+// *sqlrepo.Repository every process already opens, the same way
+// ScheduledCrawlStore is.
+type EmbeddingEndpointStore interface {
+	CreateEmbeddingEndpoint(ctx context.Context, e domain.EmbeddingHTTPEndpoint) error
+	// GetEmbeddingEndpoint returns one endpoint by ID, or
+	// ErrEmbeddingEndpointNotFound if none exists -- used by the admin
+	// endpoint edit subpage to load a single entry's current config.
+	GetEmbeddingEndpoint(ctx context.Context, id string) (domain.EmbeddingHTTPEndpoint, error)
+	// ListEmbeddingEndpoints returns every configured endpoint, in no
+	// particular guaranteed order beyond what the implementation's query
+	// happens to return -- callers needing a stable order sort it
+	// themselves.
+	ListEmbeddingEndpoints(ctx context.Context) ([]domain.EmbeddingHTTPEndpoint, error)
+	UpdateEmbeddingEndpoint(ctx context.Context, e domain.EmbeddingHTTPEndpoint) error
+	DeleteEmbeddingEndpoint(ctx context.Context, id string) error
 }

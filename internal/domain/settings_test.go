@@ -219,8 +219,6 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 		TitleWeight:                      2,
 		EmbeddingHashEnabled:             true,
 		EmbeddingProvider:                domain.EmbeddingProviderHash,
-		EmbeddingHTTPDimensions:          128,
-		EmbeddingRateLimitPerSecond:      5,
 		EmbeddingTitleWeight:             0.3,
 	}
 	if v != want {
@@ -352,156 +350,29 @@ func TestOperationalSettings_SetValidLinkScopePreserved(t *testing.T) {
 	}
 }
 
-func TestOperationalSettings_SetBlankEmbeddingProviderFallsBackToHash(t *testing.T) {
-	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{EmbeddingProvider: ""})
-	if v := s.Get(); v.EmbeddingProvider != domain.EmbeddingProviderHash {
-		t.Errorf("expected a blank EmbeddingProvider to fall back to EmbeddingProviderHash, got %q", v.EmbeddingProvider)
+// TestOperationalSettings_SetEmbeddingProviderPassedThroughUnvalidated proves
+// Set no longer self-heals EmbeddingProvider itself (blank, unrecognized,
+// or naming a not-currently-enabled provider) -- that validation moved to
+// domain.ReconcileActiveProvider (see its own tests), applied by callers
+// that have both the settings and the live embedding_http_endpoints list at
+// hand, since provider validity now depends on that dynamically configured
+// table rather than a fixed two-value enum Set could check on its own.
+func TestOperationalSettings_SetEmbeddingProviderPassedThroughUnvalidated(t *testing.T) {
+	cases := []string{"", "ouija-board", "some-deleted-endpoint-id"}
+	for _, name := range cases {
+		s := domain.DefaultOperationalSettings()
+		s.Set(domain.OperationalSettingsValues{EmbeddingProvider: name})
+		if v := s.Get(); v.EmbeddingProvider != name {
+			t.Errorf("Set(EmbeddingProvider=%q): expected it passed through unchanged, got %q", name, v.EmbeddingProvider)
+		}
 	}
 }
 
-func TestOperationalSettings_SetInvalidEmbeddingProviderFallsBackToHash(t *testing.T) {
+func TestOperationalSettings_SetEmbeddingHashEnabledPreserved(t *testing.T) {
 	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{EmbeddingProvider: "ouija-board"})
-	if v := s.Get(); v.EmbeddingProvider != domain.EmbeddingProviderHash {
-		t.Errorf("expected an unrecognized EmbeddingProvider to fall back to EmbeddingProviderHash, got %q", v.EmbeddingProvider)
-	}
-}
-
-func TestOperationalSettings_SetValidEmbeddingProviderPreserved(t *testing.T) {
-	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHTTP, EmbeddingHTTPEnabled: true})
-	if v := s.Get(); v.EmbeddingProvider != domain.EmbeddingProviderHTTP {
-		t.Errorf("expected EmbeddingProvider=http to be preserved, got %q", v.EmbeddingProvider)
-	}
-}
-
-// Note: naming "http" while both enabled flags are left at their zero
-// value (false) is deliberately NOT tested here as "self-heals to hash" --
-// that's exactly the shape of settings stored before EmbeddingHashEnabled/
-// EmbeddingHTTPEnabled existed, and self-healing it to hash would silently
-// discard a real, already-working HTTP configuration on upgrade. See
-// TestOperationalSettings_SetPreExistingHTTPConfigWithBothFlagsUnsetEnablesHTTP
-// for the actual (correct) behavior.
-
-// TestOperationalSettings_SetEmbeddingProviderNamingHashWhileOnlyHTTPEnabledSelfHeals
-// mirrors the above the other direction: EmbeddingProvider defaults to
-// "hash" (the Go zero value's implicit choice isn't actually zero here,
-// but an explicit "hash" naming it while only HTTP is enabled) must
-// self-heal to the one provider that's actually enabled.
-func TestOperationalSettings_SetEmbeddingProviderNamingHashWhileOnlyHTTPEnabledSelfHeals(t *testing.T) {
-	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHash, EmbeddingHashEnabled: false, EmbeddingHTTPEnabled: true})
-	if v := s.Get(); v.EmbeddingProvider != domain.EmbeddingProviderHTTP {
-		t.Errorf("expected EmbeddingProvider=hash (disabled) to self-heal to http, got %q", v.EmbeddingProvider)
-	}
-}
-
-func TestOperationalSettings_SetBothEmbeddingProvidersDisabledFallsBackToHashEnabled(t *testing.T) {
-	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{EmbeddingHashEnabled: false, EmbeddingHTTPEnabled: false})
-	v := s.Get()
-	if !v.EmbeddingHashEnabled {
-		t.Errorf("expected both disabled to fall back to EmbeddingHashEnabled=true, got %+v", v)
-	}
-	if v.EmbeddingProvider != domain.EmbeddingProviderHash {
-		t.Errorf("expected EmbeddingProvider to self-heal to hash alongside it, got %q", v.EmbeddingProvider)
-	}
-}
-
-// TestOperationalSettings_SetPreExistingHTTPConfigWithBothFlagsUnsetEnablesHTTP
-// is a real-upgrade regression test: settings saved before
-// EmbeddingHashEnabled/EmbeddingHTTPEnabled existed decode both fields to
-// their Go zero value (false) -- the exact same shape as
-// TestOperationalSettings_SetBothEmbeddingProvidersDisabledFallsBackToHashEnabled
-// above, except EmbeddingProvider here already names "http", meaning a
-// real, working HTTP configuration (base URL, model, API key) that must
-// not be silently discarded in favor of hash the moment this process
-// upgrades to a build with these two fields. This is the exact scenario
-// that would have broken an already-deployed EmbeddingProvider=http
-// installation on its very next settings sync after upgrading -- before
-// this fix, the old (both-flags-false-always-means-hash) logic forced
-// EmbeddingProvider back to "hash" here.
-func TestOperationalSettings_SetPreExistingHTTPConfigWithBothFlagsUnsetEnablesHTTP(t *testing.T) {
-	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{
-		EmbeddingProvider:       domain.EmbeddingProviderHTTP,
-		EmbeddingHTTPBaseURL:    "https://openai.inference.de-txl.ionos.com/v1",
-		EmbeddingHTTPModel:      "BAAI/bge-m3",
-		EmbeddingHTTPDimensions: 1024,
-		// EmbeddingHashEnabled/EmbeddingHTTPEnabled deliberately omitted --
-		// simulating a JSON blob decoded from storage that predates these
-		// fields, not an admin actively unchecking both boxes.
-	})
-	v := s.Get()
-	if !v.EmbeddingHTTPEnabled {
-		t.Errorf("expected pre-existing http config to self-heal to EmbeddingHTTPEnabled=true, got %+v", v)
-	}
-	if v.EmbeddingHashEnabled {
-		t.Errorf("expected hash to stay disabled (only http was ever configured), got %+v", v)
-	}
-	if v.EmbeddingProvider != domain.EmbeddingProviderHTTP {
-		t.Errorf("expected EmbeddingProvider to remain http, not be silently reverted to hash, got %q", v.EmbeddingProvider)
-	}
-}
-
-func TestOperationalSettings_SetBothEmbeddingProvidersEnabledPreserved(t *testing.T) {
-	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{EmbeddingHashEnabled: true, EmbeddingHTTPEnabled: true, EmbeddingProvider: domain.EmbeddingProviderHTTP})
-	v := s.Get()
-	if !v.EmbeddingHashEnabled || !v.EmbeddingHTTPEnabled {
-		t.Errorf("expected both providers to stay enabled, got %+v", v)
-	}
-	if v.EmbeddingProvider != domain.EmbeddingProviderHTTP {
-		t.Errorf("expected the explicitly chosen active provider to be preserved when it's enabled, got %q", v.EmbeddingProvider)
-	}
-}
-
-func TestOperationalSettings_SetZeroEmbeddingHTTPDimensionsFallsBackToDefault(t *testing.T) {
-	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{EmbeddingHTTPDimensions: 0})
-	if v := s.Get(); v.EmbeddingHTTPDimensions != 128 {
-		t.Errorf("expected EmbeddingHTTPDimensions=0 to fall back to 128, got %d", v.EmbeddingHTTPDimensions)
-	}
-}
-
-func TestOperationalSettings_SetNegativeEmbeddingHTTPDimensionsFallsBackToDefault(t *testing.T) {
-	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{EmbeddingHTTPDimensions: -10})
-	if v := s.Get(); v.EmbeddingHTTPDimensions != 128 {
-		t.Errorf("expected a negative EmbeddingHTTPDimensions to fall back to 128, got %d", v.EmbeddingHTTPDimensions)
-	}
-}
-
-func TestOperationalSettings_SetPositiveEmbeddingHTTPDimensionsPreserved(t *testing.T) {
-	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{EmbeddingHTTPDimensions: 1536})
-	if v := s.Get(); v.EmbeddingHTTPDimensions != 1536 {
-		t.Errorf("expected EmbeddingHTTPDimensions=1536 to be preserved, got %d", v.EmbeddingHTTPDimensions)
-	}
-}
-
-func TestOperationalSettings_SetZeroEmbeddingRateLimitFallsBackToDefault(t *testing.T) {
-	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{EmbeddingRateLimitPerSecond: 0})
-	if v := s.Get(); v.EmbeddingRateLimitPerSecond != 5 {
-		t.Errorf("expected EmbeddingRateLimitPerSecond=0 to fall back to 5, got %d", v.EmbeddingRateLimitPerSecond)
-	}
-}
-
-func TestOperationalSettings_SetNegativeEmbeddingRateLimitFallsBackToDefault(t *testing.T) {
-	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{EmbeddingRateLimitPerSecond: -10})
-	if v := s.Get(); v.EmbeddingRateLimitPerSecond != 5 {
-		t.Errorf("expected a negative EmbeddingRateLimitPerSecond to fall back to 5, got %d", v.EmbeddingRateLimitPerSecond)
-	}
-}
-
-func TestOperationalSettings_SetPositiveEmbeddingRateLimitPreserved(t *testing.T) {
-	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{EmbeddingRateLimitPerSecond: 50})
-	if v := s.Get(); v.EmbeddingRateLimitPerSecond != 50 {
-		t.Errorf("expected EmbeddingRateLimitPerSecond=50 to be preserved, got %d", v.EmbeddingRateLimitPerSecond)
+	s.Set(domain.OperationalSettingsValues{EmbeddingHashEnabled: false})
+	if v := s.Get(); v.EmbeddingHashEnabled {
+		t.Errorf("expected EmbeddingHashEnabled=false to be preserved (Set no longer forces it back to true), got %+v", v)
 	}
 }
 
@@ -538,59 +409,6 @@ func TestOperationalSettings_SetInRangeEmbeddingTitleWeightPreserved(t *testing.
 	s.Set(domain.OperationalSettingsValues{EmbeddingTitleWeight: 0.4})
 	if v := s.Get(); v.EmbeddingTitleWeight != 0.4 {
 		t.Errorf("expected EmbeddingTitleWeight=0.4 to be preserved, got %v", v.EmbeddingTitleWeight)
-	}
-}
-
-// TestOperationalSettings_SetBlankEmbeddingHTTPAPIKeyPreservesExisting proves
-// the secret-field precedent from the doc comment on OperationalSettings.Set:
-// a settings-page save always resubmits every field, including ones the
-// admin didn't touch, and the admin form never sees the real stored key (see
-// admin.go's toOperationalValues) -- so a blank key in a Set call must never
-// wipe out whatever's already configured.
-func TestOperationalSettings_SetBlankEmbeddingHTTPAPIKeyPreservesExisting(t *testing.T) {
-	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{EmbeddingHTTPAPIKey: "sk-original"})
-	s.Set(domain.OperationalSettingsValues{EmbeddingHTTPAPIKey: "", UserAgent: "some-other-change"})
-	if v := s.Get(); v.EmbeddingHTTPAPIKey != "sk-original" {
-		t.Errorf("expected a blank EmbeddingHTTPAPIKey to preserve the existing key, got %q", v.EmbeddingHTTPAPIKey)
-	}
-}
-
-func TestOperationalSettings_SetNonBlankEmbeddingHTTPAPIKeyReplacesExisting(t *testing.T) {
-	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{EmbeddingHTTPAPIKey: "sk-original"})
-	s.Set(domain.OperationalSettingsValues{EmbeddingHTTPAPIKey: "sk-rotated"})
-	if v := s.Get(); v.EmbeddingHTTPAPIKey != "sk-rotated" {
-		t.Errorf("expected a non-blank EmbeddingHTTPAPIKey to replace the existing key, got %q", v.EmbeddingHTTPAPIKey)
-	}
-}
-
-func TestOperationalSettings_SetEmbeddingHTTPBaseURLAndModelPreserved(t *testing.T) {
-	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{
-		EmbeddingHTTPBaseURL: "http://localhost:11434/v1",
-		EmbeddingHTTPModel:   "nomic-embed-text",
-	})
-	v := s.Get()
-	if v.EmbeddingHTTPBaseURL != "http://localhost:11434/v1" || v.EmbeddingHTTPModel != "nomic-embed-text" {
-		t.Errorf("expected EmbeddingHTTPBaseURL/EmbeddingHTTPModel to be preserved, got %+v", v)
-	}
-}
-
-func TestValidEmbeddingProvider(t *testing.T) {
-	cases := []struct {
-		name string
-		want bool
-	}{
-		{domain.EmbeddingProviderHash, true},
-		{domain.EmbeddingProviderHTTP, true},
-		{"", false},
-		{"ouija-board", false},
-	}
-	for _, tc := range cases {
-		if got := domain.ValidEmbeddingProvider(tc.name); got != tc.want {
-			t.Errorf("ValidEmbeddingProvider(%q) = %v, want %v", tc.name, got, tc.want)
-		}
 	}
 }
 

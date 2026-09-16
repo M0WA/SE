@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — embedding endpoint</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<main>
+  <div class="page-header">
+    <a class="mark" href="/">se.</a>
+    <button id="sign-out" class="text-button" type="button">Sign out</button>
+  </div>
+  <a class="back" href="/admin/embeddings/endpoints">Back to HTTP endpoints</a>
+
+  <h2 id="endpoint-title">Add endpoint</h2>
+  <p id="endpoint-meta" class="panel-status"></p>
+  <p id="endpoint-status" class="panel-status"></p>
+
+  <form id="endpoint-form" class="crawl-form" hidden>
+    <div class="form-row">
+      <label for="endpoint-name">Name</label><br>
+      <input id="endpoint-name" class="field" type="text" required placeholder="e.g. IONOS bge-m3">
+    </div>
+    <div class="form-row">
+      <label for="endpoint-base-url">Base URL</label><br>
+      <input id="endpoint-base-url" class="field" type="text" required placeholder="http://localhost:11434/v1">
+    </div>
+    <div class="form-row">
+      <label for="endpoint-api-key">API key</label><br>
+      <input id="endpoint-api-key" class="field" type="password" autocomplete="new-password">
+    </div>
+    <div class="form-row form-row-check">
+      <label for="endpoint-clear-api-key">
+        <input id="endpoint-clear-api-key" type="checkbox">
+        Remove the stored API key
+      </label>
+    </div>
+    <div class="form-row">
+      <label for="endpoint-model">Model</label><br>
+      <input id="endpoint-model" class="field" type="text">
+      <button id="endpoint-list-models-btn" type="button" class="text-button">List available models</button>
+      <div id="endpoint-models-status" class="panel-status"></div>
+      <div id="endpoint-models-result"></div>
+    </div>
+    <div class="form-row">
+      <label for="endpoint-dimensions">Dimensions</label><br>
+      <input id="endpoint-dimensions" class="field" type="number" min="1" required>
+    </div>
+    <div class="form-row">
+      <label for="endpoint-rate-limit">Rate limit — requests/second (0 = unlimited)</label><br>
+      <input id="endpoint-rate-limit" class="field" type="number" min="0" step="any">
+    </div>
+    <div class="form-row form-row-check">
+      <label for="endpoint-enabled">
+        <input id="endpoint-enabled" type="checkbox">
+        Enabled
+      </label>
+    </div>
+    <div class="form-row">
+      <button id="endpoint-test-btn" type="button" class="text-button">Test connection</button>
+      <div id="endpoint-test-status" class="panel-status"></div>
+    </div>
+    <div class="form-row">
+      <button id="endpoint-save-btn" type="submit">Save</button>
+      <button id="endpoint-delete-btn" type="button" class="text-button">Delete</button>
+    </div>
+  </form>
+</main>
+<script src="/admin.js"></script>
+<script src="/admin_embedding_endpoint.js"></script>
+</body>
+</html>

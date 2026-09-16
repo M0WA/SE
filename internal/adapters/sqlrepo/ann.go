@@ -14,17 +14,17 @@ import (
 
 // annState tracks whether Postgres pgvector-backed approximate
 // nearest-neighbor semantic search is available for this process's
-// lifetime, per provider (domain.EmbeddingProviderHash/
-// EmbeddingProviderHTTP) -- both may be enabled at once (see
-// domain.OperationalSettingsValues.EmbeddingHashEnabled/
-// EmbeddingHTTPEnabled), each with its own dimension and its own
+// lifetime, per provider (domain.EmbeddingProviderHash, or a configured
+// domain.EmbeddingHTTPEndpoint's ID) -- any number may be enabled at once
+// (see domain.OperationalSettingsValues.EmbeddingHashEnabled and each
+// endpoint's own Enabled), each with its own dimension and its own
 // availability outcome, discovered exactly once, at startup, by
 // EnableANN. Never re-attempted per request, so a missing extension (or
 // any other migration failure) for one provider permanently and safely
 // degrades that provider's semantic search to the existing bounded-sample
 // brute-force path (SampleEmbeddings) rather than retrying (and
-// potentially failing) on every subsequent search or crawl -- the other
-// provider, if enabled, is entirely unaffected.
+// potentially failing) on every subsequent search or crawl -- every other
+// enabled provider is entirely unaffected.
 type annState struct {
 	mu        sync.RWMutex
 	available map[string]bool
@@ -52,11 +52,14 @@ func (a *annState) markAvailable(provider string, dims int) {
 
 // vectorColumnNameFor and vectorIndexNameFor name a provider's own
 // pgvector column and HNSW index, added to documents only on Postgres
-// once EnableANN succeeds for that provider. provider is always
-// domain.EmbeddingProviderHash/EmbeddingProviderHTTP -- validated by
-// domain.OperationalSettings.Set before it ever reaches this package -- so
-// concatenating it directly into a column/index name is as safe as any
-// other fixed-set enum value would be.
+// once EnableANN succeeds for that provider. provider is always either the
+// literal domain.EmbeddingProviderHash or a domain.EmbeddingHTTPEndpoint.ID
+// -- every endpoint ID is minted exclusively by domain.
+// NewEmbeddingEndpointID, which guarantees it matches domain.
+// EmbeddingEndpointIDPattern (^[a-z0-9_]{1,20}$) -- so concatenating it
+// directly into a column/index name is as safe as any other fixed-set enum
+// value would be, even though the set of valid IDs is now admin-configured
+// rather than a hardcoded two-value enum.
 func vectorColumnNameFor(provider string) string {
 	return "embedding_vector_" + provider
 }
@@ -78,10 +81,10 @@ const maxHNSWEfSearch = 1000
 
 // EnableANN attempts to turn on Postgres pgvector-backed ANN semantic
 // search for this process's lifetime, once per provider in dimsByProvider
-// (domain.EmbeddingProviderHash/EmbeddingProviderHTTP -> that provider's
-// embedder.Dimensions(), one entry per currently-enabled provider -- see
-// domain.OperationalSettingsValues.EmbeddingHashEnabled/
-// EmbeddingHTTPEnabled): enabling the pgvector extension once, then for
+// (domain.EmbeddingProviderHash or a domain.EmbeddingHTTPEndpoint.ID ->
+// that provider's embedder.Dimensions(), one entry per currently-enabled
+// provider -- see domain.OperationalSettingsValues.EmbeddingHashEnabled and
+// each endpoint's own Enabled): enabling the pgvector extension once, then for
 // each provider adding its own vector(dims) column and building its own
 // cosine-distance HNSW index over it. Every process that searches or
 // writes documents (cmd/search, cmd/admin, cmd/crawl) calls this once at

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — HTTP embedding endpoints</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<main>
+  <div class="page-header">
+    <a class="mark" href="/">se.</a>
+    <button id="sign-out" class="text-button" type="button">Sign out</button>
+  </div>
+  <a class="back" href="/admin/embeddings">Back to Embeddings</a>
+
+  <h2>HTTP embedding endpoints</h2>
+  <p class="lede" style="margin: 0 0 1.5rem;">Each row is a separate OpenAI-compatible embeddings API -- a local inference server (Ollama, llama.cpp, LM Studio) or a hosted provider -- computed and stored independently of every other one, and of the built-in hash provider. Enable any number at once; switching which one is active for search (on <a href="/admin/settings">Settings</a>) is then instant.</p>
+
+  <a id="add-endpoint-link" class="text-button" href="/admin/embeddings/endpoint/new">Add endpoint</a>
+  <div id="endpoints-status" class="panel-status"></div>
+  <div id="endpoints-table"></div>
+</main>
+<script src="/admin.js"></script>
+<script src="/admin_embedding_endpoints.js"></script>
+</body>
+</html>

@@ -80,7 +80,7 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 	parse := func(h, u string) (string, string, []string) { return htmlparser.Parse(strings.NewReader(h), u) }
 
 	embedders := map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}
-	crawlerSvc := application.NewSQLCrawlerService(fetcher, robotsChecker, repo, embedders, parse, opSettings)
+	crawlerSvc := application.NewSQLCrawlerService(fetcher, robotsChecker, repo, embedders, nil, parse, opSettings)
 
 	// crawl-server: the only process that actually executes crawls.
 	crawlHandler := restapi.New(restapi.Config{Crawler: crawlerSvc, CrawlJobs: repo, Health: repo})
