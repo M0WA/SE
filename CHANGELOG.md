@@ -1,5 +1,19 @@
 # Changelog
 
+## v4.0.37 - 2026-09-16
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Tolerate the concurrent-CREATE-TABLE race during migrate() by @M0WA in https://github.com/M0WA/SE/pull/62
+* Add external_labels.site to prevent cross-host metric collisions by @M0WA in https://github.com/M0WA/SE/pull/63
+* Support any number of configurable HTTP embedding endpoints by @M0WA in https://github.com/M0WA/SE/pull/64
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.0.36...v4.0.37
+
+
 ## v4.0.36 - 2026-09-16
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
