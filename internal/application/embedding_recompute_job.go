@@ -80,8 +80,17 @@ type EmbeddingRecomputeResult struct {
 // ratePerSecond (see
 // domain.OperationalSettingsValues.EmbeddingRateLimitPerSecond)
 // paces Embed calls to that rate -- see embedRateLimitInterval.
-func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepository, embedder ports.EmbeddingProvider, ratePerSecond int) (EmbeddingRecomputeResult, error) {
+// titleWeight (see domain.OperationalSettingsValues.EmbeddingTitleWeight)
+// blends each document's title into its recomputed vector the same way
+// sqlCrawlerService.Crawl does at crawl time -- see embedTitleWeighted.
+func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepository, embedder ports.EmbeddingProvider, ratePerSecond int, titleWeight float64) (EmbeddingRecomputeResult, error) {
 	interval := embedRateLimitInterval(ratePerSecond)
+	embed := func(ctx context.Context, s string) ([]float32, error) {
+		embedStart := time.Now()
+		vec, err := embedder.Embed(ctx, s)
+		paceEmbedCall(ctx, time.Since(embedStart), interval)
+		return vec, err
+	}
 	ids, err := repo.AllDocumentIDs(ctx)
 	if err != nil {
 		return EmbeddingRecomputeResult{}, err
@@ -105,9 +114,7 @@ func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepositor
 				// being fetched -- nothing to recompute.
 				continue
 			}
-			embedStart := time.Now()
-			vec, err := embedder.Embed(ctx, doc.Text)
-			paceEmbedCall(ctx, time.Since(embedStart), interval)
+			vec, err := embedTitleWeighted(ctx, embed, doc.Title, doc.Text, titleWeight)
 			if err != nil {
 				log.Printf("recomputing embedding for %s: %v", id, err)
 				result.Failed++
@@ -140,13 +147,13 @@ func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepositor
 // caller: recomputing a real corpus means one Embed call per document,
 // each a network round-trip against an HTTP embeddings endpoint, so the
 // whole run can easily take minutes -- see handleAdminEmbeddingsRecompute.
-func RunEmbeddingRecomputeJobWithStatus(ctx context.Context, repo ports.EmbeddingRepository, embedder ports.EmbeddingProvider, settings ports.SettingsStore, ratePerSecond int) (EmbeddingRecomputeResult, error) {
+func RunEmbeddingRecomputeJobWithStatus(ctx context.Context, repo ports.EmbeddingRepository, embedder ports.EmbeddingProvider, settings ports.SettingsStore, ratePerSecond int, titleWeight float64) (EmbeddingRecomputeResult, error) {
 	start := time.Now()
 	status := LoadEmbeddingRecomputeStatus(ctx, settings)
 	status.InProgress = true
 	saveEmbeddingRecomputeStatus(ctx, settings, status)
 
-	result, err := RunEmbeddingRecomputeJob(ctx, repo, embedder, ratePerSecond)
+	result, err := RunEmbeddingRecomputeJob(ctx, repo, embedder, ratePerSecond, titleWeight)
 
 	status.InProgress = false
 	if err == nil {

@@ -645,6 +645,10 @@ type operationalValues struct {
 	// domain.OperationalSettingsValues field -- see there for the full
 	// doc comment.
 	EmbeddingRateLimitPerSecond int `json:"embedding_rate_limit_per_second"`
+	// EmbeddingTitleWeight mirrors the same-named
+	// domain.OperationalSettingsValues field -- see there for the full
+	// doc comment.
+	EmbeddingTitleWeight float64 `json:"embedding_title_weight"`
 }
 
 func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
@@ -676,6 +680,7 @@ func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 		EmbeddingHTTPDimensions:          v.EmbeddingHTTPDimensions,
 		EmbeddingHTTPAPIKeySet:           v.EmbeddingHTTPAPIKey != "",
 		EmbeddingRateLimitPerSecond:      v.EmbeddingRateLimitPerSecond,
+		EmbeddingTitleWeight:             v.EmbeddingTitleWeight,
 	}
 }
 
@@ -708,6 +713,7 @@ func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 		EmbeddingHTTPModel:               o.EmbeddingHTTPModel,
 		EmbeddingHTTPDimensions:          o.EmbeddingHTTPDimensions,
 		EmbeddingRateLimitPerSecond:      o.EmbeddingRateLimitPerSecond,
+		EmbeddingTitleWeight:             o.EmbeddingTitleWeight,
 	}
 }
 
@@ -1489,10 +1495,10 @@ func (h *Handler) handleAdminEmbeddingsRecomputeStart(w http.ResponseWriter, r *
 		http.Error(w, "an embedding recompute is already in progress", http.StatusConflict)
 		return
 	}
-	ratePerSecond := h.opSettings.Get().EmbeddingRateLimitPerSecond
+	v := h.opSettings.Get()
 	go func() {
 		ctx := context.Background()
-		if _, err := application.RunEmbeddingRecomputeJobWithStatus(ctx, h.embeddingRepo, h.embedder, h.settingsStore, ratePerSecond); err != nil {
+		if _, err := application.RunEmbeddingRecomputeJobWithStatus(ctx, h.embeddingRepo, h.embedder, h.settingsStore, v.EmbeddingRateLimitPerSecond, v.EmbeddingTitleWeight); err != nil {
 			log.Printf("recomputing embeddings: %v", err)
 		}
 	}()

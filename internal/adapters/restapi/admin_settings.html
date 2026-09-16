@@ -119,6 +119,10 @@
             <input id="embedding-rate-limit" class="field" type="number" step="1" min="1" placeholder="5">
           </div>
         </div>
+        <div class="form-row">
+          <label for="embedding-title-weight">Title weight in embeddings — 0 embeds the body only, 1 the title only; in between, blends two separate Embed calls (see Embeddings)</label><br>
+          <input id="embedding-title-weight" class="field" type="number" step="0.05" min="0" max="1">
+        </div>
         <p class="tuning-hint">Default: hash. Switching providers takes effect only after every process (search, admin, crawl) is restarted -- unlike every other setting on this page, it isn't picked up live, since the embedding column's size is fixed at process startup. It also changes the vector space entirely: existing stored embeddings become meaningless to compare against newly computed ones until every document's embedding is recomputed -- no re-crawl needed, since the indexed text itself doesn't change. See <a href="/admin/embeddings">Embeddings</a> to list available models or trigger a recompute.</p>
       </div>
 

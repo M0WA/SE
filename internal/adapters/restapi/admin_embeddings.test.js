@@ -16,6 +16,7 @@ function baseSettings(operationalOverrides) {
       embedding_http_dimensions: 256,
       embedding_http_api_key_set: false,
       embedding_rate_limit_per_second: 5,
+      embedding_title_weight: 0.3,
     }, operationalOverrides),
   };
 }
@@ -63,6 +64,7 @@ test('renderConfig shows the hash provider without http-only fields', () => {
   assert.equal(text.includes('Hash'), true);
   assert.equal(text.includes('Base URL'), false);
   assert.equal(text.includes('req/s'), true);
+  assert.equal(text.includes('0.3'), true);
 });
 
 function kvValuesByKey(container) {
@@ -83,6 +85,7 @@ test('renderConfig shows http provider fields including base URL, model, dimensi
     embedding_http_dimensions: 1024,
     embedding_http_api_key_set: true,
     embedding_rate_limit_per_second: 5,
+    embedding_title_weight: 0.25,
   }));
   const values = kvValuesByKey(document.getElementById('embeddings-config'));
   assert.equal(values.Provider, 'HTTP (trained model)');
@@ -90,6 +93,7 @@ test('renderConfig shows http provider fields including base URL, model, dimensi
   assert.equal(values.Model, 'BAAI/bge-m3');
   assert.equal(values.Dimensions, '1024');
   assert.equal(values['API key'], 'configured');
+  assert.equal(values['Title weight'], '0.25 (0 = body only, 1 = title only)');
 });
 
 test('renderConfig shows "(not set)" for an unconfigured http base URL, model, and unconfigured api key', () => {

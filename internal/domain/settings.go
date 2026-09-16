@@ -195,6 +195,26 @@ type OperationalSettingsValues struct {
 	// Ollama) -- raise this well above whatever throughput it can actually
 	// sustain to make pacing a no-op there.
 	EmbeddingRateLimitPerSecond int
+	// EmbeddingTitleWeight blends a document's title into its stored
+	// embedding as a weighted combination of two separate Embed calls --
+	// titleWeight*titleVector + (1-titleWeight)*bodyVector (see
+	// domain.CombineWeighted) -- rather than a single call against a
+	// concatenated title+body string, whose title contribution most
+	// pooling strategies dilute to near-nothing once a page's body runs
+	// more than a few dozen tokens. 0 disables this entirely (skips the
+	// extra Embed call and embeds the body alone, exactly like this
+	// setting didn't exist); 1 embeds the title alone. Unlike TitleWeight
+	// above, this is a genuine, unclamped-by-saturation weight -- there's
+	// no BM25-style k1 tempering it, so a value close to 1 can make a
+	// document's semantic vector nearly indifferent to its actual body
+	// content. Doubles this process's Embed call volume against
+	// EmbeddingProviderHTTP whenever it's non-zero (see
+	// EmbeddingRateLimitPerSecond, which paces every individual Embed
+	// call, title and body alike) -- free for EmbeddingProviderHash, since
+	// that's a local computation with no rate limit of its own. Like
+	// TitleWeight, a change here only takes effect for documents crawled,
+	// re-crawled, or explicitly recomputed afterward.
+	EmbeddingTitleWeight float64
 }
 
 // defaultUserAgent mimics a standard desktop Firefox so crawled sites treat
@@ -259,6 +279,11 @@ const (
 	// for the motivating hosted provider; a deployment using a local,
 	// unlimited server can raise it.
 	defaultEmbeddingRateLimitPerSecond = 5
+	// defaultEmbeddingTitleWeight is a modest edge, matching
+	// defaultTitleWeight's own "modest, not aggressive" philosophy --
+	// title carries real topical signal, but a document's semantic vector
+	// should still be driven mostly by its actual body content.
+	defaultEmbeddingTitleWeight = 0.3
 )
 
 func defaultOperationalSettings() OperationalSettingsValues {
@@ -287,6 +312,7 @@ func defaultOperationalSettings() OperationalSettingsValues {
 		EmbeddingProvider:                EmbeddingProviderHash,
 		EmbeddingHTTPDimensions:          defaultEmbeddingHTTPDimensions,
 		EmbeddingRateLimitPerSecond:      defaultEmbeddingRateLimitPerSecond,
+		EmbeddingTitleWeight:             defaultEmbeddingTitleWeight,
 	}
 }
 
@@ -406,6 +432,14 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 	}
 	if v.EmbeddingRateLimitPerSecond <= 0 {
 		v.EmbeddingRateLimitPerSecond = d.EmbeddingRateLimitPerSecond
+	}
+	// 0 is a legitimate, meaningful value here (disables title blending
+	// entirely -- see the field's own doc comment), so it's clamped rather
+	// than substituted with the default the way every <=0 field above is.
+	if v.EmbeddingTitleWeight < 0 {
+		v.EmbeddingTitleWeight = 0
+	} else if v.EmbeddingTitleWeight > 1 {
+		v.EmbeddingTitleWeight = 1
 	}
 
 	s.mu.Lock()

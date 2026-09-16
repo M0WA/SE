@@ -2430,6 +2430,66 @@ func TestHandleAdminSettings_EmbeddingRateLimitFieldRoundTrips(t *testing.T) {
 	}
 }
 
+// TestHandleAdminSettings_EmbeddingTitleWeightFieldRoundTrips mirrors
+// TestHandleAdminSettings_EmbeddingRateLimitFieldRoundTrips for the new
+// title/body embedding blend weight.
+func TestHandleAdminSettings_EmbeddingTitleWeightFieldRoundTrips(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingTitleWeight: 0.2})
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", getRec.Code)
+	}
+	var getResp struct {
+		Operational struct {
+			EmbeddingTitleWeight float64 `json:"embedding_title_weight"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decoding GET response: %v", err)
+	}
+	if getResp.Operational.EmbeddingTitleWeight != 0.2 {
+		t.Errorf("expected GET to report embedding_title_weight=0.2, got %+v", getResp.Operational)
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
+			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
+			"embedding_title_weight": 0.6,
+		},
+	})
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	postReq.AddCookie(cookie)
+	postRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
+	}
+
+	if ov := opSettings.Get(); ov.EmbeddingTitleWeight != 0.6 {
+		t.Errorf("expected embedding_title_weight=0.6 to be applied, got %+v", ov)
+	}
+
+	var postResp struct {
+		Operational struct {
+			EmbeddingTitleWeight float64 `json:"embedding_title_weight"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(postRec.Body.Bytes(), &postResp); err != nil {
+		t.Fatalf("decoding POST response: %v", err)
+	}
+	if postResp.Operational.EmbeddingTitleWeight != 0.6 {
+		t.Errorf("expected the POST response to echo back embedding_title_weight=0.6, got %+v", postResp.Operational)
+	}
+}
+
 // TestHandleAdminSettings_EmbeddingFieldsRoundTrip mirrors
 // TestHandleAdminSettings_TitleWeightFieldRoundTrips for the new
 // embedding-provider knobs: GET reports the non-secret fields as currently
