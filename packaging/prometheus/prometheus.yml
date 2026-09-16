@@ -6,8 +6,19 @@
 ## <IONOS_METRICS_ENDPOINT> and <IONOS_APIKEY> come from the monitoring
 ## pipeline created in the IONOS DCD (Observability > Monitoring). Fill
 ## these in on the deployed copy only -- never commit real values here.
+##
+## external_labels.site MUST be unique per host pushing into this same
+## IONOS pipeline. Every host's node/nginx exporters produce identically-
+## labeled series otherwise (job="node", instance="127.0.0.1:9100" is the
+## same on every host, since each only ever scrapes its own loopback) --
+## discovered when a second host (a GPU inference box) started silently
+## colliding with se.mo-sys.de's own node_load1 etc. in the same Mimir
+## series. Replace <SITE_NAME> with something host-identifying (e.g.
+## se-mo-sys-de) on every deployed copy.
 
 global:
+  external_labels:
+    site: <SITE_NAME>
   scrape_interval: 30s
 
 scrape_configs:
