@@ -2485,12 +2485,44 @@ func TestHandleAdminSettings_EmbeddingEnabledTogglesFieldRoundTrip(t *testing.T)
 	}
 }
 
-// TestHandleAdminSettings_EmbeddingProviderSelfHealsWhenPostedDisabled
+// TestHandleAdminSettings_EmbeddingProviderSelfHealsWhenPostedInvalid
 // proves the wire-level self-healing from OperationalSettings.Set is
 // actually reachable through the HTTP API, not just the Go type directly:
-// posting embedding_provider=http without enabling it must come back as
-// hash.
-func TestHandleAdminSettings_EmbeddingProviderSelfHealsWhenPostedDisabled(t *testing.T) {
+// posting an unrecognized embedding_provider value comes back as hash.
+func TestHandleAdminSettings_EmbeddingProviderSelfHealsWhenPostedInvalid(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	opSettings := domain.DefaultOperationalSettings()
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
+			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
+			"embedding_provider": "not-a-real-provider",
+		},
+	})
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	postReq.AddCookie(cookie)
+	postRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
+	}
+	if ov := opSettings.Get(); ov.EmbeddingProvider != domain.EmbeddingProviderHash {
+		t.Errorf("expected an unrecognized embedding_provider to self-heal to hash, got %q", ov.EmbeddingProvider)
+	}
+}
+
+// TestHandleAdminSettings_PostedHTTPProviderWithoutEnabledFlagsEnablesHTTP
+// is the HTTP-API-level counterpart of
+// domain's TestOperationalSettings_SetPreExistingHTTPConfigWithBothFlagsUnsetEnablesHTTP
+// regression test: posting embedding_provider=http without either enabled
+// flag in the request body (the exact shape a pre-Phase-1 admin UI, or any
+// client that doesn't yet know about the two Enabled fields, would send)
+// must enable http rather than silently reverting to hash and discarding
+// a real HTTP configuration.
+func TestHandleAdminSettings_PostedHTTPProviderWithoutEnabledFlagsEnablesHTTP(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	opSettings := domain.DefaultOperationalSettings()
 	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
@@ -2510,8 +2542,12 @@ func TestHandleAdminSettings_EmbeddingProviderSelfHealsWhenPostedDisabled(t *tes
 	if postRec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
 	}
-	if ov := opSettings.Get(); ov.EmbeddingProvider != domain.EmbeddingProviderHash {
-		t.Errorf("expected embedding_provider=http (not enabled) to self-heal to hash, got %q", ov.EmbeddingProvider)
+	ov := opSettings.Get()
+	if !ov.EmbeddingHTTPEnabled {
+		t.Errorf("expected embedding_provider=http with no enabled flags posted to self-heal to http enabled, got %+v", ov)
+	}
+	if ov.EmbeddingProvider != domain.EmbeddingProviderHTTP {
+		t.Errorf("expected embedding_provider to remain http, not be silently reverted to hash, got %q", ov.EmbeddingProvider)
 	}
 }
 

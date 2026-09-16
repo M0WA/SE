@@ -1102,11 +1102,17 @@ components:
                 Together with embedding_http_enabled, controls which
                 provider(s) are actually kept current -- embedding_provider
                 below just picks which of the enabled one(s) search reads.
-                At least one must stay enabled; both false self-heals to
-                hash_enabled=true. Like embedding_http_enabled, NOT applied
-                live -- read once at process startup, since enabling a
-                provider that wasn't running before requires constructing
-                its embedder and sizing its own pgvector column/index.
+                At least one must stay enabled; if both are left false (or
+                omitted, as a request from before these two fields existed
+                would) while embedding_provider already names "http", that
+                self-heals to http_enabled=true instead -- preserving a
+                real, already-configured HTTP setup rather than silently
+                discarding it -- only a genuinely unset/invalid
+                embedding_provider falls back to hash_enabled=true here.
+                Like embedding_http_enabled, NOT applied live -- read once
+                at process startup, since enabling a provider that wasn't
+                running before requires constructing its embedder and
+                sizing its own pgvector column/index.
             embedding_http_enabled:
               type: boolean
               description: >-
