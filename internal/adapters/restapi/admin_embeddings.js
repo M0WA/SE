@@ -18,6 +18,7 @@
       kvRow(configEl, 'API key', op.embedding_http_api_key_set ? 'configured' : 'not configured');
     }
     kvRow(configEl, 'Rate limit', op.embedding_rate_limit_per_second + ' req/s (shared by recompute and crawling)');
+    kvRow(configEl, 'Title weight', op.embedding_title_weight + ' (0 = body only, 1 = title only)');
   }
 
   async function loadConfig() {

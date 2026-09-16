@@ -51,12 +51,15 @@ func (c *sqlCrawlerService) Crawl(ctx context.Context, opts ports.CrawlOptions, 
 		isDomainIndexed = c.buildDomainIndexed(ctx)
 	}
 	return crawlLoop(ctx, c.fetcher, c.robots, c.parseHTML, c.settings, opts, isIndexed, isDomainIndexed, func(ctx context.Context, doc domain.Document) error {
-		c.embedRate.wait(ctx, c.settings.Get().EmbeddingRateLimitPerSecond)
-		embedding, err := c.embedder.Embed(ctx, doc.Title+" "+doc.Text)
+		v := c.settings.Get()
+		embed := func(ctx context.Context, s string) ([]float32, error) {
+			c.embedRate.wait(ctx, v.EmbeddingRateLimitPerSecond)
+			return c.embedder.Embed(ctx, s)
+		}
+		embedding, err := embedTitleWeighted(ctx, embed, doc.Title, doc.Text, v.EmbeddingTitleWeight)
 		if err != nil {
 			return err
 		}
-		v := c.settings.Get()
 		return c.repo.SaveDocument(ctx, doc, embedding, v.MaxDocumentVersions, v.TitleWeight)
 	}, onPage)
 }

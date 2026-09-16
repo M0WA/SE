@@ -29,6 +29,7 @@ const FULL_SETTINGS = {
     embedding_http_dimensions: 128,
     embedding_http_api_key_set: false,
     embedding_rate_limit_per_second: 5,
+    embedding_title_weight: 0.3,
     max_document_versions: 5,
     db_max_open_conns: 25,
     db_max_idle_conns: 25,
@@ -64,6 +65,7 @@ test('applySettings fills every field, applying the renderer/link-scope fallback
   applySettings(FULL_SETTINGS);
   assert.equal(document.getElementById('alpha').value, '0.5');
   assert.equal(document.getElementById('title-weight').value, '2');
+  assert.equal(document.getElementById('embedding-title-weight').value, '0.3');
   assert.equal(document.getElementById('default-renderer').value, 'none');
   assert.equal(document.getElementById('default-link-scope').value, 'domain');
   assert.equal(document.getElementById('ann-search-enabled').checked, true);
@@ -108,6 +110,48 @@ test('applySettings reveals the HTTP embedding fields and never fills in the API
     document.getElementById('embedding-http-api-key-hint').textContent,
     'A key is currently configured. Leave blank to keep it, or type a new one to replace it.',
   );
+});
+
+// applySettings shows 0 in the title-weight field, not a blank -- unlike
+// embedding-rate-limit (which falls back to '' on a falsy 0, since 0 isn't
+// a meaningful rate), 0 here is a real, meaningful "disabled" value that
+// must round-trip visibly.
+test('applySettings shows a zero embedding title weight as "0", not blank', () => {
+  const { applySettings } = loadFixture();
+  const s = JSON.parse(JSON.stringify(FULL_SETTINGS));
+  s.operational.embedding_title_weight = 0;
+  applySettings(s);
+  assert.equal(document.getElementById('embedding-title-weight').value, '0');
+});
+
+test('saveSettings posts the configured embedding title weight', async () => {
+  const { saveSettings } = loadFixture();
+  document.getElementById('embedding-title-weight').value = '0.6';
+  let gotBody;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/settings')) {
+      gotBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => FULL_SETTINGS };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  await saveSettings();
+  assert.equal(gotBody.operational.embedding_title_weight, 0.6);
+});
+
+test('saveSettings posts 0 for an unparseable embedding title weight field', async () => {
+  const { saveSettings } = loadFixture();
+  document.getElementById('embedding-title-weight').value = '';
+  let gotBody;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/settings')) {
+      gotBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => FULL_SETTINGS };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  await saveSettings();
+  assert.equal(gotBody.operational.embedding_title_weight, 0);
 });
 
 test('toggleEmbeddingHTTPFields shows/hides the HTTP fields based on the select value', () => {

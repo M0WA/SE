@@ -25,6 +25,7 @@
   const embeddingHTTPModelOptionsEl = document.getElementById('embedding-http-model-options');
   const embeddingHTTPModelHintEl = document.getElementById('embedding-http-model-hint');
   const embeddingRateLimitEl = document.getElementById('embedding-rate-limit');
+  const embeddingTitleWeightEl = document.getElementById('embedding-title-weight');
   const maxDocumentVersionsEl = document.getElementById('max-document-versions');
   const dbMaxOpenConnsEl = document.getElementById('db-max-open-conns');
   const dbMaxIdleConnsEl = document.getElementById('db-max-idle-conns');
@@ -147,6 +148,10 @@
     embeddingHTTPModelEl.value = s.operational.embedding_http_model || '';
     embeddingHTTPDimensionsEl.value = s.operational.embedding_http_dimensions || '';
     embeddingRateLimitEl.value = s.operational.embedding_rate_limit_per_second || '';
+    // Unlike the fields above, 0 is a real, meaningful value here (title
+    // blending disabled -- see the field's own doc comment in admin.go),
+    // so it's assigned directly rather than falling back to '' on falsy.
+    embeddingTitleWeightEl.value = s.operational.embedding_title_weight;
     // The real key is never sent back (see toOperationalValues in admin.go)
     // -- this field always starts blank, only ever showing whether one is
     // currently configured, never the value itself.
@@ -212,6 +217,7 @@
         embedding_http_model: embeddingHTTPModelEl.value,
         embedding_http_dimensions: parseInt(embeddingHTTPDimensionsEl.value, 10) || 0,
         embedding_rate_limit_per_second: parseInt(embeddingRateLimitEl.value, 10) || 0,
+        embedding_title_weight: parseFloat(embeddingTitleWeightEl.value) || 0,
         embedding_http_api_key: embeddingHTTPAPIKeyEl.value,
         max_document_versions: parseInt(maxDocumentVersionsEl.value, 10),
         db_max_open_conns: parseInt(dbMaxOpenConnsEl.value, 10),

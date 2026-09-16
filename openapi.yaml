@@ -1157,6 +1157,24 @@ components:
                 a local server with no rate limit of its own -- raise this
                 well above whatever it can sustain to make pacing a no-op
                 there.
+            embedding_title_weight:
+              type: number
+              format: double
+              description: >-
+                Blends a document's title into its stored embedding as a
+                weighted combination of two separate Embed calls --
+                titleWeight*titleVector + (1-titleWeight)*bodyVector --
+                rather than a single call against a concatenated
+                title+body string, whose title contribution most pooling
+                strategies dilute to near-nothing once a body runs more
+                than a few dozen tokens. Clamped to [0,1]: 0 (unlike every
+                other field here, a real, meaningful value, not "unset")
+                skips the extra Embed call and embeds the body alone; 1
+                embeds the title alone. Doubles Embed call volume against
+                the "http" provider whenever non-zero -- free for "hash",
+                a local computation with no rate limit of its own. Only
+                takes effect for documents crawled, re-crawled, or
+                explicitly recomputed after the change -- not retroactive.
         embedding_test_error:
           type: string
           readOnly: true

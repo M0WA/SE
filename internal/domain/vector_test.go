@@ -103,3 +103,52 @@ func TestCosineSimilarityWithNorms_StaleNormProducesDifferentResult(t *testing.T
 		t.Fatalf("expected a stale norm to change the result (correct=%f), got same value", correct)
 	}
 }
+
+func TestCombineWeighted_ZeroWeightReturnsBody(t *testing.T) {
+	title := []float32{1, 0, 0}
+	body := []float32{0, 1, 0}
+	got := domain.CombineWeighted(title, body, 0)
+	want := []float32{0, 1, 0}
+	if got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Errorf("expected weight=0 to reproduce the body vector exactly, got %v", got)
+	}
+}
+
+func TestCombineWeighted_FullWeightReturnsTitle(t *testing.T) {
+	title := []float32{1, 0, 0}
+	body := []float32{0, 1, 0}
+	got := domain.CombineWeighted(title, body, 1)
+	want := []float32{1, 0, 0}
+	if got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Errorf("expected weight=1 to reproduce the title vector exactly, got %v", got)
+	}
+}
+
+func TestCombineWeighted_HalfWeightIsTheMidpoint(t *testing.T) {
+	title := []float32{2, 0}
+	body := []float32{0, 2}
+	got := domain.CombineWeighted(title, body, 0.5)
+	if got[0] != 1 || got[1] != 1 {
+		t.Errorf("expected the midpoint {1,1} at weight=0.5, got %v", got)
+	}
+}
+
+// TestCombineWeighted_BiasesSimilarityTowardTheHeavierInput proves the
+// blend actually changes downstream cosine similarity in the expected
+// direction, not just that the arithmetic is right in isolation: a query
+// vector aligned with the title should score higher once title carries
+// more of the combined weight.
+func TestCombineWeighted_BiasesSimilarityTowardTheHeavierInput(t *testing.T) {
+	title := []float32{1, 0}
+	body := []float32{0, 1}
+	query := []float32{1, 0}
+
+	lowTitleWeight := domain.CombineWeighted(title, body, 0.1)
+	highTitleWeight := domain.CombineWeighted(title, body, 0.9)
+
+	simLow := domain.CosineSimilarity(query, lowTitleWeight)
+	simHigh := domain.CosineSimilarity(query, highTitleWeight)
+	if simHigh <= simLow {
+		t.Errorf("expected higher title weight to increase similarity to a title-aligned query: low=%f high=%f", simLow, simHigh)
+	}
+}

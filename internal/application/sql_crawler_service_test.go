@@ -384,3 +384,82 @@ func TestSQLCrawlerService_Crawl_SharesRateLimitAcrossConcurrentCrawls(t *testin
 		t.Fatalf("expected 4 total saved documents across both jobs, got %d", len(repo.saved))
 	}
 }
+
+// textAwareEmbedder returns a distinct vector per exact input text, via a
+// caller-supplied map -- unlike fakeEmbedder's single fixed vector, this
+// lets a test tell a title Embed call apart from a body one, to verify a
+// weighted title/body combination actually reaches SaveDocument rather
+// than just checking a pass-through value both calls would return
+// identically.
+type textAwareEmbedder struct {
+	vecByText map[string][]float32
+}
+
+func (e *textAwareEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
+	return e.vecByText[text], nil
+}
+func (e *textAwareEmbedder) Dimensions() int { return 2 }
+
+// TestSQLCrawlerService_Crawl_BlendsTitleAndBodyEmbeddingsWhenWeightConfigured
+// proves EmbeddingTitleWeight actually reaches embedTitleWeighted at crawl
+// time: with a title and body that embed to orthogonal vectors, the saved
+// embedding must be their weighted combination, not either one alone.
+func TestSQLCrawlerService_Crawl_BlendsTitleAndBodyEmbeddingsWhenWeightConfigured(t *testing.T) {
+	fetcher := &fakeFetcher{pages: map[string]string{"http://a/": "<html>a</html>"}}
+	robots := &fakeRobots{}
+	repo := &recordingSQLRepo{}
+	embedder := &textAwareEmbedder{vecByText: map[string][]float32{
+		"Title text": {1, 0},
+		"Body text":  {0, 1},
+	}}
+	parse := func(html, pageURL string) (string, string, []string) {
+		return "Title text", "Body text", nil
+	}
+	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingTitleWeight: 0.25})
+
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedder, parse, settings)
+	if _, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a/"}, MaxPages: 5}, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(repo.embeddings) != 1 {
+		t.Fatalf("expected 1 saved document, got %d", len(repo.embeddings))
+	}
+	// 0.25*{1,0} + 0.75*{0,1} = {0.25, 0.75}
+	got := repo.embeddings[0]
+	if got[0] < 0.24 || got[0] > 0.26 || got[1] < 0.74 || got[1] > 0.76 {
+		t.Errorf("expected the weighted title/body combination ~{0.25, 0.75}, got %v", got)
+	}
+}
+
+// TestSQLCrawlerService_Crawl_PacesBothTitleAndBodyEmbedCallsSeparately
+// proves a non-zero EmbeddingTitleWeight's extra Embed call is paced just
+// like the first one, not exempted from the rate limit -- otherwise a
+// document with both a title and body would silently double this
+// process's real request rate against the configured provider without
+// EmbeddingRateLimitPerSecond actually bounding it.
+func TestSQLCrawlerService_Crawl_PacesBothTitleAndBodyEmbedCallsSeparately(t *testing.T) {
+	fetcher := &fakeFetcher{pages: map[string]string{"http://a/": "<html>a</html>"}}
+	robots := &fakeRobots{}
+	repo := &recordingSQLRepo{}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+	parse := func(html, pageURL string) (string, string, []string) {
+		return "A", "genuegend inhalt text fuer die seite a hier bitte danke", nil
+	}
+	const ratePerSecond = 10 // 100ms/call
+	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
+		EmbeddingRateLimitPerSecond: ratePerSecond,
+		EmbeddingTitleWeight:        0.5,
+	})
+
+	svc := application.NewSQLCrawlerService(fetcher, robots, repo, embedder, parse, settings)
+	start := time.Now()
+	if _, err := svc.Crawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"http://a/"}, MaxPages: 5}, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// One document, but titleWeight=0.5 means two real Embed calls (title,
+	// then body) -- if each is independently paced, the second call must
+	// wait out roughly one full 100ms interval after the first.
+	if elapsed := time.Since(start); elapsed < 80*time.Millisecond {
+		t.Errorf("expected pacing to add ~100ms for one document's title+body Embed calls, took %v", elapsed)
+	}
+}

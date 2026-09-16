@@ -220,6 +220,7 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 		EmbeddingProvider:                domain.EmbeddingProviderHash,
 		EmbeddingHTTPDimensions:          128,
 		EmbeddingRateLimitPerSecond:      5,
+		EmbeddingTitleWeight:             0.3,
 	}
 	if v != want {
 		t.Errorf("expected defaults %+v, got %+v", want, v)
@@ -419,6 +420,42 @@ func TestOperationalSettings_SetPositiveEmbeddingRateLimitPreserved(t *testing.T
 	s.Set(domain.OperationalSettingsValues{EmbeddingRateLimitPerSecond: 50})
 	if v := s.Get(); v.EmbeddingRateLimitPerSecond != 50 {
 		t.Errorf("expected EmbeddingRateLimitPerSecond=50 to be preserved, got %d", v.EmbeddingRateLimitPerSecond)
+	}
+}
+
+func TestOperationalSettings_SetNegativeEmbeddingTitleWeightClampsToZero(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{EmbeddingTitleWeight: -0.5})
+	if v := s.Get(); v.EmbeddingTitleWeight != 0 {
+		t.Errorf("expected a negative EmbeddingTitleWeight to clamp to 0, got %v", v.EmbeddingTitleWeight)
+	}
+}
+
+func TestOperationalSettings_SetEmbeddingTitleWeightAboveOneClampsToOne(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{EmbeddingTitleWeight: 1.5})
+	if v := s.Get(); v.EmbeddingTitleWeight != 1 {
+		t.Errorf("expected EmbeddingTitleWeight=1.5 to clamp to 1, got %v", v.EmbeddingTitleWeight)
+	}
+}
+
+// TestOperationalSettings_SetZeroEmbeddingTitleWeightPreserved proves 0 is a
+// legitimate, meaningful value here (disables title blending entirely --
+// see the field's own doc comment) rather than falling back to the
+// default the way every other <=0 field does.
+func TestOperationalSettings_SetZeroEmbeddingTitleWeightPreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{EmbeddingTitleWeight: 0})
+	if v := s.Get(); v.EmbeddingTitleWeight != 0 {
+		t.Errorf("expected EmbeddingTitleWeight=0 to be preserved, got %v", v.EmbeddingTitleWeight)
+	}
+}
+
+func TestOperationalSettings_SetInRangeEmbeddingTitleWeightPreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{EmbeddingTitleWeight: 0.4})
+	if v := s.Get(); v.EmbeddingTitleWeight != 0.4 {
+		t.Errorf("expected EmbeddingTitleWeight=0.4 to be preserved, got %v", v.EmbeddingTitleWeight)
 	}
 }
 
