@@ -196,30 +196,30 @@ func TestOperationalSettings_SetANNSearchEnabledFalseIsPreserved(t *testing.T) {
 func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 	v := domain.DefaultOperationalSettings().Get()
 	want := domain.OperationalSettingsValues{
-		FetchTimeout:                         8 * time.Second,
-		UserAgent:                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0",
-		DefaultMaxPages:                      20,
-		MinTextLength:                        50,
-		DefaultTopK:                          10,
-		SessionTTL:                           12 * time.Hour,
-		CrawlDelayMs:                         250,
-		MaxResponseBytes:                     5 * 1024 * 1024,
-		SemanticCandidatePoolSize:            200,
-		DBMaxOpenConns:                       25,
-		DBMaxIdleConns:                       25,
-		DBConnMaxLifetime:                    5 * time.Minute,
-		FuzzyMatchEnabled:                    true,
-		FuzzyMaxEditDistance:                 2,
-		PageRankRecomputeIntervalMinutes:     60,
-		ANNSearchEnabled:                     true,
-		MaxRetainedCrawlJobs:                 200,
-		DefaultRenderer:                      domain.RendererNone,
-		LinkScope:                            domain.LinkScopeDomain,
-		MaxDocumentVersions:                  5,
-		TitleWeight:                          2,
-		EmbeddingProvider:                    domain.EmbeddingProviderHash,
-		EmbeddingHTTPDimensions:              128,
-		EmbeddingRecomputeRateLimitPerSecond: 5,
+		FetchTimeout:                     8 * time.Second,
+		UserAgent:                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0",
+		DefaultMaxPages:                  20,
+		MinTextLength:                    50,
+		DefaultTopK:                      10,
+		SessionTTL:                       12 * time.Hour,
+		CrawlDelayMs:                     250,
+		MaxResponseBytes:                 5 * 1024 * 1024,
+		SemanticCandidatePoolSize:        200,
+		DBMaxOpenConns:                   25,
+		DBMaxIdleConns:                   25,
+		DBConnMaxLifetime:                5 * time.Minute,
+		FuzzyMatchEnabled:                true,
+		FuzzyMaxEditDistance:             2,
+		PageRankRecomputeIntervalMinutes: 60,
+		ANNSearchEnabled:                 true,
+		MaxRetainedCrawlJobs:             200,
+		DefaultRenderer:                  domain.RendererNone,
+		LinkScope:                        domain.LinkScopeDomain,
+		MaxDocumentVersions:              5,
+		TitleWeight:                      2,
+		EmbeddingProvider:                domain.EmbeddingProviderHash,
+		EmbeddingHTTPDimensions:          128,
+		EmbeddingRateLimitPerSecond:      5,
 	}
 	if v != want {
 		t.Errorf("expected defaults %+v, got %+v", want, v)
@@ -398,27 +398,27 @@ func TestOperationalSettings_SetPositiveEmbeddingHTTPDimensionsPreserved(t *test
 	}
 }
 
-func TestOperationalSettings_SetZeroEmbeddingRecomputeRateLimitFallsBackToDefault(t *testing.T) {
+func TestOperationalSettings_SetZeroEmbeddingRateLimitFallsBackToDefault(t *testing.T) {
 	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{EmbeddingRecomputeRateLimitPerSecond: 0})
-	if v := s.Get(); v.EmbeddingRecomputeRateLimitPerSecond != 5 {
-		t.Errorf("expected EmbeddingRecomputeRateLimitPerSecond=0 to fall back to 5, got %d", v.EmbeddingRecomputeRateLimitPerSecond)
+	s.Set(domain.OperationalSettingsValues{EmbeddingRateLimitPerSecond: 0})
+	if v := s.Get(); v.EmbeddingRateLimitPerSecond != 5 {
+		t.Errorf("expected EmbeddingRateLimitPerSecond=0 to fall back to 5, got %d", v.EmbeddingRateLimitPerSecond)
 	}
 }
 
-func TestOperationalSettings_SetNegativeEmbeddingRecomputeRateLimitFallsBackToDefault(t *testing.T) {
+func TestOperationalSettings_SetNegativeEmbeddingRateLimitFallsBackToDefault(t *testing.T) {
 	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{EmbeddingRecomputeRateLimitPerSecond: -10})
-	if v := s.Get(); v.EmbeddingRecomputeRateLimitPerSecond != 5 {
-		t.Errorf("expected a negative EmbeddingRecomputeRateLimitPerSecond to fall back to 5, got %d", v.EmbeddingRecomputeRateLimitPerSecond)
+	s.Set(domain.OperationalSettingsValues{EmbeddingRateLimitPerSecond: -10})
+	if v := s.Get(); v.EmbeddingRateLimitPerSecond != 5 {
+		t.Errorf("expected a negative EmbeddingRateLimitPerSecond to fall back to 5, got %d", v.EmbeddingRateLimitPerSecond)
 	}
 }
 
-func TestOperationalSettings_SetPositiveEmbeddingRecomputeRateLimitPreserved(t *testing.T) {
+func TestOperationalSettings_SetPositiveEmbeddingRateLimitPreserved(t *testing.T) {
 	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{EmbeddingRecomputeRateLimitPerSecond: 50})
-	if v := s.Get(); v.EmbeddingRecomputeRateLimitPerSecond != 50 {
-		t.Errorf("expected EmbeddingRecomputeRateLimitPerSecond=50 to be preserved, got %d", v.EmbeddingRecomputeRateLimitPerSecond)
+	s.Set(domain.OperationalSettingsValues{EmbeddingRateLimitPerSecond: 50})
+	if v := s.Get(); v.EmbeddingRateLimitPerSecond != 50 {
+		t.Errorf("expected EmbeddingRateLimitPerSecond=50 to be preserved, got %d", v.EmbeddingRateLimitPerSecond)
 	}
 }
 

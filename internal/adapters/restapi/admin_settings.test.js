@@ -28,7 +28,7 @@ const FULL_SETTINGS = {
     embedding_http_model: '',
     embedding_http_dimensions: 128,
     embedding_http_api_key_set: false,
-    embedding_recompute_rate_limit_per_second: 5,
+    embedding_rate_limit_per_second: 5,
     max_document_versions: 5,
     db_max_open_conns: 25,
     db_max_idle_conns: 25,
@@ -102,7 +102,7 @@ test('applySettings reveals the HTTP embedding fields and never fills in the API
   assert.equal(document.getElementById('embedding-http-base-url').value, 'http://localhost:11434/v1');
   assert.equal(document.getElementById('embedding-http-model').value, 'nomic-embed-text');
   assert.equal(document.getElementById('embedding-http-dimensions').value, '768');
-  assert.equal(document.getElementById('embedding-recompute-rate-limit').value, '5');
+  assert.equal(document.getElementById('embedding-rate-limit').value, '5');
   assert.equal(document.getElementById('embedding-http-api-key').value, '');
   assert.equal(
     document.getElementById('embedding-http-api-key-hint').textContent,
@@ -194,7 +194,7 @@ test('saveSettings posts 0 for an unparseable embedding dimensions field', async
 
 test('saveSettings posts the configured embedding recompute rate limit', async () => {
   const { saveSettings } = loadFixture();
-  document.getElementById('embedding-recompute-rate-limit').value = '20';
+  document.getElementById('embedding-rate-limit').value = '20';
   let gotBody;
   global.fetch = async (url, opts) => {
     if (url.includes('/admin/api/settings')) {
@@ -204,12 +204,12 @@ test('saveSettings posts the configured embedding recompute rate limit', async (
     return { ok: true, json: async () => ({}) };
   };
   await saveSettings();
-  assert.equal(gotBody.operational.embedding_recompute_rate_limit_per_second, 20);
+  assert.equal(gotBody.operational.embedding_rate_limit_per_second, 20);
 });
 
 test('saveSettings posts 0 for an unparseable embedding recompute rate limit field', async () => {
   const { saveSettings } = loadFixture();
-  document.getElementById('embedding-recompute-rate-limit').value = '';
+  document.getElementById('embedding-rate-limit').value = '';
   let gotBody;
   global.fetch = async (url, opts) => {
     if (url.includes('/admin/api/settings')) {
@@ -219,7 +219,7 @@ test('saveSettings posts 0 for an unparseable embedding recompute rate limit fie
     return { ok: true, json: async () => ({}) };
   };
   await saveSettings();
-  assert.equal(gotBody.operational.embedding_recompute_rate_limit_per_second, 0);
+  assert.equal(gotBody.operational.embedding_rate_limit_per_second, 0);
 });
 
 test('loadSettings applies the fetched settings on success', async () => {

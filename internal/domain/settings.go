@@ -177,20 +177,24 @@ type OperationalSettingsValues struct {
 	// downstream cosine-similarity calculation. Also what Dimensions()
 	// reports to EnableANN for pgvector column sizing.
 	EmbeddingHTTPDimensions int
-	// EmbeddingRecomputeRateLimitPerSecond caps how many Embed calls per
-	// second application.RunEmbeddingRecomputeJob issues against
-	// EmbeddingProviderHTTP -- a real hosted provider (IONOS's AI Model
-	// Hub, the motivating case, documents a 5 requests/second steady-state
-	// limit -- see docs.ionos.com/cloud/ai/ai-model-hub/how-tos/rate-limits)
-	// rejects a corpus-wide recompute's unthrottled flood of requests with
-	// 429s, and a rate-limited response returns near-instantly (no real
-	// inference work done), so an unpaced loop spins through the failure
-	// condition far faster than any real embedding call ever would,
-	// compounding it instead of self-correcting. Meaningless for a local
-	// server with no rate limit of its own (e.g. Ollama) -- raise this well
-	// above whatever throughput it can actually sustain to make pacing a
-	// no-op there.
-	EmbeddingRecomputeRateLimitPerSecond int
+	// EmbeddingRateLimitPerSecond caps how many Embed calls per second
+	// this process issues against EmbeddingProviderHTTP, shared across
+	// every caller: application.RunEmbeddingRecomputeJob's corpus-wide
+	// recompute, and (on cmd/crawl) every concurrently-running crawl job
+	// saving a newly-fetched page -- see sqlCrawlerService's embedRateLimiter,
+	// shared across up to maxConcurrentCrawls simultaneous jobs so their
+	// combined rate, not just one job's own, respects this cap. A real
+	// hosted provider (IONOS's AI Model Hub, the motivating case, documents
+	// a 5 requests/second steady-state limit -- see
+	// docs.ionos.com/cloud/ai/ai-model-hub/how-tos/rate-limits) rejects an
+	// unthrottled flood of requests with 429s, and a rate-limited response
+	// returns near-instantly (no real inference work done), so an unpaced
+	// caller spins through the failure condition far faster than any real
+	// embedding call ever would, compounding it instead of self-correcting.
+	// Meaningless for a local server with no rate limit of its own (e.g.
+	// Ollama) -- raise this well above whatever throughput it can actually
+	// sustain to make pacing a no-op there.
+	EmbeddingRateLimitPerSecond int
 }
 
 // defaultUserAgent mimics a standard desktop Firefox so crawled sites treat
@@ -249,40 +253,40 @@ const (
 	// (EnableANN treats dims<=0 as "ANN unavailable") rather than silently
 	// disabling ANN until they do.
 	defaultEmbeddingHTTPDimensions = 128
-	// defaultEmbeddingRecomputeRateLimitPerSecond matches IONOS's AI Model
+	// defaultEmbeddingRateLimitPerSecond matches IONOS's AI Model
 	// Hub's own documented base rate limit (see
-	// EmbeddingRecomputeRateLimitPerSecond's doc comment) -- a safe default
+	// EmbeddingRateLimitPerSecond's doc comment) -- a safe default
 	// for the motivating hosted provider; a deployment using a local,
 	// unlimited server can raise it.
-	defaultEmbeddingRecomputeRateLimitPerSecond = 5
+	defaultEmbeddingRateLimitPerSecond = 5
 )
 
 func defaultOperationalSettings() OperationalSettingsValues {
 	return OperationalSettingsValues{
-		FetchTimeout:                         8 * time.Second,
-		UserAgent:                            defaultUserAgent,
-		DefaultMaxPages:                      20,
-		MinTextLength:                        50,
-		DefaultTopK:                          10,
-		SessionTTL:                           12 * time.Hour,
-		CrawlDelayMs:                         defaultCrawlDelayMs,
-		MaxResponseBytes:                     defaultMaxResponseBytes,
-		SemanticCandidatePoolSize:            defaultSemanticCandidatePoolSize,
-		DBMaxOpenConns:                       defaultDBMaxOpenConns,
-		DBMaxIdleConns:                       defaultDBMaxIdleConns,
-		DBConnMaxLifetime:                    defaultDBConnMaxLifetime,
-		FuzzyMatchEnabled:                    true,
-		FuzzyMaxEditDistance:                 defaultFuzzyMaxEditDistance,
-		PageRankRecomputeIntervalMinutes:     defaultPageRankRecomputeIntervalMinutes,
-		ANNSearchEnabled:                     true,
-		MaxRetainedCrawlJobs:                 defaultMaxRetainedCrawlJobs,
-		DefaultRenderer:                      RendererNone,
-		LinkScope:                            LinkScopeDomain,
-		MaxDocumentVersions:                  defaultMaxDocumentVersions,
-		TitleWeight:                          defaultTitleWeight,
-		EmbeddingProvider:                    EmbeddingProviderHash,
-		EmbeddingHTTPDimensions:              defaultEmbeddingHTTPDimensions,
-		EmbeddingRecomputeRateLimitPerSecond: defaultEmbeddingRecomputeRateLimitPerSecond,
+		FetchTimeout:                     8 * time.Second,
+		UserAgent:                        defaultUserAgent,
+		DefaultMaxPages:                  20,
+		MinTextLength:                    50,
+		DefaultTopK:                      10,
+		SessionTTL:                       12 * time.Hour,
+		CrawlDelayMs:                     defaultCrawlDelayMs,
+		MaxResponseBytes:                 defaultMaxResponseBytes,
+		SemanticCandidatePoolSize:        defaultSemanticCandidatePoolSize,
+		DBMaxOpenConns:                   defaultDBMaxOpenConns,
+		DBMaxIdleConns:                   defaultDBMaxIdleConns,
+		DBConnMaxLifetime:                defaultDBConnMaxLifetime,
+		FuzzyMatchEnabled:                true,
+		FuzzyMaxEditDistance:             defaultFuzzyMaxEditDistance,
+		PageRankRecomputeIntervalMinutes: defaultPageRankRecomputeIntervalMinutes,
+		ANNSearchEnabled:                 true,
+		MaxRetainedCrawlJobs:             defaultMaxRetainedCrawlJobs,
+		DefaultRenderer:                  RendererNone,
+		LinkScope:                        LinkScopeDomain,
+		MaxDocumentVersions:              defaultMaxDocumentVersions,
+		TitleWeight:                      defaultTitleWeight,
+		EmbeddingProvider:                EmbeddingProviderHash,
+		EmbeddingHTTPDimensions:          defaultEmbeddingHTTPDimensions,
+		EmbeddingRateLimitPerSecond:      defaultEmbeddingRateLimitPerSecond,
 	}
 }
 
@@ -400,8 +404,8 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 	if v.EmbeddingHTTPDimensions <= 0 {
 		v.EmbeddingHTTPDimensions = d.EmbeddingHTTPDimensions
 	}
-	if v.EmbeddingRecomputeRateLimitPerSecond <= 0 {
-		v.EmbeddingRecomputeRateLimitPerSecond = d.EmbeddingRecomputeRateLimitPerSecond
+	if v.EmbeddingRateLimitPerSecond <= 0 {
+		v.EmbeddingRateLimitPerSecond = d.EmbeddingRateLimitPerSecond
 	}
 
 	s.mu.Lock()
