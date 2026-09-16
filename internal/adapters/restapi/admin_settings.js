@@ -15,6 +15,8 @@
   const defaultTopKEl = document.getElementById('default-top-k');
   const semanticPoolSizeEl = document.getElementById('semantic-pool-size');
   const annSearchEnabledEl = document.getElementById('ann-search-enabled');
+  const embeddingHashEnabledEl = document.getElementById('embedding-hash-enabled');
+  const embeddingHTTPEnabledEl = document.getElementById('embedding-http-enabled');
   const embeddingProviderEl = document.getElementById('embedding-provider');
   const embeddingHTTPFieldsEl = document.getElementById('embedding-http-fields');
   const embeddingHTTPBaseURLEl = document.getElementById('embedding-http-base-url');
@@ -66,13 +68,16 @@
     tileCrawlDefaultEl.textContent = s.operational.default_max_pages + ' pages';
   }
 
-  // toggleEmbeddingHTTPFields shows the HTTP-provider-only fields only when
-  // that provider is actually selected -- they're meaningless (and
-  // confusing to leave visible) while the default hash provider is active.
+  // toggleEmbeddingHTTPFields shows the HTTP-provider-only fields only
+  // when that provider is actually enabled (computed) -- driven by the
+  // "compute HTTP embeddings" checkbox, not by which provider is active
+  // for search: these fields (base URL, model, dimensions, API key) are
+  // meaningful whenever HTTP is being computed at all, even while hash is
+  // the one actually active.
   function toggleEmbeddingHTTPFields() {
-    embeddingHTTPFieldsEl.hidden = embeddingProviderEl.value !== 'http';
+    embeddingHTTPFieldsEl.hidden = !embeddingHTTPEnabledEl.checked;
   }
-  embeddingProviderEl.addEventListener('change', toggleEmbeddingHTTPFields);
+  embeddingHTTPEnabledEl.addEventListener('change', toggleEmbeddingHTTPFields);
 
   // The API key field starts readonly and only becomes editable on focus --
   // same reasoning as crawl.html's Basic auth password field (see
@@ -98,13 +103,15 @@
   // from GET /admin/api/embeddings/models, using whatever base URL/API key
   // are already saved server-side (see handleAdminEmbeddingsModels) --
   // never values just typed into the form but not yet saved. Only
-  // attempted when the HTTP provider is selected and a base URL is
-  // already saved -- there's nothing to ask otherwise, so a freshly-typed
-  // base URL needs a save first before this prefills anything.
+  // attempted when the HTTP provider is enabled (computed) and a base URL
+  // is already saved -- there's nothing to ask otherwise, so a
+  // freshly-typed base URL needs a save first before this prefills
+  // anything. Gated on embedding_http_enabled, not embedding_provider
+  // (which one is active for search) -- see toggleEmbeddingHTTPFields.
   async function loadEmbeddingModels(s) {
     clear(embeddingHTTPModelOptionsEl);
     embeddingHTTPModelHintEl.textContent = '';
-    if (s.operational.embedding_provider !== 'http' || !s.operational.embedding_http_base_url) {
+    if (!s.operational.embedding_http_enabled || !s.operational.embedding_http_base_url) {
       return;
     }
     try {
@@ -143,6 +150,8 @@
     defaultTopKEl.value = s.operational.default_top_k;
     semanticPoolSizeEl.value = s.operational.semantic_candidate_pool_size;
     annSearchEnabledEl.checked = s.operational.ann_search_enabled;
+    embeddingHashEnabledEl.checked = s.operational.embedding_hash_enabled;
+    embeddingHTTPEnabledEl.checked = s.operational.embedding_http_enabled;
     embeddingProviderEl.value = s.operational.embedding_provider || 'hash';
     embeddingHTTPBaseURLEl.value = s.operational.embedding_http_base_url || '';
     embeddingHTTPModelEl.value = s.operational.embedding_http_model || '';
@@ -212,6 +221,8 @@
         default_top_k: parseInt(defaultTopKEl.value, 10),
         semantic_candidate_pool_size: parseInt(semanticPoolSizeEl.value, 10),
         ann_search_enabled: annSearchEnabledEl.checked,
+        embedding_hash_enabled: embeddingHashEnabledEl.checked,
+        embedding_http_enabled: embeddingHTTPEnabledEl.checked,
         embedding_provider: embeddingProviderEl.value,
         embedding_http_base_url: embeddingHTTPBaseURLEl.value,
         embedding_http_model: embeddingHTTPModelEl.value,

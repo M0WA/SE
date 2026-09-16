@@ -774,13 +774,16 @@ type adminEmbeddingModelsResponse struct {
 // credentials are already configured rather than asking the admin to
 // resupply them just to list models. Returns an empty list (200, no
 // error) rather than attempting a call at all when no base URL is
-// configured yet, or the provider isn't "http" -- there's nothing to ask.
+// configured yet, or the http provider isn't enabled -- there's nothing to
+// ask. Gated on EmbeddingHTTPEnabled, not EmbeddingProvider (which one is
+// active for search): listing models is meaningful whenever http is being
+// computed at all, even while hash is the one actually active.
 func (h *Handler) handleAdminEmbeddingsModels(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.opSettings != nil && h.newEmbedder != nil, "embedding models") {
 		return
 	}
 	v := h.opSettings.Get()
-	if v.EmbeddingProvider != domain.EmbeddingProviderHTTP || v.EmbeddingHTTPBaseURL == "" {
+	if !v.EmbeddingHTTPEnabled || v.EmbeddingHTTPBaseURL == "" {
 		writeJSON(w, http.StatusOK, adminEmbeddingModelsResponse{})
 		return
 	}
@@ -804,12 +807,15 @@ func (h *Handler) handleAdminEmbeddingsModels(w http.ResponseWriter, r *http.Req
 // currently-configured HTTP embedding provider so a settings save can tell
 // the admin immediately if the endpoint/model/API key they just entered
 // doesn't actually work, rather than that only surfacing on the next real
-// search. A no-op (empty string, no network call) when v isn't configured
-// for the HTTP provider -- the hash provider can't fail this way -- or
-// when h.newEmbedder itself isn't set (a Handler built without going
-// through New, e.g. a test fixture that doesn't care about this feature).
+// search. A no-op (empty string, no network call) when the http provider
+// isn't enabled (EmbeddingHTTPEnabled) -- the hash provider can't fail
+// this way, and there's no HTTP config to test if it's disabled even when
+// EmbeddingProvider still happens to name it as active (self-healed away
+// on the next Set anyway, see domain.OperationalSettings.Set) -- or when
+// h.newEmbedder itself isn't set (a Handler built without going through
+// New, e.g. a test fixture that doesn't care about this feature).
 func (h *Handler) testEmbeddingConnectivity(ctx context.Context, v domain.OperationalSettingsValues) string {
-	if v.EmbeddingProvider != domain.EmbeddingProviderHTTP || h.newEmbedder == nil {
+	if !v.EmbeddingHTTPEnabled || h.newEmbedder == nil {
 		return ""
 	}
 	testCtx, cancel := context.WithTimeout(ctx, embeddingConnectivityTestTimeout)

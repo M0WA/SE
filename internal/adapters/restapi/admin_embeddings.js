@@ -10,8 +10,15 @@
   function renderConfig(s) {
     clear(configEl);
     const op = s.operational;
-    kvRow(configEl, 'Provider', op.embedding_provider === 'http' ? 'HTTP (trained model)' : 'Hash (dependency-free, default)');
-    if (op.embedding_provider === 'http') {
+    const enabled = [];
+    if (op.embedding_hash_enabled) enabled.push('hash');
+    if (op.embedding_http_enabled) enabled.push('http');
+    kvRow(configEl, 'Enabled providers', enabled.length ? enabled.join(', ') : 'none');
+    kvRow(configEl, 'Active for search', op.embedding_provider === 'http' ? 'HTTP (trained model)' : 'Hash (dependency-free)');
+    // The HTTP-only fields below are shown whenever that provider is
+    // enabled (computed) -- not only when it's the one active for search,
+    // since both may be enabled at once (see the two rows above).
+    if (op.embedding_http_enabled) {
       kvRow(configEl, 'Base URL', op.embedding_http_base_url || '(not set)');
       kvRow(configEl, 'Model', op.embedding_http_model || '(not set)');
       kvRow(configEl, 'Dimensions', String(op.embedding_http_dimensions));
