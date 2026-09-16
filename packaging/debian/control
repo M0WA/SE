@@ -5,6 +5,22 @@ Priority: optional
 Architecture: amd64
 Maintainer: Your Name <your-email@example.com>
 Depends: libc6 (>= 2.31)
+Recommends: libnspr4, libnss3, libatk1.0-0t64, libatk-bridge2.0-0t64, libcups2t64,
+ libdrm2, libxkbcommon0, libxcomposite1, libxdamage1, libxfixes3, libxrandr2,
+ libgbm1, libasound2t64, libatspi2.0-0t64, libxshmfence1, libgtk-3-0t64,
+ libcairo-gobject2, libcairo2, libgdk-pixbuf-2.0-0, libxcursor1, libxcb-shm0,
+ libpangocairo-1.0-0
 Description: Custom hybrid search engine (BM25 + semantic)
  Crawler, inverted index, BM25 ranking, and semantic search
  over SQLite/MySQL/PostgreSQL. Hexagonal architecture, in Go.
+ .
+ Recommends pulls in the shared libraries crawl-server's optional real-
+ browser rendering (Renderer=chromium/firefox, see
+ internal/adapters/browserfetcher) needs to launch either Playwright
+ browser engine -- without them, a crawl configured to use one fails with
+ a "launching <browser>: ... error while loading shared libraries"/missing-
+ dependency error rather than crashing the process; every other feature
+ (the default Renderer=none plain-HTTP fetch included) is unaffected
+ either way. Recommends rather than Depends since rendering is opt-in, not
+ every deployment needs it, and a minimal install (apt-get install
+ --no-install-recommends) can still skip this GTK/Cairo stack entirely.
