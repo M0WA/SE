@@ -935,7 +935,7 @@ func (r *Repository) PageRankDistribution(ctx context.Context) (min, max, avg fl
 // dialect's CreateSchemaSQL), in the order the admin database diagnostics
 // page shows them.
 var diagnosticsTables = []string{
-	"documents", "postings", "document_versions", "links",
+	"documents", "postings", "document_versions", "document_embeddings", "links",
 	"app_settings", "scheduled_crawls", "crawl_jobs", "crawl_job_pages", "sessions",
 }
 

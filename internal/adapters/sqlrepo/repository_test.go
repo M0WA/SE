@@ -2603,7 +2603,7 @@ func TestTableRowCounts_ReflectsSavedDocuments(t *testing.T) {
 	}
 	// Every table the schema creates should be present, even if empty --
 	// the admin database diagnostics page shows all of them.
-	for _, table := range []string{"documents", "postings", "document_versions", "links", "app_settings", "scheduled_crawls", "crawl_jobs", "crawl_job_pages", "sessions"} {
+	for _, table := range []string{"documents", "postings", "document_versions", "document_embeddings", "links", "app_settings", "scheduled_crawls", "crawl_jobs", "crawl_job_pages", "sessions"} {
 		if _, ok := counts[table]; !ok {
 			t.Errorf("expected a row count entry for table %q, got %+v", table, counts)
 		}

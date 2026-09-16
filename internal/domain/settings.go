@@ -117,35 +117,55 @@ type OperationalSettingsValues struct {
 	// afterward -- it isn't retroactively applied to already-indexed
 	// content.
 	TitleWeight int
-	// EmbeddingProvider selects which ports.EmbeddingProvider implementation
-	// every process (cmd/search, cmd/admin, cmd/crawl) constructs at
-	// startup -- EmbeddingProviderHash (the default: hashembed.Embedder's
-	// dependency-free feature-hashing pseudo-embedding, "semantic" only in
-	// that documents sharing tokens score similarly) or
-	// EmbeddingProviderHTTP (httpembed.Embedder: calls an OpenAI-compatible
-	// embeddings HTTP endpoint -- a local inference server such as Ollama/
-	// llama.cpp/LM Studio, or a hosted API -- for a real trained model,
-	// without adding any ML runtime dependency to this binary itself).
+	// EmbeddingHashEnabled and EmbeddingHTTPEnabled independently control
+	// which ports.EmbeddingProvider implementation(s) get computed and
+	// stored for every document -- EmbeddingProviderHash (hashembed.
+	// Embedder's dependency-free feature-hashing pseudo-embedding,
+	// "semantic" only in that documents sharing tokens score similarly)
+	// and/or EmbeddingProviderHTTP (httpembed.Embedder: an OpenAI-
+	// compatible embeddings HTTP endpoint -- a local inference server such
+	// as Ollama/llama.cpp/LM Studio, or a hosted API -- for a real trained
+	// model). Both may be enabled at once, so switching which one EmbeddingProvider
+	// below actually searches against never needs a recompute -- the other
+	// one's vectors are already there, kept warm the whole time. At least
+	// one must stay enabled: Set forces EmbeddingHashEnabled back to true
+	// if both are left false, since search always needs something to read.
 	//
-	// Unlike every other field on this page, this one is NOT picked up
-	// live by bootstrap.SyncSettings: each process reads it exactly once,
-	// at startup, to build its embedder before calling
-	// sqlrepo.Repository.EnableANN, which sizes its pgvector column and
-	// HNSW index to that embedder's Dimensions() -- swapping providers (or
-	// dimensions) without a restart would leave that column sized for the
-	// wrong vector length. Changing this setting takes effect the next
-	// time each of cmd/search/cmd/admin/cmd/crawl is restarted, same as
-	// any other change that would require re-sizing that column.
+	// Like EmbeddingProvider below, these are NOT picked up live by
+	// bootstrap.SyncSettings: each process reads them exactly once, at
+	// startup, to decide which embedder(s) to construct before calling
+	// sqlrepo.Repository.EnableANN, which sizes one pgvector column/HNSW
+	// index per enabled provider to that provider's own Dimensions() --
+	// enabling a provider that wasn't running before only takes effect the
+	// next time each of cmd/search/cmd/admin/cmd/crawl is restarted.
+	// Enabling EmbeddingHTTPEnabled means every crawl (and any recompute)
+	// now also pays for an HTTP Embed call per document even while
+	// EmbeddingProvider is still "hash" -- real, continuous cost against
+	// EmbeddingRateLimitPerSecond, not a one-time migration cost, since
+	// it's what keeps the HTTP vectors warm enough to switch to instantly.
+	// EmbeddingHashEnabled costs nothing extra either way -- a local
+	// computation with no rate limit of its own.
+	EmbeddingHashEnabled bool
+	EmbeddingHTTPEnabled bool
+	// EmbeddingProvider selects which of the enabled provider(s) above
+	// search actually compares a query against (EmbeddingProviderHash or
+	// EmbeddingProviderHTTP) -- self-healed to an enabled provider
+	// (preferring hash) if it names one that isn't. Unlike
+	// EmbeddingHashEnabled/EmbeddingHTTPEnabled, this doesn't require a
+	// restart or a recompute to take effect once both providers are
+	// already being kept warm -- it's just choosing which already-current
+	// stored vector to read.
 	//
-	// Switching providers (or, for EmbeddingProviderHTTP, changing model or
-	// dimensions) also changes the vector space entirely: a similarity
-	// score between an embedding computed by the old provider/model and one
-	// computed by the new one is meaningless. Like TitleWeight above, there
-	// is no automatic full-corpus re-embed migration here -- a document's
-	// stored embedding only gets recomputed the next time that document is
-	// crawled or re-crawled, so search stays internally consistent (BM25
-	// keeps working normally) but semantic ranking degrades until the whole
-	// corpus has been re-crawled under the new provider.
+	// Switching to a provider that was previously disabled (so it has no
+	// stored vectors yet, or stale ones from before it was last enabled)
+	// changes the vector space entirely -- a similarity score between an
+	// embedding computed by one provider/model and one computed by
+	// another is meaningless. Like TitleWeight above, there is no
+	// automatic re-embed here beyond whatever EmbeddingHTTPEnabled/
+	// EmbeddingHashEnabled have been keeping current -- semantic ranking
+	// for a freshly re-enabled provider degrades until either it's been
+	// enabled long enough to catch up via ongoing crawls, or an explicit
+	// recompute brings it current immediately.
 	EmbeddingProvider string
 	// EmbeddingHTTPBaseURL is the OpenAI-compatible embeddings API's base
 	// URL (e.g. "http://localhost:11434/v1" for a local Ollama server, or a
@@ -309,6 +329,8 @@ func defaultOperationalSettings() OperationalSettingsValues {
 		LinkScope:                        LinkScopeDomain,
 		MaxDocumentVersions:              defaultMaxDocumentVersions,
 		TitleWeight:                      defaultTitleWeight,
+		EmbeddingHashEnabled:             true,
+		EmbeddingHTTPEnabled:             false,
 		EmbeddingProvider:                EmbeddingProviderHash,
 		EmbeddingHTTPDimensions:          defaultEmbeddingHTTPDimensions,
 		EmbeddingRateLimitPerSecond:      defaultEmbeddingRateLimitPerSecond,
@@ -426,6 +448,27 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 	}
 	if !ValidEmbeddingProvider(v.EmbeddingProvider) {
 		v.EmbeddingProvider = EmbeddingProviderHash
+	}
+	// Search always needs something to read -- if an admin submits both
+	// toggles off (or a caller never set them), fall back to hash, the
+	// always-available, dependency-free provider, the same way a stale
+	// process's zero-value settings self-heal everywhere else on this
+	// page.
+	if !v.EmbeddingHashEnabled && !v.EmbeddingHTTPEnabled {
+		v.EmbeddingHashEnabled = true
+	}
+	// EmbeddingProvider must name a provider that's actually enabled (and
+	// therefore actually has stored vectors to read) -- self-heal to
+	// whichever is enabled, preferring hash, the same way DefaultRenderer/
+	// LinkScope above self-heal an otherwise-valid-looking but
+	// inapplicable value.
+	if (v.EmbeddingProvider == EmbeddingProviderHash && !v.EmbeddingHashEnabled) ||
+		(v.EmbeddingProvider == EmbeddingProviderHTTP && !v.EmbeddingHTTPEnabled) {
+		if v.EmbeddingHashEnabled {
+			v.EmbeddingProvider = EmbeddingProviderHash
+		} else {
+			v.EmbeddingProvider = EmbeddingProviderHTTP
+		}
 	}
 	if v.EmbeddingHTTPDimensions <= 0 {
 		v.EmbeddingHTTPDimensions = d.EmbeddingHTTPDimensions
