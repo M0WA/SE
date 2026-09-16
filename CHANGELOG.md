@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.0.39 - 2026-09-16
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Fix embedding endpoint "Test connection" always failing with a blank API key by @M0WA in https://github.com/M0WA/SE/pull/68
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.0.38...v4.0.39
+
+
 ## v4.0.38 - 2026-09-16
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
