@@ -32,15 +32,20 @@ nginx -t && systemctl reload nginx
 ```
 
 Copy `prometheus.yml`, filling in the real values from the IONOS DCD
-(Observability > Monitoring > your pipeline):
+(Observability > Monitoring > your pipeline) and a **host-unique**
+`site` name:
 
 ```sh
 sed -e 's/<IONOS_METRICS_ENDPOINT>/<pipeline id>-metrics.<pipeline uid>.monitoring.<region>.ionos.com/' \
     -e 's/<IONOS_APIKEY>/<real key here>/' \
+    -e 's/<SITE_NAME>/<this-hosts-name>/' \
     prometheus.yml > /etc/prometheus/prometheus.yml
 chown root:prometheus /etc/prometheus/prometheus.yml
 chmod 640 /etc/prometheus/prometheus.yml
 ```
+
+`<SITE_NAME>` must be different for every host pushing into the same
+IONOS pipeline -- see `prometheus.yml`'s comment on `external_labels`.
 
 **Never commit the filled-in `prometheus.yml`** -- the API key it carries is
 a write credential for the monitoring pipeline. The tracked copy in this
