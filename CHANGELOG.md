@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.0.38 - 2026-09-16
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Generalize "active for search" to a weighted multi-provider blend by @M0WA in https://github.com/M0WA/SE/pull/66
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.0.37...v4.0.38
+
+
 ## v4.0.37 - 2026-09-16
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
