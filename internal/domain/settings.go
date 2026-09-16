@@ -450,12 +450,22 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 		v.EmbeddingProvider = EmbeddingProviderHash
 	}
 	// Search always needs something to read -- if an admin submits both
-	// toggles off (or a caller never set them), fall back to hash, the
-	// always-available, dependency-free provider, the same way a stale
-	// process's zero-value settings self-heal everywhere else on this
-	// page.
+	// toggles off (or a caller never set them), enable one. This is also
+	// the exact signature of settings stored before these two fields
+	// existed (a JSON blob with no embedding_hash_enabled/
+	// embedding_http_enabled keys at all decodes both to their Go zero
+	// value, false) -- in that case EmbeddingProvider already names
+	// whichever provider was actually configured and working, so enable
+	// THAT one rather than silently discarding a real, working HTTP setup
+	// in favor of hash the moment this feature ships. Only a genuinely
+	// fresh install (EmbeddingProvider itself unset, already self-healed
+	// to hash above) falls back to hash here.
 	if !v.EmbeddingHashEnabled && !v.EmbeddingHTTPEnabled {
-		v.EmbeddingHashEnabled = true
+		if v.EmbeddingProvider == EmbeddingProviderHTTP {
+			v.EmbeddingHTTPEnabled = true
+		} else {
+			v.EmbeddingHashEnabled = true
+		}
 	}
 	// EmbeddingProvider must name a provider that's actually enabled (and
 	// therefore actually has stored vectors to read) -- self-heal to

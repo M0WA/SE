@@ -376,18 +376,13 @@ func TestOperationalSettings_SetValidEmbeddingProviderPreserved(t *testing.T) {
 	}
 }
 
-// TestOperationalSettings_SetEmbeddingProviderNamingADisabledProviderSelfHeals
-// proves EmbeddingProvider must name an actually-enabled provider --
-// naming "http" while EmbeddingHTTPEnabled is left false (the zero value)
-// self-heals to "hash" rather than pointing search at a provider with no
-// stored vectors to read.
-func TestOperationalSettings_SetEmbeddingProviderNamingADisabledProviderSelfHeals(t *testing.T) {
-	s := domain.DefaultOperationalSettings()
-	s.Set(domain.OperationalSettingsValues{EmbeddingProvider: domain.EmbeddingProviderHTTP})
-	if v := s.Get(); v.EmbeddingProvider != domain.EmbeddingProviderHash {
-		t.Errorf("expected EmbeddingProvider=http (disabled) to self-heal to hash, got %q", v.EmbeddingProvider)
-	}
-}
+// Note: naming "http" while both enabled flags are left at their zero
+// value (false) is deliberately NOT tested here as "self-heals to hash" --
+// that's exactly the shape of settings stored before EmbeddingHashEnabled/
+// EmbeddingHTTPEnabled existed, and self-healing it to hash would silently
+// discard a real, already-working HTTP configuration on upgrade. See
+// TestOperationalSettings_SetPreExistingHTTPConfigWithBothFlagsUnsetEnablesHTTP
+// for the actual (correct) behavior.
 
 // TestOperationalSettings_SetEmbeddingProviderNamingHashWhileOnlyHTTPEnabledSelfHeals
 // mirrors the above the other direction: EmbeddingProvider defaults to
@@ -411,6 +406,42 @@ func TestOperationalSettings_SetBothEmbeddingProvidersDisabledFallsBackToHashEna
 	}
 	if v.EmbeddingProvider != domain.EmbeddingProviderHash {
 		t.Errorf("expected EmbeddingProvider to self-heal to hash alongside it, got %q", v.EmbeddingProvider)
+	}
+}
+
+// TestOperationalSettings_SetPreExistingHTTPConfigWithBothFlagsUnsetEnablesHTTP
+// is a real-upgrade regression test: settings saved before
+// EmbeddingHashEnabled/EmbeddingHTTPEnabled existed decode both fields to
+// their Go zero value (false) -- the exact same shape as
+// TestOperationalSettings_SetBothEmbeddingProvidersDisabledFallsBackToHashEnabled
+// above, except EmbeddingProvider here already names "http", meaning a
+// real, working HTTP configuration (base URL, model, API key) that must
+// not be silently discarded in favor of hash the moment this process
+// upgrades to a build with these two fields. This is the exact scenario
+// that would have broken an already-deployed EmbeddingProvider=http
+// installation on its very next settings sync after upgrading -- before
+// this fix, the old (both-flags-false-always-means-hash) logic forced
+// EmbeddingProvider back to "hash" here.
+func TestOperationalSettings_SetPreExistingHTTPConfigWithBothFlagsUnsetEnablesHTTP(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{
+		EmbeddingProvider:       domain.EmbeddingProviderHTTP,
+		EmbeddingHTTPBaseURL:    "https://openai.inference.de-txl.ionos.com/v1",
+		EmbeddingHTTPModel:      "BAAI/bge-m3",
+		EmbeddingHTTPDimensions: 1024,
+		// EmbeddingHashEnabled/EmbeddingHTTPEnabled deliberately omitted --
+		// simulating a JSON blob decoded from storage that predates these
+		// fields, not an admin actively unchecking both boxes.
+	})
+	v := s.Get()
+	if !v.EmbeddingHTTPEnabled {
+		t.Errorf("expected pre-existing http config to self-heal to EmbeddingHTTPEnabled=true, got %+v", v)
+	}
+	if v.EmbeddingHashEnabled {
+		t.Errorf("expected hash to stay disabled (only http was ever configured), got %+v", v)
+	}
+	if v.EmbeddingProvider != domain.EmbeddingProviderHTTP {
+		t.Errorf("expected EmbeddingProvider to remain http, not be silently reverted to hash, got %q", v.EmbeddingProvider)
 	}
 }
 
