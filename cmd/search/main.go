@@ -45,18 +45,19 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	embedder := bootstrap.NewEmbedder(bootstrap.DecryptEmbeddingKey(opSettings.Get(), settingsEncryptionKey))
+	embedders := bootstrap.NewEmbedders(bootstrap.DecryptEmbeddingKey(opSettings.Get(), settingsEncryptionKey))
 	// Attempt to enable Postgres pgvector-backed ANN semantic search -- a
 	// no-op on SQLite/MySQL, and never fatal even on Postgres without the
 	// extension installed (see sqlrepo.Repository.EnableANN): this process
 	// just keeps using the brute-force SampleEmbeddings fallback either
-	// way. Must run after embedder is constructed, since its vector column
-	// is sized to embedder.Dimensions() -- see domain.
-	// OperationalSettingsValues.EmbeddingProvider for why that means this
-	// can no longer run concurrently with the settings sync above.
-	repo.EnableANN(ctx, embedder.Dimensions())
+	// way. Must run after embedders are constructed, since each provider's
+	// vector column is sized to its own Dimensions() -- see domain.
+	// OperationalSettingsValues.EmbeddingHashEnabled/EmbeddingHTTPEnabled
+	// for why that means this can no longer run concurrently with the
+	// settings sync above.
+	repo.EnableANN(ctx, bootstrap.EmbedderDimensions(embedders))
 
-	searchSvc := application.NewHybridAsSearchService(repo, embedder, settings, opSettings, overrides, corpusStats, vocabulary)
+	searchSvc := application.NewHybridAsSearchService(repo, embedders[opSettings.Get().EmbeddingProvider], settings, opSettings, overrides, corpusStats, vocabulary)
 
 	handler := restapi.New(restapi.Config{
 		Search:     searchSvc,

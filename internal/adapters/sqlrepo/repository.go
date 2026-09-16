@@ -346,6 +346,23 @@ func isAlreadyExistsError(err error) bool {
 		strings.Contains(msg, "Duplicate column name")
 }
 
+// isForeignKeyViolationError reports whether err is a foreign key
+// constraint failure, across all three dialects -- used by UpdateEmbedding
+// to recognize (and silently ignore) an upsert into document_embeddings
+// for a doc_id that no longer exists in documents, the same "target's
+// already gone, nothing to do" no-op the old direct
+// "UPDATE documents SET ... WHERE id=?" used to produce by simply
+// affecting zero rows.
+func isForeignKeyViolationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "FOREIGN KEY constraint failed") ||
+		strings.Contains(msg, "violates foreign key constraint") ||
+		strings.Contains(msg, "foreign key constraint fails")
+}
+
 // isSQLiteBusyError reports whether err is modernc.org/sqlite's
 // SQLITE_BUSY, phrased as "database is locked (5)" (plain busy) or
 // "(261)"/"(517)" (the WAL-mode and RESERVED-lock variants SQLITE_BUSY
@@ -383,8 +400,11 @@ func retrySQLiteBusy(ctx context.Context, fn func() error) error {
 
 // migrateDocumentColumns adds host/version/crawled_at/norm_embedding to a
 // documents table that predates them (CREATE TABLE IF NOT EXISTS above only
-// shapes a fresh table) and backfills host/norm_embedding for any
-// pre-existing row, so an upgrade never requires a manual migration step.
+// shapes a fresh table) and backfills host/pagerank for any pre-existing
+// row, so an upgrade never requires a manual migration step.
+// norm_embedding (like embedding itself) is retired -- see SaveDocument --
+// so it's added for schema compatibility with an older table but never
+// backfilled; nothing reads it anymore.
 func (r *Repository) migrateDocumentColumns(ctx context.Context) error {
 	existing, err := r.existingColumns(ctx, "documents")
 	if err != nil {
@@ -415,9 +435,6 @@ func (r *Repository) migrateDocumentColumns(ctx context.Context) error {
 		return err
 	}
 	if err := r.backfillHost(ctx); err != nil {
-		return err
-	}
-	if err := r.backfillNormEmbedding(ctx); err != nil {
 		return err
 	}
 	return r.backfillPageRank(ctx)
@@ -497,52 +514,6 @@ func (r *Repository) backfillHost(ctx context.Context) error {
 	return nil
 }
 
-// backfillNormEmbedding fills in norm_embedding for any row saved before
-// that column existed (it defaults to 0, indistinguishable from a
-// genuinely all-zero embedding -- recomputing a zero-vector's norm as 0
-// again is harmless, just a no-op). Computed once here per pre-existing
-// row rather than left to be recomputed from scratch on every future
-// search request that scores the document.
-func (r *Repository) backfillNormEmbedding(ctx context.Context) error {
-	rows, err := r.db.QueryContext(ctx, r.ph(`SELECT id, embedding FROM documents WHERE norm_embedding = %s`, 1), 0)
-	if err != nil {
-		return fmt.Errorf("finding rows needing a norm_embedding backfill: %w", err)
-	}
-	type idEmbedding struct {
-		id      string
-		embBlob []byte
-	}
-	var pending []idEmbedding
-	for rows.Next() {
-		var ie idEmbedding
-		if err := rows.Scan(&ie.id, &ie.embBlob); err != nil {
-			rows.Close()
-			return fmt.Errorf("scanning row: %w", err)
-		}
-		pending = append(pending, ie)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	updateSQL := r.ph(`UPDATE documents SET norm_embedding = %s WHERE id = %s`, 1, 2)
-	for _, ie := range pending {
-		vec, err := DecodeEmbedding(ie.embBlob)
-		if err != nil {
-			return fmt.Errorf("deserializing embedding for norm backfill (%s): %w", ie.id, err)
-		}
-		norm := domain.VectorNorm(vec)
-		if norm == 0 {
-			continue // already 0; nothing to update
-		}
-		if _, err := r.db.ExecContext(ctx, updateSQL, norm, ie.id); err != nil {
-			return fmt.Errorf("backfilling norm_embedding for %s: %w", ie.id, err)
-		}
-	}
-	return nil
-}
-
 // backfillPageRank fills in pagerank for any row saved before that column
 // existed (it defaults to 0) with a neutral 1/N score rather than leaving
 // it at 0 -- a bare 0 would unfairly rank every pre-existing document dead
@@ -550,8 +521,7 @@ func (r *Repository) backfillNormEmbedding(ctx context.Context) error {
 // application.RunPageRankJob has ever had a chance to compute a real
 // score. A real PageRank score is always strictly positive (see
 // domain.PageRank's base (1-d)/N term, added unconditionally every
-// iteration), so "pagerank = 0" unambiguously means "never assigned",
-// exactly like backfillNormEmbedding's use of 0 for "never computed".
+// iteration), so "pagerank = 0" unambiguously means "never assigned".
 func (r *Repository) backfillPageRank(ctx context.Context) error {
 	var totalDocs int
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM documents`).Scan(&totalDocs); err != nil {
@@ -584,7 +554,7 @@ func (r *Repository) Ping(ctx context.Context) error {
 // makes up the "+1") are pruned, oldest first, in the same transaction;
 // re-confirming unchanged content just refreshes crawled_at and prunes
 // nothing.
-func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embedding []float32, maxVersions, titleWeight int) error {
+func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embeddings map[string][]float32, maxVersions, titleWeight int) error {
 	// The title is counted titleWeight times before the body: postings
 	// stores one merged term_freq per (term, doc) rather than a separate
 	// per-field count (no BM25F-style fielded formula), so the simplest way
@@ -602,12 +572,14 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 		titleWeight = 1
 	}
 	tokens := domain.Tokenize(strings.Repeat(doc.Title+" ", titleWeight) + doc.Text)
-	embBlob := EncodeEmbedding(embedding)
-	// Computed once here, at write time, and persisted alongside the
-	// embedding -- so every future search request that scores this
-	// document against a query reuses this norm instead of recomputing a
-	// full sum-of-squares pass over the embedding from scratch.
-	normEmbedding := domain.VectorNorm(embedding)
+	// documents.embedding/norm_embedding are retired now that every
+	// provider's vector lives in document_embeddings instead (see
+	// saveDocumentEmbeddings below) -- this codebase's migrations only ever
+	// add columns, never drop them, so the two columns stay in the schema
+	// (still NOT NULL) but are always written empty from here on, rather
+	// than picking one provider's vector to keep populating there.
+	embBlob := EncodeEmbedding(nil)
+	normEmbedding := domain.VectorNorm(nil)
 	host := hostOf(doc.URL)
 	now := time.Now().UTC().Format(crawledAtLayout)
 
@@ -688,19 +660,11 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 		return fmt.Errorf("saving document: %w", err)
 	}
 
-	// Also populate the pgvector column used by the ANN path (see ann.go),
-	// alongside (never instead of) the packed-binary embedding column above -- that
-	// column stays the source of truth for SQLite/MySQL, and is a harmless
-	// duplicate on Postgres. A plain UPDATE right after the upsert rather
-	// than folding it into UpsertDocumentSQL, since that statement is
-	// shared verbatim across all three dialects and embedding_vector only
-	// exists (and only ever should be written to) on Postgres once
-	// EnableANN has actually succeeded for this process.
-	if r.ann.isAvailable() {
-		vecSQL := r.ph(`UPDATE documents SET embedding_vector = %s::vector WHERE id = %s`, 1, 2)
-		if _, err := tx.ExecContext(ctx, vecSQL, formatPgVectorLiteral(embedding), doc.ID); err != nil {
-			return fmt.Errorf("saving embedding vector: %w", err)
-		}
+	// Write every enabled provider's actual vector into document_embeddings
+	// (the real source of truth now), plus its pgvector ANN column on
+	// Postgres wherever that provider's own EnableANN has succeeded.
+	if err := r.saveDocumentEmbeddings(ctx, tx, doc.ID, embeddings); err != nil {
+		return err
 	}
 
 	if _, err := tx.ExecContext(ctx, r.ph(`DELETE FROM postings WHERE doc_id = %s`, 1), doc.ID); err != nil {
@@ -751,6 +715,43 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 	}
 
 	return tx.Commit()
+}
+
+// saveDocumentEmbeddings upserts one document_embeddings row per provider
+// present in embeddings (typically one entry per currently-enabled
+// provider -- see domain.OperationalSettingsValues.EmbeddingHashEnabled/
+// EmbeddingHTTPEnabled), plus, on Postgres, that provider's own pgvector
+// ANN column whenever EnableANN has succeeded for it -- shared by
+// SaveDocument and UpdateEmbedding, since both write the same shape of
+// data, just via a caller-supplied transaction so either call site's own
+// surrounding writes stay atomic with this one.
+// dbExecer is satisfied by both *sql.DB and *sql.Tx, letting
+// saveDocumentEmbeddings run either as part of a larger caller transaction
+// (SaveDocument, where an embedding write failing should roll back the
+// whole document save, exactly like before this table existed) or as its
+// own independently-committing statements per provider (UpdateEmbedding --
+// see its own doc comment for why that one needs different atomicity).
+type dbExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func (r *Repository) saveDocumentEmbeddings(ctx context.Context, exec dbExecer, docID string, embeddings map[string][]float32) error {
+	upsertSQL := r.dialect.UpsertDocumentEmbeddingSQL()
+	for provider, vec := range embeddings {
+		embBlob := EncodeEmbedding(vec)
+		norm := domain.VectorNorm(vec)
+		if _, err := exec.ExecContext(ctx, upsertSQL, docID, provider, embBlob, norm); err != nil {
+			return fmt.Errorf("saving %s embedding: %w", provider, err)
+		}
+		if r.ann.isAvailable(provider) {
+			col := vectorColumnNameFor(provider)
+			vecSQL := r.ph(`UPDATE documents SET `+col+` = %s::vector WHERE id = %s`, 1, 2)
+			if _, err := exec.ExecContext(ctx, vecSQL, formatPgVectorLiteral(vec), docID); err != nil {
+				return fmt.Errorf("saving %s embedding vector: %w", provider, err)
+			}
+		}
+	}
+	return nil
 }
 
 // saveDocumentInsertBatchSize bounds how many postings or links rows one
@@ -1072,18 +1073,23 @@ func scanEmbeddingRows(rows *sql.Rows) (map[string]domain.EmbeddedVector, error)
 	return out, rows.Err()
 }
 
-// EmbeddingsForDocs batch-fetches embeddings for exactly the given doc IDs
-// (a single "WHERE id IN (...)" query), so a search only ever deserializes
-// embeddings for documents it actually needs -- never the whole corpus.
-func (r *Repository) EmbeddingsForDocs(ctx context.Context, ids []string) (map[string]domain.EmbeddedVector, error) {
+// EmbeddingsForDocs batch-fetches provider's embeddings for exactly the
+// given doc IDs (a single "WHERE provider = ? AND doc_id IN (...)" query
+// against document_embeddings, joined to documents for pagerank), so a
+// search only ever deserializes embeddings for documents it actually
+// needs -- never the whole corpus.
+func (r *Repository) EmbeddingsForDocs(ctx context.Context, ids []string, provider string) (map[string]domain.EmbeddedVector, error) {
 	if len(ids) == 0 {
 		return map[string]domain.EmbeddedVector{}, nil
 	}
-	args := make([]interface{}, len(ids))
-	for i, id := range ids {
-		args[i] = id
+	args := make([]interface{}, 0, len(ids)+1)
+	args = append(args, provider)
+	for _, id := range ids {
+		args = append(args, id)
 	}
-	query := `SELECT id, embedding, norm_embedding, pagerank FROM documents WHERE id IN (` + r.placeholderList(len(ids), 1) + `)`
+	query := `SELECT de.doc_id, de.embedding, de.norm_embedding, d.pagerank
+	          FROM document_embeddings de JOIN documents d ON d.id = de.doc_id
+	          WHERE de.provider = ` + r.dialect.Placeholder(1) + ` AND de.doc_id IN (` + r.placeholderList(len(ids), 2) + `)`
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying embeddings for docs: %w", err)
@@ -1092,16 +1098,19 @@ func (r *Repository) EmbeddingsForDocs(ctx context.Context, ids []string) (map[s
 	return scanEmbeddingRows(rows)
 }
 
-// SampleEmbeddings returns up to limit embeddings from across the corpus
-// (SQL-bounded via LIMIT, so the query cost never scales with corpus size),
-// used to fill out a search's semantic candidate pool beyond its BM25 hits.
-// A non-positive limit returns an empty map without touching the database.
-func (r *Repository) SampleEmbeddings(ctx context.Context, limit int) (map[string]domain.EmbeddedVector, error) {
+// SampleEmbeddings returns up to limit of provider's embeddings from
+// across the corpus (SQL-bounded via LIMIT, so the query cost never scales
+// with corpus size), used to fill out a search's semantic candidate pool
+// beyond its BM25 hits. A non-positive limit returns an empty map without
+// touching the database.
+func (r *Repository) SampleEmbeddings(ctx context.Context, limit int, provider string) (map[string]domain.EmbeddedVector, error) {
 	if limit <= 0 {
 		return map[string]domain.EmbeddedVector{}, nil
 	}
-	query := r.ph(`SELECT id, embedding, norm_embedding, pagerank FROM documents ORDER BY id LIMIT %s`, 1)
-	rows, err := r.db.QueryContext(ctx, query, limit)
+	query := r.ph(`SELECT de.doc_id, de.embedding, de.norm_embedding, d.pagerank
+	               FROM document_embeddings de JOIN documents d ON d.id = de.doc_id
+	               WHERE de.provider = %s ORDER BY de.doc_id LIMIT %s`, 1, 2)
+	rows, err := r.db.QueryContext(ctx, query, provider, limit)
 	if err != nil {
 		return nil, fmt.Errorf("sampling embeddings: %w", err)
 	}
@@ -1250,32 +1259,41 @@ func (r *Repository) AllDocumentIDs(ctx context.Context) ([]string, error) {
 }
 
 // UpdateEmbedding overwrites one document's embedding (and norm_embedding,
-// recomputed to match) -- the narrow write half of SaveDocument's embedding
-// handling, without touching text/postings/links/document_versions/
-// pagerank/host, none of which change when a document's vector
-// representation is recomputed against its own already-stored text (e.g.
-// after an OperationalSettingsValues.EmbeddingProvider change -- see
-// application.RunEmbeddingRecomputeJob). Also refreshes the Postgres
-// pgvector column when ANN is enabled for this process, mirroring
-// SaveDocument's own handling of that column.
-func (r *Repository) UpdateEmbedding(ctx context.Context, id string, embedding []float32) error {
-	embBlob := EncodeEmbedding(embedding)
-	normEmbedding := domain.VectorNorm(embedding)
-	updateSQL := r.ph(`UPDATE documents SET embedding = %s, norm_embedding = %s WHERE id = %s`, 1, 2, 3)
-	// No rows-affected check: a document deleted between
-	// RunEmbeddingRecomputeJob listing its ID and reaching this call is a
-	// harmless no-op update, not an error worth surfacing -- unlike
-	// RunScheduledCrawlNow/DeleteScheduledCrawl's use of
-	// requireRowsAffected, there's no caller here for whom "the target no
-	// longer exists" is meaningfully different from "nothing to do".
-	if _, err := r.db.ExecContext(ctx, updateSQL, embBlob, normEmbedding, id); err != nil {
-		return fmt.Errorf("updating embedding (%s): %w", id, err)
-	}
-	if r.ann.isAvailable() {
-		vecSQL := r.ph(`UPDATE documents SET embedding_vector = %s::vector WHERE id = %s`, 1, 2)
-		if _, err := r.db.ExecContext(ctx, vecSQL, formatPgVectorLiteral(embedding), id); err != nil {
-			return fmt.Errorf("updating embedding vector (%s): %w", id, err)
+// recomputed to match) for every provider present in embeddings -- the
+// narrow write half of SaveDocument's embedding handling, without touching
+// text/postings/links/document_versions/pagerank/host, none of which
+// change when a document's vector representation is recomputed against
+// its own already-stored text (e.g. after an
+// OperationalSettingsValues.EmbeddingProvider change -- see
+// application.RunEmbeddingRecomputeJob). Also refreshes each provider's
+// Postgres pgvector column when ANN is enabled for it, mirroring
+// SaveDocument's own handling of those columns.
+func (r *Repository) UpdateEmbedding(ctx context.Context, id string, embeddings map[string][]float32) error {
+	// Deliberately NOT wrapped in a shared transaction (unlike SaveDocument's
+	// call to the same helper): each provider's document_embeddings write
+	// must commit independently of whether its ANN pgvector-column write
+	// subsequently succeeds. This matters for the real production scenario
+	// TestEnableANN_RecreatesColumnWhenDimensionsChange guards -- a
+	// recompute run against a provider/model whose dimension changed but
+	// whose pgvector column this process hasn't recreated yet (that only
+	// happens on the next EnableANN, at startup): the canonical
+	// document_embeddings write must still land so a later EnableANN's
+	// backfill can recover from it, even though the (expected, transient)
+	// ANN-column write fails and this call still reports that failure to
+	// the caller (RunEmbeddingRecomputeJob counts it as Failed).
+	//
+	// A document deleted between RunEmbeddingRecomputeJob listing its ID
+	// and reaching this call is a harmless no-op, not an error worth
+	// surfacing -- unlike the old direct "UPDATE documents SET ... WHERE
+	// id=?" (which just silently affected zero rows), document_embeddings'
+	// doc_id foreign key rejects the upsert outright once the document is
+	// gone, so that specific failure is swallowed here to preserve the
+	// original no-op behavior.
+	if err := r.saveDocumentEmbeddings(ctx, r.db, id, embeddings); err != nil {
+		if isForeignKeyViolationError(err) {
+			return nil
 		}
+		return err
 	}
 	return nil
 }

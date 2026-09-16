@@ -87,7 +87,12 @@ type SQLRepository interface {
 	// domain.OperationalSettingsValues.MaxDocumentVersions. titleWeight is
 	// how many times the title is counted into the indexed token stream
 	// ahead of the body -- see domain.OperationalSettingsValues.TitleWeight.
-	SaveDocument(ctx context.Context, doc domain.Document, embedding []float32, maxVersions, titleWeight int) error
+	// embeddings holds one vector per currently-enabled provider (see
+	// domain.OperationalSettingsValues.EmbeddingHashEnabled/
+	// EmbeddingHTTPEnabled, keyed by domain.EmbeddingProviderHash/
+	// EmbeddingProviderHTTP) -- every one of them is upserted into
+	// document_embeddings in the same write.
+	SaveDocument(ctx context.Context, doc domain.Document, embeddings map[string][]float32, maxVersions, titleWeight int) error
 	// PostingsForTerms batch-fetches postings for every given term in a
 	// single query (a "WHERE term IN (...)" join against documents), so a
 	// multi-term search issues one round trip regardless of how many unique
@@ -117,32 +122,36 @@ type SQLRepository interface {
 	// zero postings hits against for a bounded-edit-distance near-miss (see
 	// domain.NearestTerm).
 	AllTerms(ctx context.Context) ([]domain.TermStat, error)
-	// EmbeddingsForDocs batch-fetches embeddings for exactly the given doc
-	// IDs (typically a query's BM25-hit set), so scoring a candidate never
-	// requires a full-corpus scan. Each result carries its norm alongside
-	// its vector (see domain.EmbeddedVector) -- precomputed once, at
-	// SaveDocument time, rather than recomputed from scratch on every
-	// request that scores the document.
-	EmbeddingsForDocs(ctx context.Context, ids []string) (map[string]domain.EmbeddedVector, error)
-	// SampleEmbeddings returns up to limit embeddings from across the
-	// corpus, so a purely semantic match (no BM25 hits at all) can still be
-	// found -- bounded regardless of how large the corpus is, unlike a full
-	// "every document" scan.
-	SampleEmbeddings(ctx context.Context, limit int) (map[string]domain.EmbeddedVector, error)
-	// TopSemanticMatches finds queryVec's approximate nearest neighbors by
-	// cosine distance via Postgres pgvector's HNSW-accelerated "ORDER BY
-	// embedding_vector <=> $1 LIMIT $2" query, used in place of
-	// SampleEmbeddings to fill a search's semantic candidate pool whenever
-	// ANN is actually available. ok is false (with a nil error and nil map)
-	// when it isn't -- a non-Postgres dialect, a Postgres server without
-	// the pgvector extension, or this process's sqlrepo.Repository.EnableANN
-	// never having succeeded -- telling the caller
+	// EmbeddingsForDocs batch-fetches provider's embeddings for exactly the
+	// given doc IDs (typically a query's BM25-hit set), so scoring a
+	// candidate never requires a full-corpus scan. Each result carries its
+	// norm alongside its vector (see domain.EmbeddedVector) -- precomputed
+	// once, at SaveDocument time, rather than recomputed from scratch on
+	// every request that scores the document. provider is
+	// domain.EmbeddingProviderHash/EmbeddingProviderHTTP -- typically
+	// whichever domain.OperationalSettingsValues.EmbeddingProvider names as
+	// active for search.
+	EmbeddingsForDocs(ctx context.Context, ids []string, provider string) (map[string]domain.EmbeddedVector, error)
+	// SampleEmbeddings returns up to limit of provider's embeddings from
+	// across the corpus, so a purely semantic match (no BM25 hits at all)
+	// can still be found -- bounded regardless of how large the corpus is,
+	// unlike a full "every document" scan.
+	SampleEmbeddings(ctx context.Context, limit int, provider string) (map[string]domain.EmbeddedVector, error)
+	// TopSemanticMatches finds queryVec's approximate nearest neighbors
+	// within provider's embeddings by cosine distance via Postgres
+	// pgvector's HNSW-accelerated "ORDER BY embedding_vector_<provider>
+	// <=> $1 LIMIT $2" query, used in place of SampleEmbeddings to fill a
+	// search's semantic candidate pool whenever ANN is actually available
+	// for provider. ok is false (with a nil error and nil map) when it
+	// isn't -- a non-Postgres dialect, a Postgres server without the
+	// pgvector extension, or this process's sqlrepo.Repository.EnableANN
+	// never having succeeded for provider -- telling the caller
 	// (hybridSearchService.Search) to fall back to SampleEmbeddings's
 	// bounded brute-force sample exactly as it did before ANN existed. A
 	// non-nil error means the ANN query itself failed (a real fault, not an
 	// availability question) and should be treated like any other
 	// repository error.
-	TopSemanticMatches(ctx context.Context, queryVec []float32, limit int) (matches map[string]domain.EmbeddedVector, ok bool, err error)
+	TopSemanticMatches(ctx context.Context, queryVec []float32, limit int, provider string) (matches map[string]domain.EmbeddedVector, ok bool, err error)
 	// DocumentsByIDs batch-fetches documents for the given IDs in one
 	// round trip (a missing ID is simply absent from the result, not an
 	// error) -- the only document-lookup-by-ID this port exposes, since
@@ -210,14 +219,15 @@ type EmbeddingRepository interface {
 	// AdminRepository's identical method (implemented once, satisfying
 	// both narrow ports).
 	DocumentsByIDs(ctx context.Context, ids []string) (map[string]domain.Document, error)
-	// UpdateEmbedding overwrites one document's embedding (and, when
-	// Postgres pgvector ANN is enabled for this process, its
-	// embedding_vector column too) -- the narrow write SaveDocument's
-	// embedding-writing half performs, without re-tokenizing text, without
-	// touching postings/links/versions/pagerank, and without archiving a
-	// new document_versions row (the text itself hasn't changed, only its
-	// vector representation).
-	UpdateEmbedding(ctx context.Context, id string, embedding []float32) error
+	// UpdateEmbedding overwrites one document's embedding for every
+	// provider present in embeddings (and, when Postgres pgvector ANN is
+	// enabled for this process for a given provider, that provider's own
+	// embedding_vector_<provider> column too) -- the narrow write
+	// SaveDocument's embedding-writing half performs, without re-tokenizing
+	// text, without touching postings/links/versions/pagerank, and without
+	// archiving a new document_versions row (the text itself hasn't
+	// changed, only its vector representation).
+	UpdateEmbedding(ctx context.Context, id string, embeddings map[string][]float32) error
 }
 
 // SessionStore backs the admin/search login system's session tokens.

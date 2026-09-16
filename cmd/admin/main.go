@@ -44,13 +44,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	embedder := bootstrap.NewEmbedder(bootstrap.DecryptEmbeddingKey(opSettings.Get(), settingsEncryptionKey))
+	embedders := bootstrap.NewEmbedders(bootstrap.DecryptEmbeddingKey(opSettings.Get(), settingsEncryptionKey))
 	// Enables Postgres pgvector ANN search for this process when
-	// available, never fatal otherwise. Must run after embedder is
+	// available, never fatal otherwise. Must run after embedders are
 	// constructed -- see cmd/search's identical comment.
-	repo.EnableANN(ctx, embedder.Dimensions())
+	repo.EnableANN(ctx, bootstrap.EmbedderDimensions(embedders))
 
-	debugSvc := application.NewHybridSearchService(repo, embedder, settings, opSettings, overrides, corpusStats, vocabulary)
+	debugSvc := application.NewHybridSearchService(repo, embedders[opSettings.Get().EmbeddingProvider], settings, opSettings, overrides, corpusStats, vocabulary)
 
 	// A previous admin-server instance killed mid-recompute (crash, restart,
 	// redeploy) leaves embedding_recompute_status stuck at InProgress=true,
@@ -77,7 +77,7 @@ func main() {
 		Admin:                 repo,
 		PageRank:              repo,
 		EmbeddingRepo:         repo,
-		Embedder:              embedder,
+		Embedders:             embedders,
 		Settings:              settings,
 		OpSettings:            opSettings,
 		Overrides:             overrides,

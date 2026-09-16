@@ -177,7 +177,7 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 		}
 		bm25HitIDs = append(bm25HitIDs, siteIDs...)
 	}
-	embeddings, err := s.repo.EmbeddingsForDocs(ctx, bm25HitIDs)
+	embeddings, err := s.repo.EmbeddingsForDocs(ctx, bm25HitIDs, opValues.EmbeddingProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +192,7 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 	poolSize := opValues.SemanticCandidatePoolSize
 	var sampled map[string]domain.EmbeddedVector
 	if opValues.ANNSearchEnabled {
-		annMatches, ok, annErr := s.repo.TopSemanticMatches(ctx, queryVec, poolSize)
+		annMatches, ok, annErr := s.repo.TopSemanticMatches(ctx, queryVec, poolSize, opValues.EmbeddingProvider)
 		if annErr != nil {
 			return nil, annErr
 		}
@@ -202,7 +202,7 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 	}
 	if sampled == nil {
 		var sampleErr error
-		sampled, sampleErr = s.repo.SampleEmbeddings(ctx, poolSize)
+		sampled, sampleErr = s.repo.SampleEmbeddings(ctx, poolSize, opValues.EmbeddingProvider)
 		if sampleErr != nil {
 			return nil, sampleErr
 		}

@@ -6,6 +6,7 @@ type Dialect interface {
 	Name() string
 	Placeholder(argPosition int) string
 	UpsertDocumentSQL() string
+	UpsertDocumentEmbeddingSQL() string
 	UpsertSettingSQL() string
 	CreateSchemaSQL() []string
 }
@@ -22,6 +23,11 @@ func (sqliteDialect) UpsertDocumentSQL() string {
 	          doc_length=excluded.doc_length, embedding=excluded.embedding,
 	          norm_embedding=excluded.norm_embedding, pagerank=excluded.pagerank,
 	          host=excluded.host, version=excluded.version, crawled_at=excluded.crawled_at`
+}
+func (sqliteDialect) UpsertDocumentEmbeddingSQL() string {
+	return `INSERT INTO document_embeddings (doc_id, provider, embedding, norm_embedding) VALUES (?, ?, ?, ?)
+	        ON CONFLICT(doc_id, provider) DO UPDATE SET
+	          embedding=excluded.embedding, norm_embedding=excluded.norm_embedding`
 }
 func (sqliteDialect) UpsertSettingSQL() string {
 	return `INSERT INTO app_settings (setting_key, value, updated_at) VALUES (?, ?, ?)
@@ -110,6 +116,10 @@ func (mysqlDialect) UpsertDocumentSQL() string {
 	          doc_length=VALUES(doc_length), embedding=VALUES(embedding),
 	          norm_embedding=VALUES(norm_embedding), pagerank=VALUES(pagerank),
 	          host=VALUES(host), version=VALUES(version), crawled_at=VALUES(crawled_at)`
+}
+func (mysqlDialect) UpsertDocumentEmbeddingSQL() string {
+	return `INSERT INTO document_embeddings (doc_id, provider, embedding, norm_embedding) VALUES (?, ?, ?, ?)
+	        ON DUPLICATE KEY UPDATE embedding=VALUES(embedding), norm_embedding=VALUES(norm_embedding)`
 }
 func (mysqlDialect) UpsertSettingSQL() string {
 	return `INSERT INTO app_settings (setting_key, value, updated_at) VALUES (?, ?, ?)
@@ -201,6 +211,11 @@ func (postgresDialect) UpsertDocumentSQL() string {
 	          doc_length=EXCLUDED.doc_length, embedding=EXCLUDED.embedding,
 	          norm_embedding=EXCLUDED.norm_embedding, pagerank=EXCLUDED.pagerank,
 	          host=EXCLUDED.host, version=EXCLUDED.version, crawled_at=EXCLUDED.crawled_at`
+}
+func (postgresDialect) UpsertDocumentEmbeddingSQL() string {
+	return `INSERT INTO document_embeddings (doc_id, provider, embedding, norm_embedding) VALUES ($1, $2, $3, $4)
+	        ON CONFLICT (doc_id, provider) DO UPDATE SET
+	          embedding=EXCLUDED.embedding, norm_embedding=EXCLUDED.norm_embedding`
 }
 func (postgresDialect) UpsertSettingSQL() string {
 	return `INSERT INTO app_settings (setting_key, value, updated_at) VALUES ($1, $2, $3)

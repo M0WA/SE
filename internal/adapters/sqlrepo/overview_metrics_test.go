@@ -217,7 +217,7 @@ func TestDocumentsIndexedByDay_GroupsByCrawledAtDate(t *testing.T) {
 	}
 	for _, d := range docs {
 		doc := domain.Document{ID: d.id, URL: "https://a.example/" + d.id, Title: d.id, Text: "text " + d.id}
-		if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
+		if err := repo.SaveDocument(ctx, doc, map[string][]float32{domain.EmbeddingProviderHash: []float32{1}}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", d.id, err)
 		}
 		if _, err := raw.ExecContext(ctx, `UPDATE documents SET crawled_at = ? WHERE id = ?`, d.day.Format(time.RFC3339Nano), d.id); err != nil {
@@ -304,7 +304,7 @@ func TestPageRankHistogram_BucketsAcrossObservedRange(t *testing.T) {
 	ctx := context.Background()
 	for i, id := range []string{"doc-1", "doc-2", "doc-3"} {
 		doc := domain.Document{ID: id, URL: "https://a.example/" + id, Title: id, Text: fmt.Sprintf("text %d", i)}
-		if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
+		if err := repo.SaveDocument(ctx, doc, map[string][]float32{domain.EmbeddingProviderHash: []float32{1}}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", id, err)
 		}
 	}
@@ -354,7 +354,7 @@ func TestPageRankHistogram_DegenerateSingleValueRange(t *testing.T) {
 	ctx := context.Background()
 	for _, id := range []string{"doc-1", "doc-2"} {
 		doc := domain.Document{ID: id, URL: "https://a.example/" + id, Title: id, Text: "shared text " + id}
-		if err := repo.SaveDocument(ctx, doc, []float32{1}, 100, 2); err != nil {
+		if err := repo.SaveDocument(ctx, doc, map[string][]float32{domain.EmbeddingProviderHash: []float32{1}}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", id, err)
 		}
 	}

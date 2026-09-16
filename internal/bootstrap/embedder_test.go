@@ -8,6 +8,7 @@ import (
 	"searchengine/internal/adapters/settingscrypto"
 	"searchengine/internal/bootstrap"
 	"searchengine/internal/domain"
+	"searchengine/internal/ports"
 )
 
 func TestNewEmbedder_DefaultsToHash(t *testing.T) {
@@ -41,6 +42,83 @@ func TestNewEmbedder_HTTPProviderBuildsHTTPEmbedder(t *testing.T) {
 	}
 	if he.Dimensions() != 768 {
 		t.Errorf("expected 768 dimensions, got %d", he.Dimensions())
+	}
+}
+
+func TestNewEmbedders_HashOnlyByDefault(t *testing.T) {
+	embedders := bootstrap.NewEmbedders(domain.OperationalSettingsValues{EmbeddingHashEnabled: true})
+	if len(embedders) != 1 {
+		t.Fatalf("expected exactly one embedder, got %d: %+v", len(embedders), embedders)
+	}
+	if _, ok := embedders[domain.EmbeddingProviderHash].(*hashembed.Embedder); !ok {
+		t.Errorf("expected a *hashembed.Embedder under %q, got %+v", domain.EmbeddingProviderHash, embedders)
+	}
+}
+
+func TestNewEmbedders_NeitherEnabledReturnsEmptyMap(t *testing.T) {
+	embedders := bootstrap.NewEmbedders(domain.OperationalSettingsValues{})
+	if len(embedders) != 0 {
+		t.Errorf("expected no embedders when neither is enabled, got %+v", embedders)
+	}
+}
+
+func TestNewEmbedders_HTTPOnlyBuildsJustHTTPEmbedder(t *testing.T) {
+	embedders := bootstrap.NewEmbedders(domain.OperationalSettingsValues{
+		EmbeddingHTTPEnabled:    true,
+		EmbeddingHTTPBaseURL:    "http://localhost:11434/v1",
+		EmbeddingHTTPModel:      "nomic-embed-text",
+		EmbeddingHTTPDimensions: 768,
+	})
+	if len(embedders) != 1 {
+		t.Fatalf("expected exactly one embedder, got %d: %+v", len(embedders), embedders)
+	}
+	he, ok := embedders[domain.EmbeddingProviderHTTP].(*httpembed.Embedder)
+	if !ok {
+		t.Fatalf("expected a *httpembed.Embedder under %q, got %+v", domain.EmbeddingProviderHTTP, embedders)
+	}
+	if he.Dimensions() != 768 {
+		t.Errorf("expected 768 dimensions, got %d", he.Dimensions())
+	}
+}
+
+func TestNewEmbedders_BothEnabledBuildsBoth(t *testing.T) {
+	embedders := bootstrap.NewEmbedders(domain.OperationalSettingsValues{
+		EmbeddingHashEnabled:    true,
+		EmbeddingHTTPEnabled:    true,
+		EmbeddingHTTPBaseURL:    "http://localhost:11434/v1",
+		EmbeddingHTTPDimensions: 768,
+	})
+	if len(embedders) != 2 {
+		t.Fatalf("expected both embedders, got %d: %+v", len(embedders), embedders)
+	}
+	if _, ok := embedders[domain.EmbeddingProviderHash]; !ok {
+		t.Error("expected the hash provider present")
+	}
+	if _, ok := embedders[domain.EmbeddingProviderHTTP]; !ok {
+		t.Error("expected the http provider present")
+	}
+}
+
+func TestEmbedderDimensions_ReflectsEachEmbeddersOwnDimensions(t *testing.T) {
+	embedders := bootstrap.NewEmbedders(domain.OperationalSettingsValues{
+		EmbeddingHashEnabled:    true,
+		EmbeddingHTTPEnabled:    true,
+		EmbeddingHTTPBaseURL:    "http://localhost:11434/v1",
+		EmbeddingHTTPDimensions: 768,
+	})
+	dims := bootstrap.EmbedderDimensions(embedders)
+	if dims[domain.EmbeddingProviderHash] != 128 {
+		t.Errorf("expected hash dims=128, got %+v", dims)
+	}
+	if dims[domain.EmbeddingProviderHTTP] != 768 {
+		t.Errorf("expected http dims=768, got %+v", dims)
+	}
+}
+
+func TestEmbedderDimensions_EmptyMapForEmptyEmbedders(t *testing.T) {
+	dims := bootstrap.EmbedderDimensions(map[string]ports.EmbeddingProvider{})
+	if len(dims) != 0 {
+		t.Errorf("expected an empty map, got %+v", dims)
 	}
 }
 

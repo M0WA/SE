@@ -29,11 +29,11 @@ func TestEnableANN_NonPostgresIsNoop(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = repo.Close() })
 
-	repo.EnableANN(context.Background(), 128)
-	if repo.ANNAvailable() {
+	repo.EnableANN(context.Background(), map[string]int{domain.EmbeddingProviderHash: 128})
+	if repo.ANNAvailable(domain.EmbeddingProviderHash) {
 		t.Error("expected ANN to stay unavailable on SQLite")
 	}
-	matches, ok, err := repo.TopSemanticMatches(context.Background(), []float32{1, 0}, 10)
+	matches, ok, err := repo.TopSemanticMatches(context.Background(), []float32{1, 0}, 10, domain.EmbeddingProviderHash)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -68,16 +68,16 @@ func TestEnableANN_NonFatalWhenCreateExtensionFails(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	repo := sqlrepo.NewWithDB(db, "postgres")
-	repo.EnableANN(context.Background(), 128) // must not panic
+	repo.EnableANN(context.Background(), map[string]int{domain.EmbeddingProviderHash: 128}) // must not panic
 
-	if repo.ANNAvailable() {
+	if repo.ANNAvailable(domain.EmbeddingProviderHash) {
 		t.Error("expected ANN to remain unavailable when CREATE EXTENSION fails")
 	}
 	// The permanent-fallback contract: a subsequent TopSemanticMatches call
 	// must report unavailable too, never attempting (and failing on) the
 	// pgvector-specific query against a database that was never actually
 	// migrated for it.
-	_, ok, err := repo.TopSemanticMatches(context.Background(), []float32{1, 0}, 10)
+	_, ok, err := repo.TopSemanticMatches(context.Background(), []float32{1, 0}, 10, domain.EmbeddingProviderHash)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -90,9 +90,9 @@ func TestEnableANN_NonFatalWhenCreateExtensionFails(t *testing.T) {
 // pgvector DDL with a nonsensical column width.
 func TestEnableANN_ZeroOrNegativeDimsIsNoop(t *testing.T) {
 	repo := newTestRepo(t)
-	repo.EnableANN(context.Background(), 0)
-	repo.EnableANN(context.Background(), -1)
-	if repo.ANNAvailable() {
+	repo.EnableANN(context.Background(), map[string]int{domain.EmbeddingProviderHash: 0})
+	repo.EnableANN(context.Background(), map[string]int{domain.EmbeddingProviderHash: -1})
+	if repo.ANNAvailable(domain.EmbeddingProviderHash) {
 		t.Error("expected ANN to stay unavailable for a non-positive dims value")
 	}
 }
@@ -108,8 +108,8 @@ func requirePostgresANN(t *testing.T) *sqlrepo.Repository {
 		t.Skip("TEST_POSTGRES_DSN not set; skipping pgvector ANN test")
 	}
 	repo := newTestRepo(t)
-	repo.EnableANN(context.Background(), 2)
-	if !repo.ANNAvailable() {
+	repo.EnableANN(context.Background(), map[string]int{domain.EmbeddingProviderHash: 2})
+	if !repo.ANNAvailable(domain.EmbeddingProviderHash) {
 		t.Skip("pgvector extension not available on this Postgres server; skipping ANN test")
 	}
 	return repo
@@ -119,7 +119,7 @@ func requirePostgresANN(t *testing.T) *sqlrepo.Repository {
 // (extension, column, HNSW index) against a real Postgres+pgvector server.
 func TestEnableANN_SucceedsAgainstRealPostgres(t *testing.T) {
 	repo := requirePostgresANN(t)
-	if !repo.ANNAvailable() {
+	if !repo.ANNAvailable(domain.EmbeddingProviderHash) {
 		t.Fatal("expected ANN to be available after a successful EnableANN")
 	}
 }
@@ -144,16 +144,16 @@ func TestEnableANN_BackfillsVectorColumnForPreExistingDocuments(t *testing.T) {
 	// NULL at this point, the same as every document crawled before this
 	// process ever turned ANN on.
 	doc := domain.Document{ID: "pre-existing", URL: "https://example.com/pre-existing", Title: "pre-existing", Text: "pre-existing"}
-	if err := repo.SaveDocument(ctx, doc, []float32{1, 0}, 100, 2); err != nil {
+	if err := repo.SaveDocument(ctx, doc, map[string][]float32{domain.EmbeddingProviderHash: []float32{1, 0}}, 100, 2); err != nil {
 		t.Fatalf("saving pre-existing document: %v", err)
 	}
 
-	repo.EnableANN(ctx, 2)
-	if !repo.ANNAvailable() {
+	repo.EnableANN(ctx, map[string]int{domain.EmbeddingProviderHash: 2})
+	if !repo.ANNAvailable(domain.EmbeddingProviderHash) {
 		t.Skip("pgvector extension not available on this Postgres server; skipping ANN test")
 	}
 
-	matches, ok, err := repo.TopSemanticMatches(ctx, []float32{1, 0}, 10)
+	matches, ok, err := repo.TopSemanticMatches(ctx, []float32{1, 0}, 10, domain.EmbeddingProviderHash)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -188,10 +188,10 @@ func TestEnableANN_RecreatesColumnWhenDimensionsChange(t *testing.T) {
 	repo := requirePostgresANN(t) // enables ANN at dims=2
 	ctx := context.Background()
 	doc := domain.Document{ID: "doc-1", URL: "https://example.com/doc-1", Title: "Doc", Text: "hello world"}
-	if err := repo.SaveDocument(ctx, doc, []float32{1, 0}, 100, 2); err != nil {
+	if err := repo.SaveDocument(ctx, doc, map[string][]float32{domain.EmbeddingProviderHash: []float32{1, 0}}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if err := repo.UpdateEmbedding(ctx, "doc-1", []float32{0, 1, 0}); err == nil {
+	if err := repo.UpdateEmbedding(ctx, "doc-1", map[string][]float32{domain.EmbeddingProviderHash: []float32{0, 1, 0}}); err == nil {
 		t.Fatal("expected an error writing a 3-dimensional vector into the still-2-dimensional ANN column")
 	}
 
@@ -199,12 +199,12 @@ func TestEnableANN_RecreatesColumnWhenDimensionsChange(t *testing.T) {
 	// embedder -- the same repo object stands in for "a fresh process
 	// against the same database" here, since EnableANN itself always
 	// re-checks the catalog rather than trusting any in-memory state.
-	repo.EnableANN(ctx, 3)
-	if !repo.ANNAvailable() {
+	repo.EnableANN(ctx, map[string]int{domain.EmbeddingProviderHash: 3})
+	if !repo.ANNAvailable(domain.EmbeddingProviderHash) {
 		t.Fatal("expected ANN to remain available after a clean dimension change")
 	}
 
-	matches, ok, err := repo.TopSemanticMatches(ctx, []float32{0, 1, 0}, 10)
+	matches, ok, err := repo.TopSemanticMatches(ctx, []float32{0, 1, 0}, 10, domain.EmbeddingProviderHash)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -213,6 +213,62 @@ func TestEnableANN_RecreatesColumnWhenDimensionsChange(t *testing.T) {
 	}
 	if _, found := matches["doc-1"]; !found {
 		t.Errorf("expected doc-1 backfilled into the recreated 3-dimensional column from its already-updated blob embedding, got %+v", matches)
+	}
+}
+
+// TestEnableANN_MaintainsTwoProvidersOfDifferentDimensionsIndependently
+// proves the whole point of per-provider pgvector columns: hash and http
+// can be enabled simultaneously with different dimensions, each gets its
+// own correctly-sized column/index, and a query against one provider's
+// column only ever finds that provider's own vectors, never the other's
+// (a query vector shaped for the 2-dim provider would even fail to compare
+// against a 4-dim column).
+func TestEnableANN_MaintainsTwoProvidersOfDifferentDimensionsIndependently(t *testing.T) {
+	if os.Getenv(testPostgresDSNEnv) == "" {
+		t.Skip("TEST_POSTGRES_DSN not set; skipping pgvector ANN test")
+	}
+	repo := newTestRepo(t)
+	ctx := context.Background()
+
+	repo.EnableANN(ctx, map[string]int{
+		domain.EmbeddingProviderHash: 2,
+		domain.EmbeddingProviderHTTP: 4,
+	})
+	if !repo.ANNAvailable(domain.EmbeddingProviderHash) {
+		t.Skip("pgvector extension not available on this Postgres server; skipping ANN test")
+	}
+	if !repo.ANNAvailable(domain.EmbeddingProviderHTTP) {
+		t.Fatal("expected ANN to be available for the http provider too")
+	}
+
+	doc := domain.Document{ID: "doc-1", URL: "https://example.com/doc-1", Title: "Doc", Text: "hello world"}
+	if err := repo.SaveDocument(ctx, doc, map[string][]float32{
+		domain.EmbeddingProviderHash: {1, 0},
+		domain.EmbeddingProviderHTTP: {0, 1, 0, 0},
+	}, 100, 2); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	hashMatches, ok, err := repo.TopSemanticMatches(ctx, []float32{1, 0}, 10, domain.EmbeddingProviderHash)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true for the hash provider")
+	}
+	if got := hashMatches["doc-1"].Vector; len(got) != 2 {
+		t.Errorf("expected the hash provider's own 2-dim vector back, got %v", got)
+	}
+
+	httpMatches, ok, err := repo.TopSemanticMatches(ctx, []float32{0, 1, 0, 0}, 10, domain.EmbeddingProviderHTTP)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true for the http provider")
+	}
+	if got := httpMatches["doc-1"].Vector; len(got) != 4 {
+		t.Errorf("expected the http provider's own 4-dim vector back, got %v", got)
 	}
 }
 
@@ -235,12 +291,12 @@ func TestTopSemanticMatches_ReturnsNearestNeighborsInSaneOrder(t *testing.T) {
 	}
 	for _, d := range docs {
 		doc := domain.Document{ID: d.id, URL: "https://example.com/" + d.id, Title: d.id, Text: d.id}
-		if err := repo.SaveDocument(ctx, doc, d.vec, 100, 2); err != nil {
+		if err := repo.SaveDocument(ctx, doc, map[string][]float32{domain.EmbeddingProviderHash: d.vec}, 100, 2); err != nil {
 			t.Fatalf("saving document %s: %v", d.id, err)
 		}
 	}
 
-	matches, ok, err := repo.TopSemanticMatches(ctx, []float32{1, 0}, 3)
+	matches, ok, err := repo.TopSemanticMatches(ctx, []float32{1, 0}, 3, domain.EmbeddingProviderHash)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -271,12 +327,12 @@ func TestTopSemanticMatches_LimitBoundsResultCount(t *testing.T) {
 
 	for _, id := range []string{"a", "b", "c", "d", "e"} {
 		doc := domain.Document{ID: id, URL: "https://example.com/" + id, Title: id, Text: id}
-		if err := repo.SaveDocument(ctx, doc, []float32{1, 0}, 100, 2); err != nil {
+		if err := repo.SaveDocument(ctx, doc, map[string][]float32{domain.EmbeddingProviderHash: []float32{1, 0}}, 100, 2); err != nil {
 			t.Fatalf("saving document %s: %v", id, err)
 		}
 	}
 
-	matches, ok, err := repo.TopSemanticMatches(ctx, []float32{1, 0}, 2)
+	matches, ok, err := repo.TopSemanticMatches(ctx, []float32{1, 0}, 2, domain.EmbeddingProviderHash)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -292,7 +348,7 @@ func TestTopSemanticMatches_LimitBoundsResultCount(t *testing.T) {
 // mirrors SampleEmbeddings' own non-positive-limit contract.
 func TestTopSemanticMatches_NonPositiveLimitReturnsUnavailableWithoutQuerying(t *testing.T) {
 	repo := requirePostgresANN(t)
-	matches, ok, err := repo.TopSemanticMatches(context.Background(), []float32{1, 0}, 0)
+	matches, ok, err := repo.TopSemanticMatches(context.Background(), []float32{1, 0}, 0, domain.EmbeddingProviderHash)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -313,11 +369,11 @@ func TestTopSemanticMatches_ClampsEfSearchAboveOwnPgvectorMax(t *testing.T) {
 	repo := requirePostgresANN(t)
 	ctx := context.Background()
 	doc := domain.Document{ID: "doc-1", URL: "https://example.com/doc-1", Title: "Doc", Text: "hello world"}
-	if err := repo.SaveDocument(ctx, doc, []float32{1, 0}, 100, 2); err != nil {
+	if err := repo.SaveDocument(ctx, doc, map[string][]float32{domain.EmbeddingProviderHash: []float32{1, 0}}, 100, 2); err != nil {
 		t.Fatalf("saving document: %v", err)
 	}
 
-	matches, ok, err := repo.TopSemanticMatches(ctx, []float32{1, 0}, 1500)
+	matches, ok, err := repo.TopSemanticMatches(ctx, []float32{1, 0}, 1500, domain.EmbeddingProviderHash)
 	if err != nil {
 		t.Fatalf("expected the over-ceiling limit to be clamped rather than erroring, got: %v", err)
 	}
@@ -342,7 +398,7 @@ func TestTopSemanticMatches_TransactionStartFailureIsReportedAsError(t *testing.
 		t.Fatalf("closing repository: %v", err)
 	}
 
-	_, ok, err := repo.TopSemanticMatches(ctx, []float32{1, 0}, 10)
+	_, ok, err := repo.TopSemanticMatches(ctx, []float32{1, 0}, 10, domain.EmbeddingProviderHash)
 	if err == nil {
 		t.Fatal("expected an error once the underlying connection pool is closed")
 	}
@@ -360,10 +416,10 @@ func TestSaveDocument_PopulatesVectorColumnWhenANNAvailable(t *testing.T) {
 	repo := requirePostgresANN(t)
 	ctx := context.Background()
 	doc := domain.Document{ID: "doc-1", URL: "https://example.com/doc-1", Title: "Doc", Text: "hello world"}
-	if err := repo.SaveDocument(ctx, doc, []float32{1, 0}, 100, 2); err != nil {
+	if err := repo.SaveDocument(ctx, doc, map[string][]float32{domain.EmbeddingProviderHash: []float32{1, 0}}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	matches, ok, err := repo.TopSemanticMatches(ctx, []float32{1, 0}, 10)
+	matches, ok, err := repo.TopSemanticMatches(ctx, []float32{1, 0}, 10, domain.EmbeddingProviderHash)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -384,15 +440,15 @@ func TestUpdateEmbedding_RefreshesVectorColumnWhenANNAvailable(t *testing.T) {
 	repo := requirePostgresANN(t)
 	ctx := context.Background()
 	doc := domain.Document{ID: "doc-1", URL: "https://example.com/doc-1", Title: "Doc", Text: "hello world"}
-	if err := repo.SaveDocument(ctx, doc, []float32{1, 0}, 100, 2); err != nil {
+	if err := repo.SaveDocument(ctx, doc, map[string][]float32{domain.EmbeddingProviderHash: []float32{1, 0}}, 100, 2); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if err := repo.UpdateEmbedding(ctx, "doc-1", []float32{0, 1}); err != nil {
+	if err := repo.UpdateEmbedding(ctx, "doc-1", map[string][]float32{domain.EmbeddingProviderHash: []float32{0, 1}}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	matches, ok, err := repo.TopSemanticMatches(ctx, []float32{0, 1}, 10)
+	matches, ok, err := repo.TopSemanticMatches(ctx, []float32{0, 1}, 10, domain.EmbeddingProviderHash)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

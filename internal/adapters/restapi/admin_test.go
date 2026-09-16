@@ -3980,13 +3980,13 @@ func (r *fakeEmbeddingRepo) DocumentsByIDs(_ context.Context, ids []string) (map
 	return out, nil
 }
 
-func (r *fakeEmbeddingRepo) UpdateEmbedding(_ context.Context, id string, vec []float32) error {
+func (r *fakeEmbeddingRepo) UpdateEmbedding(_ context.Context, id string, embeddings map[string][]float32) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.updated == nil {
 		r.updated = make(map[string][]float32)
 	}
-	r.updated[id] = vec
+	r.updated[id] = embeddings[domain.EmbeddingProviderHash]
 	return nil
 }
 
@@ -4003,8 +4003,10 @@ func (r *fakeEmbeddingRepo) UpdatedCount() int {
 func adminAuthedHandlerWithEmbedding(t *testing.T, embeddingRepo ports.EmbeddingRepository, embedder ports.EmbeddingProvider, settingsStore ports.SettingsStore) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
 	h := restapi.New(restapi.Config{
-		Admin: &fakeAdminRepo{}, EmbeddingRepo: embeddingRepo, Embedder: embedder, SettingsStore: settingsStore,
-		DBDriver: "pgx", AdminUser: testAdminUser, AdminPass: testAdminPass,
+		Admin: &fakeAdminRepo{}, EmbeddingRepo: embeddingRepo,
+		Embedders:     map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder},
+		SettingsStore: settingsStore,
+		DBDriver:      "pgx", AdminUser: testAdminUser, AdminPass: testAdminPass,
 	})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
@@ -4068,8 +4070,9 @@ func TestHandleAdminEmbeddingsRecomputeStatus_NoRunYetReportsZeroValues(t *testi
 	repo := &fakeEmbeddingRepo{}
 	adminRepo := &fakeAdminRepo{totalDocs: 42}
 	h := restapi.New(restapi.Config{
-		Admin: adminRepo, EmbeddingRepo: repo, Embedder: fakeEmbeddingProvider{},
-		DBDriver: "pgx", AdminUser: testAdminUser, AdminPass: testAdminPass,
+		Admin: adminRepo, EmbeddingRepo: repo,
+		Embedders: map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: fakeEmbeddingProvider{}},
+		DBDriver:  "pgx", AdminUser: testAdminUser, AdminPass: testAdminPass,
 	})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	loginReq := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))

@@ -28,7 +28,7 @@ type benchHybridRepo struct {
 	docs       map[string]domain.Document
 }
 
-func (r *benchHybridRepo) SaveDocument(context.Context, domain.Document, []float32, int, int) error {
+func (r *benchHybridRepo) SaveDocument(context.Context, domain.Document, map[string][]float32, int, int) error {
 	return nil
 }
 
@@ -56,7 +56,7 @@ func (r *benchHybridRepo) AllTerms(context.Context) ([]domain.TermStat, error) {
 	return nil, nil
 }
 
-func (r *benchHybridRepo) EmbeddingsForDocs(_ context.Context, ids []string) (map[string]domain.EmbeddedVector, error) {
+func (r *benchHybridRepo) EmbeddingsForDocs(_ context.Context, ids []string, _ string) (map[string]domain.EmbeddedVector, error) {
 	out := make(map[string]domain.EmbeddedVector, len(ids))
 	for _, id := range ids {
 		if v, ok := r.embeddings[id]; ok {
@@ -69,7 +69,7 @@ func (r *benchHybridRepo) EmbeddingsForDocs(_ context.Context, ids []string) (ma
 // SampleEmbeddings takes the first limit of the pre-sorted ID list -- O(limit),
 // not O(corpus size), exactly like the real repository's indexed
 // "ORDER BY id LIMIT limit" query.
-func (r *benchHybridRepo) SampleEmbeddings(_ context.Context, limit int) (map[string]domain.EmbeddedVector, error) {
+func (r *benchHybridRepo) SampleEmbeddings(_ context.Context, limit int, _ string) (map[string]domain.EmbeddedVector, error) {
 	if limit <= 0 {
 		return map[string]domain.EmbeddedVector{}, nil
 	}
@@ -119,7 +119,7 @@ func (r *benchHybridRepo) HostsIndexed(context.Context, []string) (map[string]bo
 // exists to measure the bounded brute-force SampleEmbeddings path
 // (benchHybridRepo's whole point, see its doc comment above), not the ANN
 // path, so it must never divert to anything but SampleEmbeddings.
-func (r *benchHybridRepo) TopSemanticMatches(context.Context, []float32, int) (map[string]domain.EmbeddedVector, bool, error) {
+func (r *benchHybridRepo) TopSemanticMatches(context.Context, []float32, int, string) (map[string]domain.EmbeddedVector, bool, error) {
 	return nil, false, nil
 }
 

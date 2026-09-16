@@ -125,7 +125,7 @@ type Handler struct {
 	admin           ports.AdminRepository
 	pageRank        ports.PageRankRepository
 	embeddingRepo   ports.EmbeddingRepository
-	embedder        ports.EmbeddingProvider
+	embedders       map[string]ports.EmbeddingProvider
 	settings        *domain.TuningSettings
 	opSettings      *domain.OperationalSettings
 	overrides       *domain.RankingOverrides
@@ -201,11 +201,13 @@ type Config struct {
 	// -- same reasoning as PageRank above), backs the Settings page's
 	// "recompute embeddings" button; without it, that endpoint reports
 	// itself unavailable, same as the other optional dependencies.
-	// Embedder is the actual ports.EmbeddingProvider this recompute calls
-	// Embed against -- the same instance bootstrap.NewEmbedder built for
-	// this process at startup.
+	// Embedders holds one ports.EmbeddingProvider per currently-enabled
+	// provider this recompute calls Embed against -- the same map
+	// bootstrap.NewEmbedders built for this process at startup, so a
+	// recompute always refreshes every enabled provider's vectors, not
+	// just whichever is currently active for search.
 	EmbeddingRepo ports.EmbeddingRepository
-	Embedder      ports.EmbeddingProvider
+	Embedders     map[string]ports.EmbeddingProvider
 	// NewEmbedder builds a throwaway ports.EmbeddingProvider from a given
 	// settings snapshot, used by handleAdminSettings to test-probe a
 	// newly-saved HTTP embedding provider before the process actually
@@ -259,7 +261,7 @@ func New(cfg Config) *Handler {
 		admin:                 cfg.Admin,
 		pageRank:              cfg.PageRank,
 		embeddingRepo:         cfg.EmbeddingRepo,
-		embedder:              cfg.Embedder,
+		embedders:             cfg.Embedders,
 		settings:              cfg.Settings,
 		opSettings:            cfg.OpSettings,
 		overrides:             cfg.Overrides,

@@ -83,13 +83,20 @@ type EmbeddingRecomputeResult struct {
 // titleWeight (see domain.OperationalSettingsValues.EmbeddingTitleWeight)
 // blends each document's title into its recomputed vector the same way
 // sqlCrawlerService.Crawl does at crawl time -- see embedTitleWeighted.
-func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepository, embedder ports.EmbeddingProvider, ratePerSecond int, titleWeight float64) (EmbeddingRecomputeResult, error) {
+// embedders holds one ports.EmbeddingProvider per currently-enabled
+// provider (see domain.OperationalSettingsValues.EmbeddingHashEnabled/
+// EmbeddingHTTPEnabled) -- every document gets a freshly recomputed vector
+// for every one of them, not just whichever is currently active for
+// search, so switching which one is active never needs a second recompute.
+func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepository, embedders map[string]ports.EmbeddingProvider, ratePerSecond int, titleWeight float64) (EmbeddingRecomputeResult, error) {
 	interval := embedRateLimitInterval(ratePerSecond)
-	embed := func(ctx context.Context, s string) ([]float32, error) {
-		embedStart := time.Now()
-		vec, err := embedder.Embed(ctx, s)
-		paceEmbedCall(ctx, time.Since(embedStart), interval)
-		return vec, err
+	embedFor := func(embedder ports.EmbeddingProvider) func(context.Context, string) ([]float32, error) {
+		return func(ctx context.Context, s string) ([]float32, error) {
+			embedStart := time.Now()
+			vec, err := embedder.Embed(ctx, s)
+			paceEmbedCall(ctx, time.Since(embedStart), interval)
+			return vec, err
+		}
 	}
 	ids, err := repo.AllDocumentIDs(ctx)
 	if err != nil {
@@ -114,13 +121,22 @@ func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepositor
 				// being fetched -- nothing to recompute.
 				continue
 			}
-			vec, err := embedTitleWeighted(ctx, embed, doc.Title, doc.Text, titleWeight)
-			if err != nil {
-				log.Printf("recomputing embedding for %s: %v", id, err)
+			embeddings := make(map[string][]float32, len(embedders))
+			var embedErr error
+			for provider, embedder := range embedders {
+				vec, err := embedTitleWeighted(ctx, embedFor(embedder), doc.Title, doc.Text, titleWeight)
+				if err != nil {
+					log.Printf("recomputing %s embedding for %s: %v", provider, id, err)
+					embedErr = err
+					break
+				}
+				embeddings[provider] = vec
+			}
+			if embedErr != nil {
 				result.Failed++
 				continue
 			}
-			if err := repo.UpdateEmbedding(ctx, id, vec); err != nil {
+			if err := repo.UpdateEmbedding(ctx, id, embeddings); err != nil {
 				log.Printf("saving recomputed embedding for %s: %v", id, err)
 				result.Failed++
 				continue
@@ -147,13 +163,13 @@ func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepositor
 // caller: recomputing a real corpus means one Embed call per document,
 // each a network round-trip against an HTTP embeddings endpoint, so the
 // whole run can easily take minutes -- see handleAdminEmbeddingsRecompute.
-func RunEmbeddingRecomputeJobWithStatus(ctx context.Context, repo ports.EmbeddingRepository, embedder ports.EmbeddingProvider, settings ports.SettingsStore, ratePerSecond int, titleWeight float64) (EmbeddingRecomputeResult, error) {
+func RunEmbeddingRecomputeJobWithStatus(ctx context.Context, repo ports.EmbeddingRepository, embedders map[string]ports.EmbeddingProvider, settings ports.SettingsStore, ratePerSecond int, titleWeight float64) (EmbeddingRecomputeResult, error) {
 	start := time.Now()
 	status := LoadEmbeddingRecomputeStatus(ctx, settings)
 	status.InProgress = true
 	saveEmbeddingRecomputeStatus(ctx, settings, status)
 
-	result, err := RunEmbeddingRecomputeJob(ctx, repo, embedder, ratePerSecond, titleWeight)
+	result, err := RunEmbeddingRecomputeJob(ctx, repo, embedders, ratePerSecond, titleWeight)
 
 	status.InProgress = false
 	if err == nil {

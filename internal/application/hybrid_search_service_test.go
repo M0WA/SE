@@ -84,13 +84,23 @@ type fakeSQLRepo struct {
 	annErr                  error
 	topSemanticMatchesCalls int
 	sampleEmbeddingsCalls   int
+
+	// embeddingsForDocsProvider/sampleEmbeddingsProvider/
+	// topSemanticMatchesProvider record the provider argument each method
+	// was last called with, so a test can assert Search passes through
+	// opValues.EmbeddingProvider (the active provider) rather than a
+	// hardcoded value.
+	embeddingsForDocsProvider  string
+	sampleEmbeddingsProvider   string
+	topSemanticMatchesProvider string
 }
 
 // TopSemanticMatches mimics ports.SQLRepository's ANN entry point: reports
 // unavailable (ok=false, nil error) unless the test explicitly configured
 // annOK, exactly like a repository whose EnableANN never succeeded.
-func (r *fakeSQLRepo) TopSemanticMatches(_ context.Context, _ []float32, _ int) (map[string]domain.EmbeddedVector, bool, error) {
+func (r *fakeSQLRepo) TopSemanticMatches(_ context.Context, _ []float32, _ int, provider string) (map[string]domain.EmbeddedVector, bool, error) {
 	r.topSemanticMatchesCalls++
+	r.topSemanticMatchesProvider = provider
 	if r.annErr != nil {
 		return nil, false, r.annErr
 	}
@@ -100,7 +110,7 @@ func (r *fakeSQLRepo) TopSemanticMatches(_ context.Context, _ []float32, _ int) 
 	return r.annMatches, true, nil
 }
 
-func (r *fakeSQLRepo) SaveDocument(context.Context, domain.Document, []float32, int, int) error {
+func (r *fakeSQLRepo) SaveDocument(context.Context, domain.Document, map[string][]float32, int, int) error {
 	return nil
 }
 
@@ -132,7 +142,8 @@ func (r *fakeSQLRepo) AllTerms(context.Context) ([]domain.TermStat, error) {
 // requested IDs come back, and only those actually present. Each vector's
 // norm is computed on the way out, standing in for a real repository's
 // precomputed norm_embedding column.
-func (r *fakeSQLRepo) EmbeddingsForDocs(_ context.Context, ids []string) (map[string]domain.EmbeddedVector, error) {
+func (r *fakeSQLRepo) EmbeddingsForDocs(_ context.Context, ids []string, provider string) (map[string]domain.EmbeddedVector, error) {
+	r.embeddingsForDocsProvider = provider
 	out := make(map[string]domain.EmbeddedVector)
 	for _, id := range ids {
 		if v, ok := r.embeddings[id]; ok {
@@ -156,8 +167,9 @@ func (r *fakeSQLRepo) normFor(id string, v []float32) float64 {
 
 // SampleEmbeddings mimics a bounded "ORDER BY id LIMIT limit" query, so
 // tests exercising a small pool size can rely on a deterministic subset.
-func (r *fakeSQLRepo) SampleEmbeddings(_ context.Context, limit int) (map[string]domain.EmbeddedVector, error) {
+func (r *fakeSQLRepo) SampleEmbeddings(_ context.Context, limit int, provider string) (map[string]domain.EmbeddedVector, error) {
 	r.sampleEmbeddingsCalls++
+	r.sampleEmbeddingsProvider = provider
 	if limit <= 0 {
 		return map[string]domain.EmbeddedVector{}, nil
 	}
@@ -1547,5 +1559,42 @@ func TestHybridSearch_ANNQueryErrorPropagates(t *testing.T) {
 
 	if _, err := svc.Search(context.Background(), "quantenphysik", ports.SearchQuery{TopK: 10}); err == nil {
 		t.Fatal("expected the ANN query failure to propagate as a search error")
+	}
+}
+
+// TestHybridSearch_PassesActiveProviderToRepoEmbeddingMethods proves
+// EmbeddingsForDocs/SampleEmbeddings/TopSemanticMatches are all called
+// with whichever provider opValues.EmbeddingProvider currently names as
+// active -- not a hardcoded value -- so a search reads the right stored
+// vectors even when both hash and http are enabled simultaneously (see
+// domain.OperationalSettingsValues.EmbeddingHashEnabled/
+// EmbeddingHTTPEnabled) and http happens to be the active one.
+func TestHybridSearch_PassesActiveProviderToRepoEmbeddingMethods(t *testing.T) {
+	repo := &fakeSQLRepo{
+		postings: map[string][]domain.PostingStats{
+			"katzen": {{DocID: "1", TermFreq: 5, DocLength: 10, DocFreq: 1, TotalDocs: 2, AvgDocLen: 10}},
+		},
+		embeddings: map[string][]float32{"1": {1, 0}},
+		docs:       map[string]domain.Document{"1": {ID: "1", URL: "http://a", Title: "Katzen", Text: "Katzen sind toll"}},
+		annOK:      true,
+		annMatches: map[string]domain.EmbeddedVector{},
+	}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
+		EmbeddingHTTPEnabled: true,
+		EmbeddingProvider:    domain.EmbeddingProviderHTTP,
+		ANNSearchEnabled:     true,
+	})
+
+	svc := application.NewHybridSearchService(repo, embedder, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), opSettings, nil, domain.NewCorpusStatsCache(2, 10), nil)
+	if _, err := svc.Search(context.Background(), "katzen", ports.SearchQuery{TopK: 10}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if repo.embeddingsForDocsProvider != domain.EmbeddingProviderHTTP {
+		t.Errorf("expected EmbeddingsForDocs called with the active provider %q, got %q", domain.EmbeddingProviderHTTP, repo.embeddingsForDocsProvider)
+	}
+	if repo.topSemanticMatchesProvider != domain.EmbeddingProviderHTTP {
+		t.Errorf("expected TopSemanticMatches called with the active provider %q, got %q", domain.EmbeddingProviderHTTP, repo.topSemanticMatchesProvider)
 	}
 }
