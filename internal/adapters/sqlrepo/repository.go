@@ -176,8 +176,24 @@ func (r *Repository) PoolStats() sql.DBStats {
 }
 
 func (r *Repository) migrate(ctx context.Context) error {
+	// search-server, admin-server and crawl-server each run this loop
+	// independently at startup with no coordination between them. Postgres's
+	// CREATE TABLE IF NOT EXISTS is not safe under true concurrency: the
+	// existence check and the actual creation aren't atomic, so two
+	// processes can both see a table missing and race to create it, with
+	// the loser getting a duplicate-key error against the catalog (e.g.
+	// "duplicate key value violates unique constraint
+	// pg_type_typname_nsp_index") instead of a clean no-op -- observed in
+	// practice the first time a brand new table (document_embeddings) was
+	// added and all three binaries restarted at once during a package
+	// upgrade. This is the exact same benign race isAlreadyExistsError
+	// already tolerates for ALTER TABLE ADD COLUMN and CREATE INDEX below;
+	// it was just never wired up for CREATE TABLE itself. Only bites a
+	// table's very first creation -- once it exists for every process,
+	// CREATE TABLE IF NOT EXISTS is a guaranteed fast no-op with no race
+	// window.
 	for _, stmt := range r.dialect.CreateSchemaSQL() {
-		if _, err := r.db.ExecContext(ctx, stmt); err != nil {
+		if _, err := r.db.ExecContext(ctx, stmt); err != nil && !isAlreadyExistsError(err) {
 			return fmt.Errorf("migration failed: %w", err)
 		}
 	}
