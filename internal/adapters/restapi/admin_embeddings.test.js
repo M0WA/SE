@@ -65,22 +65,31 @@ test('renderConfig shows the hash provider without http-only fields', () => {
   assert.equal(text.includes('req/s'), true);
 });
 
+function kvValuesByKey(container) {
+  const values = {};
+  container.querySelectorAll('.kv-row').forEach((row) => {
+    values[row.querySelector('.k').textContent] = row.querySelector('.v').textContent;
+  });
+  return values;
+}
+
 test('renderConfig shows http provider fields including base URL, model, dimensions, and api key state', () => {
   const { renderConfig } = loadFixture();
+  const baseURL = 'https://openai.inference.de-txl.ionos.com/v1';
   renderConfig(baseSettings({
     embedding_provider: 'http',
-    embedding_http_base_url: 'https://openai.inference.de-txl.ionos.com/v1',
+    embedding_http_base_url: baseURL,
     embedding_http_model: 'BAAI/bge-m3',
     embedding_http_dimensions: 1024,
     embedding_http_api_key_set: true,
     embedding_rate_limit_per_second: 5,
   }));
-  const text = document.getElementById('embeddings-config').textContent;
-  assert.equal(text.includes('HTTP'), true);
-  assert.equal(text.includes('https://openai.inference.de-txl.ionos.com/v1'), true);
-  assert.equal(text.includes('BAAI/bge-m3'), true);
-  assert.equal(text.includes('1024'), true);
-  assert.equal(text.includes('configured'), true);
+  const values = kvValuesByKey(document.getElementById('embeddings-config'));
+  assert.equal(values.Provider, 'HTTP (trained model)');
+  assert.equal(values['Base URL'], baseURL);
+  assert.equal(values.Model, 'BAAI/bge-m3');
+  assert.equal(values.Dimensions, '1024');
+  assert.equal(values['API key'], 'configured');
 });
 
 test('renderConfig shows "(not set)" for an unconfigured http base URL, model, and unconfigured api key', () => {
