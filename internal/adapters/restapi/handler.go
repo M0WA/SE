@@ -51,6 +51,9 @@ var adminVocabularyTermHTML []byte
 //go:embed admin_pagerank.html
 var adminPageRankHTML []byte
 
+//go:embed admin_embeddings.html
+var adminEmbeddingsHTML []byte
+
 //go:embed admin_database.html
 var adminDatabaseHTML []byte
 
@@ -79,6 +82,9 @@ var adminDomainJS []byte
 
 //go:embed admin_pagerank.js
 var adminPageRankJS []byte
+
+//go:embed admin_embeddings.js
+var adminEmbeddingsJS []byte
 
 //go:embed admin_schedule.js
 var adminScheduleJS []byte
@@ -352,6 +358,8 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("/admin_search_result.js", h.handleAdminSearchResultJS)
 	mux.HandleFunc("/admin/pagerank", h.requireAuthPage(h.handleAdminPageRankPage))
 	mux.HandleFunc("/admin_pagerank.js", h.handleAdminPageRankJS)
+	mux.HandleFunc("/admin/embeddings", h.requireAuthPage(h.handleAdminEmbeddingsPage))
+	mux.HandleFunc("/admin_embeddings.js", h.handleAdminEmbeddingsJS)
 	mux.HandleFunc("/admin/database", h.requireAuthPage(h.handleAdminDatabasePage))
 	mux.HandleFunc("/admin_database.js", h.handleAdminDatabaseJS)
 
@@ -435,6 +443,10 @@ func (h *Handler) handleAdminDomainJS(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleAdminPageRankJS(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/javascript; charset=utf-8", adminPageRankJS)
+}
+
+func (h *Handler) handleAdminEmbeddingsJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminEmbeddingsJS)
 }
 
 func (h *Handler) handleAdminScheduleJS(w http.ResponseWriter, r *http.Request) {

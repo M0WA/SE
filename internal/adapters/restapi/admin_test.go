@@ -3373,6 +3373,30 @@ func TestHandleAdminPageRankPage_Unauthenticated_Redirects(t *testing.T) {
 	}
 }
 
+func TestHandleAdminEmbeddingsPage_GetServesPage(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/embeddings", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+		t.Errorf("expected html content type, got %q", ct)
+	}
+}
+
+func TestHandleAdminEmbeddingsPage_Unauthenticated_Redirects(t *testing.T) {
+	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	req := httptest.NewRequest(http.MethodGet, "/admin/embeddings", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Errorf("expected 303 redirect, got %d", rec.Code)
+	}
+}
+
 func TestHandleAdminPageRank_Success(t *testing.T) {
 	repo := &fakeAdminRepo{totalDocs: 5, pageRankMin: 0.1, pageRankMax: 0.9, pageRankAvg: 0.5}
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)

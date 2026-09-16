@@ -23,6 +23,7 @@
     <a href="/admin/settings" aria-current="page">Settings</a>
     <a href="/admin/search">Search</a>
     <a href="/admin/pagerank">PageRank</a>
+    <a href="/admin/embeddings">Embeddings</a>
     <a href="/admin/database">Database</a>
   </nav>
 
@@ -118,12 +119,7 @@
             <input id="embedding-rate-limit" class="field" type="number" step="1" min="1" placeholder="5">
           </div>
         </div>
-        <p class="tuning-hint">Default: hash. Switching providers takes effect only after every process (search, admin, crawl) is restarted -- unlike every other setting on this page, it isn't picked up live, since the embedding column's size is fixed at process startup. It also changes the vector space entirely: existing stored embeddings become meaningless to compare against newly computed ones until every document's embedding is recomputed below -- no re-crawl needed, since the indexed text itself doesn't change.</p>
-        <div class="form-row">
-          <button id="embedding-recompute-btn" type="button">Recompute embeddings</button>
-          <div id="embedding-recompute-status" class="panel-status"></div>
-          <div id="embedding-recompute-result"></div>
-        </div>
+        <p class="tuning-hint">Default: hash. Switching providers takes effect only after every process (search, admin, crawl) is restarted -- unlike every other setting on this page, it isn't picked up live, since the embedding column's size is fixed at process startup. It also changes the vector space entirely: existing stored embeddings become meaningless to compare against newly computed ones until every document's embedding is recomputed -- no re-crawl needed, since the indexed text itself doesn't change. See <a href="/admin/embeddings">Embeddings</a> to list available models or trigger a recompute.</p>
       </div>
 
       <div class="subpanel">
