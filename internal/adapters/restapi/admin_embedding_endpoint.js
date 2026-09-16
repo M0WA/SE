@@ -61,9 +61,16 @@
   // candidateBody is what a not-yet-saved (or being-edited) endpoint looks
   // like to the test-connection/list-models probes -- just the fields a
   // real Embed/ListModels call needs, independent of whether this form is
-  // in "new" or "edit" mode.
+  // in "new" or "edit" mode. id (blank for a brand new endpoint) lets the
+  // server fall back to the real stored API key when api_key is left blank
+  // here -- this form never re-populates that field with an already-saved
+  // endpoint's real value (see applyEndpoint), so without this, testing an
+  // endpoint the admin hasn't just retyped the key for would always send an
+  // empty one and fail with 401 regardless of whether the stored key
+  // actually works.
   function candidateBody() {
     return {
+      id: isNew ? '' : id,
       base_url: baseURLEl.value,
       api_key: apiKeyEl.value,
       model: modelEl.value,
@@ -127,7 +134,7 @@
         modelsStatusEl.textContent = 'No models reported -- either no base URL is set yet, or this endpoint does not support listing models.';
       } else {
         modelsStatusEl.textContent = r.models.length + ' model(s) available from this endpoint.';
-        r.models.forEach((m) => kvRow(modelsResultEl, 'Model', m));
+        r.models.forEach((m) => listItem(modelsResultEl, m));
       }
     } catch (err) {
       modelsStatusEl.textContent = 'Could not list models: ' + err.message;

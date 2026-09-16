@@ -1389,8 +1389,24 @@ components:
         Embed/ListModels call needs, independent of whether this candidate
         is ultimately saved as a new endpoint or an edit to an existing one.
       properties:
+        id:
+          type: string
+          description: >-
+            The already-saved endpoint this candidate is editing, if any --
+            blank for a brand new endpoint. Used only to resolve a blank
+            api_key to that endpoint's real stored key (see api_key's own
+            description); has no other effect. Absent/blank when this
+            candidate names no existing endpoint.
         base_url: { type: string, description: 'Blank means "nothing to probe" -- both endpoints return a no-op success rather than attempting a call.' }
-        api_key: { type: string }
+        api_key:
+          type: string
+          description: >-
+            Left blank when editing an already-saved endpoint whose key the
+            admin didn't retype -- the endpoint add/edit page never
+            re-populates this field with a stored key's real value, so a
+            blank here (with id set) falls back to that endpoint's actual
+            stored key rather than probing with no credentials at all. A
+            non-blank value here always wins over whatever's stored.
         model: { type: string }
         dimensions: { type: integer }
 

@@ -719,8 +719,13 @@ type modelLister interface {
 // handleAdminEmbeddingsModels and handleAdminEmbeddingsTest both probe
 // exactly this shape, so the admin's "Test connection"/"List models"
 // buttons on the endpoint add/edit subpage work against whatever's
-// currently typed into the form, before (or instead of) saving it.
+// currently typed into the form, before (or instead of) saving it. ID,
+// when set, names the already-saved endpoint this candidate is editing --
+// see resolveCandidateAPIKey, which uses it to fall back to the real
+// stored key when APIKey is left blank (the same "blank means unchanged"
+// convention embeddingEndpointRequest.APIKey already follows for saving).
 type embeddingCandidateRequest struct {
+	ID         string `json:"id"`
 	BaseURL    string `json:"base_url"`
 	APIKey     string `json:"api_key"`
 	Model      string `json:"model"`
@@ -729,6 +734,30 @@ type embeddingCandidateRequest struct {
 
 func (req embeddingCandidateRequest) toEndpoint() domain.EmbeddingHTTPEndpoint {
 	return domain.EmbeddingHTTPEndpoint{BaseURL: req.BaseURL, APIKey: req.APIKey, Model: req.Model, Dimensions: req.Dimensions}
+}
+
+// resolveCandidateAPIKey returns e with its APIKey resolved the same way
+// handleAdminUpdateEmbeddingEndpoint's save path already treats a blank
+// APIKey field: "the admin didn't retype it, not that they want to test
+// with no key at all." The endpoint add/edit page never echoes a stored
+// key's real value back into the form (see embeddingEndpointResponse), so
+// without this, clicking "Test connection"/"List available models" on an
+// already-saved endpoint without retyping its key always sent an empty
+// one -- a guaranteed 401 against the real API, regardless of whether the
+// actually-stored key works fine. A blank APIKey with no ID (a brand new,
+// not-yet-saved endpoint) or a lookup failure (deleted concurrently, or no
+// embeddingEndpoints store configured) leaves e unchanged -- the caller's
+// existing "no BaseURL, or the request as typed" behavior.
+func (h *Handler) resolveCandidateAPIKey(ctx context.Context, e domain.EmbeddingHTTPEndpoint, id string) domain.EmbeddingHTTPEndpoint {
+	if e.APIKey != "" || id == "" || h.embeddingEndpoints == nil {
+		return e
+	}
+	stored, err := h.embeddingEndpoints.GetEmbeddingEndpoint(ctx, id)
+	if err != nil {
+		return e
+	}
+	e.APIKey = h.decryptAPIKey(stored.APIKey)
+	return e
 }
 
 type adminEmbeddingModelsResponse struct {
@@ -765,7 +794,8 @@ func (h *Handler) handleAdminEmbeddingsModels(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusOK, adminEmbeddingModelsResponse{})
 		return
 	}
-	lister, ok := h.newEmbedder(req.toEndpoint()).(modelLister)
+	endpoint := h.resolveCandidateAPIKey(r.Context(), req.toEndpoint(), req.ID)
+	lister, ok := h.newEmbedder(endpoint).(modelLister)
 	if !ok {
 		writeJSON(w, http.StatusOK, adminEmbeddingModelsResponse{Error: "this provider doesn't support listing models"})
 		return
@@ -802,7 +832,8 @@ func (h *Handler) handleAdminEmbeddingsTest(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, http.StatusOK, adminEmbeddingTestResponse{Error: h.testEmbeddingConnectivity(r.Context(), req.toEndpoint())})
+	endpoint := h.resolveCandidateAPIKey(r.Context(), req.toEndpoint(), req.ID)
+	writeJSON(w, http.StatusOK, adminEmbeddingTestResponse{Error: h.testEmbeddingConnectivity(r.Context(), endpoint)})
 }
 
 // testEmbeddingConnectivity makes one real Embed call (via h.newEmbedder)
@@ -916,6 +947,24 @@ func (h *Handler) encryptAPIKey(apiKey string) string {
 		return apiKey
 	}
 	return enc
+}
+
+// decryptAPIKey reverses encryptAPIKey for a stored value -- used by
+// resolveCandidateAPIKey to recover an already-saved endpoint's real key
+// for a connectivity/model-list probe. A decryption failure (this
+// process's key is nil, wrong, or the data is corrupt) is logged and
+// returns apiKey unchanged, the same "fail visibly, never send silently
+// garbled ciphertext as a Bearer token" contract bootstrap.
+// DecryptEndpointAPIKey documents -- an unchanged (still-encrypted) value
+// simply fails the probe's real HTTP call with its own 401, rather than
+// this helper masking the failure.
+func (h *Handler) decryptAPIKey(apiKey string) string {
+	dec, err := settingscrypto.Decrypt(h.settingsEncryptionKey, apiKey)
+	if err != nil {
+		log.Printf("decrypting embedding endpoint API key: %v", err)
+		return apiKey
+	}
+	return dec
 }
 
 // handleAdminEmbeddingEndpoints lists (GET) or creates (POST) HTTP

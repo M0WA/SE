@@ -127,6 +127,24 @@ test('candidateBody reflects the form fields relevant to a connectivity/models p
   assert.equal(body.dimensions, 1024);
 });
 
+// candidateBody includes id in edit mode -- see resolveCandidateAPIKey in
+// admin.go, which uses it to fall back to the real stored API key when
+// api_key is left blank, since this form never re-populates that field with
+// an already-saved endpoint's actual value.
+test('candidateBody includes the endpoint id in edit mode', async () => {
+  loadFixture('ionos_bge_m3', async () => ({ ok: true, json: async () => baseEndpoint() }));
+  await flush();
+  const { candidateBody } = require('./admin_embedding_endpoint.js');
+  assert.equal(candidateBody().id, 'ionos_bge_m3');
+});
+
+test('candidateBody sends a blank id in "new" mode', async () => {
+  loadFixture('new');
+  await flush();
+  const { candidateBody } = require('./admin_embedding_endpoint.js');
+  assert.equal(candidateBody().id, '');
+});
+
 test('load() shows "Not found" and the error message on failure', async () => {
   loadFixture('ionos_bge_m3', async () => ({ ok: false, status: 404, text: async () => 'no such endpoint' }));
   await flush();
@@ -194,7 +212,10 @@ test('submitting reports the error message on failure', async () => {
   assert.equal(document.getElementById('endpoint-status').textContent, 'Could not save: dimensions must be positive');
 });
 
-test('clicking "List available models" renders each returned model', async () => {
+// Each model renders as a plain .list-item, not a kvRow -- a repeated
+// "Model" key column next to every entry would read as a redundant table
+// for what is really just a flat list of names.
+test('clicking "List available models" renders each returned model as a plain list item', async () => {
   loadFixture('ionos_bge_m3', async () => ({ ok: true, json: async () => baseEndpoint() }));
   await flush();
   global.fetch = async (url) => {
@@ -207,8 +228,32 @@ test('clicking "List available models" renders each returned model', async () =>
   await flush();
   await flush();
   assert.equal(document.getElementById('endpoint-models-status').textContent, '2 model(s) available from this endpoint.');
-  const resultText = document.getElementById('endpoint-models-result').textContent;
-  assert.equal(resultText.includes('BAAI/bge-m3'), true);
+  const resultEl = document.getElementById('endpoint-models-result');
+  const items = Array.from(resultEl.querySelectorAll('.list-item'));
+  assert.deepEqual(items.map((i) => i.textContent), ['BAAI/bge-m3', 'text-embedding-3-small']);
+  assert.equal(resultEl.querySelectorAll('.kv-row').length, 0);
+});
+
+// The endpoint edit page never re-populates the API key field with an
+// already-saved endpoint's real value, so testing/listing models without
+// retyping it must still send the request -- the server (resolveCandidateAPIKey)
+// is what falls back to the real stored key via the id these requests carry.
+test('clicking "List available models" sends the endpoint id alongside a blank api_key', async () => {
+  loadFixture('ionos_bge_m3', async () => ({ ok: true, json: async () => baseEndpoint() }));
+  await flush();
+  let posted;
+  global.fetch = async (url, opts) => {
+    if (url === '/admin/api/embeddings/models') {
+      posted = JSON.parse(opts.body);
+      return { ok: true, json: async () => ({ models: [] }) };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  document.getElementById('endpoint-list-models-btn').dispatchEvent(new window.Event('click'));
+  await flush();
+  await flush();
+  assert.equal(posted.id, 'ionos_bge_m3');
+  assert.equal(posted.api_key, '');
 });
 
 test('clicking "List available models" shows the endpoint-reported error', async () => {
@@ -277,6 +322,24 @@ test('clicking "Test connection" reports success', async () => {
   await flush();
   await flush();
   assert.equal(document.getElementById('endpoint-test-status').textContent, 'Connection succeeded.');
+});
+
+test('clicking "Test connection" sends the endpoint id alongside a blank api_key', async () => {
+  loadFixture('ionos_bge_m3', async () => ({ ok: true, json: async () => baseEndpoint() }));
+  await flush();
+  let posted;
+  global.fetch = async (url, opts) => {
+    if (url === '/admin/api/embeddings/test') {
+      posted = JSON.parse(opts.body);
+      return { ok: true, json: async () => ({}) };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  document.getElementById('endpoint-test-btn').dispatchEvent(new window.Event('click'));
+  await flush();
+  await flush();
+  assert.equal(posted.id, 'ionos_bge_m3');
+  assert.equal(posted.api_key, '');
 });
 
 test('clicking "Test connection" reports a failure', async () => {

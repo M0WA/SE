@@ -558,6 +558,19 @@ section.panel:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
   font-size: 0.92rem;
 }
 
+/* .list-item: a flat list of same-kind values (e.g. an embedding
+   endpoint's reported model names) -- kvRow's two-column key/value
+   treatment reads as a redundant table when every row would repeat the
+   same label, so this is a single column instead. */
+.list-item {
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--rule);
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 0.92rem;
+}
+
+.list-item:last-child { border-bottom: none; }
+
 /* Settings page: read-only summary tiles + collapsible groups (see
    admin_settings.html/admin_settings.js). Tiles show the current
    configuration at a glance; groups replace the old flat stack of

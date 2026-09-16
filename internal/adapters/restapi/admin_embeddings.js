@@ -4,15 +4,26 @@
   const recomputeStatusEl = document.getElementById('embeddings-recompute-status');
   const recomputeResultEl = document.getElementById('embeddings-recompute-result');
 
-  // activeProviderLabel resolves op.embedding_provider (either the literal
-  // "hash" or a configured HTTP endpoint's ID) against the fetched endpoint
-  // list to a human name -- falling back to the raw ID if it names an
-  // endpoint that's been deleted since (self-heals on the next settings
-  // sync, see domain.ReconcileActiveProvider).
-  function activeProviderLabel(providerID, endpoints) {
+  // providerLabel resolves a provider id (either the literal "hash" or a
+  // configured HTTP endpoint's ID) against the fetched endpoint list to a
+  // human name -- falling back to the raw ID if it names an endpoint
+  // that's been deleted since (self-heals on the next settings sync, see
+  // domain.ReconcileSearchWeights).
+  function providerLabel(providerID, endpoints) {
     if (providerID === 'hash') return 'Hash (dependency-free)';
     const match = endpoints.find((e) => e.id === providerID);
     return match ? match.name + ' (' + match.id + ')' : providerID;
+  }
+
+  // activeSearchWeightsLabel summarizes op.embedding_search_weights (see
+  // domain.OperationalSettingsValues.EmbeddingSearchWeights) as "name
+  // (weight)" pairs, one per provider actually contributing to the
+  // blended semantic score -- a provider absent or at weight <= 0 doesn't
+  // appear, same as it not contributing to search at all.
+  function activeSearchWeightsLabel(weights, endpoints) {
+    const active = Object.entries(weights || {}).filter(([, w]) => w > 0);
+    if (active.length === 0) return 'none';
+    return active.map(([id, w]) => providerLabel(id, endpoints) + ' (' + w + ')').join(', ');
   }
 
   function renderConfig(op, endpoints) {
@@ -21,7 +32,7 @@
     if (op.embedding_hash_enabled) enabled.push('hash');
     endpoints.filter((e) => e.enabled).forEach((e) => enabled.push(e.name));
     kvRow(configEl, 'Enabled providers', enabled.length ? enabled.join(', ') : 'none');
-    kvRow(configEl, 'Active for search', activeProviderLabel(op.embedding_provider, endpoints));
+    kvRow(configEl, 'Active for search', activeSearchWeightsLabel(op.embedding_search_weights, endpoints));
     kvRow(configEl, 'HTTP endpoints configured', String(endpoints.length));
     kvRow(configEl, 'Title weight', op.embedding_title_weight + ' (0 = body only, 1 = title only)');
   }
@@ -105,7 +116,7 @@
   // a browser's <script> tag, so this is a no-op there. See admin_embeddings.test.js.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-      activeProviderLabel, renderConfig, loadConfig,
+      providerLabel, activeSearchWeightsLabel, renderConfig, loadConfig,
       renderRecomputeStatus, loadRecomputeStatus,
     };
   }
