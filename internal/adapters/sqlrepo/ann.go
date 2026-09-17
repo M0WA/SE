@@ -218,18 +218,78 @@ func (r *Repository) enablePgVectorExtension(ctx context.Context) error {
 	return nil
 }
 
+// queryRower is satisfied by both *sql.DB and *sql.Tx -- just enough of
+// their shared surface for vectorColumnType to run identically whether
+// it's called standalone or (as ensureVectorColumn now always does) from
+// inside an already-open transaction, so the type/dims read and the
+// migration decision made from it are guaranteed to see the same
+// consistent catalog snapshot under the same advisory lock.
+type queryRower interface {
+	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
+}
+
 // ensureVectorColumn adds documents.embedding_vector_<provider> sized to
 // dims, the same way migrateDocumentColumns adds host/version/crawled_at/
 // etc to a documents table that predates them -- except this one is
 // Postgres-only (pgvector's "halfvec" type doesn't exist on SQLite/MySQL)
 // and needs the embedder's Dimensions() at call time, so it can't be part
 // of the static, dialect-branched CreateSchemaSQL list every dialect
-// already returns. "ADD COLUMN IF NOT EXISTS" plus this function's own
-// tolerance for an "already exists" race covers the same concurrent-
-// startup scenario ensureHostIndex/ensureCrawledAtIndex guard against.
+// already returns. "ADD COLUMN IF NOT EXISTS" plus isAlreadyExistsError
+// covers the brand-new-column concurrent-startup race the same way
+// ensureHostIndex/ensureCrawledAtIndex's "IF NOT EXISTS" does for theirs --
+// but that comparison stops applying the moment a mismatched pre-existing
+// column needs migrating (below), because unlike CREATE INDEX IF NOT
+// EXISTS, "read the existing type, then maybe DROP, then ADD" is a
+// genuine check-then-act sequence: nothing about it is idempotent under a
+// second concurrent caller. cmd/search, cmd/admin and cmd/crawl are three
+// separate processes that each call EnableANN independently at their own
+// startup against the same database, so without serialization one process
+// could DROP COLUMN a column (and its index) that a second process already
+// finished recreating and is actively querying via TopSemanticMatches/
+// SaveDocument -- each process's annState is purely in-memory and
+// per-process, so the loser would have no way to notice its column got
+// yanked out from under it mid-flight.
+//
+// The fix: run the whole read-then-maybe-drop-then-add sequence inside one
+// transaction, guarded by a transaction-scoped Postgres advisory lock
+// (pg_advisory_xact_lock) keyed on provider, acquired as the very first
+// statement. This serializes every process's ensureVectorColumn call for
+// the same provider -- whichever one gets there first fully completes its
+// migration (or no-op) before any other is allowed to even read the
+// column's current type, so no process ever observes (or drops) a column
+// that another is mid-migration on.
+//
+// Deliberately pg_advisory_xact_lock, not the session-level
+// pg_advisory_lock/pg_advisory_unlock pair: those would have to be run as
+// two separate r.db.ExecContext calls directly against r.db (a *sql.DB
+// connection pool), and database/sql gives no guarantee those two calls
+// land on the same physical connection. A session-level advisory lock is
+// tied to whichever specific connection acquired it, so an unlock issued
+// on a different pooled connection just silently returns false (not an
+// error) -- the lock never actually releases and is leaked forever on
+// whatever connection happened to hold it. pg_advisory_xact_lock instead
+// ties the lock to the transaction, and a *sql.Tx is always pinned to one
+// physical connection for its entire lifetime, so this is the only variant
+// that's safe to use through a pooled *sql.DB: it's guaranteed to acquire
+// and release on the exact same connection, and it auto-releases on either
+// COMMIT or ROLLBACK with no separate unlock call to ever forget.
 func (r *Repository) ensureVectorColumn(ctx context.Context, provider string, dims int) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting vector column migration transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// hashtext(...) folds the provider string down to the int4/int8 key
+	// pg_advisory_xact_lock needs; keying by provider (rather than one
+	// global lock for every provider) lets independent providers migrate
+	// concurrently without contending on each other's unrelated column.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('sqlrepo:vector_column:'||$1))`, provider); err != nil {
+		return fmt.Errorf("acquiring vector column migration lock: %w", err)
+	}
+
 	col := vectorColumnNameFor(provider)
-	existingDims, existingType, found, err := r.vectorColumnType(ctx, provider)
+	existingDims, existingType, found, err := vectorColumnType(ctx, tx, provider)
 	if err != nil {
 		return err
 	}
@@ -245,19 +305,21 @@ func (r *Repository) ensureVectorColumn(ctx context.Context, provider string, di
 		// recreate it fresh; backfillVectorColumn repopulates every row
 		// from document_embeddings, which SaveDocument/UpdateEmbedding
 		// always keep current regardless of this column's own state -- so
-		// nothing is actually lost.
-		if _, err := r.db.ExecContext(ctx, `DROP INDEX IF EXISTS `+vectorIndexNameFor(provider)); err != nil {
+		// nothing is actually lost. Safe to do here, inside the locked
+		// transaction, because no other process can be mid-migration on
+		// this same provider's column right now.
+		if _, err := tx.ExecContext(ctx, `DROP INDEX IF EXISTS `+vectorIndexNameFor(provider)); err != nil {
 			return fmt.Errorf("dropping stale pgvector index: %w", err)
 		}
-		if _, err := r.db.ExecContext(ctx, `ALTER TABLE documents DROP COLUMN IF EXISTS `+col); err != nil {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE documents DROP COLUMN IF EXISTS `+col); err != nil {
 			return fmt.Errorf("dropping mismatched pgvector column: %w", err)
 		}
 	}
 	ddl := fmt.Sprintf(`ALTER TABLE documents ADD COLUMN IF NOT EXISTS %s halfvec(%d)`, col, dims)
-	if _, err := r.db.ExecContext(ctx, ddl); err != nil && !isAlreadyExistsError(err) {
+	if _, err := tx.ExecContext(ctx, ddl); err != nil && !isAlreadyExistsError(err) {
 		return err
 	}
-	return nil
+	return tx.Commit()
 }
 
 // vectorColumnType reports the dimension and pgvector type name (e.g.
@@ -271,15 +333,22 @@ func (r *Repository) ensureVectorColumn(ctx context.Context, provider string, di
 // dimension count hasn't changed. found is false when the column doesn't
 // exist yet at all (a fresh database, or ANN never having been enabled
 // before for this provider), which is not an error.
-func (r *Repository) vectorColumnType(ctx context.Context, provider string) (dims int, typeName string, found bool, err error) {
-	const q = `
+//
+// Takes a queryRower rather than using r.db directly so ensureVectorColumn
+// can call it against its own *sql.Tx -- reading the column's current
+// type must happen inside the same locked transaction that decides
+// whether to migrate it, or the read and the act could still see
+// different states of the world (the whole point of the advisory lock
+// above).
+func vectorColumnType(ctx context.Context, q queryRower, provider string) (dims int, typeName string, found bool, err error) {
+	const query = `
 		SELECT format_type(a.atttypid, a.atttypmod)
 		FROM pg_attribute a
 		WHERE a.attrelid = 'documents'::regclass
 		  AND a.attname = $1
 		  AND NOT a.attisdropped`
 	var formatted string
-	if err := r.db.QueryRowContext(ctx, q, vectorColumnNameFor(provider)).Scan(&formatted); err != nil {
+	if err := q.QueryRowContext(ctx, query, vectorColumnNameFor(provider)).Scan(&formatted); err != nil {
 		if err == sql.ErrNoRows {
 			return 0, "", false, nil
 		}

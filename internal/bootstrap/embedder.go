@@ -20,12 +20,13 @@ import (
 // anything itself.
 func NewHTTPEmbedder(e domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider {
 	return httpembed.New(httpembed.Config{
-		BaseURL:         e.BaseURL,
-		APIKey:          e.APIKey,
-		Model:           e.Model,
-		Dimensions:      e.Dimensions,
-		ChunkSizeTokens: e.ChunkSizeTokens,
-		TokenizeURL:     e.TokenizeURL,
+		BaseURL:            e.BaseURL,
+		APIKey:             e.APIKey,
+		Model:              e.Model,
+		Dimensions:         e.Dimensions,
+		ChunkSizeTokens:    e.ChunkSizeTokens,
+		TokenizeURL:        e.TokenizeURL,
+		RateLimitPerSecond: e.RateLimitPerSecond,
 	})
 }
 
@@ -122,17 +123,4 @@ func LoadEmbeddingEndpoints(ctx context.Context, store ports.EmbeddingEndpointSt
 		return nil
 	}
 	return DecryptEndpointAPIKeys(endpoints, settingsEncryptionKey)
-}
-
-// EmbedderRateLimits reduces endpoints to a provider ID -> RateLimitPerSecond
-// map -- the shape application.RunEmbeddingRecomputeJob and
-// application.NewSQLCrawlerService need to pace each provider's Embed calls
-// independently. The built-in hash provider is simply absent (treated as
-// unlimited, same as a provider with RateLimitPerSecond <= 0).
-func EmbedderRateLimits(endpoints []domain.EmbeddingHTTPEndpoint) map[string]float64 {
-	limits := make(map[string]float64, len(endpoints))
-	for _, e := range endpoints {
-		limits[e.ID] = e.RateLimitPerSecond
-	}
-	return limits
 }

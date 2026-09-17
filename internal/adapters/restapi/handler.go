@@ -151,17 +151,11 @@ type Handler struct {
 	// endpoints; without it, those endpoints report themselves unavailable.
 	contentDedupRepo ports.ContentDedupRepository
 	embedders        map[string]ports.EmbeddingProvider
-	// embedderRateLimits gives each provider in embedders its own
-	// requests-per-second cap -- see application.RunEmbeddingRecomputeJob's
-	// rateLimits parameter. Built once at startup from the same enabled
-	// domain.EmbeddingHTTPEndpoint list embedders itself was built from
-	// (bootstrap.NewEmbedders' caller).
-	embedderRateLimits map[string]float64
-	settings           *domain.TuningSettings
-	opSettings         *domain.OperationalSettings
-	overrides          *domain.RankingOverrides
-	settingsStore      ports.SettingsStore
-	scheduledCrawls    ports.ScheduledCrawlStore
+	settings         *domain.TuningSettings
+	opSettings       *domain.OperationalSettings
+	overrides        *domain.RankingOverrides
+	settingsStore    ports.SettingsStore
+	scheduledCrawls  ports.ScheduledCrawlStore
 	// embeddingEndpoints backs the admin API's HTTP embedding endpoint CRUD
 	// (GET/POST/PATCH/DELETE /admin/api/embeddings/endpoints...) -- set on
 	// admin-server only, the same *sqlrepo.Repository ScheduledCrawls uses.
@@ -240,13 +234,10 @@ type Config struct {
 	// provider this recompute calls Embed against -- the same map
 	// bootstrap.NewEmbedders built for this process at startup, so a
 	// recompute always refreshes every enabled provider's vectors, not
-	// just whichever is currently active for search. EmbedderRateLimits
-	// gives each of those providers its own requests-per-second cap -- see
-	// bootstrap.NewEmbedders' caller for how it's built from the same
-	// enabled domain.EmbeddingHTTPEndpoint list.
-	EmbeddingRepo      ports.EmbeddingRepository
-	Embedders          map[string]ports.EmbeddingProvider
-	EmbedderRateLimits map[string]float64
+	// just whichever is currently active for search. Each provider's own
+	// rate limit is enforced inside its own httpembed.Embedder, not here.
+	EmbeddingRepo ports.EmbeddingRepository
+	Embedders     map[string]ports.EmbeddingProvider
 	// ContentDedupRepo, when set (admin-server only, its own
 	// *sqlrepo.Repository -- same reasoning as PageRank above), backs the
 	// content-dedup admin page's status display and "recompute now" button;
@@ -312,7 +303,6 @@ func New(cfg Config) *Handler {
 		embeddingRepo:         cfg.EmbeddingRepo,
 		contentDedupRepo:      cfg.ContentDedupRepo,
 		embedders:             cfg.Embedders,
-		embedderRateLimits:    cfg.EmbedderRateLimits,
 		settings:              cfg.Settings,
 		opSettings:            cfg.OpSettings,
 		overrides:             cfg.Overrides,

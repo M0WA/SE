@@ -17,7 +17,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // requestTimeout bounds a single embeddings call -- generous enough for a
@@ -120,6 +122,59 @@ func waitForRetry(ctx context.Context, wait time.Duration) error {
 	}
 }
 
+// rateLimiter paces real HTTP requests this package makes against a single
+// configured endpoint (see Config.RateLimitPerSecond) so their combined
+// rate -- across every chunk of every document, not just once per Embed
+// call -- respects the endpoint's own requests-per-second cap. This is
+// the same "reserve the next available slot, then sleep outside the
+// lock" algorithm application.embedRateLimiter used before rate limiting
+// moved down into this package (chunking meant a single Embed call could
+// already fire many real HTTP requests internally, so pacing only at the
+// application layer -- once per Embed call -- silently let a chunked
+// document's whole burst of requests fire back-to-back unpaced). The zero
+// value is ready to use.
+type rateLimiter struct {
+	mu   sync.Mutex
+	next time.Time
+}
+
+// wait blocks until this call's reserved slot in the timeline arrives, or
+// returns early if ctx is cancelled first -- an early return here just
+// means the actual HTTP call fails fast against the same cancelled
+// context instead. ratePerSecond <= 0 disables pacing entirely -- a
+// provider configured with no rate limit of its own (e.g. a local Ollama
+// server) passes 0 here.
+//
+// Each call atomically reserves the next available slot (now, or right
+// after whichever slot was most recently reserved, whichever is later)
+// before sleeping outside the lock -- so concurrent callers (embedChunk
+// calls made across concurrently-running crawl jobs, or a chunked
+// document's own sequential chunk/tokenize calls) queue up correctly
+// spaced regardless of goroutine scheduling order, rather than racing to
+// read the same "last call time" and under-pacing.
+func (r *rateLimiter) wait(ctx context.Context, ratePerSecond float64) {
+	if ratePerSecond <= 0 {
+		return
+	}
+	interval := time.Second / time.Duration(ratePerSecond)
+
+	r.mu.Lock()
+	now := time.Now()
+	start := r.next
+	if start.Before(now) {
+		start = now
+	}
+	r.next = start.Add(interval)
+	r.mu.Unlock()
+
+	if wait := time.Until(start); wait > 0 {
+		select {
+		case <-ctx.Done():
+		case <-time.After(wait):
+		}
+	}
+}
+
 // Config configures a new Embedder. BaseURL and APIKey are read verbatim
 // from the admin-configured EmbeddingHTTPBaseURL/EmbeddingHTTPAPIKey
 // settings; APIKey is never logged by this package.
@@ -153,6 +208,13 @@ type Config struct {
 	// exactly.
 	ChunkSizeTokens int
 	TokenizeURL     string
+	// RateLimitPerSecond mirrors domain.EmbeddingHTTPEndpoint's same-named
+	// field: the maximum rate of real HTTP requests (both embeddings and,
+	// when TokenizeURL is set, tokenize calls) this Embedder issues
+	// against its configured endpoint. <=0 (the zero value) disables
+	// pacing entirely -- a local provider with no rate limit of its own
+	// (e.g. Ollama) leaves this unset.
+	RateLimitPerSecond float64
 }
 
 // Embedder calls an OpenAI-compatible POST {base_url}/embeddings endpoint:
@@ -168,6 +230,13 @@ type Embedder struct {
 	rateLimitBackoff    time.Duration
 	chunkSizeTokens     int
 	tokenizeURL         string
+	// rateLimitPerSecond is Config.RateLimitPerSecond, read by rate.wait
+	// on every real HTTP request embedChunk/countTokens make (see their
+	// own call sites) -- rate itself is always non-nil (New constructs
+	// it unconditionally), so a <=0 rateLimitPerSecond just means every
+	// rate.wait call is a no-op, not that rate is absent.
+	rateLimitPerSecond float64
+	rate               *rateLimiter
 }
 
 func New(cfg Config) *Embedder {
@@ -193,6 +262,8 @@ func New(cfg Config) *Embedder {
 		rateLimitBackoff:    backoff,
 		chunkSizeTokens:     cfg.ChunkSizeTokens,
 		tokenizeURL:         cfg.TokenizeURL,
+		rateLimitPerSecond:  cfg.RateLimitPerSecond,
+		rate:                &rateLimiter{},
 	}
 }
 
@@ -245,6 +316,11 @@ func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
 // with backoff (see isRateLimitStatus/retryDelay) up to rateLimitMaxRetries
 // times before its error is finally returned.
 func (e *Embedder) embedChunk(ctx context.Context, text string) ([]float32, error) {
+	// Paced once per chunk, before the first attempt only -- a retried
+	// attempt (429/529) is already paced by embedChunk's own exponential
+	// backoff below, so pacing it again here would double-wait.
+	e.rate.wait(ctx, e.rateLimitPerSecond)
+
 	reqBody, err := json.Marshal(embeddingRequest{Input: text, Model: e.model})
 	if err != nil {
 		return nil, fmt.Errorf("httpembed: encoding request: %w", err)
@@ -317,11 +393,15 @@ func (e *Embedder) embedOnce(ctx context.Context, reqBody []byte) ([]float32, *h
 
 // chunkText splits text into pieces for Embed to embed separately (see
 // combineVectors), each estimated -- or, with tokenizeURL configured,
-// confirmed -- to be at or under e.chunkSizeTokens tokens. Breaks only on
-// whitespace, so a chunk never splits a word in half. Returns text
-// unchanged as the only element when chunkSizeTokens is 0 (chunking
-// disabled), text has no whitespace to split on at all, or text already
-// fits in one chunk.
+// confirmed -- to be at or under e.chunkSizeTokens tokens. Breaks on
+// whitespace where possible, so a chunk never splits a word in half;
+// a single "word" (strings.Fields' definition) that's itself over budget
+// -- CJK text with no ASCII whitespace at all, or one oversized token
+// like a long URL/base64 blob -- is instead split on rune boundaries (see
+// splitByRuneBudget), never raw bytes, so a multi-byte UTF-8 sequence is
+// never severed. Returns text unchanged as the only element when
+// chunkSizeTokens is 0 (chunking disabled) or text already fits in one
+// chunk.
 func (e *Embedder) chunkText(ctx context.Context, text string) ([]string, error) {
 	if e.chunkSizeTokens <= 0 {
 		return []string{text}, nil
@@ -343,9 +423,29 @@ func (e *Embedder) chunkText(ctx context.Context, text string) ([]string, error)
 		}
 	}
 	for _, w := range words {
-		wLen := len(w) + 1 // +1 for the joining space
+		wRunes := utf8.RuneCountInString(w)
+		wLen := wRunes + 1 // +1 for the joining space
 		if currentLen > 0 && currentLen+wLen > charBudget {
 			flush()
+		}
+		if wRunes > charBudget {
+			// This single "word" (strings.Fields' definition -- a run of
+			// non-whitespace) is itself over budget on its own, with no
+			// whitespace inside it to split on: CJK text with no ASCII
+			// whitespace at all collapses to exactly one such "word" for
+			// its entire length, and a single oversized token (a long
+			// URL/base64 blob) is one "word" regardless of length either
+			// way. Letting it sail through unsplit would silently
+			// reproduce the exact context-length failure chunking exists
+			// to prevent. Flush whatever's already pending first (this
+			// oversized word starts its own chunk(s), never merged with
+			// unrelated pending text), then split the word itself on rune
+			// boundaries -- never raw bytes, which could sever a
+			// multi-byte UTF-8 sequence -- and append each piece as its
+			// own chunk.
+			flush()
+			chunks = append(chunks, splitByRuneBudget(w, charBudget)...)
+			continue
 		}
 		current = append(current, w)
 		currentLen += wLen
@@ -373,14 +473,18 @@ func (e *Embedder) chunkText(ctx context.Context, text string) ([]string, error)
 
 // fitChunkToTokenBudget ensures text fits within e.chunkSizeTokens tokens
 // per e.tokenizeURL's own exact count, recursively splitting it into two
-// halves (by words) and re-verifying each when it doesn't -- rather than
-// trimming and discarding the excess, which would silently drop part of
-// the document from ever being embedded. Bounded by
-// maxTokenizeSplitDepth so a pathological chunk that still measures over
-// budget after repeated halving can't recurse forever; it's used as one
-// (possibly still slightly over-budget) chunk at that point rather than
-// looping indefinitely, same as a chunk with no whitespace left to split
-// on (len(words) < 2).
+// halves and re-verifying each when it doesn't -- rather than trimming
+// and discarding the excess, which would silently drop part of the
+// document from ever being embedded. Prefers splitting on words
+// (strings.Fields), falling back to splitting by rune count when there's
+// no whitespace left to split on (CJK text, or a single oversized token
+// like a long URL/base64 blob) -- giving up in that case would silently
+// reproduce the exact context-length failure chunking exists to prevent,
+// for precisely the case a real multilingual/binary-ish input would hit.
+// Both paths are bounded by maxTokenizeSplitDepth so a pathological chunk
+// that still measures over budget after repeated halving can't recurse
+// forever; it's used as one (possibly still slightly over-budget) chunk
+// at that point rather than looping indefinitely.
 func (e *Embedder) fitChunkToTokenBudget(ctx context.Context, text string, depth int) ([]string, error) {
 	count, err := e.countTokens(ctx, text)
 	if err != nil {
@@ -391,7 +495,28 @@ func (e *Embedder) fitChunkToTokenBudget(ctx context.Context, text string, depth
 	}
 	words := strings.Fields(text)
 	if len(words) < 2 {
-		return []string{text}, nil
+		// No whitespace left to split on -- CJK text, or a single
+		// oversized token that already made it this far (e.g.
+		// chunkText's own rune-budget split still measured over budget
+		// per the exact tokenizer). Rather than giving up and shipping
+		// text unsplit, fall back to splitting by rune count in half:
+		// still bounded by the same maxTokenizeSplitDepth as the
+		// word-based path above, so a pathological input still
+		// terminates rather than recursing forever.
+		runes := []rune(text)
+		if len(runes) < 2 {
+			return []string{text}, nil
+		}
+		mid := len(runes) / 2
+		left, err := e.fitChunkToTokenBudget(ctx, string(runes[:mid]), depth+1)
+		if err != nil {
+			return nil, err
+		}
+		right, err := e.fitChunkToTokenBudget(ctx, string(runes[mid:]), depth+1)
+		if err != nil {
+			return nil, err
+		}
+		return append(left, right...), nil
 	}
 	mid := len(words) / 2
 	left, err := e.fitChunkToTokenBudget(ctx, strings.Join(words[:mid], " "), depth+1)
@@ -403,6 +528,31 @@ func (e *Embedder) fitChunkToTokenBudget(ctx context.Context, text string, depth
 		return nil, err
 	}
 	return append(left, right...), nil
+}
+
+// splitByRuneBudget splits s into consecutive pieces of at most maxRunes
+// runes each -- used by chunkText to split a single oversized "word" (no
+// whitespace inside it, so word-based splitting can't shrink it) and by
+// fitChunkToTokenBudget as its own no-whitespace-left fallback. Splits on
+// rune boundaries via []rune(s) slicing, never raw byte offsets, so a
+// multi-byte UTF-8 sequence is never severed mid-character.
+func splitByRuneBudget(s string, maxRunes int) []string {
+	if maxRunes <= 0 {
+		return []string{s}
+	}
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return []string{s}
+	}
+	pieces := make([]string, 0, (len(runes)+maxRunes-1)/maxRunes)
+	for start := 0; start < len(runes); start += maxRunes {
+		end := start + maxRunes
+		if end > len(runes) {
+			end = len(runes)
+		}
+		pieces = append(pieces, string(runes[start:end]))
+	}
+	return pieces
 }
 
 // tokenizeRequest/tokenizeResponse mirror vLLM's own POST /tokenize
@@ -426,6 +576,8 @@ type tokenizeResponse struct {
 // tokenizer endpoint should surface as a clear failure rather than
 // silently stall Embed.
 func (e *Embedder) countTokens(ctx context.Context, text string) (int, error) {
+	e.rate.wait(ctx, e.rateLimitPerSecond)
+
 	reqBody, err := json.Marshal(tokenizeRequest{Model: e.model, Prompt: text})
 	if err != nil {
 		return 0, fmt.Errorf("httpembed: encoding tokenize request: %w", err)

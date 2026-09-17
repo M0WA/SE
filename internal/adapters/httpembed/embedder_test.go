@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"searchengine/internal/adapters/httpembed"
 )
@@ -577,6 +579,117 @@ func TestListModels_RetriesOn429ThenSucceeds(t *testing.T) {
 	}
 }
 
+// TestEmbedder_RateLimitPacesChunkRequests proves fix 3: pacing now lives
+// inside httpembed itself, so it applies to every real HTTP request a
+// single Embed call makes internally -- not just once per Embed call at
+// the application layer (which chunking made insufficient, since one
+// Embed call can fire many real embeddings requests). A small
+// ChunkSizeTokens forces multiple chunks, each its own embeddings POST;
+// with RateLimitPerSecond configured, consecutive requests' arrival times
+// at the fake server must be spaced apart by at least the configured
+// interval.
+func TestEmbedder_RateLimitPacesChunkRequests(t *testing.T) {
+	var mu sync.Mutex
+	var arrivals []time.Time
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		arrivals = append(arrivals, time.Now())
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1, 0}}},
+		})
+	}))
+	defer srv.Close()
+
+	// Same one-word-per-chunk shape as TestEmbedder_ChunksLongTextAndMeanPoolsVectors:
+	// ChunkSizeTokens=2 -> 6-character budget, each 5-char word using
+	// exactly the whole budget on its own (so two never pack together) --
+	// 3 chunks, 3 real embeddings requests. RateLimitPerSecond=20 -> 50ms
+	// minimum spacing between them.
+	e := httpembed.New(httpembed.Config{
+		BaseURL: srv.URL, Dimensions: 2, ChunkSizeTokens: 2, RateLimitPerSecond: 20,
+	})
+	if _, err := e.Embed(context.Background(), "aaaaa bbbbb ccccc"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(arrivals) != 3 {
+		t.Fatalf("expected 3 chunked embeddings requests, got %d", len(arrivals))
+	}
+	const wantMinGap = 40 * time.Millisecond // 50ms configured, with slack for scheduling jitter
+	for i := 1; i < len(arrivals); i++ {
+		if gap := arrivals[i].Sub(arrivals[i-1]); gap < wantMinGap {
+			t.Errorf("expected requests %d and %d spaced at least %v apart, got %v", i-1, i, wantMinGap, gap)
+		}
+	}
+}
+
+// TestEmbedder_RateLimitZeroDisablesPacing proves RateLimitPerSecond's
+// zero value (the common case -- a local provider with no rate limit of
+// its own) never adds pacing: the same 3-chunk request burst as above
+// must complete near-instantly rather than waiting between requests.
+func TestEmbedder_RateLimitZeroDisablesPacing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1, 0}}},
+		})
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 2, ChunkSizeTokens: 2})
+	start := time.Now()
+	if _, err := e.Embed(context.Background(), "aaaaa bbbbb ccccc"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Errorf("expected no pacing at all with RateLimitPerSecond unset, took %v across 3 chunks", elapsed)
+	}
+}
+
+// TestEmbedder_RateLimitPacesTokenizeRequests proves the pacer also
+// covers countTokens -- the tokenize verification step chunking makes
+// when TokenizeURL is configured is a real HTTP request too, and must be
+// paced the same as an embeddings request.
+func TestEmbedder_RateLimitPacesTokenizeRequests(t *testing.T) {
+	embedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1, 0}}},
+		})
+	}))
+	defer embedSrv.Close()
+
+	var mu sync.Mutex
+	var arrivals []time.Time
+	tokenizeSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		arrivals = append(arrivals, time.Now())
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"count": 1})
+	}))
+	defer tokenizeSrv.Close()
+
+	// Same char-chunk shape as TestEmbedder_ChunkingPacksMultipleShortWordsPerChunk:
+	// "aa bb cc dd ee ff" -> 2 char-chunks -> 2 tokenize verification
+	// calls, one per chunk.
+	e := httpembed.New(httpembed.Config{
+		BaseURL: embedSrv.URL, Dimensions: 2, ChunkSizeTokens: 4, TokenizeURL: tokenizeSrv.URL, RateLimitPerSecond: 20,
+	})
+	if _, err := e.Embed(context.Background(), "aa bb cc dd ee ff"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(arrivals) != 2 {
+		t.Fatalf("expected 2 tokenize requests, got %d", len(arrivals))
+	}
+	if gap := arrivals[1].Sub(arrivals[0]); gap < 40*time.Millisecond {
+		t.Errorf("expected the 2 tokenize requests spaced at least ~50ms apart, got %v", gap)
+	}
+}
+
 func containsAll(s string, substrs ...string) bool {
 	for _, sub := range substrs {
 		if !strings.Contains(s, sub) {
@@ -638,11 +751,11 @@ func TestEmbedder_ChunksLongTextAndMeanPoolsVectors(t *testing.T) {
 	defer srv.Close()
 
 	// ChunkSizeTokens=2, approxCharsPerToken=3 -> a 6-character budget per
-	// chunk. Each word below is 10 characters (over budget on its own), so
-	// the first word in every chunk is always accepted regardless (a chunk
-	// is never left empty just because one word doesn't fit), giving
-	// exactly one word per chunk here -- three words, three chunks.
-	text := "aaaaaaaaaa bbbbbbbbbb cccccccccc"
+	// chunk. Each word below is exactly 5 characters -- under budget on
+	// its own (so it's never itself split), but two together (5+1+5=11)
+	// don't fit, giving exactly one word per chunk here -- three words,
+	// three chunks.
+	text := "aaaaa bbbbb ccccc"
 	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 2, ChunkSizeTokens: 2})
 	vec, err := e.Embed(context.Background(), text)
 	if err != nil {
@@ -651,7 +764,7 @@ func TestEmbedder_ChunksLongTextAndMeanPoolsVectors(t *testing.T) {
 	if len(inputs) != 3 {
 		t.Fatalf("expected 3 chunked embeddings calls, got %d: %v", len(inputs), inputs)
 	}
-	if inputs[0] != "aaaaaaaaaa" || inputs[1] != "bbbbbbbbbb" || inputs[2] != "cccccccccc" {
+	if inputs[0] != "aaaaa" || inputs[1] != "bbbbb" || inputs[2] != "ccccc" {
 		t.Errorf("expected one word per chunk, in order, got %v", inputs)
 	}
 	// Mean of (1,2), (2,4), (3,6) is (2,4).
@@ -764,12 +877,15 @@ func TestEmbedder_TokenizeURLErrorPropagatesFromEmbed(t *testing.T) {
 	}
 }
 
-// TestEmbedder_TokenizeURLUnsplittableChunkNeverLoops proves
-// fitChunkToTokenBudget's recursion actually terminates for a single
+// TestEmbedder_TokenizeURLUnsplittableChunkFallsBackToRuneSplit proves
+// fitChunkToTokenBudget's rune-based fallback (the fix for the "CJK/one
+// giant token silently never splits" bug) actually kicks in for a single
 // "word" (no whitespace to split on) that a misbehaving/unusual tokenizer
-// reports as perpetually over budget -- it must be embedded once, as-is,
-// rather than recursing forever or panicking.
-func TestEmbedder_TokenizeURLUnsplittableChunkNeverLoops(t *testing.T) {
+// reports as perpetually over budget: rather than giving up and shipping
+// the whole thing as one unsplit chunk (the original bug), it now halves
+// by rune count instead, terminating (not recursing forever) once
+// maxTokenizeSplitDepth is reached.
+func TestEmbedder_TokenizeURLUnsplittableChunkFallsBackToRuneSplit(t *testing.T) {
 	var embedCalls, tokenizeCalls int
 	embedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		embedCalls++
@@ -788,14 +904,112 @@ func TestEmbedder_TokenizeURLUnsplittableChunkNeverLoops(t *testing.T) {
 	e := httpembed.New(httpembed.Config{
 		BaseURL: embedSrv.URL, Dimensions: 2, ChunkSizeTokens: 4, TokenizeURL: tokenizeSrv.URL,
 	})
-	if _, err := e.Embed(context.Background(), "oneunsplittableword"); err != nil {
+	if _, err := e.Embed(context.Background(), "oneunsplittablewordthatiswaytoolong"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if embedCalls != 1 {
-		t.Errorf("expected exactly 1 embeddings call for the single unsplittable chunk, got %d", embedCalls)
+	// A tokenizer that never reports "within budget" forces recursion all
+	// the way to maxTokenizeSplitDepth -- proving the rune fallback
+	// actually split this into multiple pieces (the old behavior gave up
+	// immediately: exactly 1 embed call, exactly 1 tokenize call).
+	if embedCalls <= 1 {
+		t.Errorf("expected the rune-based fallback to split this unsplittable word into multiple chunks, got %d embed calls", embedCalls)
 	}
-	if tokenizeCalls != 1 {
-		t.Errorf("expected exactly 1 tokenize call (no whitespace to split on, so no recursion), got %d", tokenizeCalls)
+	if tokenizeCalls <= 1 {
+		t.Errorf("expected more than one tokenize call once the rune-fallback recursion kicks in, got %d", tokenizeCalls)
+	}
+}
+
+// TestEmbedder_ChunkTextSplitsCJKTextWithNoWhitespace proves fix 1: CJK
+// text (no ASCII whitespace between "words" at all, so strings.Fields
+// collapses it to exactly one unsplittable "word") longer than a small
+// ChunkSizeTokens budget is actually split into more than one chunk,
+// rather than sailing through whole -- the exact original
+// context-length failure chunking exists to prevent, for precisely the
+// multilingual case a real endpoint would see.
+func TestEmbedder_ChunkTextSplitsCJKTextWithNoWhitespace(t *testing.T) {
+	var inputs []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body embedInput
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		inputs = append(inputs, body.Input)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1, 0}}},
+		})
+	}))
+	defer srv.Close()
+
+	// 30 CJK characters, no whitespace anywhere -- strings.Fields sees
+	// this as exactly one "word". ChunkSizeTokens=4 -> a 12-character
+	// budget (approxCharsPerToken=3), so this must split into multiple
+	// chunks via splitByRuneBudget rather than staying whole.
+	text := strings.Repeat("日本語", 10) // 30 runes, 90 bytes (3 bytes/rune in UTF-8)
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 2, ChunkSizeTokens: 4})
+	if _, err := e.Embed(context.Background(), text); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(inputs) <= 1 {
+		t.Fatalf("expected CJK text with no whitespace to be split into multiple chunks, got %d: %v", len(inputs), inputs)
+	}
+	// Every chunk must stay within the 12-rune budget, and rejoining them
+	// must reproduce the original text exactly -- no character lost or
+	// duplicated by the rune-boundary splitting.
+	var rejoined strings.Builder
+	for _, c := range inputs {
+		if n := utf8.RuneCountInString(c); n > 12 {
+			t.Errorf("expected every chunk within the 12-rune budget, got %d runes in %q", n, c)
+		}
+		rejoined.WriteString(c)
+	}
+	if rejoined.String() != text {
+		t.Errorf("expected the rune-split chunks to rejoin into the original text exactly, got %q", rejoined.String())
+	}
+}
+
+// TestEmbedder_ChunkTextRuneCountNotByteCountForMultiByteText proves fix
+// 2: the per-word budget accumulation counts runes (characters), not
+// UTF-8 bytes, matching what approxCharsPerToken's doc comment already
+// claims it measures. Accented Latin text where each "word" is 2 bytes
+// per rune (byte count double the rune count) must pack according to its
+// rune count, not silently be treated as over budget (or under-budget by
+// the wrong margin) from counting bytes instead.
+func TestEmbedder_ChunkTextRuneCountNotByteCountForMultiByteText(t *testing.T) {
+	var inputs []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body embedInput
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		inputs = append(inputs, body.Input)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1, 0}}},
+		})
+	}))
+	defer srv.Close()
+
+	// Every Cyrillic letter here is a 2-byte UTF-8 codepoint, so each
+	// word's byte length is double its rune length -- "привет"
+	// (6 runes/12 bytes), "мир" (3/6), "один" (4/8), "два" (3/6).
+	// ChunkSizeTokens=6 -> an 18-character budget. Counted by RUNE (the
+	// fix): "привет"+"мир"+"один" accumulates 6+1 + 3+1 + 4+1 = 16 <= 18,
+	// so all three pack into one chunk, and "два" (+4 = 20 > 18) starts a
+	// new one -- 2 chunks: ["привет мир один", "два"]. Counted by BYTE
+	// (the bug), the same budget number compared against byte lengths
+	// would flush much earlier (12+1=13, then +3+1=17, already close, and
+	// the 4th word pushes it over at a different point) -- producing 3
+	// chunks instead of 2. Asserting the exact 2-chunk rune-based split
+	// below fails if this ever regresses back to counting bytes.
+	words := []string{"привет", "мир", "один", "два"}
+	text := strings.Join(words, " ")
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 2, ChunkSizeTokens: 6})
+	if _, err := e.Embed(context.Background(), text); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"привет мир один", "два"}
+	if len(inputs) != len(want) {
+		t.Fatalf("expected rune-based counting to produce %d chunks %v, got %d: %v", len(want), want, len(inputs), inputs)
+	}
+	for i, w := range want {
+		if inputs[i] != w {
+			t.Errorf("chunk %d: expected %q, got %q (all: %v)", i, w, inputs[i], inputs)
+		}
 	}
 }
 
@@ -838,7 +1052,7 @@ func TestEmbedder_ChunkEmbedFailurePropagatesWithChunkIndex(t *testing.T) {
 
 	// Same one-word-per-chunk shape as TestEmbedder_ChunksLongTextAndMeanPoolsVectors.
 	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 1, ChunkSizeTokens: 2})
-	_, err := e.Embed(context.Background(), "aaaaaaaaaa bbbbbbbbbb cccccccccc")
+	_, err := e.Embed(context.Background(), "aaaaa bbbbb ccccc")
 	if err == nil {
 		t.Fatal("expected an error when a later chunk's embed call fails")
 	}

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"searchengine/internal/adapters/hashembed"
 	"searchengine/internal/adapters/httpembed"
@@ -158,17 +159,33 @@ func TestEmbedderDimensions_EmptyMapForEmptyEmbedders(t *testing.T) {
 	}
 }
 
-func TestEmbedderRateLimits_ReflectsEachEndpointsOwnLimit(t *testing.T) {
-	endpoints := []domain.EmbeddingHTTPEndpoint{
-		{ID: "a", RateLimitPerSecond: 5},
-		{ID: "b", RateLimitPerSecond: 0},
+// TestNewHTTPEmbedder_WiresRateLimitPerSecond proves RateLimitPerSecond
+// actually reaches the constructed httpembed.Embedder's Config -- like
+// ChunkSizeTokens/TokenizeURL, httpembed exposes no getter for it, so this
+// checks the effect behaviorally: with a small rate limit and multiple
+// chunks forced by a small ChunkSizeTokens, consecutive embeddings
+// requests must be measurably paced apart.
+func TestNewHTTPEmbedder_WiresRateLimitPerSecond(t *testing.T) {
+	var arrivals []time.Time
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		arrivals = append(arrivals, time.Now())
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1}}},
+		})
+	}))
+	defer srv.Close()
+
+	e := bootstrap.NewHTTPEmbedder(domain.EmbeddingHTTPEndpoint{
+		BaseURL: srv.URL, Dimensions: 1, ChunkSizeTokens: 2, RateLimitPerSecond: 20, // 50ms/call
+	})
+	if _, err := e.Embed(context.Background(), "aaaaa bbbbb ccccc"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	limits := bootstrap.EmbedderRateLimits(endpoints)
-	if limits["a"] != 5 {
-		t.Errorf("expected a's limit=5, got %+v", limits)
+	if len(arrivals) != 3 {
+		t.Fatalf("expected 3 chunked embeddings requests, got %d", len(arrivals))
 	}
-	if limits["b"] != 0 {
-		t.Errorf("expected b's limit=0, got %+v", limits)
+	if gap := arrivals[1].Sub(arrivals[0]); gap < 40*time.Millisecond {
+		t.Errorf("expected requests paced at least ~50ms apart, got %v", gap)
 	}
 }
 

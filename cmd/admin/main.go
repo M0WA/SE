@@ -83,7 +83,6 @@ func main() {
 		EmbeddingRepo:         repo,
 		ContentDedupRepo:      repo,
 		Embedders:             embedders,
-		EmbedderRateLimits:    bootstrap.EmbedderRateLimits(endpoints),
 		Settings:              settings,
 		OpSettings:            opSettings,
 		Overrides:             overrides,

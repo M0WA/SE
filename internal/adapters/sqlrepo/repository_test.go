@@ -59,6 +59,19 @@ func newTestRepo(t testing.TB) *sqlrepo.Repository {
 // server always starts clean rather than accumulating schemas over time.
 func newPostgresTestRepo(t testing.TB, baseDSN string) *sqlrepo.Repository {
 	t.Helper()
+	repo, _ := newPostgresTestRepoAndRawDB(t, baseDSN)
+	return repo
+}
+
+// newPostgresTestRepoAndRawDB does exactly what newPostgresTestRepo does,
+// but also hands back the raw *sql.DB it opens against the same scoped
+// schema/search_path -- for a test that needs to inject state (or inspect
+// catalog state) via side-channel SQL the exported Repository API has no
+// way to express, the same pattern TestMergeDocuments_CascadesLoserRows
+// already uses against SQLite. newPostgresTestRepo itself just discards
+// the second value, so every existing call site is unaffected.
+func newPostgresTestRepoAndRawDB(t testing.TB, baseDSN string) (*sqlrepo.Repository, *sql.DB) {
+	t.Helper()
 	ctx := context.Background()
 	n := atomic.AddInt64(&dsnCounter, 1)
 	schema := fmt.Sprintf("sqlrepo_test_%d_%d", time.Now().UnixNano(), n)
@@ -92,7 +105,14 @@ func newPostgresTestRepo(t testing.TB, baseDSN string) *sqlrepo.Repository {
 		t.Fatalf("failed to create postgres test repository: %v", err)
 	}
 	t.Cleanup(func() { _ = repo.Close() })
-	return repo
+
+	rawDB, err := sql.Open("pgx", scopedDSN)
+	if err != nil {
+		t.Fatalf("failed to open raw postgres connection: %v", err)
+	}
+	t.Cleanup(func() { _ = rawDB.Close() })
+
+	return repo, rawDB
 }
 
 // dsnWithSearchPath sets baseDSN's search_path query parameter to schema --
