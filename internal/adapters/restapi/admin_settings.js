@@ -327,6 +327,7 @@
     }
   }
 
+  renderAdminNav();
   wireSignOut();
   loadSettings();
   loadOverrides();

@@ -11,9 +11,9 @@
 // load time) see the fixture HTML this test controls, not a real browser.
 const { JSDOM } = require('jsdom');
 
-function setupDOM(html) {
+function setupDOM(html, url) {
   const dom = new JSDOM(html || '<!doctype html><html><body></body></html>', {
-    url: 'http://localhost/',
+    url: url || 'http://localhost/',
   });
   global.window = dom.window;
   global.document = dom.window.document;

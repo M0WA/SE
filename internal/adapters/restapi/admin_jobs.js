@@ -587,6 +587,7 @@
     }
   }
 
+  renderAdminNav();
   wireSignOut();
   loadCrawls();
   loadJobs();

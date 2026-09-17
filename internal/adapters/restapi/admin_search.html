@@ -10,23 +10,13 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
 </head>
 <body class="admin">
+<div class="admin-shell">
+<nav class="admin-rail" id="admin-rail" aria-label="Admin sections"></nav>
 <main>
   <div class="page-header">
     <a class="mark" href="/">se.</a>
     <button id="sign-out" class="text-button" type="button">Sign out</button>
   </div>
-  <nav class="admin-nav">
-    <a href="/admin">Overview</a>
-    <a href="/admin/documents">Documents</a>
-    <a href="/admin/crawl">Schedule</a>
-    <a href="/admin/jobs">Jobs</a>
-    <a href="/admin/settings">Settings</a>
-    <a href="/admin/search" aria-current="page">Search</a>
-    <a href="/admin/pagerank">PageRank</a>
-    <a href="/admin/embeddings">Embeddings</a>
-    <a href="/admin/content_dedup">Content dedup</a>
-    <a href="/admin/database">Database</a>
-  </nav>
 
   <section class="panel">
     <h2>Debug a query</h2>
@@ -58,6 +48,7 @@
     <div id="postings-result"></div>
   </section>
 </main>
+</div>
 <script src="/admin.js"></script>
 <script src="/admin_search.js"></script>
 </body>

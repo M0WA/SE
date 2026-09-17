@@ -263,6 +263,53 @@ test('buildTable renders zero body rows for an empty row list', () => {
   assert.equal(table.querySelectorAll('tbody tr').length, 0);
 });
 
+test('renderAdminNav is a no-op when the page has no #admin-rail element', () => {
+  const { renderAdminNav } = load();
+  assert.doesNotThrow(() => renderAdminNav());
+});
+
+test('renderAdminNav renders Overview plus every group from ADMIN_NAV_GROUPS', () => {
+  setupDOM('<!doctype html><html><body><nav id="admin-rail"></nav></body></html>', 'http://x/admin/settings');
+  const { renderAdminNav, ADMIN_NAV_GROUPS } = load();
+  renderAdminNav();
+  const rail = document.getElementById('admin-rail');
+
+  const top = rail.querySelector('.rail-top');
+  assert.equal(top.textContent, 'Overview');
+  assert.equal(top.getAttribute('href'), '/admin');
+
+  const groups = rail.querySelectorAll('.rail-group');
+  assert.equal(groups.length, ADMIN_NAV_GROUPS.length - 1);
+  assert.equal(groups[0].querySelector('.rail-tab').textContent, 'Content');
+  const contentLinks = Array.from(groups[0].querySelectorAll('a')).map((a) => a.textContent);
+  assert.deepEqual(contentLinks, ['Documents', 'Content dedup']);
+});
+
+test('renderAdminNav marks the entry matching the current path as current, and nothing else', () => {
+  setupDOM('<!doctype html><html><body><nav id="admin-rail"></nav></body></html>', 'http://x/admin/settings');
+  const { renderAdminNav } = load();
+  renderAdminNav();
+  const rail = document.getElementById('admin-rail');
+  const current = rail.querySelectorAll('[aria-current="page"]');
+  assert.equal(current.length, 1);
+  assert.equal(current[0].textContent, 'Settings');
+  assert.equal(rail.querySelector('.rail-top').hasAttribute('aria-current'), false);
+});
+
+test('renderAdminNav marks Overview itself as current on /admin', () => {
+  setupDOM('<!doctype html><html><body><nav id="admin-rail"></nav></body></html>', 'http://x/admin');
+  const { renderAdminNav } = load();
+  renderAdminNav();
+  assert.equal(document.querySelector('.rail-top').getAttribute('aria-current'), 'page');
+});
+
+test('renderAdminNav clears any previous content before re-rendering', () => {
+  setupDOM('<!doctype html><html><body><nav id="admin-rail"><span>stale</span></nav></body></html>', 'http://x/admin');
+  const { renderAdminNav } = load();
+  renderAdminNav();
+  assert.equal(document.getElementById('admin-rail').querySelector('span'), null);
+});
+
 test('wireSignOut is a no-op when there is no #sign-out button', () => {
   const { wireSignOut } = load();
   assert.doesNotThrow(() => wireSignOut());

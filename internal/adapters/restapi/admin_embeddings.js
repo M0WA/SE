@@ -108,6 +108,7 @@
     }
   });
 
+  renderAdminNav();
   wireSignOut();
   loadConfig();
   loadRecomputeStatus();
