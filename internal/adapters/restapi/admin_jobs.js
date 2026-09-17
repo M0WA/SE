@@ -62,17 +62,39 @@
     return Math.floor(secs / 60) + 'm ' + Math.round(secs % 60) + 's';
   }
 
-  // formatSpeed reports a job's throughput in pages/sec, over the same
-  // elapsed window formatDuration uses (started_at to finished_at, or to
-  // now if it's still running) -- so a running job's speed keeps updating
-  // on every poll along with its duration, not just once at the end.
+  // jobSpeedSamples/jobSpeedRates: speed is the delta between two
+  // consecutive polls of the jobs list, not pages_crawled/started_at --
+  // that formula breaks the moment a job survives a crawl-server restart
+  // (recovered jobs get a fresh started_at from MarkRunning, but
+  // pages_crawled is a lifetime counter that doesn't reset), which
+  // divides a lifetime page count by a tiny elapsed window and reports a
+  // wildly inflated rate. `now` is a parameter (not a bare Date.now()
+  // call) so tests can drive it deterministically.
+  const jobSpeedSamples = new Map();
+  const jobSpeedRates = new Map();
+
+  function updateJobSpeeds(jobs, now) {
+    if (now === undefined) now = Date.now();
+    for (const job of jobs) {
+      const prev = jobSpeedSamples.get(job.id);
+      if (prev) {
+        const deltaPages = job.pages_crawled - prev.pages;
+        const deltaSecs = (now - prev.at) / 1000;
+        if (deltaSecs > 0 && deltaPages >= 0) {
+          jobSpeedRates.set(job.id, deltaPages / deltaSecs);
+        }
+      }
+      jobSpeedSamples.set(job.id, { pages: job.pages_crawled, at: now });
+    }
+  }
+
+  // formatSpeed reports the most recently computed poll-to-poll rate for
+  // job.id -- '—' until at least two polls have seen this job (a brand
+  // new job, or one just noticed for the first time this page load).
   function formatSpeed(job) {
-    if (!job.started_at) return '—';
-    const start = new Date(job.started_at).getTime();
-    const end = job.finished_at ? new Date(job.finished_at).getTime() : Date.now();
-    const secs = (end - start) / 1000;
-    if (secs <= 0) return '—';
-    return (job.pages_crawled / secs).toFixed(2) + '/s';
+    const rate = jobSpeedRates.get(job.id);
+    if (rate === undefined) return '—';
+    return rate.toFixed(2) + '/s';
   }
 
   async function clearEndedJobs() {
@@ -177,6 +199,7 @@
   async function loadJobs() {
     try {
       const jobs = await getJSON('/admin/api/crawl/jobs');
+      updateJobSpeeds(jobs);
       allJobs = jobs;
       renderJobs(jobs);
       if (selectedJobID && jobs.some((j) => j.id === selectedJobID && ACTIVE_STATUSES.includes(j.status))) {
@@ -570,7 +593,7 @@
 
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-      capitalize, formatDuration, formatSpeed, formatMs,
+      capitalize, formatDuration, formatSpeed, updateJobSpeeds, formatMs,
       clearEndedJobs,
       filterJobs, filterPages, filterCrawls,
       crawlRecurrenceCell, crawlLinkScopeCell,
