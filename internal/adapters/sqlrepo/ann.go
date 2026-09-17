@@ -85,7 +85,7 @@ const maxHNSWEfSearch = 1000
 // that provider's embedder.Dimensions(), one entry per currently-enabled
 // provider -- see domain.OperationalSettingsValues.EmbeddingHashEnabled and
 // each endpoint's own Enabled): enabling the pgvector extension once, then for
-// each provider adding its own vector(dims) column and building its own
+// each provider adding its own halfvec(dims) column and building its own
 // cosine-distance HNSW index over it. Every process that searches or
 // writes documents (cmd/search, cmd/admin, cmd/crawl) calls this once at
 // startup, right after constructing its embedder(s) -- each opens its own
@@ -179,7 +179,7 @@ func (r *Repository) backfillVectorColumn(ctx context.Context, provider string) 
 		return err
 	}
 
-	updateSQL := r.ph(`UPDATE documents SET `+col+` = %s::vector WHERE id = %s`, 1, 2)
+	updateSQL := r.ph(`UPDATE documents SET `+col+` = %s::halfvec WHERE id = %s`, 1, 2)
 	for _, ie := range pending {
 		vec, err := DecodeEmbedding(ie.embBlob)
 		if err != nil {
@@ -221,7 +221,7 @@ func (r *Repository) enablePgVectorExtension(ctx context.Context) error {
 // ensureVectorColumn adds documents.embedding_vector_<provider> sized to
 // dims, the same way migrateDocumentColumns adds host/version/crawled_at/
 // etc to a documents table that predates them -- except this one is
-// Postgres-only (pgvector's "vector" type doesn't exist on SQLite/MySQL)
+// Postgres-only (pgvector's "halfvec" type doesn't exist on SQLite/MySQL)
 // and needs the embedder's Dimensions() at call time, so it can't be part
 // of the static, dialect-branched CreateSchemaSQL list every dialect
 // already returns. "ADD COLUMN IF NOT EXISTS" plus this function's own
@@ -229,43 +229,49 @@ func (r *Repository) enablePgVectorExtension(ctx context.Context) error {
 // startup scenario ensureHostIndex/ensureCrawledAtIndex guard against.
 func (r *Repository) ensureVectorColumn(ctx context.Context, provider string, dims int) error {
 	col := vectorColumnNameFor(provider)
-	existingDims, found, err := r.vectorColumnDimensions(ctx, provider)
+	existingDims, existingType, found, err := r.vectorColumnType(ctx, provider)
 	if err != nil {
 		return err
 	}
-	if found && existingDims != dims {
-		// The embedding model changed since this column was first created
-		// (see application.RunEmbeddingRecomputeJob, the whole point of
-		// which is letting that happen without a re-crawl) -- pgvector's
-		// vector(N) type is fixed per column, so the old column can't
-		// just be widened/narrowed in place. Drop it (and its
-		// now-mismatched index) and let the ADD COLUMN below recreate it
-		// fresh at the new size; backfillVectorColumn repopulates every
-		// row from document_embeddings, which SaveDocument/UpdateEmbedding
+	if found && (existingDims != dims || existingType != "halfvec") {
+		// Either the embedding model changed since this column was first
+		// created (see application.RunEmbeddingRecomputeJob, the whole
+		// point of which is letting that happen without a re-crawl), or
+		// this column predates this package's switch from "vector" to
+		// "halfvec" (see ensureVectorIndex's doc comment for why) --
+		// either way, pgvector's column type is fixed once created, so the
+		// old column can't just be widened/narrowed/retyped in place.
+		// Drop it (and its now-stale index) and let the ADD COLUMN below
+		// recreate it fresh; backfillVectorColumn repopulates every row
+		// from document_embeddings, which SaveDocument/UpdateEmbedding
 		// always keep current regardless of this column's own state -- so
 		// nothing is actually lost.
 		if _, err := r.db.ExecContext(ctx, `DROP INDEX IF EXISTS `+vectorIndexNameFor(provider)); err != nil {
 			return fmt.Errorf("dropping stale pgvector index: %w", err)
 		}
 		if _, err := r.db.ExecContext(ctx, `ALTER TABLE documents DROP COLUMN IF EXISTS `+col); err != nil {
-			return fmt.Errorf("dropping mismatched-dimension pgvector column: %w", err)
+			return fmt.Errorf("dropping mismatched pgvector column: %w", err)
 		}
 	}
-	ddl := fmt.Sprintf(`ALTER TABLE documents ADD COLUMN IF NOT EXISTS %s vector(%d)`, col, dims)
+	ddl := fmt.Sprintf(`ALTER TABLE documents ADD COLUMN IF NOT EXISTS %s halfvec(%d)`, col, dims)
 	if _, err := r.db.ExecContext(ctx, ddl); err != nil && !isAlreadyExistsError(err) {
 		return err
 	}
 	return nil
 }
 
-// vectorColumnDimensions reports the dimension provider's pgvector column
-// was actually created with, by asking Postgres's own catalog rather than
-// trusting this process's in-memory dims -- necessary because another
-// process (or an earlier run of this one, before a model change) may have
-// created the column at a different size. found is false when the column
-// doesn't exist yet at all (a fresh database, or ANN never having been
-// enabled before for this provider), which is not an error.
-func (r *Repository) vectorColumnDimensions(ctx context.Context, provider string) (dims int, found bool, err error) {
+// vectorColumnType reports the dimension and pgvector type name (e.g.
+// "vector" or "halfvec") provider's column was actually created with, by
+// asking Postgres's own catalog rather than trusting this process's
+// in-memory state -- necessary both because another process (or an
+// earlier run of this one, before a model change) may have created the
+// column at a different size, and because a column created before this
+// package switched from "vector" to "halfvec" (see ensureVectorIndex's
+// doc comment) needs recreating under the new type even when its
+// dimension count hasn't changed. found is false when the column doesn't
+// exist yet at all (a fresh database, or ANN never having been enabled
+// before for this provider), which is not an error.
+func (r *Repository) vectorColumnType(ctx context.Context, provider string) (dims int, typeName string, found bool, err error) {
 	const q = `
 		SELECT format_type(a.atttypid, a.atttypmod)
 		FROM pg_attribute a
@@ -275,23 +281,24 @@ func (r *Repository) vectorColumnDimensions(ctx context.Context, provider string
 	var formatted string
 	if err := r.db.QueryRowContext(ctx, q, vectorColumnNameFor(provider)).Scan(&formatted); err != nil {
 		if err == sql.ErrNoRows {
-			return 0, false, nil
+			return 0, "", false, nil
 		}
-		return 0, false, fmt.Errorf("checking existing pgvector column dimensions: %w", err)
+		return 0, "", false, fmt.Errorf("checking existing pgvector column type: %w", err)
 	}
-	// formatted looks like "vector(128)" -- pull the integer out from
-	// between the parens rather than assuming any particular prefix, so
-	// this doesn't silently misparse if a future pgvector version changes
-	// format_type's exact spelling.
+	// formatted looks like "halfvec(128)" (or, for a column predating this
+	// package's switch to halfvec, "vector(128)") -- pull the type name
+	// and the integer out from around the parens rather than assuming any
+	// particular prefix, so this doesn't silently misparse if a future
+	// pgvector version changes format_type's exact spelling.
 	open, close := strings.IndexByte(formatted, '('), strings.LastIndexByte(formatted, ')')
 	if open < 0 || close <= open {
-		return 0, false, fmt.Errorf("unexpected pgvector column type format %q", formatted)
+		return 0, "", false, fmt.Errorf("unexpected pgvector column type format %q", formatted)
 	}
 	dims, err = strconv.Atoi(formatted[open+1 : close])
 	if err != nil {
-		return 0, false, fmt.Errorf("parsing pgvector column dimensions from %q: %w", formatted, err)
+		return 0, "", false, fmt.Errorf("parsing pgvector column dimensions from %q: %w", formatted, err)
 	}
-	return dims, true, nil
+	return dims, formatted[:open], true, nil
 }
 
 // ensureVectorIndex builds the HNSW index TopSemanticMatches' "ORDER BY
@@ -302,9 +309,20 @@ func (r *Repository) vectorColumnDimensions(ctx context.Context, provider string
 // INDEX IF NOT EXISTS" plus isAlreadyExistsError tolerates the identical
 // concurrent-startup race ensureHostIndex/ensureCrawledAtIndex already
 // tolerate.
+//
+// halfvec, not vector: pgvector caps both types' HNSW/ivfflat indexes at a
+// fixed byte budget per row, which works out to 2000 dimensions for
+// "vector" (4 bytes/dim) but 4000 for "halfvec" (2 bytes/dim, i.e. float16
+// storage) -- confirmed empirically (a plain vector(3584) column's index
+// creation fails with "column cannot have more than 2000 dimensions",
+// halfvec(3584) succeeds). A model like Alibaba-NLP/gte-Qwen2-7B-instruct
+// (3584 dims) needs that wider ceiling; the halfvec storage's reduced
+// precision is not a meaningful accuracy loss for cosine-similarity
+// search. ensureVectorColumn creates the column itself as halfvec(dims)
+// to match.
 func (r *Repository) ensureVectorIndex(ctx context.Context, provider string) error {
 	col := vectorColumnNameFor(provider)
-	ddl := fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON documents USING hnsw (%s vector_cosine_ops)`, vectorIndexNameFor(provider), col)
+	ddl := fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON documents USING hnsw (%s halfvec_cosine_ops)`, vectorIndexNameFor(provider), col)
 	if _, err := r.db.ExecContext(ctx, ddl); err != nil && !isAlreadyExistsError(err) {
 		return err
 	}
@@ -327,8 +345,9 @@ func isMissingExtensionError(err error) bool {
 }
 
 // formatPgVectorLiteral renders vec in pgvector's text input format
-// ("[v1,v2,v3]"), accepted by Postgres wherever a ::vector cast is applied
-// to a query parameter -- used both to write a provider's
+// ("[v1,v2,v3]"), accepted by Postgres wherever a ::halfvec cast is
+// applied to a query parameter (the same bracketed literal syntax pgvector
+// accepts for its "vector" type too) -- used both to write a provider's
 // documents.embedding_vector_<provider> in saveDocumentEmbeddings and to
 // pass the query vector to TopSemanticMatches' ORDER BY ... <=> $1 clause.
 func formatPgVectorLiteral(vec []float32) string {
@@ -404,7 +423,7 @@ func (r *Repository) TopSemanticMatches(ctx context.Context, queryVec []float32,
 	query := r.ph(`SELECT de.doc_id, de.embedding, de.norm_embedding, d.pagerank
 	               FROM documents d JOIN document_embeddings de ON de.doc_id = d.id AND de.provider = %s
 	               WHERE d.`+col+` IS NOT NULL
-	               ORDER BY d.`+col+` <=> %s::vector LIMIT %s`, 1, 2, 3)
+	               ORDER BY d.`+col+` <=> %s::halfvec LIMIT %s`, 1, 2, 3)
 	rows, err := tx.QueryContext(ctx, query, provider, formatPgVectorLiteral(queryVec), limit)
 	if err != nil {
 		return nil, false, fmt.Errorf("querying ANN semantic matches: %w", err)
