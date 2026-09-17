@@ -66,6 +66,46 @@ func TestRenderer_ExecutesJavaScriptAndWaitsForLoad(t *testing.T) {
 	}
 }
 
+// TestRenderer_WaitsForDelayedNetworkContentAfterLoad guards against a real
+// production gap: the browser's own "load" event fires once the initial
+// document is parsed, but a typical client-rendered page (a static shell +
+// JS bundle) issues its own fetch()/XHR afterward and populates its real
+// content only once that resolves -- confirmed against a real site, where
+// the DOM had 0 links right at `load` and 115 once its own JS caught up
+// roughly a second later. Without waiting past `load`, Render would
+// capture the pre-fetch placeholder instead of the page's real content.
+func TestRenderer_WaitsForDelayedNetworkContentAfterLoad(t *testing.T) {
+	requireBrowserTests(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/slow-data" {
+			time.Sleep(500 * time.Millisecond)
+			fmt.Fprint(w, "delayed-content")
+			return
+		}
+		fmt.Fprint(w, `<html><body><div id="x">before</div>
+<script>
+fetch('/slow-data').then((r) => r.text()).then((t) => { document.getElementById('x').textContent = t; });
+</script></body></html>`)
+	}))
+	defer srv.Close()
+
+	r := browserfetcher.New("chromium")
+	r.AllowURL = alwaysAllowURL
+	defer r.Close()
+
+	html, err := r.Render(context.Background(), srv.URL, ports.FetchOptions{})
+	skipIfNoUsableSandbox(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(html, "delayed-content") {
+		t.Errorf("expected the rendered HTML to include content populated by a fetch() that only resolved after the browser's own load event, got: %s", html)
+	}
+	if strings.Contains(html, ">before<") {
+		t.Errorf("expected the pre-fetch placeholder content to be gone, got: %s", html)
+	}
+}
+
 func TestRenderer_RespectsMaxResponseBytes(t *testing.T) {
 	requireBrowserTests(t)
 	r := browserfetcher.New("chromium")
