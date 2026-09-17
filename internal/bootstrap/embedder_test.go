@@ -1,6 +1,10 @@
 package bootstrap_test
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"searchengine/internal/adapters/hashembed"
@@ -22,6 +26,62 @@ func TestNewHTTPEmbedder_BuildsHTTPEmbedder(t *testing.T) {
 	}
 	if he.Dimensions() != 768 {
 		t.Errorf("expected 768 dimensions, got %d", he.Dimensions())
+	}
+}
+
+// TestNewHTTPEmbedder_WiresChunkSizeTokens proves ChunkSizeTokens actually
+// reaches the constructed httpembed.Embedder's Config -- httpembed has no
+// exported getter for it (unlike Dimensions, which EnableANN's own
+// EmbedderDimensions needs in production), so this checks the effect
+// behaviorally: a small chunk budget against multi-word text must produce
+// more than one embeddings call.
+func TestNewHTTPEmbedder_WiresChunkSizeTokens(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1}}},
+		})
+	}))
+	defer srv.Close()
+
+	e := bootstrap.NewHTTPEmbedder(domain.EmbeddingHTTPEndpoint{
+		BaseURL: srv.URL, Dimensions: 1, ChunkSizeTokens: 2,
+	})
+	if _, err := e.Embed(context.Background(), "aaaaaaaaaa bbbbbbbbbb cccccccccc"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if calls <= 1 {
+		t.Errorf("expected ChunkSizeTokens to split this text into multiple embeddings calls, got %d", calls)
+	}
+}
+
+// TestNewHTTPEmbedder_WiresTokenizeURL proves TokenizeURL reaches the
+// constructed Embedder the same way -- a configured TokenizeURL must
+// actually get called during chunking.
+func TestNewHTTPEmbedder_WiresTokenizeURL(t *testing.T) {
+	embedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1}}},
+		})
+	}))
+	defer embedSrv.Close()
+
+	var tokenizeCalled bool
+	tokenizeSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokenizeCalled = true
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"count": 1})
+	}))
+	defer tokenizeSrv.Close()
+
+	e := bootstrap.NewHTTPEmbedder(domain.EmbeddingHTTPEndpoint{
+		BaseURL: embedSrv.URL, Dimensions: 1, ChunkSizeTokens: 2, TokenizeURL: tokenizeSrv.URL,
+	})
+	if _, err := e.Embed(context.Background(), "aa bb"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !tokenizeCalled {
+		t.Error("expected the configured TokenizeURL to be called during chunking")
 	}
 }
 

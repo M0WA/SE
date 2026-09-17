@@ -1578,6 +1578,8 @@ components:
         model: { type: string, description: 'Sent as the embeddings request body''s "model" field.' }
         dimensions: { type: integer, description: "Expected embedding vector length; a mismatch against the API's actual response fails clearly rather than corrupting search. Must be positive." }
         rate_limit_per_second: { type: number, description: "Caps how many Embed calls per second this process issues against this endpoint specifically. 0 (the default) means unlimited. Must not be negative." }
+        chunk_size_tokens: { type: integer, description: "Token budget per Embed call before splitting text into multiple chunks (each embedded separately and mean-pooled into one vector). 0 (the default) disables chunking -- text is always sent whole. Must not be negative. Measured exactly via tokenize_url when set, otherwise estimated from character count." }
+        tokenize_url: { type: string, description: "An exact-token-count endpoint (e.g. vLLM's own POST /tokenize, accepting {model, prompt} and returning {count}) used for precise chunk sizing. Never inferred from base_url -- not every OpenAI-compatible embeddings server exposes an equivalent route. Empty means chunk_size_tokens (when set) is estimated from character count instead." }
         enabled: { type: boolean, description: "Whether this endpoint's embedding is actually computed and stored for every document. Disabling never deletes its already-stored vectors." }
 
     EmbeddingHTTPEndpointRequest:

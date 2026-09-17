@@ -99,7 +99,9 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			id TEXT PRIMARY KEY, name TEXT NOT NULL, base_url TEXT NOT NULL,
 			api_key TEXT NOT NULL DEFAULT '', model TEXT NOT NULL,
 			dimensions INTEGER NOT NULL, rate_limit_per_second REAL NOT NULL DEFAULT 0,
-			enabled BOOLEAN NOT NULL DEFAULT true, created_at TEXT NOT NULL
+			enabled BOOLEAN NOT NULL DEFAULT true,
+			chunk_size_tokens INTEGER NOT NULL DEFAULT 0, tokenize_url TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS crawl_jobs (
 			id TEXT PRIMARY KEY, request TEXT NOT NULL, status TEXT NOT NULL,
@@ -209,7 +211,9 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			id VARCHAR(20) PRIMARY KEY, name VARCHAR(255) NOT NULL, base_url TEXT NOT NULL,
 			api_key TEXT NOT NULL, model VARCHAR(255) NOT NULL,
 			dimensions INT NOT NULL, rate_limit_per_second DOUBLE NOT NULL DEFAULT 0,
-			enabled BOOLEAN NOT NULL DEFAULT true, created_at VARCHAR(64) NOT NULL
+			enabled BOOLEAN NOT NULL DEFAULT true,
+			chunk_size_tokens INT NOT NULL DEFAULT 0, tokenize_url TEXT NOT NULL DEFAULT '',
+			created_at VARCHAR(64) NOT NULL
 		) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS crawl_jobs (
 			id VARCHAR(64) PRIMARY KEY, request LONGTEXT NOT NULL, status VARCHAR(32) NOT NULL,
@@ -322,7 +326,9 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			id TEXT PRIMARY KEY, name TEXT NOT NULL, base_url TEXT NOT NULL,
 			api_key TEXT NOT NULL DEFAULT '', model TEXT NOT NULL,
 			dimensions INT NOT NULL, rate_limit_per_second DOUBLE PRECISION NOT NULL DEFAULT 0,
-			enabled BOOLEAN NOT NULL DEFAULT true, created_at TEXT NOT NULL
+			enabled BOOLEAN NOT NULL DEFAULT true,
+			chunk_size_tokens INT NOT NULL DEFAULT 0, tokenize_url TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS crawl_jobs (
 			id TEXT PRIMARY KEY, request TEXT NOT NULL, status TEXT NOT NULL,

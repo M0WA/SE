@@ -54,7 +54,9 @@ func newEmbeddingEndpoint(id string) domain.EmbeddingHTTPEndpoint {
 	return domain.EmbeddingHTTPEndpoint{
 		ID: id, Name: "IONOS bge-m3", BaseURL: "https://openai.inference.de-txl.ionos.com/v1",
 		APIKey: "sk-test", Model: "BAAI/bge-m3", Dimensions: 1024,
-		RateLimitPerSecond: 5, Enabled: true, CreatedAt: time.Now().UTC(),
+		RateLimitPerSecond: 5, Enabled: true,
+		ChunkSizeTokens: 6000, TokenizeURL: "http://localhost:8000/tokenize",
+		CreatedAt: time.Now().UTC(),
 	}
 }
 
@@ -80,6 +82,9 @@ func TestCreateEmbeddingEndpoint_ThenListRoundTrips(t *testing.T) {
 	}
 	if g.Model != "BAAI/bge-m3" || g.Dimensions != 1024 || g.RateLimitPerSecond != 5 || !g.Enabled {
 		t.Errorf("unexpected option round trip: %+v", g)
+	}
+	if g.ChunkSizeTokens != 6000 || g.TokenizeURL != "http://localhost:8000/tokenize" {
+		t.Errorf("expected chunk_size_tokens/tokenize_url to round trip, got %+v", g)
 	}
 	if g.CreatedAt.IsZero() {
 		t.Errorf("expected CreatedAt to round trip, got %+v", g)
@@ -158,6 +163,8 @@ func TestUpdateEmbeddingEndpoint_ReplacesEditableFields(t *testing.T) {
 	e.Dimensions = 512
 	e.RateLimitPerSecond = 10
 	e.Enabled = false
+	e.ChunkSizeTokens = 8192
+	e.TokenizeURL = "http://localhost:9000/tokenize"
 	if err := repo.UpdateEmbeddingEndpoint(ctx, e); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -167,7 +174,8 @@ func TestUpdateEmbeddingEndpoint_ReplacesEditableFields(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got.Name != "Renamed" || got.BaseURL != "https://new.example/v1" || got.APIKey != "sk-rotated" ||
-		got.Model != "new-model" || got.Dimensions != 512 || got.RateLimitPerSecond != 10 || got.Enabled {
+		got.Model != "new-model" || got.Dimensions != 512 || got.RateLimitPerSecond != 10 || got.Enabled ||
+		got.ChunkSizeTokens != 8192 || got.TokenizeURL != "http://localhost:9000/tokenize" {
 		t.Errorf("expected every editable field replaced, got %+v", got)
 	}
 }
@@ -327,5 +335,65 @@ func TestMigrateLegacyHTTPEmbeddingConfig_NeverRunsTwice(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("expected the deleted migrated endpoint to stay deleted across a later restart, got %+v", got)
+	}
+}
+
+// TestMigrateEmbeddingEndpointColumns_UpgradesPreExistingTable is a real-
+// upgrade regression test for the chunking columns themselves: a table
+// created before ChunkSizeTokens/TokenizeURL existed (the pre-migration
+// schema, built here by hand via a raw connection -- CREATE TABLE IF NOT
+// EXISTS in dialect.go only shapes a brand new table, never an existing
+// one) must gain both columns, defaulting a pre-existing row to 0/”
+// (chunking disabled, exactly its previous behavior) without erroring,
+// and the table must still work normally (create/get) afterward.
+func TestMigrateEmbeddingEndpointColumns_UpgradesPreExistingTable(t *testing.T) {
+	dsn := uniqueSQLiteDSN(t)
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open raw db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	// The pre-migration shape: no chunk_size_tokens/tokenize_url columns
+	// at all.
+	if _, err := db.Exec(`CREATE TABLE embedding_http_endpoints (
+		id TEXT PRIMARY KEY, name TEXT NOT NULL, base_url TEXT NOT NULL,
+		api_key TEXT NOT NULL DEFAULT '', model TEXT NOT NULL,
+		dimensions INTEGER NOT NULL, rate_limit_per_second REAL NOT NULL DEFAULT 0,
+		enabled BOOLEAN NOT NULL DEFAULT true, created_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("failed to create legacy-shape table: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO embedding_http_endpoints
+		(id, name, base_url, api_key, model, dimensions, rate_limit_per_second, enabled, created_at)
+		VALUES ('ionos', 'IONOS bge-m3', 'https://example.com/v1', 'sk-test', 'BAAI/bge-m3', 1024, 5, true, ?)`,
+		time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("failed to seed a pre-existing row: %v", err)
+	}
+
+	ctx := context.Background()
+	repo := reopenSQLiteTestRepo(t, dsn) // migrate() runs here, including migrateEmbeddingEndpointColumns
+
+	pre, err := repo.GetEmbeddingEndpoint(ctx, "ionos")
+	if err != nil {
+		t.Fatalf("unexpected error reading the pre-existing row after migration: %v", err)
+	}
+	if pre.ChunkSizeTokens != 0 || pre.TokenizeURL != "" {
+		t.Errorf("expected a pre-existing row to default to chunking disabled (0, \"\"), got %+v", pre)
+	}
+	if pre.Name != "IONOS bge-m3" || pre.Dimensions != 1024 {
+		t.Errorf("expected every pre-existing field otherwise untouched, got %+v", pre)
+	}
+
+	// The table must still work normally for a fresh row afterward too.
+	fresh := newEmbeddingEndpoint("gpu")
+	if err := repo.CreateEmbeddingEndpoint(ctx, fresh); err != nil {
+		t.Fatalf("unexpected error creating a new endpoint after migration: %v", err)
+	}
+	got, err := repo.GetEmbeddingEndpoint(ctx, "gpu")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.ChunkSizeTokens != 6000 || got.TokenizeURL != "http://localhost:8000/tokenize" {
+		t.Errorf("expected a freshly created endpoint's chunk fields to round trip normally, got %+v", got)
 	}
 }

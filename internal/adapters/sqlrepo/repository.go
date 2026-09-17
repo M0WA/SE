@@ -207,6 +207,9 @@ func (r *Repository) migrate(ctx context.Context) error {
 	if err := r.migrateScheduledCrawlColumns(ctx); err != nil {
 		return err
 	}
+	if err := r.migrateEmbeddingEndpointColumns(ctx); err != nil {
+		return err
+	}
 	if err := r.migrateLegacyHTTPEmbeddingConfig(ctx); err != nil {
 		return err
 	}
@@ -316,6 +319,32 @@ func (r *Repository) migrateScheduledCrawlColumns(ctx context.Context) error {
 	// why the two must never be conflated. Defaults to false for a
 	// pre-existing row: nothing was mid-run when this column didn't exist.
 	return addColumn("in_progress", "in_progress BOOLEAN NOT NULL DEFAULT false")
+}
+
+// migrateEmbeddingEndpointColumns adds the chunking columns (see
+// domain.EmbeddingHTTPEndpoint.ChunkSizeTokens/TokenizeURL) to an
+// embedding_http_endpoints table that predates them -- CREATE TABLE IF NOT
+// EXISTS above only shapes a fresh table. Both default to their "disabled"
+// value (0 / ”) for a pre-existing endpoint, exactly matching its
+// previous behavior: send text whole, no chunking, no exact tokenizer.
+func (r *Repository) migrateEmbeddingEndpointColumns(ctx context.Context) error {
+	existing, err := r.existingColumns(ctx, "embedding_http_endpoints")
+	if err != nil {
+		return err
+	}
+	addColumn := func(name, ddl string) error {
+		if existing[name] {
+			return nil
+		}
+		if _, err := r.db.ExecContext(ctx, "ALTER TABLE embedding_http_endpoints ADD COLUMN "+ddl); err != nil && !isAlreadyExistsError(err) {
+			return fmt.Errorf("adding %s column: %w", name, err)
+		}
+		return nil
+	}
+	if err := addColumn("chunk_size_tokens", "chunk_size_tokens INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	return addColumn("tokenize_url", "tokenize_url TEXT NOT NULL DEFAULT ''")
 }
 
 // legacyHTTPEmbeddingSettings decodes just the handful of fields this
@@ -2588,15 +2617,16 @@ func (r *Repository) ResetStaleInProgress(ctx context.Context) (int, error) {
 	return int(n), nil
 }
 
-const embeddingEndpointColumns = `id, name, base_url, api_key, model, dimensions, rate_limit_per_second, enabled, created_at`
+const embeddingEndpointColumns = `id, name, base_url, api_key, model, dimensions, rate_limit_per_second, enabled, chunk_size_tokens, tokenize_url, created_at`
 
 // CreateEmbeddingEndpoint inserts a new admin-configured HTTP embedding
 // endpoint (see domain.EmbeddingHTTPEndpoint).
 func (r *Repository) CreateEmbeddingEndpoint(ctx context.Context, e domain.EmbeddingHTTPEndpoint) error {
 	insertSQL := r.ph(`INSERT INTO embedding_http_endpoints (`+embeddingEndpointColumns+`)
-	                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)`, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
 	_, err := r.db.ExecContext(ctx, insertSQL,
 		e.ID, e.Name, e.BaseURL, e.APIKey, e.Model, e.Dimensions, e.RateLimitPerSecond, e.Enabled,
+		e.ChunkSizeTokens, e.TokenizeURL,
 		e.CreatedAt.UTC().Format(crawledAtLayout),
 	)
 	if err != nil {
@@ -2643,10 +2673,12 @@ func (r *Repository) ListEmbeddingEndpoints(ctx context.Context) ([]domain.Embed
 func (r *Repository) UpdateEmbeddingEndpoint(ctx context.Context, e domain.EmbeddingHTTPEndpoint) error {
 	updateSQL := r.ph(`UPDATE embedding_http_endpoints SET
 	                      name = %s, base_url = %s, api_key = %s, model = %s,
-	                      dimensions = %s, rate_limit_per_second = %s, enabled = %s
-	                    WHERE id = %s`, 1, 2, 3, 4, 5, 6, 7, 8)
+	                      dimensions = %s, rate_limit_per_second = %s, enabled = %s,
+	                      chunk_size_tokens = %s, tokenize_url = %s
+	                    WHERE id = %s`, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
 	res, err := r.db.ExecContext(ctx, updateSQL,
-		e.Name, e.BaseURL, e.APIKey, e.Model, e.Dimensions, e.RateLimitPerSecond, e.Enabled, e.ID,
+		e.Name, e.BaseURL, e.APIKey, e.Model, e.Dimensions, e.RateLimitPerSecond, e.Enabled,
+		e.ChunkSizeTokens, e.TokenizeURL, e.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("updating embedding endpoint (%s): %w", e.ID, err)
@@ -2683,7 +2715,8 @@ func scanEmbeddingEndpoint(row scanner) (domain.EmbeddingHTTPEndpoint, error) {
 	var e domain.EmbeddingHTTPEndpoint
 	var createdAt string
 	if err := row.Scan(&e.ID, &e.Name, &e.BaseURL, &e.APIKey, &e.Model,
-		&e.Dimensions, &e.RateLimitPerSecond, &e.Enabled, &createdAt); err != nil {
+		&e.Dimensions, &e.RateLimitPerSecond, &e.Enabled,
+		&e.ChunkSizeTokens, &e.TokenizeURL, &createdAt); err != nil {
 		return domain.EmbeddingHTTPEndpoint{}, err
 	}
 	e.CreatedAt = parseCrawledAt(createdAt)

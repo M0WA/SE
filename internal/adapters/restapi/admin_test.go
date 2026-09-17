@@ -3053,6 +3053,8 @@ type embeddingEndpointResp struct {
 	Dimensions         int       `json:"dimensions"`
 	RateLimitPerSecond float64   `json:"rate_limit_per_second"`
 	Enabled            bool      `json:"enabled"`
+	ChunkSizeTokens    int       `json:"chunk_size_tokens"`
+	TokenizeURL        string    `json:"tokenize_url"`
 	CreatedAt          time.Time `json:"created_at"`
 }
 
@@ -3128,6 +3130,7 @@ func TestHandleAdminEmbeddingEndpoints_CreateValidation(t *testing.T) {
 		{"zero dimensions", map[string]interface{}{"name": "x", "base_url": "https://example.com", "dimensions": 0}},
 		{"negative dimensions", map[string]interface{}{"name": "x", "base_url": "https://example.com", "dimensions": -1}},
 		{"negative rate limit", map[string]interface{}{"name": "x", "base_url": "https://example.com", "dimensions": 4, "rate_limit_per_second": -1}},
+		{"negative chunk size", map[string]interface{}{"name": "x", "base_url": "https://example.com", "dimensions": 4, "chunk_size_tokens": -1}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3153,6 +3156,7 @@ func TestHandleAdminEmbeddingEndpoints_CreateThenList(t *testing.T) {
 	code, created := createTestEmbeddingEndpoint(t, h, cookie, map[string]interface{}{
 		"name": "IONOS bge-m3", "base_url": "https://example.com/v1", "api_key": "sk-test",
 		"model": "BAAI/bge-m3", "dimensions": 1024, "rate_limit_per_second": 5, "enabled": true,
+		"chunk_size_tokens": 6000, "tokenize_url": "http://localhost:8000/tokenize",
 	})
 	if code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d", code)
@@ -3162,6 +3166,9 @@ func TestHandleAdminEmbeddingEndpoints_CreateThenList(t *testing.T) {
 	}
 	if !created.HasAPIKey {
 		t.Errorf("expected has_api_key=true, got %+v", created)
+	}
+	if created.ChunkSizeTokens != 6000 || created.TokenizeURL != "http://localhost:8000/tokenize" {
+		t.Errorf("expected chunk_size_tokens/tokenize_url round-tripped in the create response, got %+v", created)
 	}
 
 	listReq := httptest.NewRequest(http.MethodGet, "/admin/api/embeddings/endpoints", nil)
@@ -3269,6 +3276,7 @@ func TestHandleAdminUpdateEmbeddingEndpoint_ReplacesEditableFields(t *testing.T)
 	rec := patchEmbeddingEndpoint(t, h, cookie, created.ID, map[string]interface{}{
 		"name": "Renamed", "base_url": "https://new.example/v1", "model": "new-model",
 		"dimensions": 8, "rate_limit_per_second": 3, "enabled": false,
+		"chunk_size_tokens": 512, "tokenize_url": "http://localhost:8000/tokenize",
 	})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
@@ -3279,7 +3287,8 @@ func TestHandleAdminUpdateEmbeddingEndpoint_ReplacesEditableFields(t *testing.T)
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got.Name != "Renamed" || got.BaseURL != "https://new.example/v1" || got.Model != "new-model" ||
-		got.Dimensions != 8 || got.RateLimitPerSecond != 3 || got.Enabled {
+		got.Dimensions != 8 || got.RateLimitPerSecond != 3 || got.Enabled ||
+		got.ChunkSizeTokens != 512 || got.TokenizeURL != "http://localhost:8000/tokenize" {
 		t.Errorf("expected every editable field replaced, got %+v", got)
 	}
 }

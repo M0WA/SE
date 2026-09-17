@@ -20,10 +20,12 @@ import (
 // anything itself.
 func NewHTTPEmbedder(e domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider {
 	return httpembed.New(httpembed.Config{
-		BaseURL:    e.BaseURL,
-		APIKey:     e.APIKey,
-		Model:      e.Model,
-		Dimensions: e.Dimensions,
+		BaseURL:         e.BaseURL,
+		APIKey:          e.APIKey,
+		Model:           e.Model,
+		Dimensions:      e.Dimensions,
+		ChunkSizeTokens: e.ChunkSizeTokens,
+		TokenizeURL:     e.TokenizeURL,
 	})
 }
 
