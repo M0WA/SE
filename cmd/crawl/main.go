@@ -314,7 +314,7 @@ func main() {
 	parseHTML := func(html, pageURL string) (string, string, []string, string) {
 		return htmlparser.Parse(strings.NewReader(html), pageURL)
 	}
-	crawlerSvc := application.NewSQLCrawlerService(renderingFetcher, robotsChecker, repo, embedders, bootstrap.EmbedderRateLimits(endpoints), parseHTML, opSettings)
+	crawlerSvc := application.NewSQLCrawlerService(renderingFetcher, robotsChecker, repo, embedders, parseHTML, opSettings)
 
 	pageRank := runPageRankScheduler(ctx, repo, repo, opSettings)
 	contentDedup := runContentDedupScheduler(ctx, repo, repo, opSettings)

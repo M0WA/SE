@@ -1787,7 +1787,7 @@ func (h *Handler) handleAdminEmbeddingsRecomputeStart(w http.ResponseWriter, r *
 	v := h.opSettings.Get()
 	go func() {
 		ctx := context.Background()
-		if _, err := application.RunEmbeddingRecomputeJobWithStatus(ctx, h.embeddingRepo, h.embedders, h.settingsStore, h.embedderRateLimits, v.EmbeddingTitleWeight); err != nil {
+		if _, err := application.RunEmbeddingRecomputeJobWithStatus(ctx, h.embeddingRepo, h.embedders, h.settingsStore, v.EmbeddingTitleWeight); err != nil {
 			log.Printf("recomputing embeddings: %v", err)
 		}
 	}()

@@ -44,12 +44,16 @@ type EmbeddingHTTPEndpoint struct {
 	// doesn't match, and it's what EnableANN uses to size this provider's
 	// own pgvector column.
 	Dimensions int
-	// RateLimitPerSecond caps how many Embed calls per second this process
-	// issues against this endpoint specifically. Each configured endpoint
-	// may be a genuinely different external service with its own rate
-	// limit, so unlike the old single shared EmbeddingRateLimitPerSecond
-	// setting this replaces, the limit is per-endpoint. 0 means unlimited
-	// (fine for a local server with no rate limit of its own, e.g. Ollama).
+	// RateLimitPerSecond caps how many real HTTP requests per second this
+	// process issues against this endpoint specifically -- enforced inside
+	// httpembed.Embedder itself (see its rateLimiter), once per real
+	// embeddings/tokenize request rather than once per Embed call, since a
+	// single Embed call can fire many real requests once ChunkSizeTokens
+	// splits a document into multiple chunks. Each configured endpoint may
+	// be a genuinely different external service with its own rate limit,
+	// so unlike the old single shared EmbeddingRateLimitPerSecond setting
+	// this replaces, the limit is per-endpoint. 0 means unlimited (fine for
+	// a local server with no rate limit of its own, e.g. Ollama).
 	RateLimitPerSecond float64
 	// Enabled controls whether this endpoint's embedding actually gets
 	// computed and stored for every document -- disabling it (like

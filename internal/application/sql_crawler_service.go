@@ -18,45 +18,30 @@ type sqlCrawlerService struct {
 	// provider gets its own embedding computed and stored for every saved
 	// document, not just whichever one is currently active for search.
 	embedders map[string]ports.EmbeddingProvider
-	// rateLimits gives each provider in embedders its own requests-per-
-	// second cap (domain.EmbeddingHTTPEndpoint.RateLimitPerSecond; the
-	// built-in hash provider is simply absent here, same as ratePerSecond
-	// <= 0 -- a local computation with no rate limit of its own). A
-	// provider missing from this map is treated the same as 0 (unlimited).
-	rateLimits map[string]float64
-	parseHTML  func(html, pageURL string) (title, text string, links []string, canonicalURL string)
-	settings   *domain.OperationalSettings
-	// embedRates paces every Embed call this service makes, one
-	// *embedRateLimiter per provider in embedders (see its own doc
-	// comment) -- shared across every concurrently running crawl job,
-	// since a single sqlCrawlerService is constructed once and reused for
-	// all of them (see cmd/crawl/main.go), so a provider's own limit is
-	// respected across the combined rate of every job, not per-job.
-	embedRates map[string]*embedRateLimiter
+	parseHTML func(html, pageURL string) (title, text string, links []string, canonicalURL string)
+	settings  *domain.OperationalSettings
 }
 
 // NewSQLCrawlerService is a CrawlerService that persists crawled documents
 // (with their embeddings) to a SQL-backed ports.SQLRepository, for use with
-// the hybrid (BM25 + semantic) search service. rateLimits gives each
-// provider in embedders its own requests-per-second cap -- see
-// bootstrap.NewEmbedders' caller for how it's built from the currently
-// enabled domain.EmbeddingHTTPEndpoint list.
+// the hybrid (BM25 + semantic) search service. Each provider's own
+// requests-per-second rate limit (domain.EmbeddingHTTPEndpoint.
+// RateLimitPerSecond) is enforced inside its own httpembed.Embedder, not
+// here -- see that package's rateLimiter, which paces every real HTTP
+// request a chunked Embed call makes internally, something an
+// application-layer wrapper around one Embed call per document can no
+// longer do correctly now that chunking exists.
 func NewSQLCrawlerService(
 	fetcher ports.AuthFetcher,
 	robots ports.RobotsChecker,
 	repo ports.SQLRepository,
 	embedders map[string]ports.EmbeddingProvider,
-	rateLimits map[string]float64,
 	parseHTML func(string, string) (string, string, []string, string),
 	settings *domain.OperationalSettings,
 ) ports.CrawlerService {
-	embedRates := make(map[string]*embedRateLimiter, len(embedders))
-	for provider := range embedders {
-		embedRates[provider] = &embedRateLimiter{}
-	}
 	return &sqlCrawlerService{
 		fetcher: fetcher, robots: robots, repo: repo,
-		embedders: embedders, rateLimits: rateLimits, embedRates: embedRates,
+		embedders: embedders,
 		parseHTML: parseHTML, settings: settings,
 	}
 }
@@ -79,14 +64,7 @@ func (c *sqlCrawlerService) Crawl(ctx context.Context, opts ports.CrawlOptions, 
 		v := c.settings.Get()
 		embeddings := make(map[string][]float32, len(c.embedders))
 		for provider, embedder := range c.embedders {
-			rate := c.embedRates[provider]
-			embed := func(ctx context.Context, s string) ([]float32, error) {
-				if rate != nil {
-					rate.wait(ctx, c.rateLimits[provider])
-				}
-				return embedder.Embed(ctx, s)
-			}
-			vec, err := embedTitleWeighted(ctx, embed, doc.Title, doc.Text, v.EmbeddingTitleWeight)
+			vec, err := embedTitleWeighted(ctx, embedder.Embed, doc.Title, doc.Text, v.EmbeddingTitleWeight)
 			if err != nil {
 				return err
 			}

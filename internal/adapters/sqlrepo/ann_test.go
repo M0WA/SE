@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -566,5 +568,172 @@ func TestUpdateEmbedding_RefreshesVectorColumnWhenANNAvailable(t *testing.T) {
 	}
 	if sim := domain.CosineSimilarity([]float32{0, 1}, match.Vector); sim < 0.999 {
 		t.Errorf("expected doc-1's pgvector column to match the new [0,1] embedding (cosine sim ~1), got %v", sim)
+	}
+}
+
+// injectPlainVectorColumn uses rawDB (see newPostgresTestRepoAndRawDB) to
+// create provider's pgvector column directly as the old plain "vector(N)"
+// type, side-stepping the exported Repository API entirely -- simulating a
+// real deployment's column that predates this package's switch to
+// "halfvec" (see ensureVectorIndex's doc comment), so EnableANN's
+// existingType != "halfvec" migration branch actually gets exercised
+// instead of only ever creating a brand-new column. Uses the exact
+// "embedding_vector_<provider>" naming vectorColumnNameFor produces --
+// replicated literally here since that helper is unexported.
+func injectPlainVectorColumn(t *testing.T, rawDB *sql.DB, provider string, dims int) {
+	t.Helper()
+	// The pgvector extension is scoped to whatever schema is first on
+	// search_path at CREATE EXTENSION time -- each test's own throwaway
+	// schema here -- so it must be created (once per test schema) before
+	// the "vector" type it provides can be referenced below; EnableANN
+	// hasn't run yet at this point in these tests, so nothing else has
+	// created it.
+	if _, err := rawDB.ExecContext(context.Background(), `CREATE EXTENSION IF NOT EXISTS vector`); err != nil {
+		t.Skip("pgvector extension not available on this Postgres server; skipping ANN test")
+	}
+	ddl := fmt.Sprintf(`ALTER TABLE documents ADD COLUMN embedding_vector_%s vector(%d)`, provider, dims)
+	if _, err := rawDB.ExecContext(context.Background(), ddl); err != nil {
+		t.Fatalf("injecting pre-existing plain vector(%d) column for %s: %v", dims, provider, err)
+	}
+}
+
+// pgVectorColumnCatalogType reads back provider's pgvector column type
+// straight from Postgres's catalog (the same pg_attribute/format_type
+// query vectorColumnType itself runs), independent of anything
+// ensureVectorColumn or its in-memory annState believe -- so a test can
+// prove the migration actually happened at the database level, not just
+// that EnableANN reported success.
+func pgVectorColumnCatalogType(t *testing.T, rawDB *sql.DB, provider string) string {
+	t.Helper()
+	const q = `
+		SELECT format_type(a.atttypid, a.atttypmod)
+		FROM pg_attribute a
+		WHERE a.attrelid = 'documents'::regclass
+		  AND a.attname = $1
+		  AND NOT a.attisdropped`
+	var formatted string
+	if err := rawDB.QueryRowContext(context.Background(), q, "embedding_vector_"+provider).Scan(&formatted); err != nil {
+		t.Fatalf("reading back catalog type for %s: %v", provider, err)
+	}
+	if open := strings.IndexByte(formatted, '('); open >= 0 {
+		return formatted[:open]
+	}
+	return formatted
+}
+
+// TestEnableANN_MigratesPreExistingPlainVectorColumnToHalfvec is the direct
+// regression test for the actual type-mismatch migration branch inside
+// ensureVectorColumn (existingType != "halfvec") -- unlike
+// TestEnableANN_SucceedsAboveVectorTypeDimensionLimit, which only ever
+// creates a brand-new column for a never-before-used provider, this test
+// first creates a genuine pre-existing plain "vector(N)" column (the exact
+// shape a real deployed database predating the vector->halfvec migration
+// has, per ann.go's own doc comments) and a document_embeddings row to
+// backfill from, then proves EnableANN both migrates the column's catalog
+// type to halfvec and preserves the ability to find the pre-existing
+// document afterward.
+func TestEnableANN_MigratesPreExistingPlainVectorColumnToHalfvec(t *testing.T) {
+	dsn := os.Getenv(testPostgresDSNEnv)
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN not set; skipping pgvector ANN test")
+	}
+	repo, rawDB := newPostgresTestRepoAndRawDB(t, dsn)
+	ctx := context.Background()
+	const provider = "legacy_plain"
+	const dims = 4
+
+	injectPlainVectorColumn(t, rawDB, provider, dims)
+
+	// A document_embeddings row to backfill from, exactly like a document
+	// crawled and embedded before this process ever ran EnableANN. Saved
+	// before EnableANN, so its embedding_vector_<provider> column (still
+	// plain "vector" at this point) is never populated by SaveDocument
+	// itself -- only the later backfillVectorColumn call inside EnableANN
+	// populates it, once the column has been migrated to halfvec.
+	doc := domain.Document{ID: "legacy-doc", URL: "https://example.com/legacy-doc", Title: "legacy", Text: "legacy"}
+	if err := repo.SaveDocument(ctx, doc, map[string][]float32{provider: {1, 0, 0, 0}}, 100, 2); err != nil {
+		t.Fatalf("saving pre-existing document: %v", err)
+	}
+
+	repo.EnableANN(ctx, map[string]int{provider: dims})
+	if !repo.ANNAvailable(provider) {
+		t.Skip("pgvector extension not available on this Postgres server; skipping ANN test")
+	}
+
+	if got := pgVectorColumnCatalogType(t, rawDB, provider); got != "halfvec" {
+		t.Errorf("expected the pre-existing plain vector column migrated to halfvec, catalog still reports %q", got)
+	}
+
+	matches, ok, err := repo.TopSemanticMatches(ctx, []float32{1, 0, 0, 0}, 10, provider)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true once ANN is available")
+	}
+	if _, found := matches["legacy-doc"]; !found {
+		t.Errorf("expected legacy-doc backfilled into the migrated halfvec column and found via ANN, got %+v", matches)
+	}
+}
+
+// TestEnableANN_ConcurrentMismatchedColumnMigrationDoesNotRace is the
+// direct regression test for the concurrency bug ensureVectorColumn's
+// pg_advisory_xact_lock now fixes: several goroutines (standing in for
+// cmd/search, cmd/admin and cmd/crawl each independently calling EnableANN
+// against the same database at their own startup) race to migrate the
+// exact same genuinely pre-existing, mismatched column at once. Without
+// the lock, this is capable of (even if not deterministically, depending
+// on scheduling) leaving one goroutine's process believing ANN is
+// available against a column another goroutine's DROP COLUMN yanked out
+// from under it, or of a transient DDL error surfacing from the
+// unserialized DROP/ADD race. With the lock, every goroutine's EnableANN
+// call is fully serialized per provider, so this must be reliably clean on
+// every run: no error, ANN available afterward, and the document saved
+// before the race still findable via TopSemanticMatches.
+func TestEnableANN_ConcurrentMismatchedColumnMigrationDoesNotRace(t *testing.T) {
+	dsn := os.Getenv(testPostgresDSNEnv)
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN not set; skipping pgvector ANN test")
+	}
+	repo, rawDB := newPostgresTestRepoAndRawDB(t, dsn)
+	ctx := context.Background()
+	const provider = "concurrent_legacy"
+	const dims = 4
+
+	injectPlainVectorColumn(t, rawDB, provider, dims)
+
+	doc := domain.Document{ID: "concurrent-doc", URL: "https://example.com/concurrent-doc", Title: "concurrent", Text: "concurrent"}
+	if err := repo.SaveDocument(ctx, doc, map[string][]float32{provider: {1, 0, 0, 0}}, 100, 2); err != nil {
+		t.Fatalf("saving pre-existing document: %v", err)
+	}
+
+	const goroutines = 8
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			repo.EnableANN(ctx, map[string]int{provider: dims})
+		}()
+	}
+	wg.Wait()
+
+	if !repo.ANNAvailable(provider) {
+		t.Skip("pgvector extension not available on this Postgres server; skipping ANN test")
+	}
+
+	if got := pgVectorColumnCatalogType(t, rawDB, provider); got != "halfvec" {
+		t.Errorf("expected the column migrated to halfvec after the concurrent race, catalog still reports %q", got)
+	}
+
+	matches, ok, err := repo.TopSemanticMatches(ctx, []float32{1, 0, 0, 0}, 10, provider)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true once ANN is available")
+	}
+	if _, found := matches["concurrent-doc"]; !found {
+		t.Errorf("expected concurrent-doc still findable via ANN after the concurrent migration race, got %+v", matches)
 	}
 }
