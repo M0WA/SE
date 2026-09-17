@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.4.0 - 2026-09-17
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Default a new crawl's "prioritize pages not yet indexed" checkbox to on by @M0WA in https://github.com/M0WA/SE/pull/82
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.3.0...v4.4.0
+
+
 ## v4.3.0 - 2026-09-17
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
