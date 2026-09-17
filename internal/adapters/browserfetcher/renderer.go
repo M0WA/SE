@@ -187,6 +187,29 @@ func (r *Renderer) Render(ctx context.Context, url string, opts ports.FetchOptio
 			done <- result{err: fmt.Errorf("rendering %s: %w", url, err)}
 			return
 		}
+		// The browser's native "load" event (waited for above) fires as
+		// soon as the initial document and its static resources finish --
+		// for a client-rendered page (a typical SPA shell + JS bundle),
+		// confirmed against a real site to be well under 2 seconds, long
+		// before the page's own JavaScript has actually fetched and
+		// rendered its real content (that same site: 0 links in the DOM
+		// right at `load`, 115 once its JS caught up ~1s later).
+		// Capturing the DOM at `load` alone routinely sees an
+		// almost-empty shell instead of the real page. WaitForLoadState
+		// with networkidle waits for a short quiet window with no
+		// in-flight requests -- a reasonable proxy for "this page's own
+		// JS is done fetching" -- bounded by the same configured fetch
+		// timeout as the navigation above; a page with continuous
+		// background requests (analytics, polling) simply never goes
+		// idle and this times out on its own, so rendering proceeds with
+		// whatever's in the DOM by then rather than hanging past the
+		// budget already spent reaching `load`. Deliberately not
+		// escalated to an error: a timeout here means "didn't settle,"
+		// not "failed."
+		_ = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+			State:   playwright.LoadStateNetworkidle,
+			Timeout: gotoOpts.Timeout,
+		})
 		html, err := page.Content()
 		if err != nil {
 			done <- result{err: fmt.Errorf("reading rendered content of %s: %w", url, err)}
