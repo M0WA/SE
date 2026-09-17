@@ -1,11 +1,8 @@
 // Package httpembed implements ports.EmbeddingProvider by calling an
-// OpenAI-compatible embeddings HTTP endpoint -- a local inference server
-// (Ollama, llama.cpp, LM Studio, ...) or a hosted API -- so a deployment can
-// opt into a real trained embedding model without this binary itself taking
-// on an ML runtime dependency (no bundled model weights, no ONNX runtime).
-// See internal/domain/settings.go's OperationalSettingsValues.
-// EmbeddingProvider for how a deployment opts into this over the default
-// hashembed.Embedder.
+// OpenAI-compatible embeddings HTTP endpoint (a local inference server or a
+// hosted API), so a deployment can opt into a real trained model without
+// this binary taking on an ML runtime dependency. See domain.
+// OperationalSettingsValues.EmbeddingProvider for how a deployment opts in.
 package httpembed
 
 import (
@@ -22,12 +19,10 @@ import (
 	"unicode/utf8"
 )
 
-// requestTimeout bounds a single embeddings call -- generous enough for a
-// slow local CPU-only inference server, but never so long that a stuck
-// endpoint hangs a search request indefinitely. Unlike httpfetcher's
-// timeout, this isn't admin-configurable: the request shape here is a
-// short, fixed-size text-to-vector call, not an open-ended page fetch, so
-// one sane built-in value covers every deployment.
+// requestTimeout bounds a single embeddings call -- generous for a slow
+// CPU-only server, but bounded so a stuck endpoint can't hang a search
+// indefinitely. Not admin-configurable: unlike a page fetch, this is a
+// short fixed-size call, so one built-in value covers every deployment.
 const requestTimeout = 30 * time.Second
 
 // maxResponseBytes caps how much of the HTTP response body is ever read --
@@ -43,30 +38,22 @@ const maxResponseBytes = 1 << 20
 // Embedder (e.g. in a test) still gets a sane, non-zero value.
 const defaultDimensions = 128
 
-// approxCharsPerToken estimates a chunk's token count from its character
-// count when no TokenizeURL is configured -- this package has no real
-// tokenizer of its own (see the package doc comment). Deliberately low
-// (real English text averages closer to 4 chars/token) so the estimate
-// errs toward *smaller* chunks: undercounting tokens (and so overflowing
-// the configured budget) is the failure mode chunking exists to prevent,
-// so this constant is tuned to make that rare rather than to be precise.
+// approxCharsPerToken estimates token count from char count when no
+// TokenizeURL is configured. Deliberately lower than real English's ~4
+// chars/token so the estimate errs toward smaller chunks -- overflowing
+// the token budget is the failure mode chunking exists to prevent.
 const approxCharsPerToken = 3
 
 // maxTokenizeSplitDepth bounds how many times fitChunkToTokenBudget
-// recursively halves a chunk that verified over budget via TokenizeURL --
-// a hard backstop, not something normal input should ever approach (the
-// character estimate that produced the chunk in the first place is
-// already conservative), so a pathological input is used as one
-// (possibly still slightly over-budget) chunk rather than recursing
-// indefinitely.
+// recursively halves a chunk that verified over budget -- a hard backstop
+// normal input shouldn't approach; a pathological input is used as one
+// (possibly still slightly over-budget) chunk rather than recursing forever.
 const maxTokenizeSplitDepth = 4
 
 // rateLimitMaxRetries bounds how many times Embed/ListModels retries a
-// rate-limited response before giving up and returning the error to the
-// caller -- otherwise a single persistently-throttled call could retry
-// forever and stall a caller like application.RunEmbeddingRecomputeJob
-// (which needs to eventually move on and count a document as failed
-// rather than block the entire corpus behind one document).
+// rate-limited response before giving up -- otherwise a persistently
+// throttled call could stall a caller like RunEmbeddingRecomputeJob, which
+// needs to eventually move on rather than block the corpus on one document.
 const rateLimitMaxRetries = 5
 
 // rateLimitInitialBackoff/rateLimitMaxBackoff bound the exponential
@@ -122,36 +109,20 @@ func waitForRetry(ctx context.Context, wait time.Duration) error {
 	}
 }
 
-// rateLimiter paces real HTTP requests this package makes against a single
-// configured endpoint (see Config.RateLimitPerSecond) so their combined
-// rate -- across every chunk of every document, not just once per Embed
-// call -- respects the endpoint's own requests-per-second cap. This is
-// the same "reserve the next available slot, then sleep outside the
-// lock" algorithm application.embedRateLimiter used before rate limiting
-// moved down into this package (chunking meant a single Embed call could
-// already fire many real HTTP requests internally, so pacing only at the
-// application layer -- once per Embed call -- silently let a chunked
-// document's whole burst of requests fire back-to-back unpaced). The zero
-// value is ready to use.
+// rateLimiter paces real HTTP requests against one configured endpoint
+// (see Config.RateLimitPerSecond) so their combined rate -- across every
+// chunk of every document, not just once per Embed call -- respects the
+// endpoint's requests-per-second cap. The zero value is ready to use.
 type rateLimiter struct {
 	mu   sync.Mutex
 	next time.Time
 }
 
-// wait blocks until this call's reserved slot in the timeline arrives, or
-// returns early if ctx is cancelled first -- an early return here just
-// means the actual HTTP call fails fast against the same cancelled
-// context instead. ratePerSecond <= 0 disables pacing entirely -- a
-// provider configured with no rate limit of its own (e.g. a local Ollama
-// server) passes 0 here.
-//
-// Each call atomically reserves the next available slot (now, or right
-// after whichever slot was most recently reserved, whichever is later)
-// before sleeping outside the lock -- so concurrent callers (embedChunk
-// calls made across concurrently-running crawl jobs, or a chunked
-// document's own sequential chunk/tokenize calls) queue up correctly
-// spaced regardless of goroutine scheduling order, rather than racing to
-// read the same "last call time" and under-pacing.
+// wait blocks until this call's reserved slot arrives, or returns early if
+// ctx is cancelled (the HTTP call then just fails fast against the same
+// context). ratePerSecond <= 0 disables pacing. Each call atomically
+// reserves the next slot before sleeping outside the lock, so concurrent
+// callers queue up correctly spaced rather than racing on "last call time".
 func (r *rateLimiter) wait(ctx context.Context, ratePerSecond float64) {
 	if ratePerSecond <= 0 {
 		return
@@ -209,11 +180,8 @@ type Config struct {
 	ChunkSizeTokens int
 	TokenizeURL     string
 	// RateLimitPerSecond mirrors domain.EmbeddingHTTPEndpoint's same-named
-	// field: the maximum rate of real HTTP requests (both embeddings and,
-	// when TokenizeURL is set, tokenize calls) this Embedder issues
-	// against its configured endpoint. <=0 (the zero value) disables
-	// pacing entirely -- a local provider with no rate limit of its own
-	// (e.g. Ollama) leaves this unset.
+	// field: max rate of real HTTP requests (embeddings + tokenize) this
+	// Embedder issues. <=0 (the zero value) disables pacing entirely.
 	RateLimitPerSecond float64
 }
 
@@ -281,13 +249,10 @@ type embeddingResponse struct {
 }
 
 // Embed calls the configured embeddings endpoint for text and returns its
-// vector. When chunkSizeTokens is 0 (the default), this is exactly one
-// call to embedChunk -- everything below is unchanged from before
-// chunking existed. Otherwise, text is split into chunks (see chunkText),
-// each embedded separately, and mean-pooled into one final vector (see
-// combineVectors) -- so a document whose token count would otherwise
-// exceed the model's context length still gets a real, whole-document
-// vector rather than a hard error.
+// vector. When chunkSizeTokens is 0 (the default), this is one call to
+// embedChunk. Otherwise text is split into chunks (chunkText), each
+// embedded separately and mean-pooled (combineVectors) -- so a document
+// exceeding the model's context length still gets a whole-document vector.
 func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	chunks, err := e.chunkText(ctx, text)
 	if err != nil {
@@ -309,12 +274,9 @@ func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
 
 // embedChunk calls the configured embeddings endpoint for one chunk of
 // text (or the whole text, when chunking is disabled) and returns its
-// vector. A network failure, non-2xx status, malformed JSON response, empty
-// result, or a response vector whose length doesn't match the configured
-// Dimensions all return a clear, wrapped error -- never a panic, and never a
-// silently zero-valued or mis-sized vector. A 429/529 response is retried
-// with backoff (see isRateLimitStatus/retryDelay) up to rateLimitMaxRetries
-// times before its error is finally returned.
+// vector. Any failure (network, non-2xx, malformed JSON, size mismatch)
+// returns a clear wrapped error, never a mis-sized vector. A 429/529 is
+// retried with backoff up to rateLimitMaxRetries times.
 func (e *Embedder) embedChunk(ctx context.Context, text string) ([]float32, error) {
 	// Paced once per chunk, before the first attempt only -- a retried
 	// attempt (429/529) is already paced by embedChunk's own exponential
@@ -391,17 +353,12 @@ func (e *Embedder) embedOnce(ctx context.Context, reqBody []byte) ([]float32, *h
 	return vec, resp, nil
 }
 
-// chunkText splits text into pieces for Embed to embed separately (see
-// combineVectors), each estimated -- or, with tokenizeURL configured,
-// confirmed -- to be at or under e.chunkSizeTokens tokens. Breaks on
-// whitespace where possible, so a chunk never splits a word in half;
-// a single "word" (strings.Fields' definition) that's itself over budget
-// -- CJK text with no ASCII whitespace at all, or one oversized token
-// like a long URL/base64 blob -- is instead split on rune boundaries (see
-// splitByRuneBudget), never raw bytes, so a multi-byte UTF-8 sequence is
-// never severed. Returns text unchanged as the only element when
-// chunkSizeTokens is 0 (chunking disabled) or text already fits in one
-// chunk.
+// chunkText splits text into pieces each estimated (or, with tokenizeURL
+// configured, confirmed) to be at or under e.chunkSizeTokens tokens.
+// Breaks on whitespace where possible; a single over-budget "word" (CJK
+// text, or a long URL/base64 blob) is split on rune boundaries instead (see
+// splitByRuneBudget). Returns text unchanged if chunking is disabled or it
+// already fits.
 func (e *Embedder) chunkText(ctx context.Context, text string) ([]string, error) {
 	if e.chunkSizeTokens <= 0 {
 		return []string{text}, nil
@@ -429,20 +386,10 @@ func (e *Embedder) chunkText(ctx context.Context, text string) ([]string, error)
 			flush()
 		}
 		if wRunes > charBudget {
-			// This single "word" (strings.Fields' definition -- a run of
-			// non-whitespace) is itself over budget on its own, with no
-			// whitespace inside it to split on: CJK text with no ASCII
-			// whitespace at all collapses to exactly one such "word" for
-			// its entire length, and a single oversized token (a long
-			// URL/base64 blob) is one "word" regardless of length either
-			// way. Letting it sail through unsplit would silently
-			// reproduce the exact context-length failure chunking exists
-			// to prevent. Flush whatever's already pending first (this
-			// oversized word starts its own chunk(s), never merged with
-			// unrelated pending text), then split the word itself on rune
-			// boundaries -- never raw bytes, which could sever a
-			// multi-byte UTF-8 sequence -- and append each piece as its
-			// own chunk.
+			// A single "word" with no whitespace to split on (CJK text, or
+			// a long URL/base64 blob) -- flush pending text first (this
+			// word starts its own chunk(s)), then split on rune boundaries
+			// so a multi-byte UTF-8 sequence is never severed.
 			flush()
 			chunks = append(chunks, splitByRuneBudget(w, charBudget)...)
 			continue
@@ -471,20 +418,12 @@ func (e *Embedder) chunkText(ctx context.Context, text string) ([]string, error)
 	return verified, nil
 }
 
-// fitChunkToTokenBudget ensures text fits within e.chunkSizeTokens tokens
-// per e.tokenizeURL's own exact count, recursively splitting it into two
-// halves and re-verifying each when it doesn't -- rather than trimming
-// and discarding the excess, which would silently drop part of the
-// document from ever being embedded. Prefers splitting on words
-// (strings.Fields), falling back to splitting by rune count when there's
-// no whitespace left to split on (CJK text, or a single oversized token
-// like a long URL/base64 blob) -- giving up in that case would silently
-// reproduce the exact context-length failure chunking exists to prevent,
-// for precisely the case a real multilingual/binary-ish input would hit.
-// Both paths are bounded by maxTokenizeSplitDepth so a pathological chunk
-// that still measures over budget after repeated halving can't recurse
-// forever; it's used as one (possibly still slightly over-budget) chunk
-// at that point rather than looping indefinitely.
+// fitChunkToTokenBudget ensures text fits e.chunkSizeTokens per
+// e.tokenizeURL's exact count, recursively halving and re-verifying when
+// it doesn't (never trimming/discarding, which would silently drop
+// content). Prefers splitting on words, falling back to rune count when
+// there's no whitespace left (CJK, or one oversized token). Bounded by
+// maxTokenizeSplitDepth so a pathological chunk can't recurse forever.
 func (e *Embedder) fitChunkToTokenBudget(ctx context.Context, text string, depth int) ([]string, error) {
 	count, err := e.countTokens(ctx, text)
 	if err != nil {
@@ -495,14 +434,9 @@ func (e *Embedder) fitChunkToTokenBudget(ctx context.Context, text string, depth
 	}
 	words := strings.Fields(text)
 	if len(words) < 2 {
-		// No whitespace left to split on -- CJK text, or a single
-		// oversized token that already made it this far (e.g.
-		// chunkText's own rune-budget split still measured over budget
-		// per the exact tokenizer). Rather than giving up and shipping
-		// text unsplit, fall back to splitting by rune count in half:
-		// still bounded by the same maxTokenizeSplitDepth as the
-		// word-based path above, so a pathological input still
-		// terminates rather than recursing forever.
+		// No whitespace left to split on (CJK, or an oversized token) --
+		// fall back to splitting by rune count in half, still bounded by
+		// maxTokenizeSplitDepth.
 		runes := []rune(text)
 		if len(runes) < 2 {
 			return []string{text}, nil
@@ -531,10 +465,7 @@ func (e *Embedder) fitChunkToTokenBudget(ctx context.Context, text string, depth
 }
 
 // splitByRuneBudget splits s into consecutive pieces of at most maxRunes
-// runes each -- used by chunkText to split a single oversized "word" (no
-// whitespace inside it, so word-based splitting can't shrink it) and by
-// fitChunkToTokenBudget as its own no-whitespace-left fallback. Splits on
-// rune boundaries via []rune(s) slicing, never raw byte offsets, so a
+// runes each, via []rune(s) slicing rather than raw byte offsets so a
 // multi-byte UTF-8 sequence is never severed mid-character.
 func splitByRuneBudget(s string, maxRunes int) []string {
 	if maxRunes <= 0 {
@@ -565,16 +496,18 @@ type tokenizeRequest struct {
 	Prompt string `json:"prompt"`
 }
 
+// Count is a pointer so a response missing the field entirely (a schema
+// mismatch on a misconfigured tokenize_url) is distinguishable from a
+// genuine count of 0 -- json.Unmarshal leaves it nil either way, but a
+// plain int would silently read as 0, which fitChunkToTokenBudget would
+// treat as "fits", the opposite of failing closed on a bad response.
 type tokenizeResponse struct {
-	Count int `json:"count"`
+	Count *int `json:"count"`
 }
 
 // countTokens calls e.tokenizeURL for text's exact token count. Unlike
 // embedChunk/listModelsOnce, this never retries on 429/529 -- it's an
-// internal accuracy step inside chunking, not a user-facing operation
-// worth the same backoff complexity, and a persistently rate-limited
-// tokenizer endpoint should surface as a clear failure rather than
-// silently stall Embed.
+// internal accuracy step, not worth the same backoff complexity.
 func (e *Embedder) countTokens(ctx context.Context, text string) (int, error) {
 	e.rate.wait(ctx, e.rateLimitPerSecond)
 
@@ -610,15 +543,15 @@ func (e *Embedder) countTokens(ctx context.Context, text string) (int, error) {
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return 0, fmt.Errorf("httpembed: decoding tokenize response: %w", err)
 	}
-	return parsed.Count, nil
+	if parsed.Count == nil {
+		return 0, fmt.Errorf("httpembed: tokenize response missing \"count\" field: %s", truncate(redact(body, e.apiKey)))
+	}
+	return *parsed.Count, nil
 }
 
-// combineVectors mean-pools multiple chunk vectors (see chunkText) into
-// one final vector representing the whole document -- the standard,
-// simplest way to combine several same-length embeddings of different
-// parts of one text into a single one for downstream cosine-similarity
-// search. Only ever called with 2+ vectors: Embed calls embedChunk
-// directly for the single-chunk case, never combineVectors.
+// combineVectors mean-pools multiple chunk vectors into one vector
+// representing the whole document. Only ever called with 2+ vectors --
+// Embed calls embedChunk directly for the single-chunk case.
 func combineVectors(vecs [][]float32) []float32 {
 	dims := len(vecs[0])
 	out := make([]float32, dims)
@@ -642,17 +575,10 @@ type modelsResponse struct {
 	} `json:"data"`
 }
 
-// ListModels calls the configured endpoint's GET {base_url}/models and
-// returns every model ID it reports -- used by the admin Settings page to
-// prefill the embedding model field's suggestions, so an admin doesn't have
-// to already know (or guess/mistype) a valid model ID for whatever provider
-// they've pointed this at. Not part of ports.EmbeddingProvider: unlike
-// Embed, this isn't something every embedding provider implementation can
-// support (hashembed has no remote catalog to list), so callers that want
-// it type-assert for it specifically (see
-// restapi.handleAdminEmbeddingsModels). Some OpenAI-compatible servers
-// don't implement /models at all -- a 404 there surfaces as a normal
-// non-2xx error, same as any other endpoint failure.
+// ListModels calls GET {base_url}/models and returns every model ID, used
+// by the admin Settings page to prefill model suggestions. Not part of
+// ports.EmbeddingProvider (hashembed has no remote catalog to list) --
+// callers type-assert for it (see restapi.handleAdminEmbeddingsModels).
 func (e *Embedder) ListModels(ctx context.Context) ([]string, error) {
 	backoff := e.rateLimitBackoff
 	for attempt := 0; ; attempt++ {
@@ -724,14 +650,9 @@ func truncate(s string) string {
 }
 
 // redact removes every occurrence of apiKey from body before it's ever
-// included in an error -- this error is not just logged, it's persisted to
-// a crawl job's record and shown back in the admin UI (see
-// crawl_loop.go -> the crawl job store -> the admin crawl-job endpoints),
-// so an embeddings endpoint that's malicious, misconfigured, or simply
-// echoes request headers back in its own error bodies (some gateways do)
-// could otherwise round-trip the "Authorization: Bearer <apiKey>" header
-// this same request just sent right back through this app's own
-// error/logging path. An empty apiKey (no key configured) is a no-op.
+// included in an error -- this error is persisted to a crawl job's record
+// and shown in the admin UI, so a gateway that echoes request headers back
+// in its error bodies could otherwise leak the Authorization header.
 func redact(body []byte, apiKey string) string {
 	if apiKey == "" {
 		return string(body)

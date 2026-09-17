@@ -6,11 +6,8 @@ import (
 )
 
 // The optional leading [+-] lets a sign attach directly to a quoted phrase
-// as one token (`-"exact phrase"`) -- previously absent, which let the
-// plain \S+ alternative match `-"exact` and `phrase"` as two separate,
-// nonsensical tokens instead (see ParseQuery's sign-then-body handling
-// below, and the -site: fix in the same commit for the analogous bug in
-// the site: operator).
+// as one token (`-"exact phrase"`) -- without it, the plain \S+ alternative
+// would split that into two nonsensical tokens (`-"exact`, `phrase"`).
 var queryTokenRe = regexp.MustCompile(`[+-]?"[^"]*"|\S+`)
 
 // sitePrefix is the "site:" operator prefix, matched case-insensitively
@@ -32,17 +29,11 @@ type ParsedQuery struct {
 	ExcludedSites   []string
 }
 
-// ParseQuery splits a raw query string into its structural pieces. It must
-// run on the raw string before Tokenize, which would otherwise strip the
-// +/-/"/site: syntax this depends on.
-//
-// Every token's leading +/- sign (if any) is stripped once, up front, into
-// `sign` -- both the phrase and site: cases below key off that same sign
-// rather than re-deriving it from `tok`, which is what previously let
-// -"phrase" and -site:host fall through to the plain excluded-word case
-// instead of being recognized as an excluded phrase/site: -site:host in
-// particular used to tokenize as three unrelated excluded words
-// ("site","example","com") rather than excluding a host at all.
+// ParseQuery splits a raw query string into its structural pieces. Must run
+// on the raw string before Tokenize, which would strip the +/-/"/site:
+// syntax this depends on. Each token's leading +/- is stripped once into
+// `sign`, which the phrase/site: cases below key off directly rather than
+// re-deriving from `tok`.
 func ParseQuery(raw string) ParsedQuery {
 	var parsed ParsedQuery
 	for _, tok := range queryTokenRe.FindAllString(raw, -1) {
@@ -118,12 +109,10 @@ func (q ParsedQuery) HasConstraints() bool {
 		len(q.ExcludedPhrases) > 0 || len(q.Sites) > 0 || len(q.ExcludedSites) > 0
 }
 
-// SiteAllowed reports whether doc's URL host satisfies this query's site:
-// filter(s), if any. -site:host is checked first and always wins over a
-// positive site: filter (matching how a required/excluded word pair would
-// behave): an exact host match or a subdomain of one (so "site:example.com"
-// also matches "www.example.com", and "-site:example.com" excludes it the
-// same way). A query with neither kind of site: filter allows every host.
+// SiteAllowed reports whether doc's host satisfies this query's site:
+// filter(s). -site:host always wins over a positive site: filter. Matches
+// an exact host or any subdomain ("site:example.com" also matches
+// "www.example.com"). No filters at all allows every host.
 func (q ParsedQuery) SiteAllowed(doc Document) bool {
 	host := HostOf(doc.URL)
 	for _, site := range q.ExcludedSites {
@@ -142,12 +131,10 @@ func (q ParsedQuery) SiteAllowed(doc Document) bool {
 	return false
 }
 
-// Matches reports whether a document's title and text satisfy this query's
-// required words, excluded words, and required phrases. A one-off
-// convenience wrapper around MatchesTokens for a caller that doesn't
-// already have the document's tokens; hybrid_search_service.go calls
-// MatchesTokens directly since it needs the same tokens for ranking
-// overrides too (see domain.TokenSet).
+// Matches reports whether title/text satisfy this query's required/excluded
+// words and phrases -- a convenience wrapper around MatchesTokens for a
+// caller without pre-tokenized text (hybrid_search_service.go calls
+// MatchesTokens directly since it reuses those tokens for ranking too).
 func (q ParsedQuery) Matches(title, text string) bool {
 	if !q.HasConstraints() {
 		return true
@@ -160,15 +147,10 @@ func (q ParsedQuery) Matches(title, text string) bool {
 }
 
 // MatchesTokens is Matches' counterpart for a caller that already
-// tokenized title+text (see TokenSet) for some other reason. tokens is
-// only consulted when this query has required/excluded words -- pass nil
-// if the caller doesn't have a token set for a query it already knows to
-// be phrase-only.
-//
-// Required/excluded checks use the same tokenization as indexing, for
-// consistency with what the BM25 postings actually contain. Phrase checks
-// are a literal, case-insensitive substring match, since phrases aren't
-// positionally indexed.
+// tokenized title+text. tokens is only consulted when required/excluded
+// words exist -- pass nil for a query known to be phrase-only. Phrase
+// checks are a literal, case-insensitive substring match (phrases aren't
+// positionally indexed).
 func (q ParsedQuery) MatchesTokens(tokens map[string]bool, title, text string) bool {
 	if !q.HasConstraints() {
 		return true

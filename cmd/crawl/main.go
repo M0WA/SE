@@ -21,17 +21,13 @@ import (
 )
 
 // schedulerPollInterval is how often crawl-server checks for crawls that
-// have come due. Short enough that a one-off crawl (due immediately --
-// see domain.ScheduledCrawl.Recurring) starts within a few seconds of the
-// admin creating it, rather than waiting up to a full recurring-schedule
-// interval; a single cheap query on this cadence is negligible load for a
-// self-hosted, single-admin instance.
+// have come due -- short enough that a one-off crawl starts within a few
+// seconds, cheap enough to be negligible load for a single-admin instance.
 const schedulerPollInterval = 3 * time.Second
 
 // pageRankPollInterval is how often runPageRankScheduler checks whether the
 // admin-configured recompute interval has elapsed -- independent of (and
-// much shorter than) that interval itself, the same way schedulerPollInterval
-// is independent of any individual scheduled crawl's own interval.
+// much shorter than) that interval itself.
 const pageRankPollInterval = 60 * time.Second
 
 // contentDedupPollInterval is how often runContentDedupScheduler checks
@@ -45,28 +41,11 @@ const contentDedupPollInterval = 60 * time.Second
 // doesn't need pruning to happen the instant the limit is crossed.
 const crawlJobPrunePollInterval = 5 * time.Minute
 
-// runPageRankScheduler recomputes every document's PageRank score once
-// immediately (so a fresh process doesn't run with a stale link graph for a
-// full interval), then again every time at least
-// opSettings.PageRankRecomputeIntervalMinutes has elapsed since the last
-// run -- checked on a fixed, shorter poll tick so an admin edit to that
-// interval takes effect promptly rather than only at the next already-
-// scheduled run. A recompute triggered by a just-completed crawl (see
-// restapi.Config.OnCrawlComplete below) also resets this timer, so a crawl
-// finishing moments before the interval would have fired doesn't trigger an
-// almost-immediate redundant second run.
-//
-// That first recompute runs in the background (go pr.recompute()) rather
-// than blocking here: on a large corpus it can take minutes (a full-graph
-// PageRank pass over every document), and main() still has
-// RecoverInterruptedCrawls and http.ListenAndServe to get through after
-// this returns -- crawl-server should start accepting requests (and
-// resuming interrupted jobs) immediately with the previous scores still in
-// place, not sit unreachable until a potentially long recompute finishes.
-// pageRankRecomputer.recompute's own running-guard keeps this from
-// overlapping with the ticker below, which would otherwise see a
-// zero-value lastRun() and fire a redundant concurrent second pass before
-// this first one even finishes.
+// runPageRankScheduler recomputes PageRank once immediately, then again
+// whenever PageRankRecomputeIntervalMinutes has elapsed (checked on a
+// shorter poll tick so an admin edit takes effect promptly). A post-crawl
+// trigger also resets this timer. Runs the first recompute in the
+// background so a large corpus's pass doesn't delay ListenAndServe.
 func runPageRankScheduler(ctx context.Context, repo ports.PageRankRepository, settingsStore ports.SettingsStore, opSettings *domain.OperationalSettings) *pageRankRecomputer {
 	pr := &pageRankRecomputer{ctx: ctx, repo: repo, settingsStore: settingsStore}
 	go pr.recompute()
@@ -99,13 +78,9 @@ type pageRankRecomputer struct {
 	settingsStore ports.SettingsStore
 	mu            sync.Mutex
 	last          time.Time
-	// running guards against two recompute()s overlapping -- e.g. the
-	// startup call (backgrounded in runPageRankScheduler, above) still
-	// going when the ticker's first tick fires and sees a zero-value
-	// lastRun(), or a crawl completing (OnCrawlComplete) while the
-	// periodic ticker's own run is already underway. A second call while
-	// one is in flight just returns immediately rather than running a
-	// wasteful, contending second full-corpus pass.
+	// running guards against two recompute()s overlapping (startup call vs.
+	// ticker vs. a post-crawl trigger) -- a second call while one is in
+	// flight just returns immediately rather than contending.
 	running bool
 }
 
@@ -134,20 +109,10 @@ func (p *pageRankRecomputer) lastRun() time.Time {
 	return p.last
 }
 
-// runContentDedupScheduler recomputes content-dedup merges once immediately
-// (so a fresh process doesn't wait a full interval before the first pass
-// runs, mirroring runPageRankScheduler), then again every time at least
-// opSettings.ContentDedupIntervalMinutes has elapsed since the last run --
-// checked on a fixed, shorter poll tick so an admin edit to that interval
-// takes effect promptly. A recompute triggered by a just-completed crawl
-// (see restapi.Config.OnCrawlComplete in main below) also resets this
-// timer. Unlike PageRank, this whole pass is opt-in and destructive (see
-// domain.OperationalSettingsValues.ContentDedupEnabled) -- every actual run
-// is gated on it inside contentDedupRecomputer.recompute, so both this
-// scheduler's own startup/ticker calls and an external trigger (the
-// post-crawl hook, or the admin page's own "recompute now" button, which
-// calls application.RunContentDedupJobWithStatus directly rather than
-// through this recomputer) are safe to call unconditionally.
+// runContentDedupScheduler mirrors runPageRankScheduler, gated by
+// ContentDedupIntervalMinutes. Unlike PageRank this pass is opt-in and
+// destructive -- gated inside contentDedupRecomputer.recompute so both this
+// scheduler and an external trigger are safe to call unconditionally.
 func runContentDedupScheduler(ctx context.Context, repo ports.ContentDedupRepository, settingsStore ports.SettingsStore, opSettings *domain.OperationalSettings) *contentDedupRecomputer {
 	cd := &contentDedupRecomputer{ctx: ctx, repo: repo, settingsStore: settingsStore, opSettings: opSettings}
 	go cd.recompute()
@@ -212,13 +177,10 @@ func (c *contentDedupRecomputer) lastRun() time.Time {
 	return c.last
 }
 
-// runScheduler triggers every scheduled crawl that's due, once immediately
-// (so a schedule that came due while the process was down isn't stuck
-// waiting a full poll interval) and then again on every tick for as long
-// as ctx stays alive. It calls handler.TriggerScheduledCrawl -- the same
-// job-creation path handleCrawl uses for a manually triggered crawl, plus
-// a completion callback so TriggerDueCrawls can correct next_run_at to
-// reflect when the crawl actually finished, not just when it started.
+// runScheduler triggers every due scheduled crawl once immediately, then
+// again on every tick, via handler.TriggerScheduledCrawl -- with a
+// completion callback so next_run_at reflects when a crawl actually
+// finished, not just when it started.
 func runScheduler(ctx context.Context, store ports.ScheduledCrawlStore, handler *restapi.Handler) {
 	triggerDue := func() {
 		if _, err := application.TriggerDueCrawls(ctx, store, handler.TriggerScheduledCrawl, time.Now()); err != nil {
@@ -288,19 +250,14 @@ func main() {
 	}
 	endpoints := bootstrap.LoadEmbeddingEndpoints(ctx, repo, settingsEncryptionKey)
 	embedders := bootstrap.NewEmbedders(opSettings.Get().EmbeddingHashEnabled, endpoints)
-	// Enables Postgres pgvector ANN search for this process when available
-	// (so SaveDocument populates the vector columns below), never fatal
-	// otherwise. Must run after embedders are constructed -- see
-	// cmd/search's identical comment and domain.OperationalSettingsValues.
-	// EmbeddingHashEnabled/EmbeddingHTTPEnabled for why.
+	// Enables Postgres pgvector ANN search when available, never fatal
+	// otherwise -- see cmd/search's identical comment. Must run after
+	// embedders are constructed.
 	repo.EnableANN(ctx, bootstrap.EmbedderDimensions(embedders))
-	// fetcher does plain HTTP; wrapping it in RenderAwareFetcher adds an
-	// opt-in real-browser rendering path (see internal/adapters/
-	// browserfetcher) on top, chosen per-crawl or by the Tuning page's
-	// global default -- with rendering left off (the default), this is
-	// byte-for-byte the same plain-HTTP behavior as before the feature
-	// existed. Neither browser engine actually starts a process until a
-	// crawl first asks for it.
+	// fetcher does plain HTTP; RenderAwareFetcher adds an opt-in real-browser
+	// path on top, chosen per-crawl or by the Tuning page's default -- with
+	// rendering off (the default), byte-for-byte the same as before the
+	// feature existed. Neither browser engine starts until a crawl asks for it.
 	fetcher := httpfetcher.New(opSettings)
 	renderingFetcher := &application.RenderAwareFetcher{
 		Base:       fetcher,
@@ -324,17 +281,13 @@ func main() {
 		CrawlJobs:  repo,
 		Health:     repo,
 		OpSettings: opSettings,
-		// A crawl just changed the corpus -- recompute right away (in the
-		// background, so a slow recompute never delays the crawl job's own
-		// reported completion or the concurrency semaphore's release) in
-		// addition to each recomputer's own periodic ticker.
-		// contentDedup.recompute() is a no-op when ContentDedupEnabled is
-		// off (see its own doc comment).
+		// A crawl just changed the corpus -- recompute right away in the
+		// background (so it never delays the job's reported completion),
+		// on top of each recomputer's own ticker. contentDedup.recompute is
+		// a no-op when ContentDedupEnabled is off.
 		OnCrawlComplete: func() { go pageRank.recompute(); go contentDedup.recompute() },
-		// See requireCrawlInternalToken's doc comment: opt-in shared
-		// secret admin-server's crawlclient.Client must send back --
-		// empty by default, so an existing deployment that hasn't set
-		// this keeps working unchanged.
+		// Opt-in shared secret admin-server's crawlclient.Client sends back
+		// -- empty by default, so an unconfigured deployment is unaffected.
 		CrawlInternalToken: bootstrap.GetEnv("CRAWL_INTERNAL_TOKEN", ""),
 	})
 
@@ -348,16 +301,11 @@ func main() {
 		log.Printf("recovered %d interrupted crawl job(s), %d could not be resumed (needed credentials) and were marked failed", recovered, abandoned)
 	}
 
-	// A scheduled crawl's in_progress flag only ever gets cleared by its
-	// own triggered run's completion callback -- an in-memory closure that
-	// dies with this process (see crawl_internal.go's TriggerScheduledCrawl
-	// and ResumeCrawlJob, which knows nothing about it). A restart while
-	// any schedule was mid-run leaves it stuck true forever otherwise,
-	// silently taking that schedule out of both its own recurring cadence
-	// and "Run now" (see RunScheduledCrawlNow's doc comment) until this
-	// runs. Nothing can genuinely still be in progress the instant this
-	// process starts, so every stale flag is reset before the scheduler's
-	// first tick can ever run.
+	// in_progress is only ever cleared by its triggering run's completion
+	// callback, an in-memory closure that dies with this process -- a
+	// restart mid-run otherwise leaves it stuck true forever, silently
+	// blocking that schedule's recurring cadence and "Run now." Nothing can
+	// genuinely still be in progress the instant this process starts.
 	if reset, err := repo.ResetStaleInProgress(ctx); err != nil {
 		log.Printf("resetting stale scheduled-crawl in-progress flags: %v", err)
 	} else if reset > 0 {

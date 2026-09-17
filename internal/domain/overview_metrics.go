@@ -9,12 +9,10 @@ type CrawlJobOutcomeCount struct {
 	Count  int
 }
 
-// DailyCount is one day's count for a simple day-bucketed series (e.g.
-// documents indexed per day). Date is "YYYY-MM-DD" (UTC) -- the first 10
-// characters of the RFC3339Nano text every crawled_at/fetched_at/created_at
-// column already stores (see sqlrepo.crawledAtLayout), which is what the
-// underlying query buckets on directly rather than parsing into a native
-// date type.
+// DailyCount is one day's count for a day-bucketed series (e.g. documents
+// indexed per day). Date is "YYYY-MM-DD" (UTC) -- the first 10 characters
+// of the RFC3339Nano text every *_at column already stores, bucketed on
+// directly rather than parsed into a native date type.
 type DailyCount struct {
 	Date  string
 	Count int
@@ -40,11 +38,8 @@ type DailyAvgDuration struct {
 }
 
 // PageRankBucket is a count of documents whose pagerank falls in one
-// labeled range -- the admin Overview page's PageRank distribution
-// histogram. Label is a pre-formatted "lo–hi" range (see sqlrepo's
-// PageRankHistogram), the same convention AgeBucket/VersionCount already
-// use for a server-formatted display label rather than raw bounds the
-// client would have to format itself.
+// labeled range -- the Overview page's PageRank histogram. Label is a
+// pre-formatted "lo–hi" range, same convention as AgeBucket/VersionCount.
 type PageRankBucket struct {
 	Label string
 	Count int

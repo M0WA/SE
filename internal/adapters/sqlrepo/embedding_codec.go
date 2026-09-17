@@ -6,18 +6,11 @@ import (
 	"math"
 )
 
-// EncodeEmbedding packs vec as a sequence of little-endian IEEE-754 float32
-// values -- the on-disk format for documents.embedding (a BLOB/bytea/
-// LONGBLOB column on every dialect, see dialect.go) since this optimization
-// replaced the previous JSON-array-of-decimal-text encoding. 4 bytes/float
-// regardless of value, versus JSON's ~10-12 ASCII bytes/float, with no
-// reflection-driven token scanning or strconv parsing on either side --
-// embeddings are opaque numeric vectors, never inspected as JSON by a human
-// or tool, so there's no readability trade-off being given up here.
-//
-// A nil/empty vec encodes to an empty (non-nil) byte slice, decoded back by
-// DecodeEmbedding to an empty (non-nil) []float32 -- consistent with how
-// json.Marshal(([]float32)(nil)) previously produced "[]" wire.
+// EncodeEmbedding packs vec as little-endian IEEE-754 float32s -- the
+// on-disk format for documents.embedding, replacing a previous
+// JSON-array encoding (4 bytes/float vs JSON's ~10-12, no parsing
+// overhead; embeddings are never human-inspected, so no readability is
+// lost). A nil/empty vec encodes to an empty (non-nil) byte slice.
 func EncodeEmbedding(vec []float32) []byte {
 	buf := make([]byte, len(vec)*4)
 	for i, v := range vec {

@@ -13,10 +13,8 @@ type sqlCrawlerService struct {
 	robots  ports.RobotsChecker
 	repo    ports.SQLRepository
 	// embedders holds one ports.EmbeddingProvider per currently-enabled
-	// provider (domain.EmbeddingProviderHash, or a configured domain.
-	// EmbeddingHTTPEndpoint's ID), keyed by provider name -- every enabled
-	// provider gets its own embedding computed and stored for every saved
-	// document, not just whichever one is currently active for search.
+	// provider, keyed by name -- every enabled provider gets its own
+	// embedding stored per document, not just the one active for search.
 	embedders map[string]ports.EmbeddingProvider
 	parseHTML func(html, pageURL string) (title, text string, links []string, canonicalURL string)
 	settings  *domain.OperationalSettings
@@ -24,13 +22,8 @@ type sqlCrawlerService struct {
 
 // NewSQLCrawlerService is a CrawlerService that persists crawled documents
 // (with their embeddings) to a SQL-backed ports.SQLRepository, for use with
-// the hybrid (BM25 + semantic) search service. Each provider's own
-// requests-per-second rate limit (domain.EmbeddingHTTPEndpoint.
-// RateLimitPerSecond) is enforced inside its own httpembed.Embedder, not
-// here -- see that package's rateLimiter, which paces every real HTTP
-// request a chunked Embed call makes internally, something an
-// application-layer wrapper around one Embed call per document can no
-// longer do correctly now that chunking exists.
+// the hybrid (BM25 + semantic) search service. Each provider's own rate
+// limit is enforced inside its own httpembed.Embedder, not here.
 func NewSQLCrawlerService(
 	fetcher ports.AuthFetcher,
 	robots ports.RobotsChecker,
@@ -76,15 +69,11 @@ func (c *sqlCrawlerService) Crawl(ctx context.Context, opts ports.CrawlOptions, 
 	}, onPage)
 }
 
-// buildDomainIndexed returns a closure crawlLoop calls, at most once per
-// enqueue batch, to check whether any already-indexed document exists for
-// a discovered link's host -- backing opts.FollowIndexedDomains. Memoizes
-// per host across the whole crawl (a per-instance cache, safe for
-// crawlLoop's single-goroutine call pattern), so a domain seen repeatedly
-// across many pages' links is only ever looked up once. A failed lookup
-// for a given host is cached as "not indexed" rather than retried -- same
-// tradeoff as buildIsIndexed's own failure handling: proceed without the
-// optimization rather than fail the crawl or hammer a failing repository.
+// buildDomainIndexed returns a closure crawlLoop calls to check whether an
+// already-indexed document exists for a discovered link's host (backing
+// opts.FollowIndexedDomains), memoized per host across the crawl. A failed
+// lookup is cached as "not indexed" rather than retried -- same tradeoff
+// as buildIsIndexed below.
 func (c *sqlCrawlerService) buildDomainIndexed(ctx context.Context) func([]string) map[string]bool {
 	cache := make(map[string]bool)
 	return func(hosts []string) map[string]bool {

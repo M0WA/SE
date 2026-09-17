@@ -2,14 +2,10 @@ package domain
 
 import "sync"
 
-// VocabularyCache holds a snapshot of every distinct term the corpus's
-// postings hold (each with its doc/total frequency), kept in memory and
-// refreshed on a timer (see bootstrap.SyncVocabulary) rather than fetched
-// via a full vocabulary scan on every search request that needs fuzzy
-// term correction. Safe for concurrent use, following the same
-// RWMutex-guarded live-value pattern as CorpusStatsCache: read on every
-// search (only for query terms with zero postings hits), written only by
-// the background refresh.
+// VocabularyCache holds a snapshot of every distinct corpus term (with
+// doc/total frequency), refreshed on a timer (bootstrap.SyncVocabulary)
+// rather than scanned on every fuzzy-correction search. Same RWMutex
+// live-value pattern as CorpusStatsCache.
 type VocabularyCache struct {
 	mu    sync.RWMutex
 	terms []TermStat

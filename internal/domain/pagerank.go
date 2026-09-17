@@ -21,15 +21,10 @@ const PageRankMaxIterations = 50
 const PageRankEpsilon = 1e-6
 
 // PageRankOrphanThreshold is the pagerank value below which a document is
-// treated as an "orphan" -- functionally unlinked -- for the admin
-// Overview page's orphan-rate stat tile. Chosen to equal PageRankEpsilon,
-// the same "negligible" convergence threshold PageRank already uses
-// elsewhere: a score this close to zero only happens once PageRank has
-// actually run and found the page has no real incoming link weight, never
-// merely because it hasn't been recomputed yet (a never-recomputed
-// document instead sits at the neutral 1/N default every document starts
-// at -- see sqlrepo's backfillPageRank/SaveDocument -- which is nowhere
-// near this small once there's more than a handful of documents).
+// treated as an "orphan" (functionally unlinked) for the admin Overview
+// page. Equals PageRankEpsilon: this small only happens once PageRank has
+// actually run and found no real incoming link weight, not merely because
+// it hasn't been recomputed yet (a never-recomputed doc sits at 1/N).
 const PageRankOrphanThreshold = 1e-6
 
 // PageRankHistogramBuckets is how many equal-width buckets
@@ -38,14 +33,11 @@ const PageRankOrphanThreshold = 1e-6
 // distribution histogram.
 const PageRankHistogramBuckets = 10
 
-// PageRankRunInfo reports how a PageRank computation actually ran -- how
-// many iterations it took, how far the final iteration still was from full
-// convergence, and how long the run took wall-clock. None of these are
-// observable from the returned scores alone, and all are useful
-// diagnostics for the admin PageRank debug page after a forced recompute.
-// DurationMs is set by application.RunPageRankJob (it covers the whole job
-// -- reading the link graph, running the algorithm, and writing scores
-// back -- not just the in-memory iteration below), not by PageRank itself.
+// PageRankRunInfo reports how a PageRank computation ran (iterations
+// taken, distance from full convergence, wall-clock duration) -- useful
+// diagnostics for the admin PageRank debug page. DurationMs is set by
+// application.RunPageRankJob (covers the whole job, not just the
+// in-memory iteration below), not by PageRank itself.
 type PageRankRunInfo struct {
 	Iterations int     `json:"iterations,omitempty"`
 	FinalDelta float64 `json:"final_delta,omitempty"`
@@ -53,17 +45,10 @@ type PageRankRunInfo struct {
 }
 
 // PageRankStatus is the persisted, cross-process-visible record of the
-// last PageRank recompute -- written to a shared SettingsStore key (see
-// application.RunPageRankJobWithStatus) so the admin PageRank debug page
-// shows whether a recompute triggered by ANY process (the periodic
-// ticker, a post-crawl trigger, or an admin's "force recalculation"
-// click, possibly from a different browser or a different admin-server
-// instance) is currently running, and what the last completed run found
-// -- not just whatever this one process/browser happens to remember.
-// LastRunAt/Documents/Iterations/FinalDelta describe the last run that
-// actually completed; a run currently in progress doesn't touch them
-// until it finishes, so a concurrent viewer still sees the previous
-// result rather than a blank slate while InProgress is true.
+// last PageRank recompute, so the admin debug page shows whether any
+// process is currently recomputing, and what the last run found. An
+// in-progress run leaves the other fields untouched, so a viewer sees
+// the previous result rather than a blank slate.
 type PageRankStatus struct {
 	InProgress bool      `json:"in_progress"`
 	LastRunAt  time.Time `json:"last_run_at,omitempty"`
@@ -71,25 +56,10 @@ type PageRankStatus struct {
 	PageRankRunInfo
 }
 
-// PageRank computes classic iterative PageRank scores over a directed
-// graph: adjacency maps each node (a document ID) to the IDs of every
-// node it links to. A node that only ever appears as a link target (never
-// as a key of adjacency, i.e. it has no outbound links of its own) is
-// still included in the result -- every node mentioned anywhere in
-// adjacency gets a score.
-//
+// PageRank computes classic iterative PageRank over a directed graph:
+// adjacency maps a node (document ID) to the IDs it links to. Every node
+// mentioned anywhere gets a score, even a link-target-only node.
 // PR(v) = (1-d)/N + d * sum over u linking to v of PR(u)/outdegree(u)
-//
-// with d = PageRankDamping and N the total node count. Iteration runs for
-// up to PageRankMaxIterations rounds, stopping early once the total
-// absolute change across every node's score (from the previous round)
-// drops below PageRankEpsilon.
-//
-// An empty adjacency (no nodes at all) returns an empty map and a zero
-// PageRankRunInfo (no iteration was needed). A node with outdegree 0
-// contributes nothing to any other node's score (it simply isn't -- and
-// can't be -- any other node's incoming link), matching the formula
-// literally rather than redistributing its mass across the graph.
 func PageRank(adjacency map[string][]string) (map[string]float64, PageRankRunInfo) {
 	nodes := make(map[string]bool)
 	for from, tos := range adjacency {

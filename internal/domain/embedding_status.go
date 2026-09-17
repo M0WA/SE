@@ -3,15 +3,10 @@ package domain
 import "time"
 
 // EmbeddingRecomputeStatus is the persisted, cross-process-visible record
-// of the last embeddings recompute (see application.RunEmbeddingRecomputeJobWithStatus)
-// -- written to a shared SettingsStore key so the admin Settings page
-// shows whether a recompute triggered by any admin-server instance is
-// currently running, and what the last completed run found, the same way
-// domain.PageRankStatus already does for PageRank recomputes.
-// LastRunAt/Documents/Failed/DurationMs describe the last run that
-// actually completed; a run currently in progress doesn't touch them
-// until it finishes, so a concurrent viewer still sees the previous
-// result rather than a blank slate while InProgress is true.
+// of the last embeddings recompute, written to a shared SettingsStore key
+// (mirrors domain.PageRankStatus). LastRunAt/Documents/Failed/DurationMs
+// describe the last completed run; an in-progress run leaves them
+// untouched, so a viewer sees the previous result, not a blank slate.
 type EmbeddingRecomputeStatus struct {
 	InProgress bool      `json:"in_progress"`
 	LastRunAt  time.Time `json:"last_run_at,omitempty"`

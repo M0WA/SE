@@ -3,16 +3,10 @@ package domain
 import "time"
 
 // ContentDedupStatus is the persisted, cross-process-visible record of the
-// last content-dedup batch run (see application.RunContentDedupJobWithStatus)
-// -- written to a shared SettingsStore key so the admin content-dedup page
-// shows whether a run triggered by any process (the periodic ticker, a
-// post-crawl trigger, or an admin's "recompute now" click) is currently
-// running, and what the last completed run found, the same way
-// domain.PageRankStatus/EmbeddingRecomputeStatus already do for their own
-// batch jobs. GroupsFound/DocumentsMerged/DurationMs describe the last run
-// that actually completed; a run currently in progress doesn't touch them
-// until it finishes, so a concurrent viewer still sees the previous result
-// rather than a blank slate while InProgress is true.
+// last content-dedup batch run -- same pattern as PageRankStatus/
+// EmbeddingRecomputeStatus. GroupsFound/DocumentsMerged/DurationMs describe
+// the last completed run; a run in progress leaves them untouched, so a
+// concurrent viewer sees the previous result, not a blank slate.
 type ContentDedupStatus struct {
 	InProgress bool      `json:"in_progress"`
 	LastRunAt  time.Time `json:"last_run_at,omitempty"`

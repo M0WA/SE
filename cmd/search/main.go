@@ -27,13 +27,10 @@ func main() {
 	corpusStats := domain.NewCorpusStatsCache(0, 1)
 	vocabulary := domain.NewVocabularyCache(nil)
 
-	// Each of these does its own blocking DB round-trip against unrelated
-	// tables/state, and none depends on another's result -- run them
-	// concurrently so startup latency is the slowest one of the three
-	// rather than their sum. Embedder construction (below) needs
-	// opSettings already synced from the settings store (it picks whether
-	// the built-in hash provider is enabled off opSettings.
-	// EmbeddingHashEnabled), so it can't join this same batch.
+	// Each of these does its own independent blocking DB round-trip -- run
+	// concurrently so startup latency is the slowest one, not their sum.
+	// Embedder construction below needs opSettings already synced, so it
+	// can't join this same batch.
 	var wg sync.WaitGroup
 	wg.Add(3)
 	go func() {
@@ -50,16 +47,10 @@ func main() {
 	}
 	endpoints := bootstrap.LoadEmbeddingEndpoints(ctx, repo, settingsEncryptionKey)
 	embedders := bootstrap.NewEmbedders(opSettings.Get().EmbeddingHashEnabled, endpoints)
-	// Attempt to enable Postgres pgvector-backed ANN semantic search -- a
-	// no-op on SQLite/MySQL, and never fatal even on Postgres without the
-	// extension installed (see sqlrepo.Repository.EnableANN): this process
-	// just keeps using the brute-force SampleEmbeddings fallback either
-	// way. Must run after embedders are constructed, since each provider's
-	// vector column is sized to its own Dimensions() -- see domain.
-	// OperationalSettingsValues.EmbeddingHashEnabled/domain.
-	// EmbeddingHTTPEndpoint.Enabled for why that means this can no longer
-	// run concurrently with the
-	// settings sync above.
+	// Attempt to enable Postgres pgvector ANN search -- a no-op on
+	// SQLite/MySQL, never fatal even without the extension (falls back to
+	// SampleEmbeddings). Must run after embedders are constructed, since
+	// each provider's vector column is sized to its own Dimensions().
 	repo.EnableANN(ctx, bootstrap.EmbedderDimensions(embedders))
 
 	searchSvc := application.NewHybridAsSearchService(repo, embedders, settings, opSettings, overrides, corpusStats, vocabulary)

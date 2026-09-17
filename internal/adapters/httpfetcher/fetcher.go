@@ -18,17 +18,11 @@ type Fetcher struct {
 	settings *domain.OperationalSettings
 }
 
-// New builds a Fetcher whose timeout and User-Agent are read from settings
-// on every request, so they can be changed live from the admin panel. A
-// nil settings uses the built-in defaults (see domain.OperationalSettings).
-//
-// The Client's Transport routes every dial -- the initial connection and
-// every redirect hop the client follows -- through netguard.SafeDialContext,
-// so a crawl target (or a redirect/DNS-rebind a crawl target points to)
-// that resolves to a loopback/private/reserved address is refused at the
-// TCP layer rather than fetched. This is the only fetcher every crawl path
-// in this app ultimately goes through for plain (non-rendered) requests,
-// including robots.txt (see robots.Checker, which wraps this same Fetcher).
+// New builds a Fetcher whose timeout/User-Agent are read from settings on
+// every request (live-configurable; nil settings uses the built-in
+// defaults). Its Transport routes every dial, including redirect hops,
+// through netguard.SafeDialContext, so a crawl target resolving to a
+// loopback/private/reserved address is refused at the TCP layer.
 func New(settings *domain.OperationalSettings) *Fetcher {
 	return &Fetcher{Client: &http.Client{Transport: netguard.Transport()}, settings: settings}
 }

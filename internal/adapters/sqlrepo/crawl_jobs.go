@@ -50,10 +50,8 @@ func (r *Repository) MarkRunning(ctx context.Context, id string) error {
 
 // AppendPage records one page's outcome and, for an indexed page, advances
 // crawl_jobs.pages_crawled -- both in one transaction, so a concurrent Get
-// never observes a page row without its corresponding count update (or
-// vice versa). A page appended against a job ID that no longer exists
-// (pruned by PruneCrawlJobs, say) is silently dropped, matching the
-// in-memory store's same "append on an evicted job is a no-op" contract.
+// never observes one without the other. Appending against a since-evicted
+// job ID is a silent no-op, matching the in-memory store's contract.
 func (r *Repository) AppendPage(ctx context.Context, id string, ev domain.CrawlPageEvent) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -171,10 +169,8 @@ func (r *Repository) List(ctx context.Context) ([]domain.CrawlJobSummary, error)
 
 // PruneCrawlJobs deletes every crawl job beyond the maxRetained most
 // recently created, cascading to their crawl_job_pages rows -- called
-// periodically by cmd/crawl's own maintenance ticker (mirroring the
-// PageRank recompute ticker), not part of ports.CrawlJobStore itself,
-// since it's a maintenance operation rather than something the HTTP
-// handler ever needs to trigger directly.
+// periodically by cmd/crawl's own maintenance ticker, not part of
+// ports.CrawlJobStore itself since no HTTP handler triggers it directly.
 func (r *Repository) PruneCrawlJobs(ctx context.Context, maxRetained int) error {
 	if maxRetained <= 0 {
 		return nil
@@ -190,13 +186,10 @@ func (r *Repository) PruneCrawlJobs(ctx context.Context, maxRetained int) error 
 	return nil
 }
 
-// DeleteEndedCrawlJobs deletes every crawl job in domain.CrawlJobDone,
-// CrawlJobFailed, or CrawlJobCancelled status, cascading to their
-// crawl_job_pages rows (same FK-cascade reuse PruneCrawlJobs relies on),
-// and reports how many were removed -- the admin Jobs page's "Clear ended
-// jobs" button, unlike PruneCrawlJobs' age/count-based retention limit,
-// this always leaves queued/running jobs alone regardless of how many
-// there are.
+// DeleteEndedCrawlJobs deletes every done/failed/cancelled job (cascading
+// to crawl_job_pages) and reports how many were removed -- backs the admin
+// Jobs page's "Clear ended jobs" button. Unlike PruneCrawlJobs' count-based
+// retention, this always leaves queued/running jobs alone regardless of count.
 func (r *Repository) DeleteEndedCrawlJobs(ctx context.Context) (int, error) {
 	deleteSQL := r.ph(`DELETE FROM crawl_jobs WHERE status IN (%s, %s, %s)`, 1, 2, 3)
 	res, err := r.db.ExecContext(ctx, deleteSQL,

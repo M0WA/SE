@@ -13,46 +13,24 @@ import (
 // safely resumed (it needed credentials that were never persisted).
 var ErrCrawlInterruptedByRestart = errors.New("crawl-server restarted before this job finished")
 
-// RecoverInterruptedCrawls runs once at crawl-server startup. A job left in
-// CrawlJobQueued or CrawlJobRunning status when the process last stopped
-// (a crash, a deploy, ...) has no goroutine actually working on it anymore
-// -- its in-memory queue/frontier died with the old process -- so without
-// this, it would sit showing "running" (or "queued") forever, looking
-// active when it's actually dead, and never get picked back up.
+// RecoverInterruptedCrawls runs once at crawl-server startup. A job left
+// queued/running when the process last stopped has no goroutine working on
+// it anymore, so without this it would show "running" forever and never
+// get picked back up.
 //
-// A job whose request needed a cookie or Basic auth can't be safely
-// resumed: those credentials are deliberately never persisted (the same
-// storage-at-rest security rationale as domain.ScheduledCrawl's), so it's
-// marked failed with ErrCrawlInterruptedByRestart, and it's on the admin to
-// re-trigger it (e.g. via the Crawl page's "Recrawl" panel) with
-// credentials supplied again.
+// A job needing a cookie/Basic auth can't be resumed (credentials are
+// never persisted) -- marked failed with ErrCrawlInterruptedByRestart; an
+// admin must re-trigger it with credentials supplied again.
 //
-// Every other interrupted job is resumed **in place**, under its own
-// existing ID (via resume, not a fresh trigger) -- its pages_crawled count
-// and page history keep accumulating rather than the job being marked
-// failed and silently replaced by an unrelated-looking new job that starts
-// over from zero. This is not a true resume from wherever the crawl's
-// frontier actually was (no per-URL frontier is persisted) -- it restarts
-// from the same seed URLs -- but that's safe: the crawler's idempotent
-// per-URL document IDs mean already-indexed pages are just harmlessly
-// re-verified, and PrioritizeUnindexed is forced on for this pass
-// regardless of the original request's own setting, so the budget reaches
-// still-missing pages fastest rather than being spent re-confirming ones
-// already indexed before the restart.
+// Every other job resumes in place under its existing ID (pages_crawled
+// and history keep accumulating), restarting from the same seed URLs --
+// safe since per-URL document IDs are idempotent, and PrioritizeUnindexed
+// is forced on so the remaining budget reaches still-missing pages first.
 //
-// Resuming hands crawlLoop a fresh, zeroed local page counter every time,
-// so a job's original MaxPages is shrunk by however many pages it already
-// has to its name (j.PagesCrawled) before being passed on -- otherwise
-// each restart would silently hand the job another full MaxPages budget on
-// top of what it already used, so a long-lived job surviving several
-// restarts (deploys, crashes) could end up crawling many times its
-// configured limit while still reporting that same limit in its request.
-// A job that had already reached (or, from an even earlier restart,
-// exceeded) its budget before this restart has nothing left to spend, so
-// it's marked done outright rather than resumed for yet another pass.
-// MaxPages<=0 (the crawl never set an explicit cap, so crawlLoop applies
-// the operational default instead) is left untouched -- there's no fixed
-// budget here to shrink against.
+// MaxPages is shrunk by PagesCrawled already spent before resuming, so a
+// job surviving several restarts doesn't get a fresh full budget each
+// time; one already at or past budget is marked done instead of resumed.
+// MaxPages<=0 (no explicit cap) is left untouched.
 func RecoverInterruptedCrawls(
 	ctx context.Context,
 	jobs ports.CrawlJobStore,

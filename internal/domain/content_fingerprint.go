@@ -21,12 +21,9 @@ type DocumentFingerprint struct {
 	CrawledAt   time.Time
 }
 
-// ContentHash returns a stable fingerprint of text's actual content,
-// insensitive to case and whitespace differences that don't change what a
-// reader sees (htmlparser.Parse already collapses runs of whitespace to a
-// single space; this additionally case-folds). Two documents with an
-// identical ContentHash are the exact-match dedup case -- see
-// application.RunContentDedupJob's "exact" method.
+// ContentHash returns a stable fingerprint of text's content, case-folded
+// (htmlparser.Parse already collapses whitespace). Two documents with an
+// identical ContentHash are the exact-match dedup case.
 func ContentHash(text string) string {
 	sum := sha256.Sum256([]byte(strings.ToLower(text)))
 	return hex.EncodeToString(sum[:])
@@ -39,23 +36,11 @@ func ContentHash(text string) string {
 // most shingles).
 const simHashShingleSize = 3
 
-// SimHash64 returns a 64-bit locality-sensitive fingerprint of text, encoded
-// as 16 hex characters for dialect-portable storage (a signed BIGINT column
-// would need different handling per SQL dialect once the high bit is set;
-// a fixed-width hex string needs none). Two documents whose SimHash64
-// values differ in only a few bits (see HammingDistance64) are near-
-// duplicates -- e.g. the same article with a different ad slot or
-// timestamp embedded -- even though their ContentHash values differ
-// completely. See application.RunContentDedupJob's "simhash" method.
-//
-// Standard SimHash construction: hash each width-simHashShingleSize word
-// shingle (fnv-1a, a fast, well-distributed non-cryptographic hash -- no
-// adversarial-input concern here, this only ever hashes this app's own
-// crawled text), then for each of the 64 bit positions, sum +1 for every
-// shingle hash with that bit set and -1 for every shingle hash with that
-// bit clear; the output bit is 1 iff the sum is positive. Near-identical
-// texts share most shingles, so their bit-vote sums -- and therefore their
-// final fingerprints -- stay close in Hamming distance.
+// SimHash64 returns a 64-bit locality-sensitive fingerprint of text
+// (16 hex chars -- dialect-portable, unlike a signed BIGINT). Fingerprints
+// differing in only a few bits (HammingDistance64) mean near-duplicate
+// text: each fnv-1a-hashed word shingle casts a per-bit majority vote,
+// so similar texts share most shingles and stay close in Hamming distance.
 func SimHash64(text string) uint64 {
 	words := strings.Fields(strings.ToLower(text))
 	var votes [64]int

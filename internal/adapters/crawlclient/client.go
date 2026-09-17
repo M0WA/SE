@@ -32,10 +32,21 @@ func New(baseURL, token string) *Client {
 	return &Client{BaseURL: baseURL, HTTP: &http.Client{}, Token: token}
 }
 
-func (c *Client) ListCrawlJobs(ctx context.Context) ([]domain.CrawlJobSummary, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/jobs", nil)
+// newRequest builds a request against path relative to c.BaseURL, wrapping
+// the (rare, usually invalid-BaseURL) construction error consistently
+// across every method below.
+func (c *Client) newRequest(ctx context.Context, method, path string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, nil)
 	if err != nil {
-		return nil, fmt.Errorf("building jobs request: %w", err)
+		return nil, fmt.Errorf("building %s %s request: %w", method, path, err)
+	}
+	return req, nil
+}
+
+func (c *Client) ListCrawlJobs(ctx context.Context) ([]domain.CrawlJobSummary, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, "/jobs")
+	if err != nil {
+		return nil, err
 	}
 
 	respBody, status, err := c.do(req)
@@ -54,9 +65,9 @@ func (c *Client) ListCrawlJobs(ctx context.Context) ([]domain.CrawlJobSummary, e
 }
 
 func (c *Client) GetCrawlJob(ctx context.Context, jobID string) (domain.CrawlJob, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/jobs/"+url.PathEscape(jobID), nil)
+	req, err := c.newRequest(ctx, http.MethodGet, "/jobs/"+url.PathEscape(jobID))
 	if err != nil {
-		return domain.CrawlJob{}, fmt.Errorf("building job request: %w", err)
+		return domain.CrawlJob{}, err
 	}
 
 	respBody, status, err := c.do(req)
@@ -79,9 +90,9 @@ func (c *Client) GetCrawlJob(ctx context.Context, jobID string) (domain.CrawlJob
 
 // CancelCrawlJob asks crawl-server to stop a queued or running job.
 func (c *Client) CancelCrawlJob(ctx context.Context, jobID string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/jobs/"+url.PathEscape(jobID)+"/cancel", nil)
+	req, err := c.newRequest(ctx, http.MethodPost, "/jobs/"+url.PathEscape(jobID)+"/cancel")
 	if err != nil {
-		return fmt.Errorf("building cancel request: %w", err)
+		return err
 	}
 
 	respBody, status, err := c.do(req)
@@ -103,9 +114,9 @@ func (c *Client) CancelCrawlJob(ctx context.Context, jobID string) error {
 // DeleteEndedCrawlJobs asks crawl-server to delete every done/failed/
 // cancelled job, returning how many were removed.
 func (c *Client) DeleteEndedCrawlJobs(ctx context.Context) (int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.BaseURL+"/jobs", nil)
+	req, err := c.newRequest(ctx, http.MethodDelete, "/jobs")
 	if err != nil {
-		return 0, fmt.Errorf("building clear-ended request: %w", err)
+		return 0, err
 	}
 
 	respBody, status, err := c.do(req)

@@ -10,12 +10,9 @@ type TuningSettings struct {
 	alpha float64
 	k1    float64
 	b     float64
-	// pageRankWeight blends a document's normalized PageRank score into
-	// FinalScore (see hybridSearchService.Search) -- 0 (the default) means
-	// zero influence, exactly reproducing ranking as it was before
-	// PageRank existed. Kept as its own field (with its own accessors)
-	// rather than a fourth positional Get/Set argument, so every existing
-	// caller of the alpha/k1/b triple is untouched by this addition.
+	// pageRankWeight blends normalized PageRank into FinalScore -- 0 (the
+	// default) means zero influence. Its own field/accessors rather than a
+	// fourth Get/Set argument, so the existing alpha/k1/b callers are untouched.
 	pageRankWeight float64
 }
 

@@ -22,14 +22,10 @@ type ContentDedupRunResult struct {
 	// documents removed across every group.
 	DocumentsMerged int
 	DurationMs      int64
-	// Merges reports each group's canonical document and the alias URLs
-	// merged into it, capped at maxReportedMerges -- the admin page's
-	// per-run "what just got merged" summary. A corpus with more merge
-	// groups than that in a single run still merges all of them (this
-	// only bounds what's reported back from this call, never what
-	// MergeDocuments actually does); the full, permanent listing is
-	// ports.AdminRepository.ListDocumentAliasGroups, read directly from
-	// document_aliases, not this in-memory result.
+	// Merges reports each group's canonical document and its merged alias
+	// URLs, capped at maxReportedMerges -- only bounds what's reported
+	// here, not what's actually merged. The full listing is
+	// ports.AdminRepository.ListDocumentAliasGroups.
 	Merges []MergeRecord
 }
 
@@ -47,13 +43,11 @@ type MergeRecord struct {
 // API's response body, not a limit on how many groups are actually merged.
 const maxReportedMerges = 200
 
-// simHashBandBits/simHashBandCount split each 64-bit domain.SimHash64
-// fingerprint into 4 non-overlapping 16-bit bands for LSH-style bucketing
-// -- see groupBySimHash. Any two documents whose real Hamming distance is
-// within a realistic near-duplicate threshold (a handful of bits) are
-// guaranteed to share at least one of these 4 bands, so only documents
-// that collide in some band are ever pairwise-compared -- avoiding a full
-// O(n^2) scan across the whole corpus.
+// simHashBandBits/simHashBandCount split each 64-bit SimHash64 fingerprint
+// into 4 non-overlapping 16-bit bands for LSH-style bucketing (see
+// groupBySimHash) -- two documents within a realistic Hamming distance are
+// guaranteed to share a band, so only band-colliding documents are ever
+// pairwise-compared, avoiding a full O(n^2) scan.
 const (
 	simHashBandBits  = 16
 	simHashBandCount = 4
@@ -66,19 +60,11 @@ const (
 // not a fully rigorous LSH scheme.
 const maxBandBucketSize = 2000
 
-// RunContentDedupJob scans every document's fingerprint (see
-// ports.ContentDedupRepository.AllDocumentFingerprints), groups duplicates
-// according to method ("exact": domain.ContentHash must match exactly;
-// "simhash": domain.SimHash64 fingerprints within maxSimHashDistance
-// Hamming distance -- see domain.OperationalSettingsValues.
-// ContentDedupMethod/ContentDedupSimHashMaxDistance), and merges each group
-// via MergeDocuments. Called by cmd/crawl's periodic ticker, once more
-// right after each crawl job completes (when ContentDedupEnabled), and on
-// demand by the admin content-dedup page's "recompute now" button.
-//
-// Idempotent by construction: once a group is merged, its loser documents
-// no longer exist as rows, so a subsequent run never re-processes them --
-// AllDocumentFingerprints only ever sees surviving canonical documents.
+// RunContentDedupJob scans every document's fingerprint, groups duplicates
+// per method ("exact": ContentHash match; "simhash": SimHash64 within
+// maxSimHashDistance), and merges each group via MergeDocuments. Called by
+// cmd/crawl's ticker, after each crawl completes, and on demand. Idempotent:
+// merged losers no longer exist as rows, so a later run never re-sees them.
 func RunContentDedupJob(ctx context.Context, repo ports.ContentDedupRepository, method string, maxSimHashDistance int) (ContentDedupRunResult, error) {
 	start := time.Now()
 	fingerprints, err := repo.AllDocumentFingerprints(ctx)
@@ -149,13 +135,10 @@ func groupByExactHash(fingerprints []domain.DocumentFingerprint) [][]domain.Docu
 	return groups
 }
 
-// groupBySimHash finds near-duplicate groups via 4-band LSH bucketing (see
-// simHashBandBits/simHashBandCount) plus union-find over whichever pairs
-// land within maxSimHashDistance of each other -- a document can end up in
-// the same group as another it isn't itself directly within distance of,
-// as long as a chain of pairwise-close documents connects them (a known,
-// accepted simplification for a similarity-clustering pass like this one,
-// not a bug).
+// groupBySimHash finds near-duplicate groups via 4-band LSH bucketing plus
+// union-find over pairs within maxSimHashDistance -- a document can join a
+// group via a chain of pairwise-close documents, not just direct distance
+// to every member; an accepted simplification for clustering, not a bug.
 func groupBySimHash(fingerprints []domain.DocumentFingerprint, maxDistance int) [][]domain.DocumentFingerprint {
 	parent := make([]int, len(fingerprints))
 	for i := range parent {
@@ -231,17 +214,10 @@ func groupBySimHash(fingerprints []domain.DocumentFingerprint, maxDistance int) 
 }
 
 // chooseCanonical picks which document in a duplicate group survives:
-// shortest host wins (the confirmed default rule). By the time two
-// documents ever reach here as separate fingerprints, they were never a
-// www-vs-bare-host pair of the *same* domain -- domain.CanonicalizeURL
-// already folds that case into one document, one ID, before either is
-// ever saved (see OperationalSettingsValues.URLAliasWWWEnabled) -- so this
-// is really comparing genuinely different hosts (e.g. a mirror site) that
-// happen to serve identical/near-identical content. Comparing raw host
-// length (no www-stripping needed) still naturally prefers a bare host
-// over its own www. form in the rarer edge case where one was crawled
-// with URLAliasWWWEnabled off. Ties (equal length) fall back to whichever
-// was crawled first, an arbitrary but deterministic choice.
+// shortest host wins. A www-vs-bare pair of the *same* domain is already
+// folded into one document before either is saved, so this really compares
+// genuinely different hosts (e.g. a mirror) with identical content. Ties
+// (equal length) fall back to whichever was crawled first.
 func chooseCanonical(group []domain.DocumentFingerprint) domain.DocumentFingerprint {
 	best := group[0]
 	for _, f := range group[1:] {
@@ -255,19 +231,11 @@ func chooseCanonical(group []domain.DocumentFingerprint) domain.DocumentFingerpr
 	return best
 }
 
-// RunContentDedupJobWithStatus wraps RunContentDedupJob, additionally
-// persisting a domain.ContentDedupStatus to settings (under
-// ports.SettingsKeyContentDedupStatus) so any process's admin content-dedup
-// page can show whether a run triggered by anything -- another admin's
-// click, the periodic ticker in cmd/crawl, or a post-crawl trigger -- is
-// currently running, and what the last completed run found, without
-// needing to have triggered it itself. settings may be nil (e.g. in a
-// test), in which case this behaves exactly like RunContentDedupJob with
-// the status bookkeeping skipped.
-//
-// On error, InProgress is cleared but LastRunAt/GroupsFound/
-// DocumentsMerged/DurationMs are left as whatever the last successful run
-// recorded -- a failed run didn't produce a new result to show.
+// RunContentDedupJobWithStatus wraps RunContentDedupJob, persisting a
+// domain.ContentDedupStatus so any process's admin page can show whether a
+// run (triggered by anything, anywhere) is in progress and what the last
+// one found. settings may be nil (bookkeeping then skipped). On error,
+// InProgress clears but the last successful run's fields are left as-is.
 func RunContentDedupJobWithStatus(ctx context.Context, repo ports.ContentDedupRepository, settings ports.SettingsStore, method string, maxSimHashDistance int) (ContentDedupRunResult, error) {
 	status := LoadContentDedupStatus(ctx, settings)
 	status.InProgress = true
@@ -286,13 +254,10 @@ func RunContentDedupJobWithStatus(ctx context.Context, repo ports.ContentDedupRe
 	return result, err
 }
 
-// LoadContentDedupStatus reads the persisted content-dedup status back --
-// used both internally, to update it without clobbering fields a
-// concurrent run isn't touching, and by the admin content-dedup page's GET
-// handler, to show it. A nil settings, a store error, a missing key
-// (nothing has ever run through this mechanism), or an undecodable value
-// all just return the zero value -- "nothing to show yet" is never
-// treated as an error.
+// LoadContentDedupStatus reads the persisted status back -- used
+// internally and by the admin GET handler. A nil settings, store error,
+// missing key, or bad value all just return the zero value; "nothing to
+// show yet" is never an error.
 func LoadContentDedupStatus(ctx context.Context, settings ports.SettingsStore) domain.ContentDedupStatus {
 	if settings == nil {
 		return domain.ContentDedupStatus{}

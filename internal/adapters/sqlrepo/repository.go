@@ -17,15 +17,10 @@ import (
 const crawledAtLayout = time.RFC3339Nano
 
 // newDocumentPlaceholderPageRank is the pagerank a brand-new document row
-// gets at insert time, before application.RunPageRankJob has ever had a
-// chance to score it -- see SaveDocument's sql.ErrNoRows branch. Order of
-// magnitude only: a fixed value in the same ballpark as 1/N for a
-// mid-sized (order-10,000-document) corpus, strictly positive (never the
-// column's bare-0 default) and cheap to produce (no query needed at all).
-// Any crawled corpus this is ever slightly too big or small for gets
-// corrected the moment RunPageRankJob next runs, exactly like this
-// codebase already treats backfillPageRank's and domain.PageRank's own
-// neutral placeholder values.
+// gets before RunPageRankJob has scored it (see SaveDocument's
+// sql.ErrNoRows branch) -- order-of-magnitude only (~1/N for a
+// mid-sized corpus), strictly positive, cheap (no query). Corrected the
+// moment RunPageRankJob next runs.
 const newDocumentPlaceholderPageRank = 1e-4
 
 func hostOf(rawURL string) string {
@@ -50,62 +45,32 @@ func New(ctx context.Context, driverName, dsn string) (*Repository, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening DB (%s): %w", driverName, err)
 	}
-	// The very first touch of a brand new sqlite file -- this Ping -- can
-	// itself race with another process's own concurrent open/create
-	// (SQLITE_BUSY), before there's even been a connection yet to set
-	// busy_timeout on (that happens further down, once dialect-specific
-	// setup starts) -- observed in practice: search-server's Ping failing
-	// this way while admin-server and crawl-server started at the same
-	// moment against a brand new file. retrySQLiteBusy is a harmless
-	// no-op for every other dialect (isSQLiteBusyError never matches
-	// their error text) and for sqlite once the file already exists (the
-	// overwhelmingly common case after the very first start).
+	// A brand-new sqlite file's first Ping can race another process's
+	// concurrent open/create (SQLITE_BUSY), before busy_timeout is even
+	// set (below) -- observed in practice across search/admin/crawl
+	// starting simultaneously. A no-op for every other dialect, and for
+	// sqlite once the file already exists.
 	if err := retrySQLiteBusy(ctx, func() error { return db.PingContext(ctx) }); err != nil {
 		return nil, fmt.Errorf("DB ping (%s): %w", driverName, err)
 	}
 
 	repo := &Repository{db: db, dialect: NewDialect(driverName)}
 	repo.applyDefaultPoolSettings()
-	// search-server, admin-server and crawl-server each open (and migrate)
-	// the same SQLite file independently at startup, with no coordination
-	// between them -- SQLite's own file-level locking, not this process,
-	// is what has to serialize their concurrent CREATE TABLE/INDEX
-	// statements. Without a busy timeout, SQLite fails a migration outright
-	// the instant it finds the file locked (SQLITE_BUSY) rather than
-	// waiting the few milliseconds another process's migration actually
-	// takes; the isAlreadyExistsError handling elsewhere only covers
-	// one specific step of that same race, not the table-creation
-	// statements that run first. This is a no-op for every other dialect.
+	// search/admin/crawl each open and migrate the same SQLite file
+	// independently at startup; SQLite's file-level locking serializes
+	// their concurrent CREATE TABLE/INDEX statements. Without a busy
+	// timeout, SQLite fails a migration outright on SQLITE_BUSY instead of
+	// waiting out another process's in-flight migration.
 	if repo.dialect.Name() == "sqlite" {
 		if _, err := db.ExecContext(ctx, "PRAGMA busy_timeout = 5000"); err != nil {
 			return nil, fmt.Errorf("setting busy_timeout (sqlite): %w", err)
 		}
-		// search-server, admin-server and crawl-server are three separate OS
-		// processes, each opening its own *sql.DB (clamped to a single
-		// connection by ConfigurePool) against the same search.db file.
-		// Under SQLite's default rollback-journal mode, a writer's
-		// transaction (crawl-server's SaveDocument -- select/archive/prune/
-		// upsert/rewrite postings+links, all in one commit) takes a
-		// RESERVED/EXCLUSIVE lock that blocks every concurrent reader
-		// (search-server's PostingsForTerms/CorpusStats) until COMMIT. WAL
-		// mode removes that: readers proceed against the last-committed
-		// snapshot in the WAL file while a single writer appends to it, so
-		// readers never block behind the writer. synchronous=NORMAL is
-		// WAL's documented standard pairing -- it skips one of the two
-		// fsyncs FULL performs per commit (safe under WAL: a crash can lose
-		// the most recent commit but never corrupts the database, unlike
-		// under rollback-journal mode where NORMAL can permit corruption).
-		// The very first time WAL mode is set up on a brand new database
-		// file -- e.g. all three binaries starting for the first time at
-		// once, or in CI's install smoke test -- this PRAGMA can return
-		// SQLITE_BUSY immediately rather than honoring busy_timeout's own
-		// retry window (observed in practice both locally and in CI: the
-		// error surfaces within milliseconds, not after waiting out the
-		// 5-second busy_timeout above). retrySQLiteBusy is cheap, short-
-		// lived insurance against that one-time startup race; once the
-		// file is already in WAL mode (every subsequent process start,
-		// overwhelmingly the common case), this is a fast no-op that never
-		// retries at all.
+		// Three processes share one file; rollback-journal mode's writer
+		// lock would block every concurrent reader until COMMIT, so WAL
+		// mode lets readers use the last-committed snapshot instead.
+		// synchronous=NORMAL is WAL's safe documented pairing. The
+		// first-ever WAL setup on a brand-new file can SQLITE_BUSY
+		// immediately, hence the retrySQLiteBusy wrap.
 		if err := retrySQLiteBusy(ctx, func() error {
 			_, err := db.ExecContext(ctx, "PRAGMA journal_mode = WAL")
 			return err
@@ -131,32 +96,19 @@ func NewWithDB(db *sql.DB, driverName string) *Repository {
 	return repo
 }
 
-// applyDefaultPoolSettings applies the built-in operational-settings
-// connection-pool defaults immediately at construction time, before any
-// admin-configured value (if one is ever loaded) is applied via
-// ConfigurePool -- so a freshly started process never runs with Go's
-// unbounded-open/2-idle database/sql defaults, even for the brief window
-// before bootstrap.SyncSettings's first poll completes.
+// applyDefaultPoolSettings applies built-in pool defaults at construction,
+// before any admin-configured value loads, so a fresh process never runs
+// with Go's unbounded-open/2-idle defaults even briefly.
 func (r *Repository) applyDefaultPoolSettings() {
 	d := domain.DefaultOperationalSettings().Get()
 	r.ConfigurePool(d.DBMaxOpenConns, d.DBMaxIdleConns, d.DBConnMaxLifetime)
 }
 
-// ConfigurePool applies connection-pool limits to the live database
-// connection: at most maxOpenConns open connections, up to maxIdleConns of
-// them kept idle rather than closed between requests, and each connection
-// recycled after connMaxLifetime regardless of use (0 means never). Called
-// once at construction with the built-in defaults, and again by
-// bootstrap.SyncSettings whenever the admin-configured operational
-// settings change, so a production Postgres/MySQL deployment always keeps
-// a bounded, warm pool instead of churning connections open and closed
-// past database/sql's default of only 2 cached idle connections.
-//
-// For SQLite, maxOpenConns (and, if larger, maxIdleConns) is always
-// clamped down to 1 regardless of what's requested: SQLite serializes
-// writers at the file level, so more than one open connection doesn't add
-// real concurrency and only risks "database is locked" errors under
-// concurrent writes.
+// ConfigurePool applies connection-pool limits: called once at
+// construction with built-in defaults, then again by bootstrap.SyncSettings
+// whenever admin settings change. For SQLite, maxOpenConns/maxIdleConns
+// are always clamped to 1: SQLite serializes writers at the file level, so
+// more than one connection only risks "database is locked" errors.
 func (r *Repository) ConfigurePool(maxOpenConns, maxIdleConns int, connMaxLifetime time.Duration) {
 	if r.dialect.Name() == "sqlite" {
 		maxOpenConns = 1
@@ -222,13 +174,10 @@ func (r *Repository) migrate(ctx context.Context) error {
 	return r.ensureDocumentAliasHostIndex(ctx)
 }
 
-// migrateScheduledCrawlColumns adds the per-crawl override columns (fetch
-// timeout, minimum text length, crawl delay, max response size,
-// prioritize-unindexed) to a scheduled_crawls table that predates them --
-// CREATE TABLE IF NOT EXISTS above only shapes a fresh table. A
-// pre-existing schedule defaults to 0/false for all five, same as a
-// one-off crawl leaving them blank: "use whatever's configured on the
-// Tuning page."
+// migrateScheduledCrawlColumns adds per-crawl override columns to a
+// scheduled_crawls table that predates them (CREATE TABLE IF NOT EXISTS
+// only shapes a fresh table). A pre-existing schedule defaults to
+// 0/false/” for each, same as a one-off crawl leaving them blank.
 func (r *Repository) migrateScheduledCrawlColumns(ctx context.Context) error {
 	existing, err := r.existingColumns(ctx, "scheduled_crawls")
 	if err != nil {
@@ -290,13 +239,9 @@ func (r *Repository) migrateScheduledCrawlColumns(ctx context.Context) error {
 		return err
 	}
 	// link_scope replaces the old allow_off_domain_links boolean (left in
-	// place, unused, on a database that has it -- this project's
-	// migrations only ever add columns). Defaulting a pre-existing row to
-	// '' (inherit the Tuning page's global default, domain.LinkScopeDomain)
-	// rather than translating its old boolean is a deliberate behavior
-	// change for any schedule that predates this column, same tradeoff as
-	// every other breaking change in this app: downwards compatibility
-	// isn't a concern here.
+	// place, unused). Defaulting a pre-existing row to '' (inherit the
+	// Tuning page's global default) rather than translating the old
+	// boolean is deliberate -- downwards compatibility isn't a concern here.
 	if err := addColumn("link_scope", "link_scope TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
@@ -322,11 +267,9 @@ func (r *Repository) migrateScheduledCrawlColumns(ctx context.Context) error {
 }
 
 // migrateEmbeddingEndpointColumns adds the chunking columns (see
-// domain.EmbeddingHTTPEndpoint.ChunkSizeTokens/TokenizeURL) to an
-// embedding_http_endpoints table that predates them -- CREATE TABLE IF NOT
-// EXISTS above only shapes a fresh table. Both default to their "disabled"
-// value (0 / ”) for a pre-existing endpoint, exactly matching its
-// previous behavior: send text whole, no chunking, no exact tokenizer.
+// domain.EmbeddingHTTPEndpoint.ChunkSizeTokens/TokenizeURL) to a table
+// that predates them, each defaulting to "disabled" (0/”) to match a
+// pre-existing endpoint's previous unchunked behavior.
 func (r *Repository) migrateEmbeddingEndpointColumns(ctx context.Context) error {
 	existing, err := r.existingColumns(ctx, "embedding_http_endpoints")
 	if err != nil {
@@ -347,14 +290,11 @@ func (r *Repository) migrateEmbeddingEndpointColumns(ctx context.Context) error 
 	return addColumn("tokenize_url", "tokenize_url TEXT NOT NULL DEFAULT ''")
 }
 
-// legacyHTTPEmbeddingSettings decodes just the handful of fields this
-// migration cares about from a stored operational-settings JSON blob --
-// deliberately its own small struct, not domain.OperationalSettingsValues,
-// since these fields (EmbeddingHTTPBaseURL/APIKey/Model/Dimensions/Enabled,
-// EmbeddingRateLimitPerSecond) no longer exist on that struct at all. The
-// stored JSON was produced by a plain json.Marshal of the old struct (no
-// json tags anywhere on it), so these Go field names decode by exact name
-// match regardless of what fields the *current* struct has or lacks.
+// legacyHTTPEmbeddingSettings decodes just the fields this migration cares
+// about from a stored operational-settings JSON blob -- its own small
+// struct since these fields no longer exist on the current
+// OperationalSettingsValues; the old blob has no json tags, so these Go
+// field names decode by exact name match regardless.
 type legacyHTTPEmbeddingSettings struct {
 	EmbeddingHTTPEnabled        bool
 	EmbeddingHTTPBaseURL        string
@@ -365,26 +305,11 @@ type legacyHTTPEmbeddingSettings struct {
 }
 
 // migrateLegacyHTTPEmbeddingConfig is a one-time migration for an install
-// that configured the old single-HTTP-endpoint feature (EmbeddingHTTPBaseURL
-// et al. on OperationalSettingsValues, removed in favor of the
-// embedding_http_endpoints table) before upgrading to this version -- it
-// creates one endpoint row from that old flat config so the admin's live
-// HTTP provider setup isn't silently lost across the upgrade, mirroring
-// this codebase's established "protect an existing live config across a
-// breaking settings change" precedent. ID "http" for continuity with any
-// document_embeddings rows a pre-upgrade install already tagged
-// provider="http". Guarded to run at most once via
-// SettingsKeyEmbeddingEndpointsMigrated -- deliberately not "skip if
-// embedding_http_endpoints has any rows," since an admin deleting the
-// migrated endpoint afterward would make that table empty again, and a
-// row-count-based guard would then wrongly resurrect it on the next
-// restart.
+// that configured the old single-HTTP-endpoint feature: creates one
+// endpoint row (ID "http", for continuity with pre-upgrade rows) from the
+// old flat config. Guarded by a settings key, not row count, so a later
+// admin deletion isn't resurrected on restart.
 func (r *Repository) migrateLegacyHTTPEmbeddingConfig(ctx context.Context) error {
-	// Guarded by SettingsKeyEmbeddingEndpointsMigrated, not by whether
-	// embedding_http_endpoints currently has any rows -- an admin deleting
-	// the migrated "http" endpoint afterward would otherwise make that
-	// table empty again, and a later restart would wrongly re-run this and
-	// resurrect the endpoint the admin deliberately removed.
 	_, migrated, err := r.GetSetting(ctx, ports.SettingsKeyEmbeddingEndpointsMigrated)
 	if err != nil {
 		return fmt.Errorf("checking embedding endpoints migration marker: %w", err)
@@ -401,12 +326,8 @@ func (r *Repository) migrateLegacyHTTPEmbeddingConfig(ctx context.Context) error
 	}
 	var legacy legacyHTTPEmbeddingSettings
 	if err := json.Unmarshal([]byte(raw), &legacy); err != nil {
-		// A stored settings blob that doesn't even parse as JSON is a
-		// pre-existing problem bootstrap.SyncSettings already tolerates
-		// (logs and skips) -- not something this migration should turn into
-		// a hard startup failure over. Still mark migrated, since retrying
-		// against the same unparseable blob on every future restart would
-		// never succeed anyway.
+		// An unparseable blob is a pre-existing problem SyncSettings
+		// already tolerates -- mark migrated rather than retrying forever.
 		return r.SaveSetting(ctx, ports.SettingsKeyEmbeddingEndpointsMigrated, "true")
 	}
 	if legacy.EmbeddingHTTPBaseURL != "" {
@@ -432,17 +353,10 @@ func (r *Repository) migrateLegacyHTTPEmbeddingConfig(ctx context.Context) error
 }
 
 // ensureHostIndex and ensureCrawledAtIndex both run after
-// migrateDocumentColumns, since on a database that predates the host
-// column, an index on it can't be created any earlier -- CreateSchemaSQL's
-// CREATE TABLE IF NOT EXISTS is a no-op against an existing table, so the
-// column wouldn't exist yet if this were part of that same statement list
-// (crawled_at itself has been part of the base schema since before its
-// index existed, so for it this is purely about the missing index, not a
-// missing column). Both delegate to ensureIndex, which handles MySQL's
-// lack of CREATE INDEX IF NOT EXISTS (a best-effort statement whose
-// "already exists" error is expected and ignored on every startup after
-// the first) and the concurrent-migration race on Postgres/SQLite
-// (isAlreadyExistsError).
+// migrateDocumentColumns, since a database predating the host column
+// needs it added before an index can be built over it. Both delegate to
+// ensureIndex, which handles MySQL's lack of CREATE INDEX IF NOT EXISTS
+// and the concurrent-migration race on Postgres/SQLite.
 func (r *Repository) ensureHostIndex(ctx context.Context) error {
 	return r.ensureIndex(ctx, "documents", "idx_documents_host", "host")
 }
@@ -452,12 +366,9 @@ func (r *Repository) ensureCrawledAtIndex(ctx context.Context) error {
 }
 
 // ensureDocumentAliasHostIndex creates document_aliases(host)'s index only
-// after migrateDocumentAliasColumns has guaranteed that column exists --
-// unlike a fresh install's CREATE TABLE (which already includes host),
-// creating this index in the same static CreateSchemaSQL() list would fail
-// outright against a document_aliases table from before this column
-// existed, since CREATE TABLE IF NOT EXISTS is a no-op there and the
-// column-adding ALTER TABLE hasn't run yet at that point in migrate().
+// after migrateDocumentAliasColumns guarantees that column exists --
+// building it via the static CreateSchemaSQL() list would fail against a
+// pre-existing table from before the column was added.
 func (r *Repository) ensureDocumentAliasHostIndex(ctx context.Context) error {
 	return r.ensureIndex(ctx, "document_aliases", "idx_document_aliases_host", "host")
 }
@@ -479,16 +390,10 @@ func (r *Repository) ensureIndex(ctx context.Context, table, indexName, column s
 }
 
 // isAlreadyExistsError reports whether err is the benign race where two of
-// search/admin/crawl migrate the same not-yet-upgraded table at once (each
-// opens its own DB connection and migrates on startup): both see a column
-// or index missing, both try to add it, and the loser gets an
-// already-exists/duplicate error from the database instead of a clean
-// no-op, even though the column/index ends up created either way. Without
-// tolerating this, that race crashes the losing process outright. Covers
-// Postgres ("already exists" for both CREATE INDEX and ADD COLUMN, plus
-// the unique-violation phrasing CREATE INDEX CONCURRENTLY's catalog race
-// can produce) and MySQL (which phrases a duplicate column as "Duplicate
-// column name" rather than "already exists").
+// search/admin/crawl migrate the same not-yet-upgraded table at once: both
+// see a column/index missing, both try to add it, and the loser gets an
+// already-exists/duplicate error even though it ends up created either
+// way. Covers Postgres's and MySQL's differently-phrased variants.
 func isAlreadyExistsError(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "already exists") ||
@@ -498,11 +403,8 @@ func isAlreadyExistsError(err error) bool {
 
 // isForeignKeyViolationError reports whether err is a foreign key
 // constraint failure, across all three dialects -- used by UpdateEmbedding
-// to recognize (and silently ignore) an upsert into document_embeddings
-// for a doc_id that no longer exists in documents, the same "target's
-// already gone, nothing to do" no-op the old direct
-// "UPDATE documents SET ... WHERE id=?" used to produce by simply
-// affecting zero rows.
+// to silently ignore an upsert for a doc_id that no longer exists, the
+// same no-op a plain "UPDATE ... WHERE id=?" would produce.
 func isForeignKeyViolationError(err error) bool {
 	if err == nil {
 		return false
@@ -514,24 +416,19 @@ func isForeignKeyViolationError(err error) bool {
 }
 
 // isSQLiteBusyError reports whether err is modernc.org/sqlite's
-// SQLITE_BUSY, phrased as "database is locked (5)" (plain busy) or
-// "(261)"/"(517)" (the WAL-mode and RESERVED-lock variants SQLITE_BUSY
-// carries as extended result codes) -- all three show up when two
-// processes race to convert a brand new database file to WAL mode at
-// once, see retrySQLiteBusy.
+// SQLITE_BUSY (plain or an extended result code variant) -- shows up when
+// two processes race to convert a brand new file to WAL mode, see
+// retrySQLiteBusy.
 func isSQLiteBusyError(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "SQLITE_BUSY") || strings.Contains(msg, "database is locked")
 }
 
-// retrySQLiteBusy runs fn, retrying with a short backoff if it fails with
-// SQLITE_BUSY. PRAGMA busy_timeout only governs SQLite's own internal wait
-// loop for a lock held by another connection's in-flight statement; the
-// one-time conversion of a brand new file to WAL mode involves SQLite
-// re-opening the database's shared-memory (-shm) file, which can hand back
-// SQLITE_BUSY immediately, before busy_timeout's retry logic ever engages
-// -- see the call sites in New(). A handful of short retries is enough to
-// let the winning process finish that one-time setup.
+// retrySQLiteBusy runs fn, retrying with a short backoff on SQLITE_BUSY.
+// PRAGMA busy_timeout doesn't cover the one-time WAL-mode conversion
+// (SQLite re-opening the -shm file can SQLITE_BUSY immediately, before
+// busy_timeout engages) -- a handful of short retries covers that startup
+// race instead. See New()'s call sites.
 func retrySQLiteBusy(ctx context.Context, fn func() error) error {
 	const maxAttempts = 10
 	var err error
@@ -549,12 +446,9 @@ func retrySQLiteBusy(ctx context.Context, fn func() error) error {
 }
 
 // migrateDocumentColumns adds host/version/crawled_at/norm_embedding to a
-// documents table that predates them (CREATE TABLE IF NOT EXISTS above only
-// shapes a fresh table) and backfills host/pagerank for any pre-existing
-// row, so an upgrade never requires a manual migration step.
-// norm_embedding (like embedding itself) is retired -- see SaveDocument --
-// so it's added for schema compatibility with an older table but never
-// backfilled; nothing reads it anymore.
+// documents table that predates them, and backfills host/pagerank for any
+// pre-existing row, so an upgrade never needs a manual step. norm_embedding
+// is retired (see SaveDocument) -- added for compatibility but never backfilled.
 func (r *Repository) migrateDocumentColumns(ctx context.Context) error {
 	existing, err := r.existingColumns(ctx, "documents")
 	if err != nil {
@@ -600,12 +494,9 @@ func (r *Repository) migrateDocumentColumns(ctx context.Context) error {
 }
 
 // migrateDocumentAliasColumns adds host to a document_aliases table that
-// predates it (this table itself is new enough that every fresh install's
-// CREATE TABLE IF NOT EXISTS above already includes it -- this only
-// matters for a database that ran this feature's very first release,
-// before host existed on this table). Backfilled from each row's own
-// alias_url the same way documents.host is backfilled from url -- see
-// backfillDocumentAliasHosts.
+// predates it (only matters for a database that ran this feature's very
+// first release). Backfilled from each row's alias_url the same way
+// documents.host is backfilled from url -- see backfillDocumentAliasHosts.
 func (r *Repository) migrateDocumentAliasColumns(ctx context.Context) error {
 	existing, err := r.existingColumns(ctx, "document_aliases")
 	if err != nil {
@@ -725,12 +616,9 @@ func (r *Repository) backfillHost(ctx context.Context) error {
 }
 
 // backfillContentFingerprints fills in content_hash/simhash for any row
-// saved before those columns existed (they default to ”), computed
-// directly from that row's already-stored text -- no re-crawl needed. This
-// is what lets application.RunContentDedupJob find duplicates among
-// content crawled before this feature ever existed, the moment it's first
-// enabled, rather than only catching duplicates crawled from here on. A
-// no-op once every row has a fingerprint.
+// saved before those columns existed, computed from stored text (no
+// re-crawl needed) -- lets RunContentDedupJob find duplicates predating
+// the feature the moment it's enabled. A no-op once every row has one.
 func (r *Repository) backfillContentFingerprints(ctx context.Context) error {
 	rows, err := r.db.QueryContext(ctx, r.ph(`SELECT id, text FROM documents WHERE content_hash = %s`, 1), "")
 	if err != nil {
@@ -763,13 +651,10 @@ func (r *Repository) backfillContentFingerprints(ctx context.Context) error {
 }
 
 // backfillPageRank fills in pagerank for any row saved before that column
-// existed (it defaults to 0) with a neutral 1/N score rather than leaving
-// it at 0 -- a bare 0 would unfairly rank every pre-existing document dead
-// last on PageRank the moment an admin turns on PageRankWeight, before
-// application.RunPageRankJob has ever had a chance to compute a real
-// score. A real PageRank score is always strictly positive (see
-// domain.PageRank's base (1-d)/N term, added unconditionally every
-// iteration), so "pagerank = 0" unambiguously means "never assigned".
+// existed with a neutral 1/N score instead of a bare 0 -- 0 would unfairly
+// rank a pre-existing document last the moment PageRankWeight is turned
+// on. A real score is always strictly positive, so 0 unambiguously means
+// "never assigned".
 func (r *Repository) backfillPageRank(ctx context.Context) error {
 	var totalDocs int
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM documents`).Scan(&totalDocs); err != nil {
@@ -793,39 +678,24 @@ func (r *Repository) Ping(ctx context.Context) error {
 	return r.db.PingContext(ctx)
 }
 
-// SaveDocument upserts doc keyed by its ID (callers derive that ID
-// deterministically from the URL, so re-crawling the same page always
-// lands on the same row rather than creating a duplicate). When the new
-// content actually differs from what's on record, the previous version is
-// archived to document_versions and the version counter advances, and any
-// archived versions beyond maxVersions-1 (the current row in documents
-// makes up the "+1") are pruned, oldest first, in the same transaction;
-// re-confirming unchanged content just refreshes crawled_at and prunes
-// nothing.
+// SaveDocument upserts doc keyed by its ID (deterministic from URL, so a
+// re-crawl always lands on the same row). When content actually changes,
+// the previous version is archived to document_versions and pruned back
+// to maxVersions-1 (oldest first); re-confirming unchanged content just
+// refreshes crawled_at.
 func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embeddings map[string][]float32, maxVersions, titleWeight int) error {
-	// The title is counted titleWeight times before the body: postings
-	// stores one merged term_freq per (term, doc) rather than a separate
-	// per-field count (no BM25F-style fielded formula), so the simplest way
-	// to give a title match more weight than the same word appearing in the
-	// body is to make it contribute that many times more to term_freq --
-	// see domain.OperationalSettingsValues.TitleWeight. A non-positive
-	// value (the caller passed a zero value rather than a real setting, as
-	// in an older test) is treated as 1, the same as any other unweighted
-	// term, rather than dropping the title from the token stream entirely.
-	// Like every other indexing-time setting (min text length, crawl
-	// delay, ...), this only takes effect for documents crawled or
-	// re-crawled after a change to it -- it isn't retroactively applied to
-	// already-indexed content.
+	// The title is repeated titleWeight times before the body (no
+	// BM25F-style fielded formula, so this is how a title match counts
+	// more than the same word in body text). A non-positive value (e.g.
+	// an older test's zero) is treated as 1, not "no title at all". Only
+	// affects documents crawled/re-crawled after the setting changes.
 	if titleWeight <= 0 {
 		titleWeight = 1
 	}
 	tokens := domain.Tokenize(strings.Repeat(doc.Title+" ", titleWeight) + doc.Text)
-	// documents.embedding/norm_embedding are retired now that every
-	// provider's vector lives in document_embeddings instead (see
-	// saveDocumentEmbeddings below) -- this codebase's migrations only ever
-	// add columns, never drop them, so the two columns stay in the schema
-	// (still NOT NULL) but are always written empty from here on, rather
-	// than picking one provider's vector to keep populating there.
+	// documents.embedding/norm_embedding are retired (vectors now live in
+	// document_embeddings) -- migrations only ever add columns, never drop
+	// them, so these stay NOT NULL but always written empty from here on.
 	embBlob := EncodeEmbedding(nil)
 	normEmbedding := domain.VectorNorm(nil)
 	host := hostOf(doc.URL)
@@ -975,19 +845,10 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 }
 
 // saveDocumentEmbeddings upserts one document_embeddings row per provider
-// present in embeddings (typically one entry per currently-enabled
-// provider -- see domain.OperationalSettingsValues.EmbeddingHashEnabled/
-// EmbeddingHTTPEnabled), plus, on Postgres, that provider's own pgvector
-// ANN column whenever EnableANN has succeeded for it -- shared by
-// SaveDocument and UpdateEmbedding, since both write the same shape of
-// data, just via a caller-supplied transaction so either call site's own
-// surrounding writes stay atomic with this one.
-// dbExecer is satisfied by both *sql.DB and *sql.Tx, letting
-// saveDocumentEmbeddings run either as part of a larger caller transaction
-// (SaveDocument, where an embedding write failing should roll back the
-// whole document save, exactly like before this table existed) or as its
-// own independently-committing statements per provider (UpdateEmbedding --
-// see its own doc comment for why that one needs different atomicity).
+// in embeddings, plus its pgvector ANN column when EnableANN has
+// succeeded for it -- shared by SaveDocument and UpdateEmbedding via a
+// caller-supplied transaction, so each call site's own atomicity needs
+// are respected. dbExecer (*sql.DB or *sql.Tx) is what makes that possible.
 type dbExecer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
@@ -1011,17 +872,11 @@ func (r *Repository) saveDocumentEmbeddings(ctx context.Context, exec dbExecer, 
 	return nil
 }
 
-// saveDocumentInsertBatchSize bounds how many postings or links rows one
-// multi-row "INSERT ... VALUES (...),(...),..." statement in SaveDocument
-// covers, following the same batching principle UpdatePageRanks/
-// updatePageRankBatch already apply to the pagerank write path -- applied
-// here to the postings/links rewrite that runs on literally every crawled
-// page, replacing what used to be one INSERT per term/link row. Each row
-// contributes 3 placeholders, and SQLite's default
-// SQLITE_MAX_VARIABLE_NUMBER is 999 -- 300 rows/chunk (900 params) stays
-// comfortably under that regardless of dialect, since Postgres/MySQL's own
-// per-statement parameter limits are far higher and never the binding
-// constraint.
+// saveDocumentInsertBatchSize bounds how many postings/links rows one
+// multi-row INSERT in SaveDocument covers, replacing what used to be one
+// INSERT per row. Each row is 3 placeholders; SQLite's default
+// SQLITE_MAX_VARIABLE_NUMBER is 999, so 300 rows/chunk (900 params) stays
+// safely under it (Postgres/MySQL's own limits are never the constraint).
 const saveDocumentInsertBatchSize = 300
 
 // insertPostingsBatch runs one multi-row INSERT INTO postings statement
@@ -1114,17 +969,11 @@ func (r *Repository) PostingsForTerm(ctx context.Context, term string, limit int
 	return out, rows.Err()
 }
 
-// PostingsForTerms batch-fetches postings for every one of terms in a
-// single "WHERE term IN (...)" query joined against documents, instead of
-// hybrid search's caller running one such join (plus a separate doc-freq
-// COUNT(*) query) per unique query term. Each term's DocFreq is simply the
-// number of rows that came back for it -- postings has exactly one row per
-// (term, doc_id) pair, so counting the grouped rows in Go is equivalent to
-// (and cheaper than) a separate "SELECT COUNT(*) ... GROUP BY term" query.
-// TotalDocs/AvgDocLen are deliberately left zero here -- see the
-// ports.SQLRepository.PostingsForTerms doc comment -- since the caller
-// fetches those once per request (or less often, from an in-memory cache)
-// rather than once per term.
+// PostingsForTerms batch-fetches postings for all of terms in one "WHERE
+// term IN (...)" join, instead of one join + COUNT(*) per term. Each
+// term's DocFreq is just the row count returned for it (one row per
+// (term, doc_id) pair). TotalDocs/AvgDocLen are left zero -- the caller
+// fetches those once per request, not once per term.
 func (r *Repository) PostingsForTerms(ctx context.Context, terms []string) (map[string][]domain.PostingStats, error) {
 	if len(terms) == 0 {
 		return map[string][]domain.PostingStats{}, nil
@@ -1228,14 +1077,11 @@ func vocabularySortColumn(sortBy string) string {
 	}
 }
 
-// VocabularyStats reports the total number of distinct indexed terms
-// (vocabSize, always corpus-wide) plus a limit/offset page of terms
-// ordered by sortBy/sortDir (see vocabularySortColumn; ties are always
-// broken by term ascending, for a stable order across pages). When search
-// is non-empty, both the page and matchedCount (the total this search
-// matches, before limit/offset -- for the caller to compute a page count)
-// are restricted to terms containing it; matchedCount equals vocabSize
-// when search is empty.
+// VocabularyStats reports the total distinct term count (vocabSize) plus
+// a limit/offset page of terms ordered by sortBy/sortDir (ties broken by
+// term ascending). When search is non-empty, both the page and
+// matchedCount (pre-limit/offset total) are restricted to matching terms;
+// matchedCount equals vocabSize otherwise.
 func (r *Repository) VocabularyStats(ctx context.Context, limit, offset int, search, sortBy, sortDir string) (int, int, []domain.TermStat, error) {
 	var vocabSize int
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT term) FROM postings`).Scan(&vocabSize); err != nil {
@@ -1306,12 +1152,9 @@ func (r *Repository) AllTerms(ctx context.Context) ([]domain.TermStat, error) {
 }
 
 // scanEmbeddingRows reads (id, embedding-blob, norm_embedding, pagerank)
-// rows into a map, shared by EmbeddingsForDocs and SampleEmbeddings so both
-// stay consistent about how the embedding column is deserialized. The norm
-// and pagerank are read straight off their own columns -- computed once at
-// SaveDocument time (or by the norm_embedding/pagerank backfills, or --
-// for pagerank -- a later application.RunPageRankJob run) -- rather than
-// recomputed here from the deserialized vector.
+// rows into a map, shared by EmbeddingsForDocs and SampleEmbeddings. norm
+// and pagerank are read straight off their own precomputed columns rather
+// than recomputed here from the deserialized vector.
 func scanEmbeddingRows(rows *sql.Rows) (map[string]domain.EmbeddedVector, error) {
 	out := make(map[string]domain.EmbeddedVector)
 	for rows.Next() {
@@ -1375,13 +1218,10 @@ func (r *Repository) SampleEmbeddings(ctx context.Context, limit int, provider s
 	return scanEmbeddingRows(rows)
 }
 
-// DocumentsByIDs batch-fetches documents for the given IDs in a single
-// "WHERE id IN (...)" query, for callers (e.g. hybrid search's
-// constraint/boost/recency filtering) that would otherwise need one round
-// trip per candidate -- an ID with no matching row is simply absent from
-// the result rather than an error, so a candidate whose document was
-// deleted concurrently is silently dropped by the caller rather than
-// failing the whole search.
+// DocumentsByIDs batch-fetches documents for the given IDs in one query
+// instead of one round trip per candidate. An ID with no matching row is
+// simply absent from the result, not an error -- a concurrently-deleted
+// candidate is silently dropped rather than failing the whole search.
 func (r *Repository) DocumentsByIDs(ctx context.Context, ids []string) (map[string]domain.Document, error) {
 	if len(ids) == 0 {
 		return map[string]domain.Document{}, nil
@@ -1410,13 +1250,10 @@ func (r *Repository) DocumentsByIDs(ctx context.Context, ids []string) (map[stri
 	return out, rows.Err()
 }
 
-// DocumentsByIDsSortedByCrawledAt batch-fetches documents for the given IDs
-// exactly like DocumentsByIDs (an ID with no matching row is simply absent,
-// not an error), but returns them as a slice in descending crawled_at order
-// (ties broken by id ascending, for a deterministic order) -- pushed down
-// into SQL and served by idx_documents_crawled_at, so the hybrid search
-// service's recency-sort path never needs an in-app sort.Slice over the
-// fetched candidates.
+// DocumentsByIDsSortedByCrawledAt is DocumentsByIDs but returns a slice in
+// descending crawled_at order (ties by id), pushed into SQL and served by
+// idx_documents_crawled_at so hybrid search's recency-sort path never
+// needs an in-app sort.Slice.
 func (r *Repository) DocumentsByIDsSortedByCrawledAt(ctx context.Context, ids []string) ([]domain.Document, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -1453,14 +1290,10 @@ func (r *Repository) DocumentsByIDsSortedByCrawledAt(ctx context.Context, ids []
 // the user's own intent, not a general relevance sample.
 const maxDocumentIDsByHost = 5000
 
-// hostMatchConditions builds the "column = ? OR column LIKE ?" clauses
-// (one pair per host, ORed together) that DocumentIDsByHost and its
-// document_aliases counterpart both need against their own host column --
-// exact match or a subdomain of it, mirroring domain.ParsedQuery.
-// SiteAllowed's matching rule. startPos is the first placeholder position
-// to use (queries appending this after other placeholders pass their own
-// next position); the returned nextPos is where the caller's own
-// following placeholder (e.g. a trailing LIMIT) should start from.
+// hostMatchConditions builds "column = ? OR column LIKE ?" clauses (one
+// per host, ORed) for exact-or-subdomain matching, mirroring domain.
+// ParsedQuery.SiteAllowed's rule. startPos is the first placeholder
+// position to use; nextPos is where the caller's next placeholder starts.
 func (r *Repository) hostMatchConditions(column string, hosts []string, startPos int) (conditions []string, args []interface{}, nextPos int) {
 	conditions = make([]string, 0, len(hosts))
 	args = make([]interface{}, 0, len(hosts)*2)
@@ -1473,13 +1306,10 @@ func (r *Repository) hostMatchConditions(column string, hosts []string, startPos
 	return conditions, args, pos
 }
 
-// DocumentIDsByHost returns the IDs of documents whose host exactly
-// matches one of hosts, or is a subdomain of one, served by
-// idx_documents_host rather than a full table scan -- plus, unioned in,
-// the canonical_id of any document_alias whose own host matches: a
-// document merged away (or www-folded) under one of the requested hosts
-// is still findable by site: through whichever host it was actually
-// aliased from, even though its surviving document's own host differs.
+// DocumentIDsByHost returns IDs of documents whose host exactly matches
+// or is a subdomain of one of hosts (via idx_documents_host), plus,
+// unioned in, the canonical_id of any document_alias whose host matches
+// -- so a merged-away or www-folded document is still findable by site:.
 func (r *Repository) DocumentIDsByHost(ctx context.Context, hosts []string) ([]string, error) {
 	if len(hosts) == 0 {
 		return nil, nil
@@ -1563,13 +1393,9 @@ func (r *Repository) ResolveAliasHosts(ctx context.Context, hosts []string) ([]s
 	return hostsOut, rows.Err()
 }
 
-// AllDocumentIDs lists every document ID in the corpus, ordered by id for
-// stable, deterministic pagination -- used by
-// application.RunEmbeddingRecomputeJob to walk the whole corpus in
-// bounded-size batches (via DocumentsByIDs) rather than loading every
-// document's text into memory at once. A plain "SELECT id", with none of
-// ListDocuments' link-stat joins or DocumentIDsByHost's per-host filter --
-// neither is relevant to just enumerating every ID once.
+// AllDocumentIDs lists every document ID, ordered by id for stable
+// pagination -- used by RunEmbeddingRecomputeJob to walk the corpus in
+// bounded batches via DocumentsByIDs rather than loading all text at once.
 func (r *Repository) AllDocumentIDs(ctx context.Context) ([]string, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id FROM documents ORDER BY id`)
 	if err != nil {
@@ -1588,37 +1414,17 @@ func (r *Repository) AllDocumentIDs(ctx context.Context) ([]string, error) {
 	return ids, rows.Err()
 }
 
-// UpdateEmbedding overwrites one document's embedding (and norm_embedding,
-// recomputed to match) for every provider present in embeddings -- the
-// narrow write half of SaveDocument's embedding handling, without touching
-// text/postings/links/document_versions/pagerank/host, none of which
-// change when a document's vector representation is recomputed against
-// its own already-stored text (e.g. after an
-// OperationalSettingsValues.EmbeddingProvider change -- see
-// application.RunEmbeddingRecomputeJob). Also refreshes each provider's
-// Postgres pgvector column when ANN is enabled for it, mirroring
-// SaveDocument's own handling of those columns.
+// UpdateEmbedding overwrites one document's embedding+norm_embedding per
+// provider, without touching text/postings/links/versions/pagerank/host --
+// used after a model change recomputes vectors from stored text (see
+// RunEmbeddingRecomputeJob). Also refreshes each provider's pgvector column.
 func (r *Repository) UpdateEmbedding(ctx context.Context, id string, embeddings map[string][]float32) error {
-	// Deliberately NOT wrapped in a shared transaction (unlike SaveDocument's
-	// call to the same helper): each provider's document_embeddings write
-	// must commit independently of whether its ANN pgvector-column write
-	// subsequently succeeds. This matters for the real production scenario
-	// TestEnableANN_RecreatesColumnWhenDimensionsChange guards -- a
-	// recompute run against a provider/model whose dimension changed but
-	// whose pgvector column this process hasn't recreated yet (that only
-	// happens on the next EnableANN, at startup): the canonical
-	// document_embeddings write must still land so a later EnableANN's
-	// backfill can recover from it, even though the (expected, transient)
-	// ANN-column write fails and this call still reports that failure to
-	// the caller (RunEmbeddingRecomputeJob counts it as Failed).
-	//
-	// A document deleted between RunEmbeddingRecomputeJob listing its ID
-	// and reaching this call is a harmless no-op, not an error worth
-	// surfacing -- unlike the old direct "UPDATE documents SET ... WHERE
-	// id=?" (which just silently affected zero rows), document_embeddings'
-	// doc_id foreign key rejects the upsert outright once the document is
-	// gone, so that specific failure is swallowed here to preserve the
-	// original no-op behavior.
+	// NOT wrapped in a shared transaction (unlike SaveDocument's call to
+	// this helper): each provider's document_embeddings write must commit
+	// independently of a subsequent, possibly-failing ANN-column write --
+	// see TestEnableANN_RecreatesColumnWhenDimensionsChange. A document
+	// deleted between listing and reaching this call is a harmless no-op:
+	// document_embeddings' FK rejects the upsert, swallowed here below.
 	if err := r.saveDocumentEmbeddings(ctx, r.db, id, embeddings); err != nil {
 		if isForeignKeyViolationError(err) {
 			return nil
@@ -1628,13 +1434,10 @@ func (r *Repository) UpdateEmbedding(ctx context.Context, id string, embeddings 
 	return nil
 }
 
-// DeleteDocument removes a document and every row that references it
-// (postings, archived versions, outbound links). The schema also declares
-// ON DELETE CASCADE for all three, but that's only a backstop here, not
-// relied on: SQLite's foreign-key enforcement is off by default and is a
-// per-connection PRAGMA, so a pooled connection that never ran it would
-// silently leave orphaned rows behind -- deleting them explicitly is
-// correct regardless of whether cascade enforcement happens to be active.
+// DeleteDocument removes a document and every referencing row (postings,
+// archived versions, outbound links) explicitly -- the schema's ON DELETE
+// CASCADE is only a backstop, since SQLite's FK enforcement is off by
+// default per-connection and a pooled connection may never have enabled it.
 func (r *Repository) DeleteDocument(ctx context.Context, docID string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1704,23 +1507,11 @@ func (r *Repository) AllDocumentFingerprints(ctx context.Context) ([]domain.Docu
 	return out, nil
 }
 
-// MergeDocuments folds every document in loserIDs into canonicalID, all in
-// one transaction: each loser's own pre-existing document_aliases entries
-// are repointed straight to canonicalID (path compression -- a loser that
-// was itself already an alias target, e.g. from a www-fold or a
-// rel=canonical tag, must resolve in a single lookup, never a chain), a
-// fresh alias row is recorded for the loser's own URL, and the loser's
-// document row is removed. loserIDs naming canonicalID itself, or a
-// document already removed by a concurrent run (no longer found), are
-// silently skipped rather than erroring the whole merge.
-//
-// Every child table referencing the loser by doc_id (postings,
-// document_versions, document_embeddings, links) is deleted explicitly,
-// the same per-table pattern DeleteDocument already uses -- not a bare
-// DELETE FROM documents relying on the schema's ON DELETE CASCADE, since
-// this driver never enables SQLite's foreign-key enforcement (no
-// PRAGMA foreign_keys = ON anywhere in this package), so CASCADE is a
-// silent no-op there.
+// MergeDocuments folds each loserIDs document into canonicalID in one
+// transaction: repoints its existing aliases to canonicalID (path
+// compression), records a fresh alias for its URL, then deletes it and
+// every referencing child row (like DeleteDocument -- CASCADE isn't
+// reliable here). loserIDs naming canonicalID, or already gone, are skipped.
 func (r *Repository) MergeDocuments(ctx context.Context, canonicalID string, loserIDs []string, reason string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1766,13 +1557,10 @@ func (r *Repository) MergeDocuments(ctx context.Context, canonicalID string, los
 	return tx.Commit()
 }
 
-// ListDocumentAliasGroups pages through every canonical document that
-// currently has at least one alias -- see ports.AdminRepository's own doc
-// comment. Grouping happens in Go (fetch every (canonical_id, alias_url)
-// pair ordered by canonical_id, then group consecutive rows) rather than a
-// dialect-specific GROUP_CONCAT/STRING_AGG, since those aggregate
-// functions differ enough across sqlite/mysql/postgres to not be worth the
-// portability cost for what's ultimately just an admin diagnostics page.
+// ListDocumentAliasGroups pages through every canonical document with at
+// least one alias. Grouping happens in Go (fetch ordered pairs, group
+// consecutive rows) rather than a dialect-specific GROUP_CONCAT/STRING_AGG,
+// not worth the portability cost for an admin diagnostics page.
 func (r *Repository) ListDocumentAliasGroups(ctx context.Context, limit, offset int) ([]domain.DocumentAliasGroup, int, error) {
 	var total int
 	countSQL := `SELECT COUNT(DISTINCT canonical_id) FROM document_aliases`
@@ -1867,12 +1655,10 @@ func (r *Repository) ListDocumentAliasGroups(ctx context.Context, limit, offset 
 }
 
 // ListDocuments lists indexed pages, most recent ID first, optionally
-// narrowed to a single host (used by the per-domain admin subpage so it
-// doesn't need to fetch and filter the whole corpus client-side).
+// narrowed to a single host (backs the per-domain admin subpage).
 // maxHostsIndexedBatch bounds how many hosts a single FollowIndexedDomains
-// lookup batches per query -- a safety valve consistent with
-// maxDocumentIDsByHost, since a crawl could otherwise discover an
-// unbounded number of distinct off-scope hosts across its own pages' links.
+// lookup batches per query -- a crawl could otherwise discover unbounded
+// distinct off-scope hosts across its own pages' links.
 const maxHostsIndexedBatch = 500
 
 // HostsIndexed reports, for each of hosts, whether any document is already
@@ -2028,26 +1814,16 @@ func (r *Repository) attachLinkStats(ctx context.Context, docs []domain.IndexedD
 	return backlinkRows.Err()
 }
 
-// LinkGraph loads the entire crawled link graph as an adjacency map: each
-// document's ID to the IDs of every other indexed document it links to.
-// links only stores each outbound link's raw target URL (to_url), not a
-// document ID -- a link whose target was never crawled/indexed has no
-// document ID to report, so this join against documents.url on to_url
-// naturally omits it. Self-links are already excluded at SaveDocument time
-// (a link back to doc.URL itself is skipped there), but a document ID
-// pair could still coincide here if two distinct source URLs happened to
-// resolve to the same document ID; guarded against defensively anyway,
-// since a self-loop is meaningless for PageRank. Loaded in one query
-// rather than one row at a time.
+// LinkGraph loads the crawled link graph as a document-ID adjacency map
+// in one query. links stores each link's raw target URL, not a document
+// ID, so an uncrawled/unindexed target is naturally omitted by the join.
+// Self-loops are defensively filtered even though SaveDocument already
+// skips them, since two distinct source URLs could resolve to one ID.
 func (r *Repository) LinkGraph(ctx context.Context) (map[string][]string, error) {
-	// A link's to_url is resolved against documents.url directly first;
-	// when that misses but to_url instead names a known alias (a page
-	// merged away by application.RunContentDedupJob, or folded by
-	// domain.CanonicalizeURL's www rule after this link was recorded),
-	// document_aliases.canonical_id is used instead -- so a link to a
-	// since-merged-away URL still contributes its PageRank weight to
-	// whichever document actually survived, rather than silently
-	// disappearing the moment the target is merged away.
+	// to_url resolves against documents.url first; if that misses but
+	// names a known alias (merged away by RunContentDedupJob, or
+	// www-folded), document_aliases.canonical_id is used instead, so a
+	// link to a since-merged-away URL still credits the surviving document.
 	query := `SELECT l.from_id, COALESCE(d.id, da.canonical_id) FROM links l
 	          LEFT JOIN documents d ON d.url = l.to_url
 	          LEFT JOIN document_aliases da ON da.alias_url = l.to_url
@@ -2072,23 +1848,16 @@ func (r *Repository) LinkGraph(ctx context.Context) (map[string][]string, error)
 	return graph, rows.Err()
 }
 
-// UpdatePageRanks batch-writes every given document ID's freshly computed
-// PageRank score to documents.pagerank, one UPDATE per ID within a single
-// transaction. A document ID not present in scores is left untouched --
-// see application.RunPageRankJob and ports.PageRankRepository.
-// pageRankUpdateBatchSize bounds how many documents one UPDATE statement in
-// UpdatePageRanks covers -- each document contributes 3 placeholders (a
-// CASE WHEN id/THEN score pair, plus the id again in the WHERE IN list), so
-// 200 keeps every batch's placeholder count comfortably under any SQL
-// driver's per-statement parameter limit regardless of dialect.
+// pageRankUpdateBatchSize bounds documents per UPDATE in UpdatePageRanks:
+// each contributes 3 placeholders, so 200 stays well under any driver's
+// per-statement parameter limit.
 const pageRankUpdateBatchSize = 200
 
-// UpdatePageRanks writes every document's freshly computed PageRank score
-// in batches of one CASE-WHEN UPDATE per pageRankUpdateBatchSize documents
-// (standard SQL, portable across sqlite/postgres/mysql) rather than one
-// UPDATE per document -- the same batching principle DocumentsByIDs/
-// PostingsForTerms already apply to reads, applied here to a write that
-// can touch the entire corpus every time application.RunPageRankJob runs.
+// UpdatePageRanks batch-writes every scores entry to documents.pagerank
+// in one CASE-WHEN UPDATE per pageRankUpdateBatchSize documents, within a
+// single transaction, rather than one UPDATE per document -- this can
+// touch the entire corpus on every RunPageRankJob run. An ID not present
+// in scores is left untouched.
 func (r *Repository) UpdatePageRanks(ctx context.Context, scores map[string]float64) error {
 	if len(scores) == 0 {
 		return nil
@@ -2164,12 +1933,9 @@ func (r *Repository) placeholderList(n, startPos int) string {
 }
 
 // SearchDomains finds distinct crawled domains whose hostname contains q,
-// most-documents-first, capped at limit. An empty q matches every domain
-// (still capped at limit, most-documents-first) rather than nothing -- the
-// admin Documents page's domain search fetches this bounded-but-broad
-// batch once an admin starts searching, then matches q as a regular
-// expression against it client-side, since a substring LIKE can't express
-// what a regex can.
+// most-documents-first, capped at limit (or every domain if q is empty).
+// The admin Documents page then matches q as a regex client-side against
+// this batch, since a substring LIKE can't express what a regex can.
 func (r *Repository) SearchDomains(ctx context.Context, q string, limit int) ([]domain.DomainSummary, error) {
 	query := r.ph(`SELECT host, COUNT(*) AS cnt FROM documents
 	               WHERE host LIKE %s GROUP BY host ORDER BY cnt DESC, host ASC LIMIT %s`, 1, 2)
@@ -2315,11 +2081,9 @@ func (r *Repository) DocumentsOverview(ctx context.Context, topDomains int) (dom
 }
 
 // countDocumentsCrawled counts documents whose crawled_at falls in
-// [since, until) -- an empty bound on either side means unbounded on that
-// side. crawled_at is stored as RFC3339Nano UTC text, which sorts
-// lexicographically the same as chronologically, so plain string
-// comparison works across all three dialects without a native TIMESTAMP
-// column or driver-specific time scanning.
+// [since, until) -- empty means unbounded on that side. crawled_at is
+// RFC3339Nano UTC text, which sorts lexicographically = chronologically,
+// so plain string comparison works across all three dialects.
 func (r *Repository) countDocumentsCrawled(ctx context.Context, since, until string) (int, error) {
 	var query string
 	var args []interface{}
@@ -2511,11 +2275,8 @@ func requireRowsAffected(res sql.Result, id string) error {
 }
 
 // DueScheduledCrawls lists every enabled, not-already-in-progress schedule
-// whose next_run_at is at or before now, soonest-due first. in_progress =
-// false excludes an entry whose previously-triggered run hasn't finished
-// yet -- see application.TriggerDueCrawls, which is the only thing that
-// ever sets in_progress true, and MarkScheduledCrawlRun's onDone call,
-// which is the only thing that ever clears it back to false.
+// whose next_run_at is at or before now, soonest-due first -- in_progress
+// = false excludes an entry whose previously-triggered run hasn't finished.
 func (r *Repository) DueScheduledCrawls(ctx context.Context, now time.Time) ([]domain.ScheduledCrawl, error) {
 	query := r.ph(`SELECT `+scheduledCrawlColumns+` FROM scheduled_crawls
 	               WHERE enabled = %s AND in_progress = %s AND next_run_at <= %s ORDER BY next_run_at ASC`, 1, 2, 3)
@@ -2536,21 +2297,10 @@ func (r *Repository) DueScheduledCrawls(ctx context.Context, now time.Time) ([]d
 	return out, rows.Err()
 }
 
-// MarkScheduledCrawlRun records that a schedule was just triggered (or just
-// finished -- see application.TriggerDueCrawls, which calls this twice per
-// run: once immediately with a provisional nextRunAt and inProgress=true,
-// once more when the crawl actually completes, correcting nextRunAt to
-// reflect the real finish time and clearing inProgress back to false).
-// enabled and inProgress are deliberately separate columns: enabled is
-// purely the admin's own on/off toggle (this call only ever changes it to
-// reflect a genuine end state -- a one-off entry that just ran, or a
-// recurring one that just reached its MaxRuns cap -- never merely "a run
-// is currently in flight"), while inProgress is what actually keeps
-// DueScheduledCrawls from double-triggering an entry that's still running
-// past its own interval. Conflating the two used to mean every trigger
-// (including a manual "Run now") visibly, if temporarily, unchecked the
-// admin's own enabled toggle in the UI -- confusing and wrong, since the
-// admin never touched it.
+// MarkScheduledCrawlRun records a schedule's trigger or finish --
+// TriggerDueCrawls calls this twice per run: once provisionally with
+// inProgress=true, again on completion. enabled (the admin's toggle) and
+// inProgress (what blocks double-triggering) are deliberately separate.
 func (r *Repository) MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time, enabled, inProgress bool, runCount int) error {
 	updateSQL := r.ph(`UPDATE scheduled_crawls SET last_run_at = %s, next_run_at = %s, enabled = %s, in_progress = %s, run_count = %s WHERE id = %s`, 1, 2, 3, 4, 5, 6)
 	res, err := r.db.ExecContext(ctx, updateSQL,
@@ -2561,31 +2311,10 @@ func (r *Repository) MarkScheduledCrawlRun(ctx context.Context, id string, lastR
 	return requireRowsAffected(res, id)
 }
 
-// RunScheduledCrawlNow marks a schedule due immediately -- next_run_at =
-// now, enabled = true -- without touching last_run_at, run_count, or any
-// crawl option. crawl-server's own scheduler ticker (application.
-// TriggerDueCrawls) discovers it on its next tick, the same as a freshly
-// created one-off crawl already does; that tick is what actually calls
-// MarkScheduledCrawlRun once the triggered job finishes.
-//
-// Also force-clears in_progress: DueScheduledCrawls only ever selects an
-// entry with in_progress = false (see its own doc comment), and nothing
-// besides a triggered run's own completion callback ever clears that flag
-// -- a callback that's only ever registered in-memory for the lifetime of
-// the goroutine that triggered it (see crawl_internal.go's
-// TriggerScheduledCrawl). A crawl-server restart while that run was still
-// in flight loses that callback entirely, leaving in_progress stuck true
-// forever with nothing to reset it (ResumeCrawlJob, the restart-recovery
-// path, only knows about the crawl_jobs row, not the ScheduledCrawl that
-// triggered it) -- silently breaking both this entry's normal recurring
-// schedule and every future "Run now" against it, since neither could
-// ever satisfy DueScheduledCrawls' in_progress = false condition again. An
-// explicit "run now" click is exactly the moment to self-heal that: the
-// admin is unambiguously asking for this to run immediately, so any stale
-// "already running" state is cleared rather than left to silently block
-// it forever. (cmd/crawl/main.go's own startup also resets every stale
-// in_progress flag, which is the systemic fix for schedules nobody
-// happens to click "Run now" on again.)
+// RunScheduledCrawlNow marks a schedule due immediately, discovered on
+// the ticker's next tick. Also force-clears in_progress: a crawl-server
+// restart mid-run loses the callback that would otherwise clear it, so
+// an explicit "Run now" click self-heals that stale state.
 func (r *Repository) RunScheduledCrawlNow(ctx context.Context, id string, now time.Time) error {
 	updateSQL := r.ph(`UPDATE scheduled_crawls SET next_run_at = %s, enabled = %s, in_progress = %s WHERE id = %s`, 1, 2, 3, 4)
 	res, err := r.db.ExecContext(ctx, updateSQL, now.UTC().Format(crawledAtLayout), true, false, id)
@@ -2595,15 +2324,11 @@ func (r *Repository) RunScheduledCrawlNow(ctx context.Context, id string, now ti
 	return requireRowsAffected(res, id)
 }
 
-// ResetStaleInProgress clears in_progress back to false for every schedule
-// that has it stuck true -- meant to run once at crawl-server startup (see
-// cmd/crawl/main.go), before the scheduler ticker's first tick. Nothing
-// can genuinely still be "in progress" the instant this process starts:
-// any goroutine that would eventually have cleared the flag via its
-// triggered run's completion callback died with whatever process set it,
-// whether that was this same restart or an earlier one this schedule
-// never got "Run now" clicked on since. Returns how many rows were reset,
-// for a one-line startup log -- 0 is the expected, healthy case.
+// ResetStaleInProgress clears in_progress for every schedule stuck true,
+// run once at crawl-server startup before the ticker's first tick --
+// nothing can genuinely be in-progress the instant this process starts,
+// since the goroutine that would clear it died with whatever process set
+// it. Returns how many rows were reset (0 is the healthy case).
 func (r *Repository) ResetStaleInProgress(ctx context.Context) (int, error) {
 	updateSQL := r.ph(`UPDATE scheduled_crawls SET in_progress = %s WHERE in_progress = %s`, 1, 2)
 	res, err := r.db.ExecContext(ctx, updateSQL, false, true)
@@ -2686,12 +2411,9 @@ func (r *Repository) UpdateEmbeddingEndpoint(ctx context.Context, e domain.Embed
 	return requireEmbeddingEndpointRowsAffected(res, e.ID)
 }
 
-// DeleteEmbeddingEndpoint removes an endpoint's configuration -- its
-// already-stored document_embeddings rows and ANN column are left in
-// place, unused, same non-destructive convention as disabling a provider
-// (see EmbeddingHTTPEndpoint.Enabled's doc comment); only the configured
-// endpoint itself, which controls whether it's still computed going
-// forward, is removed here.
+// DeleteEmbeddingEndpoint removes an endpoint's config only -- its stored
+// document_embeddings rows and ANN column are left in place, unused, the
+// same non-destructive convention as disabling a provider.
 func (r *Repository) DeleteEmbeddingEndpoint(ctx context.Context, id string) error {
 	res, err := r.db.ExecContext(ctx, r.ph(`DELETE FROM embedding_http_endpoints WHERE id = %s`, 1), id)
 	if err != nil {

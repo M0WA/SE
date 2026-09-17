@@ -12,19 +12,11 @@ import (
 	"searchengine/internal/domain"
 )
 
-// annState tracks whether Postgres pgvector-backed approximate
-// nearest-neighbor semantic search is available for this process's
-// lifetime, per provider (domain.EmbeddingProviderHash, or a configured
-// domain.EmbeddingHTTPEndpoint's ID) -- any number may be enabled at once
-// (see domain.OperationalSettingsValues.EmbeddingHashEnabled and each
-// endpoint's own Enabled), each with its own dimension and its own
-// availability outcome, discovered exactly once, at startup, by
-// EnableANN. Never re-attempted per request, so a missing extension (or
-// any other migration failure) for one provider permanently and safely
-// degrades that provider's semantic search to the existing bounded-sample
-// brute-force path (SampleEmbeddings) rather than retrying (and
-// potentially failing) on every subsequent search or crawl -- every other
-// enabled provider is entirely unaffected.
+// annState tracks whether Postgres pgvector-backed ANN semantic search is
+// available, per embedding provider, discovered once at startup by
+// EnableANN and never re-attempted per request -- a migration failure for
+// one provider permanently (for this process) falls back to the brute-force
+// SampleEmbeddings path for just that provider, others unaffected.
 type annState struct {
 	mu        sync.RWMutex
 	available map[string]bool
@@ -50,16 +42,11 @@ func (a *annState) markAvailable(provider string, dims int) {
 	a.dims[provider] = dims
 }
 
-// vectorColumnNameFor and vectorIndexNameFor name a provider's own
-// pgvector column and HNSW index, added to documents only on Postgres
-// once EnableANN succeeds for that provider. provider is always either the
-// literal domain.EmbeddingProviderHash or a domain.EmbeddingHTTPEndpoint.ID
-// -- every endpoint ID is minted exclusively by domain.
-// NewEmbeddingEndpointID, which guarantees it matches domain.
-// EmbeddingEndpointIDPattern (^[a-z0-9_]{1,20}$) -- so concatenating it
-// directly into a column/index name is as safe as any other fixed-set enum
-// value would be, even though the set of valid IDs is now admin-configured
-// rather than a hardcoded two-value enum.
+// vectorColumnNameFor and vectorIndexNameFor name a provider's pgvector
+// column/HNSW index, added on Postgres once EnableANN succeeds for it.
+// provider is always domain.EmbeddingProviderHash or an endpoint ID
+// matching domain.EmbeddingEndpointIDPattern (^[a-z0-9_]{1,20}$), so
+// concatenating it directly into the name is safe.
 func vectorColumnNameFor(provider string) string {
 	return "embedding_vector_" + provider
 }
@@ -68,45 +55,17 @@ func vectorIndexNameFor(provider string) string {
 	return "idx_documents_embedding_vector_" + provider + "_hnsw"
 }
 
-// maxHNSWEfSearch is pgvector's own hard ceiling on the hnsw.ef_search GUC
-// (see pgvector's hnsw.c: DefineCustomIntVariable clamps it to [1, 1000]) --
-// setting anything higher fails with "invalid value for parameter
-// \"hnsw.ef_search\"". SemanticCandidatePoolSize (the value TopSemanticMatches
-// is called with as limit) is an admin-configurable knob with no upper bound
-// of its own (see domain.OperationalSettingsValues), so this clamp is what
-// keeps an unusually large configured pool size from turning every ANN query
-// into a hard Postgres error instead of merely capping recall quality at
-// pgvector's own ceiling.
+// maxHNSWEfSearch is pgvector's own hard ceiling on hnsw.ef_search (see
+// hnsw.c: clamped to [1, 1000], else "invalid value" errors). Clamps the
+// admin-configurable, unbounded SemanticCandidatePoolSize so a large
+// setting merely caps recall quality instead of erroring every ANN query.
 const maxHNSWEfSearch = 1000
 
-// EnableANN attempts to turn on Postgres pgvector-backed ANN semantic
-// search for this process's lifetime, once per provider in dimsByProvider
-// (domain.EmbeddingProviderHash or a domain.EmbeddingHTTPEndpoint.ID ->
-// that provider's embedder.Dimensions(), one entry per currently-enabled
-// provider -- see domain.OperationalSettingsValues.EmbeddingHashEnabled and
-// each endpoint's own Enabled): enabling the pgvector extension once, then for
-// each provider adding its own halfvec(dims) column and building its own
-// cosine-distance HNSW index over it. Every process that searches or
-// writes documents (cmd/search, cmd/admin, cmd/crawl) calls this once at
-// startup, right after constructing its embedder(s) -- each opens its own
-// *sql.DB/Repository, so each independently discovers (and logs) ANN
-// availability for itself, per provider.
-//
-// This never returns an error and never crashes the process. For any
-// dialect other than Postgres (SQLite/MySQL) it's a silent no-op, since
-// ANN is Postgres-only. On Postgres, any failure along the way --
-// pgvector's extension not being installed at the OS/server level (a
-// distinct problem from merely lacking permission to install it -- this
-// surfaces as something like "could not open extension control file"), a
-// permission error, or any other unexpected fault -- is logged once as a
-// clear warning, after which that provider's ANN stays unavailable and
-// every caller (TopSemanticMatches, SaveDocument) permanently uses the
-// brute-force fallback for it, for this process's lifetime instead. It's
-// never retried per-request. A failure for one provider doesn't affect
-// another's outcome. A concurrent-migration race between the three
-// processes (all calling EnableANN against the same database at startup)
-// is treated as success, not failure, exactly like
-// ensureHostIndex/ensureCrawledAtIndex already do for their own indexes.
+// EnableANN turns on Postgres pgvector-backed ANN search, once per
+// provider in dimsByProvider: enables the extension, then adds each
+// provider's halfvec(dims) column + HNSW index. Never errors or crashes --
+// a no-op on non-Postgres dialects; a Postgres failure permanently falls
+// that provider back to brute-force search for this process's lifetime.
 func (r *Repository) EnableANN(ctx context.Context, dimsByProvider map[string]int) {
 	if r.dialect.Name() != "postgres" {
 		return
@@ -144,14 +103,10 @@ func (r *Repository) enableANNForProvider(ctx context.Context, provider string, 
 }
 
 // backfillVectorColumn populates provider's pgvector column for any
-// document_embeddings row saved before ANN was ever enabled for that
-// provider -- without this, TopSemanticMatches' "WHERE
-// embedding_vector_<provider> IS NOT NULL" filter would exclude every
-// pre-existing document, so ANN would report itself available yet return
-// zero candidates for the entire corpus until each document happened to
-// be re-saved. Only ANN's own caller (EnableANN) runs this, and only once
-// the column exists. Run before r.ann.markAvailable, so TopSemanticMatches
-// is never used against a corpus that hasn't actually been backfilled yet.
+// document_embeddings row saved before ANN was enabled for it -- else
+// TopSemanticMatches' NOT NULL filter would exclude every pre-existing
+// document until each got re-saved. Must run before r.ann.markAvailable,
+// so TopSemanticMatches is never used before the backfill completes.
 func (r *Repository) backfillVectorColumn(ctx context.Context, provider string) error {
 	col := vectorColumnNameFor(provider)
 	query := r.ph(`SELECT de.doc_id, de.embedding FROM document_embeddings de
@@ -205,11 +160,9 @@ func (r *Repository) ANNAvailable(provider string) bool {
 }
 
 // enablePgVectorExtension runs CREATE EXTENSION IF NOT EXISTS vector,
-// tolerating the same concurrent-migration race ensureHostIndex/
-// ensureCrawledAtIndex already tolerate for their own indexes (three
-// processes racing to enable the extension at startup can hit a
-// catalog unique-violation on the loser even though the extension ends up
-// enabled either way).
+// tolerating the same concurrent-startup race ensureHostIndex/
+// ensureCrawledAtIndex tolerate: three processes racing this can hit a
+// catalog unique-violation on the loser even though it ends up enabled.
 func (r *Repository) enablePgVectorExtension(ctx context.Context) error {
 	_, err := r.db.ExecContext(ctx, `CREATE EXTENSION IF NOT EXISTS vector`)
 	if err != nil && !isAlreadyExistsError(err) {
@@ -218,61 +171,19 @@ func (r *Repository) enablePgVectorExtension(ctx context.Context) error {
 	return nil
 }
 
-// queryRower is satisfied by both *sql.DB and *sql.Tx -- just enough of
-// their shared surface for vectorColumnType to run identically whether
-// it's called standalone or (as ensureVectorColumn now always does) from
-// inside an already-open transaction, so the type/dims read and the
-// migration decision made from it are guaranteed to see the same
-// consistent catalog snapshot under the same advisory lock.
+// queryRower is satisfied by both *sql.DB and *sql.Tx, so
+// vectorColumnType can run either standalone or (as ensureVectorColumn
+// does) inside its already-open transaction -- guaranteeing the read and
+// the migration decision made from it see the same catalog snapshot.
 type queryRower interface {
 	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
 }
 
 // ensureVectorColumn adds documents.embedding_vector_<provider> sized to
-// dims, the same way migrateDocumentColumns adds host/version/crawled_at/
-// etc to a documents table that predates them -- except this one is
-// Postgres-only (pgvector's "halfvec" type doesn't exist on SQLite/MySQL)
-// and needs the embedder's Dimensions() at call time, so it can't be part
-// of the static, dialect-branched CreateSchemaSQL list every dialect
-// already returns. "ADD COLUMN IF NOT EXISTS" plus isAlreadyExistsError
-// covers the brand-new-column concurrent-startup race the same way
-// ensureHostIndex/ensureCrawledAtIndex's "IF NOT EXISTS" does for theirs --
-// but that comparison stops applying the moment a mismatched pre-existing
-// column needs migrating (below), because unlike CREATE INDEX IF NOT
-// EXISTS, "read the existing type, then maybe DROP, then ADD" is a
-// genuine check-then-act sequence: nothing about it is idempotent under a
-// second concurrent caller. cmd/search, cmd/admin and cmd/crawl are three
-// separate processes that each call EnableANN independently at their own
-// startup against the same database, so without serialization one process
-// could DROP COLUMN a column (and its index) that a second process already
-// finished recreating and is actively querying via TopSemanticMatches/
-// SaveDocument -- each process's annState is purely in-memory and
-// per-process, so the loser would have no way to notice its column got
-// yanked out from under it mid-flight.
-//
-// The fix: run the whole read-then-maybe-drop-then-add sequence inside one
-// transaction, guarded by a transaction-scoped Postgres advisory lock
-// (pg_advisory_xact_lock) keyed on provider, acquired as the very first
-// statement. This serializes every process's ensureVectorColumn call for
-// the same provider -- whichever one gets there first fully completes its
-// migration (or no-op) before any other is allowed to even read the
-// column's current type, so no process ever observes (or drops) a column
-// that another is mid-migration on.
-//
-// Deliberately pg_advisory_xact_lock, not the session-level
-// pg_advisory_lock/pg_advisory_unlock pair: those would have to be run as
-// two separate r.db.ExecContext calls directly against r.db (a *sql.DB
-// connection pool), and database/sql gives no guarantee those two calls
-// land on the same physical connection. A session-level advisory lock is
-// tied to whichever specific connection acquired it, so an unlock issued
-// on a different pooled connection just silently returns false (not an
-// error) -- the lock never actually releases and is leaked forever on
-// whatever connection happened to hold it. pg_advisory_xact_lock instead
-// ties the lock to the transaction, and a *sql.Tx is always pinned to one
-// physical connection for its entire lifetime, so this is the only variant
-// that's safe to use through a pooled *sql.DB: it's guaranteed to acquire
-// and release on the exact same connection, and it auto-releases on either
-// COMMIT or ROLLBACK with no separate unlock call to ever forget.
+// dims. Migrating a mismatched pre-existing column isn't idempotent under
+// 3 processes calling EnableANN concurrently, so it runs in one
+// transaction under pg_advisory_xact_lock keyed on provider -- not the
+// session-level variant, which can't guarantee release through a pool.
 func (r *Repository) ensureVectorColumn(ctx context.Context, provider string, dims int) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -294,20 +205,11 @@ func (r *Repository) ensureVectorColumn(ctx context.Context, provider string, di
 		return err
 	}
 	if found && (existingDims != dims || existingType != "halfvec") {
-		// Either the embedding model changed since this column was first
-		// created (see application.RunEmbeddingRecomputeJob, the whole
-		// point of which is letting that happen without a re-crawl), or
-		// this column predates this package's switch from "vector" to
-		// "halfvec" (see ensureVectorIndex's doc comment for why) --
-		// either way, pgvector's column type is fixed once created, so the
-		// old column can't just be widened/narrowed/retyped in place.
-		// Drop it (and its now-stale index) and let the ADD COLUMN below
-		// recreate it fresh; backfillVectorColumn repopulates every row
-		// from document_embeddings, which SaveDocument/UpdateEmbedding
-		// always keep current regardless of this column's own state -- so
-		// nothing is actually lost. Safe to do here, inside the locked
-		// transaction, because no other process can be mid-migration on
-		// this same provider's column right now.
+		// The model changed (see RunEmbeddingRecomputeJob) or this column
+		// predates the "vector"->"halfvec" switch -- pgvector's type is
+		// fixed once created, so drop it (and its stale index) and let ADD
+		// COLUMN below recreate it; backfillVectorColumn repopulates every
+		// row from document_embeddings, so nothing is lost.
 		if _, err := tx.ExecContext(ctx, `DROP INDEX IF EXISTS `+vectorIndexNameFor(provider)); err != nil {
 			return fmt.Errorf("dropping stale pgvector index: %w", err)
 		}
@@ -322,24 +224,11 @@ func (r *Repository) ensureVectorColumn(ctx context.Context, provider string, di
 	return tx.Commit()
 }
 
-// vectorColumnType reports the dimension and pgvector type name (e.g.
-// "vector" or "halfvec") provider's column was actually created with, by
-// asking Postgres's own catalog rather than trusting this process's
-// in-memory state -- necessary both because another process (or an
-// earlier run of this one, before a model change) may have created the
-// column at a different size, and because a column created before this
-// package switched from "vector" to "halfvec" (see ensureVectorIndex's
-// doc comment) needs recreating under the new type even when its
-// dimension count hasn't changed. found is false when the column doesn't
-// exist yet at all (a fresh database, or ANN never having been enabled
-// before for this provider), which is not an error.
-//
-// Takes a queryRower rather than using r.db directly so ensureVectorColumn
-// can call it against its own *sql.Tx -- reading the column's current
-// type must happen inside the same locked transaction that decides
-// whether to migrate it, or the read and the act could still see
-// different states of the world (the whole point of the advisory lock
-// above).
+// vectorColumnType reports provider's column's actual dimension and
+// pgvector type, read from Postgres's catalog rather than trusted
+// in-memory state (another process may have created it differently).
+// found is false if the column doesn't exist yet. Takes a queryRower so
+// ensureVectorColumn can call it inside its own locked *sql.Tx.
 func vectorColumnType(ctx context.Context, q queryRower, provider string) (dims int, typeName string, found bool, err error) {
 	const query = `
 		SELECT format_type(a.atttypid, a.atttypmod)
@@ -370,25 +259,10 @@ func vectorColumnType(ctx context.Context, q queryRower, provider string) (dims 
 	return dims, formatted[:open], true, nil
 }
 
-// ensureVectorIndex builds the HNSW index TopSemanticMatches' "ORDER BY
-// embedding_vector_<provider> <=> $1 LIMIT $2" query needs for
-// cosine-distance ANN search, run after ensureVectorColumn the same way
-// ensureHostIndex runs after migrateDocumentColumns adds the host column
-// it indexes -- a column an index is built over must exist first. "CREATE
-// INDEX IF NOT EXISTS" plus isAlreadyExistsError tolerates the identical
-// concurrent-startup race ensureHostIndex/ensureCrawledAtIndex already
-// tolerate.
-//
-// halfvec, not vector: pgvector caps both types' HNSW/ivfflat indexes at a
-// fixed byte budget per row, which works out to 2000 dimensions for
-// "vector" (4 bytes/dim) but 4000 for "halfvec" (2 bytes/dim, i.e. float16
-// storage) -- confirmed empirically (a plain vector(3584) column's index
-// creation fails with "column cannot have more than 2000 dimensions",
-// halfvec(3584) succeeds). A model like Alibaba-NLP/gte-Qwen2-7B-instruct
-// (3584 dims) needs that wider ceiling; the halfvec storage's reduced
-// precision is not a meaningful accuracy loss for cosine-similarity
-// search. ensureVectorColumn creates the column itself as halfvec(dims)
-// to match.
+// ensureVectorIndex builds the HNSW cosine-distance index TopSemanticMatches
+// needs, run after ensureVectorColumn. halfvec, not vector: pgvector's
+// per-row index byte budget caps "vector" at 2000 dims but "halfvec"
+// (float16) at 4000 -- needed for a 3584-dim model, no meaningful accuracy loss.
 func (r *Repository) ensureVectorIndex(ctx context.Context, provider string) error {
 	col := vectorColumnNameFor(provider)
 	ddl := fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON documents USING hnsw (%s halfvec_cosine_ops)`, vectorIndexNameFor(provider), col)
@@ -398,14 +272,10 @@ func (r *Repository) ensureVectorIndex(ctx context.Context, provider string) err
 	return nil
 }
 
-// isMissingExtensionError reports whether err is Postgres's specific
-// "the pgvector extension isn't installed at the OS/server level at all"
-// failure -- distinct from a permission problem (which would instead be a
-// plain "permission denied" error) -- so EnableANN can log a clear,
-// specific warning for the case a real production incident traced back to
-// exactly this: CREATE EXTENSION failing because vector.control isn't
-// present on the server's filesystem, not because the connecting role
-// lacked the privilege to run it.
+// isMissingExtensionError reports whether err is Postgres's "pgvector
+// isn't installed at the OS/server level" failure -- distinct from a
+// permission error -- so EnableANN can log a clear, specific warning for
+// this real production failure mode (vector.control missing on disk).
 func isMissingExtensionError(err error) bool {
 	if err == nil {
 		return false
@@ -414,10 +284,7 @@ func isMissingExtensionError(err error) bool {
 }
 
 // formatPgVectorLiteral renders vec in pgvector's text input format
-// ("[v1,v2,v3]"), accepted by Postgres wherever a ::halfvec cast is
-// applied to a query parameter (the same bracketed literal syntax pgvector
-// accepts for its "vector" type too) -- used both to write a provider's
-// documents.embedding_vector_<provider> in saveDocumentEmbeddings and to
+// ("[v1,v2,v3]"), used both to write a provider's embedding column and to
 // pass the query vector to TopSemanticMatches' ORDER BY ... <=> $1 clause.
 func formatPgVectorLiteral(vec []float32) string {
 	var b strings.Builder
@@ -432,38 +299,11 @@ func formatPgVectorLiteral(vec []float32) string {
 	return b.String()
 }
 
-// TopSemanticMatches implements ports.SQLRepository's ANN search: when
-// available for provider (see ANNAvailable), it finds queryVec's nearest
-// neighbors within provider's embeddings by cosine distance via pgvector's
-// HNSW index instead of SampleEmbeddings' bounded "ORDER BY id LIMIT
-// limit" sample -- the same shape of result (scanEmbeddingRows, shared
-// with SampleEmbeddings/EmbeddingsForDocs), just chosen by actual
-// similarity to the query rather than an arbitrary ID order. ok is false
-// (with a nil map and nil error) whenever ANN isn't available for provider
-// or limit isn't positive, telling the caller (hybridSearchService.Search)
-// to fall back to SampleEmbeddings exactly as it did before ANN existed --
-// a real query failure, by contrast, is returned as a non-nil error, the
-// same as any other repository method.
-//
-// Rows with a NULL embedding_vector_<provider> (documents saved before ANN
-// was ever enabled for this provider on this process) are excluded, since
-// ordering by cosine distance against a NULL is meaningless.
-//
-// Before the ORDER BY query, this issues "SET LOCAL hnsw.ef_search = <n>"
-// (n = limit, clamped to maxHNSWEfSearch) inside the same transaction. HNSW
-// query-time recall is governed entirely by hnsw.ef_search, a GUC that
-// defaults to 40 and is completely independent of the query's own LIMIT --
-// pgvector's docs are explicit that ef_search should be >= the requested
-// LIMIT for good recall, but nothing in EnableANN's migration ever touches
-// it. Left at its 40 default while LIMIT asks for (typically) 200 rows, the
-// HNSW graph traversal only ever explores a 40-wide dynamic candidate list,
-// so the query still returns exactly `limit` rows -- they just are not
-// reliably the true top-`limit` nearest neighbors by cosine distance, a
-// silent recall degradation with no visible error. SET LOCAL scopes the
-// change to this transaction only (never a session-wide SET, which would
-// leak the setting to whatever unrelated query the pooled connection serves
-// next), so it's safe under the connection pool's concurrent connections
-// each potentially wanting a different ef_search for a different limit.
+// TopSemanticMatches implements ports.SQLRepository's ANN search via
+// pgvector's HNSW index. ok is false (nil map, nil error) when unavailable
+// or limit isn't positive -- caller falls back to SampleEmbeddings. Sets
+// "hnsw.ef_search" (SET LOCAL) to limit first: left at its default of 40,
+// HNSW silently under-recalls a larger requested limit.
 func (r *Repository) TopSemanticMatches(ctx context.Context, queryVec []float32, limit int, provider string) (map[string]domain.EmbeddedVector, bool, error) {
 	if !r.ann.isAvailable(provider) || limit <= 0 {
 		return nil, false, nil

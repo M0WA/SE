@@ -1,11 +1,7 @@
 // Package netguard is a shared SSRF guard for every outbound fetch this
-// crawler makes -- this app's core function is fetching URLs an admin
-// supplies (one-off crawls, scheduled crawls, discovered links, redirects,
-// robots.txt), and none of those targets are trusted: a crawled site can
-// itself redirect to, or (when rendering is enabled) run JavaScript that
-// issues requests to, an internal address such as a cloud metadata service
-// or another host on the deploy network. Without a guard like this one,
-// nothing in the codebase stops that.
+// crawler makes -- crawled sites are untrusted and can redirect to (or, via
+// JS when rendering is enabled, request) an internal address like a cloud
+// metadata service. Nothing else in the codebase stops that.
 package netguard
 
 import (
@@ -70,16 +66,11 @@ func (e *blockedErr) Error() string {
 	return fmt.Sprintf("netguard: connection to %s is blocked (loopback/private/reserved address)", e.addr)
 }
 
-// SafeDialContext returns a DialContext function for an *http.Transport
-// that rejects any connection to a loopback/private/reserved IP -- checked
-// via the dialer's Control hook, which runs after DNS resolution but right
-// before the socket connects, against the exact address about to be
-// connected to. That timing matters: it closes the classic SSRF bypasses a
-// pre-flight hostname check can't -- a redirect to an internal URL (the
-// Transport dials fresh for every redirect hop through this same
-// DialContext) and DNS rebinding (there's no gap between "the address this
-// was checked against" and "the address actually connected to", since
-// they're the same string).
+// SafeDialContext returns a DialContext for an *http.Transport that rejects
+// any connection to a loopback/private/reserved IP, checked via the
+// dialer's Control hook against the exact address about to connect. That
+// timing (post-DNS, pre-socket) closes both a redirect-to-internal-URL
+// bypass and DNS rebinding, which a pre-flight hostname check can't.
 func SafeDialContext() func(ctx context.Context, network, addr string) (net.Conn, error) {
 	dialer := &net.Dialer{Timeout: 30 * time.Second, Control: dialControl}
 	return dialer.DialContext
@@ -115,11 +106,10 @@ func Transport() *http.Transport {
 // http.Transport at all -- e.g. the headless-browser renderer's own request
 // interception, which has no dialer of its own to hook.
 //
-// This is a resolve-then-check, not the Control-hook's connect-time check,
-// so it carries the same DNS-rebinding TOCTOU gap browserfetcher's other
-// SSRF-relevant checks do (see its Route handler's doc comment) -- Chromium
-// and Firefox don't expose a dial-level hook the way Go's own Transport
-// does, so this is the strongest guard available at this layer.
+// This is a resolve-then-check, not a connect-time check, so it carries the
+// same DNS-rebinding TOCTOU gap as browserfetcher's Route handler -- neither
+// Chromium nor Firefox expose a dial-level hook, so this is the strongest
+// guard available at this layer.
 func URLAllowed(rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	if err != nil {

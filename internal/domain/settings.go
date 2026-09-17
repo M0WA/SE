@@ -18,32 +18,23 @@ type OperationalSettingsValues struct {
 	SessionTTL       time.Duration
 	CrawlDelayMs     int
 	MaxResponseBytes int
-	// SemanticCandidatePoolSize bounds how many documents ever get a
-	// semantic (cosine similarity) score computed and ranked per search,
-	// regardless of corpus size -- see hybridSearchService.Search. It's the
-	// union of every BM25-hit document (however many that is) plus a
-	// bounded sample of the rest of the corpus, so a purely semantic match
-	// (no BM25 hits at all) can still be found without scoring literally
-	// every stored document on every request.
+	// SemanticCandidatePoolSize bounds how many documents get a semantic
+	// score per search, regardless of corpus size -- the union of every
+	// BM25 hit plus a bounded sample of the rest, so a purely semantic
+	// match can still be found without scoring the whole corpus.
 	SemanticCandidatePoolSize int
-	// DBMaxOpenConns and DBMaxIdleConns bound the SQL connection pool
-	// (sqlrepo.Repository.ConfigurePool), and DBConnMaxLifetime caps how
-	// long a pooled connection is reused before being recycled. Applied at
-	// startup with a dialect-aware default (Postgres/MySQL benefit from a
-	// real pool; SQLite's single-writer locking model means
-	// sqlrepo.Repository always clamps its own open-connection count to 1
-	// regardless of what's configured here), and re-applied live whenever
-	// an admin edit reaches this process via bootstrap.SyncSettings.
+	// DBMaxOpenConns/DBMaxIdleConns bound the SQL connection pool;
+	// DBConnMaxLifetime caps how long a pooled connection is reused.
+	// SQLite always clamps to 1 open connection regardless (single-writer
+	// locking), and an admin edit re-applies live via bootstrap.SyncSettings.
 	DBMaxOpenConns    int
 	DBMaxIdleConns    int
 	DBConnMaxLifetime time.Duration
-	// FuzzyMatchEnabled turns on typo-tolerant query matching: a query term
-	// with zero postings hits is looked up against the corpus vocabulary
-	// for a near-miss term within FuzzyMaxEditDistance edits (Levenshtein)
-	// and substituted into BM25 scoring for that term alone -- see
-	// hybridSearchService.Search and domain.NearestTerm. A term that
-	// already matched something is never touched. When false, search
-	// behaves exactly as if this feature didn't exist.
+	// FuzzyMatchEnabled turns on typo-tolerant query matching: a term
+	// with zero postings hits is looked up against the vocabulary for a
+	// near-miss within FuzzyMaxEditDistance edits and substituted into
+	// BM25 scoring for that term alone. False disables the feature
+	// entirely.
 	FuzzyMatchEnabled bool
 	// FuzzyMaxEditDistance bounds how many edits (insertions, deletions,
 	// substitutions) a substituted vocabulary term may be from the
@@ -51,42 +42,26 @@ type OperationalSettingsValues struct {
 	// typo/transposition-as-two-edits case conservatively, 2 is more
 	// forgiving but risks matching an unrelated short word.
 	FuzzyMaxEditDistance int
-	// PageRankRecomputeIntervalMinutes is how often cmd/crawl's periodic
-	// ticker recomputes every document's PageRank score from the current
-	// link graph (see application.RunPageRankJob) -- in addition to that,
-	// a recompute always runs once right after a crawl job completes
-	// successfully, since that's when the graph actually changes. Clamped
-	// to a minimum of 5 minutes so an overly aggressive setting can't spin
-	// the recompute in a tight loop.
+	// PageRankRecomputeIntervalMinutes is how often cmd/crawl recomputes
+	// PageRank from the current link graph, in addition to always
+	// recomputing once a crawl job completes. Clamped to a 5-minute
+	// minimum so an aggressive setting can't spin the recompute in a loop.
 	PageRankRecomputeIntervalMinutes int
-	// ANNSearchEnabled controls whether a search's semantic candidate pool
-	// (see hybridSearchService.Search) is filled via Postgres pgvector's
-	// approximate-nearest-neighbor index (repo.TopSemanticMatches) rather
-	// than the bounded brute-force SampleEmbeddings sample it otherwise
-	// falls back to. Defaults to true so ANN is used automatically
-	// wherever it's actually available for this process (Postgres, the
-	// pgvector extension installed, and sqlrepo.Repository.EnableANN
-	// having succeeded at startup) -- it has zero effect either way on
-	// SQLite/MySQL or a Postgres server without the extension, since those
-	// never report ANN as available regardless of this setting. Set false
-	// to force the brute-force fallback path even when ANN is available,
-	// e.g. to troubleshoot a ranking difference between the two paths.
+	// ANNSearchEnabled controls whether the semantic candidate pool is
+	// filled via Postgres pgvector's ANN index rather than a brute-force
+	// sample. Defaults true; has no effect where ANN isn't available
+	// (non-Postgres, or the extension/index missing). Set false to force
+	// the brute-force path, e.g. to troubleshoot a ranking difference.
 	ANNSearchEnabled bool
-	// MaxRetainedCrawlJobs bounds how many crawl jobs (and their full
-	// per-page event history) crawl-server's persistent store keeps --
-	// cmd/crawl periodically prunes the oldest beyond this limit. Unlike
-	// the old in-memory-only store's hard-coded 200-job cap, this is
-	// admin-configurable now that history survives in the database rather
-	// than being bounded only by process memory.
+	// MaxRetainedCrawlJobs bounds how many crawl jobs (with full page
+	// history) crawl-server's persistent store keeps; the oldest beyond
+	// this are pruned periodically. Admin-configurable now that history
+	// is DB-backed, not just memory-bounded.
 	MaxRetainedCrawlJobs int
-	// MaxConcurrentCrawls bounds how many crawl jobs actually fetch pages
-	// at once on crawl-server -- a burst of triggered jobs beyond this
-	// queues rather than opening unbounded concurrent connections and DB
-	// writes. Raising or lowering it takes effect for the next job that
-	// starts, without a restart, but a job already running keeps its
-	// slot until it finishes -- so a lowered limit takes a little while
-	// to fully apply, the same tradeoff every other live-reloaded
-	// operational setting already has.
+	// MaxConcurrentCrawls bounds how many crawl jobs fetch pages at once;
+	// a burst beyond this queues rather than opening unbounded
+	// connections. Live-reloadable: takes effect for the next job to
+	// start, though an already-running job keeps its slot until done.
 	MaxConcurrentCrawls int
 	// DefaultRenderer is the crawler's global default page-rendering mode
 	// (see Renderer* constants): RendererNone (plain HTTP fetch) unless an
@@ -94,143 +69,56 @@ type OperationalSettingsValues struct {
 	// (ScheduledCrawl.Renderer / ports.CrawlOptions.Renderer) overrides
 	// this when set to anything other than RendererDefault ("").
 	DefaultRenderer string
-	// LinkScope is the crawler's global default for how far a crawl
-	// follows discovered links (see LinkScope* constants) -- defaults to
-	// LinkScopeTLD (same domain name, any subdomain, any top-level
-	// domain), broader than LinkScopeDomain since most real sites span
-	// more than one TLD/subdomain worth crawling by default. A crawl's
-	// own LinkScope (ScheduledCrawl.LinkScope / ports.CrawlOptions.
-	// LinkScope) overrides this when set to anything other than
-	// LinkScopeDefault ("").
+	// LinkScope is the crawler's global default link-following scope (see
+	// LinkScope* constants) -- defaults to LinkScopeTLD, broader than
+	// LinkScopeDomain since most sites span multiple subdomains/TLDs. A
+	// crawl's own LinkScope overrides this when set.
 	LinkScope string
-	// MaxDocumentVersions bounds how many versions of a document (the
-	// current one plus its archived predecessors in document_versions)
-	// are kept whenever a re-crawl finds its content has changed -- see
-	// sqlrepo.Repository.SaveDocument, which prunes the oldest archived
-	// versions beyond this limit in the same write that archives a new
-	// one. A document that's never changed always has exactly one version
-	// regardless of this setting; it only bounds how much prior history a
-	// frequently-changing page accumulates.
+	// MaxDocumentVersions bounds how many versions of a document (current
+	// plus archived predecessors) are kept when a re-crawl changes its
+	// content -- SaveDocument prunes beyond this in the same write. An
+	// unchanged document always has just one version regardless.
 	MaxDocumentVersions int
-	// TitleWeight is how many times a document's title is counted into its
-	// indexed token stream, ahead of its body -- see
-	// sqlrepo.Repository.SaveDocument. postings stores one merged term_freq
-	// per (term, doc) rather than a separate per-field count (no
-	// BM25F-style fielded formula), so the simplest way to give a title
-	// match more weight than the same word appearing in the body is to make
-	// it contribute that many times more to term_freq. 1 gives the title no
-	// extra weight at all (counted once, same as any body mention); values
-	// above 1 give it a progressively bigger edge, tempered by BM25's own
-	// term-frequency saturation (the k1 parameter), which keeps a repeated
-	// term from dominating a score outright. Like every other
-	// indexing-time setting (min text length, crawl delay, ...), a change
-	// here only takes effect for documents crawled or re-crawled
-	// afterward -- it isn't retroactively applied to already-indexed
-	// content.
+	// TitleWeight is how many times a title match counts toward term_freq,
+	// vs. once for the same word in the body (postings has no separate
+	// per-field count) -- tempered by BM25's own k1 saturation. Only
+	// takes effect for documents crawled/re-crawled afterward.
 	TitleWeight int
-	// EmbeddingHashEnabled controls whether the built-in EmbeddingProviderHash
-	// (hashembed.Embedder's dependency-free feature-hashing pseudo-
-	// embedding, "semantic" only in that documents sharing tokens score
-	// similarly) gets computed and stored for every document, independently
-	// of however many EmbeddingHTTPEndpoint rows are separately configured
-	// and enabled (see internal/domain/embedding_endpoint.go) -- any number
-	// of providers may be enabled at once, so switching which one
-	// EmbeddingProvider below actually searches against never needs a
-	// recompute, as long as the one being switched to has been kept warm.
-	//
-	// Like EmbeddingProvider below, this is NOT picked up live by
-	// bootstrap.SyncSettings: each process reads it exactly once, at
-	// startup, to decide which embedder(s) to construct before calling
-	// sqlrepo.Repository.EnableANN, which sizes one pgvector column/HNSW
-	// index per enabled provider -- enabling a provider that wasn't running
-	// before only takes effect the next time each of cmd/search/cmd/admin/
-	// cmd/crawl is restarted. Costs nothing extra either way -- a local
-	// computation with no rate limit of its own, unlike an
-	// EmbeddingHTTPEndpoint's real, continuous cost against its own
-	// RateLimitPerSecond.
+	// EmbeddingHashEnabled controls whether the built-in dependency-free
+	// hash embedding is computed for every document, independent of any
+	// configured EmbeddingHTTPEndpoint rows. Unlike EmbeddingSearchWeights,
+	// this is read once at startup (sizes pgvector columns via EnableANN)
+	// -- enabling it only takes effect after a restart.
 	EmbeddingHashEnabled bool
-	// EmbeddingSearchWeights maps a provider -- EmbeddingProviderHash or an
-	// enabled EmbeddingHTTPEndpoint.ID -- to its weight in the search-time
-	// semantic score (see application.hybridSearchService.Search). A
-	// provider absent, or present with weight <= 0, doesn't contribute to
-	// the blend. Weights are normalized to sum 1 at scoring time (the same
-	// convention as TuningSettings' alpha blending BM25 against semantic),
-	// so relative magnitudes matter, not absolute scale -- {hash: 1,
-	// ionos: 1} weighs them equally, the same as {hash: 10, ionos: 10}
-	// would. Any request may override this map entirely for itself (see
-	// ports.SearchQuery.ProviderWeights); this is only the default.
-	//
-	// See domain.ReconcileSearchWeights for how a provider naming an
-	// invalid or no-longer-enabled entry is self-healed; OperationalSettings.
-	// Set itself can't do that here, unlike every other field it clamps,
-	// because validity now depends on the dynamically configured
-	// embedding_http_endpoints table, not a fixed enum. This doesn't
-	// require a restart or a recompute to take effect once every weighted
-	// provider is already being kept warm -- it's just choosing which
-	// already-current stored vectors to read and how to blend them.
-	//
-	// Weighting in a provider that was previously unweighted (so it has no
-	// stored vectors yet, or stale ones from before it was last enabled)
-	// dilutes the blend with noise for that provider's share until it's
-	// been enabled long enough to catch up via ongoing crawls, or an
-	// explicit recompute brings it current immediately -- like TitleWeight
-	// above, there is no automatic re-embed.
+	// EmbeddingSearchWeights maps a provider (EmbeddingProviderHash or an
+	// EmbeddingHTTPEndpoint.ID) to its weight in the search-time semantic
+	// blend; weights normalize to sum 1, so only relative magnitude
+	// matters. domain.ReconcileSearchWeights self-heals an invalid or
+	// disabled entry, since validity depends on the dynamic endpoints table.
 	EmbeddingSearchWeights map[string]float64
 	// EmbeddingProvider is deprecated: it named the single active provider
-	// before EmbeddingSearchWeights generalized "active for search" to a
-	// weighted set. Kept only so a settings blob saved before this existed
-	// still decodes -- bootstrap.applySettingsOnce seeds
-	// EmbeddingSearchWeights from it once, on first load, if the latter is
-	// still empty (protecting an already-configured active provider across
-	// this upgrade, the same "don't silently discard a real live config"
-	// precedent as the EmbeddingHashEnabled/EmbeddingHTTPEnabled migration
-	// before it). Never read anywhere else, and no longer settable through
+	// before EmbeddingSearchWeights generalized to a weighted set. Kept
+	// only so an old settings blob still decodes; bootstrap.applySettingsOnce
+	// seeds EmbeddingSearchWeights from it once. No longer settable via
 	// the admin API.
 	EmbeddingProvider string
-	// EmbeddingTitleWeight blends a document's title into its stored
-	// embedding as a weighted combination of two separate Embed calls --
-	// titleWeight*titleVector + (1-titleWeight)*bodyVector (see
-	// domain.CombineWeighted) -- rather than a single call against a
-	// concatenated title+body string, whose title contribution most
-	// pooling strategies dilute to near-nothing once a page's body runs
-	// more than a few dozen tokens. 0 disables this entirely (skips the
-	// extra Embed call and embeds the body alone, exactly like this
-	// setting didn't exist); 1 embeds the title alone. Unlike TitleWeight
-	// above, this is a genuine, unclamped-by-saturation weight -- there's
-	// no BM25-style k1 tempering it, so a value close to 1 can make a
-	// document's semantic vector nearly indifferent to its actual body
-	// content. Doubles this process's Embed call volume against any enabled
-	// HTTP endpoint whenever it's non-zero (see EmbeddingHTTPEndpoint.
-	// RateLimitPerSecond, which paces every individual Embed call, title
-	// and body alike, per endpoint) -- free for EmbeddingProviderHash,
-	// since that's a local computation with no rate limit of its own. Like
-	// TitleWeight, a change here only takes effect for documents crawled,
-	// re-crawled, or explicitly recomputed afterward.
+	// EmbeddingTitleWeight blends a document's title into its embedding as
+	// titleWeight*titleVector + (1-titleWeight)*bodyVector, rather than one
+	// call against concatenated text (whose title signal most poolers
+	// dilute away). 0 disables it (body-only); 1 embeds the title alone,
+	// doubling Embed call volume against any enabled HTTP endpoint.
 	EmbeddingTitleWeight float64
-	// URLAliasWWWEnabled folds a leading "www." host label into the bare
-	// domain when computing a crawled URL's canonical identity (see
-	// domain.CanonicalizeURL, application.documentID) -- so
-	// www.example.com/x and example.com/x always resolve to the exact same
-	// document, crawled under whichever host was seen first, with the
-	// bare-domain form as the stored URL. Purely a future-crawl identity
-	// rule: it never touches documents already saved under separate rows
-	// before this was enabled (or before this feature existed at all) --
-	// content_dedup_job.go's content-hash/simhash batch merge is what
-	// reconciles those. Defaults true since it's lossless for the
-	// overwhelming majority of sites; a site that genuinely serves
-	// different content at www vs. bare can turn it off.
+	// URLAliasWWWEnabled folds a leading "www." into the bare domain when
+	// computing a crawled URL's canonical identity, so www.example.com/x
+	// and example.com/x resolve to the same document. Only affects future
+	// crawls -- content_dedup_job.go's batch merge reconciles pre-existing
+	// duplicates. Defaults true (lossless for most sites).
 	URLAliasWWWEnabled bool
-	// ContentDedupEnabled turns on application.RunContentDedupJob's
-	// periodic/on-demand batch pass, which finds documents with
-	// duplicate/near-duplicate content across different URLs (URLAliasWWWEnabled
-	// above only ever handles the www-vs-bare-host case, and only for
-	// future crawls) and merges each group into one canonical document --
-	// see MergeDocuments. Defaults true: a search should never list the
-	// same content twice, and this is what actually cleans up duplicates
-	// already in the corpus, not just future ones. Unlike every other
-	// field here, turning this off matters because turning it on can
-	// delete existing documents rows (the merged-away losers) -- an admin
-	// who wants to review before merging can still switch it off.
+	// ContentDedupEnabled turns on RunContentDedupJob's periodic/on-demand
+	// batch pass, which merges documents with duplicate/near-duplicate
+	// content across different URLs (see MergeDocuments). Defaults true.
+	// Unlike other fields here, disabling it matters because enabling it
+	// can delete existing document rows (the merged-away losers).
 	ContentDedupEnabled bool
 	// ContentDedupMethod is "exact" (byte-identical normalized text, via
 	// domain.ContentHash) or "simhash" (a similarity fingerprint tolerant
@@ -239,22 +127,15 @@ type OperationalSettingsValues struct {
 	// "exact" on an unrecognized value the same way DefaultRenderer/LinkScope
 	// do for their own enums.
 	ContentDedupMethod string
-	// ContentDedupSimHashMaxDistance is the maximum Hamming distance (out
-	// of 64 bits) two documents' domain.SimHash64 fingerprints may differ
-	// by and still be considered near-duplicates, when ContentDedupMethod
-	// is "simhash". Clamped to [1,10]: 0 would only ever match bit-for-bit
-	// identical fingerprints (indistinguishable from the "exact" method,
-	// but slower), and above 10 starts merging documents whose content is
-	// only superficially similar.
+	// ContentDedupSimHashMaxDistance is the max Hamming distance (of 64
+	// bits) two SimHash64 fingerprints may differ by and still count as
+	// near-duplicates, when ContentDedupMethod is "simhash". Clamped to
+	// [1,10].
 	ContentDedupSimHashMaxDistance int
-	// ContentDedupIntervalMinutes is how often cmd/crawl's periodic ticker
-	// runs RunContentDedupJob, mirroring PageRankRecomputeIntervalMinutes'
-	// own ticker -- in addition to that, a run always happens once right
-	// after a crawl job completes successfully, when ContentDedupEnabled.
-	// Clamped to a minimum of 15 minutes (coarser than PageRank's 5-minute
-	// floor: a corpus-wide fingerprint comparison is heavier, and a merge
-	// is a destructive write, so an overly aggressive interval is worth
-	// guarding against more conservatively here).
+	// ContentDedupIntervalMinutes is how often cmd/crawl runs
+	// RunContentDedupJob, mirroring PageRankRecomputeIntervalMinutes'
+	// ticker. Clamped to a 15-minute minimum -- higher than PageRank's
+	// floor since a merge is a destructive write.
 	ContentDedupIntervalMinutes int
 }
 
@@ -276,11 +157,9 @@ const (
 	// million.
 	defaultSemanticCandidatePoolSize = 200
 	// defaultDBMaxOpenConns/defaultDBMaxIdleConns/defaultDBConnMaxLifetime
-	// are sane defaults for a real connection pool (Postgres/MySQL);
-	// sqlrepo.Repository.ConfigurePool clamps SQLite down to a single
-	// connection regardless of these values, since SQLite serializes
-	// writers at the file level and a larger pool there just adds
-	// "database is locked" contention instead of concurrency.
+	// are sane defaults for a real pool (Postgres/MySQL); SQLite clamps to
+	// a single connection regardless, since it serializes writers at the
+	// file level and a larger pool there just adds lock contention.
 	defaultDBMaxOpenConns    = 25
 	defaultDBMaxIdleConns    = 25
 	defaultDBConnMaxLifetime = 5 * time.Minute
@@ -479,17 +358,11 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 	if v.LinkScope == LinkScopeDefault || !ValidLinkScope(v.LinkScope) {
 		v.LinkScope = LinkScopeTLD
 	}
-	// EmbeddingProvider's validity now depends on the dynamically
-	// configured embedding_http_endpoints table, which this pure value
-	// transform has no access to -- see domain.ReconcileActiveProvider,
-	// applied by callers that have both this and the live endpoint list at
-	// hand (bootstrap.NewEmbedders, admin.go's settings handlers), rather
-	// than here. An empty/unset value is left as-is; those same callers
-	// treat "" the same as any other not-currently-enabled value.
-	//
-	// 0 is a legitimate, meaningful value here (disables title blending
-	// entirely -- see the field's own doc comment), so it's clamped rather
-	// than substituted with the default the way every <=0 field above is.
+	// EmbeddingProvider's validity depends on the dynamic
+	// embedding_http_endpoints table, so it's left as-is here -- see
+	// domain.ReconcileActiveProvider, applied by callers with both this
+	// and the live endpoint list. EmbeddingTitleWeight's 0 is meaningful
+	// (disables title blending), so it's clamped below, not substituted.
 	if v.EmbeddingTitleWeight < 0 {
 		v.EmbeddingTitleWeight = 0
 	} else if v.EmbeddingTitleWeight > 1 {

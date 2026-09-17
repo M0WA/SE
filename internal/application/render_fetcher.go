@@ -8,22 +8,13 @@ import (
 	"searchengine/internal/ports"
 )
 
-// RenderAwareFetcher wraps a plain ports.AuthFetcher, dispatching a
-// FetchWithOptions call to a real (headless) browser instead whenever a
-// renderer is actually requested -- explicitly per-fetch (opts.Renderer)
-// or, when that's empty, whatever DefaultRenderer the Tuning page
-// currently has configured. opts.NoRender always forces the plain path
-// regardless (crawlLoop sets it for its own sitemap.xml fetch, which must
-// never go through a browser). Fetch (the no-options method robots.New's
-// checker calls) also always takes the plain path -- robots.txt is plain
-// text, never worth a real browser.
-//
-// Renderers is keyed by domain.Renderer* constant ("chromium"/"firefox");
-// a name that isn't a key (an unavailable/misconfigured engine) is a
-// fetch error for that URL rather than a silent fallback to plain HTTP --
-// an admin who turned rendering on should see a clear failure, not
-// unknowingly get unrendered content while believing otherwise. crawlLoop
-// already treats one URL's fetch error as non-fatal to the whole crawl.
+// RenderAwareFetcher wraps a plain ports.AuthFetcher, routing
+// FetchWithOptions through a real (headless) browser when a renderer is
+// requested (opts.Renderer, or DefaultRenderer if empty); opts.NoRender
+// and the no-options Fetch always take the plain path. An unknown/
+// unavailable Renderers name errors rather than silently falling back to
+// plain HTTP, so a misconfigured admin setting fails loudly instead of
+// quietly serving unrendered content.
 type RenderAwareFetcher struct {
 	Base       ports.AuthFetcher
 	Renderers  map[string]ports.Renderer

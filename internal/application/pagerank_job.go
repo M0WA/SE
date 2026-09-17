@@ -23,15 +23,10 @@ type PageRankRunResult struct {
 
 // RunPageRankJob recomputes every document's PageRank score from the
 // current link graph and writes the results back in one batched update.
-// Called by cmd/crawl's periodic ticker, and once more right after each
-// crawl job completes successfully, since that's when the graph actually
-// changes -- and, on demand, by the admin PageRank debug page's "force
-// recalculation" button.
-//
-// A document with neither an incoming nor an outgoing link never appears
-// in the link graph at all, so it's simply not part of scores and
-// UpdatePageRanks leaves it untouched -- it keeps whatever neutral default
-// (or prior score) it already had rather than being reset to 0.
+// Called by cmd/crawl's periodic ticker, right after each crawl completes,
+// and on demand from the admin PageRank page. A document with no incoming
+// or outgoing link never appears in the graph, so UpdatePageRanks leaves
+// it untouched rather than resetting it to 0.
 func RunPageRankJob(ctx context.Context, repo ports.PageRankRepository) (PageRankRunResult, error) {
 	start := time.Now()
 	graph, err := repo.LinkGraph(ctx)
@@ -49,19 +44,12 @@ func RunPageRankJob(ctx context.Context, repo ports.PageRankRepository) (PageRan
 	return PageRankRunResult{Documents: len(scores), PageRankRunInfo: info}, nil
 }
 
-// RunPageRankJobWithStatus wraps RunPageRankJob, additionally persisting a
-// domain.PageRankStatus to settings (under ports.SettingsKeyPageRankStatus)
-// so any process's admin PageRank debug page can show whether a recompute
-// triggered by anything -- another admin's click, the periodic ticker in
-// cmd/crawl, or a post-crawl trigger -- is currently running, and what the
-// last completed run found, without needing to have triggered it itself.
-// settings may be nil (e.g. in a test, or a process that never configured
-// one), in which case this behaves exactly like RunPageRankJob with the
-// status bookkeeping skipped.
-//
-// On error, InProgress is cleared but LastRunAt/Documents/Iterations/
-// FinalDelta are left as whatever the last successful run recorded --
-// a failed recompute didn't produce a new result to show.
+// RunPageRankJobWithStatus wraps RunPageRankJob, persisting a
+// domain.PageRankStatus so any process's admin PageRank page can show
+// whether a recompute (triggered by anything, anywhere) is running and
+// what the last one found. settings may be nil (status bookkeeping is
+// then skipped). On error, InProgress clears but the last successful
+// run's fields are left as-is -- a failure produced no new result.
 func RunPageRankJobWithStatus(ctx context.Context, repo ports.PageRankRepository, settings ports.SettingsStore) (PageRankRunResult, error) {
 	status := LoadPageRankStatus(ctx, settings)
 	status.InProgress = true
@@ -79,13 +67,10 @@ func RunPageRankJobWithStatus(ctx context.Context, repo ports.PageRankRepository
 	return result, err
 }
 
-// LoadPageRankStatus reads the persisted PageRank status back (see
-// RunPageRankJobWithStatus) -- used both internally, to update it without
-// clobbering fields a concurrent recompute isn't touching, and by the
-// admin PageRank debug page's GET handler, to show it. A nil settings, a
-// store error, a missing key (nothing has ever recomputed through this
-// mechanism), or an undecodable value all just return the zero value --
-// "nothing to show yet" is never treated as an error.
+// LoadPageRankStatus reads the persisted status back (see
+// RunPageRankJobWithStatus) -- used internally and by the admin GET
+// handler. A nil settings, store error, missing key, or bad value all
+// just return the zero value; "nothing to show yet" is never an error.
 func LoadPageRankStatus(ctx context.Context, settings ports.SettingsStore) domain.PageRankStatus {
 	if settings == nil {
 		return domain.PageRankStatus{}

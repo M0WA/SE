@@ -16,12 +16,8 @@ type CorrectedTerm struct {
 }
 
 // HybridResult is a ranked match with a broken-down score. CrawledAt is
-// populated only when the caller needs it for recency sorting -- it's the
-// zero time otherwise. CorrectedTerms is the same for every result of a
-// given Search call (it describes the query, not this particular
-// document) -- empty when fuzzy correction is disabled, or when every query
-// term either matched something or had no close-enough vocabulary term to
-// substitute.
+// the zero time unless recency sorting needs it. CorrectedTerms describes
+// the query, not this document -- identical across one Search call's results.
 type HybridResult struct {
 	DocID     string
 	URL       string
@@ -34,12 +30,9 @@ type HybridResult struct {
 	// say what share of the batch's top score it represents.
 	NormBM25    float64
 	SemanticSim float64
-	// PageRank is this document's raw (unnormalized) link-authority score
-	// (see domain.PageRank and sqlrepo's documents.pagerank column) --
-	// carried alongside the other components so hybridSearchService.Search
-	// can normalize it against the candidate batch's own max and blend it
-	// into FinalScore. Not itself part of the wire-format admin debug view;
-	// see FinalScore for the blended result.
+	// PageRank is this document's raw (unnormalized) link-authority score,
+	// carried so Search can normalize it against the batch's max and blend
+	// it into FinalScore.
 	PageRank float64
 	// NormalizedPageRank is PageRank normalized against this batch's own max
 	// (set by hybridSearchService.Search) -- the actual value blended into

@@ -11,13 +11,10 @@ import (
 	"searchengine/internal/ports"
 )
 
-// NewHTTPEmbedder constructs a ports.EmbeddingProvider for one candidate
-// HTTP endpoint config -- used both to build a real, long-lived embedder for
-// an enabled domain.EmbeddingHTTPEndpoint (see NewEmbedders) and, by the
-// admin API's testEmbeddingConnectivity/handleAdminEmbeddingsModels, to
-// probe an endpoint's settings before they're actually saved. e.APIKey must
-// already be plaintext (see DecryptEndpointAPIKey) -- this never decrypts
-// anything itself.
+// NewHTTPEmbedder constructs a ports.EmbeddingProvider for one candidate HTTP
+// endpoint config -- used for a real long-lived embedder (see NewEmbedders)
+// and to probe unsaved settings before persisting them. e.APIKey must
+// already be plaintext (see DecryptEndpointAPIKey); this never decrypts.
 func NewHTTPEmbedder(e domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider {
 	return httpembed.New(httpembed.Config{
 		BaseURL:            e.BaseURL,
@@ -30,22 +27,10 @@ func NewHTTPEmbedder(e domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider {
 	})
 }
 
-// NewEmbedders constructs one ports.EmbeddingProvider per currently-enabled
-// provider -- the built-in hashembed.Embedder (see
-// domain.OperationalSettingsValues.EmbeddingHashEnabled) and one
-// httpembed.Embedder per enabled endpoint in endpoints (see
-// domain.EmbeddingHTTPEndpoint.Enabled) -- keyed by domain.
-// EmbeddingProviderHash or the endpoint's own ID. Every process (cmd/search,
-// cmd/admin, cmd/crawl) uses this map for the rest of its lifetime: crawling
-// and recomputing embed every enabled provider, search embeds its query
-// only against whichever one is currently active (see domain.
-// OperationalSettingsValues.EmbeddingProvider). Callers must pass endpoints
-// with APIKey already decrypted (see DecryptEndpointAPIKey) and settings
-// already synced from the settings store (i.e. call this after bootstrap.
-// SyncSettings has completed its first load, not before) -- this is read
-// exactly once at startup rather than hot-reloaded, since each embedder's
-// Dimensions() is baked into sqlrepo.Repository.EnableANN's pgvector column
-// sizing.
+// NewEmbedders builds one ports.EmbeddingProvider per enabled provider,
+// keyed by domain.EmbeddingProviderHash or the endpoint's ID. Read once at
+// startup, not hot-reloaded: Dimensions() is baked into EnableANN's pgvector
+// sizing. Endpoints must already be decrypted (DecryptEndpointAPIKey).
 func NewEmbedders(hashEnabled bool, endpoints []domain.EmbeddingHTTPEndpoint) map[string]ports.EmbeddingProvider {
 	embedders := make(map[string]ports.EmbeddingProvider, 1+len(endpoints))
 	if hashEnabled {
@@ -75,18 +60,9 @@ func EmbedderDimensions(embedders map[string]ports.EmbeddingProvider) map[string
 }
 
 // DecryptEndpointAPIKey returns e with APIKey decrypted via
-// settingsEncryptionKey (see settingscrypto's package doc comment) -- call
-// this on every domain.EmbeddingHTTPEndpoint loaded from the store before
-// passing it to NewEmbedders/NewHTTPEmbedder, since admin.go persists
-// APIKey encrypted whenever SettingsEncryptionKey is configured. A nil
-// settingsEncryptionKey, or a value that was never encrypted in the first
-// place (an unconfigured key at save time), passes e through unchanged --
-// see settingscrypto.Decrypt. A genuine decryption failure (the value IS
-// encrypted but this process's key is nil, wrong, or the data is corrupt)
-// is logged and returns e with APIKey cleared rather than the raw
-// ciphertext, so a misconfigured embedder fails fast and visibly (every
-// request to a bad URL/key rejected) rather than silently sending garbage
-// as a Bearer token.
+// settingsEncryptionKey -- call before NewEmbedders/NewHTTPEmbedder. A nil
+// or never-encrypted key passes through unchanged; a genuine decryption
+// failure clears APIKey so a misconfigured embedder fails fast, visibly.
 func DecryptEndpointAPIKey(e domain.EmbeddingHTTPEndpoint, settingsEncryptionKey []byte) domain.EmbeddingHTTPEndpoint {
 	dec, err := settingscrypto.Decrypt(settingsEncryptionKey, e.APIKey)
 	if err != nil {
@@ -109,13 +85,10 @@ func DecryptEndpointAPIKeys(endpoints []domain.EmbeddingHTTPEndpoint, settingsEn
 	return out
 }
 
-// LoadEmbeddingEndpoints lists every configured HTTP embedding endpoint
-// from store and decrypts each one's APIKey (see DecryptEndpointAPIKeys) --
-// the one-time startup read every process (cmd/search, cmd/admin,
-// cmd/crawl) does before calling NewEmbedders. A store error is logged and
-// treated as "no endpoints configured" (an empty slice) rather than fatal,
-// matching this codebase's convention of degrading gracefully rather than
-// failing startup over an optional/best-effort read.
+// LoadEmbeddingEndpoints lists every configured HTTP endpoint and decrypts
+// each APIKey -- the one-time startup read before NewEmbedders. A store
+// error is logged and treated as "no endpoints configured" rather than
+// fatal, matching this codebase's degrade-gracefully convention.
 func LoadEmbeddingEndpoints(ctx context.Context, store ports.EmbeddingEndpointStore, settingsEncryptionKey []byte) []domain.EmbeddingHTTPEndpoint {
 	endpoints, err := store.ListEmbeddingEndpoints(ctx)
 	if err != nil {
