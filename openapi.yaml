@@ -1303,6 +1303,17 @@ components:
             pagerank_recompute_interval_minutes: { type: integer }
             ann_search_enabled: { type: boolean }
             max_retained_crawl_jobs: { type: integer }
+            max_concurrent_crawls:
+              type: integer
+              description: >-
+                How many crawl jobs actually fetch pages at once on
+                crawl-server -- a burst of triggered jobs beyond this
+                queues rather than opening unbounded concurrent
+                connections and DB writes. Defaults 3. Raising or
+                lowering it takes effect for the next job that starts,
+                without a restart -- an already-running job keeps its
+                slot until it finishes, so a lowered limit takes a little
+                while to fully apply.
             default_renderer:
               type: string
               enum: [none, chromium, firefox]

@@ -79,6 +79,15 @@ type OperationalSettingsValues struct {
 	// admin-configurable now that history survives in the database rather
 	// than being bounded only by process memory.
 	MaxRetainedCrawlJobs int
+	// MaxConcurrentCrawls bounds how many crawl jobs actually fetch pages
+	// at once on crawl-server -- a burst of triggered jobs beyond this
+	// queues rather than opening unbounded concurrent connections and DB
+	// writes. Raising or lowering it takes effect for the next job that
+	// starts, without a restart, but a job already running keeps its
+	// slot until it finishes -- so a lowered limit takes a little while
+	// to fully apply, the same tradeoff every other live-reloaded
+	// operational setting already has.
+	MaxConcurrentCrawls int
 	// DefaultRenderer is the crawler's global default page-rendering mode
 	// (see Renderer* constants): RendererNone (plain HTTP fetch) unless an
 	// admin turns on real browser rendering. A crawl's own Renderer
@@ -304,6 +313,10 @@ const (
 	// point rather than a hard limit -- persistent storage can comfortably
 	// hold far more history if an admin raises it.
 	defaultMaxRetainedCrawlJobs = 200
+	// defaultMaxConcurrentCrawls matches this codebase's own previous
+	// hard-coded constant of the same name, kept as the starting point
+	// now that it's admin-adjustable rather than a hard limit.
+	defaultMaxConcurrentCrawls = 3
 	// defaultMaxDocumentVersions keeps a handful of prior versions around
 	// for a changing page without letting document_versions grow
 	// unbounded for a page that's re-crawled often.
@@ -339,6 +352,7 @@ func defaultOperationalSettings() OperationalSettingsValues {
 		PageRankRecomputeIntervalMinutes: defaultPageRankRecomputeIntervalMinutes,
 		ANNSearchEnabled:                 true,
 		MaxRetainedCrawlJobs:             defaultMaxRetainedCrawlJobs,
+		MaxConcurrentCrawls:              defaultMaxConcurrentCrawls,
 		DefaultRenderer:                  RendererNone,
 		LinkScope:                        LinkScopeTLD,
 		MaxDocumentVersions:              defaultMaxDocumentVersions,
@@ -443,6 +457,9 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 	}
 	if v.MaxRetainedCrawlJobs <= 0 {
 		v.MaxRetainedCrawlJobs = d.MaxRetainedCrawlJobs
+	}
+	if v.MaxConcurrentCrawls <= 0 {
+		v.MaxConcurrentCrawls = d.MaxConcurrentCrawls
 	}
 	if v.MaxDocumentVersions <= 0 {
 		v.MaxDocumentVersions = d.MaxDocumentVersions

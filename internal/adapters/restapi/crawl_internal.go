@@ -6,16 +6,110 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"sync"
+	"time"
 
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
 )
 
-// maxConcurrentCrawls bounds how many crawl jobs actually fetch pages at
-// once on this process -- a simple safety valve, not a tuning knob, so a
-// burst of triggered jobs queues behind it rather than opening unbounded
-// concurrent connections and DB writes.
-const maxConcurrentCrawls = 3
+// crawlConcurrencyPollInterval bounds how long a crawl job already queued
+// behind a full crawlConcurrencySemaphore can wait before it re-checks
+// whether the configured limit has since been raised -- without this, a
+// job queued before an admin raises domain.OperationalSettingsValues.
+// MaxConcurrentCrawls would stay stuck on the old (smaller, still-full)
+// permit channel until enough of ITS original occupants happened to
+// finish naturally, defeating the point of raising the limit while a
+// backlog is already queued. Short enough that a raised limit visibly
+// helps an already-queued job almost immediately, long enough that a
+// queue of many jobs isn't constantly busy-polling.
+const crawlConcurrencyPollInterval = 1 * time.Second
+
+// crawlConcurrencySemaphore bounds how many crawl jobs actually fetch
+// pages at once on this process, reading domain.OperationalSettingsValues.
+// MaxConcurrentCrawls fresh on every acquire attempt (and, via the poll
+// loop in acquire, periodically while already queued) rather than baking
+// a fixed channel capacity in at Handler construction -- so an admin
+// raising or lowering it on the Settings page takes effect without a
+// restart, the same live-reload convention every other operational
+// setting already follows, for a job already queued as well as the next
+// one to queue. A resize swaps in a freshly-sized channel; a job already
+// holding a permit from the old channel keeps it until it releases, so
+// the true concurrent count can transiently over/undershoot a
+// just-changed limit for as long as those older jobs are still running --
+// self-corrects on its own, the same "takes a little while to fully
+// apply" tradeoff every other live-reloaded setting already has.
+type crawlConcurrencySemaphore struct {
+	opSettings *domain.OperationalSettings
+
+	mu      sync.Mutex
+	ch      chan struct{}
+	current int
+}
+
+// defaultMaxConcurrentCrawls is used only if opSettings is nil (should
+// never happen on a real crawl-server process, which always configures
+// one) -- matches domain.OperationalSettingsValues' own default.
+const defaultMaxConcurrentCrawls = 3
+
+func newCrawlConcurrencySemaphore(opSettings *domain.OperationalSettings) *crawlConcurrencySemaphore {
+	s := &crawlConcurrencySemaphore{opSettings: opSettings}
+	s.resize(s.configuredLimit())
+	return s
+}
+
+func (s *crawlConcurrencySemaphore) configuredLimit() int {
+	if s.opSettings == nil {
+		return defaultMaxConcurrentCrawls
+	}
+	if n := s.opSettings.Get().MaxConcurrentCrawls; n > 0 {
+		return n
+	}
+	return defaultMaxConcurrentCrawls
+}
+
+// channel returns the current permit channel to acquire from (and later
+// release into) for one crawl job, resizing it first if the configured
+// limit has changed since the last call.
+func (s *crawlConcurrencySemaphore) channel() chan struct{} {
+	s.resize(s.configuredLimit())
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ch
+}
+
+func (s *crawlConcurrencySemaphore) resize(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n == s.current {
+		return
+	}
+	s.ch = make(chan struct{}, n)
+	s.current = n
+}
+
+// acquire blocks until a permit is available under the currently
+// configured limit, or ctx is cancelled -- whichever comes first. Unlike
+// a single blocking send on one fixed channel, this re-fetches the
+// current channel (resizing it first if the limit changed) every
+// crawlConcurrencyPollInterval while still queued, so a limit raised
+// after this call already started waiting still takes effect for it,
+// not just for jobs that start queuing afterward. The returned channel
+// must be released (a receive) by the caller once the job finishes --
+// always into this same returned channel, never "whatever's current
+// now," since a resize may have moved on by then.
+func (s *crawlConcurrencySemaphore) acquire(ctx context.Context) (chan struct{}, error) {
+	for {
+		ch := s.channel()
+		select {
+		case ch <- struct{}{}:
+			return ch, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(crawlConcurrencyPollInterval):
+		}
+	}
+}
 
 // RoutesCrawlInternal serves the endpoints the crawl-server binary
 // exposes: GET /jobs and GET /jobs/{id} report progress on jobs the
@@ -149,7 +243,7 @@ func (h *Handler) ResumeCrawlJob(jobID string, opts ports.CrawlOptions) {
 // history is far less harmful than silently losing already-crawled pages.
 //
 // A cancel func is registered under jobID for the job's entire lifetime,
-// including while it's still queued behind maxConcurrentCrawls -- so
+// including while it's still queued behind crawlSem's concurrency limit -- so
 // CancelCrawlJob can stop a job before it even starts fetching, not just
 // while it's actively running.
 func (h *Handler) runCrawlJob(jobID string, opts ports.CrawlOptions) {
@@ -160,20 +254,19 @@ func (h *Handler) runCrawlJob(jobID string, opts ports.CrawlOptions) {
 
 	storeCtx := context.Background()
 
-	select {
-	case h.crawlSem <- struct{}{}:
-	case <-crawlCtx.Done():
+	sem, err := h.crawlSem.acquire(crawlCtx)
+	if err != nil {
 		if err := h.crawlJobs.MarkCancelled(storeCtx, jobID); err != nil {
 			log.Printf("crawl job %s: marking cancelled: %v", jobID, err)
 		}
 		return
 	}
-	defer func() { <-h.crawlSem }()
+	defer func() { <-sem }()
 
 	if err := h.crawlJobs.MarkRunning(storeCtx, jobID); err != nil {
 		log.Printf("crawl job %s: marking running: %v", jobID, err)
 	}
-	_, err := h.crawler.Crawl(crawlCtx, opts, func(ev domain.CrawlPageEvent) {
+	_, err = h.crawler.Crawl(crawlCtx, opts, func(ev domain.CrawlPageEvent) {
 		if err := h.crawlJobs.AppendPage(storeCtx, jobID, ev); err != nil {
 			log.Printf("crawl job %s: appending page event: %v", jobID, err)
 		}
