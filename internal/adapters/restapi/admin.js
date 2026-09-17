@@ -201,6 +201,82 @@ function buildTable(headers, rows, cellsForRow) {
   return table;
 }
 
+// ADMIN_NAV_GROUPS is the admin sidebar's single source of truth for
+// grouping and order -- every top-level admin page used to carry its own
+// copy of the same flat, ten-link <nav>, differing only in which entry had
+// aria-current="page", so adding or reordering a page meant editing ten
+// HTML files by hand. Now renderAdminNav builds it once per page load from
+// this list; a page picks up any change here just by loading admin.js.
+const ADMIN_NAV_GROUPS = [
+  { label: 'Overview', href: '/admin' },
+  {
+    label: 'Content',
+    items: [
+      { label: 'Documents', href: '/admin/documents' },
+      { label: 'Content dedup', href: '/admin/content_dedup' },
+    ],
+  },
+  {
+    label: 'Crawling',
+    items: [
+      { label: 'Schedule', href: '/admin/crawl' },
+      { label: 'Jobs', href: '/admin/jobs' },
+    ],
+  },
+  {
+    label: 'Relevance',
+    items: [
+      { label: 'Search', href: '/admin/search' },
+      { label: 'PageRank', href: '/admin/pagerank' },
+      { label: 'Embeddings', href: '/admin/embeddings' },
+    ],
+  },
+  {
+    label: 'System',
+    items: [
+      { label: 'Settings', href: '/admin/settings' },
+      { label: 'Database', href: '/admin/database' },
+    ],
+  },
+];
+
+// renderAdminNav fills #admin-rail with the grouped sidebar built from
+// ADMIN_NAV_GROUPS, marking whichever entry's href matches the current path
+// as current. A no-op on any page without that element -- the drill-down
+// detail pages (admin_domain.html and similar) keep their own plain "back"
+// link instead of the full sidebar.
+function renderAdminNav() {
+  const rail = document.getElementById('admin-rail');
+  if (!rail) return;
+  clear(rail);
+  const path = window.location.pathname;
+
+  const [overview, ...groups] = ADMIN_NAV_GROUPS;
+  const top = document.createElement('a');
+  top.className = 'rail-top';
+  top.href = overview.href;
+  top.textContent = overview.label;
+  if (path === overview.href) top.setAttribute('aria-current', 'page');
+  rail.appendChild(top);
+
+  for (const group of groups) {
+    const groupEl = document.createElement('div');
+    groupEl.className = 'rail-group';
+    const tab = document.createElement('div');
+    tab.className = 'rail-tab';
+    tab.textContent = group.label;
+    groupEl.appendChild(tab);
+    for (const item of group.items) {
+      const a = document.createElement('a');
+      a.href = item.href;
+      a.textContent = item.label;
+      if (path === item.href) a.setAttribute('aria-current', 'page');
+      groupEl.appendChild(a);
+    }
+    rail.appendChild(groupEl);
+  }
+}
+
 function wireSignOut() {
   const btn = document.getElementById('sign-out');
   if (!btn) return;
@@ -425,6 +501,7 @@ if (typeof module !== 'undefined' && module.exports) {
     getJSON, postJSON, deleteRequest, patchJSON,
     textCell, snippetCell, urlCell, seedSummary, formatTimestamp, buildTable,
     linesToText, parseLines,
+    ADMIN_NAV_GROUPS, renderAdminNav,
     wireSignOut, loadStats, loadVocabulary, wireVocabularySearch,
   };
 }

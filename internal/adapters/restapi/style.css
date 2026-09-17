@@ -640,23 +640,74 @@ button:focus-visible {
   accent-color: var(--accent);
 }
 
-body.admin main { max-width: 820px; }
-
-.admin-nav {
+/* The admin shell is a persistent two-column layout: .admin-rail (grouped
+   navigation, filled in by admin.js's renderAdminNav -- see ADMIN_NAV_GROUPS
+   there for the single source of truth on grouping/order) beside the page's
+   own <main>, rather than the old single flat row of ten links inside main
+   itself. */
+.admin-shell {
   display: flex;
-  flex-wrap: wrap;
-  gap: 1.5rem;
-  font-size: 0.92rem;
-  margin: -1rem 0 2.5rem;
-  padding-bottom: 1.2rem;
-  border-bottom: 1px solid var(--rule);
+  align-items: flex-start;
+  gap: 2.5rem;
+  max-width: 1060px;
+  margin: 0 auto;
 }
 
-.admin-nav a { color: var(--ink-muted); text-decoration: none; }
+body.admin main { max-width: 820px; margin: 0; flex: 1; min-width: 0; }
 
-.admin-nav a:hover { color: var(--accent); }
+.admin-rail {
+  flex: none;
+  width: 180px;
+  position: sticky;
+  top: 12vh;
+  font-size: 0.92rem;
+}
 
-.admin-nav a[aria-current="page"] { color: var(--ink); font-weight: 600; }
+.admin-rail .rail-top {
+  display: block;
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: none;
+  margin-bottom: 1.6rem;
+}
+
+.admin-rail .rail-top[aria-current="page"] { color: var(--accent); }
+
+.rail-group { margin-bottom: 1.4rem; }
+
+/* rail-tab is a group label, not a link -- the border-top doubles as the
+   divider between groups so no separate rule is needed. */
+.rail-tab {
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+  border-top: 1px solid var(--rule);
+  padding-top: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.rail-group a { display: block; color: var(--ink-muted); text-decoration: none; padding: 0.25rem 0; }
+
+.rail-group a:hover { color: var(--accent); }
+
+.rail-group a[aria-current="page"] { color: var(--ink); font-weight: 600; }
+
+@media (max-width: 860px) {
+  .admin-shell { flex-direction: column; gap: 0; }
+  .admin-rail {
+    position: static;
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 1.5rem;
+    margin-bottom: 2rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--rule);
+  }
+  .admin-rail .rail-top { width: 100%; margin-bottom: 0.6rem; }
+  .rail-group { display: flex; align-items: baseline; gap: 0.9rem; margin-bottom: 0.3rem; }
+  .rail-tab { border-top: none; padding-top: 0; margin-bottom: 0; }
+  .rail-group a { display: inline; padding: 0; }
+}
 
 section.panel {
   margin-top: 2.5rem;

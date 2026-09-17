@@ -122,6 +122,7 @@
     loadGroups();
   });
 
+  renderAdminNav();
   wireSignOut();
   loadRecomputeStatus();
   loadGroups();

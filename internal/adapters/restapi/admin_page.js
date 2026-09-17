@@ -614,6 +614,7 @@
   }
 
   loadOverview();
+  renderAdminNav();
   wireSignOut();
 
   // Exports for the Node test runner only -- `typeof module` is undefined in
