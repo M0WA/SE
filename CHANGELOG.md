@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.10.0 - 2026-09-17
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Shorten long doc comments and reduce complexity repo-wide by @M0WA in https://github.com/M0WA/SE/pull/97
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.9.0...v4.10.0
+
+
 ## v4.9.0 - 2026-09-17
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
