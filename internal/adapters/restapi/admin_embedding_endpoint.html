@@ -23,15 +23,15 @@
 
   <form id="endpoint-form" class="crawl-form stacked-form" hidden>
     <div class="form-row">
-      <label for="endpoint-name">Name</label><br>
+      <label for="endpoint-name">Name</label>
       <input id="endpoint-name" class="field" type="text" required placeholder="e.g. IONOS bge-m3">
     </div>
     <div class="form-row">
-      <label for="endpoint-base-url">Base URL</label><br>
+      <label for="endpoint-base-url">Base URL</label>
       <input id="endpoint-base-url" class="field" type="text" required placeholder="http://localhost:11434/v1">
     </div>
     <div class="form-row">
-      <label for="endpoint-api-key">API key</label><br>
+      <label for="endpoint-api-key">API key</label>
       <input id="endpoint-api-key" class="field" type="password" autocomplete="new-password">
     </div>
     <div class="form-row form-row-check">
@@ -41,26 +41,35 @@
       </label>
     </div>
     <div class="form-row">
-      <label for="endpoint-model">Model</label><br>
+      <label for="endpoint-model">Model</label>
       <input id="endpoint-model" class="field" type="text">
       <button id="endpoint-list-models-btn" type="button" class="text-button">List available models</button>
       <div id="endpoint-models-status" class="panel-status"></div>
       <div id="endpoint-models-result"></div>
     </div>
     <div class="form-row">
-      <label for="endpoint-dimensions">Dimensions</label><br>
+      <label for="endpoint-dimensions">Dimensions</label>
       <input id="endpoint-dimensions" class="field" type="number" min="1" required>
     </div>
     <div class="form-row">
-      <label for="endpoint-rate-limit">Rate limit — requests/second (0 = unlimited)</label><br>
-      <input id="endpoint-rate-limit" class="field" type="number" min="0" step="any">
+      <div class="label-row">
+        <label for="endpoint-rate-limit">Rate limit</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Requests per second (0 = unlimited).</span></span>
+      </div>
+      <span class="field-wrap" data-default="Unlimited"><input id="endpoint-rate-limit" class="field" type="number" min="0" step="any"></span>
     </div>
     <div class="form-row">
-      <label for="endpoint-chunk-size">Chunk size — tokens per Embed call before splitting long text into multiple chunks and combining them (0 = never split)</label><br>
-      <input id="endpoint-chunk-size" class="field" type="number" min="0" step="1">
+      <div class="label-row">
+        <label for="endpoint-chunk-size">Chunk size</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Tokens per Embed call before splitting long text into multiple chunks and combining them (0 = never split).</span></span>
+      </div>
+      <span class="field-wrap" data-default="Never split"><input id="endpoint-chunk-size" class="field" type="number" min="0" step="1"></span>
     </div>
     <div class="form-row">
-      <label for="endpoint-tokenize-url">Tokenize URL — an exact-token-count endpoint (e.g. vLLM's own <code>/tokenize</code>) for precise chunk sizing; left blank, chunk size is estimated from character count instead</label><br>
+      <div class="label-row">
+        <label for="endpoint-tokenize-url">Tokenize URL</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">An exact-token-count endpoint (e.g. vLLM's own <code>/tokenize</code>) for precise chunk sizing; left blank, chunk size is estimated from character count instead.</span></span>
+      </div>
       <input id="endpoint-tokenize-url" class="field" type="text" placeholder="http://localhost:8000/tokenize">
     </div>
     <div class="form-row form-row-check">

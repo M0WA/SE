@@ -23,11 +23,14 @@
 
   <form id="schedule-form" class="crawl-form stacked-form" hidden>
     <div class="form-row">
-      <label for="schedule-seed-urls">Seed URLs — one per line</label><br>
+      <div class="label-row">
+        <label for="schedule-seed-urls">Seed URLs</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One per line.</span></span>
+      </div>
       <textarea id="schedule-seed-urls" class="field" rows="3" required></textarea>
     </div>
     <div class="form-row">
-      <label for="schedule-max-pages">Max pages</label><br>
+      <label for="schedule-max-pages">Max pages</label>
       <input id="schedule-max-pages" class="field" type="number" min="1">
     </div>
     <div class="form-row form-row-check">
@@ -37,7 +40,7 @@
       </label>
     </div>
     <div class="form-row">
-      <label for="schedule-link-scope">How far to follow links</label><br>
+      <label for="schedule-link-scope">How far to follow links</label>
       <select id="schedule-link-scope" class="field">
         <option value="">Use site default</option>
         <option value="host">Exact seed host only</option>
@@ -47,14 +50,18 @@
       </select>
     </div>
     <div class="form-row">
-      <label for="schedule-allowed-domains">Allowed domains — one domain per line</label><br>
+      <div class="label-row">
+        <label for="schedule-allowed-domains">Allowed domains</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One domain per line. Always followed, even where link scope above would otherwise reject them.</span></span>
+      </div>
       <textarea id="schedule-allowed-domains" class="field" rows="3"></textarea>
-      <p class="tuning-hint">Always followed, even where link scope above would otherwise reject them.</p>
     </div>
     <div class="form-row">
-      <label for="schedule-blocked-domains">Blocked domains — one domain per line</label><br>
+      <div class="label-row">
+        <label for="schedule-blocked-domains">Blocked domains</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One domain per line. Never followed, even where link scope or allowed domains above would otherwise allow them.</span></span>
+      </div>
       <textarea id="schedule-blocked-domains" class="field" rows="3"></textarea>
-      <p class="tuning-hint">Never followed, even where link scope or allowed domains above would otherwise allow them.</p>
     </div>
     <div class="form-row form-row-check">
       <label for="schedule-follow-indexed">
@@ -75,7 +82,7 @@
       </label>
     </div>
     <div class="form-row">
-      <label for="schedule-renderer">Rendering</label><br>
+      <label for="schedule-renderer">Rendering</label>
       <select id="schedule-renderer" class="field">
         <option value="">Use site default</option>
         <option value="none">None — plain HTTP fetch</option>
@@ -84,11 +91,11 @@
       </select>
     </div>
     <div class="form-row">
-      <label for="schedule-user-agent">User-Agent</label><br>
+      <label for="schedule-user-agent">User-Agent</label>
       <input id="schedule-user-agent" class="field" type="text" placeholder="Default: standard Firefox">
     </div>
     <div class="form-row">
-      <label for="schedule-cookie">Cookie header</label><br>
+      <label for="schedule-cookie">Cookie header</label>
       <input id="schedule-cookie" class="field" type="text" placeholder="session=abc123">
     </div>
     <div class="form-row form-row-check">
@@ -98,11 +105,11 @@
       </label>
     </div>
     <div class="form-row">
-      <label for="schedule-basic-user">Basic auth username</label><br>
+      <label for="schedule-basic-user">Basic auth username</label>
       <input id="schedule-basic-user" class="field" type="text" autocomplete="off">
     </div>
     <div class="form-row">
-      <label for="schedule-basic-pass">Basic auth password</label><br>
+      <label for="schedule-basic-pass">Basic auth password</label>
       <input id="schedule-basic-pass" class="field" type="password" autocomplete="new-password">
     </div>
     <div class="form-row form-row-check">
@@ -112,27 +119,33 @@
       </label>
     </div>
     <div class="form-row">
-      <label for="schedule-fetch-timeout">Fetch timeout (seconds)</label><br>
+      <label for="schedule-fetch-timeout">Fetch timeout (seconds)</label>
       <input id="schedule-fetch-timeout" class="field" type="number" min="1" placeholder="Default: global setting">
     </div>
     <div class="form-row">
-      <label for="schedule-min-text-length">Minimum text length</label><br>
+      <label for="schedule-min-text-length">Minimum text length</label>
       <input id="schedule-min-text-length" class="field" type="number" min="0" placeholder="Default: global setting">
     </div>
     <div class="form-row">
-      <label for="schedule-delay">Delay between fetches (ms)</label><br>
+      <label for="schedule-delay">Delay between fetches (ms)</label>
       <input id="schedule-delay" class="field" type="number" min="0" placeholder="Default: global setting">
     </div>
     <div class="form-row">
-      <label for="schedule-max-response">Max response size (KB)</label><br>
+      <label for="schedule-max-response">Max response size (KB)</label>
       <input id="schedule-max-response" class="field" type="number" min="1" placeholder="Default: global setting">
     </div>
     <div class="form-row">
-      <label for="schedule-interval">Interval — minutes between runs (0 = run once)</label><br>
+      <div class="label-row">
+        <label for="schedule-interval">Interval</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Minutes between runs (0 = run once).</span></span>
+      </div>
       <input id="schedule-interval" class="field" type="number" min="0">
     </div>
     <div class="form-row">
-      <label for="schedule-max-runs">Max runs (0 = unlimited)</label><br>
+      <div class="label-row">
+        <label for="schedule-max-runs">Max runs</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">0 = unlimited.</span></span>
+      </div>
       <input id="schedule-max-runs" class="field" type="number" min="0">
     </div>
     <div class="form-row form-row-check">

@@ -95,23 +95,135 @@ form {
   padding: 0.2rem 0;
 }
 
-/* A field's own caption -- in this app, often a full descriptive sentence
-   ("Semantic candidate pool size — max documents scored for semantic
-   similarity per search..."), not just a one-word tag. Sized down from
-   body copy (rather than inheriting it at full size) so a long caption
-   reads as supporting text, not as another line of prose competing with
-   real headings; the block display + margin (replacing a bare <br>
-   between label and field across every .form-row) gives the two real
-   separation instead of just a line-break's worth. .form-row-check and
-   .vocab-page-size-label below both override this back to an inline row
-   -- a short checkbox caption or a compact "Per page" field-adjacent
-   label was never the long-description case this rule is for. */
+/* A field's own caption -- a short name (e.g. "Alpha"), not the field's
+   full explanation, which now lives behind its .hint icon (below) instead
+   of always sitting in the label itself. Sized down from body copy
+   (rather than inheriting it at full size) so it reads as a caption, not
+   another line of prose competing with real headings; the block display +
+   margin gives the label and its field real separation of their own,
+   tighter than a subsection heading's own spacing so the two clearly read
+   as belonging together. .form-row-check and .vocab-page-size-label below
+   both override this back to an inline row -- a checkbox's own caption
+   sits beside it, not above a separate field. */
 label {
   display: block;
   margin: 0 0 0.35rem;
   font-size: 0.92rem;
   font-weight: 400;
   color: var(--ink);
+}
+
+/* .label-row pairs a short label with its .hint icon (see below) on one
+   line -- used wherever a field's full explanation moved out of the label
+   text itself and into the hint's hover bubble. */
+.label-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin: 0 0 0.35rem;
+}
+
+.label-row label { margin: 0; }
+
+/* .hint: a small "i" mark next to a setting's name, revealing that
+   setting's full explanation (and its default, where one applies) on
+   hover or keyboard focus -- so the name stays short and the field below
+   it stays close, while the explanation is still one hover away rather
+   than gone. tabindex on the wrapping span (set in HTML) is what makes
+   :focus-visible reachable by keyboard, the same as any other
+   non-form-control interactive element needs to opt into focusability. */
+.hint {
+  position: relative;
+  display: inline-flex;
+  cursor: help;
+}
+
+.hint-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: 50%;
+  font-size: 0.7rem;
+  font-style: italic;
+  line-height: 1;
+  color: var(--ink-muted);
+}
+
+.hint:hover .hint-icon,
+.hint:focus-visible .hint-icon {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.hint:focus-visible {
+  outline: none;
+}
+
+.hint-bubble {
+  position: absolute;
+  left: 0;
+  top: 1.35rem;
+  z-index: 5;
+  width: max-content;
+  max-width: min(22rem, 80vw);
+  padding: 0.55rem 0.75rem;
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  opacity: 0;
+  transform: translateY(-2px);
+  pointer-events: none;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+.hint:hover .hint-bubble,
+.hint:focus-visible .hint-bubble {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.hint-bubble a { color: var(--ink); }
+
+/* A field's configured default, shown only on hovering/focusing the field
+   itself -- data-default carries the value so no extra DOM node (and no
+   layout space) is needed per field until it's actually shown. Wraps a
+   .field (or a checkbox) rather than styling the field directly, since
+   the tooltip must be positioned relative to something that doesn't
+   itself change size/position when :hover/:focus-within toggle it. */
+.field-wrap { position: relative; display: block; }
+
+.field-wrap[data-default]:hover::after,
+.field-wrap[data-default]:focus-within::after {
+  content: "Default: " attr(data-default);
+  position: absolute;
+  left: 0;
+  top: 100%;
+  margin-top: 0.3rem;
+  z-index: 5;
+  padding: 0.3rem 0.6rem;
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  color: var(--ink-muted);
+  font-size: 0.8rem;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  white-space: nowrap;
+}
+
+/* A checkbox's own field-wrap is inline (sits beside the checkbox, inside
+   .form-row-check's flex row) rather than block -- the plain block
+   default above is sized for a full-width text/number/select field. */
+.form-row-check .field-wrap {
+  display: inline-flex;
 }
 
 .field::placeholder { color: var(--ink-muted); }
@@ -493,6 +605,18 @@ button:focus-visible {
 
 .crawl-advanced .field { width: 100%; font-size: 0.95rem; }
 
+/* .form-row-check itself is a flex row so a trailing .hint icon (a
+   sibling of <label>, deliberately never nested inside it -- a click
+   landing on the icon would otherwise bubble up and toggle the checkbox
+   the label is for) sits on the same line as the checkbox and its text,
+   not on a line of its own below. */
+.form-row-check {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
 .form-row-check label {
   display: flex;
   align-items: baseline;
@@ -505,8 +629,6 @@ button:focus-visible {
 .form-row-check input[type="checkbox"] {
   accent-color: var(--accent);
 }
-
-.form-row-check .tuning-hint { margin: 0.3rem 0 0; }
 
 body.admin main { max-width: 820px; }
 
