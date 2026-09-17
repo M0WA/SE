@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.6.0 - 2026-09-17
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Add sortable columns to the job detail page table, default newest first by @M0WA in https://github.com/M0WA/SE/pull/86
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.5.0...v4.6.0
+
+
 ## v4.5.0 - 2026-09-17
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
