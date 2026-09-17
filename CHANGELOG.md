@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.1 - 2026-09-17
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Auto-trigger prepare-release.yml on every merge to main by @M0WA in https://github.com/M0WA/SE/pull/106
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.0...v4.13.1
+
+
 ## v4.13.0 - 2026-09-17
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
