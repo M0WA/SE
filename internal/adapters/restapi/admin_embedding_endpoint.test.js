@@ -30,6 +30,8 @@ function baseEndpoint(overrides) {
     model: 'BAAI/bge-m3',
     dimensions: 1024,
     rate_limit_per_second: 5,
+    chunk_size_tokens: 6000,
+    tokenize_url: 'http://localhost:8000/tokenize',
     enabled: true,
     created_at: '2026-01-02T03:04:05Z',
   }, overrides);
@@ -66,6 +68,8 @@ test('load() applies the fetched endpoint to the form and reveals it', async () 
   assert.equal(document.getElementById('endpoint-model').value, 'BAAI/bge-m3');
   assert.equal(document.getElementById('endpoint-dimensions').value, '1024');
   assert.equal(document.getElementById('endpoint-rate-limit').value, '5');
+  assert.equal(document.getElementById('endpoint-chunk-size').value, '6000');
+  assert.equal(document.getElementById('endpoint-tokenize-url').value, 'http://localhost:8000/tokenize');
   assert.equal(document.getElementById('endpoint-enabled').checked, true);
   assert.equal(document.getElementById('endpoint-delete-btn').hidden, false);
   const meta = document.getElementById('endpoint-meta').textContent;
@@ -102,6 +106,16 @@ test('requestBody sends a blank api_key and clear_api_key=false by default', asy
   assert.equal(body.name, 'IONOS bge-m3');
   assert.equal(body.dimensions, 1024);
   assert.equal(body.rate_limit_per_second, 5);
+  assert.equal(body.chunk_size_tokens, 6000);
+  assert.equal(body.tokenize_url, 'http://localhost:8000/tokenize');
+});
+
+test('requestBody defaults chunk_size_tokens to 0 for an unparseable value', async () => {
+  loadFixture('ionos_bge_m3', async () => ({ ok: true, json: async () => baseEndpoint() }));
+  await flush();
+  document.getElementById('endpoint-chunk-size').value = '';
+  const { requestBody } = require('./admin_embedding_endpoint.js');
+  assert.equal(requestBody().chunk_size_tokens, 0);
 });
 
 test('requestBody reflects a newly typed key and a checked "remove" box', async () => {

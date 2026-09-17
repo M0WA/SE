@@ -56,8 +56,30 @@ type EmbeddingHTTPEndpoint struct {
 	// EmbeddingHashEnabled going false) never deletes its already-stored
 	// document_embeddings rows or ANN column, it just stops keeping them
 	// current until re-enabled or a recompute catches them up.
-	Enabled   bool
-	CreatedAt time.Time
+	Enabled bool
+	// ChunkSizeTokens bounds how much text a single Embed call sends to
+	// this endpoint -- text longer than this is split into multiple
+	// chunks, each embedded separately and mean-pooled into one final
+	// vector (see httpembed.Embedder.Embed), instead of failing outright
+	// against a model's context-length limit. 0 disables chunking
+	// entirely (the default for every endpoint created before this
+	// existed): text is sent whole, exactly like before.
+	//
+	// Always a token count, but how exactly that's measured depends on
+	// TokenizeURL: exact (via that endpoint's own tokenizer) when it's
+	// set, or an approximation from character count otherwise -- this
+	// package has no real tokenizer of its own (see httpembed's package
+	// doc comment on why: no bundled model weights or ML runtime).
+	ChunkSizeTokens int
+	// TokenizeURL, when non-empty, is a separate endpoint (e.g. vLLM's own
+	// "http://host:port/tokenize") this package POSTs {"model":...,
+	// "prompt": text} to for an exact token count instead of an estimate.
+	// Deliberately never inferred/guessed from BaseURL -- not every
+	// OpenAI-compatible embeddings server exposes an equivalent route, so
+	// this is opt-in, explicit admin config, not a try-then-fallback
+	// probe. Meaningless (and unused) when ChunkSizeTokens is 0.
+	TokenizeURL string
+	CreatedAt   time.Time
 }
 
 // EmbeddingEndpointIDPattern is every valid EmbeddingHTTPEndpoint.ID --

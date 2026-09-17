@@ -585,3 +585,422 @@ func containsAll(s string, substrs ...string) bool {
 	}
 	return true
 }
+
+// embedInput is the one field these chunking tests need from a real
+// {"input": "...", "model": "..."} embeddings request body.
+type embedInput struct {
+	Input string `json:"input"`
+}
+
+func TestEmbedder_ChunkSizeZeroSendsTextWholeRegardlessOfLength(t *testing.T) {
+	var calls int
+	var gotInput string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var body embedInput
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotInput = body.Input
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1, 2}}},
+		})
+	}))
+	defer srv.Close()
+
+	longText := strings.Repeat("word ", 500) // far more than any small ChunkSizeTokens budget would allow in one chunk
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 2, ChunkSizeTokens: 0})
+	vec, err := e.Embed(context.Background(), longText)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected exactly 1 embeddings call with chunking disabled, got %d", calls)
+	}
+	if gotInput != longText {
+		t.Errorf("expected the full, unmodified text sent whole, got %q", gotInput)
+	}
+	if vec[0] != 1 || vec[1] != 2 {
+		t.Errorf("expected the single call's own vector returned unchanged, got %v", vec)
+	}
+}
+
+func TestEmbedder_ChunksLongTextAndMeanPoolsVectors(t *testing.T) {
+	var inputs []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body embedInput
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		inputs = append(inputs, body.Input)
+		// A distinct, checkable vector per call: (n, 2n) for the nth call.
+		n := float32(len(inputs))
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{n, 2 * n}}},
+		})
+	}))
+	defer srv.Close()
+
+	// ChunkSizeTokens=2, approxCharsPerToken=3 -> a 6-character budget per
+	// chunk. Each word below is 10 characters (over budget on its own), so
+	// the first word in every chunk is always accepted regardless (a chunk
+	// is never left empty just because one word doesn't fit), giving
+	// exactly one word per chunk here -- three words, three chunks.
+	text := "aaaaaaaaaa bbbbbbbbbb cccccccccc"
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 2, ChunkSizeTokens: 2})
+	vec, err := e.Embed(context.Background(), text)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(inputs) != 3 {
+		t.Fatalf("expected 3 chunked embeddings calls, got %d: %v", len(inputs), inputs)
+	}
+	if inputs[0] != "aaaaaaaaaa" || inputs[1] != "bbbbbbbbbb" || inputs[2] != "cccccccccc" {
+		t.Errorf("expected one word per chunk, in order, got %v", inputs)
+	}
+	// Mean of (1,2), (2,4), (3,6) is (2,4).
+	if vec[0] != 2 || vec[1] != 4 {
+		t.Errorf("expected the mean-pooled vector (2,4), got %v", vec)
+	}
+}
+
+func TestEmbedder_ChunkingPacksMultipleShortWordsPerChunk(t *testing.T) {
+	var inputs []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body embedInput
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		inputs = append(inputs, body.Input)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1, 0}}},
+		})
+	}))
+	defer srv.Close()
+
+	// ChunkSizeTokens=4 -> 12-character budget. Six 2-character words ("aa
+	// bb cc dd ee ff", each contributing 3 chars incl. its joining space)
+	// pack four per chunk (4*3=12, exactly the budget) before overflowing.
+	text := "aa bb cc dd ee ff"
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 2, ChunkSizeTokens: 4})
+	if _, err := e.Embed(context.Background(), text); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(inputs) != 2 {
+		t.Fatalf("expected 2 chunks (4 words + 2 words), got %d: %v", len(inputs), inputs)
+	}
+	if inputs[0] != "aa bb cc dd" || inputs[1] != "ee ff" {
+		t.Errorf("expected chunks [%q, %q], got %v", "aa bb cc dd", "ee ff", inputs)
+	}
+}
+
+func TestEmbedder_TokenizeURLSplitsChunkThatMeasuresOverBudget(t *testing.T) {
+	var embedInputs []string
+	embedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body embedInput
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		embedInputs = append(embedInputs, body.Input)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1, 0}}},
+		})
+	}))
+	defer embedSrv.Close()
+
+	var tokenizeCalls int
+	tokenizeSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Prompt string `json:"prompt"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		tokenizeCalls++
+		// Pretend every word costs 2 real tokens -- double the character
+		// estimate's assumption for these 2-character words -- so the
+		// initial character-based chunk (4 words, "costed" at ~4 tokens by
+		// the estimate) actually measures 8 tokens, over the 4-token
+		// budget, forcing a split.
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"count": 2 * len(strings.Fields(body.Prompt))})
+	}))
+	defer tokenizeSrv.Close()
+
+	// Same word/character shape as the packing test above: "aa bb cc dd ee
+	// ff" char-chunks into ["aa bb cc dd", "ee ff"] first.
+	text := "aa bb cc dd ee ff"
+	e := httpembed.New(httpembed.Config{
+		BaseURL: embedSrv.URL, Dimensions: 2, ChunkSizeTokens: 4, TokenizeURL: tokenizeSrv.URL,
+	})
+	if _, err := e.Embed(context.Background(), text); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// "aa bb cc dd" (measures 8 > 4) splits into "aa bb" (4) and "cc dd"
+	// (4), both within budget; "ee ff" (measures 4 <= 4) stays whole.
+	want := []string{"aa bb", "cc dd", "ee ff"}
+	if len(embedInputs) != len(want) {
+		t.Fatalf("expected %d embed calls after tokenize-verified splitting, got %d: %v", len(want), len(embedInputs), embedInputs)
+	}
+	for i, w := range want {
+		if embedInputs[i] != w {
+			t.Errorf("chunk %d: expected %q, got %q (all: %v)", i, w, embedInputs[i], embedInputs)
+		}
+	}
+	if tokenizeCalls == 0 {
+		t.Error("expected at least one call to the configured TokenizeURL")
+	}
+}
+
+func TestEmbedder_TokenizeURLErrorPropagatesFromEmbed(t *testing.T) {
+	embedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("embeddings endpoint should never be called when tokenize verification fails first")
+	}))
+	defer embedSrv.Close()
+
+	tokenizeSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer tokenizeSrv.Close()
+
+	e := httpembed.New(httpembed.Config{
+		BaseURL: embedSrv.URL, Dimensions: 2, ChunkSizeTokens: 4, TokenizeURL: tokenizeSrv.URL,
+	})
+	_, err := e.Embed(context.Background(), "aa bb cc dd ee ff")
+	if err == nil {
+		t.Fatal("expected an error when the configured TokenizeURL fails")
+	}
+	if !strings.Contains(err.Error(), "tokenize") {
+		t.Errorf("expected the error to mention the tokenize endpoint, got %v", err)
+	}
+}
+
+// TestEmbedder_TokenizeURLUnsplittableChunkNeverLoops proves
+// fitChunkToTokenBudget's recursion actually terminates for a single
+// "word" (no whitespace to split on) that a misbehaving/unusual tokenizer
+// reports as perpetually over budget -- it must be embedded once, as-is,
+// rather than recursing forever or panicking.
+func TestEmbedder_TokenizeURLUnsplittableChunkNeverLoops(t *testing.T) {
+	var embedCalls, tokenizeCalls int
+	embedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		embedCalls++
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1, 0}}},
+		})
+	}))
+	defer embedSrv.Close()
+
+	tokenizeSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokenizeCalls++
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"count": 999999})
+	}))
+	defer tokenizeSrv.Close()
+
+	e := httpembed.New(httpembed.Config{
+		BaseURL: embedSrv.URL, Dimensions: 2, ChunkSizeTokens: 4, TokenizeURL: tokenizeSrv.URL,
+	})
+	if _, err := e.Embed(context.Background(), "oneunsplittableword"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if embedCalls != 1 {
+		t.Errorf("expected exactly 1 embeddings call for the single unsplittable chunk, got %d", embedCalls)
+	}
+	if tokenizeCalls != 1 {
+		t.Errorf("expected exactly 1 tokenize call (no whitespace to split on, so no recursion), got %d", tokenizeCalls)
+	}
+}
+
+// TestEmbedder_ChunkTextWhitespaceOnlyReturnsItUnchanged covers chunkText's
+// "no words at all" branch: whitespace-only text (strings.Fields returns
+// nothing) is sent to embedChunk exactly as given, rather than chunkText
+// producing an empty chunk list.
+func TestEmbedder_ChunkTextWhitespaceOnlyReturnsItUnchanged(t *testing.T) {
+	embedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body embedInput
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Input != "   " {
+			t.Errorf("expected the original whitespace-only text sent unchanged, got %q", body.Input)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1}}},
+		})
+	}))
+	defer embedSrv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: embedSrv.URL, Dimensions: 1, ChunkSizeTokens: 4})
+	if _, err := e.Embed(context.Background(), "   "); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestEmbedder_ChunkEmbedFailurePropagatesWithChunkIndex(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 2 {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1}}},
+		})
+	}))
+	defer srv.Close()
+
+	// Same one-word-per-chunk shape as TestEmbedder_ChunksLongTextAndMeanPoolsVectors.
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 1, ChunkSizeTokens: 2})
+	_, err := e.Embed(context.Background(), "aaaaaaaaaa bbbbbbbbbb cccccccccc")
+	if err == nil {
+		t.Fatal("expected an error when a later chunk's embed call fails")
+	}
+	if !strings.Contains(err.Error(), "chunk 2/3") {
+		t.Errorf("expected the error to name which chunk failed (\"chunk 2/3\"), got %v", err)
+	}
+}
+
+func TestEmbedder_FitChunkToTokenBudgetPropagatesLeftHalfTokenizeError(t *testing.T) {
+	embedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("embeddings endpoint should never be called when a recursive tokenize check fails")
+	}))
+	defer embedSrv.Close()
+
+	var tokenizeCalls int
+	tokenizeSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokenizeCalls++
+		if tokenizeCalls == 1 {
+			// The whole chunk: report it over budget, forcing a split into
+			// left/right halves.
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"count": 999})
+			return
+		}
+		// The left half's own verification call (evaluated before the
+		// right half's, per fitChunkToTokenBudget's call order): fail it.
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer tokenizeSrv.Close()
+
+	e := httpembed.New(httpembed.Config{
+		BaseURL: embedSrv.URL, Dimensions: 1, ChunkSizeTokens: 4, TokenizeURL: tokenizeSrv.URL,
+	})
+	_, err := e.Embed(context.Background(), "aa bb cc dd")
+	if err == nil {
+		t.Fatal("expected an error when the left half's tokenize verification fails")
+	}
+	if tokenizeCalls != 2 {
+		t.Errorf("expected exactly 2 tokenize calls (whole chunk, then the failing left half), got %d", tokenizeCalls)
+	}
+}
+
+func TestEmbedder_FitChunkToTokenBudgetPropagatesRightHalfTokenizeError(t *testing.T) {
+	embedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("embeddings endpoint should never be called when a recursive tokenize check fails")
+	}))
+	defer embedSrv.Close()
+
+	var tokenizeCalls int
+	tokenizeSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokenizeCalls++
+		switch tokenizeCalls {
+		case 1:
+			// The whole chunk: over budget, forcing a split.
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"count": 999})
+		case 2:
+			// The left half: within budget, no further recursion.
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"count": 1})
+		default:
+			// The right half's own verification call: fail it.
+			http.Error(w, "boom", http.StatusInternalServerError)
+		}
+	}))
+	defer tokenizeSrv.Close()
+
+	e := httpembed.New(httpembed.Config{
+		BaseURL: embedSrv.URL, Dimensions: 1, ChunkSizeTokens: 4, TokenizeURL: tokenizeSrv.URL,
+	})
+	_, err := e.Embed(context.Background(), "aa bb cc dd")
+	if err == nil {
+		t.Fatal("expected an error when the right half's tokenize verification fails")
+	}
+	if tokenizeCalls != 3 {
+		t.Errorf("expected exactly 3 tokenize calls (whole chunk, left half, then the failing right half), got %d", tokenizeCalls)
+	}
+}
+
+func TestEmbedder_CountTokensSendsAuthorizationHeaderWhenAPIKeySet(t *testing.T) {
+	embedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1}}},
+		})
+	}))
+	defer embedSrv.Close()
+
+	var gotAuth string
+	tokenizeSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"count": 1})
+	}))
+	defer tokenizeSrv.Close()
+
+	e := httpembed.New(httpembed.Config{
+		BaseURL: embedSrv.URL, APIKey: "secret-key", Dimensions: 1, ChunkSizeTokens: 4, TokenizeURL: tokenizeSrv.URL,
+	})
+	if _, err := e.Embed(context.Background(), "aa bb"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotAuth != "Bearer secret-key" {
+		t.Errorf("expected the tokenize call to carry the same Authorization header as embeddings calls, got %q", gotAuth)
+	}
+}
+
+func TestEmbedder_CountTokensInvalidURLReturnsError(t *testing.T) {
+	e := httpembed.New(httpembed.Config{
+		BaseURL: "http://unused.invalid", Dimensions: 1, ChunkSizeTokens: 4, TokenizeURL: "://invalid",
+	})
+	_, err := e.Embed(context.Background(), "aa bb")
+	if err == nil {
+		t.Fatal("expected an error building a request against an invalid TokenizeURL")
+	}
+}
+
+func TestEmbedder_CountTokensNetworkErrorReturnsError(t *testing.T) {
+	unreachable := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	tokenizeURL := unreachable.URL
+	unreachable.Close() // closed before use: connections to it now fail outright
+
+	e := httpembed.New(httpembed.Config{
+		BaseURL: "http://unused.invalid", Dimensions: 1, ChunkSizeTokens: 4, TokenizeURL: tokenizeURL,
+	})
+	_, err := e.Embed(context.Background(), "aa bb")
+	if err == nil {
+		t.Fatal("expected an error when the tokenize endpoint can't be reached")
+	}
+}
+
+func TestEmbedder_CountTokensBodyReadErrorReturnsError(t *testing.T) {
+	tokenizeSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("expected a hijackable response writer")
+		}
+		conn, buf, err := hj.Hijack()
+		if err != nil {
+			t.Fatalf("failed to hijack connection: %v", err)
+		}
+		defer conn.Close()
+		buf.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort")
+		buf.Flush()
+	}))
+	defer tokenizeSrv.Close()
+
+	e := httpembed.New(httpembed.Config{
+		BaseURL: "http://unused.invalid", Dimensions: 1, ChunkSizeTokens: 4, TokenizeURL: tokenizeSrv.URL,
+	})
+	_, err := e.Embed(context.Background(), "aa bb")
+	if err == nil {
+		t.Fatal("expected an error when the tokenize response body can't be fully read")
+	}
+}
+
+func TestEmbedder_CountTokensMalformedJSONReturnsError(t *testing.T) {
+	tokenizeSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("not json"))
+	}))
+	defer tokenizeSrv.Close()
+
+	e := httpembed.New(httpembed.Config{
+		BaseURL: "http://unused.invalid", Dimensions: 1, ChunkSizeTokens: 4, TokenizeURL: tokenizeSrv.URL,
+	})
+	_, err := e.Embed(context.Background(), "aa bb")
+	if err == nil {
+		t.Fatal("expected an error decoding a malformed tokenize response")
+	}
+}

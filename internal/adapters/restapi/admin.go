@@ -904,6 +904,10 @@ type embeddingEndpointRequest struct {
 	Dimensions         int     `json:"dimensions"`
 	RateLimitPerSecond float64 `json:"rate_limit_per_second"`
 	Enabled            bool    `json:"enabled"`
+	// ChunkSizeTokens/TokenizeURL mirror domain.EmbeddingHTTPEndpoint's
+	// same-named fields -- see that type's doc comments.
+	ChunkSizeTokens int    `json:"chunk_size_tokens"`
+	TokenizeURL     string `json:"tokenize_url"`
 	// ClearAPIKey is meaningful only to handleAdminUpdateEmbeddingEndpoint
 	// (PATCH): since a GET response never echoes a stored key's real value
 	// (see embeddingEndpointResponse), an edit form has no way to
@@ -928,6 +932,8 @@ type embeddingEndpointResponse struct {
 	Dimensions         int       `json:"dimensions"`
 	RateLimitPerSecond float64   `json:"rate_limit_per_second"`
 	Enabled            bool      `json:"enabled"`
+	ChunkSizeTokens    int       `json:"chunk_size_tokens"`
+	TokenizeURL        string    `json:"tokenize_url"`
 	CreatedAt          time.Time `json:"created_at"`
 }
 
@@ -935,7 +941,8 @@ func toEmbeddingEndpointResponse(e domain.EmbeddingHTTPEndpoint) embeddingEndpoi
 	return embeddingEndpointResponse{
 		ID: e.ID, Name: e.Name, BaseURL: e.BaseURL, HasAPIKey: e.APIKey != "",
 		Model: e.Model, Dimensions: e.Dimensions, RateLimitPerSecond: e.RateLimitPerSecond,
-		Enabled: e.Enabled, CreatedAt: e.CreatedAt,
+		Enabled: e.Enabled, ChunkSizeTokens: e.ChunkSizeTokens, TokenizeURL: e.TokenizeURL,
+		CreatedAt: e.CreatedAt,
 	}
 }
 
@@ -954,6 +961,10 @@ func validateEmbeddingEndpointRequest(w http.ResponseWriter, req embeddingEndpoi
 	}
 	if req.RateLimitPerSecond < 0 {
 		http.Error(w, "rate_limit_per_second must not be negative", http.StatusBadRequest)
+		return false
+	}
+	if req.ChunkSizeTokens < 0 {
+		http.Error(w, "chunk_size_tokens must not be negative", http.StatusBadRequest)
 		return false
 	}
 	return true
@@ -1033,7 +1044,8 @@ func (h *Handler) handleAdminEmbeddingEndpoints(w http.ResponseWriter, r *http.R
 			ID:   domain.NewEmbeddingEndpointID(req.Name, existingIDs),
 			Name: req.Name, BaseURL: req.BaseURL, APIKey: h.encryptAPIKey(req.APIKey),
 			Model: req.Model, Dimensions: req.Dimensions, RateLimitPerSecond: req.RateLimitPerSecond,
-			Enabled: req.Enabled, CreatedAt: time.Now().UTC(),
+			Enabled: req.Enabled, ChunkSizeTokens: req.ChunkSizeTokens, TokenizeURL: req.TokenizeURL,
+			CreatedAt: time.Now().UTC(),
 		}
 		if err := h.embeddingEndpoints.CreateEmbeddingEndpoint(r.Context(), e); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1054,8 +1066,9 @@ func (h *Handler) handleAdminGetEmbeddingEndpoint(w http.ResponseWriter, r *http
 }
 
 // handleAdminUpdateEmbeddingEndpoint replaces an endpoint's editable fields
-// -- name, base URL, model, dimensions, rate limit, enabled. APIKey is the
-// one exception to "PATCH is a full replace": since a GET response never
+// -- name, base URL, model, dimensions, rate limit, enabled, chunk size,
+// tokenize URL. APIKey is the one exception to "PATCH is a full replace":
+// since a GET response never
 // echoes its real value, a blank submission means "leave it as it was,"
 // not "clear it" -- req.ClearAPIKey is the explicit way to actually remove
 // it instead. The endpoint's ID is never editable once created (it's baked
@@ -1088,7 +1101,8 @@ func (h *Handler) handleAdminUpdateEmbeddingEndpoint(w http.ResponseWriter, r *h
 	e := domain.EmbeddingHTTPEndpoint{
 		ID: id, Name: req.Name, BaseURL: req.BaseURL, APIKey: apiKey,
 		Model: req.Model, Dimensions: req.Dimensions, RateLimitPerSecond: req.RateLimitPerSecond,
-		Enabled: req.Enabled, CreatedAt: existing.CreatedAt,
+		Enabled: req.Enabled, ChunkSizeTokens: req.ChunkSizeTokens, TokenizeURL: req.TokenizeURL,
+		CreatedAt: existing.CreatedAt,
 	}
 	err = h.embeddingEndpoints.UpdateEmbeddingEndpoint(r.Context(), e)
 	respondOrNotFound(w, err, ports.ErrEmbeddingEndpointNotFound, "embedding endpoint not found", toEmbeddingEndpointResponse(e))

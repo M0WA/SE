@@ -15,6 +15,8 @@
   const modelsResultEl = document.getElementById('endpoint-models-result');
   const dimensionsEl = document.getElementById('endpoint-dimensions');
   const rateLimitEl = document.getElementById('endpoint-rate-limit');
+  const chunkSizeEl = document.getElementById('endpoint-chunk-size');
+  const tokenizeURLEl = document.getElementById('endpoint-tokenize-url');
   const enabledEl = document.getElementById('endpoint-enabled');
   const testBtn = document.getElementById('endpoint-test-btn');
   const testStatusEl = document.getElementById('endpoint-test-status');
@@ -53,6 +55,8 @@
     modelEl.value = e.model;
     dimensionsEl.value = e.dimensions;
     rateLimitEl.value = e.rate_limit_per_second;
+    chunkSizeEl.value = e.chunk_size_tokens;
+    tokenizeURLEl.value = e.tokenize_url;
     enabledEl.checked = e.enabled;
 
     form.hidden = false;
@@ -87,6 +91,8 @@
       model: modelEl.value,
       dimensions: parseInt(dimensionsEl.value, 10) || 0,
       rate_limit_per_second: parseFloat(rateLimitEl.value) || 0,
+      chunk_size_tokens: parseInt(chunkSizeEl.value, 10) || 0,
+      tokenize_url: tokenizeURLEl.value,
       enabled: enabledEl.checked,
     };
   }
