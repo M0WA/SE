@@ -1,5 +1,20 @@
 # Changelog
 
+## v4.9.0 - 2026-09-17
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Add a "Clear ended jobs" button and per-job crawl speed to the Jobs page by @M0WA in https://github.com/M0WA/SE/pull/92
+* Default the admin debug-search page to 5000 results, paginated by @M0WA in https://github.com/M0WA/SE/pull/93
+* Lower the default document-version retention from 5 to 3 by @M0WA in https://github.com/M0WA/SE/pull/94
+* Fix crawl-server never actually honoring MaxConcurrentCrawls by @M0WA in https://github.com/M0WA/SE/pull/95
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.8.0...v4.9.0
+
+
 ## v4.8.0 - 2026-09-17
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
