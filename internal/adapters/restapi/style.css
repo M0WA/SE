@@ -507,6 +507,16 @@ button:focus-visible {
 
 .form-row { border-bottom: 1px solid var(--rule-strong); padding-bottom: 0.5rem; }
 
+/* padding-bottom above only gives a row breathing room *before* its own
+   rule; nothing separated that rule from the very next row's label,
+   which sat flush against it -- a whole subpanel of fields read as a
+   dense list of rule-separated one-liners with no real gap anywhere,
+   the border doing double duty as both this row's bottom margin and the
+   next row's top margin at once. Margin between siblings only, so a
+   subpanel's first row still sits right under its h4 (which already has
+   its own margin-bottom) rather than getting a redundant extra gap. */
+.form-row + .form-row { margin-top: 1rem; }
+
 .form-row .field { width: 100%; }
 
 .form-actions {
