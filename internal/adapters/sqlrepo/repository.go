@@ -973,7 +973,7 @@ func (r *Repository) saveDocumentEmbeddings(ctx context.Context, exec dbExecer, 
 		}
 		if r.ann.isAvailable(provider) {
 			col := vectorColumnNameFor(provider)
-			vecSQL := r.ph(`UPDATE documents SET `+col+` = %s::vector WHERE id = %s`, 1, 2)
+			vecSQL := r.ph(`UPDATE documents SET `+col+` = %s::halfvec WHERE id = %s`, 1, 2)
 			if _, err := exec.ExecContext(ctx, vecSQL, formatPgVectorLiteral(vec), docID); err != nil {
 				return fmt.Errorf("saving %s embedding vector: %w", provider, err)
 			}

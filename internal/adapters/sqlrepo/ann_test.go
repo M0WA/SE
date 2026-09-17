@@ -216,6 +216,52 @@ func TestEnableANN_RecreatesColumnWhenDimensionsChange(t *testing.T) {
 	}
 }
 
+// TestEnableANN_SucceedsAboveVectorTypeDimensionLimit guards against the
+// exact real production failure this was found from: pgvector's plain
+// "vector" column type caps HNSW/ivfflat indexing at 2000 dimensions
+// (4 bytes/dimension hits pgvector's fixed per-row byte budget for either
+// index type -- confirmed empirically, ivfflat fails identically to
+// hnsw), so a real model like Alibaba-NLP/gte-Qwen2-7B-instruct (3584
+// dims) used to fail ensureVectorIndex and permanently fall back to
+// brute-force search. ensureVectorColumn now creates the column as
+// "halfvec" instead, whose per-row storage is 2 bytes/dimension, doubling
+// the ceiling to 4000 -- this proves a provider at 3584 dims (comfortably
+// within halfvec's ceiling, still over vector's) now succeeds end to end:
+// ANN available, and a real nearest-neighbor query returns the expected
+// document.
+func TestEnableANN_SucceedsAboveVectorTypeDimensionLimit(t *testing.T) {
+	if os.Getenv(testPostgresDSNEnv) == "" {
+		t.Skip("TEST_POSTGRES_DSN not set; skipping pgvector ANN test")
+	}
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	const dims = 3584
+	const provider = "wide"
+
+	repo.EnableANN(ctx, map[string]int{provider: dims})
+	if !repo.ANNAvailable(provider) {
+		t.Skip("pgvector extension not available on this Postgres server; skipping ANN test")
+	}
+
+	vec := make([]float32, dims)
+	vec[0] = 1
+	doc := domain.Document{ID: "wide-doc", URL: "https://example.com/wide-doc", Title: "wide-doc", Text: "wide-doc"}
+	if err := repo.SaveDocument(ctx, doc, map[string][]float32{provider: vec}, 100, 2); err != nil {
+		t.Fatalf("saving document with a %d-dimension vector: %v", dims, err)
+	}
+
+	matches, ok, err := repo.TopSemanticMatches(ctx, vec, 10, provider)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true once ANN is available at 3584 dimensions")
+	}
+	if _, found := matches["wide-doc"]; !found {
+		t.Errorf("expected wide-doc found via ANN at 3584 dimensions, got %+v", matches)
+	}
+}
+
 // TestEnableANN_MaintainsTwoProvidersOfDifferentDimensionsIndependently
 // proves the whole point of per-provider pgvector columns: hash and http
 // can be enabled simultaneously with different dimensions, each gets its
