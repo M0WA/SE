@@ -1,5 +1,18 @@
 # Changelog
 
+## v4.12.0 - 2026-09-17
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Fix crawl speed showing wildly wrong numbers across a process restart by @M0WA in https://github.com/M0WA/SE/pull/101
+* Fix vocabulary-refresh full-table scan starving crawl throughput by @M0WA in https://github.com/M0WA/SE/pull/102
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.11.0...v4.12.0
+
+
 ## v4.11.0 - 2026-09-17
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
