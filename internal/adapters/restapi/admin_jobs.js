@@ -27,6 +27,13 @@
   let jobDetailPages = [];
   let jobDetailFilterText = '';
   let jobDetailPageNum = 1;
+  // jobDetailSortBy/jobDetailSortDir default to newest-fetched-first, the
+  // most useful view right after a crawl finishes (or while it's still
+  // running) -- reset back to this default whenever a different job is
+  // selected (see loadJobDetail), but preserved across a poll refresh or
+  // page-turn within the same job.
+  let jobDetailSortBy = 'fetched_at';
+  let jobDetailSortDir = 'desc';
   let allJobs = [];
   let jobsFilterText = '';
   let allCrawls = [];
@@ -202,12 +209,102 @@
     }
   }
 
+  // JOB_DETAIL_COLUMNS drives both the sortable headers and the sort
+  // comparator below -- this table's data is already fully loaded
+  // client-side (one job's whole page list, see loadJobDetail), so
+  // sorting is plain in-memory array sort, never a server round-trip
+  // (unlike e.g. admin.js's vocabulary table, which is server-paginated).
+  const JOB_DETAIL_COLUMNS = [
+    { key: 'url', label: 'url' },
+    { key: 'status', label: 'status' },
+    { key: 'title', label: 'title' },
+    { key: 'doc_length', label: 'length', num: true },
+    { key: 'links_found', label: 'links', num: true },
+    { key: 'duration_ms', label: 'duration', num: true },
+    { key: 'fetched_at', label: 'fetched at' },
+    { key: 'error', label: 'detail' },
+  ];
+
+  // jobDetailDefaultDir picks a sensible starting direction the first time
+  // a column is clicked: text columns start ascending (alphabetical),
+  // numeric/recency columns start descending (biggest/most-recent first).
+  function jobDetailDefaultDir(key) {
+    return (key === 'doc_length' || key === 'links_found' || key === 'duration_ms' || key === 'fetched_at') ? 'desc' : 'asc';
+  }
+
+  function jobDetailSortValue(p, key) {
+    if (key === 'fetched_at') return p.fetched_at ? new Date(p.fetched_at).getTime() : 0;
+    if (key === 'doc_length' || key === 'links_found' || key === 'duration_ms') return p[key] || 0;
+    return String(p[key] || '').toLowerCase();
+  }
+
+  function sortJobDetailPages(pages, sortBy, sortDir) {
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...pages].sort((a, b) => {
+      const av = jobDetailSortValue(a, sortBy);
+      const bv = jobDetailSortValue(b, sortBy);
+      if (av < bv) return -dir;
+      if (av > bv) return dir;
+      return 0;
+    });
+  }
+
+  // buildJobDetailTable mirrors admin.js's buildVocabTable click-to-sort
+  // header pattern, but re-renders locally (renderJobDetailTable) instead
+  // of refetching from the server.
+  function buildJobDetailTable(pages) {
+    const table = document.createElement('table');
+    const thead = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    for (const col of JOB_DETAIL_COLUMNS) {
+      const th = document.createElement('th');
+      if (col.num) th.className = 'num';
+      th.classList.add('sortable-th');
+      th.tabIndex = 0;
+      const active = jobDetailSortBy === col.key;
+      th.textContent = col.label + (active ? (jobDetailSortDir === 'asc' ? ' ▲' : ' ▼') : '');
+      const activate = () => {
+        if (jobDetailSortBy === col.key) {
+          jobDetailSortDir = jobDetailSortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          jobDetailSortBy = col.key;
+          jobDetailSortDir = jobDetailDefaultDir(col.key);
+        }
+        jobDetailPageNum = 1;
+        renderJobDetailTable();
+      };
+      th.addEventListener('click', activate);
+      th.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); }
+      });
+      headRow.appendChild(th);
+    }
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    for (const p of pages) {
+      const tr = document.createElement('tr');
+      tr.appendChild(urlCell(p.url));
+      tr.appendChild(textCell(capitalize(p.status).replace(/_/g, ' ')));
+      tr.appendChild(textCell(p.title || ''));
+      tr.appendChild(textCell(p.doc_length ? String(p.doc_length) : '—', { num: true }));
+      tr.appendChild(textCell(p.links_found ? String(p.links_found) : '—', { num: true }));
+      tr.appendChild(textCell(formatMs(p.duration_ms), { num: true }));
+      tr.appendChild(textCell(formatTimestamp(p.fetched_at, { timeOnly: true })));
+      tr.appendChild(textCell(p.error || ''));
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    return table;
+  }
+
   function renderJobDetailTable() {
-    const filtered = filterPages(jobDetailPages, jobDetailFilterText);
-    const totalPages = Math.max(1, Math.ceil(filtered.length / JOB_DETAIL_PAGE_SIZE));
+    const sorted = sortJobDetailPages(filterPages(jobDetailPages, jobDetailFilterText), jobDetailSortBy, jobDetailSortDir);
+    const totalPages = Math.max(1, Math.ceil(sorted.length / JOB_DETAIL_PAGE_SIZE));
     jobDetailPageNum = Math.min(Math.max(1, jobDetailPageNum), totalPages);
     const start = (jobDetailPageNum - 1) * JOB_DETAIL_PAGE_SIZE;
-    const pageItems = filtered.slice(start, start + JOB_DETAIL_PAGE_SIZE);
+    const pageItems = sorted.slice(start, start + JOB_DETAIL_PAGE_SIZE);
 
     clear(jobDetailTableEl);
     if (pageItems.length === 0) {
@@ -215,29 +312,12 @@
       jobDetailPagerEl.hidden = true;
       return;
     }
-    const table = buildTable(
-      [
-        { label: 'url' }, { label: 'status' }, { label: 'title' },
-        { label: 'length', num: true }, { label: 'links', num: true },
-        { label: 'duration', num: true }, { label: 'fetched at' }, { label: 'detail' },
-      ],
-      pageItems,
-      (p) => [
-        urlCell(p.url),
-        textCell(capitalize(p.status).replace(/_/g, ' ')),
-        textCell(p.title || ''),
-        textCell(p.doc_length ? String(p.doc_length) : '—', { num: true }),
-        textCell(p.links_found ? String(p.links_found) : '—', { num: true }),
-        textCell(formatMs(p.duration_ms), { num: true }),
-        textCell(formatTimestamp(p.fetched_at, { timeOnly: true })),
-        textCell(p.error || ''),
-      ],
-    );
+    const table = buildJobDetailTable(pageItems);
     jobDetailTableEl.appendChild(table);
 
     jobDetailPagerEl.hidden = totalPages <= 1;
     jobDetailPageInfoEl.textContent = 'Page ' + jobDetailPageNum + ' of ' + totalPages +
-      ' (' + filtered.length + (filtered.length === 1 ? ' page)' : ' pages)');
+      ' (' + sorted.length + (sorted.length === 1 ? ' page)' : ' pages)');
     jobDetailPrevBtn.disabled = jobDetailPageNum <= 1;
     jobDetailNextBtn.disabled = jobDetailPageNum >= totalPages;
   }
@@ -277,6 +357,8 @@
       jobDetailFilterText = '';
       jobDetailFilterEl.value = '';
       jobDetailPageNum = 1;
+      jobDetailSortBy = 'fetched_at';
+      jobDetailSortDir = 'desc';
     }
     selectedJobID = jobID;
     try {
@@ -458,6 +540,9 @@
       filterJobs, filterPages, filterCrawls,
       crawlRecurrenceCell, crawlLinkScopeCell,
       LINK_SCOPE_LABELS, RENDERER_LABELS,
+      JOB_DETAIL_COLUMNS, jobDetailDefaultDir, jobDetailSortValue,
+      sortJobDetailPages, buildJobDetailTable, renderJobDetailTable,
+      loadJobDetail,
     };
   }
 })();
