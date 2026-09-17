@@ -49,23 +49,41 @@ test('formatDuration renders minutes+seconds once past a minute', () => {
   assert.equal(formatDuration(start, end), '1m 5s');
 });
 
-test('formatSpeed renders an em-dash when the job has not started', () => {
+test('formatSpeed renders an em-dash before a job has been polled at all', () => {
   const { formatSpeed } = loadFixture();
-  assert.equal(formatSpeed({ started_at: null, pages_crawled: 0 }), '—');
+  assert.equal(formatSpeed({ id: 'never-seen', pages_crawled: 0 }), '—');
 });
 
-test('formatSpeed computes pages crawled per second of elapsed time', () => {
-  const { formatSpeed } = loadFixture();
-  const start = new Date('2026-01-01T00:00:00Z').toISOString();
-  const end = new Date('2026-01-01T00:00:10Z').toISOString();
-  assert.equal(formatSpeed({ started_at: start, finished_at: end, pages_crawled: 25 }), '2.50/s');
+test('formatSpeed renders an em-dash after only one poll (no delta yet)', () => {
+  const { formatSpeed, updateJobSpeeds } = loadFixture();
+  updateJobSpeeds([{ id: 'j1', pages_crawled: 10 }], 1000);
+  assert.equal(formatSpeed({ id: 'j1' }), '—');
 });
 
-test('formatSpeed uses now() as the end time for a still-running job', () => {
-  const { formatSpeed } = loadFixture();
-  const start = new Date(Date.now() - 10000).toISOString();
-  const speed = formatSpeed({ started_at: start, finished_at: null, pages_crawled: 10 });
-  assert.match(speed, /^\d+\.\d{2}\/s$/);
+test('formatSpeed computes pages/sec from the delta between two polls, not pages_crawled/started_at', () => {
+  const { formatSpeed, updateJobSpeeds } = loadFixture();
+  updateJobSpeeds([{ id: 'j1', pages_crawled: 10 }], 1000);
+  updateJobSpeeds([{ id: 'j1', pages_crawled: 30 }], 3000);
+  assert.equal(formatSpeed({ id: 'j1' }), '10.00/s');
+});
+
+test('formatSpeed survives a job resuming after a restart: pages_crawled is a lifetime counter that can jump hugely between polls without inflating the rate, since the calculation never looks at started_at', () => {
+  const { formatSpeed, updateJobSpeeds } = loadFixture();
+  // Simulate: job had accumulated 17979 pages before a crawl-server
+  // restart; started_at gets reset on resume (irrelevant here, since
+  // updateJobSpeeds never reads it), and two polls 2s apart see the
+  // lifetime counter continue climbing by a normal amount.
+  updateJobSpeeds([{ id: 'j1', pages_crawled: 17979 }], 1000);
+  updateJobSpeeds([{ id: 'j1', pages_crawled: 17981 }], 3000);
+  assert.equal(formatSpeed({ id: 'j1' }), '1.00/s');
+});
+
+test('updateJobSpeeds tracks multiple jobs independently', () => {
+  const { formatSpeed, updateJobSpeeds } = loadFixture();
+  updateJobSpeeds([{ id: 'a', pages_crawled: 0 }, { id: 'b', pages_crawled: 100 }], 1000);
+  updateJobSpeeds([{ id: 'a', pages_crawled: 5 }, { id: 'b', pages_crawled: 105 }], 2000);
+  assert.equal(formatSpeed({ id: 'a' }), '5.00/s');
+  assert.equal(formatSpeed({ id: 'b' }), '5.00/s');
 });
 
 test('clearEndedJobs sends a DELETE to the jobs collection and reports how many were removed', async () => {
