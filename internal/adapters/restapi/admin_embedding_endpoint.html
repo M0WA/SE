@@ -52,15 +52,24 @@
       <input id="endpoint-dimensions" class="field" type="number" min="1" required>
     </div>
     <div class="form-row">
-      <label for="endpoint-rate-limit">Rate limit — requests/second (0 = unlimited)</label>
-      <input id="endpoint-rate-limit" class="field" type="number" min="0" step="any">
+      <div class="label-row">
+        <label for="endpoint-rate-limit">Rate limit</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Requests per second (0 = unlimited).</span></span>
+      </div>
+      <span class="field-wrap" data-default="Unlimited"><input id="endpoint-rate-limit" class="field" type="number" min="0" step="any"></span>
     </div>
     <div class="form-row">
-      <label for="endpoint-chunk-size">Chunk size — tokens per Embed call before splitting long text into multiple chunks and combining them (0 = never split)</label>
-      <input id="endpoint-chunk-size" class="field" type="number" min="0" step="1">
+      <div class="label-row">
+        <label for="endpoint-chunk-size">Chunk size</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Tokens per Embed call before splitting long text into multiple chunks and combining them (0 = never split).</span></span>
+      </div>
+      <span class="field-wrap" data-default="Never split"><input id="endpoint-chunk-size" class="field" type="number" min="0" step="1"></span>
     </div>
     <div class="form-row">
-      <label for="endpoint-tokenize-url">Tokenize URL — an exact-token-count endpoint (e.g. vLLM's own <code>/tokenize</code>) for precise chunk sizing; left blank, chunk size is estimated from character count instead</label>
+      <div class="label-row">
+        <label for="endpoint-tokenize-url">Tokenize URL</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">An exact-token-count endpoint (e.g. vLLM's own <code>/tokenize</code>) for precise chunk sizing; left blank, chunk size is estimated from character count instead.</span></span>
+      </div>
       <input id="endpoint-tokenize-url" class="field" type="text" placeholder="http://localhost:8000/tokenize">
     </div>
     <div class="form-row form-row-check">

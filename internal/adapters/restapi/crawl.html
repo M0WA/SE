@@ -30,7 +30,7 @@
 
   <form id="crawl-form" class="crawl-form stacked-form">
     <input id="crawl-url" class="field" name="url" type="text" placeholder="example.com" autofocus required>
-    <input id="max-pages" name="max_pages" type="number" min="1" value="20" aria-label="Max pages">
+    <input id="max-pages" name="max_pages" type="number" min="1" value="20000" aria-label="Max pages">
     <button type="submit">Crawl</button>
   </form>
 
@@ -40,14 +40,18 @@
       <div class="subpanel">
         <h4>Repeat</h4>
         <div class="form-row">
-          <label for="crawl-interval">Interval — minutes between runs (optional)</label>
+          <div class="label-row">
+            <label for="crawl-interval">Interval (optional)</label>
+            <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Minutes between runs. Leave blank (or 0) to run once. A positive value repeats this crawl on that interval -- see it, pause it, or delete it under Schedules on the Jobs page -- until disabled or its max runs (below) is reached.</span></span>
+          </div>
           <input id="crawl-interval" class="field" type="number" min="0" value="360">
-          <p class="tuning-hint">Leave blank (or 0) to run once. A positive value repeats this crawl on that interval — see it, pause it, or delete it under Schedules on the Jobs page — until disabled or its max runs (below) is reached.</p>
         </div>
         <div class="form-row">
-          <label for="crawl-max-runs">Max runs (optional)</label>
-          <input id="crawl-max-runs" class="field" type="number" min="0">
-          <p class="tuning-hint">Only used when repeating. Leave blank for unlimited — the schedule disables itself automatically after this many runs.</p>
+          <div class="label-row">
+            <label for="crawl-max-runs">Max runs (optional)</label>
+            <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Only used when repeating. Leave blank for unlimited -- the schedule disables itself automatically after this many runs.</span></span>
+          </div>
+          <span class="field-wrap" data-default="Unlimited"><input id="crawl-max-runs" class="field" type="number" min="0"></span>
         </div>
       </div>
     </details>
@@ -57,24 +61,29 @@
       <div class="subpanel">
         <h4>Fetching &amp; scope</h4>
         <div class="form-row">
-          <label for="crawl-renderer">Rendering</label>
+          <div class="label-row">
+            <label for="crawl-renderer">Rendering</label>
+            <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">"Use site default" follows whatever the Settings page has set. Rendering a page in a real browser is much slower than a plain fetch and downloads that browser engine the first time it's ever used on this server.</span></span>
+          </div>
           <select id="crawl-renderer" class="field">
             <option value="">Use site default</option>
             <option value="none">None — plain HTTP fetch</option>
             <option value="chromium">Chromium — real headless browser, runs the page's JavaScript</option>
             <option value="firefox">Firefox — real headless browser, runs the page's JavaScript</option>
           </select>
-          <p class="tuning-hint">"Use site default" follows whatever the Settings page has set. Rendering a page in a real browser is much slower than a plain fetch and downloads that browser engine the first time it's ever used on this server.</p>
         </div>
         <div class="form-row form-row-check">
           <label for="crawl-respect-robots">
-            <input id="crawl-respect-robots" type="checkbox">
+            <span class="field-wrap" data-default="Off"><input id="crawl-respect-robots" type="checkbox"></span>
             Respect robots.txt
           </label>
-          <p class="tuning-hint">Off by default — this crawl ignores robots.txt unless checked.</p>
+          <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">This crawl ignores robots.txt unless checked.</span></span>
         </div>
         <div class="form-row">
-          <label for="crawl-link-scope">How far to follow links</label>
+          <div class="label-row">
+            <label for="crawl-link-scope">How far to follow links</label>
+            <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">"Use site default" follows whatever the Settings page has set. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org. "Same domain, any subdomain, any top-level domain" is broader still -- from a seed of example.com it also follows example.org and www.example.de (the same domain name, any subdomain, under any TLD), but not other.com.</span></span>
+          </div>
           <select id="crawl-link-scope" class="field">
             <option value="">Use site default</option>
             <option value="host">Exact seed host only</option>
@@ -82,41 +91,44 @@
             <option value="tld">Same domain, any subdomain, any top-level domain</option>
             <option value="any">Any domain</option>
           </select>
-          <p class="tuning-hint">"Use site default" follows whatever the Settings page has set. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org. "Same domain, any subdomain, any top-level domain" is broader still — from a seed of example.com it also follows example.org and www.example.de (the same domain name, any subdomain, under any TLD), but not other.com.</p>
         </div>
         <div class="form-row">
-          <label for="crawl-allowed-domains">Allowed domains (optional) — one domain per line</label>
+          <div class="label-row">
+            <label for="crawl-allowed-domains">Allowed domains (optional)</label>
+            <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One domain per line. Always followed, even where "How far to follow links" above would otherwise reject them -- widens link scope, on top of it, rather than replacing it.</span></span>
+          </div>
           <textarea id="crawl-allowed-domains" class="field" rows="3" placeholder="partner.example"></textarea>
-          <p class="tuning-hint">Always followed, even where "How far to follow links" above would otherwise reject them — widens link scope, on top of it, rather than replacing it.</p>
         </div>
         <div class="form-row">
-          <label for="crawl-blocked-domains">Blocked domains (optional) — one domain per line</label>
+          <div class="label-row">
+            <label for="crawl-blocked-domains">Blocked domains (optional)</label>
+            <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One domain per line. Never followed, even where link scope or allowed domains above would otherwise allow them -- blocked domains always win.</span></span>
+          </div>
           <textarea id="crawl-blocked-domains" class="field" rows="3" placeholder="spammy.example"></textarea>
-          <p class="tuning-hint">Never followed, even where link scope or allowed domains above would otherwise allow them — blocked domains always win.</p>
         </div>
         <div class="form-row form-row-check">
           <label for="crawl-follow-indexed">
-            <input id="crawl-follow-indexed" type="checkbox">
+            <span class="field-wrap" data-default="Off"><input id="crawl-follow-indexed" type="checkbox"></span>
             Follow domains already in the index
           </label>
-          <p class="tuning-hint">Off by default — when checked, a discovered link is also followed if its domain already has at least one indexed page, even outside link scope. Blocked domains above still override this.</p>
+          <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When checked, a discovered link is also followed if its domain already has at least one indexed page, even outside link scope. Blocked domains above still override this.</span></span>
         </div>
       </div>
       <div class="subpanel">
         <h4>Discovery</h4>
         <div class="form-row form-row-check">
           <label for="crawl-use-sitemap">
-            <input id="crawl-use-sitemap" type="checkbox">
+            <span class="field-wrap" data-default="Off"><input id="crawl-use-sitemap" type="checkbox"></span>
             Discover pages via sitemap.xml
           </label>
-          <p class="tuning-hint">Off by default — when checked, /sitemap.xml is fetched from the seed's domain and every URL it lists is queued too.</p>
+          <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When checked, /sitemap.xml is fetched from the seed's domain and every URL it lists is queued too.</span></span>
         </div>
         <div class="form-row form-row-check">
           <label for="crawl-prioritize-unindexed">
-            <input id="crawl-prioritize-unindexed" type="checkbox">
+            <span class="field-wrap" data-default="Off"><input id="crawl-prioritize-unindexed" type="checkbox"></span>
             Prioritize pages not yet indexed
           </label>
-          <p class="tuning-hint">Off by default — when checked, newly discovered pages are fetched before re-fetching ones already in the index, so a limited page budget goes toward new content first on a mostly-indexed site. Already-indexed pages are still crawled once every new one has been attempted.</p>
+          <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When checked, newly discovered pages are fetched before re-fetching ones already in the index, so a limited page budget goes toward new content first on a mostly-indexed site. Already-indexed pages are still crawled once every new one has been attempted.</span></span>
         </div>
       </div>
     </details>
@@ -125,6 +137,7 @@
       <summary><span class="gh">Identity &amp; credentials</span><span class="gd">User-Agent, cookie, or Basic auth for this crawl alone</span></summary>
       <div class="subpanel">
         <h4>Credentials</h4>
+        <p class="tuning-hint">Applies only to this crawl — nothing is stored.</p>
         <div class="form-row">
           <label for="crawl-user-agent">User-Agent</label>
           <input id="crawl-user-agent" class="field" type="text" placeholder="Default: standard Firefox">
@@ -141,7 +154,6 @@
           <label for="crawl-basic-pass">Basic auth password</label>
           <input id="crawl-basic-pass" class="field" type="password" autocomplete="new-password" readonly>
         </div>
-        <p class="tuning-hint">Applies only to this crawl — nothing is stored.</p>
       </div>
     </details>
 
@@ -149,6 +161,7 @@
       <summary><span class="gh">Fetch overrides</span><span class="gd">Per-crawl timeout, thin-content floor, delay, response cap</span></summary>
       <div class="subpanel">
         <h4>Overrides</h4>
+        <p class="tuning-hint">These four override the site-wide crawl defaults (set on the Settings page) for this crawl alone — leave blank to use whatever's currently configured there.</p>
         <div class="form-row">
           <label for="crawl-fetch-timeout">Fetch timeout (seconds)</label>
           <input id="crawl-fetch-timeout" class="field" type="number" min="1" placeholder="Default: global setting">
@@ -165,7 +178,6 @@
           <label for="crawl-max-response">Max response size (KB)</label>
           <input id="crawl-max-response" class="field" type="number" min="1" placeholder="Default: global setting">
         </div>
-        <p class="tuning-hint">These four override the site-wide crawl defaults (set on the Settings page) for this crawl alone — leave blank to use whatever's currently configured there.</p>
       </div>
     </details>
   </div>
