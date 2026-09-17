@@ -683,6 +683,18 @@ section.panel:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
   margin: 0 0 1rem;
 }
 
+/* A panel heading with one action alongside it (e.g. Jobs' "Clear ended
+   jobs" button) -- same space-between/baseline idiom as .page-header,
+   scoped so it only overrides the h2's own margin, not .panel h2's font
+   sizing above. */
+.panel-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.panel-header-row h2 { margin: 0 0 1rem; }
+
 .kv-row {
   display: flex;
   justify-content: space-between;

@@ -49,6 +49,69 @@ test('formatDuration renders minutes+seconds once past a minute', () => {
   assert.equal(formatDuration(start, end), '1m 5s');
 });
 
+test('formatSpeed renders an em-dash when the job has not started', () => {
+  const { formatSpeed } = loadFixture();
+  assert.equal(formatSpeed({ started_at: null, pages_crawled: 0 }), '—');
+});
+
+test('formatSpeed computes pages crawled per second of elapsed time', () => {
+  const { formatSpeed } = loadFixture();
+  const start = new Date('2026-01-01T00:00:00Z').toISOString();
+  const end = new Date('2026-01-01T00:00:10Z').toISOString();
+  assert.equal(formatSpeed({ started_at: start, finished_at: end, pages_crawled: 25 }), '2.50/s');
+});
+
+test('formatSpeed uses now() as the end time for a still-running job', () => {
+  const { formatSpeed } = loadFixture();
+  const start = new Date(Date.now() - 10000).toISOString();
+  const speed = formatSpeed({ started_at: start, finished_at: null, pages_crawled: 10 });
+  assert.match(speed, /^\d+\.\d{2}\/s$/);
+});
+
+test('clearEndedJobs sends a DELETE to the jobs collection and reports how many were removed', async () => {
+  const { clearEndedJobs } = loadFixture();
+  let gotMethod, gotURL;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/crawl/jobs') && opts && opts.method === 'DELETE') {
+      gotMethod = opts.method;
+      gotURL = url;
+      return { ok: true, json: async () => ({ removed: 3 }) };
+    }
+    return { ok: true, json: async () => [] };
+  };
+  await clearEndedJobs();
+  assert.equal(gotMethod, 'DELETE');
+  assert.equal(gotURL, '/admin/api/crawl/jobs');
+  assert.equal(document.getElementById('jobs-status').textContent, 'Cleared 3 ended jobs.');
+});
+
+test('clearEndedJobs singularizes the status message for exactly one removed job', async () => {
+  const { clearEndedJobs } = loadFixture();
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/crawl/jobs') && opts && opts.method === 'DELETE') {
+      return { ok: true, json: async () => ({ removed: 1 }) };
+    }
+    return { ok: true, json: async () => [] };
+  };
+  await clearEndedJobs();
+  assert.equal(document.getElementById('jobs-status').textContent, 'Cleared 1 ended job.');
+});
+
+test('clearEndedJobs alerts on failure', async () => {
+  const { clearEndedJobs } = loadFixture();
+  const alerts = [];
+  global.window.alert = (msg) => alerts.push(msg);
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/crawl/jobs') && opts && opts.method === 'DELETE') {
+      return { ok: false, status: 500, json: async () => ({}), text: async () => 'boom' };
+    }
+    return { ok: true, json: async () => [] };
+  };
+  await clearEndedJobs();
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0], /Could not clear ended jobs/);
+});
+
 test('formatMs renders an em-dash for a falsy value', () => {
   const { formatMs } = loadFixture();
   assert.equal(formatMs(0), '—');

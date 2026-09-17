@@ -5,6 +5,7 @@
   const crawlsFilterEl = document.getElementById('crawls-filter');
   const crawlsFilterErrorEl = document.getElementById('crawls-filter-error');
   const crawlsTableEl = document.getElementById('crawls-table');
+  const clearEndedJobsBtn = document.getElementById('clear-ended-jobs');
   const jobsStatusEl = document.getElementById('jobs-status');
   const jobsFilterEl = document.getElementById('jobs-filter');
   const jobsFilterErrorEl = document.getElementById('jobs-filter-error');
@@ -60,6 +61,38 @@
     if (secs < 60) return secs.toFixed(1) + 's';
     return Math.floor(secs / 60) + 'm ' + Math.round(secs % 60) + 's';
   }
+
+  // formatSpeed reports a job's throughput in pages/sec, over the same
+  // elapsed window formatDuration uses (started_at to finished_at, or to
+  // now if it's still running) -- so a running job's speed keeps updating
+  // on every poll along with its duration, not just once at the end.
+  function formatSpeed(job) {
+    if (!job.started_at) return '—';
+    const start = new Date(job.started_at).getTime();
+    const end = job.finished_at ? new Date(job.finished_at).getTime() : Date.now();
+    const secs = (end - start) / 1000;
+    if (secs <= 0) return '—';
+    return (job.pages_crawled / secs).toFixed(2) + '/s';
+  }
+
+  async function clearEndedJobs() {
+    setButtonLoading(clearEndedJobsBtn, true, 'Clearing…');
+    try {
+      const resp = await deleteRequest('/admin/api/crawl/jobs');
+      // loadJobs (via renderJobs) sets jobsStatusEl's text itself based on
+      // the refreshed list, so this message must be set after it returns,
+      // not before, or renderJobs immediately overwrites it -- same
+      // ordering runScheduleNow uses for the same reason.
+      await loadJobs();
+      jobsStatusEl.textContent = 'Cleared ' + resp.removed + (resp.removed === 1 ? ' ended job.' : ' ended jobs.');
+    } catch (err) {
+      window.alert('Could not clear ended jobs: ' + err.message);
+    } finally {
+      setButtonLoading(clearEndedJobsBtn, false);
+    }
+  }
+
+  clearEndedJobsBtn.addEventListener('click', clearEndedJobs);
 
   function viewButtonCell(job) {
     const td = document.createElement('td');
@@ -122,13 +155,14 @@
     }
     jobsStatusEl.textContent = '';
     const table = buildTable(
-      [{ label: 'seed' }, { label: 'status' }, { label: 'pages', num: true }, { label: 'duration' }, { label: '' }],
+      [{ label: 'seed' }, { label: 'status' }, { label: 'pages', num: true }, { label: 'duration' }, { label: 'speed', num: true }, { label: '' }],
       filtered,
       (j) => [
         urlCell(seedSummary(j.request.seed_urls)),
         textCell(capitalize(j.status)),
         textCell(String(j.pages_crawled), { num: true }),
         textCell(formatDuration(j.started_at, j.finished_at)),
+        textCell(formatSpeed(j), { num: true }),
         viewButtonCell(j),
       ],
     );
@@ -536,7 +570,8 @@
 
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-      capitalize, formatDuration, formatMs,
+      capitalize, formatDuration, formatSpeed, formatMs,
+      clearEndedJobs,
       filterJobs, filterPages, filterCrawls,
       crawlRecurrenceCell, crawlLinkScopeCell,
       LINK_SCOPE_LABELS, RENDERER_LABELS,

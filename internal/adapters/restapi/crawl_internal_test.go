@@ -96,8 +96,8 @@ func TestRoutesCrawlInternal_TokenConfigured_HealthzStaysOpen(t *testing.T) {
 // rather than losing already-crawled pages over it.
 type erroringCrawlJobStore struct {
 	ports.CrawlJobStore
-	createErr, markRunningErr, appendPageErr, markDoneErr, markFailedErr, getErr, listErr error
-	createCalls, markRunningCalls, appendPageCalls, markDoneCalls, markFailedCalls        int32
+	createErr, markRunningErr, appendPageErr, markDoneErr, markFailedErr, getErr, listErr, deleteEndedErr error
+	createCalls, markRunningCalls, appendPageCalls, markDoneCalls, markFailedCalls                        int32
 }
 
 func (e *erroringCrawlJobStore) Create(ctx context.Context, req domain.CrawlJobRequest) (domain.CrawlJob, error) {
@@ -146,6 +146,12 @@ func (e *erroringCrawlJobStore) List(ctx context.Context) ([]domain.CrawlJobSumm
 		return nil, e.listErr
 	}
 	return e.CrawlJobStore.List(ctx)
+}
+func (e *erroringCrawlJobStore) DeleteEndedCrawlJobs(ctx context.Context) (int, error) {
+	if e.deleteEndedErr != nil {
+		return 0, e.deleteEndedErr
+	}
+	return e.CrawlJobStore.DeleteEndedCrawlJobs(ctx)
 }
 
 // startCrawl calls TriggerScheduledCrawl directly -- crawl-server's own
@@ -356,6 +362,41 @@ func TestHandleListCrawlJobs_Success(t *testing.T) {
 	}
 	if len(jobs) != 2 {
 		t.Errorf("expected 2 jobs listed, got %d", len(jobs))
+	}
+}
+
+func TestHandleDeleteEndedCrawlJobs_Success(t *testing.T) {
+	h := newCrawlServerHandler(&fakeCrawler{count: 1})
+	doneID := startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"http://a"}})
+	waitForJob(t, h, doneID)
+
+	req := httptest.NewRequest(http.MethodDelete, "/jobs", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesCrawlInternal().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Removed int `json:"removed"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.Removed < 1 {
+		t.Errorf("expected at least 1 ended job removed, got %d", resp.Removed)
+	}
+}
+
+func TestHandleDeleteEndedCrawlJobs_StoreErrorReturns500(t *testing.T) {
+	store := &erroringCrawlJobStore{CrawlJobStore: domain.NewCrawlJobStore(), deleteEndedErr: errors.New("db unavailable")}
+	h := restapi.New(restapi.Config{Crawler: &fakeCrawler{}, CrawlJobs: store})
+
+	req := httptest.NewRequest(http.MethodDelete, "/jobs", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesCrawlInternal().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 when the store fails to delete ended jobs, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

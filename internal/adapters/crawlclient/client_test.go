@@ -237,6 +237,63 @@ func TestClient_CancelCrawlJob_InvalidBaseURL(t *testing.T) {
 	}
 }
 
+func TestClient_DeleteEndedCrawlJobs_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.Path != "/jobs" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]int{"removed": 3})
+	}))
+	defer srv.Close()
+
+	c := crawlclient.New(srv.URL, "")
+	removed, err := c.DeleteEndedCrawlJobs(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if removed != 3 {
+		t.Errorf("expected 3 removed, got %d", removed)
+	}
+}
+
+func TestClient_DeleteEndedCrawlJobs_ServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := crawlclient.New(srv.URL, "")
+	if _, err := c.DeleteEndedCrawlJobs(context.Background()); err == nil {
+		t.Error("expected error for a non-200 response")
+	}
+}
+
+func TestClient_DeleteEndedCrawlJobs_InvalidResponseBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("not json"))
+	}))
+	defer srv.Close()
+
+	c := crawlclient.New(srv.URL, "")
+	if _, err := c.DeleteEndedCrawlJobs(context.Background()); err == nil {
+		t.Error("expected error for an invalid response body")
+	}
+}
+
+func TestClient_DeleteEndedCrawlJobs_ConnectionError(t *testing.T) {
+	c := crawlclient.New("http://127.0.0.1:1", "")
+	if _, err := c.DeleteEndedCrawlJobs(context.Background()); err == nil {
+		t.Error("expected error for an unreachable crawl server")
+	}
+}
+
+func TestClient_DeleteEndedCrawlJobs_InvalidBaseURL(t *testing.T) {
+	c := crawlclient.New("http://\x7f", "")
+	if _, err := c.DeleteEndedCrawlJobs(context.Background()); err == nil {
+		t.Error("expected error when the base URL contains an invalid control character")
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

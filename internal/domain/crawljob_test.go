@@ -162,6 +162,54 @@ func TestCrawlJobStore_ListOmitsPerPageDetail(t *testing.T) {
 	}
 }
 
+func TestCrawlJobStore_DeleteEndedCrawlJobsRemovesDoneFailedCancelledOnly(t *testing.T) {
+	ctx := context.Background()
+	s := domain.NewCrawlJobStore()
+	queued, _ := s.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://queued"}})
+	running, _ := s.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://running"}})
+	_ = s.MarkRunning(ctx, running.ID)
+	done, _ := s.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://done"}})
+	_ = s.MarkDone(ctx, done.ID)
+	failed, _ := s.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://failed"}})
+	_ = s.MarkFailed(ctx, failed.ID, errors.New("boom"))
+	cancelled, _ := s.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://cancelled"}})
+	_ = s.MarkCancelled(ctx, cancelled.ID)
+
+	removed, err := s.DeleteEndedCrawlJobs(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if removed != 3 {
+		t.Errorf("expected 3 ended jobs removed, got %d", removed)
+	}
+	for _, id := range []string{done.ID, failed.ID, cancelled.ID} {
+		if _, err := s.Get(ctx, id); !errors.Is(err, domain.ErrCrawlJobNotFound) {
+			t.Errorf("expected ended job %s to be deleted", id)
+		}
+	}
+	for _, id := range []string{queued.ID, running.ID} {
+		if _, err := s.Get(ctx, id); err != nil {
+			t.Errorf("expected active job %s to survive, got %v", id, err)
+		}
+	}
+	list, _ := s.List(ctx)
+	if len(list) != 2 {
+		t.Errorf("expected 2 jobs remaining, got %d", len(list))
+	}
+}
+
+func TestCrawlJobStore_DeleteEndedCrawlJobsOnEmptyStoreIsNoop(t *testing.T) {
+	ctx := context.Background()
+	s := domain.NewCrawlJobStore()
+	removed, err := s.DeleteEndedCrawlJobs(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if removed != 0 {
+		t.Errorf("expected 0 removed on an empty store, got %d", removed)
+	}
+}
+
 func TestCrawlJobStore_RequestRedactsCredentials(t *testing.T) {
 	ctx := context.Background()
 	s := domain.NewCrawlJobStore()

@@ -53,6 +53,9 @@ func (f *fakeCrawlJobStore) MarkFailed(_ context.Context, id string, failErr err
 func (f *fakeCrawlJobStore) MarkCancelled(context.Context, string) error {
 	return errors.New("not implemented")
 }
+func (f *fakeCrawlJobStore) DeleteEndedCrawlJobs(context.Context) (int, error) {
+	return 0, errors.New("not implemented")
+}
 func (f *fakeCrawlJobStore) Get(_ context.Context, id string) (domain.CrawlJob, error) {
 	j, ok := f.jobs[id]
 	if !ok {

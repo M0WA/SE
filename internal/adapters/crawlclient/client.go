@@ -100,6 +100,31 @@ func (c *Client) CancelCrawlJob(ctx context.Context, jobID string) error {
 	}
 }
 
+// DeleteEndedCrawlJobs asks crawl-server to delete every done/failed/
+// cancelled job, returning how many were removed.
+func (c *Client) DeleteEndedCrawlJobs(ctx context.Context) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.BaseURL+"/jobs", nil)
+	if err != nil {
+		return 0, fmt.Errorf("building clear-ended request: %w", err)
+	}
+
+	respBody, status, err := c.do(req)
+	if err != nil {
+		return 0, err
+	}
+	if status != http.StatusOK {
+		return 0, fmt.Errorf("crawl server returned %d: %s", status, bytes.TrimSpace(respBody))
+	}
+
+	var out struct {
+		Removed int `json:"removed"`
+	}
+	if err := json.Unmarshal(respBody, &out); err != nil {
+		return 0, fmt.Errorf("decoding crawl server response: %w", err)
+	}
+	return out.Removed, nil
+}
+
 // do sends req and returns its body and status code, or an error if the
 // request couldn't be made or its response body couldn't be read.
 func (c *Client) do(req *http.Request) ([]byte, int, error) {

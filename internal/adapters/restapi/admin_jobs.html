@@ -38,8 +38,11 @@
   </section>
 
   <section class="panel">
-    <h2>Jobs</h2>
-    <p class="lede" style="margin: 0 0 1rem;">Every crawl triggered on this instance, most recent first. Up to three run at once; the rest wait their turn.</p>
+    <div class="panel-header-row">
+      <h2>Jobs</h2>
+      <button id="clear-ended-jobs" class="text-button" type="button">Clear ended jobs</button>
+    </div>
+    <p class="lede" style="margin: 0 0 1rem;">Every crawl triggered on this instance, most recent first. Only so many run at once (see Settings); the rest wait their turn.</p>
     <div id="jobs-status" class="panel-status"></div>
     <input id="jobs-filter" class="field" type="text" placeholder="Filter jobs (regex) — matches seed or status" hidden>
     <div id="jobs-filter-error" class="error-text"></div>

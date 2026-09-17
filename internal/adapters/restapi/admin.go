@@ -1227,16 +1227,36 @@ func (h *Handler) handleAdminOverrides(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleAdminCrawlJobs serves the Jobs collection itself: GET lists every
+// job, and DELETE clears every already-ended one (done/failed/cancelled),
+// leaving queued/running jobs untouched -- the admin Jobs page's "Clear
+// ended jobs" button. Both live on this one path (rather than DELETE going
+// to a separate "/clear-ended" sub-path) specifically to avoid colliding
+// with the "GET /admin/api/crawl/jobs/{id}" wildcard registered below,
+// which would otherwise treat a literal "clear-ended" path segment as a
+// job ID to look up.
 func (h *Handler) handleAdminCrawlJobs(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.jobs != nil, "crawl jobs") {
+	if !requireConfigured(w, h.jobs != nil, "crawl jobs") {
 		return
 	}
-	jobs, err := h.jobs.ListCrawlJobs(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	switch r.Method {
+	case http.MethodGet:
+		jobs, err := h.jobs.ListCrawlJobs(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, jobs)
+	case http.MethodDelete:
+		n, err := h.jobs.DeleteEndedCrawlJobs(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]int{"removed": n})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
-	writeJSON(w, http.StatusOK, jobs)
 }
 
 func (h *Handler) handleAdminCrawlJob(w http.ResponseWriter, r *http.Request) {

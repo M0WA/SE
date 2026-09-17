@@ -846,6 +846,21 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/CrawlJobSummary" }
         "503": { $ref: "#/components/responses/NotConfigured" }
+    delete:
+      tags: [admin]
+      summary: Clear every already-ended crawl job
+      description: >-
+        Deletes every job in done, failed, or cancelled status, leaving
+        queued/running jobs untouched, and reports how many were removed --
+        the Jobs page's "Clear ended jobs" button, for trimming a long
+        history down to what's still active.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { removed: { type: integer } } }
+        "503": { $ref: "#/components/responses/NotConfigured" }
 
   /admin/api/crawl/jobs/{id}:
     get:
@@ -1023,7 +1038,8 @@ paths:
   # crawl-server has no HTTP entrypoint to start a crawl -- the only caller
   # is its own in-process scheduler ticker (application.TriggerDueCrawls),
   # which calls Handler.TriggerScheduledCrawl directly. /jobs* below is
-  # read-only, for admin-server to poll progress on jobs the ticker started.
+  # mostly read-only, for admin-server to poll progress on jobs the ticker
+  # started -- DELETE /jobs is the one write, clearing ended job history.
   /jobs:
     get:
       tags: [crawl-internal]
@@ -1037,6 +1053,21 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/CrawlJobSummary" }
+    delete:
+      tags: [crawl-internal]
+      summary: Clear every already-ended crawl job
+      description: >-
+        Deletes every job in done, failed, or cancelled status, leaving
+        queued/running jobs untouched, and reports how many were removed.
+        Called only by admin-server's crawlclient.Client, never directly
+        reachable from the internet.
+      security: [{}, { internalToken: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { removed: { type: integer } } }
   /jobs/{id}:
     get:
       tags: [crawl-internal]

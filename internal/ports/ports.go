@@ -489,6 +489,12 @@ type CrawlJobService interface {
 	// ErrCrawlJobNotRunning if it exists but already finished (done, failed,
 	// or already cancelled) -- there's nothing left to cancel.
 	CancelCrawlJob(ctx context.Context, jobID string) error
+	// DeleteEndedCrawlJobs asks crawl-server to delete every job that's
+	// already finished (done, failed, or cancelled), leaving queued/running
+	// jobs untouched, and reports how many were removed -- the admin Jobs
+	// page's "Clear ended jobs" button, for trimming a long history down to
+	// what's still active without waiting for maxRetainedCrawlJobs eviction.
+	DeleteEndedCrawlJobs(ctx context.Context) (int, error)
 }
 
 // ErrCrawlJobNotRunning is returned by CrawlJobService.CancelCrawlJob (and
@@ -513,6 +519,10 @@ type CrawlJobStore interface {
 	MarkCancelled(ctx context.Context, id string) error
 	Get(ctx context.Context, id string) (domain.CrawlJob, error)
 	List(ctx context.Context) ([]domain.CrawlJobSummary, error)
+	// DeleteEndedCrawlJobs deletes every job in domain.CrawlJobDone,
+	// CrawlJobFailed, or CrawlJobCancelled status, leaving queued/running
+	// jobs untouched, and returns how many were removed.
+	DeleteEndedCrawlJobs(ctx context.Context) (int, error)
 }
 
 // DebugSearchService exposes the raw, unblended hybrid search results

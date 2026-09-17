@@ -276,3 +276,33 @@ func (s *CrawlJobStore) List(_ context.Context) ([]CrawlJobSummary, error) {
 	}
 	return out, nil
 }
+
+// isEndedStatus reports whether a job in this status has finished one way
+// or another (as opposed to CrawlJobQueued/CrawlJobRunning, which are still
+// active) -- shared by DeleteEndedCrawlJobs here and sqlrepo's DB-backed
+// equivalent so both agree on exactly what "ended" means.
+func isEndedStatus(status CrawlJobStatus) bool {
+	return status == CrawlJobDone || status == CrawlJobFailed || status == CrawlJobCancelled
+}
+
+// DeleteEndedCrawlJobs removes every done/failed/cancelled job, keeping
+// queued/running ones, and returns how many were removed. Filters s.order
+// in place (the standard "kept := s.order[:0]" idiom) rather than
+// allocating a new slice, since this can run against up to
+// maxRetainedCrawlJobs entries.
+func (s *CrawlJobStore) DeleteEndedCrawlJobs(_ context.Context) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.order[:0]
+	removed := 0
+	for _, id := range s.order {
+		if isEndedStatus(s.jobs[id].Status) {
+			delete(s.jobs, id)
+			removed++
+			continue
+		}
+		kept = append(kept, id)
+	}
+	s.order = kept
+	return removed, nil
+}
