@@ -125,6 +125,7 @@ func (h *Handler) RoutesCrawlInternal() *http.ServeMux {
 	mux.HandleFunc("GET /jobs", h.requireCrawlInternalToken(h.handleListCrawlJobs))
 	mux.HandleFunc("GET /jobs/{id}", h.requireCrawlInternalToken(h.handleGetCrawlJob))
 	mux.HandleFunc("POST /jobs/{id}/cancel", h.requireCrawlInternalToken(h.handleCancelCrawlJob))
+	mux.HandleFunc("DELETE /jobs", h.requireCrawlInternalToken(h.handleDeleteEndedCrawlJobs))
 	mux.HandleFunc("/healthz", h.handleHealthz)
 	return mux
 }
@@ -346,6 +347,22 @@ func (h *Handler) handleListCrawlJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, jobs)
+}
+
+// handleDeleteEndedCrawlJobs is crawl-server's own "clear ended jobs"
+// endpoint (DELETE /jobs -- deliberately the collection path itself, not a
+// "/jobs/clear-ended" sub-path, which would collide with the "/jobs/{id}"
+// wildcard above for any method that path isn't explicitly registered
+// under) -- called only by admin-server's crawlclient.Client, never
+// directly reachable from the internet (see RoutesCrawlInternal's doc
+// comment).
+func (h *Handler) handleDeleteEndedCrawlJobs(w http.ResponseWriter, r *http.Request) {
+	n, err := h.crawlJobs.DeleteEndedCrawlJobs(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"removed": n})
 }
 
 func (h *Handler) handleGetCrawlJob(w http.ResponseWriter, r *http.Request) {

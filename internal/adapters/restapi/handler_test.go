@@ -66,6 +66,9 @@ type fakeJobService struct {
 
 	cancelledID string
 	cancelErr   error
+
+	deleteEndedRemoved int
+	deleteEndedErr     error
 }
 
 func (f *fakeJobService) ListCrawlJobs(_ context.Context) ([]domain.CrawlJobSummary, error) {
@@ -79,6 +82,10 @@ func (f *fakeJobService) GetCrawlJob(_ context.Context, _ string) (domain.CrawlJ
 func (f *fakeJobService) CancelCrawlJob(_ context.Context, jobID string) error {
 	f.cancelledID = jobID
 	return f.cancelErr
+}
+
+func (f *fakeJobService) DeleteEndedCrawlJobs(_ context.Context) (int, error) {
+	return f.deleteEndedRemoved, f.deleteEndedErr
 }
 
 // fakeHealthChecker is used by TestHandleHealthz_* -- a stand-in for the
@@ -770,6 +777,62 @@ func TestHandleAdminCancelCrawlJob_NotConfigured(t *testing.T) {
 	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminClearEndedCrawlJobs_Success(t *testing.T) {
+	fj := &fakeJobService{deleteEndedRemoved: 4}
+	h, cookie := authedHandler(t, &fakeSearch{}, fj)
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/crawl/jobs", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Removed int `json:"removed"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.Removed != 4 {
+		t.Errorf("expected removed=4, got %d", resp.Removed)
+	}
+}
+
+func TestHandleAdminClearEndedCrawlJobs_ServiceError(t *testing.T) {
+	fj := &fakeJobService{deleteEndedErr: errors.New("boom")}
+	h, cookie := authedHandler(t, &fakeSearch{}, fj)
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/crawl/jobs", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminClearEndedCrawlJobs_NotConfigured(t *testing.T) {
+	h, cookie := authedHandler(t, &fakeSearch{}, nil)
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/crawl/jobs", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminClearEndedCrawlJobs_MethodNotAllowed(t *testing.T) {
+	h, cookie := authedHandler(t, &fakeSearch{}, &fakeJobService{})
+	req := httptest.NewRequest(http.MethodPut, "/admin/api/crawl/jobs", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
 	}
 }
 

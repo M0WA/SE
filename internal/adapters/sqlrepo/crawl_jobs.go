@@ -190,6 +190,27 @@ func (r *Repository) PruneCrawlJobs(ctx context.Context, maxRetained int) error 
 	return nil
 }
 
+// DeleteEndedCrawlJobs deletes every crawl job in domain.CrawlJobDone,
+// CrawlJobFailed, or CrawlJobCancelled status, cascading to their
+// crawl_job_pages rows (same FK-cascade reuse PruneCrawlJobs relies on),
+// and reports how many were removed -- the admin Jobs page's "Clear ended
+// jobs" button, unlike PruneCrawlJobs' age/count-based retention limit,
+// this always leaves queued/running jobs alone regardless of how many
+// there are.
+func (r *Repository) DeleteEndedCrawlJobs(ctx context.Context) (int, error) {
+	deleteSQL := r.ph(`DELETE FROM crawl_jobs WHERE status IN (%s, %s, %s)`, 1, 2, 3)
+	res, err := r.db.ExecContext(ctx, deleteSQL,
+		string(domain.CrawlJobDone), string(domain.CrawlJobFailed), string(domain.CrawlJobCancelled))
+	if err != nil {
+		return 0, fmt.Errorf("deleting ended crawl jobs: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("counting deleted crawl jobs: %w", err)
+	}
+	return int(n), nil
+}
+
 func scanCrawlJob(row scanner) (domain.CrawlJob, error) {
 	var job domain.CrawlJob
 	var reqJSON, status, createdAt string

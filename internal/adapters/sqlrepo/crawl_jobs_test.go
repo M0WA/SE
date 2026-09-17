@@ -269,6 +269,65 @@ func TestRepository_PruneCrawlJobsZeroOrNegativeIsNoop(t *testing.T) {
 	}
 }
 
+func TestRepository_DeleteEndedCrawlJobsRemovesDoneFailedCancelledOnly(t *testing.T) {
+	ctx := context.Background()
+	repo := newTestRepo(t)
+	queued, _ := repo.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://queued"}})
+	running, _ := repo.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://running"}})
+	_ = repo.MarkRunning(ctx, running.ID)
+	done, _ := repo.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://done"}})
+	_ = repo.MarkDone(ctx, done.ID)
+	failed, _ := repo.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://failed"}})
+	_ = repo.MarkFailed(ctx, failed.ID, errors.New("boom"))
+	cancelled, _ := repo.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://cancelled"}})
+	_ = repo.MarkCancelled(ctx, cancelled.ID)
+
+	removed, err := repo.DeleteEndedCrawlJobs(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if removed != 3 {
+		t.Errorf("expected 3 ended jobs removed, got %d", removed)
+	}
+	for _, id := range []string{done.ID, failed.ID, cancelled.ID} {
+		if _, err := repo.Get(ctx, id); !errors.Is(err, domain.ErrCrawlJobNotFound) {
+			t.Errorf("expected ended job %s to be deleted", id)
+		}
+	}
+	for _, id := range []string{queued.ID, running.ID} {
+		if _, err := repo.Get(ctx, id); err != nil {
+			t.Errorf("expected active job %s to survive, got %v", id, err)
+		}
+	}
+}
+
+func TestRepository_DeleteEndedCrawlJobsCascadesToPages(t *testing.T) {
+	ctx := context.Background()
+	repo := newTestRepo(t)
+	job, _ := repo.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://a"}})
+	_ = repo.AppendPage(ctx, job.ID, domain.CrawlPageEvent{URL: "http://a", Status: domain.CrawlPageIndexed, FetchedAt: time.Now()})
+	_ = repo.MarkDone(ctx, job.ID)
+
+	if _, err := repo.DeleteEndedCrawlJobs(ctx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := repo.Get(ctx, job.ID); !errors.Is(err, domain.ErrCrawlJobNotFound) {
+		t.Error("expected the deleted job (and its page rows) to be gone")
+	}
+}
+
+func TestRepository_DeleteEndedCrawlJobsOnEmptyStoreIsNoop(t *testing.T) {
+	ctx := context.Background()
+	repo := newTestRepo(t)
+	removed, err := repo.DeleteEndedCrawlJobs(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if removed != 0 {
+		t.Errorf("expected 0 removed with no jobs at all, got %d", removed)
+	}
+}
+
 // TestRepository_CrawlJobSurvivesProcessRestart is the whole point of this
 // feature: a real file-backed SQLite database (not the in-memory DSN every
 // other test in this package uses, which -- with cache=shared -- only
