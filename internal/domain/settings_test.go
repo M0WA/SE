@@ -11,7 +11,7 @@ import (
 func TestOperationalSettings_NilGetReturnsDefaults(t *testing.T) {
 	var s *domain.OperationalSettings
 	v := s.Get()
-	if v.DefaultTopK != 10 || v.DefaultMaxPages != 20 || v.FetchTimeout != 8*time.Second {
+	if v.DefaultTopK != 10 || v.DefaultMaxPages != 20000 || v.FetchTimeout != 8*time.Second {
 		t.Errorf("expected built-in defaults from nil receiver, got %+v", v)
 	}
 }
@@ -199,7 +199,7 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 	want := domain.OperationalSettingsValues{
 		FetchTimeout:                     8 * time.Second,
 		UserAgent:                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0",
-		DefaultMaxPages:                  20,
+		DefaultMaxPages:                  20000,
 		MinTextLength:                    50,
 		DefaultTopK:                      10,
 		SessionTTL:                       12 * time.Hour,
@@ -215,13 +215,14 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 		ANNSearchEnabled:                 true,
 		MaxRetainedCrawlJobs:             200,
 		DefaultRenderer:                  domain.RendererNone,
-		LinkScope:                        domain.LinkScopeDomain,
+		LinkScope:                        domain.LinkScopeTLD,
 		MaxDocumentVersions:              5,
 		TitleWeight:                      2,
 		EmbeddingHashEnabled:             true,
 		EmbeddingSearchWeights:           map[string]float64{domain.EmbeddingProviderHash: 1},
 		EmbeddingTitleWeight:             0.3,
 		URLAliasWWWEnabled:               true,
+		ContentDedupEnabled:              true,
 		ContentDedupMethod:               domain.ContentDedupMethodExact,
 		ContentDedupSimHashMaxDistance:   3,
 		ContentDedupIntervalMinutes:      120,
@@ -331,19 +332,19 @@ func TestOperationalSettings_SetValidDefaultRendererPreserved(t *testing.T) {
 	}
 }
 
-func TestOperationalSettings_SetBlankLinkScopeFallsBackToDomain(t *testing.T) {
+func TestOperationalSettings_SetBlankLinkScopeFallsBackToTLD(t *testing.T) {
 	s := domain.DefaultOperationalSettings()
 	s.Set(domain.OperationalSettingsValues{LinkScope: ""})
-	if v := s.Get(); v.LinkScope != domain.LinkScopeDomain {
-		t.Errorf("expected a blank LinkScope to fall back to LinkScopeDomain, got %q", v.LinkScope)
+	if v := s.Get(); v.LinkScope != domain.LinkScopeTLD {
+		t.Errorf("expected a blank LinkScope to fall back to LinkScopeTLD, got %q", v.LinkScope)
 	}
 }
 
-func TestOperationalSettings_SetInvalidLinkScopeFallsBackToDomain(t *testing.T) {
+func TestOperationalSettings_SetInvalidLinkScopeFallsBackToTLD(t *testing.T) {
 	s := domain.DefaultOperationalSettings()
 	s.Set(domain.OperationalSettingsValues{LinkScope: "planet"})
-	if v := s.Get(); v.LinkScope != domain.LinkScopeDomain {
-		t.Errorf("expected an unrecognized LinkScope to fall back to LinkScopeDomain, got %q", v.LinkScope)
+	if v := s.Get(); v.LinkScope != domain.LinkScopeTLD {
+		t.Errorf("expected an unrecognized LinkScope to fall back to LinkScopeTLD, got %q", v.LinkScope)
 	}
 }
 

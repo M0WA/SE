@@ -87,7 +87,9 @@ type OperationalSettingsValues struct {
 	DefaultRenderer string
 	// LinkScope is the crawler's global default for how far a crawl
 	// follows discovered links (see LinkScope* constants) -- defaults to
-	// LinkScopeDomain (same registrable domain, any subdomain). A crawl's
+	// LinkScopeTLD (same domain name, any subdomain, any top-level
+	// domain), broader than LinkScopeDomain since most real sites span
+	// more than one TLD/subdomain worth crawling by default. A crawl's
 	// own LinkScope (ScheduledCrawl.LinkScope / ports.CrawlOptions.
 	// LinkScope) overrides this when set to anything other than
 	// LinkScopeDefault ("").
@@ -214,10 +216,12 @@ type OperationalSettingsValues struct {
 	// duplicate/near-duplicate content across different URLs (URLAliasWWWEnabled
 	// above only ever handles the www-vs-bare-host case, and only for
 	// future crawls) and merges each group into one canonical document --
-	// see MergeDocuments. Defaults false: unlike every other field here,
-	// turning this on can delete existing documents rows (the merged-away
-	// losers), so it's an explicit admin opt-in rather than an
-	// automatically-safe default.
+	// see MergeDocuments. Defaults true: a search should never list the
+	// same content twice, and this is what actually cleans up duplicates
+	// already in the corpus, not just future ones. Unlike every other
+	// field here, turning this off matters because turning it on can
+	// delete existing documents rows (the merged-away losers) -- an admin
+	// who wants to review before merging can still switch it off.
 	ContentDedupEnabled bool
 	// ContentDedupMethod is "exact" (byte-identical normalized text, via
 	// domain.ContentHash) or "simhash" (a similarity fingerprint tolerant
@@ -320,7 +324,7 @@ func defaultOperationalSettings() OperationalSettingsValues {
 	return OperationalSettingsValues{
 		FetchTimeout:                     8 * time.Second,
 		UserAgent:                        defaultUserAgent,
-		DefaultMaxPages:                  20,
+		DefaultMaxPages:                  20000,
 		MinTextLength:                    50,
 		DefaultTopK:                      10,
 		SessionTTL:                       12 * time.Hour,
@@ -336,13 +340,14 @@ func defaultOperationalSettings() OperationalSettingsValues {
 		ANNSearchEnabled:                 true,
 		MaxRetainedCrawlJobs:             defaultMaxRetainedCrawlJobs,
 		DefaultRenderer:                  RendererNone,
-		LinkScope:                        LinkScopeDomain,
+		LinkScope:                        LinkScopeTLD,
 		MaxDocumentVersions:              defaultMaxDocumentVersions,
 		TitleWeight:                      defaultTitleWeight,
 		EmbeddingHashEnabled:             true,
 		EmbeddingSearchWeights:           map[string]float64{EmbeddingProviderHash: 1},
 		EmbeddingTitleWeight:             defaultEmbeddingTitleWeight,
 		URLAliasWWWEnabled:               true,
+		ContentDedupEnabled:              true,
 		ContentDedupMethod:               ContentDedupMethodExact,
 		ContentDedupSimHashMaxDistance:   defaultContentDedupSimHashMaxDistance,
 		ContentDedupIntervalMinutes:      defaultContentDedupIntervalMinutes,
@@ -455,7 +460,7 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 	// LinkScopeDefault ("") isn't valid for the global default either --
 	// same reasoning as DefaultRenderer above.
 	if v.LinkScope == LinkScopeDefault || !ValidLinkScope(v.LinkScope) {
-		v.LinkScope = LinkScopeDomain
+		v.LinkScope = LinkScopeTLD
 	}
 	// EmbeddingProvider's validity now depends on the dynamically
 	// configured embedding_http_endpoints table, which this pure value
