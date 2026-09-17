@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.7.0 - 2026-09-17
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Wait for network idle after the load event, not just load, when rendering by @M0WA in https://github.com/M0WA/SE/pull/88
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.6.0...v4.7.0
+
+
 ## v4.6.0 - 2026-09-17
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
