@@ -97,6 +97,85 @@ test('debug form: reports the error message on a failed fetch', async () => {
   assert.equal(document.getElementById('debug-status').textContent.includes('search down'), true);
 });
 
+test('debug form: requests top_k=5000 by default, not the public search default', async () => {
+  loadFixture(async (url) => {
+    assert.equal(url.includes('top_k=5000'), true);
+    return { ok: true, json: async () => [] };
+  });
+  document.getElementById('debug-q').value = 'cats';
+  submit('debug-form');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
+function manyResults(n) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    out.push({
+      doc_id: 'd' + i, url: 'http://a/' + i, title: 'Doc ' + i, snippet: '',
+      bm25_score: 1, semantic_sim: 1, pagerank: 1, final_score: n - i,
+    });
+  }
+  return out;
+}
+
+test('debug form: paginates results at 50 per page and hides the pager for one page', async () => {
+  loadFixture(async () => ({ ok: true, json: async () => manyResults(10) }));
+  document.getElementById('debug-q').value = 'cats';
+  submit('debug-form');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('debug-result').querySelectorAll('tbody tr').length, 10);
+  assert.equal(document.getElementById('debug-pager').hidden, true);
+});
+
+test('debug form: shows a pager and only 50 rows when results exceed one page', async () => {
+  loadFixture(async () => ({ ok: true, json: async () => manyResults(120) }));
+  document.getElementById('debug-q').value = 'cats';
+  submit('debug-form');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('debug-result').querySelectorAll('tbody tr').length, 50);
+  assert.equal(document.getElementById('debug-pager').hidden, false);
+  assert.equal(document.getElementById('debug-page-info').textContent, 'Page 1 of 3 (120 results)');
+  assert.equal(document.getElementById('debug-prev').disabled, true);
+  assert.equal(document.getElementById('debug-next').disabled, false);
+});
+
+test('debug form: next/previous buttons page through results', async () => {
+  loadFixture(async () => ({ ok: true, json: async () => manyResults(120) }));
+  document.getElementById('debug-q').value = 'cats';
+  submit('debug-form');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  document.getElementById('debug-next').click();
+  assert.equal(document.getElementById('debug-page-info').textContent, 'Page 2 of 3 (120 results)');
+  assert.equal(document.getElementById('debug-result').querySelectorAll('tbody tr').length, 50);
+  assert.equal(document.getElementById('debug-prev').disabled, false);
+  assert.equal(document.getElementById('debug-next').disabled, false);
+
+  document.getElementById('debug-next').click();
+  assert.equal(document.getElementById('debug-page-info').textContent, 'Page 3 of 3 (120 results)');
+  assert.equal(document.getElementById('debug-result').querySelectorAll('tbody tr').length, 20);
+  assert.equal(document.getElementById('debug-next').disabled, true);
+
+  document.getElementById('debug-prev').click();
+  assert.equal(document.getElementById('debug-page-info').textContent, 'Page 2 of 3 (120 results)');
+});
+
+test('debug form: a new search resets back to page 1', async () => {
+  let n = 120;
+  loadFixture(async () => ({ ok: true, json: async () => manyResults(n) }));
+  document.getElementById('debug-q').value = 'cats';
+  submit('debug-form');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  document.getElementById('debug-next').click();
+  assert.equal(document.getElementById('debug-page-info').textContent, 'Page 2 of 3 (120 results)');
+
+  n = 10;
+  submit('debug-form');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('debug-pager').hidden, true);
+  assert.equal(document.getElementById('debug-result').querySelectorAll('tbody tr').length, 10);
+});
+
 test('postings form: empty term shows a prompt instead of looking up', async () => {
   let called = false;
   loadFixture(async () => { called = true; return { ok: true, json: async () => ({ postings: [] }) }; });
