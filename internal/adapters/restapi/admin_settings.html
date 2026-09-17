@@ -220,6 +220,13 @@
         </div>
         <div class="form-row">
           <div class="label-row">
+            <label for="max-concurrent-crawls">Concurrent crawls</label>
+            <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How many crawl jobs actually fetch pages at once; a burst of triggered jobs beyond this queues instead of running immediately. Raising or lowering it takes effect for the next job that starts, without a restart -- an already-running job keeps going until it finishes, so a lowered limit takes a little while to fully apply.</span></span>
+          </div>
+          <span class="field-wrap" data-default="3"><input id="max-concurrent-crawls" class="field" type="number" step="1" min="1" required></span>
+        </div>
+        <div class="form-row">
+          <div class="label-row">
             <label for="default-renderer">Rendering</label>
             <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How a crawl fetches each page, unless it overrides this itself. Rendering a page in a real browser is much slower than a plain fetch (each page opens its own browser tab) and downloads that browser engine the first time it's ever used -- turn it on only for sites whose real content needs JavaScript to appear.</span></span>
           </div>

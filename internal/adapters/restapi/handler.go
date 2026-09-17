@@ -137,7 +137,7 @@ type Handler struct {
 	search        ports.SearchService
 	crawler       ports.CrawlerService
 	crawlJobs     ports.CrawlJobStore
-	crawlSem      chan struct{}
+	crawlSem      *crawlConcurrencySemaphore
 	cancelMu      sync.Mutex
 	cancelFuncs   map[string]context.CancelFunc
 	jobs          ports.CrawlJobService
@@ -294,7 +294,7 @@ func New(cfg Config) *Handler {
 		search:                cfg.Search,
 		crawler:               cfg.Crawler,
 		crawlJobs:             cfg.CrawlJobs,
-		crawlSem:              make(chan struct{}, maxConcurrentCrawls),
+		crawlSem:              newCrawlConcurrencySemaphore(cfg.OpSettings),
 		cancelFuncs:           make(map[string]context.CancelFunc),
 		jobs:                  cfg.Jobs,
 		debug:                 cfg.Debug,

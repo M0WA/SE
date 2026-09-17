@@ -458,10 +458,11 @@ func TestCancelCrawlJob_StopsARunningJob(t *testing.T) {
 
 // TestCancelCrawlJob_StopsAQueuedJob proves a job cancelled before it ever
 // acquires crawlSem never calls Crawl at all -- cancellation works on the
-// queue, not just on an already-running fetch. maxConcurrentCrawls (3, see
-// crawl_internal.go) concurrency slots are filled with jobs that never
-// release, so one more job queues behind crawlSem instead of running
-// immediately.
+// queue, not just on an already-running fetch. All of crawlSem's
+// concurrency slots (3 by default, see crawlConcurrencySemaphore in
+// crawl_internal.go -- Config.OpSettings is nil in this test, so that
+// default applies) are filled with jobs that never release, so one more
+// job queues behind crawlSem instead of running immediately.
 func TestCancelCrawlJob_StopsAQueuedJob(t *testing.T) {
 	const maxConcurrentCrawlsForTest = 3
 	dispatch := &dispatchingCrawler{}
@@ -504,6 +505,86 @@ func TestCancelCrawlJob_StopsAQueuedJob(t *testing.T) {
 		t.Error("expected the queued job's Crawl to never be entered once cancelled")
 	default:
 	}
+}
+
+// TestRunCrawlJob_RespectsConfiguredMaxConcurrentCrawls proves a
+// higher-than-default OperationalSettingsValues.MaxConcurrentCrawls is
+// honored: 5 blocking jobs all start concurrently (none queue), where the
+// old hard-coded 3 would have queued the last 2.
+func TestRunCrawlJob_RespectsConfiguredMaxConcurrentCrawls(t *testing.T) {
+	const limit = 5
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{MaxConcurrentCrawls: limit})
+	dispatch := &dispatchingCrawler{}
+	h := restapi.New(restapi.Config{Crawler: dispatch, CrawlJobs: domain.NewCrawlJobStore(), OpSettings: opSettings})
+
+	blockers := make([]*blockingCrawler, limit)
+	for i := range blockers {
+		blockers[i] = newBlockingCrawler()
+		dispatch.push(blockers[i])
+		startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"http://a"}})
+	}
+	defer func() {
+		for _, bc := range blockers {
+			close(bc.release)
+		}
+	}()
+	for i, bc := range blockers {
+		select {
+		case <-bc.started:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for blocking slot %d to start -- expected all %d to run concurrently", i, limit)
+		}
+	}
+}
+
+// TestRunCrawlJob_MaxConcurrentCrawlsResizeAdmitsAlreadyQueuedJob proves
+// raising MaxConcurrentCrawls while a job is already queued behind the
+// old (smaller) limit still helps that job -- not just jobs that start
+// queuing afterward -- since crawlConcurrencySemaphore.acquire re-checks
+// the configured limit periodically rather than only once per queued
+// call.
+func TestRunCrawlJob_MaxConcurrentCrawlsResizeAdmitsAlreadyQueuedJob(t *testing.T) {
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{MaxConcurrentCrawls: 2})
+	dispatch := &dispatchingCrawler{}
+	h := restapi.New(restapi.Config{Crawler: dispatch, CrawlJobs: domain.NewCrawlJobStore(), OpSettings: opSettings})
+
+	blockers := make([]*blockingCrawler, 2)
+	for i := range blockers {
+		blockers[i] = newBlockingCrawler()
+		dispatch.push(blockers[i])
+		startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"http://a"}})
+	}
+	defer func() {
+		for _, bc := range blockers {
+			close(bc.release)
+		}
+	}()
+	for _, bc := range blockers {
+		select {
+		case <-bc.started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for a blocking slot to start")
+		}
+	}
+
+	queued := newBlockingCrawler()
+	dispatch.push(queued)
+	startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"http://b"}})
+
+	select {
+	case <-queued.started:
+		t.Fatal("expected the third job to queue behind the limit of 2, not start immediately")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	opSettings.Set(domain.OperationalSettingsValues{MaxConcurrentCrawls: 3})
+
+	select {
+	case <-queued.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("expected the already-queued job to start once the limit was raised to 3")
+	}
+	close(queued.release)
 }
 
 // dispatchingCrawler hands out a queue of *blockingCrawler in FIFO order,

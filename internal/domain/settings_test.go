@@ -214,6 +214,7 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 		PageRankRecomputeIntervalMinutes: 60,
 		ANNSearchEnabled:                 true,
 		MaxRetainedCrawlJobs:             200,
+		MaxConcurrentCrawls:              3,
 		DefaultRenderer:                  domain.RendererNone,
 		LinkScope:                        domain.LinkScopeTLD,
 		MaxDocumentVersions:              5,
@@ -305,6 +306,30 @@ func TestOperationalSettings_SetPositiveMaxRetainedCrawlJobsPreserved(t *testing
 	s.Set(domain.OperationalSettingsValues{MaxRetainedCrawlJobs: 1000})
 	if v := s.Get(); v.MaxRetainedCrawlJobs != 1000 {
 		t.Errorf("expected MaxRetainedCrawlJobs=1000 to be preserved, got %d", v.MaxRetainedCrawlJobs)
+	}
+}
+
+func TestOperationalSettings_SetZeroMaxConcurrentCrawlsFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{MaxConcurrentCrawls: 0})
+	if v := s.Get(); v.MaxConcurrentCrawls != 3 {
+		t.Errorf("expected a zero MaxConcurrentCrawls to fall back to the default 3, got %d", v.MaxConcurrentCrawls)
+	}
+}
+
+func TestOperationalSettings_SetNegativeMaxConcurrentCrawlsFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{MaxConcurrentCrawls: -5})
+	if v := s.Get(); v.MaxConcurrentCrawls != 3 {
+		t.Errorf("expected a negative MaxConcurrentCrawls to fall back to the default 3, got %d", v.MaxConcurrentCrawls)
+	}
+}
+
+func TestOperationalSettings_SetPositiveMaxConcurrentCrawlsPreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{MaxConcurrentCrawls: 10})
+	if v := s.Get(); v.MaxConcurrentCrawls != 10 {
+		t.Errorf("expected MaxConcurrentCrawls=10 to be preserved, got %d", v.MaxConcurrentCrawls)
 	}
 }
 
