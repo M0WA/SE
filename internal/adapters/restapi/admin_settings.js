@@ -10,6 +10,7 @@
   const crawlDelayEl = document.getElementById('crawl-delay');
   const maxResponseKBEl = document.getElementById('max-response-kb');
   const maxRetainedCrawlJobsEl = document.getElementById('max-retained-crawl-jobs');
+  const maxConcurrentCrawlsEl = document.getElementById('max-concurrent-crawls');
   const defaultRendererEl = document.getElementById('default-renderer');
   const defaultLinkScopeEl = document.getElementById('default-link-scope');
   const urlAliasWWWEnabledEl = document.getElementById('url-alias-www-enabled');
@@ -171,6 +172,7 @@
     crawlDelayEl.value = s.operational.crawl_delay_ms;
     maxResponseKBEl.value = s.operational.max_response_kb;
     maxRetainedCrawlJobsEl.value = s.operational.max_retained_crawl_jobs;
+    maxConcurrentCrawlsEl.value = s.operational.max_concurrent_crawls;
     defaultRendererEl.value = s.operational.default_renderer || 'none';
     defaultLinkScopeEl.value = s.operational.link_scope || 'domain';
     urlAliasWWWEnabledEl.checked = s.operational.url_alias_www_enabled;
@@ -233,6 +235,7 @@
         crawl_delay_ms: parseInt(crawlDelayEl.value, 10),
         max_response_kb: parseInt(maxResponseKBEl.value, 10),
         max_retained_crawl_jobs: parseInt(maxRetainedCrawlJobsEl.value, 10),
+        max_concurrent_crawls: parseInt(maxConcurrentCrawlsEl.value, 10),
         default_renderer: defaultRendererEl.value,
         link_scope: defaultLinkScopeEl.value,
         url_alias_www_enabled: urlAliasWWWEnabledEl.checked,

@@ -604,6 +604,10 @@ type operationalValues struct {
 	// history -- see domain.OperationalSettingsValues for the full doc
 	// comment.
 	MaxRetainedCrawlJobs int `json:"max_retained_crawl_jobs"`
+	// MaxConcurrentCrawls bounds how many crawl jobs actually fetch pages
+	// at once on crawl-server -- see domain.OperationalSettingsValues for
+	// the full doc comment.
+	MaxConcurrentCrawls int `json:"max_concurrent_crawls"`
 	// DefaultRenderer is the crawler's global default rendering mode
 	// (domain.RendererNone/RendererChromium/RendererFirefox) -- a
 	// scheduled/one-off crawl's own renderer overrides this when set.
@@ -667,6 +671,7 @@ func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 		PageRankRecomputeIntervalMinutes: v.PageRankRecomputeIntervalMinutes,
 		ANNSearchEnabled:                 v.ANNSearchEnabled,
 		MaxRetainedCrawlJobs:             v.MaxRetainedCrawlJobs,
+		MaxConcurrentCrawls:              v.MaxConcurrentCrawls,
 		DefaultRenderer:                  v.DefaultRenderer,
 		LinkScope:                        v.LinkScope,
 		MaxDocumentVersions:              v.MaxDocumentVersions,
@@ -701,6 +706,7 @@ func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 		PageRankRecomputeIntervalMinutes: o.PageRankRecomputeIntervalMinutes,
 		ANNSearchEnabled:                 o.ANNSearchEnabled,
 		MaxRetainedCrawlJobs:             o.MaxRetainedCrawlJobs,
+		MaxConcurrentCrawls:              o.MaxConcurrentCrawls,
 		DefaultRenderer:                  o.DefaultRenderer,
 		LinkScope:                        o.LinkScope,
 		MaxDocumentVersions:              o.MaxDocumentVersions,

@@ -18,6 +18,7 @@ const FULL_SETTINGS = {
     crawl_delay_ms: 250,
     max_response_kb: 5120,
     max_retained_crawl_jobs: 200,
+    max_concurrent_crawls: 3,
     default_renderer: 'none',
     link_scope: 'domain',
     url_alias_www_enabled: true,
@@ -342,6 +343,28 @@ test('saveSettings posts the edited content-dedup fields', async () => {
   assert.equal(gotBody.operational.content_dedup_method, 'simhash');
   assert.equal(gotBody.operational.content_dedup_simhash_max_distance, 5);
   assert.equal(gotBody.operational.content_dedup_interval_minutes, 90);
+});
+
+test('applySettings fills the concurrent-crawls field', () => {
+  const { applySettings } = loadFixture();
+  applySettings(FULL_SETTINGS);
+  assert.equal(document.getElementById('max-concurrent-crawls').value, '3');
+});
+
+test('saveSettings posts the edited concurrent-crawls field', async () => {
+  const { saveSettings } = loadFixture();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  document.getElementById('max-concurrent-crawls').value = '8';
+  let gotBody;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/settings')) {
+      gotBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => FULL_SETTINGS };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  await saveSettings();
+  assert.equal(gotBody.operational.max_concurrent_crawls, 8);
 });
 
 test('applyOverrides fills blocked/boosted textareas from the response', () => {
