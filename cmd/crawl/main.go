@@ -320,9 +320,10 @@ func main() {
 	contentDedup := runContentDedupScheduler(ctx, repo, repo, opSettings)
 
 	handler := restapi.New(restapi.Config{
-		Crawler:   crawlerSvc,
-		CrawlJobs: repo,
-		Health:    repo,
+		Crawler:    crawlerSvc,
+		CrawlJobs:  repo,
+		Health:     repo,
+		OpSettings: opSettings,
 		// A crawl just changed the corpus -- recompute right away (in the
 		// background, so a slow recompute never delays the crawl job's own
 		// reported completion or the concurrency semaphore's release) in
