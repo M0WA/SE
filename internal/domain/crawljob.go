@@ -10,11 +10,9 @@ import (
 )
 
 // ErrCrawlJobNotFound is returned by CrawlJobStore.Get when no job with the
-// given ID exists (or is no longer retained). Deliberately a domain-level
-// sentinel rather than reusing ports.ErrCrawlJobNotFound (a separate error,
-// for a separate interface: ports.CrawlJobService, the admin-server-to-
-// crawl-server network client) -- domain can never import ports, and this
-// error needs to be producible by an in-memory, domain-only implementation.
+// given ID exists (or is no longer retained). A separate sentinel from
+// ports.ErrCrawlJobNotFound since domain can't import ports, and this one
+// must be producible by an in-memory, domain-only implementation.
 var ErrCrawlJobNotFound = errors.New("crawl job not found")
 
 // CrawlJobStatus is where a triggered crawl currently stands.
@@ -142,16 +140,10 @@ func (j CrawlJob) summary() CrawlJobSummary {
 const maxRetainedCrawlJobs = 200
 
 // CrawlJobStore holds every crawl job triggered on this process, safe for
-// concurrent use by the HTTP handler goroutine that creates a job and the
-// background goroutine that runs it and reports progress.
-//
-// This is purely in-memory -- lost on process restart -- and exists today
-// only as a lightweight ports.CrawlJobStore implementation for tests; the
-// real crawl-server process uses sqlrepo's DB-backed implementation
-// instead, so crawl history survives restarts. Every method takes a
-// context.Context and returns an error purely to satisfy that same
-// interface (a real DB-backed implementation can genuinely fail); this
-// in-memory version never actually errors except Get's not-found case.
+// concurrent use. Purely in-memory (lost on restart) -- a lightweight
+// ports.CrawlJobStore for tests; crawl-server itself uses sqlrepo's
+// DB-backed implementation so history survives restarts. Every method
+// returns an error only to satisfy that interface, except Get's not-found.
 type CrawlJobStore struct {
 	mu    sync.RWMutex
 	jobs  map[string]*CrawlJob

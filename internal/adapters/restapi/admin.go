@@ -107,15 +107,10 @@ func (h *Handler) handleAdminSearchPage(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleAdminSearchResultPage serves the per-result score-breakdown
-// subpage template. It carries no server-side parameters -- like
-// handleAdminDomainPage, the same static page works for every result,
-// since the JS reads the query and doc ID it needs back out of its own
-// URL's querystring and re-runs /admin/api/search to find that one result.
-// Re-running the whole search (rather than a narrower "score just this
-// document" endpoint) is deliberate: every score here is normalized against
-// its search's own candidate batch (see domain.HybridResult.NormBM25/
-// NormalizedPageRank), so there's no way to reproduce it correctly except by
-// recomputing that same batch.
+// subpage: one static template whose JS reads the query/doc ID from its
+// own URL and re-runs /admin/api/search, since every score is normalized
+// against that search's own candidate batch -- there's no way to
+// reproduce it except by recomputing that batch.
 func (h *Handler) handleAdminSearchResultPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/html; charset=utf-8", adminSearchResultHTML)
 }
@@ -254,17 +249,9 @@ type adminDeleteDomainResponse struct {
 }
 
 // handleAdminDeleteDomainDocuments removes every document in one domain.
-// Deliberately fire-and-forget: it looks up the domain's document IDs
-// synchronously, then queues their deletion in a background goroutine and
-// returns 202 immediately, rather than deleting one at a time across N
-// separate client-driven DELETE requests (the previous design) -- those
-// were plain fetch() calls the browser would simply abort mid-batch the
-// moment the admin navigated away or closed the tab, silently leaving the
-// domain half-deleted with no way to know or resume. The background
-// goroutine uses context.Background(), not r.Context(), specifically so
-// it keeps running to completion even after this request's own context is
-// cancelled by that same navigation -- the same reason runCrawlJob does
-// the same for a triggered crawl.
+// Fire-and-forget: looks up IDs synchronously, then queues deletion in a
+// background goroutine (context.Background(), surviving the admin
+// navigating away) and returns 202 immediately.
 func (h *Handler) handleAdminDeleteDomainDocuments(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.admin != nil, "admin diagnostics") {
 		return
@@ -354,11 +341,8 @@ type adminDocumentsOverview struct {
 }
 
 // handleAdminDocumentsOverview backs the admin Overview page's summary
-// panels: document count per (top) domain, how recently pages were
-// crawled, how many distinct domains are indexed, and how documents are
-// distributed across version numbers. Registered as "GET
-// /admin/api/documents/overview", so the method is already guaranteed --
-// no separate check needed here.
+// panels. Registered as "GET /admin/api/documents/overview", so the
+// method is already guaranteed -- no separate check needed here.
 func (h *Handler) handleAdminDocumentsOverview(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.admin != nil, "admin diagnostics") {
 		return
@@ -743,15 +727,11 @@ type modelLister interface {
 	ListModels(ctx context.Context) ([]string, error)
 }
 
-// embeddingCandidateRequest is a not-yet-saved HTTP endpoint config --
-// handleAdminEmbeddingsModels and handleAdminEmbeddingsTest both probe
-// exactly this shape, so the admin's "Test connection"/"List models"
-// buttons on the endpoint add/edit subpage work against whatever's
-// currently typed into the form, before (or instead of) saving it. ID,
-// when set, names the already-saved endpoint this candidate is editing --
-// see resolveCandidateAPIKey, which uses it to fall back to the real
-// stored key when APIKey is left blank (the same "blank means unchanged"
-// convention embeddingEndpointRequest.APIKey already follows for saving).
+// embeddingCandidateRequest is a not-yet-saved HTTP endpoint config,
+// probed by handleAdminEmbeddingsModels/handleAdminEmbeddingsTest so the
+// "Test connection"/"List models" buttons work against the form as typed.
+// ID, when set, names the already-saved endpoint being edited -- see
+// resolveCandidateAPIKey for how a blank APIKey resolves from it.
 type embeddingCandidateRequest struct {
 	ID         string `json:"id"`
 	BaseURL    string `json:"base_url"`
@@ -764,18 +744,11 @@ func (req embeddingCandidateRequest) toEndpoint() domain.EmbeddingHTTPEndpoint {
 	return domain.EmbeddingHTTPEndpoint{BaseURL: req.BaseURL, APIKey: req.APIKey, Model: req.Model, Dimensions: req.Dimensions}
 }
 
-// resolveCandidateAPIKey returns e with its APIKey resolved the same way
-// handleAdminUpdateEmbeddingEndpoint's save path already treats a blank
-// APIKey field: "the admin didn't retype it, not that they want to test
-// with no key at all." The endpoint add/edit page never echoes a stored
-// key's real value back into the form (see embeddingEndpointResponse), so
-// without this, clicking "Test connection"/"List available models" on an
-// already-saved endpoint without retyping its key always sent an empty
-// one -- a guaranteed 401 against the real API, regardless of whether the
-// actually-stored key works fine. A blank APIKey with no ID (a brand new,
-// not-yet-saved endpoint) or a lookup failure (deleted concurrently, or no
-// embeddingEndpoints store configured) leaves e unchanged -- the caller's
-// existing "no BaseURL, or the request as typed" behavior.
+// resolveCandidateAPIKey treats a blank APIKey as "not retyped," not "no
+// key at all" -- the endpoint form never echoes a stored key back (see
+// embeddingEndpointResponse), so without this, testing an already-saved
+// endpoint without retyping its key would always 401. A blank APIKey with
+// no ID, or a failed lookup, leaves e unchanged.
 func (h *Handler) resolveCandidateAPIKey(ctx context.Context, e domain.EmbeddingHTTPEndpoint, id string) domain.EmbeddingHTTPEndpoint {
 	if e.APIKey != "" || id == "" || h.embeddingEndpoints == nil {
 		return e
@@ -798,17 +771,11 @@ type adminEmbeddingModelsResponse struct {
 	Error string `json:"error,omitempty"`
 }
 
-// handleAdminEmbeddingsModels lists the models a candidate HTTP endpoint
-// config (in the request body, not yet saved) reports (GET
-// {base_url}/models), so the endpoint add/edit subpage can prefill the
-// model field's suggestions instead of the admin having to already know
-// (or guess/mistype) a valid model ID. Returns an empty list (200, no
-// error) rather than attempting a call at all when base_url is blank --
-// there's nothing to ask. Unlike most admin endpoints, this has no
-// "not configured" state to gate on: h.newEmbedder is always set by New
-// (defaulting to bootstrap.NewHTTPEmbedder), since probing a candidate
-// endpoint has no optional cross-cutting dependency the way, say,
-// ScheduledCrawls does.
+// handleAdminEmbeddingsModels lists the models a candidate (not-yet-saved)
+// HTTP endpoint config reports, so the add/edit subpage can prefill model
+// suggestions. Returns an empty list (200) rather than calling out at all
+// when base_url is blank. No "not configured" gate: h.newEmbedder is
+// always set by New.
 func (h *Handler) handleAdminEmbeddingsModels(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
@@ -843,14 +810,11 @@ type adminEmbeddingTestResponse struct {
 	Error string `json:"error,omitempty"`
 }
 
-// handleAdminEmbeddingsTest makes one real Embed call (via h.newEmbedder --
-// bootstrap.NewHTTPEmbedder in production, faked out in tests) against a
-// candidate HTTP endpoint config (in the request body, not yet saved) so
-// the endpoint add/edit subpage can tell the admin immediately if the
-// base URL/model/API key they just entered doesn't actually work, rather
-// than that only surfacing on the next real search or recompute. See
-// handleAdminEmbeddingsModels' doc comment for why there's no "not
-// configured" gate here.
+// handleAdminEmbeddingsTest probes a candidate (not-yet-saved) HTTP
+// endpoint config with one real Embed call, so the add/edit subpage can
+// tell the admin immediately if it doesn't work, rather than only
+// surfacing on the next real search. No "not configured" gate, same as
+// handleAdminEmbeddingsModels.
 func (h *Handler) handleAdminEmbeddingsTest(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
@@ -864,12 +828,9 @@ func (h *Handler) handleAdminEmbeddingsTest(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, adminEmbeddingTestResponse{Error: h.testEmbeddingConnectivity(r.Context(), endpoint)})
 }
 
-// testEmbeddingConnectivity makes one real Embed call (via h.newEmbedder)
-// against e so a caller can tell immediately if a base URL/model/API key
-// combination doesn't actually work. A no-op (empty string, no network
-// call) when e.BaseURL is blank, or h.newEmbedder itself isn't set (a
-// Handler built without going through New, e.g. a test fixture that
-// doesn't care about this feature).
+// testEmbeddingConnectivity makes one real Embed call against e to check
+// a base URL/model/API key combination. A no-op when e.BaseURL is blank
+// or h.newEmbedder isn't set (a test fixture that skips New).
 func (h *Handler) testEmbeddingConnectivity(ctx context.Context, e domain.EmbeddingHTTPEndpoint) string {
 	if e.BaseURL == "" || h.newEmbedder == nil {
 		return ""
@@ -882,12 +843,10 @@ func (h *Handler) testEmbeddingConnectivity(ctx context.Context, e domain.Embedd
 	return ""
 }
 
-// persistSetting saves v (JSON-encoded) to the settings store under key, so
-// every other process's next poll picks up this edit -- a no-op when no
-// SettingsStore was configured (this process's in-memory update above still
-// applies either way). Encoding/save failures are logged, not surfaced to
-// the admin: the in-memory update already succeeded, and this is a
-// best-effort convenience knob, not a transactional write.
+// persistSetting saves v (JSON-encoded) under key so every other
+// process's next poll picks it up -- a no-op with no SettingsStore.
+// Failures are logged, not surfaced: the in-memory update already
+// succeeded, and this is a best-effort convenience, not a transactional write.
 func (h *Handler) persistSetting(ctx context.Context, key string, v interface{}) {
 	if h.settingsStore == nil {
 		return
@@ -988,15 +947,10 @@ func (h *Handler) encryptAPIKey(apiKey string) string {
 	return enc
 }
 
-// decryptAPIKey reverses encryptAPIKey for a stored value -- used by
-// resolveCandidateAPIKey to recover an already-saved endpoint's real key
-// for a connectivity/model-list probe. A decryption failure (this
-// process's key is nil, wrong, or the data is corrupt) is logged and
-// returns apiKey unchanged, the same "fail visibly, never send silently
-// garbled ciphertext as a Bearer token" contract bootstrap.
-// DecryptEndpointAPIKey documents -- an unchanged (still-encrypted) value
-// simply fails the probe's real HTTP call with its own 401, rather than
-// this helper masking the failure.
+// decryptAPIKey reverses encryptAPIKey for a stored value, used by
+// resolveCandidateAPIKey to recover a real key for a probe. A decryption
+// failure is logged and returns apiKey unchanged -- it then simply fails
+// the probe's HTTP call with its own 401, rather than masking the failure.
 func (h *Handler) decryptAPIKey(apiKey string) string {
 	dec, err := settingscrypto.Decrypt(h.settingsEncryptionKey, apiKey)
 	if err != nil {
@@ -1007,11 +961,9 @@ func (h *Handler) decryptAPIKey(apiKey string) string {
 }
 
 // handleAdminEmbeddingEndpoints lists (GET) or creates (POST) HTTP
-// embedding endpoint configs -- see domain.EmbeddingHTTPEndpoint. A
-// freshly created endpoint's ID is minted from its name (see
-// domain.NewEmbeddingEndpointID), deduped against every existing endpoint
-// ID plus the reserved "hash" (the built-in provider's own ID), so it can
-// never collide with either.
+// embedding endpoint configs. A freshly created endpoint's ID is minted
+// from its name, deduped against every existing ID plus the reserved
+// "hash" (the built-in provider's own ID).
 func (h *Handler) handleAdminEmbeddingEndpoints(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.embeddingEndpoints != nil, "embedding endpoints") {
 		return
@@ -1071,15 +1023,11 @@ func (h *Handler) handleAdminGetEmbeddingEndpoint(w http.ResponseWriter, r *http
 	respondOrNotFound(w, err, ports.ErrEmbeddingEndpointNotFound, "embedding endpoint not found", toEmbeddingEndpointResponse(e))
 }
 
-// handleAdminUpdateEmbeddingEndpoint replaces an endpoint's editable fields
-// -- name, base URL, model, dimensions, rate limit, enabled, chunk size,
-// tokenize URL. APIKey is the one exception to "PATCH is a full replace":
-// since a GET response never
-// echoes its real value, a blank submission means "leave it as it was,"
-// not "clear it" -- req.ClearAPIKey is the explicit way to actually remove
-// it instead. The endpoint's ID is never editable once created (it's baked
-// into document_embeddings.provider and the ANN column/index names for
-// every vector already stored under it).
+// handleAdminUpdateEmbeddingEndpoint replaces an endpoint's editable
+// fields. APIKey is the one exception to "PATCH is a full replace": since
+// GET never echoes its real value, blank means "unchanged," not "clear
+// it" -- req.ClearAPIKey removes it explicitly. ID is never editable
+// once created (it's baked into document_embeddings.provider and ANN names).
 func (h *Handler) handleAdminUpdateEmbeddingEndpoint(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.embeddingEndpoints != nil, "embedding endpoints") {
 		return
@@ -1233,14 +1181,10 @@ func (h *Handler) handleAdminOverrides(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleAdminCrawlJobs serves the Jobs collection itself: GET lists every
-// job, and DELETE clears every already-ended one (done/failed/cancelled),
-// leaving queued/running jobs untouched -- the admin Jobs page's "Clear
-// ended jobs" button. Both live on this one path (rather than DELETE going
-// to a separate "/clear-ended" sub-path) specifically to avoid colliding
-// with the "GET /admin/api/crawl/jobs/{id}" wildcard registered below,
-// which would otherwise treat a literal "clear-ended" path segment as a
-// job ID to look up.
+// handleAdminCrawlJobs serves the Jobs collection: GET lists every job,
+// DELETE clears every ended one (the "Clear ended jobs" button). Both
+// live on this path rather than a separate "/clear-ended" sub-path, to
+// avoid colliding with the "{id}" wildcard route below.
 func (h *Handler) handleAdminCrawlJobs(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.jobs != nil, "crawl jobs") {
 		return
@@ -1293,13 +1237,10 @@ func (h *Handler) handleAdminCancelCrawlJob(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// scheduledCrawlRequest is the wire shape for creating a crawl
-// (POST /admin/api/schedules) and replacing an existing one's editable
-// fields (PATCH /admin/api/schedules/{id}) -- there's no separate ad-hoc
-// "just run this once" request shape, and no explicit "recurring" flag
-// either: IntervalMinutes 0 (the default, left blank) means "run once";
-// a positive IntervalMinutes means "repeat on this cadence" -- see
-// toScheduledCrawl.
+// scheduledCrawlRequest is the wire shape for creating (POST) and
+// replacing (PATCH) a crawl -- no separate "just run once" shape or
+// explicit "recurring" flag: IntervalMinutes 0 means "run once," positive
+// means "repeat" -- see toScheduledCrawl.
 type scheduledCrawlRequest struct {
 	SeedURLs      []string `json:"seed_urls"`
 	MaxPages      int      `json:"max_pages"`
@@ -1401,19 +1342,11 @@ func toScheduledCrawlResponse(s domain.ScheduledCrawl) scheduledCrawlResponse {
 	}
 }
 
-// toScheduledCrawl builds the domain.ScheduledCrawl req describes -- shared
-// by handleAdminSchedules' POST (a new crawl) and handleAdminUpdateSchedule
-// (replacing an existing one's editable fields), since both otherwise
-// build the identical fields from req by hand. Recurring is derived from
-// IntervalMinutes rather than a separate request field -- a positive
-// interval means "repeat," 0 means "run once." A recurring entry's first
-// run is interval_minutes from now, same rule a freshly created and a
-// just-edited one both follow; a non-recurring (one-off) entry is due
-// right now instead, since there's no interval to wait out -- the
-// scheduler's own next tick runs it once, then disables it (see
-// application.TriggerDueCrawls). created_at is only meaningful for a new
-// entry (UpdateScheduledCrawl's SQL never touches that column, so passing
-// "now" there too is harmless).
+// toScheduledCrawl builds the domain.ScheduledCrawl req describes, shared
+// by handleAdminSchedules' POST and handleAdminUpdateSchedule's PATCH.
+// Recurring is derived from IntervalMinutes (positive = repeat, 0 = run
+// once); a recurring entry's first run is interval_minutes from now, a
+// one-off's is right now. created_at is harmless-if-ignored for an update.
 func (req scheduledCrawlRequest) toScheduledCrawl(id string, enabled bool, now time.Time) domain.ScheduledCrawl {
 	recurring := req.IntervalMinutes > 0
 	next := now
@@ -1461,18 +1394,11 @@ func validateScheduledCrawlRequest(w http.ResponseWriter, req scheduledCrawlRequ
 	return true
 }
 
-// handleAdminSchedules lists (GET) or creates (POST) crawls -- every crawl
-// an admin triggers, one-off or recurring, is one of these. A freshly
-// created entry is always enabled; a recurring one's first run is
-// interval_minutes from now (same rule editing an existing entry's options
-// applies -- see handleAdminUpdateSchedule), a non-recurring one's is
-// right now.
-//
-// POST enforces at most one schedule per domain: a submission whose first
-// seed URL's host matches an existing schedule's first seed URL's host
-// replaces that schedule's options in place (same ID, re-enabled, next run
-// recomputed) instead of inserting a second row -- crawling a domain that's
-// already scheduled is "update the schedule," not "add a competing one."
+// handleAdminSchedules lists (GET) or creates (POST) crawls -- every one
+// an admin triggers, one-off or recurring, is one of these; a freshly
+// created entry is always enabled. POST enforces at most one schedule per
+// domain: a submission matching an existing schedule's seed host replaces
+// its options in place instead of inserting a second row.
 func (h *Handler) handleAdminSchedules(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.scheduledCrawls != nil, "scheduled crawls") {
 		return
@@ -1524,11 +1450,9 @@ func (h *Handler) handleAdminSchedules(w http.ResponseWriter, r *http.Request) {
 }
 
 // scheduledCrawlIDForSameDomain returns the ID of an already-existing
-// schedule whose first seed URL shares a host with seedURLs' first entry,
-// or "" if there is none (including when seedURLs is empty or unparseable
-// -- never treated as a match). Used by handleAdminSchedules' POST to keep
-// "one schedule per domain" true instead of relying on every caller to
-// check first.
+// schedule sharing seedURLs' first host, or "" if none (empty/unparseable
+// seedURLs never match) -- keeps handleAdminSchedules' POST "one schedule
+// per domain" true.
 func (h *Handler) scheduledCrawlIDForSameDomain(ctx context.Context, seedURLs []string) (string, error) {
 	if len(seedURLs) == 0 {
 		return "", nil
@@ -1549,19 +1473,10 @@ func (h *Handler) scheduledCrawlIDForSameDomain(ctx context.Context, seedURLs []
 	return "", nil
 }
 
-// handleAdminUpdateSchedule replaces a schedule's editable fields --
-// seed(s), page budget, per-crawl options, interval and enabled flag.
-// Editing reschedules it: next_run_at becomes interval_minutes from now,
-// same as a freshly created schedule, rather than trying to preserve a
-// stale cadence computed under the old interval.
-//
-// Cookie/BasicAuthUser/BasicAuthPass are the one exception to "PATCH is a
-// full replace": since a GET response never echoes their real value (see
-// scheduledCrawlResponse), the edit form can't pre-fill them, so a blank
-// submission for one of them means "leave it as it was," not "clear it" --
-// otherwise saving any other change to a schedule that already had
-// credentials would silently wipe them. req.ClearCookie/ClearBasicAuth are
-// the explicit way to actually remove one instead.
+// handleAdminUpdateSchedule replaces a schedule's editable fields and
+// reschedules it (next_run_at = interval_minutes from now). Cookie/
+// BasicAuthUser/BasicAuthPass are the exception to "PATCH is a full
+// replace" -- GET never echoes them, so blank means "unchanged."
 func (h *Handler) handleAdminUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.scheduledCrawls != nil, "scheduled crawls") {
 		return
@@ -1718,12 +1633,10 @@ type adminPageRankRecomputeResponse struct {
 	AvgPageRank float64 `json:"avg_pagerank"`
 }
 
-// handleAdminPageRankRecompute runs a full PageRank recompute synchronously
-// and reports exactly what it did -- documents scored, iterations run,
-// final convergence delta, and wall-clock duration -- rather than the
-// fire-and-forget pattern the bulk document delete uses. An admin clicking
-// "force recalculation" is explicitly waiting to see the result of this
-// specific run, so there's nothing to gain from returning early.
+// handleAdminPageRankRecompute runs a full PageRank recompute
+// synchronously (unlike bulk document delete's fire-and-forget) and
+// reports documents scored, iterations, final delta, and duration -- an
+// admin clicking "force recalculation" is waiting to see this run's result.
 func (h *Handler) handleAdminPageRankRecompute(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.pageRank != nil, "pagerank") {
 		return
@@ -1750,14 +1663,10 @@ func (h *Handler) handleAdminPageRankRecompute(w http.ResponseWriter, r *http.Re
 type adminEmbeddingRecomputeStatusResponse struct {
 	TotalDocs  int  `json:"total_docs"`
 	InProgress bool `json:"in_progress"`
-	// LastRunAt/Documents/Failed/DurationMs reflect
-	// domain.EmbeddingRecomputeStatus, persisted by any admin-server
-	// instance that ran a recompute -- so this shows the real
-	// cross-process state, not just whatever this one browser tab
-	// remembers triggering. No omitempty on Documents/Failed/DurationMs:
-	// a run over an empty corpus legitimately recomputes 0 documents, and
-	// omitempty would silently drop that real value the same way a
-	// genuinely-missing one would.
+	// LastRunAt/Documents/Failed/DurationMs reflect the persisted
+	// cross-process status, not just this browser tab's own trigger. No
+	// omitempty on Documents/Failed/DurationMs: 0 is a legitimate result
+	// (an empty corpus), not the same as "missing".
 	LastRunAt  *time.Time `json:"last_run_at,omitempty"`
 	Documents  int        `json:"documents"`
 	Failed     int        `json:"failed"`
@@ -1787,21 +1696,9 @@ func (h *Handler) handleAdminEmbeddingsRecomputeStatus(w http.ResponseWriter, r 
 }
 
 // handleAdminEmbeddingsRecomputeStart kicks off a full-corpus embedding
-// recompute in the background and returns immediately -- unlike PageRank's
-// "force recalculation" (a single fast batched DB read+write, synchronous
-// in its own handler), recomputing embeddings means one Embed call per
-// document against whatever provider is currently configured, which for
-// the HTTP provider is a real network round-trip per document; waiting
-// for that inline would tie up this request (and the admin's browser tab)
-// for as long as the whole corpus takes. The fire-and-forget goroutine
-// uses context.Background(), not r.Context(), so it keeps running to
-// completion after this request returns -- same reasoning as bulk
-// document delete and a triggered crawl job.
-//
-// Rejects a second trigger while one is already running (409): recomputing
-// the same corpus twice concurrently wastes embeddings-endpoint calls (and
-// rate-limit budget) for no benefit, since the second run would just
-// recompute the same documents the first one is already working through.
+// recompute in the background -- unlike PageRank's synchronous recompute,
+// this is a real per-document network round-trip, too slow to do inline.
+// Rejects a second trigger while one is running (409).
 func (h *Handler) handleAdminEmbeddingsRecomputeStart(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.embeddingRepo != nil && len(h.embedders) > 0, "embedding recompute") {
 		return
@@ -1822,12 +1719,9 @@ func (h *Handler) handleAdminEmbeddingsRecomputeStart(w http.ResponseWriter, r *
 
 type adminContentDedupStatusResponse struct {
 	InProgress bool `json:"in_progress"`
-	// LastRunAt/GroupsFound/DocumentsMerged/DurationMs reflect
-	// domain.ContentDedupStatus, persisted by any process that ran a
-	// recompute (the periodic ticker in cmd/crawl, a post-crawl trigger, or
-	// this page's own "recompute now" button) -- so this shows the real
-	// cross-process state, not just whatever this one browser tab remembers
-	// triggering.
+	// LastRunAt/GroupsFound/DocumentsMerged/DurationMs reflect the
+	// persisted cross-process status (cmd/crawl's ticker, a post-crawl
+	// trigger, or this page's own button), not just this tab's trigger.
 	LastRunAt       *time.Time `json:"last_run_at,omitempty"`
 	GroupsFound     int        `json:"groups_found"`
 	DocumentsMerged int        `json:"documents_merged"`
@@ -1852,14 +1746,10 @@ func (h *Handler) handleAdminContentDedupStatus(w http.ResponseWriter, r *http.R
 }
 
 // handleAdminContentDedupRecomputeStart kicks off a full-corpus content
-// dedup pass in the background and returns immediately -- mirrors
-// handleAdminEmbeddingsRecomputeStart's fire-and-forget shape (not
-// PageRank's synchronous one): a corpus-wide fingerprint scan plus, for the
-// simhash method, banding/pairwise comparisons, can take real time on a
-// large corpus. Rejects a second trigger while one is already running
-// (409): a concurrent second pass would just re-scan the same
-// not-yet-merged documents the first one is already working through, for
-// no benefit and real DB contention (each merge is its own transaction).
+// dedup pass in the background, mirroring
+// handleAdminEmbeddingsRecomputeStart's fire-and-forget shape -- a
+// corpus-wide scan (plus simhash banding) can take real time. Rejects a
+// second trigger while one is running (409): real DB contention otherwise.
 func (h *Handler) handleAdminContentDedupRecomputeStart(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.contentDedupRepo != nil, "content dedup") {
 		return
@@ -1978,14 +1868,10 @@ func (h *Handler) handleAdminDatabase(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Lookback windows for the admin Overview page's tier-2 trend/breakdown
-// panels (see handleAdminOverviewMetrics) -- the crawl-outcome donut and
-// documents-indexed trend look back 30 days, the two crawl_job_pages-backed
-// panels (fetch throughput/outcome breakdown, fetch duration trend) look
-// back a narrower 14 days so their one-bar/one-point-per-day charts stay
-// readable rather than cramming a full month of daily crawl activity, which
-// is typically much higher-volume than daily document counts, into the
-// same width.
+// Lookback windows for the admin Overview page's tier-2 panels: the
+// crawl-outcome donut and documents-indexed trend look back 30 days; the
+// higher-volume crawl_job_pages panels use a narrower 14 to keep their
+// one-bar/point-per-day charts readable.
 const (
 	overviewJobOutcomeDays     = 30
 	overviewDocumentsTrendDays = 30
@@ -2056,18 +1942,10 @@ type adminOverviewMetrics struct {
 	PageRankTotalDocs       int     `json:"pagerank_total_docs"`
 }
 
-// handleAdminOverviewMetrics backs the admin Overview page's operational
-// panels beyond the corpus summary handleAdminDocumentsOverview already
-// covers: crawl job/schedule health, DB pool utilization, and the tier-2
-// trend/breakdown charts (crawl outcomes, fetch throughput, documents
-// indexed over time, fetch duration, PageRank distribution). Registered as
-// "GET /admin/api/overview/metrics", so the method is already guaranteed.
-//
-// Only h.admin is required (matching every other admin-diagnostics
-// endpoint) -- h.jobs/h.scheduledCrawls are consulted only if configured,
-// each degrading to its zero-valued fields rather than failing the whole
-// response, since production always wires all three together (cmd/admin)
-// but nothing here strictly depends on that.
+// handleAdminOverviewMetrics backs the Overview page's operational panels
+// beyond handleAdminDocumentsOverview's corpus summary: crawl/schedule
+// health, DB pool stats, and tier-2 trend charts. Only h.admin is
+// required; h.jobs/h.scheduledCrawls degrade to zero-valued fields if unset.
 func (h *Handler) handleAdminOverviewMetrics(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.admin != nil, "admin diagnostics") {
 		return
@@ -2170,12 +2048,10 @@ func (h *Handler) handleAdminOverviewMetrics(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// groupDailyFetchOutcomes regroups sqlrepo's flat (day, status, count) rows
-// -- one row per outcome actually seen that day -- into one entry per day
-// with every outcome nested underneath, the shape the Overview page's
-// stacked-bar chart wants to render directly. Rows arrive already ordered
-// by day, so a single pass (tracking the last day seen) is enough, no
-// separate sort/index step.
+// groupDailyFetchOutcomes regroups sqlrepo's flat (day, status, count)
+// rows into one entry per day with every outcome nested underneath, the
+// shape the Overview page's stacked-bar chart wants. Rows arrive already
+// ordered by day, so a single pass suffices.
 func groupDailyFetchOutcomes(rows []domain.DailyFetchOutcome) []adminDailyFetchOutcome {
 	var out []adminDailyFetchOutcome
 	for _, row := range rows {

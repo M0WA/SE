@@ -2,13 +2,11 @@ package domain
 
 import "sync"
 
-// CorpusStatsCache holds the corpus-wide statistics BM25 scoring needs for
-// every query term -- total document count and average document length --
-// kept in memory and refreshed on a timer (see bootstrap.SyncCorpusStats)
-// rather than recomputed via a full-table COUNT/AVG scan on every search
-// request. Safe for concurrent use, following the same RWMutex-guarded
-// live-value pattern as TuningSettings/OperationalSettings: read on every
-// search, written only by the background refresh.
+// CorpusStatsCache holds the corpus-wide statistics BM25 scoring needs
+// (doc count, average doc length), refreshed on a timer (see
+// bootstrap.SyncCorpusStats) rather than recomputed on every search.
+// Safe for concurrent use: read on every search, written only by the
+// background refresh.
 type CorpusStatsCache struct {
 	mu        sync.RWMutex
 	totalDocs int

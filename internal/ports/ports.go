@@ -34,14 +34,10 @@ type FetchOptions struct {
 	// case already uses above.
 	FetchTimeoutSeconds int
 	MaxResponseBytes    int
-	// Renderer selects how this one fetch should be done: "" (the zero
-	// value, domain.RendererDefault) defers to whatever renderer the
-	// caller would otherwise use (typically the Tuning page's global
-	// default); domain.RendererNone/RendererChromium/RendererFirefox
-	// override it explicitly for this fetch. Consulted only by a
-	// render-aware AuthFetcher (see application.RenderAwareFetcher) --
-	// httpfetcher.Fetcher itself ignores it entirely, since it only ever
-	// does plain HTTP.
+	// Renderer selects how this fetch is done: "" defers to the caller's
+	// default (typically the Tuning page's), RendererNone/Chromium/Firefox
+	// override it. Only application.RenderAwareFetcher consults this --
+	// httpfetcher.Fetcher ignores it, since it only ever does plain HTTP.
 	Renderer string
 	// NoRender forces the plain HTTP path regardless of Renderer or any
 	// configured default -- set by crawlLoop's own sitemap.xml fetch,
@@ -57,13 +53,10 @@ type AuthFetcher interface {
 	FetchWithOptions(ctx context.Context, url string, opts FetchOptions) (string, error)
 }
 
-// Renderer executes a page in a real (headless) browser -- running its
-// JavaScript and waiting for it to finish loading -- before returning its
-// final rendered HTML, for a site whose real content only exists after
-// client-side rendering. Implemented by internal/adapters/browserfetcher,
-// one instance per browser engine (Chromium, Firefox); application.
-// RenderAwareFetcher dispatches to the right one based on FetchOptions.
-// Renderer / the Tuning page's configured default.
+// Renderer executes a page in a real headless browser and returns its final
+// rendered HTML, for a site whose real content only exists after
+// client-side JS runs. Implemented per browser engine (Chromium, Firefox);
+// application.RenderAwareFetcher dispatches based on FetchOptions.Renderer.
 type Renderer interface {
 	Render(ctx context.Context, url string, opts FetchOptions) (string, error)
 }
@@ -81,77 +74,41 @@ type EmbeddingProvider interface {
 // SQLRepository is the port to the relational database.
 type SQLRepository interface {
 	// SaveDocument upserts doc, archiving its previous content to
-	// document_versions first if it changed -- maxVersions bounds how
-	// many versions (current plus archived) survive that archiving,
-	// pruning the oldest beyond it in the same write. See
-	// domain.OperationalSettingsValues.MaxDocumentVersions. titleWeight is
-	// how many times the title is counted into the indexed token stream
-	// ahead of the body -- see domain.OperationalSettingsValues.TitleWeight.
-	// embeddings holds one vector per currently-enabled provider (see
-	// domain.OperationalSettingsValues.EmbeddingHashEnabled and every
-	// enabled domain.EmbeddingHTTPEndpoint, keyed by domain.
-	// EmbeddingProviderHash or the endpoint's own ID) -- every one of them
-	// is upserted into document_embeddings in the same write.
+	// document_versions first if changed (maxVersions bounds how many
+	// survive, pruning the oldest). titleWeight repeats the title in the
+	// indexed token stream ahead of the body. embeddings (one vector per
+	// enabled provider, keyed by provider ID) are upserted in the same write.
 	SaveDocument(ctx context.Context, doc domain.Document, embeddings map[string][]float32, maxVersions, titleWeight int) error
-	// PostingsForTerms batch-fetches postings for every given term in a
-	// single query (a "WHERE term IN (...)" join against documents), so a
-	// multi-term search issues one round trip regardless of how many unique
-	// terms it has -- rather than one query per term. Returned PostingStats
-	// carry TermFreq/DocLength/DocFreq only; TotalDocs/AvgDocLen are left
-	// zero for the caller to fill in from its own corpus-wide stats (see
-	// domain.CorpusStatsCache), since those don't vary per term and would
-	// otherwise be refetched redundantly for every term in the batch.
+	// PostingsForTerms batch-fetches postings for every term in one query,
+	// so a multi-term search issues one round trip, not one per term.
+	// TotalDocs/AvgDocLen are left zero -- the caller fills them in from its
+	// own corpus-wide stats cache rather than refetching them per term.
 	PostingsForTerms(ctx context.Context, terms []string) (map[string][]domain.PostingStats, error)
 	CorpusStats(ctx context.Context) (totalDocs int, avgDocLen float64, err error)
 	// VocabularyStats reports the corpus's total distinct-term count, plus a
-	// limit/offset page of its terms ordered by sortBy ("term", "doc_freq",
-	// or "total_freq"; anything else falls back to "doc_freq") and sortDir
-	// ("asc" or "desc"; anything else falls back to "desc") -- backing the
-	// admin vocabulary page's pagination and sortable columns. When search
-	// is non-empty, the listing (and matchedCount) is additionally
-	// restricted to terms containing search (a substring match); vocabSize
-	// itself always reflects the whole corpus, unaffected by search.
-	// matchedCount is the total number of terms matching search (before
-	// limit/offset are applied, so the caller can compute a page count),
-	// equal to vocabSize when search is empty.
+	// limit/offset page of terms ordered by sortBy/sortDir (each falls back
+	// to a default on an unrecognized value) -- backs the admin vocabulary
+	// page. A non-empty search restricts the listing and matchedCount to a
+	// substring match; vocabSize always reflects the whole corpus.
 	VocabularyStats(ctx context.Context, limit, offset int, search, sortBy, sortDir string) (vocabSize, matchedCount int, terms []domain.TermStat, err error)
-	// AllTerms returns every distinct term the corpus's postings hold, each
-	// with its doc/total frequency -- the full vocabulary, unlike
-	// VocabularyStats' topN-bounded listing -- for domain.VocabularyCache
-	// (refreshed by bootstrap.SyncVocabulary) to check a query term with
-	// zero postings hits against for a bounded-edit-distance near-miss (see
-	// domain.NearestTerm).
+	// AllTerms returns every distinct term with its doc/total frequency --
+	// the full vocabulary (unlike VocabularyStats' bounded listing), used by
+	// domain.VocabularyCache for fuzzy near-miss matching (domain.NearestTerm).
 	AllTerms(ctx context.Context) ([]domain.TermStat, error)
 	// EmbeddingsForDocs batch-fetches provider's embeddings for exactly the
-	// given doc IDs (typically a query's BM25-hit set), so scoring a
-	// candidate never requires a full-corpus scan. Each result carries its
-	// norm alongside its vector (see domain.EmbeddedVector) -- precomputed
-	// once, at SaveDocument time, rather than recomputed from scratch on
-	// every request that scores the document. provider is
-	// domain.EmbeddingProviderHash or a configured domain.
-	// EmbeddingHTTPEndpoint.ID -- typically whichever domain.
-	// OperationalSettingsValues.EmbeddingProvider names as active for
-	// search.
+	// given doc IDs (typically a query's BM25-hit set), avoiding a
+	// full-corpus scan. Each result's norm (domain.EmbeddedVector) was
+	// precomputed at SaveDocument time, not recomputed per request.
 	EmbeddingsForDocs(ctx context.Context, ids []string, provider string) (map[string]domain.EmbeddedVector, error)
 	// SampleEmbeddings returns up to limit of provider's embeddings from
 	// across the corpus, so a purely semantic match (no BM25 hits at all)
 	// can still be found -- bounded regardless of how large the corpus is,
 	// unlike a full "every document" scan.
 	SampleEmbeddings(ctx context.Context, limit int, provider string) (map[string]domain.EmbeddedVector, error)
-	// TopSemanticMatches finds queryVec's approximate nearest neighbors
-	// within provider's embeddings by cosine distance via Postgres
-	// pgvector's HNSW-accelerated "ORDER BY embedding_vector_<provider>
-	// <=> $1 LIMIT $2" query, used in place of SampleEmbeddings to fill a
-	// search's semantic candidate pool whenever ANN is actually available
-	// for provider. ok is false (with a nil error and nil map) when it
-	// isn't -- a non-Postgres dialect, a Postgres server without the
-	// pgvector extension, or this process's sqlrepo.Repository.EnableANN
-	// never having succeeded for provider -- telling the caller
-	// (hybridSearchService.Search) to fall back to SampleEmbeddings's
-	// bounded brute-force sample exactly as it did before ANN existed. A
-	// non-nil error means the ANN query itself failed (a real fault, not an
-	// availability question) and should be treated like any other
-	// repository error.
+	// TopSemanticMatches finds queryVec's nearest neighbors via Postgres
+	// pgvector's HNSW index, used instead of SampleEmbeddings when ANN is
+	// available for provider. ok is false when it isn't (caller falls back
+	// to SampleEmbeddings); a non-nil error is a real query fault.
 	TopSemanticMatches(ctx context.Context, queryVec []float32, limit int, provider string) (matches map[string]domain.EmbeddedVector, ok bool, err error)
 	// DocumentsByIDs batch-fetches documents for the given IDs in one
 	// round trip (a missing ID is simply absent from the result, not an
@@ -166,98 +123,64 @@ type SQLRepository interface {
 	// to sort the fetched candidates itself.
 	DocumentsByIDsSortedByCrawledAt(ctx context.Context, ids []string) ([]domain.Document, error)
 	// DocumentIDsByHost returns the IDs of every document whose host exactly
-	// matches one of the given hosts, or is a subdomain of one (mirroring
-	// domain.ParsedQuery.SiteAllowed's matching rule), served by
-	// idx_documents_host. Used to force a query's site: matches into the
-	// search candidate set directly, since they otherwise have no guarantee
-	// of appearing in the BM25-hit set or the bounded semantic sample.
+	// matches one of hosts or is a subdomain of one -- forces a query's
+	// site: matches into the search candidate set, since they otherwise
+	// have no guarantee of appearing in the BM25-hit or semantic sample.
 	DocumentIDsByHost(ctx context.Context, hosts []string) ([]string, error)
-	// ResolveAliasHosts returns the actual documents.host of every canonical
-	// document reachable through a document_aliases row whose own host
-	// exactly matches one of hosts, or is a subdomain of one (same matching
-	// rule as DocumentIDsByHost/domain.ParsedQuery.SiteAllowed). Used to
-	// expand a query's site:/-site: host list before SiteAllowed filtering,
-	// since SiteAllowed compares a candidate's own (canonical) host, which
-	// no longer matches an alias host a user might type after a merge or a
-	// www fold -- DocumentIDsByHost alone gets the canonical document into
-	// the candidate set, but SiteAllowed still needs its real host in the
-	// list to keep it there.
+	// ResolveAliasHosts returns the real documents.host of every canonical
+	// document reachable through an alias whose host matches hosts (same
+	// rule as DocumentIDsByHost) -- expands a site: host list before
+	// SiteAllowed filtering, which compares a candidate's own real host,
+	// not an alias host a user might type after a merge or www fold.
 	ResolveAliasHosts(ctx context.Context, hosts []string) ([]string, error)
-	// HostsIndexed reports, for each of hosts, whether any document is
-	// already indexed for it (exact host match or a subdomain of it, same
-	// matching rule as DocumentIDsByHost) -- used by a crawl's
-	// FollowIndexedDomains option to widen its link scope to any domain the
-	// corpus already has content for, without needing every document ID.
-	// A host absent from the result was not found indexed.
+	// HostsIndexed reports, for each host, whether any document is already
+	// indexed for it (same matching rule as DocumentIDsByHost) -- used by
+	// FollowIndexedDomains to widen link scope without needing every ID.
 	HostsIndexed(ctx context.Context, hosts []string) (map[string]bool, error)
 	ListDocuments(ctx context.Context, limit int, host string) ([]domain.IndexedDocument, error)
 	DeleteDocument(ctx context.Context, docID string) error
 	// RecordDocumentAlias upserts one document_aliases row: aliasURL's
-	// content lives under canonicalID, not its own document row -- called
-	// by application.crawlLoop when a fetched page's <link rel="canonical">
-	// points elsewhere (reason domain.DocumentAliasReasonCanonicalTag), and
-	// by application.RunContentDedupJob's MergeDocuments when two
-	// independently-crawled documents turn out to have duplicate/near-
-	// duplicate content (reason domain.DocumentAliasReasonContentExact/
-	// ContentSimHash). canonicalID is deliberately NOT required to already
-	// exist in documents -- the canonical target may not be crawled yet
-	// (a forward-declared alias); it resolves itself once that document is
-	// actually saved.
+	// content lives under canonicalID, not its own document row -- used for
+	// both a <link rel="canonical"> redirect and a content-dedup merge.
+	// canonicalID need not already exist in documents (a forward-declared
+	// alias resolves once that document is actually saved).
 	RecordDocumentAlias(ctx context.Context, aliasURL, canonicalID, reason string) error
 }
 
 // PageRankRepository is the narrow port application.RunPageRankJob needs:
-// load the current link graph, then write back every document's freshly
-// computed score. Implemented by the same *sqlrepo.Repository every
-// process already opens -- cmd/crawl (which owns the periodic recompute
-// ticker, and triggers one more run right after each crawl completes) is
+// load the current link graph, then write back each document's fresh
+// score. cmd/crawl (periodic ticker + one run right after each crawl) is
 // the only caller.
 type PageRankRepository interface {
-	// LinkGraph loads the entire crawled link graph as an adjacency map:
-	// each document's ID to the IDs of every other indexed document it
-	// links to (a link whose target URL was never crawled/indexed has no
-	// document ID to report and is simply omitted -- domain.PageRank never
-	// sees it). Loaded in one query rather than one row/document at a
-	// time.
+	// LinkGraph loads the whole crawled link graph as an adjacency map (doc
+	// ID -> IDs it links to) in one query; a link to a never-crawled URL is
+	// simply omitted.
 	LinkGraph(ctx context.Context) (map[string][]string, error)
-	// UpdatePageRanks batch-writes every given document ID's freshly
-	// computed PageRank score to documents.pagerank. A document not
-	// mentioned in scores (e.g. one with neither an incoming nor an
-	// outgoing link, so it never appeared in the link graph at all) is
-	// left untouched, keeping whatever neutral default or prior score it
-	// already had rather than being zeroed out.
+	// UpdatePageRanks batch-writes each given ID's fresh score. A document
+	// absent from scores (no in/out links at all) is left untouched, not
+	// zeroed.
 	UpdatePageRanks(ctx context.Context, scores map[string]float64) error
 }
 
 // ContentDedupRepository is the narrow port application.RunContentDedupJob
-// needs: read every document's fingerprint, then merge whatever groups of
-// duplicates it finds. Implemented by the same *sqlrepo.Repository every
-// process already opens -- cmd/crawl (which owns the periodic recompute
-// ticker, and triggers one more run right after each crawl completes,
-// mirroring PageRankRepository's own cmd/crawl wiring) is the only caller.
+// needs: read every document's fingerprint, then merge whatever duplicate
+// groups it finds. cmd/crawl is the only caller, mirroring
+// PageRankRepository's wiring.
 type ContentDedupRepository interface {
 	// AllDocumentFingerprints lists every document's id/url/host/
-	// content_hash/simhash/crawled_at in one query -- just enough for
-	// RunContentDedupJob to group duplicates and report a human-readable
-	// merge result, not the full domain.Document (text/embeddings would be
-	// wasted memory across an entire corpus scan).
+	// content_hash/simhash/crawled_at in one query -- just enough to group
+	// duplicates, not the full domain.Document (wasted memory at this scale).
 	AllDocumentFingerprints(ctx context.Context) ([]domain.DocumentFingerprint, error)
 	// MergeDocuments folds every loserIDs document into canonicalID: each
-	// loser's own document_aliases entries are repointed to canonicalID
-	// (path compression, for a document that itself was already an alias
-	// target), a fresh alias row is recorded for the loser's own URL, and
-	// the loser's document row (and its postings/document_versions/
-	// document_embeddings/links, the same cascade DeleteDocument already
-	// performs) is removed. reason is domain.DocumentAliasReasonContentExact
-	// or ContentSimHash, recorded on every alias row this call creates.
+	// loser's own aliases are repointed (path compression), a fresh alias
+	// is recorded for its URL, and its document row is removed via the same
+	// cascade DeleteDocument uses. reason records why on each alias row.
 	MergeDocuments(ctx context.Context, canonicalID string, loserIDs []string, reason string) error
 }
 
 // EmbeddingRepository is the narrow slice of *sqlrepo.Repository
-// application.RunEmbeddingRecomputeJob needs -- iterate every document's
-// ID, fetch each one's already-stored Text, and overwrite just its
-// embedding, without touching anything else SaveDocument would (postings,
-// links, document_versions, pagerank, host).
+// application.RunEmbeddingRecomputeJob needs: iterate every document ID,
+// fetch its stored Text, and overwrite just its embedding.
 type EmbeddingRepository interface {
 	// AllDocumentIDs lists every document ID in the corpus, ordered so
 	// repeated calls (and the batches RunEmbeddingRecomputeJob fetches
@@ -267,25 +190,17 @@ type EmbeddingRepository interface {
 	// AdminRepository's identical method (implemented once, satisfying
 	// both narrow ports).
 	DocumentsByIDs(ctx context.Context, ids []string) (map[string]domain.Document, error)
-	// UpdateEmbedding overwrites one document's embedding for every
-	// provider present in embeddings (and, when Postgres pgvector ANN is
-	// enabled for this process for a given provider, that provider's own
-	// embedding_vector_<provider> column too) -- the narrow write
-	// SaveDocument's embedding-writing half performs, without re-tokenizing
-	// text, without touching postings/links/versions/pagerank, and without
-	// archiving a new document_versions row (the text itself hasn't
-	// changed, only its vector representation).
+	// UpdateEmbedding overwrites one document's embedding for every provider
+	// in embeddings (and its ANN pgvector column, when enabled) -- unlike
+	// SaveDocument, never re-tokenizes text or touches postings/links/
+	// versions/pagerank, since only the vector changed.
 	UpdateEmbedding(ctx context.Context, id string, embeddings map[string][]float32) error
 }
 
-// SessionStore backs the admin/search login system's session tokens.
-// Implemented by *sqlrepo.Repository (a "sessions" table any process
-// sharing the database can read) so a login on one process -- e.g.
-// admin-server's /login -- is recognized by every other process serving
-// the same site -- e.g. search-server, once the public search page also
-// requires authentication -- rather than only the process that issued the
-// token, which an in-memory store could never do across separate OS
-// processes.
+// SessionStore backs the admin/search login system's session tokens, via a
+// shared "sessions" table so a login on one process (e.g. admin-server's
+// /login) is recognized by every process serving the site -- something an
+// in-memory store could never do across separate OS processes.
 type SessionStore interface {
 	// CreateSession persists a freshly issued token, valid until expiresAt.
 	CreateSession(ctx context.Context, token string, expiresAt time.Time) error
@@ -354,19 +269,13 @@ type AdminRepository interface {
 	// DailyFetchDuration reports each day's mean crawl_job_pages.duration_ms
 	// at or after since -- the admin Overview page's fetch-duration trend.
 	DailyFetchDuration(ctx context.Context, since time.Time) ([]domain.DailyAvgDuration, error)
-	// PageRankHistogram buckets every document's pagerank into
-	// domain.PageRankHistogramBuckets equal-width bins spanning the
-	// corpus's own observed [min, max] range, alongside how many documents
-	// sit at or below domain.PageRankOrphanThreshold and the corpus's total
-	// document count -- the admin Overview page's PageRank distribution
-	// histogram and orphan-rate stat tile. All zero for an empty corpus.
+	// PageRankHistogram buckets every document's pagerank into equal-width
+	// bins spanning the corpus's observed range, plus how many sit at or
+	// below the orphan threshold and the total doc count. All zero when empty.
 	PageRankHistogram(ctx context.Context) (buckets []domain.PageRankBucket, orphanCount, totalDocs int, err error)
-	// ListDocumentAliasGroups pages through every canonical document that
-	// currently has at least one alias, grouped directly from the live
-	// document_aliases table (not a single run's in-memory result) so the
-	// admin content-dedup page's "what got merged" listing stays accurate
-	// across processes and over time. total is the total number of such
-	// groups (for pagination), independent of limit/offset.
+	// ListDocumentAliasGroups pages through every canonical document with
+	// at least one alias, read live from document_aliases (not a cached
+	// run) so the "what got merged" listing stays accurate over time.
 	ListDocumentAliasGroups(ctx context.Context, limit, offset int) (groups []domain.DocumentAliasGroup, total int, err error)
 }
 
@@ -387,11 +296,9 @@ const (
 type SearchQuery struct {
 	TopK int
 	Sort string
-	// ProviderWeights, when non-nil, fully replaces domain.
-	// OperationalSettingsValues.EmbeddingSearchWeights for this request
-	// only -- see hybridSearchService.Search. nil means "use the admin
-	// default"; an empty-but-non-nil map means "no semantic scoring at
-	// all for this request" (pure BM25), same as every weight being <= 0.
+	// ProviderWeights, when non-nil, fully replaces the admin default
+	// EmbeddingSearchWeights for this request only; an empty-but-non-nil
+	// map means pure BM25 (no semantic scoring), same as every weight <= 0.
 	ProviderWeights map[string]float64
 }
 
@@ -400,12 +307,10 @@ type SearchService interface {
 }
 
 // CrawlOptions is a single crawl request: seed URLs and page budget, plus
-// optional credentials for sites that require a session cookie or HTTP
-// Basic auth (applied to every fetch made during that crawl). RespectRobots
-// defaults to false (robots.txt is ignored) unless explicitly set; UserAgent
-// overrides the process's configured default for this crawl only.
-// UseSitemap defaults to false; when set, each seed's /sitemap.xml is
-// fetched and its URLs enqueued alongside normally discovered links.
+// optional credentials for sites needing a cookie or Basic auth.
+// RespectRobots defaults false; UserAgent overrides the process default for
+// this crawl only. UseSitemap, when set, also enqueues each seed's
+// /sitemap.xml URLs.
 type CrawlOptions struct {
 	SeedURLs      []string
 	MaxPages      int
@@ -414,55 +319,36 @@ type CrawlOptions struct {
 	BasicAuthPass string
 	RespectRobots bool
 	UserAgent     string
-	// LinkScope overrides the Tuning page's global default for how far
-	// this crawl follows discovered links -- "" (domain.LinkScopeDefault)
-	// means "use the global default," same convention Renderer already
-	// uses; domain.LinkScopeHost/LinkScopeDomain/LinkScopeAny choose
-	// explicitly. See domain.LinkScope* and crawlLoop's onDomain.
+	// LinkScope overrides the Tuning page's global link-following default
+	// for this crawl -- "" means "use the global default"; see domain.
+	// LinkScope* and crawlLoop's onDomain.
 	LinkScope string `json:"link_scope"`
-	// AllowedDomains/BlockedDomains are a per-crawl allow/block list of
-	// domains to follow discovered links to, on top of LinkScope: a domain
-	// (or any of its subdomains) in BlockedDomains is never followed, even
-	// if LinkScope or AllowedDomains would otherwise allow it -- BlockedDomains
-	// always wins. A domain in AllowedDomains is followed even if LinkScope
-	// itself would reject it, widening scope rather than narrowing it. Both
-	// nil/empty (the default) leave LinkScope as the only scope check.
+	// AllowedDomains/BlockedDomains are a per-crawl allow/block list on top
+	// of LinkScope: BlockedDomains always wins; AllowedDomains widens scope
+	// even where LinkScope would reject it. Both empty leaves LinkScope as
+	// the only check.
 	AllowedDomains []string `json:"allowed_domains,omitempty"`
 	BlockedDomains []string `json:"blocked_domains,omitempty"`
-	// FollowIndexedDomains additionally follows a discovered link whose
-	// domain already has at least one indexed document (see
-	// ports.SQLRepository.HostsIndexed), even if LinkScope/AllowedDomains
-	// wouldn't otherwise allow it -- useful for a crawl that should keep
-	// refreshing any site already in the corpus without having to name
-	// every one of them in AllowedDomains. BlockedDomains still overrides
-	// this, same as it overrides LinkScope/AllowedDomains.
+	// FollowIndexedDomains additionally follows a link whose domain already
+	// has an indexed document, even where LinkScope/AllowedDomains wouldn't
+	// otherwise allow it -- BlockedDomains still overrides this.
 	FollowIndexedDomains bool `json:"follow_indexed_domains,omitempty"`
 	UseSitemap           bool `json:"use_sitemap"`
 	// FetchTimeoutSeconds, MinTextLength, CrawlDelayMs and MaxResponseKB
 	// override the same-named operational defaults for this crawl alone
-	// when positive; zero means "use the global default" -- the same
-	// convention MaxPages<=0 and UserAgent=="" already use above. Every
-	// operational setting that's actually crawl-specific (as opposed to
-	// search- or database-related) is overridable here, so a crawl is
-	// never stuck with the global default for a site that needs a gentler
-	// delay, a longer timeout, or a larger page.
+	// when positive; zero means "use the global default."
 	FetchTimeoutSeconds int `json:"fetch_timeout_seconds"`
 	MinTextLength       int `json:"min_text_length"`
 	CrawlDelayMs        int `json:"crawl_delay_ms"`
 	MaxResponseKB       int `json:"max_response_kb"`
-	// PrioritizeUnindexed reorders discovery so URLs not already in the
-	// index are fetched before ones that are, within the same MaxPages
-	// budget -- useful when recrawling a large, already-mostly-indexed
-	// site and the goal is to find new pages rather than spend the budget
-	// refreshing old ones. Already-indexed pages still get crawled once
-	// every not-yet-indexed one has been attempted; this only changes
-	// order, never coverage.
+	// PrioritizeUnindexed fetches not-yet-indexed URLs before already-
+	// indexed ones within the same MaxPages budget -- changes order, not
+	// coverage; already-indexed pages still get crawled once the rest are
+	// attempted.
 	PrioritizeUnindexed bool `json:"prioritize_unindexed"`
-	// Renderer overrides the Tuning page's global default rendering mode
-	// for this crawl alone -- "" (domain.RendererDefault) means "use the
-	// global default," same convention as every other override above;
-	// domain.RendererNone/RendererChromium/RendererFirefox choose
-	// explicitly. See domain.Renderer* and ports.Renderer.
+	// Renderer overrides the Tuning page's global rendering mode for this
+	// crawl alone -- "" means "use the global default." See domain.
+	// Renderer* and ports.Renderer.
 	Renderer string `json:"renderer"`
 }
 
@@ -503,13 +389,10 @@ type CrawlJobService interface {
 var ErrCrawlJobNotRunning = errors.New("crawl job is not currently running")
 
 // CrawlJobStore is crawl-server's own persistence for crawl jobs and their
-// per-page event history -- distinct from CrawlJobService, which is the
-// network contract admin-server's client uses to talk to crawl-server.
-// domain.CrawlJobStore (in-memory, lost on restart) satisfies this
-// structurally for tests; sqlrepo.Repository's DB-backed implementation is
-// what crawl-server actually runs in production, so a job's full history
-// survives a restart instead of disappearing with it. Get returns
-// domain.ErrCrawlJobNotFound if no job with that ID is retained.
+// per-page history -- distinct from CrawlJobService, the network contract
+// admin-server's client uses. domain.CrawlJobStore (in-memory) satisfies
+// this for tests; sqlrepo.Repository's DB-backed one is what production
+// runs. Get returns domain.ErrCrawlJobNotFound if unretained.
 type CrawlJobStore interface {
 	Create(ctx context.Context, req domain.CrawlJobRequest) (domain.CrawlJob, error)
 	MarkRunning(ctx context.Context, id string) error
@@ -546,14 +429,10 @@ const (
 	// as SettingsKeyPageRankStatus, written by
 	// application.RunEmbeddingRecomputeJobWithStatus.
 	SettingsKeyEmbeddingRecomputeStatus = "embedding_recompute_status"
-	// SettingsKeyEmbeddingEndpointsMigrated holds the plain string "true"
-	// once the one-time legacy-HTTP-config-to-embedding_http_endpoints
-	// migration (sqlrepo.Repository.migrateLegacyHTTPEmbeddingConfig) has
-	// run -- a marker distinct from "does embedding_http_endpoints have any
-	// rows," since an admin deleting the migrated endpoint afterward would
-	// otherwise make that table empty again and the migration would
-	// wrongly re-run (and resurrect the deleted endpoint) on the next
-	// restart.
+	// SettingsKeyEmbeddingEndpointsMigrated holds "true" once the one-time
+	// legacy-config migration has run -- distinct from "table has rows,"
+	// since deleting the migrated endpoint would otherwise make the
+	// migration wrongly re-run (resurrecting it) on the next restart.
 	SettingsKeyEmbeddingEndpointsMigrated = "embedding_endpoints_migrated"
 	// SettingsKeyContentDedupStatus holds a domain.ContentDedupStatus --
 	// the same runtime-status pattern as SettingsKeyPageRankStatus, written
@@ -574,12 +453,9 @@ type SettingsStore interface {
 // Delete when no schedule with the given ID exists.
 var ErrScheduledCrawlNotFound = errors.New("scheduled crawl not found")
 
-// ScheduledCrawlStore persists recurring crawl schedules an admin creates
-// through the admin UI. It's implemented by the same *sqlrepo.Repository
-// admin-server and crawl-server each already open their own DB connection
-// to (for AdminRepository and SettingsStore respectively) -- both
-// processes talk to the shared scheduled_crawls table directly rather than
-// crawl-server's ticker or admin-server's CRUD endpoints needing an HTTP
+// ScheduledCrawlStore persists recurring crawl schedules an admin creates.
+// Both admin-server and crawl-server talk to the shared scheduled_crawls
+// table directly, so the ticker and the CRUD endpoints never need an HTTP
 // round-trip to reach each other.
 type ScheduledCrawlStore interface {
 	CreateScheduledCrawl(ctx context.Context, s domain.ScheduledCrawl) error
@@ -594,29 +470,18 @@ type ScheduledCrawlStore interface {
 	// DueScheduledCrawls lists every enabled, not-already-in-progress
 	// schedule whose NextRunAt is at or before now.
 	DueScheduledCrawls(ctx context.Context, now time.Time) ([]domain.ScheduledCrawl, error)
-	// MarkScheduledCrawlRun records that a schedule was just triggered (or
-	// just finished), advancing it to its next run, storing runCount (how
-	// many times it has now run), and setting whether it stays enabled -- a
-	// one-off (non-recurring) entry, or one that just reached its MaxRuns
-	// cap, passes false so it's never picked up again. inProgress is
-	// separate from enabled: true from the moment a run is triggered until
-	// that same run's completion clears it, keeping DueScheduledCrawls from
-	// double-triggering an entry that runs longer than its own interval,
-	// without touching (or visibly flickering) the admin's own enabled
-	// toggle to do it.
+	// MarkScheduledCrawlRun records a trigger/finish, advancing the next
+	// run and runCount; a one-off or MaxRuns-capped entry passes
+	// enabled=false. inProgress, separate from enabled, stays true for the
+	// run's duration so DueScheduledCrawls can't double-trigger a long crawl.
 	MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time, enabled, inProgress bool, runCount int) error
-	// RunScheduledCrawlNow marks a schedule due immediately -- sets
-	// NextRunAt to now, re-enables it if it was paused, and force-clears
-	// InProgress -- without touching any other field (recurring/interval/
-	// run count/options all stay exactly as they were). crawl-server's own
-	// scheduler ticker (TriggerDueCrawls) picks it up on its next tick, the
-	// same path a freshly created one-off crawl already goes through.
-	// Returns ErrScheduledCrawlNotFound if id doesn't exist.
+	// RunScheduledCrawlNow sets NextRunAt to now, re-enables if paused, and
+	// clears InProgress, leaving every other field untouched -- picked up by
+	// the next scheduler tick. Returns ErrScheduledCrawlNotFound if unknown.
 	RunScheduledCrawlNow(ctx context.Context, id string, now time.Time) error
-	// ResetStaleInProgress clears InProgress back to false for every
-	// schedule that has it stuck true -- meant to run once at crawl-server
-	// startup, before anything else can query DueScheduledCrawls. Returns
-	// how many rows were reset.
+	// ResetStaleInProgress clears every stuck-true InProgress flag -- run
+	// once at crawl-server startup, before anything queries
+	// DueScheduledCrawls. Returns how many rows were reset.
 	ResetStaleInProgress(ctx context.Context) (int, error)
 }
 
@@ -625,11 +490,9 @@ type ScheduledCrawlStore interface {
 var ErrEmbeddingEndpointNotFound = errors.New("embedding endpoint not found")
 
 // EmbeddingEndpointStore persists the admin-configured HTTP embedding
-// endpoints (see domain.EmbeddingHTTPEndpoint) -- one row per endpoint an
-// admin has added, each independently enabled and rate-limited, alongside
-// the always-available built-in hash provider. Implemented by the same
-// *sqlrepo.Repository every process already opens, the same way
-// ScheduledCrawlStore is.
+// endpoints (domain.EmbeddingHTTPEndpoint) -- one row per endpoint, each
+// independently enabled and rate-limited, alongside the built-in hash
+// provider.
 type EmbeddingEndpointStore interface {
 	CreateEmbeddingEndpoint(ctx context.Context, e domain.EmbeddingHTTPEndpoint) error
 	// GetEmbeddingEndpoint returns one endpoint by ID, or

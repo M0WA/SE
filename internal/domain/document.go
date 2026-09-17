@@ -16,10 +16,8 @@ type Document struct {
 
 // SearchResult is a single ranked result returned to the caller. BM25Score
 // and SemanticSim are the unblended components behind Score -- omitted
-// when a backend (e.g. the plain in-memory index) has no such breakdown.
-// CorrectedTerms describes the query, not this particular document -- see
-// HybridResult.CorrectedTerms -- and is identical across every result of one
-// search.
+// when a backend has no such breakdown. CorrectedTerms describes the
+// query, not this document, and is identical across every result of one search.
 type SearchResult struct {
 	URL            string          `json:"url"`
 	Title          string          `json:"title"`
@@ -76,26 +74,19 @@ type AgeBucket struct {
 }
 
 // VersionCount is how many documents currently sit at a given version
-// number (see Document.Version) -- version 1 is a page that has only ever
-// been crawled once; a higher number means it's been re-crawled and its
-// content changed that many times since. Unaffected by
-// OperationalSettingsValues.MaxDocumentVersions pruning -- the version
-// number keeps counting every change a document has ever had, even once
-// its oldest archived rows are pruned from document_versions.
+// number -- version 1 was only ever crawled once; higher means it's been
+// re-crawled and changed that many times. Unaffected by
+// MaxDocumentVersions pruning -- the count keeps rising even once old
+// rows are pruned from document_versions.
 type VersionCount struct {
 	Version int
 	Count   int
 }
 
-// StoredVersionsCount is how many documents currently have exactly
-// StoredVersions versions actually retained in storage -- the current row
-// in documents plus however many of its predecessors still survive in
-// document_versions, bounded by MaxDocumentVersions. Distinct from
-// VersionCount: a document changed 20 times sits at version 20 (one
-// VersionCount bucket) but, with MaxDocumentVersions=3, has only 3 rows of
-// history retained (StoredVersions=3) -- this is what actually bounds
-// storage/reflects the retention setting, where VersionCount reflects
-// total historical churn regardless of what's since been pruned.
+// StoredVersionsCount is how many documents have exactly StoredVersions
+// rows actually retained (bounded by MaxDocumentVersions), distinct from
+// VersionCount: a document changed 20 times sits at version 20, but with
+// MaxDocumentVersions=3 only has 3 rows of history retained.
 type StoredVersionsCount struct {
 	StoredVersions int
 	DocCount       int

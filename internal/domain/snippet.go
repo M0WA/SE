@@ -6,21 +6,12 @@ import (
 	"strings"
 )
 
-// Snippet extracts a text window around the first match and highlights
-// matches. phrases take priority over terms both for choosing where to
-// center the excerpt window and for how matches are highlighted -- a
-// multi-word phrase is marked as one contiguous span, and individual terms
-// are only highlighted outside any span a phrase already covers, so a
-// phrase's own words never end up double-wrapped in nested <mark> tags.
-//
-// text is untrusted (it's the crawled page's own text), and callers render
-// the result as HTML (to keep the <mark> tags live), so every byte of text
-// that ends up in the returned string is HTML-escaped before any <mark> tag
-// is added around it -- escaping happens first so the only literal "<"/">"
-// bytes in the output are the ones this function writes itself. A search
-// term containing an HTML metacharacter (e.g. "AT&T") may fail to highlight
-// against the now-escaped snippet; that's an acceptable tradeoff for never
-// emitting unescaped crawled content.
+// Snippet extracts a text window around the first match and highlights it.
+// phrases take priority over terms for centering and highlighting -- a
+// phrase marks one contiguous span, and terms only highlight outside it, so
+// nothing double-wraps. text is untrusted crawled content rendered as HTML,
+// so it's always escaped before any <mark> tag is added (a term containing
+// an HTML metacharacter like "AT&T" may then fail to highlight -- acceptable).
 func Snippet(text string, phrases, terms []string, maxLen int) string {
 	lower := strings.ToLower(text)
 	pos := indexOfEarliest(lower, phrases)

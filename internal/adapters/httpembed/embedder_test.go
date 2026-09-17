@@ -1218,3 +1218,26 @@ func TestEmbedder_CountTokensMalformedJSONReturnsError(t *testing.T) {
 		t.Fatal("expected an error decoding a malformed tokenize response")
 	}
 }
+
+// TestEmbedder_CountTokensMissingCountFieldReturnsError guards against a
+// tokenize endpoint schema mismatch silently reading as count=0 (which
+// fitChunkToTokenBudget would treat as "fits under budget", the opposite
+// of failing closed) -- a valid JSON object missing "count" entirely must
+// still error, not decode to a zero value.
+func TestEmbedder_CountTokensMissingCountFieldReturnsError(t *testing.T) {
+	tokenizeSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"tokens": ["aa", "bb"]}`))
+	}))
+	defer tokenizeSrv.Close()
+
+	e := httpembed.New(httpembed.Config{
+		BaseURL: "http://unused.invalid", Dimensions: 1, ChunkSizeTokens: 4, TokenizeURL: tokenizeSrv.URL,
+	})
+	_, err := e.Embed(context.Background(), "aa bb")
+	if err == nil {
+		t.Fatal("expected an error when the tokenize response has no \"count\" field")
+	}
+	if !strings.Contains(err.Error(), "count") {
+		t.Errorf("expected the error to mention the missing count field, got: %v", err)
+	}
+}

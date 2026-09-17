@@ -16,42 +16,18 @@ import (
 // overrides page tells the user to expect.
 const settingsPollInterval = 10 * time.Second
 
-// PoolConfigurer is the narrow slice of *sqlrepo.Repository that
-// SyncSettings needs to re-apply connection-pool limits -- kept as a local
-// interface rather than importing sqlrepo, since bootstrap's settings
-// syncing has no other reason to depend on that package. A nil
-// PoolConfigurer (e.g. a test, or a caller with no pool to manage) is
-// simply skipped.
+// PoolConfigurer is the narrow slice of *sqlrepo.Repository SyncSettings
+// needs to re-apply connection-pool limits -- a local interface so
+// bootstrap need not import sqlrepo. Nil (e.g. in a test) is skipped.
 type PoolConfigurer interface {
 	ConfigurePool(maxOpenConns, maxIdleConns int, connMaxLifetime time.Duration)
 }
 
 // SyncSettings applies whatever tuning/operational/overrides blobs store
-// currently holds to the given instances immediately, then keeps
-// re-applying the latest stored values every ~10s for as long as ctx stays
-// alive -- so an admin edit saved to the shared database (by any process)
-// reaches this one too, not just the process the edit was made on. tuning,
-// op and overrides may each be nil for a process that has no use for that
-// kind of setting (crawl-server has neither tuning nor overrides, for
-// instance); each one that's already been constructed with its hardcoded
-// default is simply left as-is when the store has no value for it yet. pool
-// (typically the same *sqlrepo.Repository the process opened via OpenDB)
-// has op's current DBMaxOpenConns/DBMaxIdleConns/DBConnMaxLifetime
-// re-applied to the live database connection on every call -- including
-// this first one, which is a harmless no-op re-application of whatever
-// sqlrepo.New already set at construction, but which also picks up any
-// admin-configured value at every later poll tick without needing its own
-// separate change-detection. pool may be nil for a caller with no
-// connection pool to manage (e.g. a test that only cares about tuning).
-//
-// embeddingEndpoints (typically the same *sqlrepo.Repository as pool), when
-// non-nil, is consulted on every tick to keep op.EmbeddingSearchWeights
-// valid: any entry naming a provider that's since been disabled or had its
-// endpoint deleted is self-healed via domain.ReconcileSearchWeights before
-// being applied -- op.Set itself can't do this (see its own doc comment),
-// since provider validity now depends on this dynamically configured list,
-// not a fixed enum. nil skips reconciliation entirely (e.g. a test that
-// only cares about the rest of op).
+// holds immediately, then re-applies them every ~10s while ctx stays alive,
+// so an admin edit on any process reaches this one too. Any param may be
+// nil if unused; pool gets DB pool settings re-applied each tick,
+// embeddingEndpoints self-heals weights against disabled/deleted providers.
 func SyncSettings(ctx context.Context, store ports.SettingsStore, tuning *domain.TuningSettings, op *domain.OperationalSettings, overrides *domain.RankingOverrides, pool PoolConfigurer, embeddingEndpoints ports.EmbeddingEndpointStore) {
 	pollRefresh(ctx, settingsPollInterval, func() { applySettingsOnce(ctx, store, tuning, op, overrides, pool, embeddingEndpoints) })
 }
@@ -66,12 +42,9 @@ func applySettingsOnce(ctx context.Context, store ports.SettingsStore, tuning *d
 	if op != nil {
 		var v domain.OperationalSettingsValues
 		if loadSetting(ctx, store, ports.SettingsKeyOperational, &v) {
-			// Upgrade-safety migration: a settings blob saved before
-			// EmbeddingSearchWeights existed still decodes the deprecated
-			// EmbeddingProvider field (see its own doc comment) -- seed the
-			// new map from it, once, so an already-configured active
-			// provider carries over as a weight-1 entry instead of
-			// resetting to the hard-coded default.
+			// Upgrade migration: a blob saved before EmbeddingSearchWeights
+			// existed still decodes the deprecated EmbeddingProvider field --
+			// seed the new map from it once, so it carries over as weight 1.
 			if len(v.EmbeddingSearchWeights) == 0 && v.EmbeddingProvider != "" {
 				v.EmbeddingSearchWeights = map[string]float64{v.EmbeddingProvider: 1}
 			}

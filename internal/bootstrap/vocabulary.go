@@ -22,12 +22,9 @@ type VocabularySource interface {
 }
 
 // SyncVocabulary seeds cache with source's current vocabulary immediately,
-// then keeps refreshing it every ~10s for as long as ctx stays alive -- the
-// same immediate-then-poll pattern SyncCorpusStats/SyncSettings use. This
-// lets hybrid search's fuzzy (typo-tolerant) query-term correction check a
-// term with zero postings hits against an in-memory vocabulary snapshot
-// instead of running a full vocabulary scan per request; a term crawled or
-// deleted by another process still reaches this process's fuzzy matching
+// then keeps refreshing it every ~10s for as long as ctx stays alive -- lets
+// fuzzy query-term correction check an in-memory snapshot instead of a full
+// vocabulary scan per request, picking up terms crawled/deleted elsewhere
 // within a poll interval.
 func SyncVocabulary(ctx context.Context, source VocabularySource, cache *domain.VocabularyCache) {
 	pollRefresh(ctx, vocabularyPollInterval, func() { refreshVocabulary(ctx, source, cache) })

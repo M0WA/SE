@@ -47,16 +47,10 @@ func levenshtein(a, b string) int {
 }
 
 // NearestTerm searches vocabulary for the closest term to target within
-// maxDistance Levenshtein edits (see levenshtein), for substituting a query
-// term that had zero postings hits into BM25 scoring instead (see
-// hybridSearchService.Search's fuzzy-correction path). Ties -- same edit
-// distance -- are broken by preferring the more frequent term (higher
-// TotalFreq, then higher DocFreq, then lexicographically first) so the
-// choice is deterministic. Reports found=false when nothing in vocabulary
-// is within maxDistance, including when vocabulary is empty or maxDistance
-// is non-positive. target itself is never returned even if present in
-// vocabulary (distance 0): a term this is called for, by construction, had
-// zero postings hits, so "correcting" it to itself would be a no-op.
+// maxDistance Levenshtein edits, for substituting a zero-hit query term
+// into BM25 scoring. Ties go to the more frequent term (see
+// moreFrequent). target itself is never returned (correcting it to
+// itself would be a no-op).
 func NearestTerm(target string, vocabulary []TermStat, maxDistance int) (term string, distance int, found bool) {
 	if maxDistance <= 0 {
 		return "", 0, false

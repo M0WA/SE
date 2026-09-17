@@ -183,41 +183,11 @@ type Handler struct {
 	newEmbedder func(domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider
 }
 
-// Config wires a Handler's dependencies. Crawler and CrawlJobs are used
-// only by crawl-server (RoutesCrawlInternal); Jobs is used only by
-// admin-server (RoutesAdmin), talking to crawl-server over the network.
-// Debug, Admin, Settings, OperationalSettings, Overrides, SettingsStore,
-// ScheduledCrawls, DBDriver, AdminUser and AdminPass are optional: without
-// AdminUser/AdminPass configured, authentication fails closed (nobody can
-// sign in, so /admin stays locked) rather than defaulting to open access.
-// Without Debug/Admin/Settings/Overrides/Jobs/ScheduledCrawls, the
-// corresponding admin endpoints report themselves unavailable. A nil
-// OperationalSettings behaves like domain.DefaultOperationalSettings(), and
-// a nil RankingOverrides like domain.DefaultRankingOverrides() (both via
-// their nil-safe Get()). Without SettingsStore, an admin settings/overrides
-// edit still applies to this process's own in-memory instance but isn't
-// persisted for any other process to pick up. ScheduledCrawls is set on
-// admin-server only (backing the schedules admin API) -- crawl-server's own
-// scheduler ticker talks to the same store directly, not through Handler.
-// PageRank, when set (admin-server only, its own *sqlrepo.Repository -- no
-// need to proxy through crawl-server the way crawl-triggering does, since
-// admin-server already has direct DB access), backs the PageRank debug
-// page's "force recalculation" button; without it, that endpoint reports
-// itself unavailable, same as the other optional dependencies.
-// Health is set on every process to back GET /healthz; without it, /healthz
-// always reports healthy (no DB connection to check). Sessions, when set
-// (every production process passes its own *sqlrepo.Repository, which
-// implements ports.SessionStore against a shared "sessions" table), makes a
-// login recognized by every process serving the site, not just the one
-// that issued it -- see ports.SessionStore's doc comment. Without it, New
-// falls back to a private in-memory store, fine for tests but useless
-// across real separate processes. OnCrawlComplete, when
-// set (crawl-server only), is called synchronously right after a crawl job
-// finishes successfully -- e.g. to trigger a PageRank recompute, since a
-// completed crawl is exactly when the link graph changes. A caller that
-// wants this to run without delaying the job's reported completion (or the
-// concurrency semaphore's release -- see runCrawlJob) should spawn its own
-// goroutine inside the callback; Handler itself makes no such decision.
+// Config wires a Handler's dependencies. Crawler/CrawlJobs are used only
+// by crawl-server; Jobs only by admin-server. Most fields are optional:
+// without AdminUser/AdminPass, auth fails closed; without a given
+// repository/store, its admin endpoints report unavailable rather than
+// erroring. See each field's own comment for specifics.
 type Config struct {
 	Search    ports.SearchService
 	Crawler   ports.CrawlerService
@@ -225,24 +195,17 @@ type Config struct {
 	Jobs      ports.CrawlJobService
 	Debug     ports.DebugSearchService
 	Admin     ports.AdminRepository
-	PageRank  ports.PageRankRepository
-	// EmbeddingRepo, when set (admin-server only, its own *sqlrepo.Repository
-	// -- same reasoning as PageRank above), backs the Settings page's
-	// "recompute embeddings" button; without it, that endpoint reports
-	// itself unavailable, same as the other optional dependencies.
-	// Embedders holds one ports.EmbeddingProvider per currently-enabled
-	// provider this recompute calls Embed against -- the same map
-	// bootstrap.NewEmbedders built for this process at startup, so a
-	// recompute always refreshes every enabled provider's vectors, not
-	// just whichever is currently active for search. Each provider's own
-	// rate limit is enforced inside its own httpembed.Embedder, not here.
+	// PageRank, set on admin-server only, backs the PageRank debug page's
+	// "force recalculation" button.
+	PageRank ports.PageRankRepository
+	// EmbeddingRepo, set on admin-server only, backs the Settings page's
+	// "recompute embeddings" button. Embedders (the same map
+	// bootstrap.NewEmbedders built at startup) is every enabled provider
+	// this recompute refreshes, not just whichever is active for search.
 	EmbeddingRepo ports.EmbeddingRepository
 	Embedders     map[string]ports.EmbeddingProvider
-	// ContentDedupRepo, when set (admin-server only, its own
-	// *sqlrepo.Repository -- same reasoning as PageRank above), backs the
-	// content-dedup admin page's status display and "recompute now" button;
-	// without it, those endpoints report themselves unavailable, same as
-	// the other optional dependencies.
+	// ContentDedupRepo, set on admin-server only, backs the content-dedup
+	// admin page's status display and "recompute now" button.
 	ContentDedupRepo ports.ContentDedupRepository
 	// NewEmbedder builds a throwaway ports.EmbeddingProvider from a given
 	// candidate endpoint config, used by the embedding endpoint CRUD
@@ -250,22 +213,33 @@ type Config struct {
 	// it's saved (see testEmbeddingConnectivity). Defaults to
 	// bootstrap.NewHTTPEmbedder when nil -- tests override this to avoid a
 	// real network call.
-	NewEmbedder     func(domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider
-	Settings        *domain.TuningSettings
-	OpSettings      *domain.OperationalSettings
-	Overrides       *domain.RankingOverrides
-	SettingsStore   ports.SettingsStore
+	NewEmbedder   func(domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider
+	Settings      *domain.TuningSettings
+	OpSettings    *domain.OperationalSettings
+	Overrides     *domain.RankingOverrides
+	SettingsStore ports.SettingsStore
+	// ScheduledCrawls is set on admin-server only (backing the schedules
+	// admin API) -- crawl-server's own ticker talks to the same store
+	// directly, not through Handler.
 	ScheduledCrawls ports.ScheduledCrawlStore
 	// EmbeddingEndpoints is set on admin-server only, backing the HTTP
 	// embedding endpoint CRUD API -- the same *sqlrepo.Repository
 	// ScheduledCrawls uses.
 	EmbeddingEndpoints ports.EmbeddingEndpointStore
-	Health             ports.HealthChecker
-	Sessions           ports.SessionStore
-	OnCrawlComplete    func()
-	DBDriver           string
-	AdminUser          string
-	AdminPass          string
+	// Health backs GET /healthz on every process; unset always reports
+	// healthy (no DB connection to check).
+	Health ports.HealthChecker
+	// Sessions, when set (every production process, via a shared
+	// "sessions" table), makes a login recognized by every process, not
+	// just the one that issued it.
+	Sessions ports.SessionStore
+	// OnCrawlComplete, set on crawl-server only, runs synchronously right
+	// after a crawl job finishes -- a caller wanting this to not delay the
+	// job's reported completion should spawn its own goroutine inside it.
+	OnCrawlComplete func()
+	DBDriver        string
+	AdminUser       string
+	AdminPass       string
 	// CrawlInternalToken, when set, is the shared secret
 	// requireCrawlInternalToken enforces on RoutesCrawlInternal (checked
 	// against every caller's X-Internal-Token header) and
@@ -322,15 +296,10 @@ func New(cfg Config) *Handler {
 	}
 }
 
-// securityHeaders lists the response headers applied to every request served
-// by RoutesSearch and RoutesAdmin -- a defense-in-depth backstop alongside
-// output escaping (domain.Snippet, template auto-escaping), not a substitute
-// for it. script-src has no 'unsafe-inline' because every page's JS already
-// lives in an external file loaded via <script src="...">; style-src needs
-// 'unsafe-inline' because several admin pages use inline style="" attributes
-// for one-off layout tweaks, and https://fonts.googleapis.com for the
-// Google Fonts stylesheet link; font-src needs https://fonts.gstatic.com for
-// the font files that stylesheet pulls in.
+// securityHeaders applies to every RoutesSearch/RoutesAdmin request -- a
+// defense-in-depth backstop alongside output escaping, not a substitute.
+// script-src has no 'unsafe-inline' (all JS is external); style-src needs
+// it for inline style="" attributes plus Google Fonts' stylesheet link.
 var securityHeaders = map[string]string{
 	"Content-Security-Policy": "default-src 'self'; script-src 'self'; " +
 		"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
@@ -351,14 +320,10 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// RoutesSearch serves the public-facing search site only: the index page,
-// its stylesheet, and the search API. No admin, login or crawl endpoints --
-// this is the mux the internet-facing search-server binary listens with.
-// The index page and the search API both require a signed-in session, the
-// same one /admin and /login already use (the admin account is the only
-// account this site has for now) -- style.css and healthz stay open so an
-// unauthenticated visitor's redirect to /login still renders styled, and
-// monitoring never needs to sign in.
+// RoutesSearch serves the public-facing search site only (index page,
+// stylesheet, search API) -- the mux the internet-facing search-server
+// binary listens with. Index and search both require the same signed-in
+// session /admin and /login use; style.css and healthz stay open.
 func (h *Handler) RoutesSearch() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.requireAuthPage(h.handleIndex))
@@ -594,17 +559,11 @@ func parseSortParam(r *http.Request) string {
 	return ports.SortRelevance
 }
 
-// parseProviderWeightsParam reads the optional ?semantic= query parameter
-// -- a comma-separated list of "provider:weight" pairs (a bare "provider"
-// with no ":weight" defaults to weight 1), e.g.
-// "semantic=hash:0.3,ionos:0.7" -- into a ports.SearchQuery.ProviderWeights
-// override. Returns nil (meaning "use the admin-configured default," see
-// hybridSearchService.resolveProviderWeights) when the parameter is
-// absent entirely. A malformed entry (empty provider name, an unparseable
-// weight) is skipped individually rather than failing the whole request --
-// the same tolerant, never-400-on-a-query-param style intQueryParam
-// already follows -- so a typo in one pair still lets the rest, or a pure
-// BM25 fallback, through.
+// parseProviderWeightsParam reads ?semantic=, a comma-separated list of
+// "provider:weight" pairs (bare "provider" defaults to weight 1), e.g.
+// "semantic=hash:0.3,ionos:0.7", into a ProviderWeights override. Returns
+// nil (use the admin default) if absent; a malformed entry is skipped
+// individually rather than failing the whole request.
 func parseProviderWeightsParam(r *http.Request) map[string]float64 {
 	raw := r.URL.Query().Get("semantic")
 	if raw == "" {
@@ -638,12 +597,9 @@ type healthResponse struct {
 	Status string `json:"status"`
 }
 
-// handleHealthz is a minimal, unauthenticated liveness endpoint for
-// automated monitoring/systemd -- registered identically (and without going
-// through requireAuthAPI) on RoutesSearch, RoutesAdmin and
-// RoutesCrawlInternal. With no HealthChecker configured it reports healthy
-// unconditionally; otherwise it reports 503 the moment the cheap DB ping
-// fails.
+// handleHealthz is a minimal, unauthenticated liveness endpoint (no
+// HealthChecker means always healthy; otherwise 503 on a failed DB ping),
+// registered identically on all three Routes* muxes.
 func (h *Handler) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

@@ -34,12 +34,9 @@ func (r *Repository) CrawlJobOutcomes(ctx context.Context, since time.Time) ([]d
 	return out, rows.Err()
 }
 
-// dayExpr extracts a "YYYY-MM-DD" date from column, one of crawl_jobs.
-// created_at/crawl_job_pages.fetched_at/documents.crawled_at -- every
-// timestamp column in this schema is stored as RFC3339Nano text (see
-// crawledAtLayout), so its first 10 characters already are that date, and
-// SUBSTR reading them is portable across sqlite/postgres/mysql without a
-// per-dialect date-trunc SQL fragment.
+// dayExpr extracts a "YYYY-MM-DD" date from column -- every timestamp
+// column here is RFC3339Nano text, so its first 10 characters already are
+// that date, and SUBSTR is portable across all three dialects.
 func dayExpr(column string) string {
 	return "SUBSTR(" + column + ", 1, 10)"
 }

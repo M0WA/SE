@@ -18,12 +18,9 @@ import (
 const sessionCookieName = "se_session"
 
 // sessionStore is a small in-memory session table, used only as the
-// fallback when no ports.SessionStore is configured (e.g. in tests that
-// don't care about cross-process session sharing). Sessions are lost on
-// restart, and are only ever visible to the one process that created
-// them -- fine for that fallback case, but not for production, where
-// search-server and admin-server are separate processes that must
-// recognize the same login (see ports.SessionStore's doc comment).
+// fallback when no ports.SessionStore is configured. Lost on restart and
+// visible only to the process that created it -- fine for tests, not for
+// production where search-server and admin-server must share a login.
 type sessionStore struct {
 	mu       sync.Mutex
 	sessions map[string]time.Time
@@ -122,15 +119,11 @@ func isHTTPS(r *http.Request) bool {
 	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 }
 
-// safeNext keeps post-login redirects on this site: an absolute or
-// protocol-relative "next" value is rejected in favor of the default, since
-// a query-string-controlled redirect target is an open-redirect vector
-// otherwise. Two layers, both required: a literal check that the first
-// character is "/" and the second is neither "/" nor "\" (browsers treat
-// a leading "\" the same as "/" when resolving a redirect target), plus a
-// url.Parse-based check that the value has no host component at all --
-// belt and suspenders, since a plain character check alone can't rule out
-// every way a value might carry an authority component.
+// safeNext keeps post-login redirects on this site, rejecting an
+// absolute/protocol-relative "next" (an open-redirect vector otherwise).
+// Two checks, both required: the first two characters rule out "//" and
+// "\\" (browsers treat a leading "\" like "/"), and url.Parse confirms no
+// host component at all.
 func safeNext(next string) string {
 	if next == "/" {
 		return next
@@ -179,21 +172,9 @@ const (
 )
 
 // loginLimiter is a small in-process, per-key (see clientIP) sliding-window
-// rate limiter for POST /login -- nothing else in this codebase throttles
-// authentication attempts, and /login sits on a public, unauthenticated
-// path (see packaging/nginx/searchengine.conf), so without this an
-// internet attacker can script an unthrottled password-guessing loop
-// against it. Login credentials are compared in constant time
-// (checkCredentials), which prevents a timing side-channel but does
-// nothing to slow down raw guess volume -- that's this limiter's job.
-//
-// This limits by client IP only, not by attempted username -- it doesn't
-// defend against a distributed attack spreading guesses for one account
-// across many source IPs, only the far more common single-source
-// brute-force case the actual exploit scenario describes. State is
-// in-memory and per-process: it resets on restart and isn't shared across
-// admin-server replicas, which is an accepted gap for this single-admin,
-// dev/test-deployed app rather than a distributed rate limiter.
+// rate limiter for public, unauthenticated POST /login -- without it an
+// attacker can script unthrottled password guessing. In-memory/per-process
+// and IP-only, an accepted gap for this single-admin, dev/test app.
 type loginLimiter struct {
 	mu      sync.Mutex
 	entries map[string]*loginAttempts
@@ -252,13 +233,10 @@ func (l *loginLimiter) recordSuccess(key string) {
 	delete(l.entries, key)
 }
 
-// clientIP returns the address /login's rate limiter should key on.
-// admin-server is only ever reached through the tracked nginx proxy in
-// production (see packaging/nginx/searchengine.conf), which always sets
-// X-Real-IP to the real client address -- r.RemoteAddr alone would be
-// nginx's own loopback address for every request, making every client
-// share one rate-limit bucket. Falls back to r.RemoteAddr when the header
-// is absent (direct connections, e.g. in tests).
+// clientIP returns the address /login's rate limiter keys on. Production
+// nginx always sets X-Real-IP; r.RemoteAddr alone would be nginx's own
+// loopback address, sharing one bucket across every client. Falls back
+// to r.RemoteAddr when absent (direct connections, e.g. tests).
 func clientIP(r *http.Request) string {
 	if ip := r.Header.Get("X-Real-IP"); ip != "" {
 		return ip

@@ -9,26 +9,19 @@ import (
 	"time"
 )
 
-// hashSessionToken returns the hex-encoded SHA-256 digest of a session
-// token -- what's actually stored as the sessions table's key, never the
-// raw token. randomToken (internal/adapters/restapi/auth.go) already draws
-// 256 bits from crypto/rand, so the token itself carries all the entropy
-// this needs; hashing it before it ever reaches the database means DB-only
-// access (a backup, a read replica, an unrelated SQL injection) yields
-// digests that can't be presented back as a live session cookie, the same
-// way a password hash can't be used to log in directly.
+// hashSessionToken returns the hex-encoded SHA-256 digest stored as the
+// sessions table's key, never the raw token -- so DB-only access (a
+// backup, a SQL injection) yields digests that can't be replayed as a
+// live session cookie, the same way a password hash can't log in directly.
 func hashSessionToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
 
-// CreateSession persists a login session so any process sharing this
-// database -- search-server, admin-server -- recognizes the same token,
-// rather than only the process that issued it (an in-memory session store
-// can't do that, since search-server and admin-server are separate OS
-// processes with no shared memory). Opportunistically deletes every
-// already-expired session first, so the table doesn't grow without bound
-// purely from old sessions nobody ever explicitly logged out of.
+// CreateSession persists a login session so every process sharing this
+// database recognizes the same token, not just the one that issued it.
+// Opportunistically deletes every already-expired session first, so the
+// table doesn't grow unbounded from sessions nobody explicitly logged out of.
 func (r *Repository) CreateSession(ctx context.Context, token string, expiresAt time.Time) error {
 	now := time.Now().UTC().Format(crawledAtLayout)
 	if _, err := r.db.ExecContext(ctx, r.ph(`DELETE FROM sessions WHERE expires_at < %s`, 1), now); err != nil {

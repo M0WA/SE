@@ -1,9 +1,7 @@
 // Package browserfetcher implements ports.Renderer by driving a real,
-// headless browser through Playwright: it executes a page's JavaScript in
-// a sandboxed browser process and waits for the page's load event before
-// extracting the final, client-side-rendered HTML -- for a site whose real
-// content only exists after that rendering happens, which a plain HTTP GET
-// (see internal/adapters/httpfetcher) can never see.
+// headless browser through Playwright: it executes a page's JavaScript in a
+// sandboxed process before extracting the client-rendered HTML, for sites a
+// plain HTTP GET (internal/adapters/httpfetcher) can never fully see.
 package browserfetcher
 
 import (
@@ -20,12 +18,10 @@ import (
 )
 
 // Renderer wraps one browser engine (Chromium or Firefox -- see
-// domain.RendererChromium/RendererFirefox, the names crawl-server's wiring
-// keys its Renderer map by). It's safe for concurrent use: each Render call
-// opens its own isolated browser context (cookies, credentials, and the
-// page itself never leak between concurrent crawls sharing one Renderer),
-// while the underlying browser process and Playwright driver are started
-// at most once, lazily, on first actual use.
+// domain.RendererChromium/RendererFirefox). Safe for concurrent use: each
+// Render call opens its own isolated browser context (nothing leaks between
+// concurrent crawls), while the underlying browser/driver starts at most
+// once, lazily, on first use.
 type Renderer struct {
 	// Engine is "chromium" or "firefox" (see domain.Renderer* constants).
 	Engine string
@@ -52,12 +48,10 @@ func New(engine string) *Renderer {
 }
 
 // ensureBrowser lazily installs (if needed) and launches this renderer's
-// browser engine, memoizing it for reuse across every subsequent Render
-// call. Installing downloads Playwright's own managed browser binary the
-// first time this engine is ever used on this machine (a few hundred MB) --
-// slow, but idempotent, and it happens on this engine's very first crawl
-// rather than at process startup, so a deployment that never enables
-// rendering never triggers it.
+// browser engine, memoizing it for reuse. Installing downloads Playwright's
+// managed browser binary on first use per engine (slow, idempotent) --
+// deferred to first crawl rather than startup, so a deployment that never
+// enables rendering never pays that cost.
 func (r *Renderer) ensureBrowser() (playwright.Browser, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -73,14 +67,10 @@ func (r *Renderer) ensureBrowser() (playwright.Browser, error) {
 		return nil, fmt.Errorf("starting playwright driver: %w", err)
 	}
 
-	// Playwright's own documented default for ChromiumSandbox is false --
-	// it launches with --no-sandbox unless told otherwise, favoring broad
-	// compatibility (works even where the OS-level sandbox mechanism
-	// Chromium wants isn't available) over defense in depth. This crawler
-	// runs pages from arbitrary, untrusted sites, so that tradeoff is wrong
-	// here: explicitly turn Chromium's own sandbox on. Firefox has no
-	// equivalent Playwright toggle -- its content-process sandboxing is
-	// always active regardless of launch options.
+	// Playwright defaults ChromiumSandbox to false (--no-sandbox) for broad
+	// compatibility, but this crawler renders arbitrary untrusted sites, so
+	// explicitly turn it on. Firefox has no equivalent toggle -- its
+	// sandboxing is always active.
 	launchOpts := playwright.BrowserTypeLaunchOptions{}
 	browserType := pw.Chromium
 	if r.Engine == "firefox" {
@@ -99,18 +89,12 @@ func (r *Renderer) ensureBrowser() (playwright.Browser, error) {
 	return r.browser, nil
 }
 
-// Render implements ports.Renderer: it opens a fresh, isolated browser
-// context for this fetch alone (so concurrent crawls sharing a Renderer
-// never see each other's cookies or credentials), navigates to url,
-// waits for the page's load event (opts.FetchTimeoutSeconds bounds it,
-// falling back to Playwright's own 30s default when unset), and returns
-// the fully rendered DOM's HTML.
-//
-// ctx cancellation (e.g. Handler.CancelCrawlJob) closes the in-flight page
-// to interrupt navigation promptly, the same way a cancelled context
-// aborts a plain HTTP fetch -- Playwright's own API has no direct
-// context.Context parameter, so this is done by racing ctx.Done() against
-// the navigation in a goroutine.
+// Render implements ports.Renderer: opens a fresh, isolated browser context
+// (no leaked cookies/credentials between concurrent crawls), navigates to
+// url, waits for load (opts.FetchTimeoutSeconds bounds it), and returns the
+// rendered DOM's HTML. ctx cancellation closes the in-flight page promptly
+// by racing ctx.Done() against the navigation goroutine, since Playwright's
+// API takes no context.Context directly.
 func (r *Renderer) Render(ctx context.Context, url string, opts ports.FetchOptions) (string, error) {
 	browser, err := r.ensureBrowser()
 	if err != nil {
@@ -133,19 +117,12 @@ func (r *Renderer) Render(ctx context.Context, url string, opts ports.FetchOptio
 	}
 	defer bctx.Close()
 
-	// A rendered page executes the target's own JavaScript, which can
-	// issue its own fetch()/XHR/image-load requests to anywhere -- unlike
-	// the plain fetcher (netguard.Transport, wired into httpfetcher.New),
-	// nothing here stops the target site's own script from probing the
-	// deploy host's internal network or its cloud metadata endpoint.
-	// Route every request this browser context makes (the top-level
-	// navigation and every subresource alike) through the same
-	// loopback/private/reserved-IP guard: a DNS lookup here, rather than
-	// Go's Transport-level connect-time hook, since Playwright exposes no
-	// dial-level control -- so, unlike the plain fetcher, this still has a
-	// (narrow) resolve-then-connect gap a DNS-rebinding attacker could
-	// race against. data: URLs are always let through -- they carry their
-	// own content inline, never touch the network, and so can't SSRF.
+	// A rendered page's own JS can issue fetch()/XHR requests anywhere, so
+	// route every request (navigation and subresources alike) through the
+	// same loopback/private-IP guard as the plain fetcher -- a DNS lookup
+	// here rather than a connect-time hook, since Playwright exposes no
+	// dial-level control (leaves a narrow resolve-then-connect gap vs. the
+	// plain fetcher). data: URLs are always allowed -- inline, never SSRF.
 	allowURL := r.AllowURL
 	if allowURL == nil {
 		allowURL = netguard.URLAllowed
@@ -187,25 +164,14 @@ func (r *Renderer) Render(ctx context.Context, url string, opts ports.FetchOptio
 			done <- result{err: fmt.Errorf("rendering %s: %w", url, err)}
 			return
 		}
-		// The browser's native "load" event (waited for above) fires as
-		// soon as the initial document and its static resources finish --
-		// for a client-rendered page (a typical SPA shell + JS bundle),
-		// confirmed against a real site to be well under 2 seconds, long
-		// before the page's own JavaScript has actually fetched and
-		// rendered its real content (that same site: 0 links in the DOM
-		// right at `load`, 115 once its JS caught up ~1s later).
-		// Capturing the DOM at `load` alone routinely sees an
-		// almost-empty shell instead of the real page. WaitForLoadState
-		// with networkidle waits for a short quiet window with no
-		// in-flight requests -- a reasonable proxy for "this page's own
-		// JS is done fetching" -- bounded by the same configured fetch
-		// timeout as the navigation above; a page with continuous
-		// background requests (analytics, polling) simply never goes
-		// idle and this times out on its own, so rendering proceeds with
-		// whatever's in the DOM by then rather than hanging past the
-		// budget already spent reaching `load`. Deliberately not
-		// escalated to an error: a timeout here means "didn't settle,"
-		// not "failed."
+		// The native "load" event fires once static resources finish, but
+		// for a typical SPA that's often well before its own JS has
+		// fetched/rendered real content (confirmed on a real site: DOM
+		// empty at `load`, populated ~1s later). networkidle waits for a
+		// quiet window with no in-flight requests as a proxy for "JS done
+		// fetching," bounded by the same timeout; a page with continuous
+		// background requests just times out here (not an error) and
+		// rendering proceeds with whatever's in the DOM.
 		_ = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 			State:   playwright.LoadStateNetworkidle,
 			Timeout: gotoOpts.Timeout,
@@ -251,12 +217,9 @@ func setCookies(bctx playwright.BrowserContext, url, cookieHeader string) error 
 	return bctx.AddCookies(cookies)
 }
 
-// Close shuts down this renderer's browser and Playwright driver, if a
-// Render call ever actually started one. Not currently called anywhere in
-// this codebase's process lifecycle (cmd/crawl has no graceful-shutdown
-// path at all -- it runs until killed, same as its DB connection and every
-// other resource), but kept as a clean, explicit release path for tests
-// and any future caller that does manage its own shutdown.
+// Close shuts down this renderer's browser and Playwright driver, if one
+// was ever started. Not called anywhere in cmd/crawl's lifecycle (it runs
+// until killed), but kept as an explicit release path for tests.
 func (r *Renderer) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

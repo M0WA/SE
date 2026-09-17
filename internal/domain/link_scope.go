@@ -1,28 +1,11 @@
 package domain
 
-// LinkScope controls how far a crawl follows discovered links away from
-// its seed URL(s), from strictest to most permissive:
-//
-//   - LinkScopeHost: only the exact seed host(s).
-//   - LinkScopeDomain: any subdomain of the seed's own registrable domain,
-//     as well as that bare domain itself (e.g. a seed of www.example.com
-//     also follows links to blog.example.com and example.com, but not
-//     example.org or other.com).
-//   - LinkScopeTLD: the same domain, any subdomain, any top-level domain
-//     (e.g. a seed of www.example.com also follows links to example.com,
-//     blog.example.com, example.org, and www.example.co.uk, but not
-//     other.com). Broader than LinkScopeDomain only in that it no longer
-//     requires the same TLD -- it's still "stay on the same site," just
-//     across that site's TLD variants.
-//   - LinkScopeAny: anywhere at all.
-//
-// LinkScopeDefault ("") is distinct from all four: as a per-crawl override
-// (see ScheduledCrawl.LinkScope / ports.CrawlOptions.LinkScope), "" means
-// "inherit whatever the Tuning page's global default currently is," the
-// same convention Renderer already uses. The global default itself
-// (OperationalSettingsValues.LinkScope) is never "" in practice -- it
-// normalizes to LinkScopeDomain when blank, matching this feature's
-// confirmed default.
+// LinkScope controls how far a crawl follows discovered links from its
+// seed(s), strictest to most permissive: LinkScopeHost (exact seed host
+// only), LinkScopeDomain (seed's registrable domain + subdomains),
+// LinkScopeTLD (same, across any TLD too), LinkScopeAny (everywhere).
+// LinkScopeDefault ("") means "inherit the Tuning page's global default"
+// for a per-crawl override field; the global default itself is never "".
 const (
 	LinkScopeDefault = ""
 	LinkScopeHost    = "host"

@@ -20,11 +20,8 @@ type RankingOverridesValues struct {
 
 // Blocked reports whether doc should be excluded from results entirely:
 // its URL's host is in BlockedDomains, or its title/text contains a
-// BlockedTerm. A one-off convenience wrapper around BlockedTokens for a
-// caller that doesn't already have doc's tokens; hybrid_search_service.go
-// calls BlockedTokens directly since it needs the same tokens for query-
-// constraint matching too, and tokenizing a document is exactly as
-// expensive whether it's done once or three times.
+// BlockedTerm. A convenience wrapper around BlockedTokens for a caller
+// that doesn't already have doc's tokens.
 func (v RankingOverridesValues) Blocked(doc Document) bool {
 	return v.BlockedTokens(doc.URL, TokenSet(doc.Title, doc.Text))
 }
@@ -75,12 +72,9 @@ func (v RankingOverridesValues) BoostFactorTokens(url string, tokens map[string]
 }
 
 // TokenSet tokenizes title+text into a set for O(1) membership checks --
-// shared by RankingOverridesValues' Blocked/BoostFactor and
-// ParsedQuery.Matches, all of which otherwise need to ask "does this
-// document contain term X" repeatedly. A caller that needs more than one
-// of these checks against the same document (hybrid_search_service.go, on
-// its hot path) should call this once and reuse the result via the
-// *Tokens-suffixed methods, rather than re-tokenizing per check.
+// shared by Blocked/BoostFactor and ParsedQuery.Matches. A caller needing
+// several checks against the same document should call this once and
+// reuse it via the *Tokens-suffixed methods, rather than re-tokenizing.
 func TokenSet(title, text string) map[string]bool {
 	tokens := Tokenize(title + " " + text)
 	set := make(map[string]bool, len(tokens))
@@ -124,12 +118,10 @@ func (v RankingOverridesValues) clone() RankingOverridesValues {
 	return out
 }
 
-// normalizeTerms tokenizes every raw entry the same way document text is
-// tokenized (Tokenize), so a blocked/boosted word matches a document
-// regardless of case or punctuation, and dedupes the result. A multi-word
-// entry ("New York") expands into each of its tokens, matching if any one
-// of them appears in a document -- consistent with how a plain query word
-// is tokenized before it's looked up.
+// normalizeTerms tokenizes every raw entry the same way document text is,
+// so a blocked/boosted word matches regardless of case/punctuation, and
+// dedupes the result. A multi-word entry ("New York") expands into each
+// of its tokens, matching if any one appears in a document.
 func normalizeTerms(raw []string) []string {
 	seen := make(map[string]bool)
 	var out []string

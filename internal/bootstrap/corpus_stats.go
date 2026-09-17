@@ -23,13 +23,10 @@ type CorpusStatsSource interface {
 }
 
 // SyncCorpusStats seeds cache with source's current corpus stats
-// immediately, then keeps refreshing it every ~10s for as long as ctx stays
-// alive -- the exact same immediate-then-poll pattern SyncSettings uses for
-// the admin-configurable settings blobs. This lets hybrid search read
-// totalDocs/avgDocLen from an in-memory cache on every query term (indeed,
-// once per whole search request) instead of running a full-table scan
-// per term, per request; a document crawled or deleted by another process
-// still reaches this process's BM25 scoring within a poll interval.
+// immediately, then keeps refreshing it every ~10s while ctx stays alive --
+// lets BM25 scoring read totalDocs/avgDocLen from memory instead of a
+// full-table scan per query term, picking up crawled/deleted documents
+// within a poll interval.
 func SyncCorpusStats(ctx context.Context, source CorpusStatsSource, cache *domain.CorpusStatsCache) {
 	pollRefresh(ctx, corpusStatsPollInterval, func() { refreshCorpusStats(ctx, source, cache) })
 }

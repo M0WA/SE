@@ -24,33 +24,16 @@ type EmbeddingRecomputeResult struct {
 }
 
 // RunEmbeddingRecomputeJob re-embeds every document's already-stored text
-// with embedder and writes the result back -- no recrawl, no re-fetch of
-// the original page, just a fresh Embed call per document against content
-// already sitting in the documents table. This is exactly what changing
-// OperationalSettingsValues.EmbeddingProvider (or, for the HTTP provider,
-// its model/dimensions) actually invalidates: the vector space, not the
-// indexed text itself -- see that field's own doc comment, which used to
-// say a full re-crawl was the only way to bring semantic ranking back in
-// sync; this is the alternative.
+// and writes the result back -- no recrawl or re-fetch, just a fresh Embed
+// call against content already in the documents table. This is what a
+// changed embedding provider/model actually invalidates: the vector space,
+// not the indexed text.
 //
-// A single document's Embed failure (a flaky HTTP embeddings endpoint, a
-// rate limit, a since-deleted document) is logged and counted, not fatal
-// to the whole run -- losing one document's fresh embedding is far less
-// harmful than aborting a recompute that's otherwise most of the way
-// through a large corpus.
-//
-// Each provider's own requests-per-second rate limit
-// (domain.EmbeddingHTTPEndpoint.RateLimitPerSecond) is enforced inside its
-// own httpembed.Embedder, not here -- see that package's rateLimiter.
-// titleWeight (see domain.OperationalSettingsValues.EmbeddingTitleWeight)
-// blends each document's title into its recomputed vector the same way
-// sqlCrawlerService.Crawl does at crawl time -- see embedTitleWeighted.
-// embedders holds one ports.EmbeddingProvider per currently-enabled
-// provider (see domain.OperationalSettingsValues.EmbeddingHashEnabled and
-// every enabled domain.EmbeddingHTTPEndpoint) -- every document gets a
-// freshly recomputed vector for every one of them, not just whichever is
-// currently active for search, so switching which one is active never
-// needs a second recompute.
+// A single document's Embed failure is logged and counted, not fatal to
+// the whole run. Each embedders entry gets a freshly recomputed vector,
+// not just whichever is active for search, so switching the active one
+// never needs a second recompute. titleWeight blends each title in the
+// same way sqlCrawlerService.Crawl does at crawl time.
 func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepository, embedders map[string]ports.EmbeddingProvider, titleWeight float64) (EmbeddingRecomputeResult, error) {
 	ids, err := repo.AllDocumentIDs(ctx)
 	if err != nil {
@@ -102,21 +85,11 @@ func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepositor
 }
 
 // RunEmbeddingRecomputeJobWithStatus wraps RunEmbeddingRecomputeJob,
-// additionally persisting a domain.EmbeddingRecomputeStatus to settings
-// (under ports.SettingsKeyEmbeddingRecomputeStatus) so any admin-server
-// instance's Settings page can show whether a recompute -- triggered by
-// this click or another admin's, possibly from a different browser or a
-// different admin-server instance -- is currently running, and what the
-// last completed run found. settings may be nil (e.g. in a test), in
-// which case this behaves exactly like RunEmbeddingRecomputeJob with the
-// status bookkeeping skipped.
-//
-// Unlike application.RunPageRankJobWithStatus (a single batched DB
-// read+write, fast enough to run synchronously inside its own HTTP
-// handler), this is meant to be launched in its own goroutine by the
-// caller: recomputing a real corpus means one Embed call per document,
-// each a network round-trip against an HTTP embeddings endpoint, so the
-// whole run can easily take minutes -- see handleAdminEmbeddingsRecompute.
+// persisting a domain.EmbeddingRecomputeStatus so any admin-server
+// instance can show whether a recompute is running and what it last
+// found. settings may be nil (bookkeeping then skipped). Unlike
+// RunPageRankJobWithStatus, this is meant to run in its own goroutine --
+// one Embed network call per document can take minutes for a real corpus.
 func RunEmbeddingRecomputeJobWithStatus(ctx context.Context, repo ports.EmbeddingRepository, embedders map[string]ports.EmbeddingProvider, settings ports.SettingsStore, titleWeight float64) (EmbeddingRecomputeResult, error) {
 	start := time.Now()
 	status := LoadEmbeddingRecomputeStatus(ctx, settings)
@@ -136,13 +109,10 @@ func RunEmbeddingRecomputeJobWithStatus(ctx context.Context, repo ports.Embeddin
 	return result, err
 }
 
-// LoadEmbeddingRecomputeStatus reads the persisted status back (see
-// RunEmbeddingRecomputeJobWithStatus) -- used both internally, to update
-// it without clobbering fields a concurrent recompute isn't touching, and
-// by the admin Settings page's GET handler, to show it. A nil settings, a
-// store error, a missing key (nothing has ever recomputed through this
-// mechanism), or an undecodable value all just return the zero value --
-// "nothing to show yet" is never treated as an error.
+// LoadEmbeddingRecomputeStatus reads the persisted status back -- used
+// internally and by the admin Settings GET handler. A nil settings, store
+// error, missing key, or bad value all just return the zero value;
+// "nothing to show yet" is never an error.
 func LoadEmbeddingRecomputeStatus(ctx context.Context, settings ports.SettingsStore) domain.EmbeddingRecomputeStatus {
 	if settings == nil {
 		return domain.EmbeddingRecomputeStatus{}
@@ -160,20 +130,11 @@ func LoadEmbeddingRecomputeStatus(ctx context.Context, settings ports.SettingsSt
 }
 
 // ResetStaleEmbeddingRecomputeStatus clears a leftover InProgress=true back
-// to false, without touching LastRunAt/Documents/Failed/DurationMs from
-// whatever run last actually completed -- the same self-healing this
-// codebase already applies to scheduled_crawls.in_progress (see
-// ports.ScheduledCrawlStore.ResetStaleInProgress and its cmd/crawl startup
-// call): admin-server is the only writer of this status, so InProgress
-// still true when THIS process is just starting up can only mean a
-// previous instance was killed (crashed, restarted, redeployed) mid-run,
-// never a genuinely still-running goroutine in this fresh process --
-// otherwise a killed recompute leaves the flag stuck forever, permanently
-// blocking every future trigger with handleAdminEmbeddingsRecomputeStart's
-// "already in progress" 409. Returns whether a stale flag was actually
-// found and cleared, for the caller to log; a nil settings, store error,
-// or nothing-to-reset are all quiet no-ops, matching
-// LoadEmbeddingRecomputeStatus's own error handling.
+// to false without touching the last completed run's fields -- called at
+// startup since InProgress still true then can only mean a previous
+// instance was killed mid-run, never a real still-running goroutine here.
+// Otherwise a killed recompute leaves every future trigger 409ing forever.
+// Returns whether a stale flag was found; nil settings/errors are no-ops.
 func ResetStaleEmbeddingRecomputeStatus(ctx context.Context, settings ports.SettingsStore) bool {
 	if settings == nil {
 		return false

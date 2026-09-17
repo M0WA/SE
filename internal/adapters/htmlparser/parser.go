@@ -8,13 +8,29 @@ import (
 	"golang.org/x/net/html"
 )
 
+// resolveHTTPURL resolves raw against base (fragment dropped) and returns
+// it only if the result is http/https -- shared by <a href> and <link
+// rel="canonical" href> resolution below, which both need exactly this.
+func resolveHTTPURL(base *url.URL, raw string) (string, bool) {
+	if base == nil {
+		return "", false
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", false
+	}
+	abs := base.ResolveReference(u)
+	abs.Fragment = ""
+	if abs.Scheme != "http" && abs.Scheme != "https" {
+		return "", false
+	}
+	return abs.String(), true
+}
+
 // Parse extracts a page's title, visible text, outbound links, and its
-// declared canonical URL (from <link rel="canonical" href="...">, if
-// present) -- see application.crawlLoop, which skips ever creating a
-// document row for a page whose canonical points elsewhere. canonicalURL
-// is "" when no such tag exists, resolved the same way <a href> links are
-// (relative to pageURL, fragment dropped), and only kept if it resolves to
-// an http/https URL.
+// declared canonical URL (see application.crawlLoop, which skips creating
+// a document row for a page whose canonical points elsewhere). canonicalURL
+// is "" when absent; both it and links are resolved/filtered the same way.
 func Parse(r io.Reader, pageURL string) (title, text string, links []string, canonicalURL string) {
 	doc, err := html.Parse(r)
 	if err != nil {
@@ -43,12 +59,8 @@ func Parse(r io.Reader, pageURL string) (title, text string, links []string, can
 			case "a":
 				for _, a := range n.Attr {
 					if a.Key == "href" {
-						if u, err := url.Parse(a.Val); err == nil && base != nil {
-							abs := base.ResolveReference(u)
-							abs.Fragment = ""
-							if abs.Scheme == "http" || abs.Scheme == "https" {
-								links = append(links, abs.String())
-							}
+						if resolved, ok := resolveHTTPURL(base, a.Val); ok {
+							links = append(links, resolved)
 						}
 					}
 				}
@@ -63,12 +75,8 @@ func Parse(r io.Reader, pageURL string) (title, text string, links []string, can
 					}
 				}
 				if rel == "canonical" && href != "" {
-					if u, err := url.Parse(href); err == nil && base != nil {
-						abs := base.ResolveReference(u)
-						abs.Fragment = ""
-						if abs.Scheme == "http" || abs.Scheme == "https" {
-							canonicalURL = abs.String()
-						}
+					if resolved, ok := resolveHTTPURL(base, href); ok {
+						canonicalURL = resolved
 					}
 				}
 			}
