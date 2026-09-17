@@ -1,5 +1,19 @@
 # Changelog
 
+## v4.2.0 - 2026-09-17
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Switch pgvector columns from vector to halfvec, fixing >2000-dim indexing by @M0WA in https://github.com/M0WA/SE/pull/76
+* Add per-endpoint configurable chunking for HTTP embedding endpoints by @M0WA in https://github.com/M0WA/SE/pull/77
+* Fix pgvector migration race and embedding-chunking correctness bugs by @M0WA in https://github.com/M0WA/SE/pull/78
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.1.0...v4.2.0
+
+
 ## v4.1.0 - 2026-09-17
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
