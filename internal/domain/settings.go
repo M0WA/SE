@@ -320,7 +320,7 @@ const (
 	// defaultMaxDocumentVersions keeps a handful of prior versions around
 	// for a changing page without letting document_versions grow
 	// unbounded for a page that's re-crawled often.
-	defaultMaxDocumentVersions = 5
+	defaultMaxDocumentVersions = 3
 	// defaultTitleWeight is a modest edge (title terms end up with roughly
 	// double the term frequency they'd get from a single mention, on top
 	// of however many times they separately occur in the body), not an

@@ -217,7 +217,7 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 		MaxConcurrentCrawls:              3,
 		DefaultRenderer:                  domain.RendererNone,
 		LinkScope:                        domain.LinkScopeTLD,
-		MaxDocumentVersions:              5,
+		MaxDocumentVersions:              3,
 		TitleWeight:                      2,
 		EmbeddingHashEnabled:             true,
 		EmbeddingSearchWeights:           map[string]float64{domain.EmbeddingProviderHash: 1},
@@ -236,16 +236,16 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 func TestOperationalSettings_SetZeroMaxDocumentVersionsFallsBackToDefault(t *testing.T) {
 	s := domain.DefaultOperationalSettings()
 	s.Set(domain.OperationalSettingsValues{MaxDocumentVersions: 0})
-	if v := s.Get(); v.MaxDocumentVersions != 5 {
-		t.Errorf("expected a zero MaxDocumentVersions to fall back to the default 5, got %d", v.MaxDocumentVersions)
+	if v := s.Get(); v.MaxDocumentVersions != 3 {
+		t.Errorf("expected a zero MaxDocumentVersions to fall back to the default 3, got %d", v.MaxDocumentVersions)
 	}
 }
 
 func TestOperationalSettings_SetNegativeMaxDocumentVersionsFallsBackToDefault(t *testing.T) {
 	s := domain.DefaultOperationalSettings()
 	s.Set(domain.OperationalSettingsValues{MaxDocumentVersions: -5})
-	if v := s.Get(); v.MaxDocumentVersions != 5 {
-		t.Errorf("expected a negative MaxDocumentVersions to fall back to the default 5, got %d", v.MaxDocumentVersions)
+	if v := s.Get(); v.MaxDocumentVersions != 3 {
+		t.Errorf("expected a negative MaxDocumentVersions to fall back to the default 3, got %d", v.MaxDocumentVersions)
 	}
 }
 
