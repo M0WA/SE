@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.3.0 - 2026-09-17
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Settings page: fix spacing hierarchy, add hover help/defaults, update defaults by @M0WA in https://github.com/M0WA/SE/pull/80
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.2.0...v4.3.0
+
+
 ## v4.2.0 - 2026-09-17
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
