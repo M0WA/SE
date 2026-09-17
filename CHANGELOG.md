@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.0 - 2026-09-17
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Replace the flat 10-item admin nav with a grouped sidebar by @M0WA in https://github.com/M0WA/SE/pull/104
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.12.0...v4.13.0
+
+
 ## v4.12.0 - 2026-09-17
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
