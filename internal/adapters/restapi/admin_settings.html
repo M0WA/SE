@@ -48,19 +48,19 @@
       <div class="subpanel">
         <h4>Ranking</h4>
         <div class="form-row">
-          <label for="alpha">Alpha — BM25 vs. semantic weight (0 = pure semantic, 1 = pure BM25)</label><br>
+          <label for="alpha">Alpha — BM25 vs. semantic weight (0 = pure semantic, 1 = pure BM25)</label>
           <input id="alpha" class="field" type="number" step="0.05" min="0" max="1" required>
         </div>
         <div class="form-row">
-          <label for="k1">k1 — term-frequency saturation</label><br>
+          <label for="k1">k1 — term-frequency saturation</label>
           <input id="k1" class="field" type="number" step="0.1" min="0" required>
         </div>
         <div class="form-row">
-          <label for="b">b — document-length normalization (0 = none, 1 = full)</label><br>
+          <label for="b">b — document-length normalization (0 = none, 1 = full)</label>
           <input id="b" class="field" type="number" step="0.05" min="0" max="1" required>
         </div>
         <div class="form-row">
-          <label for="title-weight">Title weight — how many times a title match counts, vs. once for the same word in the body</label><br>
+          <label for="title-weight">Title weight — how many times a title match counts, vs. once for the same word in the body</label>
           <input id="title-weight" class="field" type="number" step="1" min="1" required>
         </div>
         <p class="tuning-hint">Defaults: alpha 0.5, k1 1.2, b 0.75, title weight 2. Values outside 0–1 (alpha, b) or below 0 (k1) are clamped; title weight below 1 falls back to the default. A title weight change only takes effect for documents crawled or re-crawled afterward -- it isn't retroactively applied to already-indexed content.</p>
@@ -69,11 +69,11 @@
       <div class="subpanel">
         <h4>Search</h4>
         <div class="form-row">
-          <label for="default-top-k">Default result count — used when a search doesn't specify one</label><br>
+          <label for="default-top-k">Default result count — used when a search doesn't specify one</label>
           <input id="default-top-k" class="field" type="number" step="1" min="1" required>
         </div>
         <div class="form-row">
-          <label for="semantic-pool-size">Semantic candidate pool size — max documents scored for semantic similarity per search, regardless of corpus size (also the ANN top-K below, when active)</label><br>
+          <label for="semantic-pool-size">Semantic candidate pool size — max documents scored for semantic similarity per search, regardless of corpus size (also the ANN top-K below, when active)</label>
           <input id="semantic-pool-size" class="field" type="number" step="1" min="1" required>
         </div>
         <div class="form-row form-row-check">
@@ -95,12 +95,12 @@
           </label>
         </div>
         <div class="form-row">
-          <label for="embedding-search-weights">Active for search — weight each enabled provider gets in the blended semantic score (0 = not used)</label><br>
+          <label for="embedding-search-weights">Active for search — weight each enabled provider gets in the blended semantic score (0 = not used)</label>
           <div id="embedding-search-weights"></div>
           <p class="tuning-hint">A search's semantic score is a weighted blend of every provider given a weight above -- weights are relative to each other, not absolute (1 and 1 weighs two providers equally, the same as 10 and 10 would). Configure additional HTTP embedding endpoints (any number, each independently enabled) on <a href="/admin/embeddings/endpoints">HTTP endpoints</a>. Any enabled provider may be kept warm at once, so reweighting here never needs a recompute -- the others are already kept warm on every crawl. Any search request may override these weights for itself via <code>?semantic=</code>.</p>
         </div>
         <div class="form-row">
-          <label for="embedding-title-weight">Title weight in embeddings — 0 embeds the body only, 1 the title only; in between, blends two separate Embed calls (see Embeddings)</label><br>
+          <label for="embedding-title-weight">Title weight in embeddings — 0 embeds the body only, 1 the title only; in between, blends two separate Embed calls (see Embeddings)</label>
           <input id="embedding-title-weight" class="field" type="number" step="0.05" min="0" max="1">
         </div>
         <p class="tuning-hint">Default: hash. Switching which provider is active for search takes effect live, without a restart -- it's just choosing which already-current stored vector to read. Enabling a provider that wasn't already enabled (or adding a new HTTP endpoint) changes the vector space entirely for it: existing stored embeddings from a different provider are meaningless to compare against, until every document's embedding is recomputed for the newly enabled one -- no re-crawl needed, since the indexed text itself doesn't change. See <a href="/admin/embeddings">Embeddings</a> to trigger a recompute.</p>
@@ -109,11 +109,11 @@
       <div class="subpanel">
         <h4>Link authority</h4>
         <div class="form-row">
-          <label for="pagerank-weight">PageRank weight — how much link authority influences ranking (0 = no effect, 1 = ranking driven entirely by link authority)</label><br>
+          <label for="pagerank-weight">PageRank weight — how much link authority influences ranking (0 = no effect, 1 = ranking driven entirely by link authority)</label>
           <input id="pagerank-weight" class="field" type="number" step="0.05" min="0" max="1" required>
         </div>
         <div class="form-row">
-          <label for="pagerank-interval">Recompute interval — minutes between automatic PageRank recomputations</label><br>
+          <label for="pagerank-interval">Recompute interval — minutes between automatic PageRank recomputations</label>
           <input id="pagerank-interval" class="field" type="number" step="1" min="5" required>
         </div>
         <p class="tuning-hint">Defaults: weight 0 (no effect on ranking until raised), 60 minute interval (minimum 5). A recompute also always runs right after a crawl finishes, since that's when the link graph actually changes.</p>
@@ -129,7 +129,7 @@
           <p class="tuning-hint">When a query term has no matches at all, look it up against the index's vocabulary for a near-miss (within the edit distance below) and use that instead for scoring -- the displayed query is never rewritten, only what's used behind the scenes.</p>
         </div>
         <div class="form-row">
-          <label for="fuzzy-max-edit-distance">Max edit distance — how many typos (insert/delete/substitute) a correction may be off by</label><br>
+          <label for="fuzzy-max-edit-distance">Max edit distance — how many typos (insert/delete/substitute) a correction may be off by</label>
           <input id="fuzzy-max-edit-distance" class="field" type="number" step="1" min="1" max="2" required>
         </div>
         <p class="tuning-hint">Defaults: enabled, distance 2. A term that already matches something is never touched.</p>
@@ -142,35 +142,35 @@
       <div class="subpanel">
         <h4>Crawler</h4>
         <div class="form-row">
-          <label for="fetch-timeout">Fetch timeout — seconds per page before giving up</label><br>
+          <label for="fetch-timeout">Fetch timeout — seconds per page before giving up</label>
           <input id="fetch-timeout" class="field" type="number" step="1" min="1" required>
         </div>
         <div class="form-row">
-          <label for="user-agent">User-Agent sent with every fetch</label><br>
+          <label for="user-agent">User-Agent sent with every fetch</label>
           <input id="user-agent" class="field" type="text" required>
         </div>
         <div class="form-row">
-          <label for="default-max-pages">Default max pages — used when a crawl doesn't specify one</label><br>
+          <label for="default-max-pages">Default max pages — used when a crawl doesn't specify one</label>
           <input id="default-max-pages" class="field" type="number" step="1" min="1" required>
         </div>
         <div class="form-row">
-          <label for="min-text-length">Minimum text length — shorter pages are skipped as thin content</label><br>
+          <label for="min-text-length">Minimum text length — shorter pages are skipped as thin content</label>
           <input id="min-text-length" class="field" type="number" step="1" min="0" required>
         </div>
         <div class="form-row">
-          <label for="crawl-delay">Crawl delay — milliseconds to wait before each fetch after the first</label><br>
+          <label for="crawl-delay">Crawl delay — milliseconds to wait before each fetch after the first</label>
           <input id="crawl-delay" class="field" type="number" step="1" min="0" required>
         </div>
         <div class="form-row">
-          <label for="max-response-kb">Max response size — kilobytes read from a page before truncating</label><br>
+          <label for="max-response-kb">Max response size — kilobytes read from a page before truncating</label>
           <input id="max-response-kb" class="field" type="number" step="1" min="1" required>
         </div>
         <div class="form-row">
-          <label for="max-retained-crawl-jobs">Crawl history retention — number of past crawl jobs (with full per-page detail) kept before the oldest are deleted</label><br>
+          <label for="max-retained-crawl-jobs">Crawl history retention — number of past crawl jobs (with full per-page detail) kept before the oldest are deleted</label>
           <input id="max-retained-crawl-jobs" class="field" type="number" step="1" min="1" required>
         </div>
         <div class="form-row">
-          <label for="default-renderer">Rendering — how a crawl fetches each page, unless it overrides this itself</label><br>
+          <label for="default-renderer">Rendering — how a crawl fetches each page, unless it overrides this itself</label>
           <select id="default-renderer" class="field">
             <option value="none">None — plain HTTP fetch (fastest, no JavaScript)</option>
             <option value="chromium">Chromium — real headless browser, runs the page's JavaScript</option>
@@ -178,7 +178,7 @@
           </select>
         </div>
         <div class="form-row">
-          <label for="default-link-scope">Link scope — how far a crawl follows discovered links, unless it overrides this itself</label><br>
+          <label for="default-link-scope">Link scope — how far a crawl follows discovered links, unless it overrides this itself</label>
           <select id="default-link-scope" class="field">
             <option value="host">Exact seed host only</option>
             <option value="domain">Seed's domain, including subdomains</option>
@@ -199,7 +199,7 @@
       <div class="subpanel">
         <h4>Documents</h4>
         <div class="form-row">
-          <label for="max-document-versions">Version history — how many versions of a document (current plus archived) are kept when a re-crawl changes its content</label><br>
+          <label for="max-document-versions">Version history — how many versions of a document (current plus archived) are kept when a re-crawl changes its content</label>
           <input id="max-document-versions" class="field" type="number" step="1" min="1" required>
         </div>
         <p class="tuning-hint">Default: 5. A document that's never changed always has exactly one version regardless of this setting -- it only bounds how much prior history a frequently-changing page accumulates. Lowering it prunes existing extra versions the next time that document is re-crawled, not immediately.</p>
@@ -215,18 +215,18 @@
           <p class="tuning-hint">Finds documents that are byte-identical or near-identical to another already-indexed document (a mirror, a copy under a different host, ...) and merges each group into one canonical document, so a search never lists the same content twice. Off by default: a merge deletes the losing documents' own rows (their own link/version/embedding history is discarded, not migrated to the survivor), so review the results on <a href="/admin/content_dedup">Content dedup</a> after turning this on for the first time. See that page to trigger an immediate recompute and see exactly what got merged.</p>
         </div>
         <div class="form-row">
-          <label for="content-dedup-method">Matching method</label><br>
+          <label for="content-dedup-method">Matching method</label>
           <select id="content-dedup-method" class="field">
             <option value="exact">Exact — identical normalized text only</option>
             <option value="simhash">Near-duplicate — SimHash fingerprint within a distance threshold</option>
           </select>
         </div>
         <div class="form-row">
-          <label for="content-dedup-simhash-max-distance">Near-duplicate threshold — max SimHash Hamming distance still considered a match (only used by the near-duplicate method)</label><br>
+          <label for="content-dedup-simhash-max-distance">Near-duplicate threshold — max SimHash Hamming distance still considered a match (only used by the near-duplicate method)</label>
           <input id="content-dedup-simhash-max-distance" class="field" type="number" step="1" min="1" max="10" required>
         </div>
         <div class="form-row">
-          <label for="content-dedup-interval">Recompute interval — minutes between automatic content-dedup passes</label><br>
+          <label for="content-dedup-interval">Recompute interval — minutes between automatic content-dedup passes</label>
           <input id="content-dedup-interval" class="field" type="number" step="1" min="15" required>
         </div>
         <p class="tuning-hint">Defaults: off, exact method, distance 3, 120 minute interval (minimum 15). A recompute also always runs right after a crawl finishes, once enabled.</p>
@@ -239,11 +239,11 @@
       <div class="subpanel">
         <h4>Blocked</h4>
         <div class="form-row">
-          <label for="blocked-terms">Blocked words — one per line; a document containing any of these is excluded from results entirely</label><br>
+          <label for="blocked-terms">Blocked words — one per line; a document containing any of these is excluded from results entirely</label>
           <textarea id="blocked-terms" class="field" rows="4" placeholder="spam&#10;scam"></textarea>
         </div>
         <div class="form-row">
-          <label for="blocked-domains">Blocked domains — one host or URL per line; a document served from any of these is excluded entirely</label><br>
+          <label for="blocked-domains">Blocked domains — one host or URL per line; a document served from any of these is excluded entirely</label>
           <textarea id="blocked-domains" class="field" rows="4" placeholder="spammy.example"></textarea>
         </div>
         <p class="tuning-hint">Word matching uses the same tokenization as search, so casing and punctuation don't matter.</p>
@@ -252,11 +252,11 @@
       <div class="subpanel">
         <h4>Boosted</h4>
         <div class="form-row">
-          <label for="boosted-terms">Boosted words — one "word factor" pair per line; a matching document's final score is multiplied by factor</label><br>
+          <label for="boosted-terms">Boosted words — one "word factor" pair per line; a matching document's final score is multiplied by factor</label>
           <textarea id="boosted-terms" class="field" rows="4" placeholder="official 1.5"></textarea>
         </div>
         <div class="form-row">
-          <label for="boosted-domains">Boosted domains — one "host factor" pair per line</label><br>
+          <label for="boosted-domains">Boosted domains — one "host factor" pair per line</label>
           <textarea id="boosted-domains" class="field" rows="4" placeholder="trusted.example 2.0"></textarea>
         </div>
         <p class="tuning-hint">A factor above 1 ranks a match higher, below 1 lower. Matching factors multiply together; zero or blank is ignored.</p>
@@ -269,15 +269,15 @@
       <div class="subpanel">
         <h4>Database connection pool</h4>
         <div class="form-row">
-          <label for="db-max-open-conns">Max open connections</label><br>
+          <label for="db-max-open-conns">Max open connections</label>
           <input id="db-max-open-conns" class="field" type="number" step="1" min="1" required>
         </div>
         <div class="form-row">
-          <label for="db-max-idle-conns">Max idle connections — kept warm between requests instead of closed</label><br>
+          <label for="db-max-idle-conns">Max idle connections — kept warm between requests instead of closed</label>
           <input id="db-max-idle-conns" class="field" type="number" step="1" min="1" required>
         </div>
         <div class="form-row">
-          <label for="db-conn-max-lifetime">Connection max lifetime — minutes before a pooled connection is recycled</label><br>
+          <label for="db-conn-max-lifetime">Connection max lifetime — minutes before a pooled connection is recycled</label>
           <input id="db-conn-max-lifetime" class="field" type="number" step="1" min="1" required>
         </div>
         <p class="tuning-hint">Defaults: 25 open, 25 idle, 5 minute lifetime. SQLite always keeps a single connection regardless of these values, since it serializes writers at the file level; a running process re-reads and re-applies these within about 10 seconds of a save, but the effect on already-open connections is limited to pool bookkeeping (idle/lifetime), not an instant reconnect.</p>
@@ -286,7 +286,7 @@
       <div class="subpanel">
         <h4>Session</h4>
         <div class="form-row">
-          <label for="session-ttl">Session length — hours before a sign-in expires</label><br>
+          <label for="session-ttl">Session length — hours before a sign-in expires</label>
           <input id="session-ttl" class="field" type="number" step="1" min="1" required>
         </div>
         <p class="tuning-hint">Default: 12 hours. Applies to sessions created after saving.</p>
