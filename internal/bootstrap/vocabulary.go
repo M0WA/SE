@@ -8,12 +8,18 @@ import (
 	"searchengine/internal/domain"
 )
 
-// vocabularyPollInterval mirrors corpusStatsPollInterval/settingsPollInterval:
-// the corpus's distinct-term vocabulary only changes when documents are
-// crawled or deleted -- nowhere near once per search request -- so a ~10s
-// propagation delay is more than fresh enough while sparing every search
-// request needing fuzzy correction its own full vocabulary scan.
-const vocabularyPollInterval = 10 * time.Second
+// vocabularyPollInterval used to mirror corpusStatsPollInterval/
+// settingsPollInterval's 10s, but AllTerms is a full GROUP BY scan over
+// postings (unlike corpus stats' cheap COUNT/AVG on documents) --
+// confirmed via EXPLAIN ANALYZE on production taking 13+ seconds against
+// a 13M-row postings table, run independently by all three processes on
+// this timer. At that size a 10s interval means the database is running
+// this scan almost continuously, starving concurrent crawl writes of
+// I/O and buffer cache -- confirmed as the dominant cause of a real
+// crawl-throughput incident. Fuzzy-correction freshness tolerates being
+// several minutes stale just fine, so this is deliberately much coarser
+// than corpus stats' still-cheap 10s.
+const vocabularyPollInterval = 10 * time.Minute
 
 // VocabularySource is the read side of ports.SQLRepository that
 // SyncVocabulary needs, narrowed so it isn't tied to the full port.
