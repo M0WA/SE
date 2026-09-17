@@ -2993,6 +2993,35 @@ func TestEnsureCrawledAtIndex_CreatedOnFreshDatabase(t *testing.T) {
 	}
 }
 
+// TestPostingsDocIDIndex_CreatedOnFreshDatabase guards against a real
+// production incident: postings' only index besides its own (term, doc_id)
+// primary key was on term alone, so "DELETE FROM postings WHERE doc_id = ?"
+// (every re-crawl of an existing page, in SaveDocument) couldn't seek an
+// index directly and fell back to scanning the whole primary key -- 600ms+
+// on a 9.7M-row production table, confirmed via EXPLAIN ANALYZE.
+func TestPostingsDocIDIndex_CreatedOnFreshDatabase(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testpostingsdocidfresh%d?mode=memory&cache=shared", n)
+
+	raw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open raw connection: %v", err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+
+	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	var name string
+	err = raw.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_postings_doc_id'`).Scan(&name)
+	if err != nil {
+		t.Errorf("expected idx_postings_doc_id to exist on a freshly migrated database: %v", err)
+	}
+}
+
 // TestEnsureCrawledAtIndex_BackstopCreatesIndexOnPreExistingDatabase mirrors
 // the existing host-index/backfill migration tests: a database that already
 // has every documents column (so migrateDocumentColumns has nothing to add)
