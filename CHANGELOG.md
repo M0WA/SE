@@ -1,5 +1,18 @@
 # Changelog
 
+## v4.1.0 - 2026-09-17
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Add URL canonicalization and content fingerprints (PR1/2: dedup foundation) by @M0WA in https://github.com/M0WA/SE/pull/73
+* Add content-dedup batch job, merge, and admin surface (PR2) by @M0WA in https://github.com/M0WA/SE/pull/74
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.0.40...v4.1.0
+
+
 ## v4.0.40 - 2026-09-16
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
