@@ -1094,6 +1094,107 @@ func (h *Handler) currentEmbeddingEndpoints(ctx context.Context) []domain.Embedd
 	return endpoints
 }
 
+type chatEndpointRequest struct {
+	BaseURL        string `json:"base_url"`
+	APIKey         string `json:"api_key"`
+	Model          string `json:"model"`
+	Enabled        bool   `json:"enabled"`
+	RAGEnabled     bool   `json:"rag_enabled"`
+	RAGResultCount int    `json:"rag_result_count"`
+	// ClearAPIKey is meaningful only to a PATCH: since a GET response never
+	// echoes a stored key's real value (see chatEndpointResponse), an edit
+	// form has no way to distinguish "left blank because not being
+	// changed" from "wants it removed" -- APIKey left blank means the
+	// former (preserve whatever's already stored); this explicit flag is
+	// how the admin asks for the latter instead. Mirrors
+	// embeddingEndpointRequest.ClearAPIKey exactly.
+	ClearAPIKey bool `json:"clear_api_key"`
+}
+
+type chatEndpointResponse struct {
+	BaseURL string `json:"base_url"`
+	// HasAPIKey reports only whether a key is set, never its value -- same
+	// redacted-summary treatment toEmbeddingEndpointResponse already gives.
+	HasAPIKey      bool      `json:"has_api_key"`
+	Model          string    `json:"model"`
+	Enabled        bool      `json:"enabled"`
+	RAGEnabled     bool      `json:"rag_enabled"`
+	RAGResultCount int       `json:"rag_result_count"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+func toChatEndpointResponse(e domain.ChatEndpoint) chatEndpointResponse {
+	return chatEndpointResponse{
+		BaseURL: e.BaseURL, HasAPIKey: e.APIKey != "", Model: e.Model, Enabled: e.Enabled,
+		RAGEnabled: e.RAGEnabled, RAGResultCount: e.RAGResultCount, UpdatedAt: e.UpdatedAt,
+	}
+}
+
+// defaultChatEndpointResponse is what handleAdminChatEndpoint's GET returns
+// when nothing has ever been saved -- a settings page GET should never fail
+// just because it hasn't been configured yet, same spirit as
+// /admin/api/settings always succeeding.
+func defaultChatEndpointResponse() chatEndpointResponse {
+	return chatEndpointResponse{RAGEnabled: true, RAGResultCount: domain.DefaultChatRAGResultCount}
+}
+
+// handleAdminChatEndpoint is single-row admin config CRUD for the chat
+// endpoint (GET current config, PATCH to upsert it), mirroring
+// handleAdminEmbeddingEndpoints/handleAdminUpdateEmbeddingEndpoint's style
+// closely -- see chatEndpointRequest.ClearAPIKey's doc comment for the
+// "blank api_key on update means unchanged" convention shared with that
+// endpoint.
+func (h *Handler) handleAdminChatEndpoint(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.chatEndpoints != nil, "chat endpoint") {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		e, err := h.chatEndpoints.GetChatEndpoint(r.Context())
+		if errors.Is(err, ports.ErrChatEndpointNotConfigured) {
+			writeJSON(w, http.StatusOK, defaultChatEndpointResponse())
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, toChatEndpointResponse(e))
+	case http.MethodPatch:
+		var req chatEndpointRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		apiKey := ""
+		existing, err := h.chatEndpoints.GetChatEndpoint(r.Context())
+		if err == nil {
+			apiKey = existing.APIKey
+		} else if !errors.Is(err, ports.ErrChatEndpointNotConfigured) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if req.APIKey != "" {
+			apiKey = h.encryptAPIKey(req.APIKey)
+		} else if req.ClearAPIKey {
+			apiKey = ""
+		}
+		e := domain.ChatEndpoint{
+			BaseURL: req.BaseURL, APIKey: apiKey, Model: req.Model, Enabled: req.Enabled,
+			RAGEnabled: req.RAGEnabled, RAGResultCount: req.RAGResultCount,
+		}
+		e.Clamp()
+		e.UpdatedAt = time.Now().UTC()
+		if err := h.chatEndpoints.SetChatEndpoint(r.Context(), e); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, toChatEndpointResponse(e))
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func (h *Handler) currentSettings() settingsResponse {
 	alpha, k1, b := h.settings.Get()
 	return settingsResponse{

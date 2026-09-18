@@ -67,6 +67,14 @@
     <p class="mark">se.</p>
     <button id="sign-out" class="text-button" type="button">Sign out</button>
   </div>
+  <div class="mode-row">
+    <button type="button" id="mode-switch" class="mode-switch" role="switch" aria-checked="false" aria-label="Search or chat mode">
+      <span class="mode-switch-indicator" aria-hidden="true"></span>
+      <span class="mode-switch-option" data-mode="search">Search</span>
+      <span class="mode-switch-option" data-mode="chat">Chat</span>
+    </button>
+  </div>
+
   <form id="search-form" autocomplete="off">
     <input id="q" class="field" name="q" type="text" placeholder="Search the index…" autofocus>
     <select id="sort" class="field" name="sort" aria-label="Sort order">
@@ -76,7 +84,7 @@
     <button type="submit">Search</button>
   </form>
 
-  <details class="syntax-note">
+  <details class="syntax-note" id="syntax-note">
     <summary>Search syntax</summary>
     <dl>
       <dt><span class="syntax-token">word</span></dt>
@@ -100,6 +108,15 @@
   <div id="status"></div>
   <div id="correction-note" class="correction-note" hidden></div>
   <div id="results"></div>
+
+  <div id="chat-panel" hidden>
+    <div id="chat-messages"></div>
+    <div id="chat-status" class="chat-status"></div>
+    <form id="chat-form" autocomplete="off">
+      <input id="chat-input" class="field" name="message" type="text" placeholder="Ask about the index…">
+      <button type="submit">Ask</button>
+    </form>
+  </div>
 
   <div class="footer-link">
     <a href="/admin">Admin</a>
