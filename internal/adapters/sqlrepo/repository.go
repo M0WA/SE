@@ -1043,7 +1043,7 @@ func (r *Repository) PageRankDistribution(ctx context.Context) (min, max, avg fl
 // page shows them.
 var diagnosticsTables = []string{
 	"documents", "postings", "document_versions", "document_embeddings", "links",
-	"app_settings", "scheduled_crawls", "embedding_http_endpoints", "crawl_jobs", "crawl_job_pages", "sessions",
+	"app_settings", "scheduled_crawls", "embedding_http_endpoints", "chat_endpoint", "crawl_jobs", "crawl_job_pages", "sessions",
 }
 
 // TableRowCounts reports how many rows each of diagnosticsTables currently
@@ -2451,6 +2451,56 @@ func scanEmbeddingEndpoint(row scanner) (domain.EmbeddingHTTPEndpoint, error) {
 		return domain.EmbeddingHTTPEndpoint{}, err
 	}
 	e.CreatedAt = parseCrawledAt(createdAt)
+	return e, nil
+}
+
+// chatEndpointRowID is the fixed sentinel row id chat_endpoint's single row
+// always uses -- chat only ever has one active configuration (unlike
+// embedding_http_endpoints, a list of many blended providers), so
+// Get/SetChatEndpoint address one known row rather than a caller-supplied
+// key.
+const chatEndpointRowID = "default"
+
+const chatEndpointColumns = "base_url, api_key, model, enabled, rag_enabled, rag_result_count, updated_at"
+
+// GetChatEndpoint returns the single admin-configured chat endpoint, or
+// ports.ErrChatEndpointNotConfigured if it has never been saved.
+func (r *Repository) GetChatEndpoint(ctx context.Context) (domain.ChatEndpoint, error) {
+	query := r.ph(`SELECT `+chatEndpointColumns+` FROM chat_endpoint WHERE id = %s`, 1)
+	row := r.db.QueryRowContext(ctx, query, chatEndpointRowID)
+	e, err := scanChatEndpoint(row)
+	if err == sql.ErrNoRows {
+		return domain.ChatEndpoint{}, ports.ErrChatEndpointNotConfigured
+	}
+	if err != nil {
+		return domain.ChatEndpoint{}, fmt.Errorf("querying chat endpoint: %w", err)
+	}
+	return e, nil
+}
+
+// SetChatEndpoint upserts the single chat_endpoint sentinel row (id =
+// chatEndpointRowID) with e's fields, replacing whatever was saved before --
+// there is only ever one row, so this is a create on first call and an
+// in-place replace on every call after.
+func (r *Repository) SetChatEndpoint(ctx context.Context, e domain.ChatEndpoint) error {
+	_, err := r.db.ExecContext(ctx, r.dialect.UpsertChatEndpointSQL(),
+		chatEndpointRowID, e.BaseURL, e.APIKey, e.Model, e.Enabled, e.RAGEnabled, e.RAGResultCount,
+		e.UpdatedAt.UTC().Format(crawledAtLayout),
+	)
+	if err != nil {
+		return fmt.Errorf("setting chat endpoint: %w", err)
+	}
+	return nil
+}
+
+func scanChatEndpoint(row scanner) (domain.ChatEndpoint, error) {
+	var e domain.ChatEndpoint
+	var updatedAt string
+	if err := row.Scan(&e.BaseURL, &e.APIKey, &e.Model, &e.Enabled, &e.RAGEnabled,
+		&e.RAGResultCount, &updatedAt); err != nil {
+		return domain.ChatEndpoint{}, err
+	}
+	e.UpdatedAt = parseCrawledAt(updatedAt)
 	return e, nil
 }
 

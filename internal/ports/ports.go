@@ -516,3 +516,24 @@ type EmbeddingEndpointStore interface {
 	UpdateEmbeddingEndpoint(ctx context.Context, e domain.EmbeddingHTTPEndpoint) error
 	DeleteEmbeddingEndpoint(ctx context.Context, id string) error
 }
+
+// ErrChatEndpointNotConfigured is returned by ChatEndpointStore.GetChatEndpoint
+// when no chat endpoint has ever been saved, and by ChatService.Chat when the
+// saved endpoint exists but is disabled.
+var ErrChatEndpointNotConfigured = errors.New("chat endpoint not configured")
+
+// ChatEndpointStore persists the single admin-configured domain.ChatEndpoint.
+// Unlike EmbeddingEndpointStore (a list of many blended endpoints), chat only
+// ever has ONE active configuration, so this is Get/Set on one row, not CRUD
+// on a collection.
+type ChatEndpointStore interface {
+	// GetChatEndpoint returns ErrChatEndpointNotConfigured if never saved.
+	GetChatEndpoint(ctx context.Context) (domain.ChatEndpoint, error)
+	// SetChatEndpoint upserts the single chat endpoint row.
+	SetChatEndpoint(ctx context.Context, e domain.ChatEndpoint) error
+}
+
+// ChatCompleter calls an OpenAI-compatible chat-completions endpoint.
+type ChatCompleter interface {
+	Complete(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage) (string, error)
+}

@@ -4970,3 +4970,239 @@ func TestHandleAdminContentDedupAliasGroups_ServiceError(t *testing.T) {
 		t.Errorf("expected 500, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+// chatEndpointResp mirrors admin.go's unexported chatEndpointResponse wire
+// shape, for decoding test responses.
+type chatEndpointResp struct {
+	BaseURL        string    `json:"base_url"`
+	HasAPIKey      bool      `json:"has_api_key"`
+	Model          string    `json:"model"`
+	Enabled        bool      `json:"enabled"`
+	RAGEnabled     bool      `json:"rag_enabled"`
+	RAGResultCount int       `json:"rag_result_count"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+func adminAuthedHandlerWithChatEndpoints(t *testing.T, store ports.ChatEndpointStore) (*restapi.Handler, *http.Cookie) {
+	t.Helper()
+	return adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, ChatEndpoints: store,
+	})
+}
+
+func getChatEndpoint(t *testing.T, h *restapi.Handler, cookie *http.Cookie) (int, chatEndpointResp) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/chat-endpoint", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	var resp chatEndpointResp
+	if rec.Code == http.StatusOK {
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decoding get response: %v", err)
+		}
+	}
+	return rec.Code, resp
+}
+
+func patchChatEndpoint(t *testing.T, h *restapi.Handler, cookie *http.Cookie, body map[string]interface{}) *httptest.ResponseRecorder {
+	t.Helper()
+	data, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/chat-endpoint", bytes.NewReader(data))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	return rec
+}
+
+func TestHandleAdminChatEndpoint_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/chat-endpoint", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminChatEndpoint_MethodNotAllowed(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/chat-endpoint", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+// TestHandleAdminChatEndpoint_GetDefaultsWhenNothingSaved proves a GET
+// never fails just because nothing's been saved yet -- same spirit as
+// /admin/api/settings always succeeding.
+func TestHandleAdminChatEndpoint_GetDefaultsWhenNothingSaved(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
+	code, resp := getChatEndpoint(t, h, cookie)
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if !resp.RAGEnabled || resp.RAGResultCount != domain.DefaultChatRAGResultCount {
+		t.Errorf("expected RAG defaults (enabled, default result count), got %+v", resp)
+	}
+	if resp.HasAPIKey || resp.BaseURL != "" || resp.Model != "" || resp.Enabled {
+		t.Errorf("expected zero-ish defaults otherwise, got %+v", resp)
+	}
+}
+
+func TestHandleAdminChatEndpoint_GetSavedValueMasksKey(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
+	patchChatEndpoint(t, h, cookie, map[string]interface{}{
+		"base_url": "https://example.com/v1", "api_key": "sk-secret", "model": "gpt-x", "enabled": true,
+	})
+
+	code, resp := getChatEndpoint(t, h, cookie)
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if !resp.HasAPIKey || resp.BaseURL != "https://example.com/v1" || resp.Model != "gpt-x" || !resp.Enabled {
+		t.Errorf("unexpected response: %+v", resp)
+	}
+}
+
+func TestHandleAdminChatEndpoint_GetStoreError(t *testing.T) {
+	store := &fakeChatEndpointStore{getErr: errors.New("db unavailable")}
+	h, cookie := adminAuthedHandlerWithChatEndpoints(t, store)
+	code, _ := getChatEndpoint(t, h, cookie)
+	if code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", code)
+	}
+}
+
+// TestHandleAdminChatEndpoint_PatchCreatesNewConfig proves a PATCH with no
+// prior saved config creates one, never echoes the API key back, and
+// clamps rag_result_count via domain.ChatEndpoint.Clamp.
+func TestHandleAdminChatEndpoint_PatchCreatesNewConfig(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
+	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{
+		"base_url": "https://example.com/v1", "api_key": "sk-test", "model": "gpt-x",
+		"enabled": true, "rag_enabled": true, "rag_result_count": 999,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "sk-test") {
+		t.Errorf("expected the response to never contain the API key, got: %s", rec.Body.String())
+	}
+	var resp chatEndpointResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if !resp.HasAPIKey || resp.BaseURL != "https://example.com/v1" || resp.Model != "gpt-x" ||
+		!resp.Enabled || !resp.RAGEnabled {
+		t.Errorf("unexpected response: %+v", resp)
+	}
+	if resp.RAGResultCount != domain.MaxChatRAGResultCount {
+		t.Errorf("expected rag_result_count clamped to the max, got %d", resp.RAGResultCount)
+	}
+	if resp.UpdatedAt.IsZero() {
+		t.Errorf("expected UpdatedAt set, got zero value")
+	}
+
+	got, err := repo.GetChatEndpoint(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.APIKey == "" {
+		t.Errorf("expected a stored API key, got empty")
+	}
+}
+
+// TestHandleAdminChatEndpoint_PatchBlankAPIKeyPreservesExisting mirrors
+// TestHandleAdminUpdateEmbeddingEndpoint_BlankAPIKeyPreservesExisting's same
+// "blank api_key on update means unchanged" convention.
+func TestHandleAdminChatEndpoint_PatchBlankAPIKeyPreservesExisting(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
+	patchChatEndpoint(t, h, cookie, map[string]interface{}{
+		"base_url": "https://example.com/v1", "api_key": "sk-keep-me", "model": "gpt-x",
+	})
+
+	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{
+		"base_url": "https://example.com/v1", "model": "gpt-x-2",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	got, err := repo.GetChatEndpoint(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.APIKey != "sk-keep-me" {
+		t.Errorf("expected the existing API key to survive a PATCH that left it blank, got %q", got.APIKey)
+	}
+	if got.Model != "gpt-x-2" {
+		t.Errorf("expected model updated, got %q", got.Model)
+	}
+}
+
+// TestHandleAdminChatEndpoint_PatchClearAPIKeyRemovesIt proves
+// clear_api_key is the explicit way to actually remove a configured key.
+func TestHandleAdminChatEndpoint_PatchClearAPIKeyRemovesIt(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
+	patchChatEndpoint(t, h, cookie, map[string]interface{}{
+		"base_url": "https://example.com/v1", "api_key": "sk-remove-me",
+	})
+
+	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{
+		"base_url": "https://example.com/v1", "clear_api_key": true,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	got, err := repo.GetChatEndpoint(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.APIKey != "" {
+		t.Errorf("expected clear_api_key to remove the stored key, got %q", got.APIKey)
+	}
+}
+
+func TestHandleAdminChatEndpoint_PatchInvalidJSON(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/chat-endpoint", bytes.NewReader([]byte("{not json")))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+// TestHandleAdminChatEndpoint_PatchLookupErrorPropagates proves a
+// PATCH's own preserve-the-existing-key lookup surfaces a real store
+// error (anything other than ports.ErrChatEndpointNotConfigured) as 500,
+// rather than silently treating it as "no prior key."
+func TestHandleAdminChatEndpoint_PatchLookupErrorPropagates(t *testing.T) {
+	store := &fakeChatEndpointStore{getErr: errors.New("db unavailable")}
+	h, cookie := adminAuthedHandlerWithChatEndpoints(t, store)
+	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{"base_url": "https://example.com"})
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleAdminChatEndpoint_PatchStoreError(t *testing.T) {
+	store := &fakeChatEndpointStore{getErr: ports.ErrChatEndpointNotConfigured, setErr: errors.New("write failed")}
+	h, cookie := adminAuthedHandlerWithChatEndpoints(t, store)
+	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{"base_url": "https://example.com"})
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d: %s", rec.Code, rec.Body.String())
+	}
+}

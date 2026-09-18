@@ -3,6 +3,19 @@
   const status = document.getElementById('status');
   const correctionNote = document.getElementById('correction-note');
   const results = document.getElementById('results');
+  const syntaxNote = document.getElementById('syntax-note');
+
+  const modeSwitch = document.getElementById('mode-switch');
+  const chatPanel = document.getElementById('chat-panel');
+  const chatMessages = document.getElementById('chat-messages');
+  const chatStatus = document.getElementById('chat-status');
+  const chatForm = document.getElementById('chat-form');
+  const chatInput = document.getElementById('chat-input');
+
+  // chatHistory is the full running conversation, sent in full on every
+  // /chat call -- the backend is stateless and has no server-side session,
+  // so the client is the only place this state lives.
+  const chatHistory = [];
 
   // renderCorrectionNote shows a quiet, transparent note when the search
   // service fuzzy-corrected a misspelled query term (see corrected_terms on
@@ -115,6 +128,113 @@
     }
   }
 
+  // renderChatMessage appends one message to #chat-messages for a
+  // {role, content} turn. User and assistant turns are told apart by
+  // alignment and a quiet tint (see .chat-msg-user/.chat-msg-assistant in
+  // style.css) rather than a "You:"/"Assistant:" label. sources (only ever
+  // present on the assistant's most recent turn -- chatHistory itself
+  // never carries them, since the backend contract doesn't echo them back
+  // on later turns) are rendered as a small link list underneath, same
+  // title-or-url fallback renderResults already uses for r.title || r.url.
+  function renderChatMessage(role, content, sources) {
+    const msg = document.createElement('div');
+    msg.className = role === 'user' ? 'chat-msg chat-msg-user' : 'chat-msg chat-msg-assistant';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-msg-bubble';
+    bubble.textContent = content;
+    msg.appendChild(bubble);
+
+    if (role === 'assistant' && sources && sources.length > 0) {
+      const list = document.createElement('div');
+      list.className = 'chat-sources';
+      for (const s of sources) {
+        const link = document.createElement('a');
+        link.className = 'chat-source-link';
+        link.href = s.url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = s.title || s.url;
+        list.appendChild(link);
+      }
+      msg.appendChild(list);
+    }
+
+    chatMessages.appendChild(msg);
+    return msg;
+  }
+
+  // sendChatMessage appends the user's turn to chatHistory, renders it
+  // immediately, then POSTs the full history to /chat -- see runSearch
+  // above for the same ok/non-ok/network-failure pattern this mirrors.
+  async function sendChatMessage(content) {
+    chatHistory.push({ role: 'user', content });
+    renderChatMessage('user', content);
+    chatStatus.textContent = 'Thinking…';
+    try {
+      const resp = await fetch('/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: chatHistory }),
+      });
+      if (!resp.ok) {
+        const msg = await resp.text();
+        chatStatus.textContent = 'Chat failed: ' + msg.trim();
+        return;
+      }
+      const data = await resp.json();
+      chatHistory.push({ role: 'assistant', content: data.answer });
+      renderChatMessage('assistant', data.answer, data.sources || []);
+      chatStatus.textContent = '';
+    } catch (err) {
+      chatStatus.textContent = 'Chat failed: could not reach the server.';
+    }
+  }
+
+  // setMode swaps the page between its two independent views. Only
+  // #correction-note has hidden-state of its own (renderCorrectionNote
+  // shows/hides it depending on whether the last search had a correction),
+  // so its prior state is saved and restored rather than forced open --
+  // everything else here is unconditionally shown/hidden together.
+  let correctionNoteHiddenBeforeChat = true;
+
+  function setMode(mode) {
+    const isChat = mode === 'chat';
+    modeSwitch.setAttribute('aria-checked', String(isChat));
+    if (isChat) {
+      correctionNoteHiddenBeforeChat = correctionNote.hidden;
+      form.hidden = true;
+      if (syntaxNote) syntaxNote.hidden = true;
+      status.hidden = true;
+      correctionNote.hidden = true;
+      results.hidden = true;
+      chatPanel.hidden = false;
+    } else {
+      form.hidden = false;
+      if (syntaxNote) syntaxNote.hidden = false;
+      status.hidden = false;
+      correctionNote.hidden = correctionNoteHiddenBeforeChat;
+      results.hidden = false;
+      chatPanel.hidden = true;
+    }
+  }
+
+  modeSwitch.addEventListener('click', () => {
+    const isChat = modeSwitch.getAttribute('aria-checked') === 'true';
+    setMode(isChat ? 'search' : 'chat');
+  });
+
+  chatForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const content = chatInput.value.trim();
+    if (!content) {
+      chatStatus.textContent = 'Type something to ask.';
+      return;
+    }
+    chatInput.value = '';
+    sendChatMessage(content);
+  });
+
   const sortSelect = document.getElementById('sort');
 
   form.addEventListener('submit', (e) => {
@@ -144,5 +264,8 @@
   // Exports for the Node test runner only -- `typeof module` is undefined in
   // a browser's <script> tag. See index.test.js.
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { renderCorrectionNote, clear, scoreRow, renderResults, runSearch };
+    module.exports = {
+      renderCorrectionNote, clear, scoreRow, renderResults, runSearch,
+      chatHistory, renderChatMessage, sendChatMessage, setMode,
+    };
   }

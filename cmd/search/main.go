@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sync"
 
+	"searchengine/internal/adapters/httpchat"
 	"searchengine/internal/adapters/restapi"
 	"searchengine/internal/adapters/settingscrypto"
 	"searchengine/internal/application"
@@ -56,10 +57,12 @@ func main() {
 	searchSvc := application.NewHybridAsSearchService(repo, embedders, settings, opSettings, overrides, corpusStats, vocabulary)
 
 	handler := restapi.New(restapi.Config{
-		Search:     searchSvc,
-		OpSettings: opSettings,
-		Health:     repo,
-		Sessions:   repo,
+		Search:        searchSvc,
+		OpSettings:    opSettings,
+		Health:        repo,
+		Sessions:      repo,
+		ChatEndpoints: repo,
+		Chat:          application.NewChatService(repo, httpchat.New(), searchSvc),
 	})
 
 	addr := bootstrap.GetEnv("SEARCH_LISTEN_ADDR", "127.0.0.1:8080")

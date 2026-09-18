@@ -100,6 +100,35 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /chat:
+    post:
+      tags: [search]
+      summary: Answer one chat turn against the admin-configured chat endpoint
+      description: >-
+        Sends the given message history to the single admin-configured chat
+        endpoint (see /admin/api/chat-endpoint), optionally augmenting it
+        with retrieval-augmented-generation (RAG) context built from this
+        same search index -- see ChatResponse.sources. A message's role must
+        be "user" or "assistant"; "system" is rejected, since that role is
+        reserved for server-injected RAG context, never something a client
+        can supply to try to override the system prompt.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChatRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "405": { $ref: "#/components/responses/BadRequest" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
   # ------------------------------------------------------------------ auth
   /login:
     post:
@@ -650,6 +679,50 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AliasGroupsResponse" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/chat-endpoint:
+    get:
+      tags: [admin]
+      summary: Get the current chat endpoint config
+      description: >-
+        Unlike the embedding endpoints (many blended providers), chat only
+        ever has one active configuration -- this is Get/Set on a single
+        row, not CRUD on a collection. Never fails just because nothing's
+        been saved yet: returns a zero-ish default (rag_enabled true,
+        rag_result_count at its default, everything else empty/false)
+        instead, same spirit as /admin/api/settings always succeeding.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatEndpoint" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    patch:
+      tags: [admin]
+      summary: Upsert the chat endpoint config
+      description: >-
+        Full replace, not a merge, for every field except api_key: since a
+        GET/PATCH response never echoes the real key back (see
+        has_api_key), leaving api_key blank here preserves whatever's
+        already stored rather than clearing it -- clear_api_key is the
+        explicit way to actually remove it. rag_result_count is
+        self-healing: a non-positive value becomes the default, and it's
+        clamped into range otherwise (see domain.ChatEndpoint.Clamp).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChatEndpointRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatEndpoint" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "405": { $ref: "#/components/responses/BadRequest" }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
   /admin/api/embeddings/models:
@@ -1208,6 +1281,10 @@ components:
       description: This process wasn't wired up with the dependency this endpoint needs
       content:
         text/plain: { schema: { type: string } }
+    BadGateway:
+      description: The upstream chat-completions endpoint call failed
+      content:
+        text/plain: { schema: { type: string } }
 
   schemas:
     SearchResult:
@@ -1690,6 +1767,94 @@ components:
               type: boolean
               description: Whether an API key is stored for this endpoint -- its actual value is never returned.
             created_at: { type: string, format: date-time }
+
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [user, assistant]
+          description: >-
+            "system" is never accepted from a client -- that role is
+            reserved for server-injected RAG context built from search
+            results.
+        content: { type: string, description: "Max 4000 characters." }
+
+    ChatSource:
+      type: object
+      description: >-
+        One search result whose content informed a ChatResponse.answer,
+        surfaced separately so the UI can render it as a clickable citation
+        rather than parsing the answer text for it. Only ever populated
+        when the configured chat endpoint has rag_enabled.
+      properties:
+        url: { type: string }
+        title: { type: string }
+
+    ChatRequest:
+      type: object
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { $ref: "#/components/schemas/ChatMessage" }
+
+    ChatResponse:
+      type: object
+      properties:
+        answer: { type: string }
+        sources:
+          type: array
+          items: { $ref: "#/components/schemas/ChatSource" }
+
+    ChatEndpointOptions:
+      type: object
+      properties:
+        base_url: { type: string }
+        model: { type: string }
+        enabled:
+          type: boolean
+          description: Whether POST /chat will actually call out to this endpoint at all.
+        rag_enabled:
+          type: boolean
+          description: >-
+            When true, the latest user message is used as a search query
+            and matching results are folded into the conversation as
+            RAG context ahead of the rest of history.
+        rag_result_count:
+          type: integer
+          description: >-
+            How many search results are retrieved when rag_enabled. Bounds
+            self-heal server-side (see domain.ChatEndpoint.Clamp): a
+            non-positive value becomes the default (5); anything above the
+            max (20) is clamped down to it.
+
+    ChatEndpointRequest:
+      description: >-
+        The request shape for PATCH /admin/api/chat-endpoint. api_key is
+        write-only -- a ChatEndpoint response never echoes it back (see its
+        own has_api_key). Leaving it blank means "keep whatever is already
+        stored," not "clear it" -- clear_api_key is the explicit way to
+        actually remove it.
+      allOf:
+        - $ref: "#/components/schemas/ChatEndpointOptions"
+        - type: object
+          properties:
+            api_key: { type: string, description: "Sent as an Authorization: Bearer header; optional. Blank preserves the existing value unless clear_api_key is set." }
+            clear_api_key: { type: boolean, default: false, description: "Removes the stored key instead of preserving it when api_key is left blank." }
+
+    ChatEndpoint:
+      allOf:
+        - $ref: "#/components/schemas/ChatEndpointOptions"
+        - type: object
+          properties:
+            has_api_key:
+              type: boolean
+              description: Whether an API key is stored for this endpoint -- its actual value is never returned.
+            updated_at: { type: string, format: date-time }
 
     DatabaseDiagnostics:
       type: object
