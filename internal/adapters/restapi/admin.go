@@ -1538,6 +1538,25 @@ func (h *Handler) handleAdminRunScheduleNow(w http.ResponseWriter, r *http.Reque
 	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, "scheduled crawl not found", map[string]bool{"ok": true})
 }
 
+// handleAdminToggleSchedule flips only Enabled -- unlike PATCHing the
+// schedule (handleAdminUpdateSchedule), it never touches NextRunAt, so
+// pausing/resuming from the Jobs list's checkbox doesn't reschedule the
+// crawl or reorder that list (sorted by NextRunAt).
+func (h *Handler) handleAdminToggleSchedule(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.scheduledCrawls != nil, "scheduled crawls") {
+		return
+	}
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	err := h.scheduledCrawls.SetScheduledCrawlEnabled(r.Context(), r.PathValue("id"), req.Enabled)
+	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, "scheduled crawl not found", map[string]bool{"ok": true})
+}
+
 func (h *Handler) handleAdminSchedulePage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/html; charset=utf-8", adminScheduleHTML)
 }

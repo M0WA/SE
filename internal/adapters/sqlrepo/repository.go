@@ -2324,6 +2324,15 @@ func (r *Repository) RunScheduledCrawlNow(ctx context.Context, id string, now ti
 	return requireRowsAffected(res, id)
 }
 
+func (r *Repository) SetScheduledCrawlEnabled(ctx context.Context, id string, enabled bool) error {
+	updateSQL := r.ph(`UPDATE scheduled_crawls SET enabled = %s WHERE id = %s`, 1, 2)
+	res, err := r.db.ExecContext(ctx, updateSQL, enabled, id)
+	if err != nil {
+		return fmt.Errorf("setting scheduled crawl %s enabled=%v: %w", id, enabled, err)
+	}
+	return requireRowsAffected(res, id)
+}
+
 // ResetStaleInProgress clears in_progress for every schedule stuck true,
 // run once at crawl-server startup before the ticker's first tick --
 // nothing can genuinely be in-progress the instant this process starts,

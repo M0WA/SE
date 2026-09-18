@@ -405,6 +405,7 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("DELETE /admin/api/schedules/{id}", h.requireAuthAPI(h.handleAdminDeleteSchedule))
 	mux.HandleFunc("PATCH /admin/api/schedules/{id}", h.requireAuthAPI(h.handleAdminUpdateSchedule))
 	mux.HandleFunc("POST /admin/api/schedules/{id}/run", h.requireAuthAPI(h.handleAdminRunScheduleNow))
+	mux.HandleFunc("POST /admin/api/schedules/{id}/toggle", h.requireAuthAPI(h.handleAdminToggleSchedule))
 	mux.HandleFunc("GET /admin/api/pagerank", h.requireAuthAPI(h.handleAdminPageRank))
 	mux.HandleFunc("POST /admin/api/pagerank/recompute", h.requireAuthAPI(h.handleAdminPageRankRecompute))
 	mux.HandleFunc("GET /admin/api/embeddings/recompute", h.requireAuthAPI(h.handleAdminEmbeddingsRecomputeStatus))

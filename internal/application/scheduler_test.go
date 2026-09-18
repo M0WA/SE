@@ -88,6 +88,10 @@ func (f *fakeScheduledCrawlStore) RunScheduledCrawlNow(context.Context, string, 
 	return errors.New("not implemented")
 }
 
+func (f *fakeScheduledCrawlStore) SetScheduledCrawlEnabled(context.Context, string, bool) error {
+	return errors.New("not implemented")
+}
+
 func (f *fakeScheduledCrawlStore) ResetStaleInProgress(context.Context) (int, error) {
 	return 0, errors.New("not implemented")
 }

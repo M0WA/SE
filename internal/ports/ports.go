@@ -479,6 +479,15 @@ type ScheduledCrawlStore interface {
 	// clears InProgress, leaving every other field untouched -- picked up by
 	// the next scheduler tick. Returns ErrScheduledCrawlNotFound if unknown.
 	RunScheduledCrawlNow(ctx context.Context, id string, now time.Time) error
+	// SetScheduledCrawlEnabled flips only Enabled, leaving NextRunAt (and
+	// every other field) untouched -- unlike UpdateScheduledCrawl, which
+	// always reschedules (NextRunAt = interval from now) since it's meant
+	// for a genuine field edit from the schedule detail page. The admin
+	// Jobs list's plain pause/resume checkbox uses this instead, so
+	// toggling it doesn't reorder the list (sorted by NextRunAt) or push a
+	// paused-then-resumed crawl's next run further out than expected.
+	// Returns ErrScheduledCrawlNotFound if unknown.
+	SetScheduledCrawlEnabled(ctx context.Context, id string, enabled bool) error
 	// ResetStaleInProgress clears every stuck-true InProgress flag -- run
 	// once at crawl-server startup, before anything queries
 	// DueScheduledCrawls. Returns how many rows were reset.

@@ -149,6 +149,62 @@ func TestRunScheduledCrawlNow_SetsNextRunAtAndReEnablesWithoutTouchingOptions(t 
 	}
 }
 
+// TestSetScheduledCrawlEnabled_LeavesNextRunAtUntouched is the whole point
+// of this method existing separately from UpdateScheduledCrawl: a plain
+// pause/resume toggle must not reschedule the crawl (NextRunAt) or touch
+// any other option -- see ports.ScheduledCrawlStore's doc comment on why
+// (the admin Jobs list sorts by NextRunAt, so a PATCH-driven reschedule on
+// every toggle reorders that list unexpectedly).
+func TestSetScheduledCrawlEnabled_LeavesNextRunAtUntouched(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	fixedNextRun := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Second)
+	s := newScheduledCrawl("sched-1", 30, fixedNextRun)
+	if err := repo.CreateScheduledCrawl(ctx, s); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := repo.SetScheduledCrawlEnabled(ctx, "sched-1", false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := repo.GetScheduledCrawl(ctx, "sched-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Enabled {
+		t.Error("expected SetScheduledCrawlEnabled(false) to disable the schedule")
+	}
+	if !got.NextRunAt.Equal(fixedNextRun) {
+		t.Errorf("expected NextRunAt untouched at %v, got %v", fixedNextRun, got.NextRunAt)
+	}
+	if got.IntervalMinutes != 30 || got.MaxPages != 20 || got.LinkScope != domain.LinkScopeHost {
+		t.Errorf("expected every other option untouched, got %+v", got)
+	}
+
+	if err := repo.SetScheduledCrawlEnabled(ctx, "sched-1", true); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got, err = repo.GetScheduledCrawl(ctx, "sched-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !got.Enabled {
+		t.Error("expected SetScheduledCrawlEnabled(true) to re-enable the schedule")
+	}
+	if !got.NextRunAt.Equal(fixedNextRun) {
+		t.Errorf("expected NextRunAt still untouched at %v, got %v", fixedNextRun, got.NextRunAt)
+	}
+}
+
+func TestSetScheduledCrawlEnabled_NotFound(t *testing.T) {
+	repo := newTestRepo(t)
+	err := repo.SetScheduledCrawlEnabled(context.Background(), "missing", true)
+	if !errors.Is(err, ports.ErrScheduledCrawlNotFound) {
+		t.Errorf("expected ErrScheduledCrawlNotFound, got %v", err)
+	}
+}
+
 func TestRunScheduledCrawlNow_NotFound(t *testing.T) {
 	repo := newTestRepo(t)
 	err := repo.RunScheduledCrawlNow(context.Background(), "missing", time.Now())

@@ -1034,6 +1034,39 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
+  /admin/api/schedules/{id}/toggle:
+    post:
+      tags: [admin]
+      summary: Pause or resume a schedule without rescheduling it
+      description: >-
+        Sets only `enabled` -- unlike PATCHing the schedule, this never
+        touches `next_run_at` or any other field, so a plain pause/resume
+        (the admin Jobs page's checkbox) doesn't push the crawl's next run
+        out to now-plus-interval or reorder a list sorted by `next_run_at`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
   # --------------------------------------------------------- crawl-internal
   # crawl-server has no HTTP entrypoint to start a crawl -- the only caller
   # is its own in-process scheduler ticker (application.TriggerDueCrawls),
