@@ -33,6 +33,11 @@ type fakeScheduledCrawlStore struct {
 
 	runNowIDs []string
 	runNowErr error
+
+	setEnabledID    string
+	setEnabledValue bool
+	setEnabledErr   error
+	setEnabledCalls int
 }
 
 func (f *fakeScheduledCrawlStore) CreateScheduledCrawl(_ context.Context, s domain.ScheduledCrawl) error {
@@ -78,6 +83,16 @@ func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(context.Context, string,
 func (f *fakeScheduledCrawlStore) RunScheduledCrawlNow(_ context.Context, id string, _ time.Time) error {
 	f.runNowIDs = append(f.runNowIDs, id)
 	return f.runNowErr
+}
+
+// SetScheduledCrawlEnabled records the ID/value it was asked to set, so a
+// test can assert the handler called through correctly without touching
+// NextRunAt -- mirrors RunScheduledCrawlNow's recording pattern above.
+func (f *fakeScheduledCrawlStore) SetScheduledCrawlEnabled(_ context.Context, id string, enabled bool) error {
+	f.setEnabledCalls++
+	f.setEnabledID = id
+	f.setEnabledValue = enabled
+	return f.setEnabledErr
 }
 
 // ResetStaleInProgress is never exercised by restapi's own handlers (it's
@@ -911,6 +926,77 @@ func TestHandleAdminRunScheduleNow_ServiceError(t *testing.T) {
 	store := &fakeScheduledCrawlStore{runNowErr: errors.New("db unavailable")}
 	h, cookie := adminAuthedHandlerWithSchedules(t, store)
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules/sched-1/run", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminToggleSchedule_Success(t *testing.T) {
+	store := &fakeScheduledCrawlStore{}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	body, _ := json.Marshal(map[string]bool{"enabled": false})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules/sched-1/toggle", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.setEnabledCalls != 1 || store.setEnabledID != "sched-1" || store.setEnabledValue != false {
+		t.Errorf("expected SetScheduledCrawlEnabled(sched-1, false), got calls=%d id=%q enabled=%v",
+			store.setEnabledCalls, store.setEnabledID, store.setEnabledValue)
+	}
+}
+
+func TestHandleAdminToggleSchedule_InvalidJSON(t *testing.T) {
+	store := &fakeScheduledCrawlStore{}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules/sched-1/toggle", strings.NewReader("not json"))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+	if store.setEnabledCalls != 0 {
+		t.Error("expected SetScheduledCrawlEnabled not to be called for an invalid body")
+	}
+}
+
+func TestHandleAdminToggleSchedule_NotFound(t *testing.T) {
+	store := &fakeScheduledCrawlStore{setEnabledErr: ports.ErrScheduledCrawlNotFound}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	body, _ := json.Marshal(map[string]bool{"enabled": true})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules/missing/toggle", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminToggleSchedule_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithSchedules(t, nil)
+	body, _ := json.Marshal(map[string]bool{"enabled": true})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules/sched-1/toggle", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminToggleSchedule_ServiceError(t *testing.T) {
+	store := &fakeScheduledCrawlStore{setEnabledErr: errors.New("db unavailable")}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	body, _ := json.Marshal(map[string]bool{"enabled": true})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules/sched-1/toggle", bytes.NewReader(body))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)

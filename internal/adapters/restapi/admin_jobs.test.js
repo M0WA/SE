@@ -201,6 +201,39 @@ test('crawlLinkScopeCell renders the human label for a known scope, falling back
   assert.equal(crawlLinkScopeCell({ link_scope: 'something-unknown' }).textContent, 'something-unknown');
 });
 
+test('toggleCrawlEnabled POSTs to the dedicated toggle endpoint with the flipped value, not a full-schedule PATCH', async () => {
+  const { toggleCrawlEnabled } = loadFixture();
+  let gotMethod, gotURL, gotBody;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/toggle')) {
+      gotMethod = opts.method;
+      gotURL = url;
+      gotBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => ({ ok: true }) };
+    }
+    return { ok: true, json: async () => [] };
+  };
+  await toggleCrawlEnabled({ id: 'sched-1', enabled: false });
+  assert.equal(gotMethod, 'POST');
+  assert.equal(gotURL, '/admin/api/schedules/sched-1/toggle');
+  assert.deepEqual(gotBody, { enabled: true });
+});
+
+test('toggleCrawlEnabled alerts on failure', async () => {
+  const { toggleCrawlEnabled } = loadFixture();
+  const alerts = [];
+  global.window.alert = (msg) => alerts.push(msg);
+  global.fetch = async (url, opts) => {
+    if (url.includes('/toggle')) {
+      return { ok: false, status: 500, json: async () => ({}), text: async () => 'boom' };
+    }
+    return { ok: true, json: async () => [] };
+  };
+  await toggleCrawlEnabled({ id: 'sched-1', enabled: true });
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0], /Could not update/);
+});
+
 test('jobDetailDefaultDir starts numeric/recency columns descending, text columns ascending', () => {
   const { jobDetailDefaultDir } = loadFixture();
   assert.equal(jobDetailDefaultDir('fetched_at'), 'desc');

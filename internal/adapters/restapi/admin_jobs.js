@@ -552,26 +552,14 @@
     }
   }
 
-  function requestBodyFor(s) {
-    return {
-      seed_urls: s.seed_urls, max_pages: s.max_pages,
-      respect_robots: s.respect_robots, user_agent: s.user_agent,
-      cookie: s.cookie, basic_auth_user: s.basic_auth_user, basic_auth_pass: s.basic_auth_pass,
-      link_scope: s.link_scope, use_sitemap: s.use_sitemap,
-      allowed_domains: s.allowed_domains, blocked_domains: s.blocked_domains,
-      follow_indexed_domains: s.follow_indexed_domains,
-      fetch_timeout_seconds: s.fetch_timeout_seconds, min_text_length: s.min_text_length,
-      crawl_delay_ms: s.crawl_delay_ms, max_response_kb: s.max_response_kb,
-      prioritize_unindexed: s.prioritize_unindexed,
-      interval_minutes: s.interval_minutes, max_runs: s.max_runs,
-      renderer: s.renderer,
-      enabled: s.enabled,
-    };
-  }
-
+  // Uses the dedicated toggle endpoint, not the full-schedule PATCH --
+  // that one always reschedules (next_run_at = interval from now), which
+  // would reorder this list (sorted by next_run_at) on every checkbox
+  // click and push a paused-then-resumed crawl's next run further out
+  // than a plain pause/resume implies.
   async function toggleCrawlEnabled(s) {
     try {
-      await patchJSON('/admin/api/schedules/' + encodeURIComponent(s.id), requestBodyFor({ ...s, enabled: !s.enabled }));
+      await postJSON('/admin/api/schedules/' + encodeURIComponent(s.id) + '/toggle', { enabled: !s.enabled });
       await loadCrawls();
     } catch (err) {
       window.alert('Could not update: ' + err.message);
@@ -597,7 +585,7 @@
       capitalize, formatDuration, formatSpeed, updateJobSpeeds, formatMs,
       clearEndedJobs,
       filterJobs, filterPages, filterCrawls,
-      crawlRecurrenceCell, crawlLinkScopeCell,
+      crawlRecurrenceCell, crawlLinkScopeCell, toggleCrawlEnabled,
       LINK_SCOPE_LABELS, RENDERER_LABELS,
       JOB_DETAIL_COLUMNS, jobDetailDefaultDir, jobDetailSortValue,
       sortJobDetailPages, buildJobDetailTable, renderJobDetailTable,
