@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.2 - 2026-09-18
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Group the per-schedule edit page's 23 flat fields into collapsible sections by @M0WA in https://github.com/M0WA/SE/pull/108
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.1...v4.13.2
+
+
 ## v4.13.1 - 2026-09-17
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
