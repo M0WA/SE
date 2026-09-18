@@ -118,6 +118,14 @@ func TestAllDialects_UpsertSettingSQLNonEmpty(t *testing.T) {
 	}
 }
 
+func TestAllDialects_UpsertChatEndpointSQLNonEmpty(t *testing.T) {
+	for _, driver := range []string{"sqlite", "mysql", "postgres"} {
+		if sqlrepo.NewDialect(driver).UpsertChatEndpointSQL() == "" {
+			t.Errorf("expected an upsert-chat-endpoint statement for %s", driver)
+		}
+	}
+}
+
 func TestAllDialects_CreateSchemaSQLIncludesDocumentAliases(t *testing.T) {
 	for _, driver := range []string{"sqlite", "mysql", "postgres"} {
 		stmts := sqlrepo.NewDialect(driver).CreateSchemaSQL()

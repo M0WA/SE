@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"searchengine/internal/application"
 	"searchengine/internal/bootstrap"
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
@@ -160,13 +161,20 @@ type Handler struct {
 	// (GET/POST/PATCH/DELETE /admin/api/embeddings/endpoints...) -- set on
 	// admin-server only, the same *sqlrepo.Repository ScheduledCrawls uses.
 	embeddingEndpoints ports.EmbeddingEndpointStore
-	health             ports.HealthChecker
-	onCrawlComplete    func()
-	dbDriver           string
-	adminUser          string
-	adminPass          string
-	sessions           ports.SessionStore
-	loginLimiter       *loginLimiter
+	// chat backs the public POST /chat endpoint -- set on search-server
+	// only, nil (and 503-reporting) everywhere else.
+	chat *application.ChatService
+	// chatEndpoints backs the admin API's chat endpoint config CRUD
+	// (GET/PATCH /admin/api/chat-endpoint) -- set on admin-server only,
+	// the same *sqlrepo.Repository embeddingEndpoints/scheduledCrawls use.
+	chatEndpoints   ports.ChatEndpointStore
+	health          ports.HealthChecker
+	onCrawlComplete func()
+	dbDriver        string
+	adminUser       string
+	adminPass       string
+	sessions        ports.SessionStore
+	loginLimiter    *loginLimiter
 	// crawlInternalToken, when set, is the shared secret
 	// requireCrawlInternalToken checks RoutesCrawlInternal callers
 	// against -- see its doc comment. Meaningless on RoutesSearch/
@@ -226,6 +234,13 @@ type Config struct {
 	// embedding endpoint CRUD API -- the same *sqlrepo.Repository
 	// ScheduledCrawls uses.
 	EmbeddingEndpoints ports.EmbeddingEndpointStore
+	// Chat is set on search-server only, backing the public POST /chat
+	// endpoint.
+	Chat *application.ChatService
+	// ChatEndpoints is set on admin-server only, backing the chat endpoint
+	// config CRUD API -- the same *sqlrepo.Repository EmbeddingEndpoints
+	// uses.
+	ChatEndpoints ports.ChatEndpointStore
 	// Health backs GET /healthz on every process; unset always reports
 	// healthy (no DB connection to check).
 	Health ports.HealthChecker
@@ -283,6 +298,8 @@ func New(cfg Config) *Handler {
 		settingsStore:         cfg.SettingsStore,
 		scheduledCrawls:       cfg.ScheduledCrawls,
 		embeddingEndpoints:    cfg.EmbeddingEndpoints,
+		chat:                  cfg.Chat,
+		chatEndpoints:         cfg.ChatEndpoints,
 		health:                cfg.Health,
 		onCrawlComplete:       cfg.OnCrawlComplete,
 		dbDriver:              cfg.DBDriver,
@@ -330,6 +347,7 @@ func (h *Handler) RoutesSearch() http.Handler {
 	mux.HandleFunc("/style.css", h.handleStyle)
 	mux.HandleFunc("/index.js", h.handleIndexJS)
 	mux.HandleFunc("/search", h.requireAuthAPI(h.handleSearch))
+	mux.HandleFunc("POST /chat", h.requireAuthAPI(h.handleChat))
 	mux.HandleFunc("/healthz", h.handleHealthz)
 	return withSecurityHeaders(mux)
 }
@@ -390,6 +408,7 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("/admin/api/postings", h.requireAuthAPI(h.handleAdminPostings))
 	mux.HandleFunc("/admin/api/search", h.requireAuthAPI(h.handleAdminSearch))
 	mux.HandleFunc("/admin/api/settings", h.requireAuthAPI(h.handleAdminSettings))
+	mux.HandleFunc("/admin/api/chat-endpoint", h.requireAuthAPI(h.handleAdminChatEndpoint))
 	mux.HandleFunc("POST /admin/api/embeddings/models", h.requireAuthAPI(h.handleAdminEmbeddingsModels))
 	mux.HandleFunc("POST /admin/api/embeddings/test", h.requireAuthAPI(h.handleAdminEmbeddingsTest))
 	mux.HandleFunc("/admin/api/embeddings/endpoints", h.requireAuthAPI(h.handleAdminEmbeddingEndpoints))

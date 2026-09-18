@@ -161,6 +161,165 @@ test('runSearch reports a network-error message when fetch throws', async () => 
   assert.equal(document.getElementById('status').textContent, 'Search failed: could not reach the server.');
 });
 
+test('setMode toggles the switch and swaps panel visibility in both directions', () => {
+  const { setMode } = loadFixture();
+  const modeSwitch = document.getElementById('mode-switch');
+  const searchForm = document.getElementById('search-form');
+  const chatPanel = document.getElementById('chat-panel');
+  const syntaxNote = document.getElementById('syntax-note');
+  const status = document.getElementById('status');
+  const resultsEl = document.getElementById('results');
+
+  assert.equal(modeSwitch.getAttribute('aria-checked'), 'false');
+  assert.equal(chatPanel.hidden, true);
+
+  setMode('chat');
+  assert.equal(modeSwitch.getAttribute('aria-checked'), 'true');
+  assert.equal(searchForm.hidden, true);
+  assert.equal(syntaxNote.hidden, true);
+  assert.equal(status.hidden, true);
+  assert.equal(resultsEl.hidden, true);
+  assert.equal(chatPanel.hidden, false);
+
+  setMode('search');
+  assert.equal(modeSwitch.getAttribute('aria-checked'), 'false');
+  assert.equal(searchForm.hidden, false);
+  assert.equal(syntaxNote.hidden, false);
+  assert.equal(status.hidden, false);
+  assert.equal(resultsEl.hidden, false);
+  assert.equal(chatPanel.hidden, true);
+});
+
+test('the mode switch button toggles mode on click', () => {
+  loadFixture();
+  const modeSwitch = document.getElementById('mode-switch');
+  const chatPanel = document.getElementById('chat-panel');
+
+  modeSwitch.dispatchEvent(new window.Event('click', { bubbles: true }));
+  assert.equal(modeSwitch.getAttribute('aria-checked'), 'true');
+  assert.equal(chatPanel.hidden, false);
+
+  modeSwitch.dispatchEvent(new window.Event('click', { bubbles: true }));
+  assert.equal(modeSwitch.getAttribute('aria-checked'), 'false');
+  assert.equal(chatPanel.hidden, true);
+});
+
+test('setMode restores a hidden correction-note rather than forcing it open', () => {
+  const { setMode } = loadFixture();
+  const correctionNote = document.getElementById('correction-note');
+  correctionNote.hidden = false;
+  correctionNote.textContent = 'Showing results for “the” instead of “teh”.';
+
+  setMode('chat');
+  assert.equal(correctionNote.hidden, true);
+
+  setMode('search');
+  assert.equal(correctionNote.hidden, false);
+});
+
+test('switching back to search does not clear chat history or messages', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'hi' }) });
+  const { setMode, sendChatMessage } = loadFixture();
+  await sendChatMessage('hello');
+  assert.equal(document.getElementById('chat-messages').children.length, 2);
+
+  setMode('search');
+  setMode('chat');
+  assert.equal(document.getElementById('chat-messages').children.length, 2);
+});
+
+test('sendChatMessage on success appends both turns to history and renders sources', async () => {
+  let gotURL, gotOpts;
+  global.fetch = async (url, opts) => {
+    gotURL = url;
+    gotOpts = opts;
+    return {
+      ok: true,
+      json: async () => ({
+        answer: 'The answer is 42.',
+        sources: [{ url: 'http://a', title: 'A' }, { url: 'http://b', title: '' }],
+      }),
+    };
+  };
+  const { sendChatMessage, chatHistory } = loadFixture();
+  await sendChatMessage('what is the answer?');
+
+  assert.equal(gotURL, '/chat');
+  assert.equal(gotOpts.method, 'POST');
+  assert.equal(gotOpts.headers['Content-Type'], 'application/json');
+  // At the moment the request was sent, chatHistory held only the user's
+  // just-appended turn -- the assistant's reply is pushed only afterward,
+  // once the response comes back.
+  assert.deepEqual(JSON.parse(gotOpts.body), { messages: [{ role: 'user', content: 'what is the answer?' }] });
+
+  assert.equal(chatHistory.length, 2);
+  assert.deepEqual(chatHistory[0], { role: 'user', content: 'what is the answer?' });
+  assert.deepEqual(chatHistory[1], { role: 'assistant', content: 'The answer is 42.' });
+
+  const messages = document.getElementById('chat-messages').children;
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].className, 'chat-msg chat-msg-user');
+  assert.equal(messages[0].querySelector('.chat-msg-bubble').textContent, 'what is the answer?');
+  assert.equal(messages[1].className, 'chat-msg chat-msg-assistant');
+  assert.equal(messages[1].querySelector('.chat-msg-bubble').textContent, 'The answer is 42.');
+
+  const links = messages[1].querySelectorAll('.chat-source-link');
+  assert.equal(links.length, 2);
+  assert.equal(links[0].getAttribute('href'), 'http://a');
+  assert.equal(links[0].textContent, 'A');
+  assert.equal(links[1].getAttribute('href'), 'http://b');
+  assert.equal(links[1].textContent, 'http://b');
+
+  assert.equal(document.getElementById('chat-status').textContent, '');
+});
+
+test('sendChatMessage renders an assistant message with no source list when none are given', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'no sources here' }) });
+  const { sendChatMessage } = loadFixture();
+  await sendChatMessage('q');
+  const assistantMsg = document.getElementById('chat-messages').children[1];
+  assert.equal(assistantMsg.querySelector('.chat-sources'), null);
+});
+
+test('sendChatMessage renders the server error text on a non-ok response', async () => {
+  global.fetch = async () => ({ ok: false, text: async () => ' endpoint not configured ' });
+  const { sendChatMessage } = loadFixture();
+  await sendChatMessage('q');
+  assert.equal(document.getElementById('chat-status').textContent, 'Chat failed: endpoint not configured');
+  // The failed turn's reply is never appended -- only the user's own message shows.
+  assert.equal(document.getElementById('chat-messages').children.length, 1);
+});
+
+test('sendChatMessage renders a generic failure message when fetch throws', async () => {
+  global.fetch = async () => { throw new Error('boom'); };
+  const { sendChatMessage } = loadFixture();
+  await sendChatMessage('q');
+  assert.equal(document.getElementById('chat-status').textContent, 'Chat failed: could not reach the server.');
+});
+
+test('submitting an empty chat message is a no-op', () => {
+  let fetched = false;
+  global.fetch = async () => { fetched = true; return { ok: true, json: async () => ({ answer: '' }) }; };
+  loadFixture();
+  document.getElementById('chat-input').value = '   ';
+  document.getElementById('chat-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
+  assert.equal(fetched, false);
+  assert.equal(document.getElementById('chat-messages').children.length, 0);
+  assert.equal(document.getElementById('chat-status').textContent, 'Type something to ask.');
+});
+
+test('submitting the chat form sends the trimmed input and clears the field', async () => {
+  let sent;
+  global.fetch = async (url, opts) => { sent = JSON.parse(opts.body); return { ok: true, json: async () => ({ answer: 'ok' }) }; };
+  loadFixture();
+  const chatInput = document.getElementById('chat-input');
+  chatInput.value = '  hello there  ';
+  document.getElementById('chat-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
+  assert.equal(chatInput.value, '');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(sent.messages[0], { role: 'user', content: 'hello there' });
+});
+
 test('sign-out posts to /logout on click', async () => {
   loadFixture();
   let fetchedURL, fetchedOpts;

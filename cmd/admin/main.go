@@ -86,6 +86,7 @@ func main() {
 		SettingsStore:         repo,
 		ScheduledCrawls:       repo,
 		EmbeddingEndpoints:    repo,
+		ChatEndpoints:         repo,
 		Health:                repo,
 		Sessions:              repo,
 		DBDriver:              driver,

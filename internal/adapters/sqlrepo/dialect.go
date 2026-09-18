@@ -9,6 +9,7 @@ type Dialect interface {
 	UpsertDocumentEmbeddingSQL() string
 	UpsertSettingSQL() string
 	UpsertDocumentAliasSQL() string
+	UpsertChatEndpointSQL() string
 	CreateSchemaSQL() []string
 }
 
@@ -39,6 +40,13 @@ func (sqliteDialect) UpsertDocumentAliasSQL() string {
 	return `INSERT INTO document_aliases (alias_url, canonical_id, reason, created_at, host) VALUES (?, ?, ?, ?, ?)
 	        ON CONFLICT(alias_url) DO UPDATE SET
 	          canonical_id=excluded.canonical_id, reason=excluded.reason, created_at=excluded.created_at, host=excluded.host`
+}
+func (sqliteDialect) UpsertChatEndpointSQL() string {
+	return `INSERT INTO chat_endpoint (id, base_url, api_key, model, enabled, rag_enabled, rag_result_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	        ON CONFLICT(id) DO UPDATE SET
+	          base_url=excluded.base_url, api_key=excluded.api_key, model=excluded.model,
+	          enabled=excluded.enabled, rag_enabled=excluded.rag_enabled,
+	          rag_result_count=excluded.rag_result_count, updated_at=excluded.updated_at`
 }
 func (sqliteDialect) CreateSchemaSQL() []string {
 	return []string{
@@ -110,6 +118,19 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			chunk_size_tokens INTEGER NOT NULL DEFAULT 0, tokenize_url TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL
 		)`,
+		// chat_endpoint holds the single admin-configured chat-completions
+		// backend (see domain.ChatEndpoint) -- unlike
+		// embedding_http_endpoints (a list of many blended providers), chat
+		// only ever has one active configuration, kept as a single sentinel
+		// row (id = the fixed value chatEndpointRowID) upserted in place
+		// rather than a growing table.
+		`CREATE TABLE IF NOT EXISTS chat_endpoint (
+			id TEXT PRIMARY KEY, base_url TEXT NOT NULL,
+			api_key TEXT NOT NULL DEFAULT '', model TEXT NOT NULL,
+			enabled BOOLEAN NOT NULL DEFAULT false, rag_enabled BOOLEAN NOT NULL DEFAULT false,
+			rag_result_count INTEGER NOT NULL DEFAULT 0,
+			updated_at TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS crawl_jobs (
 			id TEXT PRIMARY KEY, request TEXT NOT NULL, status TEXT NOT NULL,
 			pages_crawled INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
@@ -157,6 +178,13 @@ func (mysqlDialect) UpsertSettingSQL() string {
 func (mysqlDialect) UpsertDocumentAliasSQL() string {
 	return `INSERT INTO document_aliases (alias_url, canonical_id, reason, created_at, host) VALUES (?, ?, ?, ?, ?)
 	        ON DUPLICATE KEY UPDATE canonical_id=VALUES(canonical_id), reason=VALUES(reason), created_at=VALUES(created_at), host=VALUES(host)`
+}
+func (mysqlDialect) UpsertChatEndpointSQL() string {
+	return `INSERT INTO chat_endpoint (id, base_url, api_key, model, enabled, rag_enabled, rag_result_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	        ON DUPLICATE KEY UPDATE
+	          base_url=VALUES(base_url), api_key=VALUES(api_key), model=VALUES(model),
+	          enabled=VALUES(enabled), rag_enabled=VALUES(rag_enabled),
+	          rag_result_count=VALUES(rag_result_count), updated_at=VALUES(updated_at)`
 }
 func (mysqlDialect) CreateSchemaSQL() []string {
 	return []string{
@@ -226,6 +254,16 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			chunk_size_tokens INT NOT NULL DEFAULT 0, tokenize_url TEXT NOT NULL DEFAULT '',
 			created_at VARCHAR(64) NOT NULL
 		) ENGINE=InnoDB`,
+		// See the sqlite dialect's chat_endpoint comment: a single sentinel
+		// row (id = chatEndpointRowID), upserted in place, not a growing
+		// table.
+		`CREATE TABLE IF NOT EXISTS chat_endpoint (
+			id VARCHAR(20) PRIMARY KEY, base_url TEXT NOT NULL,
+			api_key TEXT NOT NULL, model VARCHAR(255) NOT NULL,
+			enabled BOOLEAN NOT NULL DEFAULT false, rag_enabled BOOLEAN NOT NULL DEFAULT false,
+			rag_result_count INT NOT NULL DEFAULT 0,
+			updated_at VARCHAR(64) NOT NULL
+		) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS crawl_jobs (
 			id VARCHAR(64) PRIMARY KEY, request LONGTEXT NOT NULL, status VARCHAR(32) NOT NULL,
 			pages_crawled INT NOT NULL DEFAULT 0, error TEXT NOT NULL,
@@ -277,6 +315,13 @@ func (postgresDialect) UpsertDocumentAliasSQL() string {
 	return `INSERT INTO document_aliases (alias_url, canonical_id, reason, created_at, host) VALUES ($1, $2, $3, $4, $5)
 	        ON CONFLICT (alias_url) DO UPDATE SET
 	          canonical_id=EXCLUDED.canonical_id, reason=EXCLUDED.reason, created_at=EXCLUDED.created_at, host=EXCLUDED.host`
+}
+func (postgresDialect) UpsertChatEndpointSQL() string {
+	return `INSERT INTO chat_endpoint (id, base_url, api_key, model, enabled, rag_enabled, rag_result_count, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	        ON CONFLICT (id) DO UPDATE SET
+	          base_url=EXCLUDED.base_url, api_key=EXCLUDED.api_key, model=EXCLUDED.model,
+	          enabled=EXCLUDED.enabled, rag_enabled=EXCLUDED.rag_enabled,
+	          rag_result_count=EXCLUDED.rag_result_count, updated_at=EXCLUDED.updated_at`
 }
 func (postgresDialect) CreateSchemaSQL() []string {
 	return []string{
@@ -344,6 +389,16 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			enabled BOOLEAN NOT NULL DEFAULT true,
 			chunk_size_tokens INT NOT NULL DEFAULT 0, tokenize_url TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL
+		)`,
+		// See the sqlite dialect's chat_endpoint comment: a single sentinel
+		// row (id = chatEndpointRowID), upserted in place, not a growing
+		// table.
+		`CREATE TABLE IF NOT EXISTS chat_endpoint (
+			id TEXT PRIMARY KEY, base_url TEXT NOT NULL,
+			api_key TEXT NOT NULL DEFAULT '', model TEXT NOT NULL,
+			enabled BOOLEAN NOT NULL DEFAULT false, rag_enabled BOOLEAN NOT NULL DEFAULT false,
+			rag_result_count INT NOT NULL DEFAULT 0,
+			updated_at TEXT NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS crawl_jobs (
 			id TEXT PRIMARY KEY, request TEXT NOT NULL, status TEXT NOT NULL,
