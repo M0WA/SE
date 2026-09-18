@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.3 - 2026-09-18
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Stop the Jobs list from reshuffling every time a schedule is toggled by @M0WA in https://github.com/M0WA/SE/pull/110
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.2...v4.13.3
+
+
 ## v4.13.2 - 2026-09-18
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
