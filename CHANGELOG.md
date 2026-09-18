@@ -5,6 +5,21 @@
 <!-- Release notes generated using configuration in .github/release.yml at main -->
 
 ## What's Changed
+### Release Process
+* Release v4.13.4 by @github-actions[bot] in https://github.com/M0WA/SE/pull/113
+### Other Changes
+* Add prometheus-postgres-exporter, reusing searchengine's own DB_DSN by @M0WA in https://github.com/M0WA/SE/pull/112
+* Add an admin-configurable chat mode with a search/chat toggle on the search page by @M0WA in https://github.com/M0WA/SE/pull/114
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.3...v4.13.4
+
+
+## v4.13.4 - 2026-09-18
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
 ### Other Changes
 * Add prometheus-postgres-exporter, reusing searchengine's own DB_DSN by @M0WA in https://github.com/M0WA/SE/pull/112
 
