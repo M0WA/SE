@@ -150,6 +150,9 @@ func (r *Repository) migrate(ctx context.Context) error {
 			return fmt.Errorf("migration failed: %w", err)
 		}
 	}
+	if _, err := r.db.ExecContext(ctx, r.dialect.SeedContentDedupLockSQL()); err != nil {
+		return fmt.Errorf("seeding content dedup lock: %w", err)
+	}
 	if err := r.migrateDocumentColumns(ctx); err != nil {
 		return err
 	}
@@ -1578,10 +1581,48 @@ func (r *Repository) MergeDocuments(ctx context.Context, canonicalID string, los
 	return tx.Commit()
 }
 
+// TryAcquireContentDedupLock claims content_dedup_lock's single sentinel
+// row via a conditional UPDATE (the same WHERE-current-value pattern
+// RunScheduledCrawlNow uses for scheduled_crawls.in_progress) -- atomic
+// across processes, unlike a check-then-act read-then-write, which is
+// exactly what let two independent RunContentDedupJob calls interleave in
+// production (see ports.ContentDedupRepository's doc comment).
+func (r *Repository) TryAcquireContentDedupLock(ctx context.Context) (bool, error) {
+	updateSQL := r.ph(`UPDATE content_dedup_lock SET in_progress = %s WHERE id = 1 AND in_progress = %s`, 1, 2)
+	res, err := r.db.ExecContext(ctx, updateSQL, true, false)
+	if err != nil {
+		return false, fmt.Errorf("acquiring content dedup lock: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("checking content dedup lock acquisition: %w", err)
+	}
+	return n > 0, nil
+}
+
+// ReleaseContentDedupLock clears content_dedup_lock's sentinel row
+// unconditionally -- always safe to call (including from a defer after a
+// failed acquire), since setting an already-false flag to false again is a
+// no-op.
+func (r *Repository) ReleaseContentDedupLock(ctx context.Context) error {
+	updateSQL := r.ph(`UPDATE content_dedup_lock SET in_progress = %s WHERE id = 1`, 1)
+	if _, err := r.db.ExecContext(ctx, updateSQL, false); err != nil {
+		return fmt.Errorf("releasing content dedup lock: %w", err)
+	}
+	return nil
+}
+
 // ListDocumentAliasGroups pages through every canonical document with at
 // least one alias. Grouping happens in Go (fetch ordered pairs, group
 // consecutive rows) rather than a dialect-specific GROUP_CONCAT/STRING_AGG,
-// not worth the portability cost for an admin diagnostics page.
+// not worth the portability cost for an admin diagnostics page. A
+// canonical_id with no matching documents row reports an empty
+// CanonicalURL rather than being excluded -- deliberately: a forward-
+// declared rel=canonical alias (see RecordDocumentAlias) legitimately
+// names a canonical that hasn't been crawled yet, and is indistinguishable
+// from that state alone from a canonical a content-dedup race left
+// dangling (see TryAcquireContentDedupLock's doc comment) -- the latter is
+// prevented going forward by that lock, not by hiding rows here.
 func (r *Repository) ListDocumentAliasGroups(ctx context.Context, limit, offset int) ([]domain.DocumentAliasGroup, int, error) {
 	var total int
 	countSQL := `SELECT COUNT(DISTINCT canonical_id) FROM document_aliases`
