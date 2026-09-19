@@ -162,6 +162,39 @@ func TestSyncSettings_MigratesLegacyEmbeddingProviderToSearchWeights(t *testing.
 	}
 }
 
+// TestSyncSettings_MissingBoolFieldInStoredBlobKeepsItsDefault is the
+// regression test for a real incident: OperationalSettings.Set() never
+// self-heals a bool (a real false is indistinguishable from "omitted"), so
+// a blob saved before a bool field like ContentDedupEnabled existed used to
+// decode straight to Go's zero value (false) forever, even though the
+// built-in default is true -- silently disabling the feature on any
+// instance whose settings blob predates it, with no way to tell from the
+// admin UI that anything was ever wrong. Loading onto a defaults-seeded
+// struct (not a zero-valued one) means a field absent from the stored JSON
+// keeps its real default instead.
+func TestSyncSettings_MissingBoolFieldInStoredBlobKeepsItsDefault(t *testing.T) {
+	repo := newTestRepo(t)
+	// Simulate a pre-upgrade blob: some other field set, ContentDedupEnabled
+	// (and every other field added after this hypothetical blob was last
+	// saved) absent entirely, not just zero-valued.
+	stored := map[string]interface{}{"UserAgent": "legacy-agent"}
+	data, _ := json.Marshal(stored)
+	if err := repo.SaveSetting(context.Background(), ports.SettingsKeyOperational, string(data)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	op := domain.DefaultOperationalSettings()
+	bootstrap.SyncSettings(syncContext(t), repo, nil, op, nil, nil, nil)
+
+	got := op.Get()
+	if got.UserAgent != "legacy-agent" {
+		t.Errorf("expected the one stored field to still apply, got %q", got.UserAgent)
+	}
+	if !got.ContentDedupEnabled {
+		t.Error("expected ContentDedupEnabled to keep its true default when absent from the stored blob, got false")
+	}
+}
+
 func TestSyncSettings_AppliesStoredOverridesOnStartup(t *testing.T) {
 	repo := newTestRepo(t)
 	stored := domain.RankingOverridesValues{BlockedTerms: []string{"casino"}}
