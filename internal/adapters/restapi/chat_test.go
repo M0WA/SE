@@ -297,6 +297,48 @@ func TestHandleChat_SuccessWithoutSources(t *testing.T) {
 	}
 }
 
+func TestHandleChat_ContextTrimmed_OmittedWhenNothingWasDropped(t *testing.T) {
+	svc := application.NewChatService(
+		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}},
+		&fakeChatCompleter{answer: "plain answer"}, &fakeSearch{}, &fakeWebSearcher{})
+	h, cookie := chatAuthedHandler(t, svc)
+	rec := postChat(t, h, cookie, map[string]interface{}{
+		"messages": []map[string]string{{"role": "user", "content": "hi"}},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "context_trimmed") {
+		t.Errorf("expected context_trimmed omitted when nothing was dropped, got %s", rec.Body.String())
+	}
+}
+
+func TestHandleChat_ContextTrimmed_SetWhenOlderMessagesDropped(t *testing.T) {
+	svc := application.NewChatService(
+		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, MaxContextTokens: 15}},
+		&fakeChatCompleter{answer: "plain answer"}, &fakeSearch{}, &fakeWebSearcher{})
+	h, cookie := chatAuthedHandler(t, svc)
+	rec := postChat(t, h, cookie, map[string]interface{}{
+		"messages": []map[string]string{
+			{"role": "user", "content": strings.Repeat("a", 90)},
+			{"role": "assistant", "content": strings.Repeat("b", 90)},
+			{"role": "user", "content": strings.Repeat("c", 30)},
+		},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		ContextTrimmed bool `json:"context_trimmed"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if !resp.ContextTrimmed {
+		t.Errorf("expected context_trimmed=true when older messages were dropped to fit the budget, got %s", rec.Body.String())
+	}
+}
+
 func TestHandleChat_RAGOverrideTrue_ForcesSearchDespiteRAGDisabled(t *testing.T) {
 	search := &fakeSearch{results: []domain.SearchResult{{URL: "http://a", Title: "A", Score: 1}}}
 	svc := application.NewChatService(

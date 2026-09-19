@@ -52,6 +52,12 @@ type ChatOptions struct {
 type ChatResult struct {
 	Answer  string
 	Sources []domain.ChatSource
+	// ContextTrimmed reports whether trimToBudget actually dropped one or
+	// more older messages to fit endpoint.MaxContextTokens for this turn --
+	// the client sends its full running history on every call (the backend
+	// keeps no session state), so without this flag a user has no way to
+	// know the model answered without seeing the whole conversation.
+	ContextTrimmed bool
 }
 
 // Chat answers the conversation in history using the admin-configured chat
@@ -129,15 +135,18 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		}
 	}
 
+	contextTrimmed := false
 	if endpoint.MaxContextTokens > 0 {
+		before := len(messages)
 		messages = trimToBudget(messages, endpoint.MaxContextTokens)
+		contextTrimmed = len(messages) < before
 	}
 
 	answer, err := s.completer.Complete(ctx, endpoint, messages)
 	if err != nil {
 		return ChatResult{}, fmt.Errorf("chat: %w", err)
 	}
-	return ChatResult{Answer: answer, Sources: sources}, nil
+	return ChatResult{Answer: answer, Sources: sources, ContextTrimmed: contextTrimmed}, nil
 }
 
 // approxCharsPerToken mirrors httpembed's own conservative token estimate

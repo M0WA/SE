@@ -36,6 +36,11 @@ type chatRequest struct {
 type chatResponse struct {
 	Answer  string              `json:"answer"`
 	Sources []domain.ChatSource `json:"sources,omitempty"`
+	// ContextTrimmed is true when one or more of the conversation's older
+	// messages were dropped server-side to fit the endpoint's configured
+	// token budget before this answer was generated -- omitted (so it reads
+	// as false) on the common case where nothing was trimmed.
+	ContextTrimmed bool `json:"context_trimmed,omitempty"`
 }
 
 // handleChat answers one chat turn against the search-server-only,
@@ -85,5 +90,5 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	writeJSON(w, http.StatusOK, chatResponse{Answer: result.Answer, Sources: result.Sources})
+	writeJSON(w, http.StatusOK, chatResponse{Answer: result.Answer, Sources: result.Sources, ContextTrimmed: result.ContextTrimmed})
 }

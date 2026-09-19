@@ -1832,6 +1832,16 @@ components:
         sources:
           type: array
           items: { $ref: "#/components/schemas/ChatSource" }
+        context_trimmed:
+          type: boolean
+          description: >-
+            True when one or more of the conversation's older messages were
+            dropped server-side to fit ChatEndpointOptions.max_context_tokens
+            before this answer was generated -- omitted (reads as false) when
+            nothing was trimmed. The client resends its whole message history
+            on every call (the backend keeps no session state), so this is
+            the only way to know an answer was generated without seeing the
+            full conversation.
 
     ChatEndpointOptions:
       type: object

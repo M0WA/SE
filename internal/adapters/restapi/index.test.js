@@ -228,23 +228,29 @@ test('switching back to search does not clear chat history or messages', async (
   assert.equal(document.getElementById('chat-messages').children.length, 2);
 });
 
-test('renderChatMessage scrolls #chat-messages to the bottom after appending', async () => {
+test('renderChatMessage scrolls #chat-messages so the new turn\'s own beginning is visible', async () => {
   global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'hi there' }) });
   const { sendChatMessage } = loadFixture();
   const chatMessages = document.getElementById('chat-messages');
-  // jsdom never computes real layout, so scrollHeight is always 0 by
-  // default -- stub it to a distinct value per call so scrollTop actually
-  // moving to match it (rather than being left at its own default of 0)
-  // proves the scroll call ran, not just that both happen to be 0.
-  let fakeScrollHeight = 100;
-  Object.defineProperty(chatMessages, 'scrollHeight', { get: () => fakeScrollHeight, configurable: true });
+  // jsdom never computes real layout, so offsetTop is always 0 by default --
+  // stub it to grow with each message's position (as a real stacked chat
+  // history would), so scrollTop actually moving to match the newest
+  // message's own offsetTop -- not chatMessages.scrollHeight, which would
+  // land on that message's *end* rather than its *beginning* -- proves the
+  // scroll call ran, and that a long answer is read starting from its first
+  // line rather than its last.
+  Object.defineProperty(window.HTMLElement.prototype, 'offsetTop', {
+    get() { return Array.from(chatMessages.children).indexOf(this) * 100; },
+    configurable: true,
+  });
 
   await sendChatMessage('hello');
-  assert.equal(chatMessages.scrollTop, 100, 'expected scroll after the user turn is rendered');
+  // Two turns appended (user, then assistant) land at indices 0 and 1; the
+  // assistant turn, appended last, is what the scroll should land on.
+  assert.equal(chatMessages.scrollTop, 100, 'expected scroll to the assistant turn\'s own top');
 
-  fakeScrollHeight = 250;
   await sendChatMessage('another question');
-  assert.equal(chatMessages.scrollTop, 250, 'expected scroll again after the assistant turn is rendered');
+  assert.equal(chatMessages.scrollTop, 300, 'expected scroll again to the newest assistant turn\'s own top');
 });
 
 test('sendChatMessage on success appends both turns to history and renders sources', async () => {
@@ -298,6 +304,24 @@ test('sendChatMessage renders an assistant message with no source list when none
   await sendChatMessage('q');
   const assistantMsg = document.getElementById('chat-messages').children[1];
   assert.equal(assistantMsg.querySelector('.chat-sources'), null);
+});
+
+test('sendChatMessage renders a context-trimmed note when the backend flags context_trimmed', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'answer', context_trimmed: true }) });
+  const { sendChatMessage } = loadFixture();
+  await sendChatMessage('q');
+  const assistantMsg = document.getElementById('chat-messages').children[1];
+  const note = assistantMsg.querySelector('.chat-context-note');
+  assert.notEqual(note, null);
+  assert.equal(note.textContent, 'Older messages were dropped from context to fit the model’s limit.');
+});
+
+test('sendChatMessage renders no context-trimmed note when context_trimmed is absent', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'answer' }) });
+  const { sendChatMessage } = loadFixture();
+  await sendChatMessage('q');
+  const assistantMsg = document.getElementById('chat-messages').children[1];
+  assert.equal(assistantMsg.querySelector('.chat-context-note'), null);
 });
 
 test('sendChatMessage renders the server error text on a non-ok response', async () => {
