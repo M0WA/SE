@@ -116,12 +116,12 @@ This is the ordered install flow for a fresh Debian/Ubuntu host. Steps 1–2 and
     docker compose restart searxng   # config is read once at container startup
     ```
 
-14. **(Optional) Install chat hook scripts.** *(Manual — `postinst` deliberately does not create `CHAT_HOOKS_DIR`.)* See [packaging/chat-hooks/README.md](../packaging/chat-hooks/README.md).
+14. **(Optional) Install chat hook scripts.** *(Manual — `postinst` deliberately does not create `CHAT_HOOKS_DIR`.)* Two example scripts ship in the repo: `web_search.sh` (proxies to SearXNG) and `web_fetch.sh` (fetches a specific URL directly — has a documented SSRF caveat, only enable it if that residual risk is acceptable for your deployment). See [packaging/chat-hooks/README.md](../packaging/chat-hooks/README.md).
     ```
     mkdir -p /etc/searchengine/hooks
-    cp packaging/chat-hooks/web_search.sh /etc/searchengine/hooks/
-    chmod +x /etc/searchengine/hooks/web_search.sh
-    # then configure the matching ChatHook (Pattern + Script=web_search.sh) under Settings -> Chat -> Hooks in the admin UI
+    cp packaging/chat-hooks/web_search.sh packaging/chat-hooks/web_fetch.sh /etc/searchengine/hooks/
+    chmod +x /etc/searchengine/hooks/web_search.sh /etc/searchengine/hooks/web_fetch.sh
+    # then configure the matching ChatHook (Pattern + Script=web_search.sh or web_fetch.sh) under Settings -> Chat -> Hooks in the admin UI
     ```
 
 15. **(Optional) Configure an embedding and chat inference backend.** The admin UI's `domain.EmbeddingHTTPEndpoint` (edited on `admin_embedding_endpoint.html`) and `domain.ChatEndpoint` (edited on `admin_chat_settings.html`) each point at a plain OpenAI-compatible HTTP endpoint — `httpembed`/`httpchat` are generic clients, so any such API works, self-hosted or third-party. As a concrete reference, the `se.mo-sys.de` dev deployment points both at self-hosted [vLLM](https://github.com/vllm-project/vllm) server processes on a separate dedicated GPU host (one NVIDIA H200 NVL), each its own systemd unit gated by its own bearer API key:
@@ -172,6 +172,7 @@ All variables are read once at process startup (`bootstrap.GetEnv`/`os.Getenv`),
 | `packaging/nginx/searchengine.conf` | `/etc/nginx/sites-available/searchengine` (symlinked into `sites-enabled`) | Manual | nginx reverse-proxy routing split between search-server and admin-server. See [packaging/nginx/README.md](../packaging/nginx/README.md). |
 | `packaging/nginx/stub_status.conf` | `/etc/nginx/conf.d/stub_status.conf` | Manual | Loopback-only nginx `stub_status` page for `prometheus-nginx-exporter`. See [packaging/nginx/README.md](../packaging/nginx/README.md). |
 | `packaging/chat-hooks/web_search.sh` | `/etc/searchengine/hooks/web_search.sh` (default `CHAT_HOOKS_DIR`) | Manual | Example chat-hook script proxying to a self-hosted SearXNG instance. See [packaging/chat-hooks/README.md](../packaging/chat-hooks/README.md). |
+| `packaging/chat-hooks/web_fetch.sh` | `/etc/searchengine/hooks/web_fetch.sh` (default `CHAT_HOOKS_DIR`) | Manual | Example chat-hook script fetching a specific `http`/`https` URL directly; has a documented SSRF caveat. See [packaging/chat-hooks/README.md](../packaging/chat-hooks/README.md). |
 | `packaging/prometheus/prometheus.yml` | `/etc/prometheus/prometheus.yml` | Manual | Prometheus agent-mode scrape/`remote_write` config. See [packaging/prometheus/README.md](../packaging/prometheus/README.md). |
 | `packaging/prometheus/prometheus.default` | `/etc/default/prometheus` | Manual | `prometheus.service` ARGS (agent mode). |
 | `packaging/prometheus/prometheus-nginx-exporter.default` | `/etc/default/prometheus-nginx-exporter` | Manual | Exporter ARGS. |
