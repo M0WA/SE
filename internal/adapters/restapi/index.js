@@ -266,6 +266,11 @@
     }
 
     chatMessages.appendChild(msg);
+    // Keep the newest turn in view -- #chat-messages is a fixed-height,
+    // scrollable box (see style.css), so without this a long-running
+    // conversation would leave both the user's own just-sent question and
+    // the assistant's reply below the visible area until scrolled manually.
+    chatMessages.scrollTop = chatMessages.scrollHeight;
     return msg;
   }
 
