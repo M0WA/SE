@@ -26,6 +26,7 @@ function flush() {
 test.afterEach(() => {
   teardownDOM();
   delete global.fetch;
+  delete global.window?.confirm;
 });
 
 test('renderDatabase renders driver, pool stats, and a sorted table row list', () => {
@@ -65,4 +66,100 @@ test('load reports the error message on a failed fetch', async () => {
   loadFixture(async () => ({ ok: false, status: 500, text: async () => 'db unreachable' }));
   await flush();
   assert.equal(document.getElementById('db-connection').textContent.includes('db unreachable'), true);
+});
+
+test('clearContent does nothing when the confirm dialog is declined', async () => {
+  let posted = false;
+  const { clearContent } = loadFixture(async (url, opts) => {
+    if (opts && opts.method === 'POST') posted = true;
+    return { ok: true, json: async () => ({ driver: '', pool: {}, table_rows: {} }) };
+  });
+  window.confirm = () => false;
+  await clearContent();
+  assert.equal(posted, false);
+  assert.equal(document.getElementById('db-clear-content-status').textContent, '');
+});
+
+test('clearContent posts to clear-content and reports success when confirmed', async () => {
+  let gotURL;
+  const { clearContent } = loadFixture(async (url, opts) => {
+    if (opts && opts.method === 'POST') {
+      gotURL = url;
+      return { ok: true, json: async () => ({ cleared: true }) };
+    }
+    return { ok: true, json: async () => ({ driver: '', pool: {}, table_rows: {} }) };
+  });
+  window.confirm = () => true;
+  await clearContent();
+  assert.equal(gotURL, '/admin/api/database/clear-content');
+  assert.equal(document.getElementById('db-clear-content-status').textContent, 'Content cleared.');
+  assert.equal(document.getElementById('db-clear-content-btn').disabled, false);
+});
+
+test('clearContent shows an error and re-enables the button on failure', async () => {
+  const { clearContent } = loadFixture(async (url, opts) => {
+    if (opts && opts.method === 'POST') return { ok: false, status: 500, text: async () => 'db locked' };
+    return { ok: true, json: async () => ({ driver: '', pool: {}, table_rows: {} }) };
+  });
+  window.confirm = () => true;
+  await clearContent();
+  assert.equal(document.getElementById('db-clear-content-status').textContent.includes('db locked'), true);
+  assert.equal(document.getElementById('db-clear-content-btn').disabled, false);
+});
+
+test('clearSettings does nothing when the confirm dialog is declined', async () => {
+  let posted = false;
+  const { clearSettings } = loadFixture(async (url, opts) => {
+    if (opts && opts.method === 'POST') posted = true;
+    return { ok: true, json: async () => ({ driver: '', pool: {}, table_rows: {} }) };
+  });
+  window.confirm = () => false;
+  await clearSettings();
+  assert.equal(posted, false);
+});
+
+test('clearSettings posts to clear-settings and reports success when confirmed', async () => {
+  let gotURL;
+  const { clearSettings } = loadFixture(async (url, opts) => {
+    if (opts && opts.method === 'POST') {
+      gotURL = url;
+      return { ok: true, json: async () => ({ cleared: true }) };
+    }
+    return { ok: true, json: async () => ({ driver: '', pool: {}, table_rows: {} }) };
+  });
+  window.confirm = () => true;
+  await clearSettings();
+  assert.equal(gotURL, '/admin/api/database/clear-settings');
+  assert.equal(document.getElementById('db-clear-settings-status').textContent.includes('Restart search-server and crawl-server'), true);
+  assert.equal(document.getElementById('db-clear-settings-btn').disabled, false);
+});
+
+test('clearSettings shows an error and re-enables the button on failure', async () => {
+  const { clearSettings } = loadFixture(async (url, opts) => {
+    if (opts && opts.method === 'POST') return { ok: false, status: 500, text: async () => 'db locked' };
+    return { ok: true, json: async () => ({ driver: '', pool: {}, table_rows: {} }) };
+  });
+  window.confirm = () => true;
+  await clearSettings();
+  assert.equal(document.getElementById('db-clear-settings-status').textContent.includes('db locked'), true);
+  assert.equal(document.getElementById('db-clear-settings-btn').disabled, false);
+});
+
+test('clicking the clear-content/clear-settings buttons invokes the handlers', async () => {
+  let contentPosted = false, settingsPosted = false;
+  loadFixture(async (url, opts) => {
+    if (opts && opts.method === 'POST') {
+      if (url.includes('clear-content')) contentPosted = true;
+      if (url.includes('clear-settings')) settingsPosted = true;
+      return { ok: true, json: async () => ({ cleared: true }) };
+    }
+    return { ok: true, json: async () => ({ driver: '', pool: {}, table_rows: {} }) };
+  });
+  window.confirm = () => true;
+  document.getElementById('db-clear-content-btn').dispatchEvent(new window.Event('click'));
+  await flush();
+  document.getElementById('db-clear-settings-btn').dispatchEvent(new window.Event('click'));
+  await flush();
+  assert.equal(contentPosted, true);
+  assert.equal(settingsPosted, true);
 });

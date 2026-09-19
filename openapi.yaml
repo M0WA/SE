@@ -906,6 +906,42 @@ paths:
               schema: { $ref: "#/components/schemas/DatabaseDiagnostics" }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
+  /admin/api/database/clear-content:
+    post:
+      tags: [admin]
+      summary: Permanently delete every crawled document and crawl job
+      description: >-
+        Deletes documents (cascading to postings/links/document_versions/
+        document_embeddings), document_aliases, and crawl_jobs (cascading
+        to crawl_job_pages) -- the admin database page's "Clear content"
+        button. Every settings table is left untouched. Irreversible.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { cleared: { type: boolean } } }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/database/clear-settings:
+    post:
+      tags: [admin]
+      summary: Permanently delete every settings row
+      description: >-
+        Deletes every row of app_settings, chat_endpoint,
+        embedding_http_endpoints, and scheduled_crawls -- the admin
+        database page's "Clear settings" button. Crawled content is left
+        untouched. Takes effect immediately on the admin-server instance
+        handling this request; search-server and crawl-server only pick up
+        the change once restarted. Irreversible.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { cleared: { type: boolean } } }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
   /admin/api/crawl/jobs:
     get:
       tags: [admin]

@@ -2051,6 +2051,55 @@ func (h *Handler) handleAdminDatabase(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleAdminClearContent permanently deletes every crawled document
+// (postings, links, versions, embeddings, aliases) and every crawl job --
+// see ports.AdminRepository.ClearContent's own doc comment. Every settings
+// table is left untouched.
+func (h *Handler) handleAdminClearContent(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+		return
+	}
+	if err := h.admin.ClearContent(r.Context()); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"cleared": true})
+}
+
+// defaultTuningAlpha mirrors the literal every cmd/*/main.go bootstraps
+// domain.NewTuningSettings with -- k1/b already have named
+// domain.DefaultBM25K1/DefaultBM25B constants; alpha never got one.
+const defaultTuningAlpha = 0.5
+
+// handleAdminClearSettings permanently deletes every row of every settings
+// table -- see ports.AdminRepository.ClearSettings's own doc comment. This
+// process's own in-memory settings are reset to their built-in defaults
+// immediately afterward (for immediate feedback on this admin-server), but
+// other processes (search-server, crawl-server) only pick up the change
+// once restarted -- deliberately not attempted automatically, since
+// bootstrap.SyncSettings can't tell "cleared on purpose" apart from a
+// transient DB read error.
+func (h *Handler) handleAdminClearSettings(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+		return
+	}
+	if err := h.admin.ClearSettings(r.Context()); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if h.settings != nil {
+		h.settings.Set(defaultTuningAlpha, domain.DefaultBM25K1, domain.DefaultBM25B)
+		h.settings.SetPageRankWeight(0)
+	}
+	if h.opSettings != nil {
+		h.opSettings.Set(domain.DefaultOperationalSettings().Get())
+	}
+	if h.overrides != nil {
+		h.overrides.Set(domain.RankingOverridesValues{})
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"cleared": true})
+}
+
 // Lookback windows for the admin Overview page's tier-2 panels: the
 // crawl-outcome donut and documents-indexed trend look back 30 days; the
 // higher-volume crawl_job_pages panels use a narrower 14 to keep their
