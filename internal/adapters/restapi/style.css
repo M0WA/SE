@@ -670,6 +670,13 @@ button:focus-visible {
 
 .chat-source-link:hover { color: var(--accent); text-decoration: underline; }
 
+.chat-context-note {
+  margin-top: 0.5rem;
+  color: var(--ink-muted);
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
 /* .chat-options sits above #chat-form, not inside it -- a per-question
    override of the admin's rag_enabled default, kept out of the compose
    row so it doesn't compete with the (now multi-line) input and submit

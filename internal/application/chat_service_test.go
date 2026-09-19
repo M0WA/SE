@@ -511,11 +511,15 @@ func TestChatService_MaxContextTokens_Zero_NoTrimming(t *testing.T) {
 		{Role: domain.ChatRoleAssistant, Content: strings.Repeat("y", 100)},
 		{Role: domain.ChatRoleUser, Content: strings.Repeat("z", 100)},
 	}
-	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
+	result, err := svc.Chat(context.Background(), history, ChatOptions{})
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(completer.calledWith) != len(history) {
 		t.Fatalf("expected no trimming with MaxContextTokens=0, got %d messages", len(completer.calledWith))
+	}
+	if result.ContextTrimmed {
+		t.Error("expected ContextTrimmed=false when MaxContextTokens=0 disables trimming")
 	}
 }
 
@@ -531,11 +535,15 @@ func TestChatService_MaxContextTokens_TrimsOldestMessages(t *testing.T) {
 		{Role: domain.ChatRoleAssistant, Content: strings.Repeat("b", 90)},
 		{Role: domain.ChatRoleUser, Content: strings.Repeat("c", 30)},
 	}
-	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
+	result, err := svc.Chat(context.Background(), history, ChatOptions{})
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(completer.calledWith) != 1 || completer.calledWith[0].Content != history[2].Content {
 		t.Fatalf("expected only the most recent message kept, got %v", completer.calledWith)
+	}
+	if !result.ContextTrimmed {
+		t.Error("expected ContextTrimmed=true when older messages were dropped")
 	}
 }
 
@@ -565,11 +573,15 @@ func TestChatService_MaxContextTokens_AlwaysKeepsNewestMessageEvenIfOversized(t 
 	svc := NewChatService(endpoints, completer, &fakeSearchService{}, &fakeWebSearcher{})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: strings.Repeat("a", 300)}}
-	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
+	result, err := svc.Chat(context.Background(), history, ChatOptions{})
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(completer.calledWith) != 1 {
 		t.Fatalf("expected the single oversized message kept regardless of budget, got %v", completer.calledWith)
+	}
+	if result.ContextTrimmed {
+		t.Error("expected ContextTrimmed=false when nothing was actually dropped (only message kept regardless)")
 	}
 }
 

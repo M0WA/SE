@@ -238,7 +238,12 @@
   // them, since the backend contract doesn't echo them back on later
   // turns) are rendered as a small link list underneath, same
   // title-or-url fallback renderResults already uses for r.title || r.url.
-  function renderChatMessage(role, content, sources) {
+  // contextTrimmed (also assistant-only) surfaces the backend's
+  // context_trimmed flag: since the client resends its whole chatHistory on
+  // every call and the backend silently drops the oldest messages to fit
+  // the endpoint's token budget, without this note a user would have no way
+  // to know this answer was generated without seeing the full conversation.
+  function renderChatMessage(role, content, sources, contextTrimmed) {
     const msg = document.createElement('div');
     msg.className = role === 'user' ? 'chat-msg chat-msg-user' : 'chat-msg chat-msg-assistant';
 
@@ -266,12 +271,22 @@
       msg.appendChild(list);
     }
 
+    if (role === 'assistant' && contextTrimmed) {
+      const note = document.createElement('div');
+      note.className = 'chat-context-note';
+      note.textContent = 'Older messages were dropped from context to fit the model’s limit.';
+      msg.appendChild(note);
+    }
+
     chatMessages.appendChild(msg);
-    // Keep the newest turn in view -- #chat-messages is a fixed-height,
-    // scrollable box (see style.css), so without this a long-running
-    // conversation would leave both the user's own just-sent question and
-    // the assistant's reply below the visible area until scrolled manually.
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    // Scroll so the new turn's own beginning lands at the top of the
+    // visible area -- #chat-messages is a fixed-height, scrollable box (see
+    // style.css), so without this a long-running conversation would leave
+    // the just-added turn below the visible area until scrolled manually.
+    // Scrolling to msg's own top (rather than chatMessages.scrollHeight,
+    // which would land on the turn's *end*) means a long answer is always
+    // read starting from its first line, not its last.
+    chatMessages.scrollTop = msg.offsetTop;
     return msg;
   }
 
@@ -298,7 +313,7 @@
       }
       const data = await resp.json();
       chatHistory.push({ role: 'assistant', content: data.answer });
-      renderChatMessage('assistant', data.answer, data.sources || []);
+      renderChatMessage('assistant', data.answer, data.sources || [], data.context_trimmed);
       chatStatus.textContent = '';
     } catch (err) {
       chatStatus.textContent = 'Chat failed: could not reach the server.';
