@@ -13,6 +13,7 @@ function baseChatEndpoint(overrides) {
     has_api_key: true,
     model: 'llama-3',
     enabled: true,
+    system_prompt: 'You are a helpful assistant.',
     rag_enabled: true,
     rag_result_count: 5,
     max_context_tokens: 6000,
@@ -47,6 +48,7 @@ test('loadChatEndpoint populates every chat field from the GET response', async 
   assert.equal(document.getElementById('chat-enabled').checked, true);
   assert.equal(document.getElementById('chat-base-url').value, 'http://localhost:8000/v1');
   assert.equal(document.getElementById('chat-model').value, 'llama-3');
+  assert.equal(document.getElementById('chat-system-prompt').value, 'You are a helpful assistant.');
   assert.equal(document.getElementById('chat-rag-enabled').checked, true);
   assert.equal(document.getElementById('chat-rag-result-count').value, '5');
   assert.equal(document.getElementById('chat-max-context-tokens').value, '6000');
@@ -84,6 +86,12 @@ test('loadChatEndpoint defaults max-context-tokens to 0 when unset', async () =>
   assert.equal(document.getElementById('chat-max-context-tokens').value, '0');
 });
 
+test('loadChatEndpoint defaults system prompt to empty when unset', async () => {
+  loadFixture(baseChatEndpoint({ system_prompt: '' }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('chat-system-prompt').value, '');
+});
+
 test('loadChatEndpoint reports an error message on a failed fetch', async () => {
   loadFixture(undefined, async () => ({ ok: false, status: 500, text: async () => 'chat endpoint down' }));
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -97,6 +105,7 @@ test('saveChatEndpoint PATCHes every field, including max_context_tokens', async
   document.getElementById('chat-base-url').value = 'http://localhost:9000/v1';
   document.getElementById('chat-model').value = 'gpt-oss';
   document.getElementById('chat-api-key').value = 'sk-new-key';
+  document.getElementById('chat-system-prompt').value = 'Answer tersely.';
   document.getElementById('chat-rag-enabled').checked = false;
   document.getElementById('chat-rag-result-count').value = '8';
   document.getElementById('chat-max-context-tokens').value = '8000';
@@ -121,6 +130,7 @@ test('saveChatEndpoint PATCHes every field, including max_context_tokens', async
   assert.equal(gotBody.base_url, 'http://localhost:9000/v1');
   assert.equal(gotBody.model, 'gpt-oss');
   assert.equal(gotBody.api_key, 'sk-new-key');
+  assert.equal(gotBody.system_prompt, 'Answer tersely.');
   assert.equal(gotBody.rag_enabled, false);
   assert.equal(gotBody.rag_result_count, 8);
   assert.equal(gotBody.max_context_tokens, 8000);

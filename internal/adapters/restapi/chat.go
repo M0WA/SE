@@ -41,6 +41,28 @@ type chatResponse struct {
 	// token budget before this answer was generated -- omitted (so it reads
 	// as false) on the common case where nothing was trimmed.
 	ContextTrimmed bool `json:"context_trimmed,omitempty"`
+	// HookResults carries one entry per regex-triggered chat hook match
+	// against Answer this turn (see application.ChatResult.HookResults) --
+	// omitted entirely on the common case of no configured/matching hooks.
+	HookResults []chatHookResultResponse `json:"hook_results,omitempty"`
+}
+
+// chatHookResultResponse is the wire shape of one domain.ChatHookResult.
+type chatHookResultResponse struct {
+	HookName string `json:"hook_name"`
+	Output   string `json:"output,omitempty"`
+	Err      string `json:"err,omitempty"`
+}
+
+func toChatHookResultResponses(results []domain.ChatHookResult) []chatHookResultResponse {
+	if len(results) == 0 {
+		return nil
+	}
+	out := make([]chatHookResultResponse, len(results))
+	for i, r := range results {
+		out[i] = chatHookResultResponse{HookName: r.HookName, Output: r.Output, Err: r.Err}
+	}
+	return out
 }
 
 // handleChat answers one chat turn against the search-server-only,
@@ -90,5 +112,8 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	writeJSON(w, http.StatusOK, chatResponse{Answer: result.Answer, Sources: result.Sources, ContextTrimmed: result.ContextTrimmed})
+	writeJSON(w, http.StatusOK, chatResponse{
+		Answer: result.Answer, Sources: result.Sources, ContextTrimmed: result.ContextTrimmed,
+		HookResults: toChatHookResultResponses(result.HookResults),
+	})
 }

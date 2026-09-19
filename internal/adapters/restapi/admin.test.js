@@ -294,9 +294,11 @@ test('renderAdminNav includes a Chat group linking to the settings page\'s chat 
   const chatGroup = groups.find((g) => g.querySelector('.rail-tab').textContent === 'Chat');
   assert.ok(chatGroup, 'expected a Chat nav group');
   const links = Array.from(chatGroup.querySelectorAll('a'));
-  assert.equal(links.length, 1);
+  assert.equal(links.length, 2);
   assert.equal(links[0].textContent, 'Settings');
   assert.equal(links[0].getAttribute('href'), '/admin/chat/settings');
+  assert.equal(links[1].textContent, 'Chat hooks');
+  assert.equal(links[1].getAttribute('href'), '/admin/chat/hooks');
 });
 
 test('renderAdminNav marks the entry matching the current path as current, and nothing else', () => {

@@ -235,6 +235,7 @@ const ADMIN_NAV_GROUPS = [
     label: 'Chat',
     items: [
       { label: 'Settings', href: '/admin/chat/settings' },
+      { label: 'Chat hooks', href: '/admin/chat/hooks' },
     ],
   },
   {

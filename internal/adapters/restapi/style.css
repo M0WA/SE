@@ -717,6 +717,47 @@ button:focus-visible {
   font-style: italic;
 }
 
+/* .chat-hook-result renders one regex-triggered chat hook's raw output (see
+   ChatResult.HookResults) as its own folded <details> -- closed by default
+   (renderChatMessage never sets the open attribute), so a hook firing
+   doesn't clutter the answer itself; the summary is just the hook's own
+   name, same restrained, no-label-needed spirit as .chat-sources/
+   .chat-context-note above. */
+.chat-hook-result {
+  margin-top: 0.5rem;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  font-size: 0.8rem;
+}
+
+.chat-hook-result summary {
+  cursor: pointer;
+  padding: 0.35rem 0.6rem;
+  color: var(--ink-muted);
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 0.78rem;
+}
+
+.chat-hook-result pre {
+  margin: 0;
+  padding: 0.6rem 0.85rem;
+  border-top: 1px solid var(--rule);
+  background: var(--accent-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+/* .chat-hook-result-error styles a hook that failed distinctly from a
+   normal successful output -- the accent color already used for error text
+   elsewhere (see .error-text), not a fresh color of its own. */
+.chat-hook-result-error pre {
+  color: var(--accent);
+}
+
 /* .chat-options sits in .mode-row alongside the search/chat switch, not
    above #chat-form -- a per-question override of the admin's rag_enabled
    default, kept out of the compose row so it doesn't compete with the (now
@@ -731,6 +772,13 @@ button:focus-visible {
   align-items: center;
   gap: 0.35rem;
 }
+
+/* Same fix as form[hidden] above, same reason: .chat-options' own
+   display: flex is an author rule and beats the UA stylesheet's
+   "[hidden] { display: none }" regardless of specificity, so
+   index.js's setMode setting chatOptions.hidden = true (to hide RAG/Web in
+   search mode) would otherwise have no visible effect. */
+.chat-options[hidden] { display: none; }
 
 .chat-rag-toggle {
   display: flex;

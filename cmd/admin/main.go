@@ -87,6 +87,7 @@ func main() {
 		ScheduledCrawls:       repo,
 		EmbeddingEndpoints:    repo,
 		ChatEndpoints:         repo,
+		ChatHooks:             repo,
 		Health:                repo,
 		Sessions:              repo,
 		DBDriver:              driver,

@@ -45,6 +45,9 @@ var adminSettingsHTML []byte
 //go:embed admin_chat_settings.html
 var adminChatSettingsHTML []byte
 
+//go:embed admin_chat_hooks.html
+var adminChatHooksHTML []byte
+
 //go:embed admin_search.html
 var adminSearchHTML []byte
 
@@ -128,6 +131,9 @@ var adminSettingsJS []byte
 //go:embed admin_chat_settings.js
 var adminChatSettingsJS []byte
 
+//go:embed admin_chat_hooks.js
+var adminChatHooksJS []byte
+
 //go:embed admin_vocabulary_term.js
 var adminVocabularyTermJS []byte
 
@@ -173,7 +179,12 @@ type Handler struct {
 	// chatEndpoints backs the admin API's chat endpoint config CRUD
 	// (GET/PATCH /admin/api/chat-endpoint) -- set on admin-server only,
 	// the same *sqlrepo.Repository embeddingEndpoints/scheduledCrawls use.
-	chatEndpoints   ports.ChatEndpointStore
+	chatEndpoints ports.ChatEndpointStore
+	// chatHooks backs the admin API's chat hook CRUD
+	// (GET/POST /admin/api/chat-hooks, GET/PATCH/DELETE
+	// /admin/api/chat-hooks/{id}) -- set on admin-server only, the same
+	// *sqlrepo.Repository chatEndpoints/embeddingEndpoints use.
+	chatHooks       ports.ChatHookStore
 	health          ports.HealthChecker
 	onCrawlComplete func()
 	dbDriver        string
@@ -247,6 +258,9 @@ type Config struct {
 	// config CRUD API -- the same *sqlrepo.Repository EmbeddingEndpoints
 	// uses.
 	ChatEndpoints ports.ChatEndpointStore
+	// ChatHooks is set on admin-server only, backing the chat hook CRUD API
+	// -- the same *sqlrepo.Repository ChatEndpoints/EmbeddingEndpoints uses.
+	ChatHooks ports.ChatHookStore
 	// Health backs GET /healthz on every process; unset always reports
 	// healthy (no DB connection to check).
 	Health ports.HealthChecker
@@ -306,6 +320,7 @@ func New(cfg Config) *Handler {
 		embeddingEndpoints:    cfg.EmbeddingEndpoints,
 		chat:                  cfg.Chat,
 		chatEndpoints:         cfg.ChatEndpoints,
+		chatHooks:             cfg.ChatHooks,
 		health:                cfg.Health,
 		onCrawlComplete:       cfg.OnCrawlComplete,
 		dbDriver:              cfg.DBDriver,
@@ -387,6 +402,8 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("/admin_settings.js", h.handleAdminSettingsJS)
 	mux.HandleFunc("/admin/chat/settings", h.requireAuthPage(h.handleAdminChatSettingsPage))
 	mux.HandleFunc("/admin_chat_settings.js", h.handleAdminChatSettingsJS)
+	mux.HandleFunc("/admin/chat/hooks", h.requireAuthPage(h.handleAdminChatHooksPage))
+	mux.HandleFunc("/admin_chat_hooks.js", h.handleAdminChatHooksJS)
 	mux.HandleFunc("/admin/search", h.requireAuthPage(h.handleAdminSearchPage))
 	mux.HandleFunc("/admin_search.js", h.handleAdminSearchJS)
 	mux.HandleFunc("/admin/search/result", h.requireAuthPage(h.handleAdminSearchResultPage))
@@ -417,6 +434,10 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("/admin/api/search", h.requireAuthAPI(h.handleAdminSearch))
 	mux.HandleFunc("/admin/api/settings", h.requireAuthAPI(h.handleAdminSettings))
 	mux.HandleFunc("/admin/api/chat-endpoint", h.requireAuthAPI(h.handleAdminChatEndpoint))
+	mux.HandleFunc("/admin/api/chat-hooks", h.requireAuthAPI(h.handleAdminChatHooks))
+	mux.HandleFunc("GET /admin/api/chat-hooks/{id}", h.requireAuthAPI(h.handleAdminGetChatHook))
+	mux.HandleFunc("PATCH /admin/api/chat-hooks/{id}", h.requireAuthAPI(h.handleAdminUpdateChatHook))
+	mux.HandleFunc("DELETE /admin/api/chat-hooks/{id}", h.requireAuthAPI(h.handleAdminDeleteChatHook))
 	mux.HandleFunc("POST /admin/api/embeddings/models", h.requireAuthAPI(h.handleAdminEmbeddingsModels))
 	mux.HandleFunc("POST /admin/api/embeddings/test", h.requireAuthAPI(h.handleAdminEmbeddingsTest))
 	mux.HandleFunc("/admin/api/embeddings/endpoints", h.requireAuthAPI(h.handleAdminEmbeddingEndpoints))
@@ -536,6 +557,10 @@ func (h *Handler) handleAdminSettingsJS(w http.ResponseWriter, r *http.Request) 
 
 func (h *Handler) handleAdminChatSettingsJS(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/javascript; charset=utf-8", adminChatSettingsJS)
+}
+
+func (h *Handler) handleAdminChatHooksJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminChatHooksJS)
 }
 
 func (h *Handler) handleAdminVocabularyTermJS(w http.ResponseWriter, r *http.Request) {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -100,6 +101,10 @@ func (h *Handler) handleAdminSettingsPage(w http.ResponseWriter, r *http.Request
 
 func (h *Handler) handleAdminChatSettingsPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/html; charset=utf-8", adminChatSettingsHTML)
+}
+
+func (h *Handler) handleAdminChatHooksPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminChatHooksHTML)
 }
 
 func (h *Handler) handleAdminJobsPage(w http.ResponseWriter, r *http.Request) {
@@ -1085,6 +1090,157 @@ func (h *Handler) handleAdminDeleteEmbeddingEndpoint(w http.ResponseWriter, r *h
 	respondOrNotFound(w, err, ports.ErrEmbeddingEndpointNotFound, "embedding endpoint not found", map[string]bool{"ok": true})
 }
 
+type chatHookRequest struct {
+	Name    string `json:"name"`
+	Pattern string `json:"pattern"`
+	Script  string `json:"script"`
+	Enabled bool   `json:"enabled"`
+}
+
+type chatHookResponse struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Pattern string `json:"pattern"`
+	Script  string `json:"script"`
+	Enabled bool   `json:"enabled"`
+}
+
+func toChatHookResponse(hk domain.ChatHook) chatHookResponse {
+	return chatHookResponse{ID: hk.ID, Name: hk.Name, Pattern: hk.Pattern, Script: hk.Script, Enabled: hk.Enabled}
+}
+
+// validateChatHookRequest requires a non-empty Name and Script, and a
+// Pattern that compiles as a Go regexp with exactly one capture group --
+// see domain.ChatHook.Pattern's doc comment and runChatHooks's security
+// note (internal/application/chat_hooks.go) for why exactly one capture
+// group matters: it's the only thing ever passed as an argv value to
+// Script. Enforcing this at Create/Update time is what keeps
+// runChatHooks's own (best-effort, log-and-skip) version of this same
+// check from ever actually firing in practice.
+func validateChatHookRequest(w http.ResponseWriter, req chatHookRequest) bool {
+	if req.Name == "" {
+		http.Error(w, "name must not be empty", http.StatusBadRequest)
+		return false
+	}
+	if req.Script == "" {
+		http.Error(w, "script must not be empty", http.StatusBadRequest)
+		return false
+	}
+	re, err := regexp.Compile(req.Pattern)
+	if err != nil {
+		http.Error(w, "pattern must be a valid regular expression: "+err.Error(), http.StatusBadRequest)
+		return false
+	}
+	if re.NumSubexp() != 1 {
+		http.Error(w, "pattern must have exactly 1 capture group", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// handleAdminChatHooks lists (GET) or creates (POST) regex-triggered chat
+// hooks, mirroring handleAdminEmbeddingEndpoints' style closely. A freshly
+// created hook's ID is minted from its name, deduped against every
+// existing ID (domain.NewChatHookID, the same convention
+// domain.NewEmbeddingEndpointID uses).
+func (h *Handler) handleAdminChatHooks(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.chatHooks != nil, "chat hooks") {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		hooks, err := h.chatHooks.ListChatHooks(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		out := make([]chatHookResponse, len(hooks))
+		for i, hk := range hooks {
+			out[i] = toChatHookResponse(hk)
+		}
+		writeJSON(w, http.StatusOK, out)
+	case http.MethodPost:
+		var req chatHookRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		if !validateChatHookRequest(w, req) {
+			return
+		}
+		existing, err := h.chatHooks.ListChatHooks(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		existingIDs := make(map[string]bool, len(existing))
+		for _, hk := range existing {
+			existingIDs[hk.ID] = true
+		}
+		hk := domain.ChatHook{
+			ID: domain.NewChatHookID(req.Name, existingIDs), Name: req.Name,
+			Pattern: req.Pattern, Script: req.Script, Enabled: req.Enabled,
+		}
+		if err := h.chatHooks.CreateChatHook(r.Context(), hk); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusCreated, toChatHookResponse(hk))
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleAdminGetChatHook returns one hook by ID. ports.ChatHookStore has no
+// single-row get (unlike EmbeddingEndpointStore), so this scans
+// ListChatHooks -- an admin's hook list is small enough (like
+// scheduled crawls) that this is never a real cost.
+func (h *Handler) handleAdminGetChatHook(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.chatHooks != nil, "chat hooks") {
+		return
+	}
+	hooks, err := h.chatHooks.ListChatHooks(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	id := r.PathValue("id")
+	for _, hk := range hooks {
+		if hk.ID == id {
+			writeJSON(w, http.StatusOK, toChatHookResponse(hk))
+			return
+		}
+	}
+	http.Error(w, "chat hook not found", http.StatusNotFound)
+}
+
+// handleAdminUpdateChatHook replaces a hook's editable fields. ID is never
+// editable once created (mirrors handleAdminUpdateEmbeddingEndpoint).
+func (h *Handler) handleAdminUpdateChatHook(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.chatHooks != nil, "chat hooks") {
+		return
+	}
+	var req chatHookRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if !validateChatHookRequest(w, req) {
+		return
+	}
+	hk := domain.ChatHook{ID: r.PathValue("id"), Name: req.Name, Pattern: req.Pattern, Script: req.Script, Enabled: req.Enabled}
+	err := h.chatHooks.UpdateChatHook(r.Context(), hk)
+	respondOrNotFound(w, err, ports.ErrChatHookNotFound, "chat hook not found", toChatHookResponse(hk))
+}
+
+func (h *Handler) handleAdminDeleteChatHook(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.chatHooks != nil, "chat hooks") {
+		return
+	}
+	err := h.chatHooks.DeleteChatHook(r.Context(), r.PathValue("id"))
+	respondOrNotFound(w, err, ports.ErrChatHookNotFound, "chat hook not found", map[string]bool{"ok": true})
+}
+
 func (h *Handler) handleAdminEmbeddingEndpointPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/html; charset=utf-8", adminEmbeddingEndpointHTML)
 }
@@ -1120,6 +1276,10 @@ type chatEndpointRequest struct {
 	WebSearchEnabled     bool   `json:"web_search_enabled"`
 	WebSearchBaseURL     string `json:"web_search_base_url"`
 	WebSearchResultCount int    `json:"web_search_result_count"`
+	// SystemPrompt mirrors domain.ChatEndpoint.SystemPrompt exactly -- see
+	// that field's doc comment. Empty string is the default (no persistent
+	// prompt injected).
+	SystemPrompt string `json:"system_prompt"`
 	// ClearAPIKey is meaningful only to a PATCH: since a GET response never
 	// echoes a stored key's real value (see chatEndpointResponse), an edit
 	// form has no way to distinguish "left blank because not being
@@ -1134,16 +1294,19 @@ type chatEndpointResponse struct {
 	BaseURL string `json:"base_url"`
 	// HasAPIKey reports only whether a key is set, never its value -- same
 	// redacted-summary treatment toEmbeddingEndpointResponse already gives.
-	HasAPIKey            bool      `json:"has_api_key"`
-	Model                string    `json:"model"`
-	Enabled              bool      `json:"enabled"`
-	RAGEnabled           bool      `json:"rag_enabled"`
-	RAGResultCount       int       `json:"rag_result_count"`
-	MaxContextTokens     int       `json:"max_context_tokens"`
-	WebSearchEnabled     bool      `json:"web_search_enabled"`
-	WebSearchBaseURL     string    `json:"web_search_base_url"`
-	WebSearchResultCount int       `json:"web_search_result_count"`
-	UpdatedAt            time.Time `json:"updated_at"`
+	HasAPIKey            bool   `json:"has_api_key"`
+	Model                string `json:"model"`
+	Enabled              bool   `json:"enabled"`
+	RAGEnabled           bool   `json:"rag_enabled"`
+	RAGResultCount       int    `json:"rag_result_count"`
+	MaxContextTokens     int    `json:"max_context_tokens"`
+	WebSearchEnabled     bool   `json:"web_search_enabled"`
+	WebSearchBaseURL     string `json:"web_search_base_url"`
+	WebSearchResultCount int    `json:"web_search_result_count"`
+	// SystemPrompt mirrors domain.ChatEndpoint.SystemPrompt exactly -- see
+	// chatEndpointRequest.SystemPrompt's doc comment.
+	SystemPrompt string    `json:"system_prompt"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func toChatEndpointResponse(e domain.ChatEndpoint) chatEndpointResponse {
@@ -1152,7 +1315,7 @@ func toChatEndpointResponse(e domain.ChatEndpoint) chatEndpointResponse {
 		RAGEnabled: e.RAGEnabled, RAGResultCount: e.RAGResultCount,
 		MaxContextTokens: e.MaxContextTokens, UpdatedAt: e.UpdatedAt,
 		WebSearchEnabled: e.WebSearchEnabled, WebSearchBaseURL: e.WebSearchBaseURL,
-		WebSearchResultCount: e.WebSearchResultCount,
+		WebSearchResultCount: e.WebSearchResultCount, SystemPrompt: e.SystemPrompt,
 	}
 }
 
@@ -1216,7 +1379,7 @@ func (h *Handler) handleAdminChatEndpoint(w http.ResponseWriter, r *http.Request
 			RAGEnabled: req.RAGEnabled, RAGResultCount: req.RAGResultCount,
 			MaxContextTokens: req.MaxContextTokens,
 			WebSearchEnabled: req.WebSearchEnabled, WebSearchBaseURL: req.WebSearchBaseURL,
-			WebSearchResultCount: req.WebSearchResultCount,
+			WebSearchResultCount: req.WebSearchResultCount, SystemPrompt: req.SystemPrompt,
 		}
 		e.Clamp()
 		e.UpdatedAt = time.Now().UTC()

@@ -24,14 +24,21 @@ type ChatService struct {
 	completer ports.ChatCompleter
 	search    ports.SearchService
 	webSearch ports.WebSearcher
+	// hooks and hookRunner are both nil-safe (see Chat): a deployment that
+	// hasn't wired regex-triggered chat hooks yet simply gets an empty
+	// ChatResult.HookResults every turn, same convention as s.webSearch's
+	// own nil check.
+	hooks      ports.ChatHookStore
+	hookRunner ports.HookScriptRunner
 }
 
-// NewChatService wires a ChatService from its four collaborators: the
+// NewChatService wires a ChatService from its six collaborators: the
 // endpoint config store, the client that actually talks to the configured
 // OpenAI-compatible endpoint, the existing hybrid search service used for
-// RAG context, and a live web searcher used for web-search context.
-func NewChatService(endpoints ports.ChatEndpointStore, completer ports.ChatCompleter, search ports.SearchService, webSearch ports.WebSearcher) *ChatService {
-	return &ChatService{endpoints: endpoints, completer: completer, search: search, webSearch: webSearch}
+// RAG context, a live web searcher used for web-search context, and the
+// store/runner pair behind regex-triggered chat hooks (see chat_hooks.go).
+func NewChatService(endpoints ports.ChatEndpointStore, completer ports.ChatCompleter, search ports.SearchService, webSearch ports.WebSearcher, hooks ports.ChatHookStore, hookRunner ports.HookScriptRunner) *ChatService {
+	return &ChatService{endpoints: endpoints, completer: completer, search: search, webSearch: webSearch, hooks: hooks, hookRunner: hookRunner}
 }
 
 // ChatOptions carries this turn's per-question overrides for
@@ -58,6 +65,11 @@ type ChatResult struct {
 	// keeps no session state), so without this flag a user has no way to
 	// know the model answered without seeing the whole conversation.
 	ContextTrimmed bool
+	// HookResults is one entry per regex-triggered chat hook match against
+	// Answer this turn (see chat_hooks.go's runChatHooks), in no particular
+	// order beyond match order -- empty whenever s.hooks is nil or no
+	// enabled hook's pattern matched.
+	HookResults []domain.ChatHookResult
 }
 
 // Chat answers the conversation in history using the admin-configured chat
@@ -135,6 +147,18 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		}
 	}
 
+	// The persistent per-endpoint system prompt, when set, always leads --
+	// ahead of the RAG/web-search context message (if any), which by this
+	// point is already the first element of messages when present. Prepend
+	// it last so it lands first among any leading system messages, giving
+	// up to two: persistent prompt, then RAG/web-search context.
+	if endpoint.SystemPrompt != "" {
+		withPrompt := make([]domain.ChatMessage, 0, len(messages)+1)
+		withPrompt = append(withPrompt, domain.ChatMessage{Role: domain.ChatRoleSystem, Content: endpoint.SystemPrompt})
+		withPrompt = append(withPrompt, messages...)
+		messages = withPrompt
+	}
+
 	contextTrimmed := false
 	if endpoint.MaxContextTokens > 0 {
 		before := len(messages)
@@ -146,7 +170,17 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	if err != nil {
 		return ChatResult{}, fmt.Errorf("chat: %w", err)
 	}
-	return ChatResult{Answer: answer, Sources: sources, ContextTrimmed: contextTrimmed}, nil
+
+	var hookResults []domain.ChatHookResult
+	if s.hooks != nil {
+		if enabledHooks, err := s.hooks.ListChatHooks(ctx); err == nil {
+			hookResults = runChatHooks(ctx, enabledHooks, s.hookRunner, answer)
+		}
+		// A ListChatHooks error is intentionally swallowed here, same
+		// best-effort convention as the RAG/web-search errors above.
+	}
+
+	return ChatResult{Answer: answer, Sources: sources, ContextTrimmed: contextTrimmed, HookResults: hookResults}, nil
 }
 
 // approxCharsPerToken mirrors httpembed's own conservative token estimate
@@ -168,22 +202,23 @@ func estimateTokens(messages []domain.ChatMessage) int {
 	return chars / approxCharsPerToken
 }
 
-// trimToBudget drops the oldest messages in messages -- keeping a leading
-// RAG-injected system message intact if present, and always keeping at
-// least the single most recent message even if it alone exceeds budget,
-// since trimming it away would leave nothing left to answer -- until the
-// estimated token count fits within maxTokens.
+// trimToBudget drops the oldest messages in messages -- keeping every
+// leading system-role message intact (there can now be up to two: the
+// persistent per-endpoint SystemPrompt, then the RAG/web-search context
+// message, see ChatService.Chat), and always keeping at least the single
+// most recent message even if it alone exceeds budget, since trimming it
+// away would leave nothing left to answer -- until the estimated token
+// count fits within maxTokens.
 func trimToBudget(messages []domain.ChatMessage, maxTokens int) []domain.ChatMessage {
 	if estimateTokens(messages) <= maxTokens {
 		return messages
 	}
 
-	var system, rest []domain.ChatMessage
-	if len(messages) > 0 && messages[0].Role == domain.ChatRoleSystem {
-		system, rest = messages[:1], messages[1:]
-	} else {
-		rest = messages
+	leadingSystem := 0
+	for leadingSystem < len(messages) && messages[leadingSystem].Role == domain.ChatRoleSystem {
+		leadingSystem++
 	}
+	system, rest := messages[:leadingSystem], messages[leadingSystem:]
 	budget := maxTokens - estimateTokens(system)
 
 	// Walk backward from the newest message, keeping as many as fit --

@@ -725,6 +725,107 @@ paths:
         "405": { $ref: "#/components/responses/BadRequest" }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
+  /admin/api/chat-hooks:
+    get:
+      tags: [admin]
+      summary: List every configured chat hook
+      description: >-
+        A list of many, like the embedding endpoints, unlike the
+        single-row chat endpoint above -- an admin can define several
+        regex-triggered hooks over time (see ChatHookOptions.pattern).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ChatHook" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    post:
+      tags: [admin]
+      summary: Create a chat hook
+      description: >-
+        The new hook's id is minted server-side from its name (see
+        domain.NewChatHookID), deduped against every existing hook id, so
+        it can never collide -- the response's id is the one to use for
+        every subsequent GET/PATCH/DELETE on this hook, not the submitted
+        name. pattern is validated server-side: it must compile as a Go
+        regexp with exactly one capture group.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChatHookRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatHook" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/chat-hooks/{id}:
+    get:
+      tags: [admin]
+      summary: Get one chat hook's full config
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatHook" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    patch:
+      tags: [admin]
+      summary: Replace a chat hook's editable fields
+      description: >-
+        Full replace, not a merge, for every field except id (never
+        editable once created). pattern is validated the same way as on
+        create.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChatHookRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatHook" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    delete:
+      tags: [admin]
+      summary: Delete a chat hook's configuration
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
   /admin/api/embeddings/models:
     post:
       tags: [admin]
@@ -1892,6 +1993,26 @@ components:
             on every call (the backend keeps no session state), so this is
             the only way to know an answer was generated without seeing the
             full conversation.
+        hook_results:
+          type: array
+          description: >-
+            One entry per admin-configured chat hook (see
+            /admin/api/chat-hooks) whose pattern matched somewhere in
+            answer this turn, in match order. Omitted entirely when no
+            hook is configured/enabled or none matched.
+          items: { $ref: "#/components/schemas/ChatHookResult" }
+
+    ChatHookResult:
+      type: object
+      description: >-
+        The outcome of running one matched chat hook's script once. A
+        script failure or timeout is reported here, never as a failed
+        POST /chat call -- the model's own answer always reaches the
+        client regardless.
+      properties:
+        hook_name: { type: string, description: "The matching hook's name (ChatHook.name), not its id." }
+        output: { type: string, description: "The script's raw stdout, capped in size. Empty when err is set." }
+        err: { type: string, description: "Non-empty if the script failed or timed out; output is empty then." }
 
     ChatEndpointOptions:
       type: object
@@ -1944,6 +2065,16 @@ components:
             How many web search results are retrieved when
             web_search_enabled. Bounds self-heal server-side the same way
             as rag_result_count (default 5, max 20).
+        system_prompt:
+          type: string
+          description: >-
+            When non-empty, injected as a leading system-role message ahead
+            of the rest of the conversation on every turn -- before the
+            RAG/web-search context message, if any, so an admin-authored
+            persona/instruction always takes precedence. Invisible in the
+            rendered chat UI. Never dropped by max_context_tokens' context
+            trimming, even when the rest of the conversation is trimmed to
+            fit. Empty string (the default) injects nothing.
 
     ChatEndpointRequest:
       description: >-
@@ -1968,6 +2099,52 @@ components:
               type: boolean
               description: Whether an API key is stored for this endpoint -- its actual value is never returned.
             updated_at: { type: string, format: date-time }
+
+    ChatHookOptions:
+      type: object
+      required: [name, pattern, script]
+      properties:
+        name: { type: string, description: "Human label, e.g. \"web_search\" -- also the source domain.NewChatHookID slugifies into this hook's id on creation (POST only; ignored by PATCH)." }
+        pattern:
+          type: string
+          description: >-
+            A Go regexp checked against POST /chat's answer text on every
+            turn this hook is enabled. Must have exactly one capture
+            group -- rejected with 400 otherwise (either failing to
+            compile, having no capture group, or having more than one).
+            That single captured value is the only thing ever passed to
+            script, and only as an opaque argv value -- never
+            shell-interpolated, sourced, or interpreted as a path/URL/
+            command.
+        script:
+          type: string
+          description: >-
+            A script FILENAME ONLY, never a path -- resolved against a
+            fixed, admin-controlled script directory by the server-side
+            runner, never influenced by the match itself.
+        enabled:
+          type: boolean
+          description: Whether this hook is checked against POST /chat's answers at all.
+
+    ChatHookRequest:
+      description: >-
+        The request shape for creating (POST) or replacing (PATCH) a chat
+        hook. Unlike EmbeddingHTTPEndpointRequest/ChatEndpointRequest,
+        there is no write-only secret field here to preserve across a
+        PATCH -- every field is always a full replace.
+      allOf:
+        - $ref: "#/components/schemas/ChatHookOptions"
+
+    ChatHook:
+      allOf:
+        - $ref: "#/components/schemas/ChatHookOptions"
+        - type: object
+          properties:
+            id:
+              type: string
+              description: >-
+                Minted from name at creation (see domain.NewChatHookID)
+                and never changed afterward, even if name is edited later.
 
     DatabaseDiagnostics:
       type: object

@@ -59,6 +59,17 @@
   </section>
 
   <section class="panel">
+    <h2>System prompt</h2>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="chat-system-prompt">System prompt</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Injected as a system message before every turn, on every question -- never shown in the chat itself, and never dropped even when older messages are trimmed to fit the context budget.</span></span>
+      </div>
+      <span class="field-wrap" data-default="(none)"><textarea id="chat-system-prompt" class="field" rows="4"></textarea></span>
+    </div>
+  </section>
+
+  <section class="panel">
     <h2>Retrieval-augmented answers</h2>
     <div class="form-row form-row-check">
       <label for="chat-rag-enabled">

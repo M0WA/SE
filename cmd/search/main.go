@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sync"
 
+	"searchengine/internal/adapters/hookrunner"
 	"searchengine/internal/adapters/httpchat"
 	"searchengine/internal/adapters/httpsearxng"
 	"searchengine/internal/adapters/restapi"
@@ -57,13 +58,19 @@ func main() {
 
 	searchSvc := application.NewHybridAsSearchService(repo, embedders, settings, opSettings, overrides, corpusStats, vocabulary)
 
+	// chatHooksDir is where every ChatHook.Script must live -- see
+	// hookrunner.Runner.Dir's doc comment. Left at its default, an admin who
+	// hasn't set CHAT_HOOKS_DIR yet can still configure hooks; scripts just
+	// won't resolve to anything until the directory exists and is populated.
+	chatHooksDir := bootstrap.GetEnv("CHAT_HOOKS_DIR", "/etc/searchengine/hooks")
+
 	handler := restapi.New(restapi.Config{
 		Search:        searchSvc,
 		OpSettings:    opSettings,
 		Health:        repo,
 		Sessions:      repo,
 		ChatEndpoints: repo,
-		Chat:          application.NewChatService(repo, httpchat.New(), searchSvc, httpsearxng.New()),
+		Chat:          application.NewChatService(repo, httpchat.New(), searchSvc, httpsearxng.New(), repo, hookrunner.New(chatHooksDir)),
 	})
 
 	addr := bootstrap.GetEnv("SEARCH_LISTEN_ADDR", "127.0.0.1:8080")

@@ -297,14 +297,17 @@ func (r *Repository) migrateEmbeddingEndpointColumns(ctx context.Context) error 
 }
 
 // migrateChatEndpointColumns adds max_context_tokens (see
-// domain.ChatEndpoint.MaxContextTokens) and the three web_search_* columns
+// domain.ChatEndpoint.MaxContextTokens), the three web_search_* columns
 // (see domain.ChatEndpoint.WebSearchEnabled/WebSearchBaseURL/
-// WebSearchResultCount) to a chat_endpoint table that predates them --
-// max_context_tokens defaults to 0 ("disabled"), web_search_enabled to
-// false and web_search_base_url to ” (both leave web search off, a
+// WebSearchResultCount), and system_prompt (see
+// domain.ChatEndpoint.SystemPrompt) to a chat_endpoint table that predates
+// them -- max_context_tokens defaults to 0 ("disabled"), web_search_enabled
+// to false and web_search_base_url to ” (both leave web search off, a
 // pre-existing endpoint's previous behavior), web_search_result_count to 0
 // (self-heals to the real default via domain.ChatEndpoint.Clamp on the
-// next save, same convention as rag_result_count's own 0 default).
+// next save, same convention as rag_result_count's own 0 default), and
+// system_prompt to ” (no persistent prompt injected, a pre-existing
+// endpoint's previous behavior).
 func (r *Repository) migrateChatEndpointColumns(ctx context.Context) error {
 	existing, err := r.existingColumns(ctx, "chat_endpoint")
 	if err != nil {
@@ -328,7 +331,10 @@ func (r *Repository) migrateChatEndpointColumns(ctx context.Context) error {
 	if err := addColumn("web_search_base_url", "web_search_base_url TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	return addColumn("web_search_result_count", "web_search_result_count INTEGER NOT NULL DEFAULT 0")
+	if err := addColumn("web_search_result_count", "web_search_result_count INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	return addColumn("system_prompt", "system_prompt TEXT NOT NULL DEFAULT ''")
 }
 
 // legacyHTTPEmbeddingSettings decodes just the fields this migration cares
@@ -2615,7 +2621,7 @@ func scanEmbeddingEndpoint(row scanner) (domain.EmbeddingHTTPEndpoint, error) {
 // key.
 const chatEndpointRowID = "default"
 
-const chatEndpointColumns = "base_url, api_key, model, enabled, rag_enabled, rag_result_count, max_context_tokens, web_search_enabled, web_search_base_url, web_search_result_count, updated_at"
+const chatEndpointColumns = "base_url, api_key, model, enabled, rag_enabled, rag_result_count, max_context_tokens, web_search_enabled, web_search_base_url, web_search_result_count, system_prompt, updated_at"
 
 // GetChatEndpoint returns the single admin-configured chat endpoint, or
 // ports.ErrChatEndpointNotConfigured if it has never been saved.
@@ -2640,7 +2646,7 @@ func (r *Repository) SetChatEndpoint(ctx context.Context, e domain.ChatEndpoint)
 	_, err := r.db.ExecContext(ctx, r.dialect.UpsertChatEndpointSQL(),
 		chatEndpointRowID, e.BaseURL, e.APIKey, e.Model, e.Enabled, e.RAGEnabled, e.RAGResultCount,
 		e.MaxContextTokens, e.WebSearchEnabled, e.WebSearchBaseURL, e.WebSearchResultCount,
-		e.UpdatedAt.UTC().Format(crawledAtLayout),
+		e.SystemPrompt, e.UpdatedAt.UTC().Format(crawledAtLayout),
 	)
 	if err != nil {
 		return fmt.Errorf("setting chat endpoint: %w", err)
@@ -2653,11 +2659,85 @@ func scanChatEndpoint(row scanner) (domain.ChatEndpoint, error) {
 	var updatedAt string
 	if err := row.Scan(&e.BaseURL, &e.APIKey, &e.Model, &e.Enabled, &e.RAGEnabled,
 		&e.RAGResultCount, &e.MaxContextTokens, &e.WebSearchEnabled, &e.WebSearchBaseURL,
-		&e.WebSearchResultCount, &updatedAt); err != nil {
+		&e.WebSearchResultCount, &e.SystemPrompt, &updatedAt); err != nil {
 		return domain.ChatEndpoint{}, err
 	}
 	e.UpdatedAt = parseCrawledAt(updatedAt)
 	return e, nil
+}
+
+const chatHookColumns = "id, name, pattern, script, enabled"
+
+// ListChatHooks lists every configured hook, ordered by name for a stable,
+// human-friendly admin table order (chat_hooks has no created_at column to
+// order by insertion, unlike embedding_http_endpoints).
+func (r *Repository) ListChatHooks(ctx context.Context) ([]domain.ChatHook, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+chatHookColumns+` FROM chat_hooks ORDER BY name ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("querying chat hooks: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.ChatHook
+	for rows.Next() {
+		h, err := scanChatHook(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning chat hook: %w", err)
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+// CreateChatHook inserts a new admin-configured chat hook (see
+// domain.ChatHook).
+func (r *Repository) CreateChatHook(ctx context.Context, h domain.ChatHook) error {
+	insertSQL := r.ph(`INSERT INTO chat_hooks (`+chatHookColumns+`) VALUES (%s, %s, %s, %s, %s)`, 1, 2, 3, 4, 5)
+	if _, err := r.db.ExecContext(ctx, insertSQL, h.ID, h.Name, h.Pattern, h.Script, h.Enabled); err != nil {
+		return fmt.Errorf("creating chat hook: %w", err)
+	}
+	return nil
+}
+
+// UpdateChatHook replaces h's editable fields (everything but ID, which
+// never changes after creation), returning ports.ErrChatHookNotFound if no
+// hook with h.ID exists.
+func (r *Repository) UpdateChatHook(ctx context.Context, h domain.ChatHook) error {
+	updateSQL := r.ph(`UPDATE chat_hooks SET name = %s, pattern = %s, script = %s, enabled = %s WHERE id = %s`, 1, 2, 3, 4, 5)
+	res, err := r.db.ExecContext(ctx, updateSQL, h.Name, h.Pattern, h.Script, h.Enabled, h.ID)
+	if err != nil {
+		return fmt.Errorf("updating chat hook (%s): %w", h.ID, err)
+	}
+	return requireChatHookRowsAffected(res, h.ID)
+}
+
+// DeleteChatHook removes a hook's config, returning ports.ErrChatHookNotFound
+// if no hook with id exists.
+func (r *Repository) DeleteChatHook(ctx context.Context, id string) error {
+	res, err := r.db.ExecContext(ctx, r.ph(`DELETE FROM chat_hooks WHERE id = %s`, 1), id)
+	if err != nil {
+		return fmt.Errorf("deleting chat hook (%s): %w", id, err)
+	}
+	return requireChatHookRowsAffected(res, id)
+}
+
+func requireChatHookRowsAffected(res sql.Result, id string) error {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking result for %s: %w", id, err)
+	}
+	if n == 0 {
+		return ports.ErrChatHookNotFound
+	}
+	return nil
+}
+
+func scanChatHook(row scanner) (domain.ChatHook, error) {
+	var h domain.ChatHook
+	if err := row.Scan(&h.ID, &h.Name, &h.Pattern, &h.Script, &h.Enabled); err != nil {
+		return domain.ChatHook{}, err
+	}
+	return h, nil
 }
 
 func nullableTimeString(t *time.Time) sql.NullString {

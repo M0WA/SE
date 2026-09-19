@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — chat hooks</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<div class="admin-shell">
+<nav class="admin-rail" id="admin-rail" aria-label="Admin sections"></nav>
+<main>
+  <div class="page-header">
+    <a class="mark" href="/">se.</a>
+    <button id="sign-out" class="text-button" type="button">Sign out</button>
+  </div>
+
+  <h2>Chat hooks</h2>
+  <p class="lede" style="margin: 0 0 1.5rem;">Regex triggers matched against every chat answer: whenever a hook's pattern matches, the matched capture group is passed as an argument to its script, and the script's output is folded back into the answer as a labeled, folded aside. A lightweight, deliberately narrow tool-calling mechanism -- not a general plugin system.</p>
+
+  <button id="add-hook-btn" class="text-button" type="button">Add hook</button>
+  <div id="hooks-status" class="panel-status"></div>
+  <div id="hooks-table"></div>
+
+  <section class="panel" id="hook-form-panel" hidden>
+    <h2 id="hook-form-title">Add hook</h2>
+    <form id="hook-form" class="stacked-form">
+      <div class="form-row">
+        <label for="hook-name">Name</label>
+        <input id="hook-name" class="field" type="text" required placeholder="e.g. web_search">
+      </div>
+      <div class="form-row">
+        <div class="label-row">
+          <label for="hook-pattern">Pattern</label>
+          <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">A Go regexp with exactly one capture group -- that group's matched text is the only thing ever passed to the script, as an opaque argv value.</span></span>
+        </div>
+        <input id="hook-pattern" class="field" type="text" required placeholder="e.g. \[\[search:(.+?)\]\]">
+      </div>
+      <div class="form-row">
+        <div class="label-row">
+          <label for="hook-script">Script</label>
+          <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">A script filename only, never a path -- resolved against a fixed, admin-controlled script directory.</span></span>
+        </div>
+        <input id="hook-script" class="field" type="text" required placeholder="e.g. web_search.sh">
+      </div>
+      <div class="form-row form-row-check">
+        <label for="hook-enabled">
+          <input id="hook-enabled" type="checkbox">
+          Enabled
+        </label>
+      </div>
+      <div class="form-row">
+        <button id="hook-save-btn" type="submit">Save</button>
+        <button id="hook-cancel-btn" type="button" class="text-button">Cancel</button>
+      </div>
+      <span id="hook-form-status" class="error-text"></span>
+    </form>
+  </section>
+</main>
+</div>
+<script src="/admin.js"></script>
+<script src="/admin_chat_hooks.js"></script>
+</body>
+</html>
