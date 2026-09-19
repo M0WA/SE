@@ -11,7 +11,7 @@ import (
 func TestOperationalSettings_NilGetReturnsDefaults(t *testing.T) {
 	var s *domain.OperationalSettings
 	v := s.Get()
-	if v.DefaultTopK != 10 || v.DefaultMaxPages != 20000 || v.FetchTimeout != 8*time.Second {
+	if v.DefaultTopK != 5000 || v.DefaultMaxPages != 20000 || v.FetchTimeout != 8*time.Second {
 		t.Errorf("expected built-in defaults from nil receiver, got %+v", v)
 	}
 }
@@ -201,7 +201,7 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 		UserAgent:                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0",
 		DefaultMaxPages:                  20000,
 		MinTextLength:                    50,
-		DefaultTopK:                      10,
+		DefaultTopK:                      5000,
 		SessionTTL:                       12 * time.Hour,
 		CrawlDelayMs:                     250,
 		MaxResponseBytes:                 5 * 1024 * 1024,

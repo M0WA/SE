@@ -349,8 +349,8 @@ func TestHandleSearch_DefaultTopK(t *testing.T) {
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
-	if fs.gotOpts.TopK != 10 {
-		t.Errorf("expected default top_k=10, got %d", fs.gotOpts.TopK)
+	if fs.gotOpts.TopK != 5000 {
+		t.Errorf("expected default top_k=5000, got %d", fs.gotOpts.TopK)
 	}
 }
 
