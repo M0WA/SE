@@ -34,6 +34,19 @@ scrape_configs:
     static_configs:
       - targets: ["127.0.0.1:9187"]
 
+  # SearXNG (/opt/searxng on se.mo-sys.de, a separate Docker deployment --
+  # not part of this repo/package) exposes its own OpenMetrics endpoint
+  # once general.open_metrics is set to a password in its settings.yml;
+  # that password is this scrape's basic_auth password too. Fill in on
+  # the deployed copy only -- never commit the real value here.
+  - job_name: searxng
+    metrics_path: /metrics
+    basic_auth:
+      username: searxng
+      password: "<SEARXNG_METRICS_PASSWORD>"
+    static_configs:
+      - targets: ["127.0.0.1:8888"]
+
 remote_write:
   - url: "https://<IONOS_METRICS_ENDPOINT>/api/v1/push"
     headers:
