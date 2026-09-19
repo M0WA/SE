@@ -77,6 +77,20 @@ change** (see `docs/architecture.md`'s own top section for the exact
 `mmdc` command) -- an `.mmd` edit with a stale `.svg` is incomplete work,
 same as any other change here.
 
+## Keep the configuration documentation in sync
+
+`docs/configuration.md` is the single reference for every way this system is
+configured: every environment variable any binary reads (`bootstrap.GetEnv`/
+`os.Getenv`), every config file under `packaging/` and its install/deploy
+path, every database-backed setting an admin edits through the web UI
+(`domain.OperationalSettings`, `TuningSettings`, `EmbeddingHTTPEndpoint`,
+`ChatEndpoint`, `ChatHook`, ...), and the end-to-end installation checklist.
+**Whenever any of these changes -- a new env var, a new or renamed config
+file, a new admin-configurable field, a new required install step -- update
+`docs/configuration.md` in the same change.** Treat a config-surface change
+without a matching doc update as incomplete work, same as every other rule
+in this section.
+
 ## Before committing
 
 - `go build ./...`, `go vet ./...`, `gofmt -l .` must be clean.
