@@ -13,7 +13,7 @@ func TestParseQuery_PlainWords(t *testing.T) {
 	if !reflect.DeepEqual(q.Optional, []string{"katzen", "hunde"}) {
 		t.Errorf("expected two optional terms, got %+v", q)
 	}
-	if len(q.Required) != 0 || len(q.Excluded) != 0 || len(q.Phrases) != 0 {
+	if len(q.Required) != 0 || len(q.ExcludedGroups) != 0 || len(q.Phrases) != 0 {
 		t.Errorf("expected no operators, got %+v", q)
 	}
 }
@@ -27,8 +27,35 @@ func TestParseQuery_RequiredWord(t *testing.T) {
 
 func TestParseQuery_ExcludedWord(t *testing.T) {
 	q := domain.ParseQuery("-hunde")
-	if !reflect.DeepEqual(q.Excluded, []string{"hunde"}) {
-		t.Errorf("expected 'hunde' excluded, got %+v", q.Excluded)
+	if !reflect.DeepEqual(q.ExcludedGroups, [][]string{{"hunde"}}) {
+		t.Errorf("expected 'hunde' excluded, got %+v", q.ExcludedGroups)
+	}
+}
+
+// TestParseQuery_ExcludedCompoundWordIsAndedNotOred is the regression test
+// for a query like "uber driver -Xuber" (a stray non-word character inside
+// an otherwise-single exclusion token, e.g. from a mangled autocomplete/
+// typing glitch, tokenizes to ["x", "uber"]): if both sub-words were added
+// to a flat OR'd exclusion list, "uber" alone would veto every document --
+// including ones the user is also searching for via an unrelated positive
+// term, silently returning nothing. Grouped-AND semantics mean the
+// exclusion only fires when a document contains BOTH sub-words together.
+func TestParseQuery_ExcludedCompoundWordIsAndedNotOred(t *testing.T) {
+	q := domain.ParseQuery("uber driver -well-known")
+	if !reflect.DeepEqual(q.ExcludedGroups, [][]string{{"well", "known"}}) {
+		t.Errorf("expected one exclusion group of ['well','known'], got %+v", q.ExcludedGroups)
+	}
+	// A document about "uber driver" (containing "uber" but neither "well"
+	// nor "known") must still match -- only one shared sub-word must never
+	// veto an otherwise-unrelated document.
+	if !q.Matches("Uber driver jobs", "Become an Uber driver today.") {
+		t.Error("expected a document containing none of the exclusion group's sub-words to still match")
+	}
+	if !q.Matches("Title", "A widely known fact.") {
+		t.Error("expected a document containing only one sub-word of the exclusion group to still match")
+	}
+	if q.Matches("Title", "A well-known fact.") {
+		t.Error("expected a document containing every sub-word of the exclusion group to be excluded")
 	}
 }
 
@@ -47,8 +74,8 @@ func TestParseQuery_Combination(t *testing.T) {
 	if !reflect.DeepEqual(q.Required, []string{"haustier"}) {
 		t.Errorf("expected 'haustier' required, got %+v", q.Required)
 	}
-	if !reflect.DeepEqual(q.Excluded, []string{"hund"}) {
-		t.Errorf("expected 'hund' excluded, got %+v", q.Excluded)
+	if !reflect.DeepEqual(q.ExcludedGroups, [][]string{{"hund"}}) {
+		t.Errorf("expected 'hund' excluded, got %+v", q.ExcludedGroups)
 	}
 	if !reflect.DeepEqual(q.Phrases, []string{"sehr treu"}) {
 		t.Errorf("expected one phrase, got %+v", q.Phrases)
@@ -120,8 +147,8 @@ func TestParseQuery_SiteFilterCombinedWithOtherOperators(t *testing.T) {
 	if !reflect.DeepEqual(q.Required, []string{"haustier"}) {
 		t.Errorf("expected 'haustier' required, got %+v", q.Required)
 	}
-	if !reflect.DeepEqual(q.Excluded, []string{"hund"}) {
-		t.Errorf("expected 'hund' excluded, got %+v", q.Excluded)
+	if !reflect.DeepEqual(q.ExcludedGroups, [][]string{{"hund"}}) {
+		t.Errorf("expected 'hund' excluded, got %+v", q.ExcludedGroups)
 	}
 	if !reflect.DeepEqual(q.Phrases, []string{"sehr treu"}) {
 		t.Errorf("expected one phrase, got %+v", q.Phrases)
@@ -260,8 +287,8 @@ func TestParseQuery_ExcludedPhrase(t *testing.T) {
 	if !reflect.DeepEqual(q.Optional, []string{"katzen"}) {
 		t.Errorf("expected 'katzen' optional, got %+v", q.Optional)
 	}
-	if len(q.Excluded) != 0 {
-		t.Errorf("expected no plain excluded words (the old buggy split), got %+v", q.Excluded)
+	if len(q.ExcludedGroups) != 0 {
+		t.Errorf("expected no plain excluded words (the old buggy split), got %+v", q.ExcludedGroups)
 	}
 	if !reflect.DeepEqual(q.ExcludedPhrases, []string{"sehr laut"}) {
 		t.Errorf("expected 'sehr laut' as an excluded phrase, got %+v", q.ExcludedPhrases)
@@ -310,8 +337,8 @@ func TestParseQuery_ExcludedSite(t *testing.T) {
 	if !reflect.DeepEqual(q.Optional, []string{"katzen"}) {
 		t.Errorf("expected 'katzen' optional, got %+v", q.Optional)
 	}
-	if len(q.Excluded) != 0 {
-		t.Errorf("expected no plain excluded words (the old buggy split), got %+v", q.Excluded)
+	if len(q.ExcludedGroups) != 0 {
+		t.Errorf("expected no plain excluded words (the old buggy split), got %+v", q.ExcludedGroups)
 	}
 	if !reflect.DeepEqual(q.ExcludedSites, []string{"example.com"}) {
 		t.Errorf("expected 'example.com' as an excluded site, got %+v", q.ExcludedSites)

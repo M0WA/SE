@@ -287,7 +287,7 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 	// below, so a query with both term constraints and admin blocked/
 	// boosted terms doesn't tokenize the same document three times.
 	docTokens := make(map[string]map[string]bool)
-	needsTokens := len(parsed.Required) > 0 || len(parsed.Excluded) > 0 ||
+	needsTokens := len(parsed.Required) > 0 || len(parsed.ExcludedGroups) > 0 ||
 		len(overrides.BlockedTerms) > 0 || len(overrides.BoostedTerms) > 0
 	var recencyOrder []string
 	if parsed.HasConstraints() || hasOverrides || recency {
