@@ -1907,7 +1907,16 @@ func (h *Handler) handleAdminContentDedupRecomputeStart(w http.ResponseWriter, r
 	v := h.opSettings.Get()
 	go func() {
 		ctx := context.Background()
-		if _, err := application.RunContentDedupJobWithStatus(ctx, h.contentDedupRepo, h.settingsStore, v.ContentDedupMethod, v.ContentDedupSimHashMaxDistance); err != nil {
+		_, err := application.RunContentDedupJobWithStatus(ctx, h.contentDedupRepo, h.settingsStore, v.ContentDedupMethod, v.ContentDedupSimHashMaxDistance)
+		switch {
+		case err == nil:
+		case errors.Is(err, ports.ErrContentDedupAlreadyRunning):
+			// The fast-path check above already rejected the common case
+			// (200/409 back to this same request) -- this is the rarer
+			// case where cmd/crawl's own scheduler won the race in the
+			// gap between that check and this goroutine actually starting.
+			// Expected, not worth logging as an error.
+		default:
 			log.Printf("recomputing content dedup: %v", err)
 		}
 	}()

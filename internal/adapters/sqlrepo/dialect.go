@@ -10,6 +10,13 @@ type Dialect interface {
 	UpsertSettingSQL() string
 	UpsertDocumentAliasSQL() string
 	UpsertChatEndpointSQL() string
+	// SeedContentDedupLockSQL atomically inserts content_dedup_lock's one
+	// sentinel row (id=1, in_progress=false) if it isn't already there --
+	// a plain SELECT-then-INSERT would have the exact same
+	// multiple-processes-racing-at-startup problem CreateSchemaSQL's own
+	// doc comment describes, so this is a single insert-or-noop statement
+	// per dialect instead.
+	SeedContentDedupLockSQL() string
 	CreateSchemaSQL() []string
 }
 
@@ -48,6 +55,9 @@ func (sqliteDialect) UpsertChatEndpointSQL() string {
 	          enabled=excluded.enabled, rag_enabled=excluded.rag_enabled,
 	          rag_result_count=excluded.rag_result_count, max_context_tokens=excluded.max_context_tokens,
 	          updated_at=excluded.updated_at`
+}
+func (sqliteDialect) SeedContentDedupLockSQL() string {
+	return `INSERT OR IGNORE INTO content_dedup_lock (id, in_progress) VALUES (1, false)`
 }
 func (sqliteDialect) CreateSchemaSQL() []string {
 	return []string{
@@ -133,6 +143,18 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			max_context_tokens INTEGER NOT NULL DEFAULT 0,
 			updated_at TEXT NOT NULL
 		)`,
+		// content_dedup_lock is a single sentinel row (id = 1) whose
+		// in_progress flag TryAcquireContentDedupLock/ReleaseContentDedupLock
+		// claim/clear via a conditional UPDATE -- see ports.
+		// ContentDedupRepository's doc comment for why this needs to be a
+		// real DB row (visible to every process) rather than an in-memory
+		// bool. The row is seeded once at migration time (see
+		// migrateDocumentColumns), not here, since CREATE TABLE alone
+		// leaves it empty and the conditional UPDATE has no row to match
+		// against otherwise.
+		`CREATE TABLE IF NOT EXISTS content_dedup_lock (
+			id INTEGER PRIMARY KEY, in_progress BOOLEAN NOT NULL DEFAULT false
+		)`,
 		`CREATE TABLE IF NOT EXISTS crawl_jobs (
 			id TEXT PRIMARY KEY, request TEXT NOT NULL, status TEXT NOT NULL,
 			pages_crawled INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
@@ -188,6 +210,9 @@ func (mysqlDialect) UpsertChatEndpointSQL() string {
 	          enabled=VALUES(enabled), rag_enabled=VALUES(rag_enabled),
 	          rag_result_count=VALUES(rag_result_count), max_context_tokens=VALUES(max_context_tokens),
 	          updated_at=VALUES(updated_at)`
+}
+func (mysqlDialect) SeedContentDedupLockSQL() string {
+	return `INSERT IGNORE INTO content_dedup_lock (id, in_progress) VALUES (1, false)`
 }
 func (mysqlDialect) CreateSchemaSQL() []string {
 	return []string{
@@ -268,6 +293,10 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			max_context_tokens INT NOT NULL DEFAULT 0,
 			updated_at VARCHAR(64) NOT NULL
 		) ENGINE=InnoDB`,
+		// See the sqlite dialect's content_dedup_lock comment.
+		`CREATE TABLE IF NOT EXISTS content_dedup_lock (
+			id INT PRIMARY KEY, in_progress BOOLEAN NOT NULL DEFAULT false
+		) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS crawl_jobs (
 			id VARCHAR(64) PRIMARY KEY, request LONGTEXT NOT NULL, status VARCHAR(32) NOT NULL,
 			pages_crawled INT NOT NULL DEFAULT 0, error TEXT NOT NULL,
@@ -327,6 +356,9 @@ func (postgresDialect) UpsertChatEndpointSQL() string {
 	          enabled=EXCLUDED.enabled, rag_enabled=EXCLUDED.rag_enabled,
 	          rag_result_count=EXCLUDED.rag_result_count, max_context_tokens=EXCLUDED.max_context_tokens,
 	          updated_at=EXCLUDED.updated_at`
+}
+func (postgresDialect) SeedContentDedupLockSQL() string {
+	return `INSERT INTO content_dedup_lock (id, in_progress) VALUES (1, false) ON CONFLICT (id) DO NOTHING`
 }
 func (postgresDialect) CreateSchemaSQL() []string {
 	return []string{
@@ -405,6 +437,10 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			rag_result_count INT NOT NULL DEFAULT 0,
 			max_context_tokens INT NOT NULL DEFAULT 0,
 			updated_at TEXT NOT NULL
+		)`,
+		// See the sqlite dialect's content_dedup_lock comment.
+		`CREATE TABLE IF NOT EXISTS content_dedup_lock (
+			id INT PRIMARY KEY, in_progress BOOLEAN NOT NULL DEFAULT false
 		)`,
 		`CREATE TABLE IF NOT EXISTS crawl_jobs (
 			id TEXT PRIMARY KEY, request TEXT NOT NULL, status TEXT NOT NULL,

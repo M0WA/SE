@@ -4685,6 +4685,7 @@ type fakeContentDedupRepo struct {
 	fingerprints    []domain.DocumentFingerprint
 	fingerprintsErr error
 	mergeErr        error
+	lockBusy        bool
 
 	mu     sync.Mutex
 	merges []struct {
@@ -4692,6 +4693,16 @@ type fakeContentDedupRepo struct {
 		loserIDs    []string
 		reason      string
 	}
+}
+
+func (r *fakeContentDedupRepo) TryAcquireContentDedupLock(context.Context) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return !r.lockBusy, nil
+}
+
+func (r *fakeContentDedupRepo) ReleaseContentDedupLock(context.Context) error {
+	return nil
 }
 
 func (r *fakeContentDedupRepo) AllDocumentFingerprints(context.Context) ([]domain.DocumentFingerprint, error) {
@@ -4862,6 +4873,41 @@ func TestHandleAdminContentDedupRecomputeStart_AlreadyInProgress(t *testing.T) {
 	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {
 		t.Errorf("expected 409 when a recompute is already in progress, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleAdminContentDedupRecomputeStart_LosesLockRaceToAnotherProcess
+// covers the gap the fast-path InProgress check above can't close: the
+// status flag it inspects synchronously said "not running" (nothing
+// seeded here), but by the time the spawned goroutine actually calls
+// RunContentDedupJobWithStatus, cmd/crawl's own scheduler has already
+// taken the real lock -- see ports.ErrContentDedupAlreadyRunning's doc
+// comment. Still 202 (the response was already decided before the race
+// could even happen); the real assertion is that the job never touches
+// fingerprints/merges or the persisted status once it loses that race.
+func TestHandleAdminContentDedupRecomputeStart_LosesLockRaceToAnotherProcess(t *testing.T) {
+	store := newSettingsStoreTestRepo(t)
+	repo := &fakeContentDedupRepo{lockBusy: true}
+	h, cookie := adminAuthedHandlerWithContentDedup(t, repo, nil, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/content-dedup/recompute", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// No positive "it's done" signal exists to poll for here (that's the
+	// whole point -- losing the lock race means nothing ever runs), so
+	// give the detached goroutine a brief, generous window to have acted
+	// if it were going to, then assert it didn't.
+	time.Sleep(100 * time.Millisecond)
+	if repo.mergeCount() > 0 {
+		t.Error("expected no merges to be attempted after losing the lock race")
+	}
+	if _, found, err := store.GetSetting(context.Background(), ports.SettingsKeyContentDedupStatus); err != nil || found {
+		t.Errorf("expected no status write when the lock race is lost, found=%v err=%v", found, err)
 	}
 }
 
