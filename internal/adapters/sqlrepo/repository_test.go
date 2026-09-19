@@ -1411,6 +1411,65 @@ func TestListDocumentAliasGroups_PaginatesByCanonicalID(t *testing.T) {
 	}
 }
 
+func TestTryAcquireContentDedupLock_SucceedsWhenFree(t *testing.T) {
+	repo := newTestRepo(t)
+	acquired, err := repo.TryAcquireContentDedupLock(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !acquired {
+		t.Error("expected the lock to be free on a fresh database")
+	}
+}
+
+// TestTryAcquireContentDedupLock_FailsWhileAlreadyHeld proves a second
+// acquire attempt is refused while the first caller still holds it -- the
+// exact scenario that let two content-dedup runs interleave in production
+// before this lock existed.
+func TestTryAcquireContentDedupLock_FailsWhileAlreadyHeld(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	first, err := repo.TryAcquireContentDedupLock(ctx)
+	if err != nil || !first {
+		t.Fatalf("expected the first acquire to succeed, got acquired=%v err=%v", first, err)
+	}
+	second, err := repo.TryAcquireContentDedupLock(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if second {
+		t.Error("expected the second acquire to fail while the first still holds the lock")
+	}
+}
+
+func TestReleaseContentDedupLock_AllowsReacquiring(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	if _, err := repo.TryAcquireContentDedupLock(ctx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := repo.ReleaseContentDedupLock(ctx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	reacquired, err := repo.TryAcquireContentDedupLock(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !reacquired {
+		t.Error("expected the lock to be acquirable again after being released")
+	}
+}
+
+// TestReleaseContentDedupLock_IdempotentWhenAlreadyFree proves releasing a
+// lock nobody holds is a harmless no-op, not an error -- a deferred release
+// after a failed/short-circuited acquire must never itself need handling.
+func TestReleaseContentDedupLock_IdempotentWhenAlreadyFree(t *testing.T) {
+	repo := newTestRepo(t)
+	if err := repo.ReleaseContentDedupLock(context.Background()); err != nil {
+		t.Fatalf("expected releasing a free lock to be a no-op, got %v", err)
+	}
+}
+
 func TestListDocuments_RespectsLimit(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()

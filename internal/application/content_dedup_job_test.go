@@ -24,6 +24,27 @@ type fakeContentDedupRepo struct {
 	fingerprintsErr error
 	merges          []mergeCall
 	mergeErr        error
+	// lockBusy simulates another process already holding the lock --
+	// zero-value false (the default every existing test implicitly relies
+	// on) means TryAcquireContentDedupLock succeeds.
+	lockBusy     bool
+	acquireErr   error
+	releaseErr   error
+	acquireCalls int
+	releaseCalls int
+}
+
+func (r *fakeContentDedupRepo) TryAcquireContentDedupLock(context.Context) (bool, error) {
+	r.acquireCalls++
+	if r.acquireErr != nil {
+		return false, r.acquireErr
+	}
+	return !r.lockBusy, nil
+}
+
+func (r *fakeContentDedupRepo) ReleaseContentDedupLock(context.Context) error {
+	r.releaseCalls++
+	return r.releaseErr
 }
 
 func (r *fakeContentDedupRepo) AllDocumentFingerprints(context.Context) ([]domain.DocumentFingerprint, error) {
@@ -334,6 +355,96 @@ func TestRunContentDedupJobWithStatus_NilSettingsStoreIsANoop(t *testing.T) {
 	repo := &fakeContentDedupRepo{}
 	if _, err := application.RunContentDedupJobWithStatus(context.Background(), repo, nil, domain.ContentDedupMethodExact, 3); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestRunContentDedupJobWithStatus_AlreadyRunningSkipsEntirely proves the
+// atomic lock, not just the display-only InProgress flag, gates a run: when
+// another process already holds it, this call must not touch
+// AllDocumentFingerprints/MergeDocuments at all, and must not perturb the
+// persisted status (a concurrent run's own status writes are what's
+// authoritative).
+func TestRunContentDedupJobWithStatus_AlreadyRunningSkipsEntirely(t *testing.T) {
+	repo := &fakeContentDedupRepo{
+		lockBusy: true,
+		fingerprints: []domain.DocumentFingerprint{
+			{ID: "a", ContentHash: "same"},
+			{ID: "b", ContentHash: "same"},
+		},
+	}
+	settings := newFakeSettingsStore()
+
+	_, err := application.RunContentDedupJobWithStatus(context.Background(), repo, settings, domain.ContentDedupMethodExact, 3)
+	if !errors.Is(err, ports.ErrContentDedupAlreadyRunning) {
+		t.Fatalf("expected ErrContentDedupAlreadyRunning, got %v", err)
+	}
+	if len(repo.merges) != 0 {
+		t.Errorf("expected no merges when the lock is already held, got %v", repo.merges)
+	}
+	if len(settings.saveCalls) != 0 {
+		t.Errorf("expected no status writes when the lock is already held, got %d", len(settings.saveCalls))
+	}
+	if repo.releaseCalls != 0 {
+		t.Errorf("expected no release call for a lock this call never acquired, got %d", repo.releaseCalls)
+	}
+}
+
+// TestRunContentDedupJobWithStatus_ReleasesLockOnSuccess proves the lock is
+// always released after a run, not just leaked until the next restart.
+func TestRunContentDedupJobWithStatus_ReleasesLockOnSuccess(t *testing.T) {
+	repo := &fakeContentDedupRepo{}
+	settings := newFakeSettingsStore()
+
+	if _, err := application.RunContentDedupJobWithStatus(context.Background(), repo, settings, domain.ContentDedupMethodExact, 3); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.acquireCalls != 1 {
+		t.Errorf("expected exactly one acquire attempt, got %d", repo.acquireCalls)
+	}
+	if repo.releaseCalls != 1 {
+		t.Errorf("expected the lock to be released after a successful run, got %d release calls", repo.releaseCalls)
+	}
+}
+
+// TestRunContentDedupJobWithStatus_ReleasesLockOnError proves the lock is
+// released even when the run itself fails, so one failed run can't wedge
+// every future run behind a lock nothing will ever clear.
+func TestRunContentDedupJobWithStatus_ReleasesLockOnError(t *testing.T) {
+	repo := &fakeContentDedupRepo{fingerprintsErr: errors.New("db unavailable")}
+	settings := newFakeSettingsStore()
+
+	if _, err := application.RunContentDedupJobWithStatus(context.Background(), repo, settings, domain.ContentDedupMethodExact, 3); err == nil {
+		t.Fatal("expected an error to propagate")
+	}
+	if repo.releaseCalls != 1 {
+		t.Errorf("expected the lock to be released after a failed run, got %d release calls", repo.releaseCalls)
+	}
+}
+
+func TestRunContentDedupJobWithStatus_AcquireLockErrorPropagates(t *testing.T) {
+	repo := &fakeContentDedupRepo{acquireErr: errors.New("db unavailable")}
+	settings := newFakeSettingsStore()
+
+	_, err := application.RunContentDedupJobWithStatus(context.Background(), repo, settings, domain.ContentDedupMethodExact, 3)
+	if err == nil {
+		t.Fatal("expected the lock acquisition error to propagate")
+	}
+	if repo.releaseCalls != 0 {
+		t.Errorf("expected no release call for a lock this call never acquired, got %d", repo.releaseCalls)
+	}
+}
+
+// TestRunContentDedupJobWithStatus_ReleaseErrorDoesNotFailTheRun proves a
+// failure to release the lock afterward (logged, per RunContentDedupJobWithStatus's
+// deferred cleanup) never turns an otherwise-successful run into an error --
+// the lock row will simply time out or be cleared by the next process that
+// notices, not something worth failing the caller's own result over.
+func TestRunContentDedupJobWithStatus_ReleaseErrorDoesNotFailTheRun(t *testing.T) {
+	repo := &fakeContentDedupRepo{releaseErr: errors.New("db unavailable")}
+	settings := newFakeSettingsStore()
+
+	if _, err := application.RunContentDedupJobWithStatus(context.Background(), repo, settings, domain.ContentDedupMethodExact, 3); err != nil {
+		t.Fatalf("expected a release error not to fail the run, got %v", err)
 	}
 }
 

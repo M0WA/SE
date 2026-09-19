@@ -11,6 +11,7 @@
   const chatStatus = document.getElementById('chat-status');
   const chatForm = document.getElementById('chat-form');
   const chatInput = document.getElementById('chat-input');
+  const chatRag = document.getElementById('chat-rag');
 
   // chatHistory is the full running conversation, sent in full on every
   // /chat call -- the backend is stateless and has no server-side session,
@@ -128,13 +129,113 @@
     }
   }
 
+  // escapeHTML neutralizes raw HTML in model output before any markdown
+  // transform runs, so renderMarkdown's innerHTML use below can never
+  // inject a tag/script the model happened to emit -- every markdown
+  // pattern is matched and replaced strictly *after* this, working only
+  // with already-inert text and the specific tags this function itself
+  // introduces.
+  function escapeHTML(text) {
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // renderInline applies span-level markdown -- code spans first (each
+  // pulled out to a plain SPANn placeholder so nothing inside it is ever
+  // touched by the bold/italic/link patterns that follow, then restored
+  // verbatim at the end), to already-HTML-escaped text. Bold is matched
+  // before italic so **x** is never left as <em>*x</em>.
+  function renderInline(text) {
+    const codeSpans = [];
+    text = text.replace(/`([^`\n]+)`/g, (_, code) => {
+      codeSpans.push(code);
+      return 'SPAN' + (codeSpans.length - 1) + 'END';
+    });
+    text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    text = text.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    text = text.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+    text = text.replace(/SPAN(\d+)END/g, (_, i) => '<code>' + codeSpans[Number(i)] + '</code>');
+    return text;
+  }
+
+  // renderMarkdown turns a chat model's plain-text-with-markdown answer
+  // into safe HTML: fenced code blocks are pulled out first (so nothing
+  // inside them is ever touched by inline/list/heading rules), then each
+  // remaining line is classified into a heading, a list item, or plain
+  // paragraph text, matching CommonMark closely enough for typical answers
+  // without pulling in a full parser for a chat bubble. Simplification
+  // accepted: a fence opened and closed on the same line (rare in
+  // practice) isn't specially recognized and renders as literal text
+  // instead of a code block.
+  function renderMarkdown(raw) {
+    const codeBlocks = [];
+    const text = escapeHTML(raw).replace(/```[a-zA-Z0-9]*\n?([\s\S]*?)```/g, (_, code) => {
+      codeBlocks.push(code.replace(/\n$/, ''));
+      return '\nBLOCKFENCE' + (codeBlocks.length - 1) + '\n';
+    });
+
+    const html = [];
+    let list = null; // { tag: 'ul'|'ol', items: string[] }
+    let para = [];
+
+    function flushPara() {
+      if (para.length === 0) return;
+      html.push('<p>' + renderInline(para.join('\n')).replace(/\n/g, '<br>') + '</p>');
+      para = [];
+    }
+    function flushList() {
+      if (!list) return;
+      const items = list.items.map((item) => '<li>' + renderInline(item) + '</li>').join('');
+      html.push('<' + list.tag + '>' + items + '</' + list.tag + '>');
+      list = null;
+    }
+
+    for (const rawLine of text.split('\n')) {
+      const line = rawLine.trim();
+      const blockMatch = line.match(/^BLOCKFENCE(\d+)$/);
+      const headingMatch = line.match(/^(#{1,6})\s+(.*)$/);
+      const ulMatch = line.match(/^[-*]\s+(.*)$/);
+      const olMatch = line.match(/^\d+\.\s+(.*)$/);
+      if (blockMatch) {
+        flushPara();
+        flushList();
+        html.push('<pre><code>' + codeBlocks[Number(blockMatch[1])] + '</code></pre>');
+      } else if (line === '') {
+        flushPara();
+        flushList();
+      } else if (headingMatch) {
+        flushPara();
+        flushList();
+        const level = Math.min(headingMatch[1].length + 2, 6);
+        html.push('<h' + level + '>' + renderInline(headingMatch[2]) + '</h' + level + '>');
+      } else if (ulMatch) {
+        flushPara();
+        if (!list || list.tag !== 'ul') { flushList(); list = { tag: 'ul', items: [] }; }
+        list.items.push(ulMatch[1]);
+      } else if (olMatch) {
+        flushPara();
+        if (!list || list.tag !== 'ol') { flushList(); list = { tag: 'ol', items: [] }; }
+        list.items.push(olMatch[1]);
+      } else {
+        flushList();
+        para.push(line);
+      }
+    }
+    flushPara();
+    flushList();
+    return html.join('');
+  }
+
   // renderChatMessage appends one message to #chat-messages for a
   // {role, content} turn. User and assistant turns are told apart by
   // alignment and a quiet tint (see .chat-msg-user/.chat-msg-assistant in
-  // style.css) rather than a "You:"/"Assistant:" label. sources (only ever
-  // present on the assistant's most recent turn -- chatHistory itself
-  // never carries them, since the backend contract doesn't echo them back
-  // on later turns) are rendered as a small link list underneath, same
+  // style.css) rather than a "You:"/"Assistant:" label. The assistant's
+  // own text is rendered as markdown (renderMarkdown escapes it first, so
+  // this is safe against anything the model emits); a user's own typed
+  // text is shown as plain text -- markdown syntax they typed is not
+  // something they'd expect reinterpreted. sources (only ever present on
+  // the assistant's most recent turn -- chatHistory itself never carries
+  // them, since the backend contract doesn't echo them back on later
+  // turns) are rendered as a small link list underneath, same
   // title-or-url fallback renderResults already uses for r.title || r.url.
   function renderChatMessage(role, content, sources) {
     const msg = document.createElement('div');
@@ -142,7 +243,11 @@
 
     const bubble = document.createElement('div');
     bubble.className = 'chat-msg-bubble';
-    bubble.textContent = content;
+    if (role === 'assistant') {
+      bubble.innerHTML = renderMarkdown(content);
+    } else {
+      bubble.textContent = content;
+    }
     msg.appendChild(bubble);
 
     if (role === 'assistant' && sources && sources.length > 0) {
@@ -167,6 +272,9 @@
   // sendChatMessage appends the user's turn to chatHistory, renders it
   // immediately, then POSTs the full history to /chat -- see runSearch
   // above for the same ok/non-ok/network-failure pattern this mirrors.
+  // rag is read fresh from the checkbox on every call, so switching it
+  // mid-conversation only ever affects the question being asked right now,
+  // not history already answered under the other setting.
   async function sendChatMessage(content) {
     chatHistory.push({ role: 'user', content });
     renderChatMessage('user', content);
@@ -175,7 +283,7 @@
       const resp = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: chatHistory }),
+        body: JSON.stringify({ messages: chatHistory, rag: chatRag.checked }),
       });
       if (!resp.ok) {
         const msg = await resp.text();
@@ -235,6 +343,17 @@
     sendChatMessage(content);
   });
 
+  // chat-input is a <textarea> (multi-line input, so the user can compose a
+  // longer question) -- unlike a plain text <input>, a <textarea> never
+  // submits its form on Enter by itself, so this wires up the standard chat
+  // convention by hand: Enter alone sends, Shift+Enter inserts a newline.
+  chatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      chatForm.requestSubmit();
+    }
+  });
+
   const sortSelect = document.getElementById('sort');
 
   form.addEventListener('submit', (e) => {
@@ -267,5 +386,6 @@
     module.exports = {
       renderCorrectionNote, clear, scoreRow, renderResults, runSearch,
       chatHistory, renderChatMessage, sendChatMessage, setMode,
+      escapeHTML, renderInline, renderMarkdown,
     };
   }

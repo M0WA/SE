@@ -43,7 +43,15 @@ type ChatEndpoint struct {
 	// RAGResultCount bounds how many search results are retrieved when
 	// RAGEnabled -- see DefaultChatRAGResultCount/Min/MaxChatRAGResultCount.
 	RAGResultCount int
-	UpdatedAt      time.Time
+	// MaxContextTokens bounds how many tokens' worth of conversation
+	// (RAG context plus message history) ChatService.Chat will send to the
+	// model, approximated by character count -- see that package's
+	// trimToBudget. Older messages are dropped first, oldest to newest,
+	// always keeping the most recent user message. 0 disables trimming
+	// (the full history is sent as-is), same convention as
+	// EmbeddingHTTPEndpoint.ChunkSizeTokens.
+	MaxContextTokens int
+	UpdatedAt        time.Time
 }
 
 // DefaultChatRAGResultCount/MinChatRAGResultCount/MaxChatRAGResultCount

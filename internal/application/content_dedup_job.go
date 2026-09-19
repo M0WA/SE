@@ -236,7 +236,32 @@ func chooseCanonical(group []domain.DocumentFingerprint) domain.DocumentFingerpr
 // run (triggered by anything, anywhere) is in progress and what the last
 // one found. settings may be nil (bookkeeping then skipped). On error,
 // InProgress clears but the last successful run's fields are left as-is.
+//
+// The status.InProgress bookkeeping above is display-only and, on its own,
+// race-prone (a plain read-then-write, not atomic) -- the actual mutual
+// exclusion is repo.TryAcquireContentDedupLock, a real conditional DB
+// UPDATE every process contends for. Returns
+// ports.ErrContentDedupAlreadyRunning, without touching status at all, if
+// this call loses that race -- production once had cmd/crawl's own
+// scheduler and the admin-server's "recompute now" button run this
+// concurrently, each merging from its own snapshot of
+// AllDocumentFingerprints, which left a document_aliases row pointing at a
+// canonical the other run's transaction had already deleted (see
+// ports.ContentDedupRepository's doc comment).
 func RunContentDedupJobWithStatus(ctx context.Context, repo ports.ContentDedupRepository, settings ports.SettingsStore, method string, maxSimHashDistance int) (ContentDedupRunResult, error) {
+	acquired, err := repo.TryAcquireContentDedupLock(ctx)
+	if err != nil {
+		return ContentDedupRunResult{}, err
+	}
+	if !acquired {
+		return ContentDedupRunResult{}, ports.ErrContentDedupAlreadyRunning
+	}
+	defer func() {
+		if releaseErr := repo.ReleaseContentDedupLock(ctx); releaseErr != nil {
+			log.Printf("releasing content dedup lock: %v", releaseErr)
+		}
+	}()
+
 	status := LoadContentDedupStatus(ctx, settings)
 	status.InProgress = true
 	saveContentDedupStatus(ctx, settings, status)

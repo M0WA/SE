@@ -45,24 +45,14 @@ const FULL_SETTINGS = {
 
 const EMPTY_OVERRIDES = { blocked_terms: [], blocked_domains: [], boosted_terms: {}, boosted_domains: {} };
 
-const CHAT_ENDPOINT = {
-  enabled: true,
-  base_url: 'http://localhost:8000/v1',
-  model: 'llama-3',
-  has_api_key: true,
-  rag_enabled: true,
-  rag_result_count: 5,
-};
-
-function loadFixture(endpoints, chatEndpoint, url) {
-  setupDOM(SETTINGS_HTML, url);
+function loadFixture(endpoints) {
+  setupDOM(SETTINGS_HTML);
   const adminHelpers = requireFresh('./admin.js');
   Object.assign(global, adminHelpers);
   global.fetch = async (url) => {
     if (url.includes('/admin/api/settings')) return { ok: true, json: async () => FULL_SETTINGS };
     if (url.includes('/admin/api/overrides')) return { ok: true, json: async () => EMPTY_OVERRIDES };
     if (url.includes('/admin/api/embeddings/endpoints')) return { ok: true, json: async () => endpoints || [] };
-    if (url.includes('/admin/api/chat-endpoint')) return { ok: true, json: async () => chatEndpoint || CHAT_ENDPOINT };
     return { ok: true, json: async () => ({}) };
   };
   return requireFresh('./admin_settings.js');
@@ -549,146 +539,4 @@ test('a failing settings save still lets the overrides save succeed', async () =
   const text = document.getElementById('settings-status').textContent;
   assert.equal(text.includes('settings: settings write failed'), true);
   assert.equal(text.includes('overrides:'), false);
-});
-
-test('loadChatEndpoint populates every chat field from the GET response', async () => {
-  const { loadChatEndpoint } = loadFixture();
-  await loadChatEndpoint();
-  assert.equal(document.getElementById('chat-enabled').checked, true);
-  assert.equal(document.getElementById('chat-base-url').value, 'http://localhost:8000/v1');
-  assert.equal(document.getElementById('chat-model').value, 'llama-3');
-  assert.equal(document.getElementById('chat-rag-enabled').checked, true);
-  assert.equal(document.getElementById('chat-rag-result-count').value, '5');
-});
-
-test('loadChatEndpoint leaves the API key field blank even when has_api_key is true, and enables the clear checkbox', async () => {
-  const { loadChatEndpoint } = loadFixture();
-  await loadChatEndpoint();
-  assert.equal(document.getElementById('chat-api-key').value, '');
-  assert.equal(document.getElementById('chat-api-key').placeholder, 'Leave blank to keep the current key');
-  assert.equal(document.getElementById('chat-clear-api-key').disabled, false);
-});
-
-test('loadChatEndpoint disables the clear-key checkbox and blanks the placeholder when no key is stored', async () => {
-  const { loadChatEndpoint } = loadFixture(null, {
-    enabled: false, base_url: '', model: '', has_api_key: false, rag_enabled: false, rag_result_count: 5,
-  });
-  await loadChatEndpoint();
-  assert.equal(document.getElementById('chat-api-key').placeholder, '');
-  assert.equal(document.getElementById('chat-clear-api-key').disabled, true);
-  assert.equal(document.getElementById('chat-rag-enabled').checked, false);
-});
-
-test('loadChatEndpoint reports the error message on a failed fetch', async () => {
-  const { loadChatEndpoint } = loadFixture();
-  global.fetch = async () => ({ ok: false, status: 500, text: async () => 'chat endpoint down' });
-  await loadChatEndpoint();
-  assert.equal(document.getElementById('chat-settings-status').textContent.includes('chat endpoint down'), true);
-});
-
-test('saveChatEndpoint PATCHes the entered fields and reports "Saved." on success', async () => {
-  const { saveChatEndpoint } = loadFixture();
-  await flush();
-  document.getElementById('chat-enabled').checked = true;
-  document.getElementById('chat-base-url').value = 'http://localhost:9000/v1';
-  document.getElementById('chat-model').value = 'gpt-oss';
-  document.getElementById('chat-api-key').value = 'sk-new-key';
-  document.getElementById('chat-rag-enabled').checked = false;
-  document.getElementById('chat-rag-result-count').value = '8';
-  let gotURL;
-  let gotBody;
-  let gotMethod;
-  global.fetch = async (url, opts) => {
-    if (url.includes('/admin/api/chat-endpoint')) {
-      if (opts && opts.method === 'PATCH') {
-        gotURL = url;
-        gotMethod = opts.method;
-        gotBody = JSON.parse(opts.body);
-      }
-      return { ok: true, json: async () => CHAT_ENDPOINT };
-    }
-    return { ok: true, json: async () => ({}) };
-  };
-  await saveChatEndpoint();
-  assert.equal(gotURL, '/admin/api/chat-endpoint');
-  assert.equal(gotMethod, 'PATCH');
-  assert.equal(gotBody.base_url, 'http://localhost:9000/v1');
-  assert.equal(gotBody.model, 'gpt-oss');
-  assert.equal(gotBody.api_key, 'sk-new-key');
-  assert.equal(gotBody.enabled, true);
-  assert.equal(gotBody.rag_enabled, false);
-  assert.equal(gotBody.rag_result_count, 8);
-  assert.equal(gotBody.clear_api_key, false);
-  assert.equal(document.getElementById('chat-settings-status').textContent, 'Saved.');
-});
-
-test('saveChatEndpoint sends clear_api_key when the clear checkbox is checked', async () => {
-  const { saveChatEndpoint } = loadFixture();
-  await flush();
-  document.getElementById('chat-clear-api-key').checked = true;
-  let gotBody;
-  global.fetch = async (url, opts) => {
-    if (url.includes('/admin/api/chat-endpoint')) {
-      gotBody = JSON.parse(opts.body);
-      return { ok: true, json: async () => CHAT_ENDPOINT };
-    }
-    return { ok: true, json: async () => ({}) };
-  };
-  await saveChatEndpoint();
-  assert.equal(gotBody.clear_api_key, true);
-});
-
-test('saveChatEndpoint surfaces a server error and leaves the loading state cleared', async () => {
-  const { saveChatEndpoint } = loadFixture();
-  await flush();
-  global.fetch = async (url) => {
-    if (url.includes('/admin/api/chat-endpoint')) {
-      return { ok: false, status: 500, text: async () => 'chat endpoint save failed' };
-    }
-    return { ok: true, json: async () => ({}) };
-  };
-  await saveChatEndpoint();
-  const status = document.getElementById('chat-settings-status');
-  assert.equal(status.textContent.includes('chat endpoint save failed'), true);
-  assert.equal(document.getElementById('save-chat-settings-btn').disabled, false);
-});
-
-test('clicking "Save chat settings" invokes saveChatEndpoint', async () => {
-  loadFixture();
-  await flush();
-  let posted = false;
-  global.fetch = async (url, opts) => {
-    if (url.includes('/admin/api/chat-endpoint') && opts.method === 'PATCH') {
-      posted = true;
-      return { ok: true, json: async () => CHAT_ENDPOINT };
-    }
-    return { ok: true, json: async () => ({}) };
-  };
-  document.getElementById('save-chat-settings-btn').dispatchEvent(new window.Event('click'));
-  await flush();
-  assert.equal(posted, true);
-});
-
-test('visiting #chat-settings opens the Chat details section', async () => {
-  const { openLinkedSection } = loadFixture(undefined, undefined, 'http://x/admin/settings#chat-settings');
-  await flush();
-  const section = document.getElementById('chat-settings');
-  section.open = false;
-  openLinkedSection();
-  assert.equal(section.open, true);
-});
-
-test('loading the page normally (no fragment) leaves every section collapsed', async () => {
-  const { openLinkedSection } = loadFixture(undefined, undefined, 'http://x/admin/settings');
-  await flush();
-  const section = document.getElementById('chat-settings');
-  assert.equal(section.open, false);
-  openLinkedSection();
-  assert.equal(section.open, false);
-});
-
-test('a fragment naming a non-existent or non-<details> element is a no-op', async () => {
-  const { openLinkedSection } = loadFixture(undefined, undefined, 'http://x/admin/settings#missing-section');
-  await flush();
-  assert.doesNotThrow(() => openLinkedSection());
 });
