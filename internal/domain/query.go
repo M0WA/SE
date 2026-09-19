@@ -20,9 +20,18 @@ const sitePrefix = "site:"
 // text") and excluded ones (-"quoted text"), and site: filters restricting
 // results to (site:host) or away from (-site:host) one or more hosts.
 type ParsedQuery struct {
-	Optional        []string
-	Required        []string
-	Excluded        []string
+	Optional []string
+	Required []string
+	// ExcludedGroups holds one group of sub-words per "-word" token that
+	// tokenized into more than one word (e.g. punctuation inside it, like
+	// "-well-known" or a stray non-word character). A document is excluded
+	// by a group only if ALL of that group's words are present -- an AND
+	// within the group, OR'd across groups -- so a single mangled or
+	// hyphenated exclusion token can't veto a document over just one of
+	// its sub-words, which could otherwise collide with an unrelated term
+	// the query is also searching for. A plain single-word exclusion is
+	// just a singleton group, so ordinary "-word" usage is unaffected.
+	ExcludedGroups  [][]string
 	Phrases         []string
 	ExcludedPhrases []string
 	Sites           []string
@@ -65,7 +74,9 @@ func ParseQuery(raw string) ParsedQuery {
 		case sign == '+' && len(body) > 0:
 			parsed.Required = append(parsed.Required, Tokenize(body)...)
 		case sign == '-' && len(body) > 0:
-			parsed.Excluded = append(parsed.Excluded, Tokenize(body)...)
+			if group := Tokenize(body); len(group) > 0 {
+				parsed.ExcludedGroups = append(parsed.ExcludedGroups, group)
+			}
 		default:
 			parsed.Optional = append(parsed.Optional, Tokenize(tok)...)
 		}
@@ -105,7 +116,7 @@ func (q ParsedQuery) Empty() bool {
 // terms, phrases, or site: filters that need per-document filtering,
 // beyond ordinary relevance ranking.
 func (q ParsedQuery) HasConstraints() bool {
-	return len(q.Required) > 0 || len(q.Excluded) > 0 || len(q.Phrases) > 0 ||
+	return len(q.Required) > 0 || len(q.ExcludedGroups) > 0 || len(q.Phrases) > 0 ||
 		len(q.ExcludedPhrases) > 0 || len(q.Sites) > 0 || len(q.ExcludedSites) > 0
 }
 
@@ -140,7 +151,7 @@ func (q ParsedQuery) Matches(title, text string) bool {
 		return true
 	}
 	var tokens map[string]bool
-	if len(q.Required) > 0 || len(q.Excluded) > 0 {
+	if len(q.Required) > 0 || len(q.ExcludedGroups) > 0 {
 		tokens = TokenSet(title, text)
 	}
 	return q.MatchesTokens(tokens, title, text)
@@ -156,16 +167,23 @@ func (q ParsedQuery) MatchesTokens(tokens map[string]bool, title, text string) b
 		return true
 	}
 
-	if len(q.Required) > 0 || len(q.Excluded) > 0 {
+	if len(q.Required) > 0 {
 		for _, req := range q.Required {
 			if !tokens[req] {
 				return false
 			}
 		}
-		for _, exc := range q.Excluded {
-			if tokens[exc] {
-				return false
+	}
+	for _, group := range q.ExcludedGroups {
+		allPresent := true
+		for _, w := range group {
+			if !tokens[w] {
+				allPresent = false
+				break
 			}
+		}
+		if allPresent {
+			return false
 		}
 	}
 
