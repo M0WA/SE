@@ -1,5 +1,18 @@
 # Changelog
 
+## v4.13.5 - 2026-09-19
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Fix RunScheduledCrawlNow letting two concurrent crawls of the same schedule run by @M0WA in https://github.com/M0WA/SE/pull/116
+* Make prepare-release's duplicate-release guard merge-strategy-agnostic by @M0WA in https://github.com/M0WA/SE/pull/117
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.4...v4.13.5
+
+
 ## v4.13.4 - 2026-09-18
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
