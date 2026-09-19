@@ -8,6 +8,35 @@ shell, never concatenated into a command string (see
 `application.runChatHooks`'s and `hookrunner.Runner`'s own security doc
 comments).
 
+When a hook fires, its script's output is fed straight back to the model in
+one follow-up completion call (the model's own tool-call text plus the
+results, as a new turn) -- `ChatService.Chat` returns THAT follow-up answer
+as the turn's Answer, not the model's bare tool-call text. A user never sees
+the raw `<web_search>...</web_search>`-style syntax itself; they see the
+model's real, results-informed answer. (`ChatResult.HookResults` still
+carries the raw tool output separately, for the chat UI's own folded
+transparency panel.)
+
+## Suggested system prompt (Settings -> Chat -> System prompt)
+
+The model only emits a hook's invocation syntax if told to. For the
+`web_search` hook below (pattern `<web_search>([^<]+)</web_search>`), an
+admin-configured system prompt along these lines is what actually makes it
+fire:
+
+```
+You may invoke a live web search at any time by outputting exactly
+<web_search>your query here</web_search> and nothing else in that reply.
+Do this whenever you need current or specific information you are not
+already certain about. You will then be given the search results as a
+new message and should answer the user's original question from them --
+never just repeat or describe the tool call itself.
+```
+
+That last sentence matters: without it, a model that doesn't already expect
+a follow-up turn may just restate the tool call again instead of actually
+reading the results it's handed.
+
 ## Install
 
 ```sh

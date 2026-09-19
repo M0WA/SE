@@ -33,21 +33,39 @@ func (f *fakeChatEndpointStore) SetChatEndpoint(ctx context.Context, e domain.Ch
 
 // fakeChatCompleter is a minimal ports.ChatCompleter fake recording the
 // messages it was called with, so a test can assert whether/what RAG
-// context got prepended.
+// context got prepended. calledWith is the LAST call's messages (every
+// pre-existing test only ever expects one call); allCalls records every
+// call in order, for tests exercising ChatService.Chat's hook follow-up
+// round, which calls Complete a second time. When answers is non-empty,
+// each successive call returns the next entry (clamped to the last once
+// exhausted) instead of the single fixed answer -- letting a test give a
+// different answer to the follow-up call than the first.
 type fakeChatCompleter struct {
 	answer      string
+	answers     []string
 	err         error
 	calledWith  []domain.ChatMessage
+	allCalls    [][]domain.ChatMessage
 	calledEndpt domain.ChatEndpoint
 	wasCalled   bool
+	callCount   int
 }
 
 func (f *fakeChatCompleter) Complete(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage) (string, error) {
 	f.wasCalled = true
 	f.calledEndpt = endpoint
 	f.calledWith = messages
+	f.allCalls = append(f.allCalls, messages)
+	idx := f.callCount
+	f.callCount++
 	if f.err != nil {
 		return "", f.err
+	}
+	if len(f.answers) > 0 {
+		if idx >= len(f.answers) {
+			idx = len(f.answers) - 1
+		}
+		return f.answers[idx], nil
 	}
 	return f.answer, nil
 }
@@ -775,6 +793,145 @@ func TestChatService_HooksConfigured_MatchingAnswerPopulatesHookResults(t *testi
 	}
 	if result.HookResults[0].HookName != "web_search" || result.HookResults[0].Output != "top result" {
 		t.Fatalf("unexpected hook result: %+v", result.HookResults[0])
+	}
+}
+
+// TestChatService_HookFires_FeedsResultsBackForFinalAnswer proves a hook
+// match triggers exactly one follow-up completion call, whose messages are
+// the original ones plus the tool-call assistant turn plus a system message
+// carrying the hook's results, and that the RETURNED answer is the
+// follow-up's own answer, not the bare tool-call text the model first
+// emitted.
+func TestChatService_HookFires_FeedsResultsBackForFinalAnswer(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
+	completer := &fakeChatCompleter{answers: []string{
+		"SEARCH[golang release notes]",
+		"Go 1.26 was just released with several performance improvements.",
+	}}
+	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true},
+	}}
+	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_search.sh": `{"results":["go 1.26 release notes"]}`}}
+	svc := NewChatService(endpoints, completer, &fakeSearchService{}, &fakeWebSearcher{}, hooks, runner)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "what's new in the latest go release?"}}
+	result, err := svc.Chat(context.Background(), history, ChatOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Answer != "Go 1.26 was just released with several performance improvements." {
+		t.Fatalf("expected the follow-up completion's own answer returned, got %q", result.Answer)
+	}
+	if len(result.HookResults) != 1 || result.HookResults[0].Output != `{"results":["go 1.26 release notes"]}` {
+		t.Fatalf("expected the hook result still surfaced for the UI, got %+v", result.HookResults)
+	}
+
+	if len(completer.allCalls) != 2 {
+		t.Fatalf("expected exactly 2 completion calls (initial + one follow-up), got %d", len(completer.allCalls))
+	}
+	followUp := completer.allCalls[1]
+	if len(followUp) != 3 {
+		t.Fatalf("expected 3 messages in the follow-up call (history + tool-call turn + results), got %d: %+v", len(followUp), followUp)
+	}
+	if followUp[0] != history[0] {
+		t.Fatalf("expected the original history preserved first, got %+v", followUp[0])
+	}
+	if followUp[1].Role != domain.ChatRoleAssistant || followUp[1].Content != "SEARCH[golang release notes]" {
+		t.Fatalf("expected the model's own tool-call text re-sent as an assistant turn, got %+v", followUp[1])
+	}
+	if followUp[2].Role != domain.ChatRoleSystem || !strings.Contains(followUp[2].Content, `{"results":["go 1.26 release notes"]}`) {
+		t.Fatalf("expected a system message carrying the hook's results, got %+v", followUp[2])
+	}
+}
+
+// TestChatService_HookFollowUpCompletionErrors_FallsBackToOriginalAnswer
+// proves a failed follow-up completion is best-effort, same convention as
+// every other augmentation source in ChatService.Chat: the turn still
+// succeeds, just with the model's original (unhelpful, bare tool-call)
+// answer rather than failing outright.
+func TestChatService_HookFollowUpCompletionErrors_FallsBackToOriginalAnswer(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
+	completer := &erroringOnSecondCallCompleter{firstAnswer: "SEARCH[golang release notes]"}
+	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true},
+	}}
+	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_search.sh": "results"}}
+	svc := NewChatService(endpoints, completer, &fakeSearchService{}, &fakeWebSearcher{}, hooks, runner)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	result, err := svc.Chat(context.Background(), history, ChatOptions{})
+	if err != nil {
+		t.Fatalf("expected the follow-up completion error to be swallowed, got %v", err)
+	}
+	if result.Answer != "SEARCH[golang release notes]" {
+		t.Fatalf("expected the original tool-call answer kept on follow-up failure, got %q", result.Answer)
+	}
+}
+
+// erroringOnSecondCallCompleter is a ports.ChatCompleter fake whose first
+// call succeeds and every later call fails -- fakeChatCompleter's own
+// answers-by-index doesn't model a call FAILING partway through, so this is
+// a small dedicated fake for that one scenario.
+type erroringOnSecondCallCompleter struct {
+	firstAnswer string
+	calls       int
+}
+
+func (f *erroringOnSecondCallCompleter) Complete(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage) (string, error) {
+	f.calls++
+	if f.calls == 1 {
+		return f.firstAnswer, nil
+	}
+	return "", errors.New("upstream unavailable")
+}
+
+// TestChatService_NoHookMatch_OnlyOneCompletionCall proves the follow-up
+// round never fires when nothing matched -- the common case shouldn't cost
+// a second completion call.
+func TestChatService_NoHookMatch_OnlyOneCompletionCall(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
+	completer := &fakeChatCompleter{answer: "a plain answer with no tool call"}
+	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true},
+	}}
+	svc := NewChatService(endpoints, completer, &fakeSearchService{}, &fakeWebSearcher{}, hooks, &fakeHookScriptRunner{})
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	result, err := svc.Chat(context.Background(), history, ChatOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Answer != "a plain answer with no tool call" {
+		t.Fatalf("expected the original answer unchanged, got %q", result.Answer)
+	}
+	if len(completer.allCalls) != 1 {
+		t.Fatalf("expected exactly 1 completion call when no hook matched, got %d", len(completer.allCalls))
+	}
+}
+
+// TestFormatHookResultsForModel_TruncatesLongOutput proves
+// formatHookResultsForModel bounds each result's own Output, independent of
+// hookrunner's own (much larger) 64KB cap -- several long results in one
+// turn could otherwise still add up to a very large follow-up prompt.
+func TestFormatHookResultsForModel_TruncatesLongOutput(t *testing.T) {
+	long := strings.Repeat("x", maxHookOutputCharsForModel+500)
+	got := formatHookResultsForModel([]domain.ChatHookResult{{HookName: "web_search", Output: long}})
+	if strings.Contains(got, long) {
+		t.Error("expected the long output truncated, got it included verbatim")
+	}
+	if !strings.Contains(got, "truncated") {
+		t.Errorf("expected a truncation note, got %q", got)
+	}
+}
+
+// TestFormatHookResultsForModel_IncludesErrorInsteadOfOutput proves a
+// failed hook's Err reaches the model instead of a blank Output, so it can
+// tell the user the tool call didn't work rather than guessing.
+func TestFormatHookResultsForModel_IncludesErrorInsteadOfOutput(t *testing.T) {
+	got := formatHookResultsForModel([]domain.ChatHookResult{{HookName: "web_search", Err: "script timed out"}})
+	if !strings.Contains(got, "script timed out") {
+		t.Errorf("expected the error text included, got %q", got)
 	}
 }
 
