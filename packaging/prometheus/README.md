@@ -52,6 +52,20 @@ See that override file's own comment for why `--disable-settings-metrics`
 is required, not optional -- omitting it leaks the DSN's password into
 `journalctl` on the first scrape error.
 
+The `stat_statements` collector (query-time metrics) needs the extension
+created once per database -- not part of `postinst`/this override, since it's
+a Postgres-side change, not a host package:
+
+```sh
+psql "$DB_DSN" -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"
+```
+
+On se.mo-sys.de's Postgres server this needed no restart (a managed instance
+that already preloads it via `shared_preload_libraries`). A self-hosted
+Postgres without that preload needs `shared_preload_libraries = 'pg_stat_statements'`
+set and a restart *first* -- check before assuming `CREATE EXTENSION` alone
+is enough.
+
 Copy `prometheus.yml`, filling in the real values from the IONOS DCD
 (Observability > Monitoring > your pipeline) and a **host-unique**
 `site` name:
