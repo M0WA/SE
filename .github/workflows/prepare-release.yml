@@ -6,12 +6,19 @@ name: Prepare Release
 #   2. push to main -- every ordinary merge auto-opens a "Release vX.Y.Z" PR
 #      with the next patch version bumped automatically, so cutting a
 #      release no longer needs a person to remember to run this. The gate
-#      job below skips two cases so this can't loop or duplicate itself:
-#      a push that IS itself a release/vX.Y.Z branch merging in (that merge
-#      is what tag-release.yml reacts to -- auto-opening another release PR
-#      immediately after would just propose re-releasing nothing new), and
-#      a push landing while a "Release vX.Y.Z" PR is already open (wait for
-#      that one to merge or close first rather than stacking a second).
+#      job below skips three cases so this can't loop or duplicate itself:
+#      a push that IS itself a release/vX.Y.Z branch merging in (checked via
+#      the PR-for-commit API, not the commit message, so this holds
+#      regardless of whether the release PR was squashed, merged, or
+#      rebased -- that merge is what tag-release.yml reacts to; auto-opening
+#      another release PR immediately after would just propose re-releasing
+#      nothing new), a push landing while a "Release vX.Y.Z" PR is already
+#      open (wait for that one to merge or close first rather than stacking
+#      a second), and a push landing after a release PR merged but before
+#      tag-release.yml (which waits for the merge commit's own CI first)
+#      has actually created its tag -- without this last check, a push
+#      landing in that window would compute the same "next version" again
+#      and open a same-version duplicate.
 #
 # Either way this only OPENS a PR into main -- main's branch ruleset still
 # requires a PR with a green "Build, vet & test" check before anything
@@ -67,9 +74,23 @@ jobs:
             # same auto-bump logic a push uses.
           fi
 
-          last_subject="$(git log -1 --format=%s)"
-          if [[ "$last_subject" =~ ^Merge\ pull\ request\ \#[0-9]+\ from\ .+/release/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "last commit is a release-branch merge ($last_subject) -- tag-release.yml handles this, not opening another release PR" >&2
+          # Was HEAD produced by merging a "release"-labeled PR? Checked via
+          # the PR-for-commit API rather than parsing the commit message:
+          # a commit message check only recognizes GitHub's default
+          # "Merge pull request #N from OWNER/BRANCH" format, which a
+          # squash or rebase merge never produces (e.g. squash instead
+          # writes "Prepare release vX.Y.Z (#N)") -- CLAUDE.md allows any
+          # of the three merge strategies for every PR, release PRs
+          # included, so this check must not silently depend on which one
+          # was used. (This was found the hard way: a squash-merged release
+          # PR slipped past the old regex, and prepare-release ran again
+          # before tag-release.yml had tagged the version, opening a
+          # same-version duplicate release PR.)
+          head_sha="$(git rev-parse HEAD)"
+          merged_release_pr="$(gh api "repos/${{ github.repository }}/commits/$head_sha/pulls" \
+            --jq '[.[] | select(.merged_at != null) | select([.labels[].name] | index("release"))] | length')"
+          if [ "${merged_release_pr:-0}" -gt 0 ]; then
+            echo "HEAD ($head_sha) is a merged release PR -- tag-release.yml handles this, not opening another release PR" >&2
             echo "should_run=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -92,6 +113,23 @@ jobs:
           minor="${rest%%.*}"
           patch="${rest#*.}"
           next_version="$major.$minor.$((patch + 1))"
+
+          # A release PR for next_version may already be merged, with its
+          # tag not created yet -- tag-release.yml waits for the merge
+          # commit's own CI before tagging, so there's a real window
+          # between "release PR merged" and "tag exists." Checking merged
+          # (not just open) release PRs closes that window too, on top of
+          # the HEAD-commit check above (which only catches the release PR
+          # being the LAST merge -- this also catches one merged earlier
+          # that's still awaiting its tag).
+          pending_tag_prs="$(gh pr list --repo "${{ github.repository }}" --base main --label release --state merged \
+            --search "\"Release v$next_version\" in:title" --json number --jq 'length')"
+          if [ "${pending_tag_prs:-0}" -gt 0 ] && ! git rev-parse "v$next_version" >/dev/null 2>&1; then
+            echo "a merged release PR for v$next_version is still awaiting its tag -- not opening a duplicate" >&2
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           echo "should_run=true" >> "$GITHUB_OUTPUT"
           echo "version=$next_version" >> "$GITHUB_OUTPUT"
 
