@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.13 - 2026-09-19
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Enqueue a page's own canonical target, label alias reasons in admin UI by @M0WA in https://github.com/M0WA/SE/pull/142
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.12...v4.13.13
+
+
 ## v4.13.12 - 2026-09-19
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
