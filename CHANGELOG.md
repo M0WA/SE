@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.11 - 2026-09-19
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Scroll chat to the start of each new turn, flag trimmed context by @M0WA in https://github.com/M0WA/SE/pull/138
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.10...v4.13.11
+
+
 ## v4.13.10 - 2026-09-19
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
