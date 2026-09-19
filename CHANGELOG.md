@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.14 - 2026-09-19
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Add admin database clear buttons, move chat toggles, box chat answers by @M0WA in https://github.com/M0WA/SE/pull/144
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.13...v4.13.14
+
+
 ## v4.13.13 - 2026-09-19
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
