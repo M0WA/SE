@@ -2,88 +2,20 @@
 
 searchengine is a self-hosted hybrid (BM25 + semantic) search engine written in Go, structured as a hexagonal architecture. `internal/domain` holds pure business logic with no I/O dependencies; `internal/ports` defines the interfaces connecting that core to the outside world; `internal/application` orchestrates use cases (search, crawling, background jobs) purely in terms of those ports; and `internal/adapters/*` implement the ports against real infrastructure (SQL databases, HTTP fetchers, embedding/chat APIs, headless browsers). Three independent Go binaries are built on this shared core — `cmd/search` (public), `cmd/admin` (internal), and `cmd/crawl` (internal-only) — and coordinate primarily by sharing one SQL database rather than calling each other directly, with a single exception: `cmd/admin` talks to `cmd/crawl` over an internal HTTP API to start and poll crawl jobs.
 
-```mermaid
-flowchart TB
-  subgraph External["External systems"]
-    Browser["Public users / browsers"]
-    Nginx["nginx (80/443)"]
-    EmbedAPI["Embedding HTTP API<br/>(e.g. IONOS AI Model Hub)"]
-    ChatAPI["Chat HTTP API<br/>(OpenAI-compatible)"]
-    SearXNG["SearXNG metasearch<br/>127.0.0.1:8888"]
-    Sites["Crawled websites"]
-    IONOSMon["IONOS Monitoring Service"]
-  end
+![Architecture diagram](architecture.svg)
 
-  subgraph Binaries["Binaries"]
-    Search["cmd/search<br/>public, 127.0.0.1:8080"]
-    Admin["cmd/admin<br/>internal, 127.0.0.1:8081"]
-    Crawl["cmd/crawl<br/>internal only, 127.0.0.1:8082"]
-  end
+Source: [`architecture.mmd`](architecture.mmd) (Mermaid) -- edit that file, then regenerate the picture:
 
-  subgraph Core["Core: domain + ports + application"]
-    Domain["internal/domain<br/>BM25, hybrid ranking, PageRank,<br/>tokenizer, fuzzy match, settings"]
-    Ports["internal/ports<br/>23 interfaces"]
-    App["internal/application<br/>hybridSearchService, crawlLoop,<br/>*Job, ChatService, scheduler"]
-  end
-
-  subgraph Adapters["Adapters (internal/adapters/*)"]
-    RestAPI["restapi<br/>HTTP handlers for cmd/search + cmd/admin"]
-    SQLRepo["sqlrepo<br/>SQL persistence"]
-    HTTPFetcher["httpfetcher"]
-    BrowserFetcher["browserfetcher<br/>Chromium/Firefox via Playwright"]
-    HTMLParser["htmlparser"]
-    Robots["robots"]
-    Netguard["netguard<br/>SSRF guard"]
-    HashEmbed["hashembed"]
-    HTTPEmbed["httpembed"]
-    HTTPChat["httpchat"]
-    HTTPSearx["httpsearxng"]
-    CrawlClient["crawlclient"]
-    SettingsCrypto["settingscrypto"]
-  end
-
-  DB[("Shared SQL database<br/>SQLite local/CI, Postgres dev")]
-
-  Browser --> Nginx
-  Nginx -->|"/, /search, static"| Search
-  Nginx -->|"/admin, /login, /logout"| Admin
-
-  Search --> RestAPI
-  Admin --> RestAPI
-  Crawl --> RestAPI
-
-  RestAPI --> App
-  App --> Ports
-  Ports --> Domain
-
-  Admin -->|"crawlclient over HTTP<br/>X-Internal-Token"| Crawl
-
-  App --> SQLRepo
-  RestAPI --> SettingsCrypto
-  Admin --> CrawlClient
-  SQLRepo --> DB
-
-  Crawl --> HTTPFetcher
-  Crawl --> BrowserFetcher
-  Crawl --> HTMLParser
-  Crawl --> Robots
-  HTTPFetcher --> Netguard
-  BrowserFetcher --> Netguard
-  HTTPFetcher --> Sites
-  BrowserFetcher --> Sites
-  Robots --> Sites
-
-  App --> HashEmbed
-  App --> HTTPEmbed
-  App --> HTTPChat
-  App --> HTTPSearx
-  HTTPEmbed --> EmbedAPI
-  HTTPChat --> ChatAPI
-  HTTPSearx --> SearXNG
-
-  Nginx -.->|"stub_status via<br/>prometheus-nginx-exporter"| IONOSMon
-  SQLRepo -.->|"postgres-exporter"| IONOSMon
+```sh
+echo '{"args": ["--no-sandbox"]}' > /tmp/puppeteer-config.json
+npx --yes @mermaid-js/mermaid-cli@latest \
+  -i docs/architecture.mmd -o docs/architecture.svg -b white \
+  -p /tmp/puppeteer-config.json
 ```
+
+(The `-p`/`--no-sandbox` step works around Puppeteer's headless Chromium
+refusing to start under most CI/container/dev-VM setups without it --
+`mmdc` fails with `No usable sandbox!` otherwise.)
 
 ## Layers
 
@@ -185,6 +117,8 @@ The dev/test deployment (`se.mo-sys.de`) runs all three Go binaries as independe
 nginx is the public entrypoint on 80/443 and splits traffic by path: `/login`, `/logout`, and `/admin` (a plain string-prefix match, not path-segment-aware) route to admin-server on `127.0.0.1:8081`; everything else falls through the catch-all to search-server on `127.0.0.1:8080`. crawl-server (`127.0.0.1:8082`) is deliberately given no location block and must never be exposed publicly. A separate, non-public server block on `127.0.0.1:8090` exposes nginx's `stub_status` for scraping.
 
 Observability is host-level and independent of the searchengine package itself: a Prometheus agent (`--enable-feature=agent`, no local TSDB) on `127.0.0.1:9090` scrapes `node-exporter` (9100, host metrics), `nginx-exporter` (9113, via `stub_status`), `postgres-exporter` (9187, reusing the same `DB_DSN` from `searchengine.env`), and optionally SearXNG's own OpenMetrics endpoint, then `remote_write`-forwards everything to an external **IONOS Monitoring Service** pipeline. SearXNG itself — a self-hosted metasearch instance backing the chat feature's live web search (`httpsearxng`) — runs as a separate Docker Compose deployment on `127.0.0.1:8888`, entirely outside the searchengine `.deb`. Everything on the host binds to `127.0.0.1` only, since there is no host firewall.
+
+The admin-configured embedding and chat endpoints (`httpembed`/`httpchat` — generic OpenAI-compatible HTTP clients at the code level) currently point at a dedicated inference host, `gpu.mo-sys.de` (a single NVIDIA H200 NVL GPU), rather than a third-party hosted API. Two independent `vLLM` server processes run there, sharing the one GPU: one serving `Alibaba-NLP/gte-Qwen2-7B-instruct` in pooling/embed mode on `:8000` (backing `httpembed`), and one serving `RedHatAI/Qwen2.5-72B-Instruct-FP8-dynamic` in normal generate mode on `:8001` (backing `httpchat`, `--max-model-len 32768`, no YaRN long-context scaling enabled). Each runs as its own systemd unit, bound to the host's private network interface only, gated by its own bearer API key. The same host also runs `node-exporter` and NVIDIA's `DCGM` GPU exporter, remote-written into the same IONOS Monitoring Service pipeline as `se.mo-sys.de`, distinguished by its own `external_labels.site` (`gpu-h200`).
 
 ## Keeping this document current
 
