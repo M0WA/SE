@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.18 - 2026-09-19
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Add docs/configuration.md and a CLAUDE.md rule to keep it in sync by @M0WA in https://github.com/M0WA/SE/pull/153
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.17...v4.13.18
+
+
 ## v4.13.17 - 2026-09-19
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
