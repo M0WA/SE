@@ -52,6 +52,20 @@ page's own script silently never runs) rather than a clean 404. When adding a
 new served path, either name it so it already falls under an existing prefix,
 or add a real `location` block for it in `packaging/nginx/searchengine.conf`.
 
+## Keep the architecture documentation in sync
+
+`docs/architecture.md` (with its embedded Mermaid diagram) documents every
+component in the hexagonal architecture -- `internal/domain`, `internal/ports`,
+`internal/application`, every `internal/adapters/*` package, the three
+binaries, and how they connect to external systems (Postgres/SQLite, nginx,
+the crawl-server network call, HTTP embedding/chat endpoints, IONOS
+monitoring). **Whenever a component is added, removed, or its relationships
+change -- a new adapter package, a new port/use-case, a binary's
+responsibilities shifting, a new external dependency -- update
+`docs/architecture.md` and its diagram in the same change.** Treat an
+architectural change without a matching doc update as incomplete work, same
+as `openapi.yaml`/the nginx config above.
+
 ## Before committing
 
 - `go build ./...`, `go vet ./...`, `gofmt -l .` must be clean.
