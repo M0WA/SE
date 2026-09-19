@@ -19,6 +19,11 @@ const (
 
 type chatRequest struct {
 	Messages []domain.ChatMessage `json:"messages"`
+	// RAG, when present, overrides the admin-configured default for this
+	// question only -- omitted (nil) falls back to
+	// domain.ChatEndpoint.RAGEnabled, letting the chat UI's per-question
+	// toggle decide instead of a fixed global setting.
+	RAG *bool `json:"rag,omitempty"`
 }
 
 type chatResponse struct {
@@ -64,7 +69,7 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := h.chat.Chat(r.Context(), req.Messages)
+	result, err := h.chat.Chat(r.Context(), req.Messages, req.RAG)
 	if errors.Is(err, ports.ErrChatEndpointNotConfigured) {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
