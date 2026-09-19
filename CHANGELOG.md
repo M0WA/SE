@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.10 - 2026-09-19
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Fix -word search exclusions vetoing unrelated docs sharing a sub-word by @M0WA in https://github.com/M0WA/SE/pull/135
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.9...v4.13.10
+
+
 ## v4.13.9 - 2026-09-19
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
