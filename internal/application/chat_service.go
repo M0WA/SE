@@ -180,7 +180,65 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		// best-effort convention as the RAG/web-search errors above.
 	}
 
+	// A tool call's own raw text (e.g. "<web_search>golang release
+	// notes</web_search>") is never the final answer a user sees: when a
+	// hook actually fired, feed its own tool-call turn plus the hook's
+	// results back to the model in one follow-up completion, so it reads
+	// and responds to what the tool actually found rather than the caller
+	// seeing the bare invocation syntax. Exactly one follow-up round --
+	// the follow-up's own answer is returned as-is even if it happens to
+	// also match a hook pattern, rather than looping again, bounding the
+	// worst-case cost of one turn to two completions regardless of what
+	// the model does.
+	if len(hookResults) > 0 {
+		followUp := make([]domain.ChatMessage, 0, len(messages)+2)
+		followUp = append(followUp, messages...)
+		followUp = append(followUp, domain.ChatMessage{Role: domain.ChatRoleAssistant, Content: answer})
+		followUp = append(followUp, domain.ChatMessage{Role: domain.ChatRoleSystem, Content: formatHookResultsForModel(hookResults)})
+		if finalAnswer, err := s.completer.Complete(ctx, endpoint, followUp); err == nil {
+			answer = finalAnswer
+		}
+		// A follow-up completion error is best-effort, same convention as
+		// every other augmentation source in this method: the original
+		// tool-call text is returned rather than failing the whole turn.
+	}
+
 	return ChatResult{Answer: answer, Sources: sources, ContextTrimmed: contextTrimmed, HookResults: hookResults}, nil
+}
+
+// maxHookOutputCharsForModel bounds how much of each hook result's own
+// Output formatHookResultsForModel feeds back into the follow-up completion
+// call -- hookrunner.Runner already caps a single script's stdout at 64KB,
+// but up to maxHookMatchesPerTurn (chat_hooks.go) of those could still add
+// up to a very large follow-up prompt; this is a second, tighter cap
+// specifically on what actually reaches the model, same "cap and note"
+// convention as hookrunner's own truncation.
+const maxHookOutputCharsForModel = 8000
+
+// formatHookResultsForModel renders every hookResults entry as a labeled
+// block instructing the model to answer from them, for the follow-up
+// completion call in Chat -- a failed hook's Err is included instead of its
+// (empty) Output, so the model can say it couldn't search rather than being
+// left to guess why a tool call produced nothing.
+func formatHookResultsForModel(results []domain.ChatHookResult) string {
+	var b strings.Builder
+	b.WriteString("Tool results for the tool call you just made -- read them and answer the user's original question; do not just repeat or describe the tool call itself.\n\n")
+	for _, r := range results {
+		fmt.Fprintf(&b, "[%s]\n", r.HookName)
+		if r.Err != "" {
+			fmt.Fprintf(&b, "error: %s\n\n", r.Err)
+			continue
+		}
+		fmt.Fprintf(&b, "%s\n\n", truncateForModel(r.Output))
+	}
+	return b.String()
+}
+
+func truncateForModel(s string) string {
+	if len(s) <= maxHookOutputCharsForModel {
+		return s
+	}
+	return s[:maxHookOutputCharsForModel] + fmt.Sprintf("... [truncated, %d bytes total]", len(s))
 }
 
 // approxCharsPerToken mirrors httpembed's own conservative token estimate
