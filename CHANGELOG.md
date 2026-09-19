@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.9 - 2026-09-19
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Add a searxng scrape job for se.mo-sys.de's Prometheus agent by @M0WA in https://github.com/M0WA/SE/pull/132
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.8...v4.13.9
+
+
 ## v4.13.8 - 2026-09-19
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
