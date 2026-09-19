@@ -98,6 +98,10 @@ func (h *Handler) handleAdminSettingsPage(w http.ResponseWriter, r *http.Request
 	serveStatic(w, r, "text/html; charset=utf-8", adminSettingsHTML)
 }
 
+func (h *Handler) handleAdminChatSettingsPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminChatSettingsHTML)
+}
+
 func (h *Handler) handleAdminJobsPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/html; charset=utf-8", adminJobsHTML)
 }
@@ -935,6 +939,17 @@ func validateEmbeddingEndpointRequest(w http.ResponseWriter, req embeddingEndpoi
 	return true
 }
 
+// validateChatEndpointRequest mirrors validateEmbeddingEndpointRequest's
+// ChunkSizeTokens check for the same reason: MaxContextTokens shares the
+// same "0 disables, negative is invalid" convention.
+func validateChatEndpointRequest(w http.ResponseWriter, req chatEndpointRequest) bool {
+	if req.MaxContextTokens < 0 {
+		http.Error(w, "max_context_tokens must not be negative", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
 // encryptAPIKey seals apiKey via settingscrypto for storage (a no-op
 // passthrough when h.settingsEncryptionKey is nil, or apiKey is already
 // empty -- see Encrypt's doc comment).
@@ -1095,12 +1110,16 @@ func (h *Handler) currentEmbeddingEndpoints(ctx context.Context) []domain.Embedd
 }
 
 type chatEndpointRequest struct {
-	BaseURL        string `json:"base_url"`
-	APIKey         string `json:"api_key"`
-	Model          string `json:"model"`
-	Enabled        bool   `json:"enabled"`
-	RAGEnabled     bool   `json:"rag_enabled"`
-	RAGResultCount int    `json:"rag_result_count"`
+	BaseURL              string `json:"base_url"`
+	APIKey               string `json:"api_key"`
+	Model                string `json:"model"`
+	Enabled              bool   `json:"enabled"`
+	RAGEnabled           bool   `json:"rag_enabled"`
+	RAGResultCount       int    `json:"rag_result_count"`
+	MaxContextTokens     int    `json:"max_context_tokens"`
+	WebSearchEnabled     bool   `json:"web_search_enabled"`
+	WebSearchBaseURL     string `json:"web_search_base_url"`
+	WebSearchResultCount int    `json:"web_search_result_count"`
 	// ClearAPIKey is meaningful only to a PATCH: since a GET response never
 	// echoes a stored key's real value (see chatEndpointResponse), an edit
 	// form has no way to distinguish "left blank because not being
@@ -1115,18 +1134,25 @@ type chatEndpointResponse struct {
 	BaseURL string `json:"base_url"`
 	// HasAPIKey reports only whether a key is set, never its value -- same
 	// redacted-summary treatment toEmbeddingEndpointResponse already gives.
-	HasAPIKey      bool      `json:"has_api_key"`
-	Model          string    `json:"model"`
-	Enabled        bool      `json:"enabled"`
-	RAGEnabled     bool      `json:"rag_enabled"`
-	RAGResultCount int       `json:"rag_result_count"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	HasAPIKey            bool      `json:"has_api_key"`
+	Model                string    `json:"model"`
+	Enabled              bool      `json:"enabled"`
+	RAGEnabled           bool      `json:"rag_enabled"`
+	RAGResultCount       int       `json:"rag_result_count"`
+	MaxContextTokens     int       `json:"max_context_tokens"`
+	WebSearchEnabled     bool      `json:"web_search_enabled"`
+	WebSearchBaseURL     string    `json:"web_search_base_url"`
+	WebSearchResultCount int       `json:"web_search_result_count"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 func toChatEndpointResponse(e domain.ChatEndpoint) chatEndpointResponse {
 	return chatEndpointResponse{
 		BaseURL: e.BaseURL, HasAPIKey: e.APIKey != "", Model: e.Model, Enabled: e.Enabled,
-		RAGEnabled: e.RAGEnabled, RAGResultCount: e.RAGResultCount, UpdatedAt: e.UpdatedAt,
+		RAGEnabled: e.RAGEnabled, RAGResultCount: e.RAGResultCount,
+		MaxContextTokens: e.MaxContextTokens, UpdatedAt: e.UpdatedAt,
+		WebSearchEnabled: e.WebSearchEnabled, WebSearchBaseURL: e.WebSearchBaseURL,
+		WebSearchResultCount: e.WebSearchResultCount,
 	}
 }
 
@@ -1135,7 +1161,10 @@ func toChatEndpointResponse(e domain.ChatEndpoint) chatEndpointResponse {
 // just because it hasn't been configured yet, same spirit as
 // /admin/api/settings always succeeding.
 func defaultChatEndpointResponse() chatEndpointResponse {
-	return chatEndpointResponse{RAGEnabled: true, RAGResultCount: domain.DefaultChatRAGResultCount}
+	return chatEndpointResponse{
+		RAGEnabled: true, RAGResultCount: domain.DefaultChatRAGResultCount,
+		WebSearchResultCount: domain.DefaultChatWebSearchResultCount,
+	}
 }
 
 // handleAdminChatEndpoint is single-row admin config CRUD for the chat
@@ -1166,6 +1195,9 @@ func (h *Handler) handleAdminChatEndpoint(w http.ResponseWriter, r *http.Request
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
+		if !validateChatEndpointRequest(w, req) {
+			return
+		}
 		apiKey := ""
 		existing, err := h.chatEndpoints.GetChatEndpoint(r.Context())
 		if err == nil {
@@ -1182,6 +1214,9 @@ func (h *Handler) handleAdminChatEndpoint(w http.ResponseWriter, r *http.Request
 		e := domain.ChatEndpoint{
 			BaseURL: req.BaseURL, APIKey: apiKey, Model: req.Model, Enabled: req.Enabled,
 			RAGEnabled: req.RAGEnabled, RAGResultCount: req.RAGResultCount,
+			MaxContextTokens: req.MaxContextTokens,
+			WebSearchEnabled: req.WebSearchEnabled, WebSearchBaseURL: req.WebSearchBaseURL,
+			WebSearchResultCount: req.WebSearchResultCount,
 		}
 		e.Clamp()
 		e.UpdatedAt = time.Now().UTC()
@@ -1885,7 +1920,16 @@ func (h *Handler) handleAdminContentDedupRecomputeStart(w http.ResponseWriter, r
 	v := h.opSettings.Get()
 	go func() {
 		ctx := context.Background()
-		if _, err := application.RunContentDedupJobWithStatus(ctx, h.contentDedupRepo, h.settingsStore, v.ContentDedupMethod, v.ContentDedupSimHashMaxDistance); err != nil {
+		_, err := application.RunContentDedupJobWithStatus(ctx, h.contentDedupRepo, h.settingsStore, v.ContentDedupMethod, v.ContentDedupSimHashMaxDistance)
+		switch {
+		case err == nil:
+		case errors.Is(err, ports.ErrContentDedupAlreadyRunning):
+			// The fast-path check above already rejected the common case
+			// (200/409 back to this same request) -- this is the rarer
+			// case where cmd/crawl's own scheduler won the race in the
+			// gap between that check and this goroutine actually starting.
+			// Expected, not worth logging as an error.
+		default:
 			log.Printf("recomputing content dedup: %v", err)
 		}
 	}()

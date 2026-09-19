@@ -126,6 +126,14 @@ func TestAllDialects_UpsertChatEndpointSQLNonEmpty(t *testing.T) {
 	}
 }
 
+func TestAllDialects_SeedContentDedupLockSQLNonEmpty(t *testing.T) {
+	for _, driver := range []string{"sqlite", "mysql", "postgres"} {
+		if sqlrepo.NewDialect(driver).SeedContentDedupLockSQL() == "" {
+			t.Errorf("expected a seed-content-dedup-lock statement for %s", driver)
+		}
+	}
+}
+
 func TestAllDialects_CreateSchemaSQLIncludesDocumentAliases(t *testing.T) {
 	for _, driver := range []string{"sqlite", "mysql", "postgres"} {
 		stmts := sqlrepo.NewDialect(driver).CreateSchemaSQL()

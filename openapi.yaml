@@ -1792,8 +1792,8 @@ components:
       description: >-
         One search result whose content informed a ChatResponse.answer,
         surfaced separately so the UI can render it as a clickable citation
-        rather than parsing the answer text for it. Only ever populated
-        when the configured chat endpoint has rag_enabled.
+        rather than parsing the answer text for it. Only ever populated when
+        this turn was retrieval-augmented (see ChatRequest.rag).
       properties:
         url: { type: string }
         title: { type: string }
@@ -1807,6 +1807,23 @@ components:
           minItems: 1
           maxItems: 50
           items: { $ref: "#/components/schemas/ChatMessage" }
+        rag:
+          type: boolean
+          description: >-
+            Overrides the admin-configured chat endpoint's rag_enabled
+            default for this question only -- omit to use that default.
+            true runs a search on the latest user message and grounds the
+            answer in the results (with sources cited); false sends the
+            conversation to the chat model as-is, with no connection to the
+            indexed corpus.
+        web_search:
+          type: boolean
+          description: >-
+            rag's exact counterpart for a live web search (via a
+            self-hosted SearXNG instance) instead of this instance's own
+            index -- overrides web_search_enabled for this question only,
+            omit to use that default. Independent of rag: either, both, or
+            neither may apply to the same question.
 
     ChatResponse:
       type: object
@@ -1837,6 +1854,36 @@ components:
             self-heal server-side (see domain.ChatEndpoint.Clamp): a
             non-positive value becomes the default (5); anything above the
             max (20) is clamped down to it.
+        max_context_tokens:
+          type: integer
+          description: >-
+            Bounds how many tokens' worth of conversation (RAG context plus
+            message history) is ever sent to the model, approximated by
+            character count. Older messages are dropped first, oldest to
+            newest, always keeping the most recent message. 0 disables
+            trimming (the full history is sent as-is). A negative value is
+            rejected with 400.
+        web_search_enabled:
+          type: boolean
+          description: >-
+            When true, the latest user message is also used as a live web
+            search query (via web_search_base_url) and matching results are
+            folded into the same context message as RAG's, ahead of the
+            rest of history. Independent of rag_enabled -- either, both, or
+            neither may apply.
+        web_search_base_url:
+          type: string
+          description: >-
+            A self-hosted SearXNG instance's base URL, e.g.
+            http://127.0.0.1:8888 -- queried at
+            <web_search_base_url>/search?q=...&format=json. Required for
+            web_search_enabled to actually do anything.
+        web_search_result_count:
+          type: integer
+          description: >-
+            How many web search results are retrieved when
+            web_search_enabled. Bounds self-heal server-side the same way
+            as rag_result_count (default 5, max 20).
 
     ChatEndpointRequest:
       description: >-

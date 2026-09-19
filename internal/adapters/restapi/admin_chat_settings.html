@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — chat settings</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<div class="admin-shell">
+<nav class="admin-rail" id="admin-rail" aria-label="Admin sections"></nav>
+<main>
+  <div class="page-header">
+    <a class="mark" href="/">se.</a>
+    <button id="sign-out" class="text-button" type="button">Sign out</button>
+  </div>
+
+  <p class="lede" style="margin: 0 0 1.5rem;">The chat-completions backend the public search page's Chat mode talks to, and whether it grounds its answers in a search of the index.</p>
+
+  <section class="panel">
+    <h2>Chat endpoint</h2>
+    <div class="form-row form-row-check">
+      <label for="chat-enabled">
+        <span class="field-wrap" data-default="Off"><input id="chat-enabled" type="checkbox"></span>
+        Enabled
+      </label>
+      <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Turns the chat mode toggle on the public search page on or off.</span></span>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="chat-base-url">Base URL</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">OpenAI-compatible chat-completions API base URL, e.g. http://localhost:8000/v1 -- POSTed to &lt;base_url&gt;/chat/completions.</span></span>
+      </div>
+      <span class="field-wrap" data-default="(none)"><input id="chat-base-url" class="field" type="text" placeholder="http://localhost:8000/v1"></span>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="chat-model">Model</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Sent as the chat request's model field.</span></span>
+      </div>
+      <span class="field-wrap" data-default="(none)"><input id="chat-model" class="field" type="text"></span>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="chat-api-key">API key</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Sent as an Authorization: Bearer header. Optional for a local server. Leave blank when editing to keep the currently stored key.</span></span>
+      </div>
+      <input id="chat-api-key" class="field" type="password" autocomplete="new-password" placeholder="Leave blank to keep the current key">
+    </div>
+    <div class="form-row form-row-check">
+      <label for="chat-clear-api-key">
+        <input id="chat-clear-api-key" type="checkbox">
+        Remove the stored API key
+      </label>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Retrieval-augmented answers</h2>
+    <div class="form-row form-row-check">
+      <label for="chat-rag-enabled">
+        <span class="field-wrap" data-default="On"><input id="chat-rag-enabled" type="checkbox"></span>
+        Retrieval-augmented answers (RAG)
+      </label>
+      <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When on, each message first runs a search and the top results are given to the chat model as context, with sources cited in the answer. When off, messages go straight to the model with no connection to the indexed corpus.</span></span>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="chat-rag-result-count">RAG result count</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How many top search results are given to the chat model as context when RAG is enabled.</span></span>
+      </div>
+      <span class="field-wrap" data-default="5"><input id="chat-rag-result-count" class="field" type="number" step="1" min="1" max="20"></span>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="chat-max-context-tokens">Max conversation length (tokens)</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Bounds how much conversation (RAG context plus message history, estimated by character count) is sent to the model per turn. Older messages are dropped first, oldest to newest -- the most recent message is always kept. 0 disables trimming and sends the full conversation as-is, which can eventually exceed the model's own context limit.</span></span>
+      </div>
+      <span class="field-wrap" data-default="Disabled"><input id="chat-max-context-tokens" class="field" type="number" step="1" min="0"></span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Web search</h2>
+    <div class="form-row form-row-check">
+      <label for="chat-web-search-enabled">
+        <span class="field-wrap" data-default="Off"><input id="chat-web-search-enabled" type="checkbox"></span>
+        Search the web
+      </label>
+      <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When on, each message first runs a live web search (via the SearXNG instance below) and the top results are given to the chat model as context, with sources cited in the answer. Independent of RAG above -- both can be on at once.</span></span>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="chat-web-search-base-url">SearXNG base URL</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">A self-hosted SearXNG instance's base URL, e.g. http://127.0.0.1:8888 -- queried at &lt;base_url&gt;/search?q=...&amp;format=json.</span></span>
+      </div>
+      <span class="field-wrap" data-default="(none)"><input id="chat-web-search-base-url" class="field" type="text" placeholder="http://127.0.0.1:8888"></span>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="chat-web-search-result-count">Web search result count</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How many top web search results are given to the chat model as context when web search is enabled.</span></span>
+      </div>
+      <span class="field-wrap" data-default="5"><input id="chat-web-search-result-count" class="field" type="number" step="1" min="1" max="20"></span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <button id="save-chat-settings-btn" type="button">Save chat settings</button>
+    <span id="chat-settings-status" class="error-text"></span>
+  </section>
+</main>
+</div>
+<script src="/admin.js"></script>
+<script src="/admin_chat_settings.js"></script>
+</body>
+</html>

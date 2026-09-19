@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"searchengine/internal/application"
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
 )
@@ -19,6 +20,17 @@ const (
 
 type chatRequest struct {
 	Messages []domain.ChatMessage `json:"messages"`
+	// RAG, when present, overrides the admin-configured default for this
+	// question only -- omitted (nil) falls back to
+	// domain.ChatEndpoint.RAGEnabled, letting the chat UI's per-question
+	// toggle decide instead of a fixed global setting.
+	RAG *bool `json:"rag,omitempty"`
+	// WebSearch is RAG's exact counterpart for live web search (via a
+	// self-hosted SearXNG instance) instead of this instance's own index --
+	// omitted falls back to domain.ChatEndpoint.WebSearchEnabled. Both may
+	// be set independently; either, both, or neither can apply to the same
+	// question.
+	WebSearch *bool `json:"web_search,omitempty"`
 }
 
 type chatResponse struct {
@@ -64,7 +76,7 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := h.chat.Chat(r.Context(), req.Messages)
+	result, err := h.chat.Chat(r.Context(), req.Messages, application.ChatOptions{RAG: req.RAG, WebSearch: req.WebSearch})
 	if errors.Is(err, ports.ErrChatEndpointNotConfigured) {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return

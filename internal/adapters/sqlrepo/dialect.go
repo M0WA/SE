@@ -10,6 +10,13 @@ type Dialect interface {
 	UpsertSettingSQL() string
 	UpsertDocumentAliasSQL() string
 	UpsertChatEndpointSQL() string
+	// SeedContentDedupLockSQL atomically inserts content_dedup_lock's one
+	// sentinel row (id=1, in_progress=false) if it isn't already there --
+	// a plain SELECT-then-INSERT would have the exact same
+	// multiple-processes-racing-at-startup problem CreateSchemaSQL's own
+	// doc comment describes, so this is a single insert-or-noop statement
+	// per dialect instead.
+	SeedContentDedupLockSQL() string
 	CreateSchemaSQL() []string
 }
 
@@ -42,11 +49,17 @@ func (sqliteDialect) UpsertDocumentAliasSQL() string {
 	          canonical_id=excluded.canonical_id, reason=excluded.reason, created_at=excluded.created_at, host=excluded.host`
 }
 func (sqliteDialect) UpsertChatEndpointSQL() string {
-	return `INSERT INTO chat_endpoint (id, base_url, api_key, model, enabled, rag_enabled, rag_result_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	return `INSERT INTO chat_endpoint (id, base_url, api_key, model, enabled, rag_enabled, rag_result_count, max_context_tokens, web_search_enabled, web_search_base_url, web_search_result_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	        ON CONFLICT(id) DO UPDATE SET
 	          base_url=excluded.base_url, api_key=excluded.api_key, model=excluded.model,
 	          enabled=excluded.enabled, rag_enabled=excluded.rag_enabled,
-	          rag_result_count=excluded.rag_result_count, updated_at=excluded.updated_at`
+	          rag_result_count=excluded.rag_result_count, max_context_tokens=excluded.max_context_tokens,
+	          web_search_enabled=excluded.web_search_enabled, web_search_base_url=excluded.web_search_base_url,
+	          web_search_result_count=excluded.web_search_result_count,
+	          updated_at=excluded.updated_at`
+}
+func (sqliteDialect) SeedContentDedupLockSQL() string {
+	return `INSERT OR IGNORE INTO content_dedup_lock (id, in_progress) VALUES (1, false)`
 }
 func (sqliteDialect) CreateSchemaSQL() []string {
 	return []string{
@@ -129,7 +142,23 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			api_key TEXT NOT NULL DEFAULT '', model TEXT NOT NULL,
 			enabled BOOLEAN NOT NULL DEFAULT false, rag_enabled BOOLEAN NOT NULL DEFAULT false,
 			rag_result_count INTEGER NOT NULL DEFAULT 0,
+			max_context_tokens INTEGER NOT NULL DEFAULT 0,
+			web_search_enabled BOOLEAN NOT NULL DEFAULT false,
+			web_search_base_url TEXT NOT NULL DEFAULT '',
+			web_search_result_count INTEGER NOT NULL DEFAULT 0,
 			updated_at TEXT NOT NULL
+		)`,
+		// content_dedup_lock is a single sentinel row (id = 1) whose
+		// in_progress flag TryAcquireContentDedupLock/ReleaseContentDedupLock
+		// claim/clear via a conditional UPDATE -- see ports.
+		// ContentDedupRepository's doc comment for why this needs to be a
+		// real DB row (visible to every process) rather than an in-memory
+		// bool. The row is seeded once at migration time (see
+		// migrateDocumentColumns), not here, since CREATE TABLE alone
+		// leaves it empty and the conditional UPDATE has no row to match
+		// against otherwise.
+		`CREATE TABLE IF NOT EXISTS content_dedup_lock (
+			id INTEGER PRIMARY KEY, in_progress BOOLEAN NOT NULL DEFAULT false
 		)`,
 		`CREATE TABLE IF NOT EXISTS crawl_jobs (
 			id TEXT PRIMARY KEY, request TEXT NOT NULL, status TEXT NOT NULL,
@@ -180,11 +209,17 @@ func (mysqlDialect) UpsertDocumentAliasSQL() string {
 	        ON DUPLICATE KEY UPDATE canonical_id=VALUES(canonical_id), reason=VALUES(reason), created_at=VALUES(created_at), host=VALUES(host)`
 }
 func (mysqlDialect) UpsertChatEndpointSQL() string {
-	return `INSERT INTO chat_endpoint (id, base_url, api_key, model, enabled, rag_enabled, rag_result_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	return `INSERT INTO chat_endpoint (id, base_url, api_key, model, enabled, rag_enabled, rag_result_count, max_context_tokens, web_search_enabled, web_search_base_url, web_search_result_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	        ON DUPLICATE KEY UPDATE
 	          base_url=VALUES(base_url), api_key=VALUES(api_key), model=VALUES(model),
 	          enabled=VALUES(enabled), rag_enabled=VALUES(rag_enabled),
-	          rag_result_count=VALUES(rag_result_count), updated_at=VALUES(updated_at)`
+	          rag_result_count=VALUES(rag_result_count), max_context_tokens=VALUES(max_context_tokens),
+	          web_search_enabled=VALUES(web_search_enabled), web_search_base_url=VALUES(web_search_base_url),
+	          web_search_result_count=VALUES(web_search_result_count),
+	          updated_at=VALUES(updated_at)`
+}
+func (mysqlDialect) SeedContentDedupLockSQL() string {
+	return `INSERT IGNORE INTO content_dedup_lock (id, in_progress) VALUES (1, false)`
 }
 func (mysqlDialect) CreateSchemaSQL() []string {
 	return []string{
@@ -262,7 +297,15 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			api_key TEXT NOT NULL, model VARCHAR(255) NOT NULL,
 			enabled BOOLEAN NOT NULL DEFAULT false, rag_enabled BOOLEAN NOT NULL DEFAULT false,
 			rag_result_count INT NOT NULL DEFAULT 0,
+			max_context_tokens INT NOT NULL DEFAULT 0,
+			web_search_enabled BOOLEAN NOT NULL DEFAULT false,
+			web_search_base_url TEXT NOT NULL,
+			web_search_result_count INT NOT NULL DEFAULT 0,
 			updated_at VARCHAR(64) NOT NULL
+		) ENGINE=InnoDB`,
+		// See the sqlite dialect's content_dedup_lock comment.
+		`CREATE TABLE IF NOT EXISTS content_dedup_lock (
+			id INT PRIMARY KEY, in_progress BOOLEAN NOT NULL DEFAULT false
 		) ENGINE=InnoDB`,
 		`CREATE TABLE IF NOT EXISTS crawl_jobs (
 			id VARCHAR(64) PRIMARY KEY, request LONGTEXT NOT NULL, status VARCHAR(32) NOT NULL,
@@ -317,11 +360,17 @@ func (postgresDialect) UpsertDocumentAliasSQL() string {
 	          canonical_id=EXCLUDED.canonical_id, reason=EXCLUDED.reason, created_at=EXCLUDED.created_at, host=EXCLUDED.host`
 }
 func (postgresDialect) UpsertChatEndpointSQL() string {
-	return `INSERT INTO chat_endpoint (id, base_url, api_key, model, enabled, rag_enabled, rag_result_count, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	return `INSERT INTO chat_endpoint (id, base_url, api_key, model, enabled, rag_enabled, rag_result_count, max_context_tokens, web_search_enabled, web_search_base_url, web_search_result_count, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	        ON CONFLICT (id) DO UPDATE SET
 	          base_url=EXCLUDED.base_url, api_key=EXCLUDED.api_key, model=EXCLUDED.model,
 	          enabled=EXCLUDED.enabled, rag_enabled=EXCLUDED.rag_enabled,
-	          rag_result_count=EXCLUDED.rag_result_count, updated_at=EXCLUDED.updated_at`
+	          rag_result_count=EXCLUDED.rag_result_count, max_context_tokens=EXCLUDED.max_context_tokens,
+	          web_search_enabled=EXCLUDED.web_search_enabled, web_search_base_url=EXCLUDED.web_search_base_url,
+	          web_search_result_count=EXCLUDED.web_search_result_count,
+	          updated_at=EXCLUDED.updated_at`
+}
+func (postgresDialect) SeedContentDedupLockSQL() string {
+	return `INSERT INTO content_dedup_lock (id, in_progress) VALUES (1, false) ON CONFLICT (id) DO NOTHING`
 }
 func (postgresDialect) CreateSchemaSQL() []string {
 	return []string{
@@ -398,7 +447,15 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			api_key TEXT NOT NULL DEFAULT '', model TEXT NOT NULL,
 			enabled BOOLEAN NOT NULL DEFAULT false, rag_enabled BOOLEAN NOT NULL DEFAULT false,
 			rag_result_count INT NOT NULL DEFAULT 0,
+			max_context_tokens INT NOT NULL DEFAULT 0,
+			web_search_enabled BOOLEAN NOT NULL DEFAULT false,
+			web_search_base_url TEXT NOT NULL DEFAULT '',
+			web_search_result_count INT NOT NULL DEFAULT 0,
 			updated_at TEXT NOT NULL
+		)`,
+		// See the sqlite dialect's content_dedup_lock comment.
+		`CREATE TABLE IF NOT EXISTS content_dedup_lock (
+			id INT PRIMARY KEY, in_progress BOOLEAN NOT NULL DEFAULT false
 		)`,
 		`CREATE TABLE IF NOT EXISTS crawl_jobs (
 			id TEXT PRIMARY KEY, request TEXT NOT NULL, status TEXT NOT NULL,

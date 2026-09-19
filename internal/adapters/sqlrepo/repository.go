@@ -150,6 +150,9 @@ func (r *Repository) migrate(ctx context.Context) error {
 			return fmt.Errorf("migration failed: %w", err)
 		}
 	}
+	if _, err := r.db.ExecContext(ctx, r.dialect.SeedContentDedupLockSQL()); err != nil {
+		return fmt.Errorf("seeding content dedup lock: %w", err)
+	}
 	if err := r.migrateDocumentColumns(ctx); err != nil {
 		return err
 	}
@@ -160,6 +163,9 @@ func (r *Repository) migrate(ctx context.Context) error {
 		return err
 	}
 	if err := r.migrateEmbeddingEndpointColumns(ctx); err != nil {
+		return err
+	}
+	if err := r.migrateChatEndpointColumns(ctx); err != nil {
 		return err
 	}
 	if err := r.migrateLegacyHTTPEmbeddingConfig(ctx); err != nil {
@@ -288,6 +294,41 @@ func (r *Repository) migrateEmbeddingEndpointColumns(ctx context.Context) error 
 		return err
 	}
 	return addColumn("tokenize_url", "tokenize_url TEXT NOT NULL DEFAULT ''")
+}
+
+// migrateChatEndpointColumns adds max_context_tokens (see
+// domain.ChatEndpoint.MaxContextTokens) and the three web_search_* columns
+// (see domain.ChatEndpoint.WebSearchEnabled/WebSearchBaseURL/
+// WebSearchResultCount) to a chat_endpoint table that predates them --
+// max_context_tokens defaults to 0 ("disabled"), web_search_enabled to
+// false and web_search_base_url to ” (both leave web search off, a
+// pre-existing endpoint's previous behavior), web_search_result_count to 0
+// (self-heals to the real default via domain.ChatEndpoint.Clamp on the
+// next save, same convention as rag_result_count's own 0 default).
+func (r *Repository) migrateChatEndpointColumns(ctx context.Context) error {
+	existing, err := r.existingColumns(ctx, "chat_endpoint")
+	if err != nil {
+		return err
+	}
+	addColumn := func(name, ddl string) error {
+		if existing[name] {
+			return nil
+		}
+		if _, err := r.db.ExecContext(ctx, "ALTER TABLE chat_endpoint ADD COLUMN "+ddl); err != nil && !isAlreadyExistsError(err) {
+			return fmt.Errorf("adding %s column: %w", name, err)
+		}
+		return nil
+	}
+	if err := addColumn("max_context_tokens", "max_context_tokens INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := addColumn("web_search_enabled", "web_search_enabled BOOLEAN NOT NULL DEFAULT false"); err != nil {
+		return err
+	}
+	if err := addColumn("web_search_base_url", "web_search_base_url TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return addColumn("web_search_result_count", "web_search_result_count INTEGER NOT NULL DEFAULT 0")
 }
 
 // legacyHTTPEmbeddingSettings decodes just the fields this migration cares
@@ -1557,10 +1598,48 @@ func (r *Repository) MergeDocuments(ctx context.Context, canonicalID string, los
 	return tx.Commit()
 }
 
+// TryAcquireContentDedupLock claims content_dedup_lock's single sentinel
+// row via a conditional UPDATE (the same WHERE-current-value pattern
+// RunScheduledCrawlNow uses for scheduled_crawls.in_progress) -- atomic
+// across processes, unlike a check-then-act read-then-write, which is
+// exactly what let two independent RunContentDedupJob calls interleave in
+// production (see ports.ContentDedupRepository's doc comment).
+func (r *Repository) TryAcquireContentDedupLock(ctx context.Context) (bool, error) {
+	updateSQL := r.ph(`UPDATE content_dedup_lock SET in_progress = %s WHERE id = 1 AND in_progress = %s`, 1, 2)
+	res, err := r.db.ExecContext(ctx, updateSQL, true, false)
+	if err != nil {
+		return false, fmt.Errorf("acquiring content dedup lock: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("checking content dedup lock acquisition: %w", err)
+	}
+	return n > 0, nil
+}
+
+// ReleaseContentDedupLock clears content_dedup_lock's sentinel row
+// unconditionally -- always safe to call (including from a defer after a
+// failed acquire), since setting an already-false flag to false again is a
+// no-op.
+func (r *Repository) ReleaseContentDedupLock(ctx context.Context) error {
+	updateSQL := r.ph(`UPDATE content_dedup_lock SET in_progress = %s WHERE id = 1`, 1)
+	if _, err := r.db.ExecContext(ctx, updateSQL, false); err != nil {
+		return fmt.Errorf("releasing content dedup lock: %w", err)
+	}
+	return nil
+}
+
 // ListDocumentAliasGroups pages through every canonical document with at
 // least one alias. Grouping happens in Go (fetch ordered pairs, group
 // consecutive rows) rather than a dialect-specific GROUP_CONCAT/STRING_AGG,
-// not worth the portability cost for an admin diagnostics page.
+// not worth the portability cost for an admin diagnostics page. A
+// canonical_id with no matching documents row reports an empty
+// CanonicalURL rather than being excluded -- deliberately: a forward-
+// declared rel=canonical alias (see RecordDocumentAlias) legitimately
+// names a canonical that hasn't been crawled yet, and is indistinguishable
+// from that state alone from a canonical a content-dedup race left
+// dangling (see TryAcquireContentDedupLock's doc comment) -- the latter is
+// prevented going forward by that lock, not by hiding rows here.
 func (r *Repository) ListDocumentAliasGroups(ctx context.Context, limit, offset int) ([]domain.DocumentAliasGroup, int, error) {
 	var total int
 	countSQL := `SELECT COUNT(DISTINCT canonical_id) FROM document_aliases`
@@ -2481,7 +2560,7 @@ func scanEmbeddingEndpoint(row scanner) (domain.EmbeddingHTTPEndpoint, error) {
 // key.
 const chatEndpointRowID = "default"
 
-const chatEndpointColumns = "base_url, api_key, model, enabled, rag_enabled, rag_result_count, updated_at"
+const chatEndpointColumns = "base_url, api_key, model, enabled, rag_enabled, rag_result_count, max_context_tokens, web_search_enabled, web_search_base_url, web_search_result_count, updated_at"
 
 // GetChatEndpoint returns the single admin-configured chat endpoint, or
 // ports.ErrChatEndpointNotConfigured if it has never been saved.
@@ -2505,6 +2584,7 @@ func (r *Repository) GetChatEndpoint(ctx context.Context) (domain.ChatEndpoint, 
 func (r *Repository) SetChatEndpoint(ctx context.Context, e domain.ChatEndpoint) error {
 	_, err := r.db.ExecContext(ctx, r.dialect.UpsertChatEndpointSQL(),
 		chatEndpointRowID, e.BaseURL, e.APIKey, e.Model, e.Enabled, e.RAGEnabled, e.RAGResultCount,
+		e.MaxContextTokens, e.WebSearchEnabled, e.WebSearchBaseURL, e.WebSearchResultCount,
 		e.UpdatedAt.UTC().Format(crawledAtLayout),
 	)
 	if err != nil {
@@ -2517,7 +2597,8 @@ func scanChatEndpoint(row scanner) (domain.ChatEndpoint, error) {
 	var e domain.ChatEndpoint
 	var updatedAt string
 	if err := row.Scan(&e.BaseURL, &e.APIKey, &e.Model, &e.Enabled, &e.RAGEnabled,
-		&e.RAGResultCount, &updatedAt); err != nil {
+		&e.RAGResultCount, &e.MaxContextTokens, &e.WebSearchEnabled, &e.WebSearchBaseURL,
+		&e.WebSearchResultCount, &updatedAt); err != nil {
 		return domain.ChatEndpoint{}, err
 	}
 	e.UpdatedAt = parseCrawledAt(updatedAt)

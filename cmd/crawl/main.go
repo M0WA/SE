@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
@@ -161,7 +162,8 @@ func (c *contentDedupRecomputer) recompute() {
 	c.running = true
 	c.mu.Unlock()
 
-	if _, err := application.RunContentDedupJobWithStatus(c.ctx, c.repo, c.settingsStore, v.ContentDedupMethod, v.ContentDedupSimHashMaxDistance); err != nil {
+	_, err := application.RunContentDedupJobWithStatus(c.ctx, c.repo, c.settingsStore, v.ContentDedupMethod, v.ContentDedupSimHashMaxDistance)
+	if err != nil && !errors.Is(err, ports.ErrContentDedupAlreadyRunning) {
 		log.Printf("recomputing content dedup: %v", err)
 	}
 

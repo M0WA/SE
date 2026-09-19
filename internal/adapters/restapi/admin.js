@@ -234,11 +234,7 @@ const ADMIN_NAV_GROUPS = [
   {
     label: 'Chat',
     items: [
-      // Chat has no dedicated page yet -- its config lives in a section on
-      // the main Settings page (see admin_settings.html's "Chat" details
-      // group, id="chat-settings"). The #chat-settings fragment tells
-      // admin_settings.js to open and scroll to it on load.
-      { label: 'Settings', href: '/admin/settings#chat-settings' },
+      { label: 'Settings', href: '/admin/chat/settings' },
     ],
   },
   {

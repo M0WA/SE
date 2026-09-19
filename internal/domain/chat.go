@@ -24,6 +24,17 @@ type ChatSource struct {
 	Title string `json:"title"`
 }
 
+// WebSearchResult is one result from a live web search (see
+// ports.WebSearcher), narrowed to just what a chat turn needs to fold into
+// its context -- distinct from ChatSource (a citation already surfaced to
+// the user) and from SearchResult (this instance's own indexed corpus,
+// which carries ranking fields a live web search has no equivalent of).
+type WebSearchResult struct {
+	Title   string
+	URL     string
+	Snippet string
+}
+
 // ChatEndpoint is the single admin-configured chat-completions backend --
 // unlike the embedding endpoints (a list of many blended providers), chat
 // only ever has one active configuration at a time.
@@ -43,7 +54,28 @@ type ChatEndpoint struct {
 	// RAGResultCount bounds how many search results are retrieved when
 	// RAGEnabled -- see DefaultChatRAGResultCount/Min/MaxChatRAGResultCount.
 	RAGResultCount int
-	UpdatedAt      time.Time
+	// MaxContextTokens bounds how many tokens' worth of conversation
+	// (RAG context plus message history) ChatService.Chat will send to the
+	// model, approximated by character count -- see that package's
+	// trimToBudget. Older messages are dropped first, oldest to newest,
+	// always keeping the most recent user message. 0 disables trimming
+	// (the full history is sent as-is), same convention as
+	// EmbeddingHTTPEndpoint.ChunkSizeTokens.
+	MaxContextTokens int
+	// WebSearchEnabled turns on live web search (via a self-hosted SearXNG
+	// instance, see ports.WebSearcher) as additional chat context --
+	// independent of RAGEnabled (this instance's own indexed corpus): a
+	// turn can draw on either, both, or neither, and their results are
+	// folded into the same system context message together.
+	WebSearchEnabled bool
+	// WebSearchBaseURL is the SearXNG instance's base URL, e.g.
+	// http://127.0.0.1:8888 -- ports.WebSearcher GETs
+	// <WebSearchBaseURL>/search?q=...&format=json.
+	WebSearchBaseURL string
+	// WebSearchResultCount bounds how many web results are fetched when
+	// WebSearchEnabled -- see DefaultChatWebSearchResultCount/Min/Max.
+	WebSearchResultCount int
+	UpdatedAt            time.Time
 }
 
 // DefaultChatRAGResultCount/MinChatRAGResultCount/MaxChatRAGResultCount
@@ -56,14 +88,28 @@ const (
 	MaxChatRAGResultCount     = 20
 )
 
-// Clamp self-heals RAGResultCount into [MinChatRAGResultCount,
-// MaxChatRAGResultCount], substituting DefaultChatRAGResultCount for a
-// non-positive value the same way ContentDedupSimHashMaxDistance's own
-// Set-time clamping does for an admin-supplied zero/negative.
+// DefaultChatWebSearchResultCount/Min/MaxChatWebSearchResultCount bound
+// ChatEndpoint.WebSearchResultCount, the same self-healing convention as
+// RAGResultCount above.
+const (
+	DefaultChatWebSearchResultCount = 5
+	MinChatWebSearchResultCount     = 1
+	MaxChatWebSearchResultCount     = 20
+)
+
+// Clamp self-heals RAGResultCount/WebSearchResultCount into their own
+// [Min,Max] ranges, substituting each default for a non-positive value the
+// same way ContentDedupSimHashMaxDistance's own Set-time clamping does for
+// an admin-supplied zero/negative.
 func (e *ChatEndpoint) Clamp() {
 	if e.RAGResultCount <= 0 {
 		e.RAGResultCount = DefaultChatRAGResultCount
 	} else if e.RAGResultCount > MaxChatRAGResultCount {
 		e.RAGResultCount = MaxChatRAGResultCount
+	}
+	if e.WebSearchResultCount <= 0 {
+		e.WebSearchResultCount = DefaultChatWebSearchResultCount
+	} else if e.WebSearchResultCount > MaxChatWebSearchResultCount {
+		e.WebSearchResultCount = MaxChatWebSearchResultCount
 	}
 }

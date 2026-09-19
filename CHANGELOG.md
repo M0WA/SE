@@ -1,5 +1,41 @@
 # Changelog
 
+## v4.13.8 - 2026-09-19
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Auto-scroll the chat panel to the newest message by @M0WA in https://github.com/M0WA/SE/pull/129
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.7...v4.13.8
+
+
+## v4.13.7 - 2026-09-19
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Enable postgres_exporter's stat_statements collector for query-time metrics by @M0WA in https://github.com/M0WA/SE/pull/122
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.6...v4.13.7
+
+
+## v4.13.6 - 2026-09-19
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Fix chat mode not hiding the search UI, add Chat as its own admin nav item by @M0WA in https://github.com/M0WA/SE/pull/119
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.5...v4.13.6
+
+
 ## v4.13.5 - 2026-09-19
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->

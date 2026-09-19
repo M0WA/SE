@@ -1,0 +1,70 @@
+# SearXNG config for the internal, chat-only metasearch instance on
+# se.mo-sys.de -- see ../README.md. Deliberately minimal: this backs one
+# programmatic caller (searchengine's chat web-search feature), not a
+# public search UI, so most of SearXNG's own default UI/privacy-policy
+# settings are irrelevant here.
+
+use_default_settings:
+  # Rather than redefining bing/brave/duckduckgo's engine configs
+  # (categories, timeout, etc.) from scratch under use_default_settings:
+  # false, keep every other default-shipped engine defined but disabled --
+  # this is the documented way to run an allowlist without hand-copying
+  # engine internals that could drift from upstream. Startpage was the
+  # original fourth choice but isn't usable: SearXNG marks that engine
+  # `inactive` upstream (a proof-of-work CAPTCHA broke its scraper, see
+  # https://github.com/searxng/searxng/pull/6669), so it's excluded here
+  # rather than kept in a list that would silently contribute nothing.
+  engines:
+    keep_only:
+      - bing
+      - brave
+      - duckduckgo
+
+# keep_only above only controls which engines survive the default list --
+# it doesn't flip an individual engine's own disabled/inactive flag, and
+# bing ships with disabled: true by default (unlike brave/duckduckgo, which
+# ship enabled), so it needs this explicit override on top of keep_only or
+# it's kept in the list but never actually queried.
+engines:
+  - name: bing
+    disabled: false
+
+general:
+  instance_name: "se.mo-sys.de internal search"
+  # No public-facing pages exist for this instance -- these links would
+  # otherwise appear in a UI nobody but the searchengine backend ever hits.
+  privacypolicy_url: false
+  donation_url: false
+  contact_url: false
+  enable_metrics: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+  # json is off by default (SearXNG's own anti-scraping default) -- this
+  # instance's only caller is searchengine's own httpsearxng adapter over
+  # the loopback interface, so enabling it is the point of running this at
+  # all, not a scraping exposure.
+  formats:
+    - html
+    - json
+
+server:
+  # Replaced with a real generated value at deploy time -- see
+  # ../README.md's Configure step. Never a real secret in this tracked file.
+  secret_key: "REPLACE_WITH_OPENSSL_RAND_HEX_32"
+  base_url: "http://127.0.0.1:8888/"
+  # No public users to rate-limit, and this repo's box doesn't run Redis for
+  # anything else -- avoids pulling in a dependency solely for a limiter
+  # protecting an instance nothing but localhost can even reach.
+  limiter: false
+  public_instance: false
+  method: "GET"
+
+ui:
+  static_use_hash: true
+
+outgoing:
+  request_timeout: 6.0
+  max_request_timeout: 12.0

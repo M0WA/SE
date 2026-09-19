@@ -162,10 +162,22 @@ type PageRankRepository interface {
 	UpdatePageRanks(ctx context.Context, scores map[string]float64) error
 }
 
+// ErrContentDedupAlreadyRunning is returned by
+// application.RunContentDedupJobWithStatus when
+// ContentDedupRepository.TryAcquireContentDedupLock lost the race to
+// another process's already-running call -- callers (the admin recompute
+// handler, the crawl-server scheduler) treat this as a normal, expected
+// outcome, not a real error.
+var ErrContentDedupAlreadyRunning = errors.New("content dedup is already running")
+
 // ContentDedupRepository is the narrow port application.RunContentDedupJob
 // needs: read every document's fingerprint, then merge whatever duplicate
-// groups it finds. cmd/crawl is the only caller, mirroring
-// PageRankRepository's wiring.
+// groups it finds. Two independent, unsynchronized callers can invoke this
+// against the same database: cmd/crawl's own ticker/on-crawl-complete
+// scheduler, and the admin-server's "recompute now" button -- two separate
+// OS processes, so TryAcquireContentDedupLock exists specifically to keep
+// them from ever running RunContentDedupJob at the same time (see its own
+// doc comment for what goes wrong if they do).
 type ContentDedupRepository interface {
 	// AllDocumentFingerprints lists every document's id/url/host/
 	// content_hash/simhash/crawled_at in one query -- just enough to group
@@ -176,6 +188,26 @@ type ContentDedupRepository interface {
 	// is recorded for its URL, and its document row is removed via the same
 	// cascade DeleteDocument uses. reason records why on each alias row.
 	MergeDocuments(ctx context.Context, canonicalID string, loserIDs []string, reason string) error
+	// TryAcquireContentDedupLock atomically claims the single, DB-backed
+	// (so it works across processes, unlike an in-memory bool)
+	// content-dedup lock, returning true if this call got it. Without this,
+	// two concurrent RunContentDedupJob calls each compute their own
+	// duplicate groups from an independent snapshot of
+	// AllDocumentFingerprints; if one call's merge deletes a document the
+	// other call's snapshot still believes is a live canonical, that other
+	// call goes on to record a fresh document_aliases row pointing at an
+	// id that no longer exists in documents -- a dangling canonical the
+	// admin alias-groups page then displays with an empty URL (confirmed
+	// in production: exactly this pattern, traced to the admin-server
+	// recompute button firing while cmd/crawl's own scheduler was already
+	// mid-run). Must be paired with ReleaseContentDedupLock (defer it
+	// immediately after a successful acquire).
+	TryAcquireContentDedupLock(ctx context.Context) (bool, error)
+	// ReleaseContentDedupLock clears the lock TryAcquireContentDedupLock
+	// claimed. Idempotent: releasing an already-released lock is a no-op,
+	// not an error, so a deferred call after a failed/short-circuited run
+	// never itself needs error handling.
+	ReleaseContentDedupLock(ctx context.Context) error
 }
 
 // EmbeddingRepository is the narrow slice of *sqlrepo.Repository
@@ -552,4 +584,15 @@ type ChatEndpointStore interface {
 // ChatCompleter calls an OpenAI-compatible chat-completions endpoint.
 type ChatCompleter interface {
 	Complete(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage) (string, error)
+}
+
+// WebSearcher performs a live web search (e.g. against a self-hosted
+// SearXNG instance) for chat's optional web-search augmentation -- a
+// distinct data source from SearchService (this instance's own indexed
+// corpus), so a chat turn can draw on either, both, or neither
+// independently. baseURL is passed per call, not bound at construction,
+// the same convention ChatCompleter.Complete uses for domain.ChatEndpoint
+// -- one stateless client works regardless of admin-configured changes.
+type WebSearcher interface {
+	Search(ctx context.Context, baseURL, query string, count int) ([]domain.WebSearchResult, error)
 }

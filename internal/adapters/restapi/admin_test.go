@@ -4685,6 +4685,7 @@ type fakeContentDedupRepo struct {
 	fingerprints    []domain.DocumentFingerprint
 	fingerprintsErr error
 	mergeErr        error
+	lockBusy        bool
 
 	mu     sync.Mutex
 	merges []struct {
@@ -4692,6 +4693,16 @@ type fakeContentDedupRepo struct {
 		loserIDs    []string
 		reason      string
 	}
+}
+
+func (r *fakeContentDedupRepo) TryAcquireContentDedupLock(context.Context) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return !r.lockBusy, nil
+}
+
+func (r *fakeContentDedupRepo) ReleaseContentDedupLock(context.Context) error {
+	return nil
 }
 
 func (r *fakeContentDedupRepo) AllDocumentFingerprints(context.Context) ([]domain.DocumentFingerprint, error) {
@@ -4865,6 +4876,41 @@ func TestHandleAdminContentDedupRecomputeStart_AlreadyInProgress(t *testing.T) {
 	}
 }
 
+// TestHandleAdminContentDedupRecomputeStart_LosesLockRaceToAnotherProcess
+// covers the gap the fast-path InProgress check above can't close: the
+// status flag it inspects synchronously said "not running" (nothing
+// seeded here), but by the time the spawned goroutine actually calls
+// RunContentDedupJobWithStatus, cmd/crawl's own scheduler has already
+// taken the real lock -- see ports.ErrContentDedupAlreadyRunning's doc
+// comment. Still 202 (the response was already decided before the race
+// could even happen); the real assertion is that the job never touches
+// fingerprints/merges or the persisted status once it loses that race.
+func TestHandleAdminContentDedupRecomputeStart_LosesLockRaceToAnotherProcess(t *testing.T) {
+	store := newSettingsStoreTestRepo(t)
+	repo := &fakeContentDedupRepo{lockBusy: true}
+	h, cookie := adminAuthedHandlerWithContentDedup(t, repo, nil, store)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/content-dedup/recompute", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// No positive "it's done" signal exists to poll for here (that's the
+	// whole point -- losing the lock race means nothing ever runs), so
+	// give the detached goroutine a brief, generous window to have acted
+	// if it were going to, then assert it didn't.
+	time.Sleep(100 * time.Millisecond)
+	if repo.mergeCount() > 0 {
+		t.Error("expected no merges to be attempted after losing the lock race")
+	}
+	if _, found, err := store.GetSetting(context.Background(), ports.SettingsKeyContentDedupStatus); err != nil || found {
+		t.Errorf("expected no status write when the lock race is lost, found=%v err=%v", found, err)
+	}
+}
+
 // TestHandleAdminContentDedupRecomputeStart_JobErrorIsLoggedNotFatal proves
 // a background job error (e.g. AllDocumentFingerprints failing) is logged
 // rather than crashing the detached goroutine, and still clears
@@ -4974,13 +5020,17 @@ func TestHandleAdminContentDedupAliasGroups_ServiceError(t *testing.T) {
 // chatEndpointResp mirrors admin.go's unexported chatEndpointResponse wire
 // shape, for decoding test responses.
 type chatEndpointResp struct {
-	BaseURL        string    `json:"base_url"`
-	HasAPIKey      bool      `json:"has_api_key"`
-	Model          string    `json:"model"`
-	Enabled        bool      `json:"enabled"`
-	RAGEnabled     bool      `json:"rag_enabled"`
-	RAGResultCount int       `json:"rag_result_count"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	BaseURL              string    `json:"base_url"`
+	HasAPIKey            bool      `json:"has_api_key"`
+	Model                string    `json:"model"`
+	Enabled              bool      `json:"enabled"`
+	RAGEnabled           bool      `json:"rag_enabled"`
+	RAGResultCount       int       `json:"rag_result_count"`
+	MaxContextTokens     int       `json:"max_context_tokens"`
+	WebSearchEnabled     bool      `json:"web_search_enabled"`
+	WebSearchBaseURL     string    `json:"web_search_base_url"`
+	WebSearchResultCount int       `json:"web_search_result_count"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 func adminAuthedHandlerWithChatEndpoints(t *testing.T, store ports.ChatEndpointStore) (*restapi.Handler, *http.Cookie) {
@@ -5051,7 +5101,10 @@ func TestHandleAdminChatEndpoint_GetDefaultsWhenNothingSaved(t *testing.T) {
 	if !resp.RAGEnabled || resp.RAGResultCount != domain.DefaultChatRAGResultCount {
 		t.Errorf("expected RAG defaults (enabled, default result count), got %+v", resp)
 	}
-	if resp.HasAPIKey || resp.BaseURL != "" || resp.Model != "" || resp.Enabled {
+	if resp.WebSearchEnabled || resp.WebSearchResultCount != domain.DefaultChatWebSearchResultCount {
+		t.Errorf("expected web search off by default (needs a base URL configured) with a default result count, got %+v", resp)
+	}
+	if resp.HasAPIKey || resp.BaseURL != "" || resp.Model != "" || resp.Enabled || resp.WebSearchBaseURL != "" {
 		t.Errorf("expected zero-ish defaults otherwise, got %+v", resp)
 	}
 }
@@ -5089,7 +5142,8 @@ func TestHandleAdminChatEndpoint_PatchCreatesNewConfig(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
 	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{
 		"base_url": "https://example.com/v1", "api_key": "sk-test", "model": "gpt-x",
-		"enabled": true, "rag_enabled": true, "rag_result_count": 999,
+		"enabled": true, "rag_enabled": true, "rag_result_count": 999, "max_context_tokens": 6000,
+		"web_search_enabled": true, "web_search_base_url": "http://127.0.0.1:8888", "web_search_result_count": 999,
 	})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
@@ -5107,6 +5161,15 @@ func TestHandleAdminChatEndpoint_PatchCreatesNewConfig(t *testing.T) {
 	}
 	if resp.RAGResultCount != domain.MaxChatRAGResultCount {
 		t.Errorf("expected rag_result_count clamped to the max, got %d", resp.RAGResultCount)
+	}
+	if resp.MaxContextTokens != 6000 {
+		t.Errorf("expected max_context_tokens round tripped, got %d", resp.MaxContextTokens)
+	}
+	if !resp.WebSearchEnabled || resp.WebSearchBaseURL != "http://127.0.0.1:8888" {
+		t.Errorf("expected web search fields round tripped, got %+v", resp)
+	}
+	if resp.WebSearchResultCount != domain.MaxChatWebSearchResultCount {
+		t.Errorf("expected web_search_result_count clamped to the max, got %d", resp.WebSearchResultCount)
 	}
 	if resp.UpdatedAt.IsZero() {
 		t.Errorf("expected UpdatedAt set, got zero value")
@@ -5170,6 +5233,21 @@ func TestHandleAdminChatEndpoint_PatchClearAPIKeyRemovesIt(t *testing.T) {
 	}
 	if got.APIKey != "" {
 		t.Errorf("expected clear_api_key to remove the stored key, got %q", got.APIKey)
+	}
+}
+
+// TestHandleAdminChatEndpoint_PatchNegativeMaxContextTokensRejected mirrors
+// TestHandleAdminEmbeddingEndpoints_CreateValidation's negative-chunk-size
+// case for the same reason: MaxContextTokens shares ChunkSizeTokens' "0
+// disables, negative is invalid" convention.
+func TestHandleAdminChatEndpoint_PatchNegativeMaxContextTokensRejected(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
+	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{
+		"base_url": "https://example.com/v1", "model": "gpt-x", "max_context_tokens": -1,
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

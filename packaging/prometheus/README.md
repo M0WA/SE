@@ -19,6 +19,15 @@ This is independent of the `searchengine` binaries/package -- it's host-level
 observability, installed and configured directly on the VM, not shipped in
 the `searchengine` .deb.
 
+`prometheus.yml`'s `searxng` job is a fifth source, but not a fifth package
+here: SearXNG itself runs as a separate Docker deployment (`/opt/searxng` on
+se.mo-sys.de), entirely outside this repo. It exposes its own OpenMetrics
+endpoint (per-engine request count, response time, result count,
+reliability) once `general.open_metrics: <password>` is set in its own
+`settings.yml` -- that same password becomes this scrape job's
+`basic_auth.password`. Nothing to install here; just point the scrape
+config at it once the password's set on the SearXNG side.
+
 ## Install
 
 ```sh
@@ -52,6 +61,20 @@ See that override file's own comment for why `--disable-settings-metrics`
 is required, not optional -- omitting it leaks the DSN's password into
 `journalctl` on the first scrape error.
 
+The `stat_statements` collector (query-time metrics) needs the extension
+created once per database -- not part of `postinst`/this override, since it's
+a Postgres-side change, not a host package:
+
+```sh
+psql "$DB_DSN" -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"
+```
+
+On se.mo-sys.de's Postgres server this needed no restart (a managed instance
+that already preloads it via `shared_preload_libraries`). A self-hosted
+Postgres without that preload needs `shared_preload_libraries = 'pg_stat_statements'`
+set and a restart *first* -- check before assuming `CREATE EXTENSION` alone
+is enough.
+
 Copy `prometheus.yml`, filling in the real values from the IONOS DCD
 (Observability > Monitoring > your pipeline) and a **host-unique**
 `site` name:
@@ -60,10 +83,14 @@ Copy `prometheus.yml`, filling in the real values from the IONOS DCD
 sed -e 's/<IONOS_METRICS_ENDPOINT>/<pipeline id>-metrics.<pipeline uid>.monitoring.<region>.ionos.com/' \
     -e 's/<IONOS_APIKEY>/<real key here>/' \
     -e 's/<SITE_NAME>/<this-hosts-name>/' \
+    -e 's/<SEARXNG_METRICS_PASSWORD>/<same value as SearXNG'"'"'s settings.yml open_metrics>/' \
     prometheus.yml > /etc/prometheus/prometheus.yml
 chown root:prometheus /etc/prometheus/prometheus.yml
 chmod 640 /etc/prometheus/prometheus.yml
 ```
+
+Skip the `<SEARXNG_METRICS_PASSWORD>` substitution (leave the job as-is,
+or delete it) on a host that doesn't run SearXNG.
 
 `<SITE_NAME>` must be different for every host pushing into the same
 IONOS pipeline -- see `prometheus.yml`'s comment on `external_labels`.
