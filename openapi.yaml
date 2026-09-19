@@ -1105,6 +1105,12 @@ paths:
             application/json:
               schema: { type: object, properties: { ok: { type: boolean } } }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >-
+            A crawl for this schedule is already running -- forcing it again
+            would let two concurrent crawls of the same site race on
+            document archiving. Not returned for a crash-stale flag, which
+            self-heals once at crawl-server startup instead.
         "503": { $ref: "#/components/responses/NotConfigured" }
 
   /admin/api/schedules/{id}/toggle:

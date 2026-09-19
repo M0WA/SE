@@ -453,6 +453,11 @@ type SettingsStore interface {
 // Delete when no schedule with the given ID exists.
 var ErrScheduledCrawlNotFound = errors.New("scheduled crawl not found")
 
+// ErrScheduledCrawlInProgress is returned by RunScheduledCrawlNow when the
+// schedule already has a crawl actively running -- see its own doc comment
+// for why forcing a second concurrent run of the same schedule is unsafe.
+var ErrScheduledCrawlInProgress = errors.New("scheduled crawl is already in progress")
+
 // ScheduledCrawlStore persists recurring crawl schedules an admin creates.
 // Both admin-server and crawl-server talk to the shared scheduled_crawls
 // table directly, so the ticker and the CRUD endpoints never need an HTTP
@@ -475,9 +480,20 @@ type ScheduledCrawlStore interface {
 	// enabled=false. inProgress, separate from enabled, stays true for the
 	// run's duration so DueScheduledCrawls can't double-trigger a long crawl.
 	MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time, enabled, inProgress bool, runCount int) error
-	// RunScheduledCrawlNow sets NextRunAt to now, re-enables if paused, and
-	// clears InProgress, leaving every other field untouched -- picked up by
-	// the next scheduler tick. Returns ErrScheduledCrawlNotFound if unknown.
+	// RunScheduledCrawlNow sets NextRunAt to now and re-enables if paused,
+	// leaving every other field untouched -- picked up by the next
+	// scheduler tick. Deliberately does NOT force-clear InProgress: a
+	// stale-after-crash InProgress is already self-healed once at
+	// crawl-server startup (see ResetStaleInProgress), so if InProgress is
+	// still true here it means a crawl for this schedule is genuinely
+	// running right now -- forcing NextRunAt=now regardless would let the
+	// ticker start a second concurrent crawl of the same site, and two
+	// crawlLoop goroutines racing to archive the same document's previous
+	// version via SaveDocument can violate document_versions' primary key
+	// (confirmed in production: two concurrent jobs for the same site,
+	// one crashed with a duplicate-key error). Returns
+	// ErrScheduledCrawlNotFound if unknown, ErrScheduledCrawlInProgress if
+	// a crawl is already running for it.
 	RunScheduledCrawlNow(ctx context.Context, id string, now time.Time) error
 	// SetScheduledCrawlEnabled flips only Enabled, leaving NextRunAt (and
 	// every other field) untouched -- unlike UpdateScheduledCrawl, which

@@ -934,6 +934,23 @@ func TestHandleAdminRunScheduleNow_ServiceError(t *testing.T) {
 	}
 }
 
+// TestHandleAdminRunScheduleNow_AlreadyInProgress proves the handler maps
+// ports.ErrScheduledCrawlInProgress to 409, distinct from the generic 500
+// TestHandleAdminRunScheduleNow_ServiceError covers -- see
+// RunScheduledCrawlNow's doc comment for why a genuinely-running schedule
+// must refuse a second concurrent trigger rather than 200'ing a no-op.
+func TestHandleAdminRunScheduleNow_AlreadyInProgress(t *testing.T) {
+	store := &fakeScheduledCrawlStore{runNowErr: ports.ErrScheduledCrawlInProgress}
+	h, cookie := adminAuthedHandlerWithSchedules(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/schedules/sched-1/run", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Errorf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleAdminToggleSchedule_Success(t *testing.T) {
 	store := &fakeScheduledCrawlStore{}
 	h, cookie := adminAuthedHandlerWithSchedules(t, store)

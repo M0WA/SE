@@ -213,17 +213,56 @@ func TestRunScheduledCrawlNow_NotFound(t *testing.T) {
 	}
 }
 
-// TestRunScheduledCrawlNow_ClearsStuckInProgress proves an explicit "run
-// now" self-heals a schedule whose in_progress flag got stuck true (e.g.
-// by a crawl-server restart interrupting its previously-triggered run --
-// see RunScheduledCrawlNow's own doc comment) -- without this, the entry
-// would never satisfy DueScheduledCrawls' in_progress = false condition
-// again, no matter how many times "Run now" is clicked.
-func TestRunScheduledCrawlNow_ClearsStuckInProgress(t *testing.T) {
+// TestRunScheduledCrawlNow_RefusesWhenAlreadyInProgress proves "run now"
+// no longer force-clears in_progress: a real production incident (two
+// concurrent crawls of the same site racing on document_versions'
+// primary key -- see RunScheduledCrawlNow's own doc comment) traced back
+// to this method unconditionally clearing the flag, which let the
+// scheduler's ticker start a second crawl while one was still genuinely
+// running. A crash-stuck flag is handled once, correctly, at crawl-server
+// startup by ResetStaleInProgress -- not here, since this layer has no
+// way to tell "genuinely running" from "stuck" apart. NextRunAt/Enabled
+// must be left exactly as they were: this must be a true no-op, not a
+// partial update.
+func TestRunScheduledCrawlNow_RefusesWhenAlreadyInProgress(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	fixedNextRun := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Second)
+	s := newScheduledCrawl("sched-1", 30, fixedNextRun)
+	s.InProgress = true
+	s.Enabled = false
+	if err := repo.CreateScheduledCrawl(ctx, s); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	err := repo.RunScheduledCrawlNow(ctx, "sched-1", time.Now().UTC())
+	if !errors.Is(err, ports.ErrScheduledCrawlInProgress) {
+		t.Fatalf("expected ErrScheduledCrawlInProgress, got %v", err)
+	}
+
+	got, err := repo.GetScheduledCrawl(ctx, "sched-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !got.InProgress {
+		t.Error("expected InProgress to remain true -- RunScheduledCrawlNow must not clear it")
+	}
+	if got.Enabled {
+		t.Error("expected Enabled to remain untouched on a refused call")
+	}
+	if !got.NextRunAt.Equal(fixedNextRun) {
+		t.Errorf("expected NextRunAt untouched at %v, got %v", fixedNextRun, got.NextRunAt)
+	}
+}
+
+// TestRunScheduledCrawlNow_SucceedsWhenNotInProgress is the companion to
+// the refusal test above: a schedule genuinely not running right now
+// still gets the normal next_run_at/enabled treatment.
+func TestRunScheduledCrawlNow_SucceedsWhenNotInProgress(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
 	s := newScheduledCrawl("sched-1", 30, time.Now().UTC().Add(2*time.Hour))
-	s.InProgress = true
+	s.InProgress = false
 	if err := repo.CreateScheduledCrawl(ctx, s); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -237,8 +276,8 @@ func TestRunScheduledCrawlNow_ClearsStuckInProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.InProgress {
-		t.Error("expected RunScheduledCrawlNow to clear a stuck InProgress flag")
+	if got.NextRunAt.Sub(now).Abs() > time.Second {
+		t.Errorf("expected NextRunAt ~%v, got %v", now, got.NextRunAt)
 	}
 
 	due, err := repo.DueScheduledCrawls(ctx, now)
