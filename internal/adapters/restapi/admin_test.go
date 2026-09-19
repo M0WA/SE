@@ -4974,7 +4974,9 @@ func TestHandleAdminContentDedupAliasGroups_MethodNotAllowed(t *testing.T) {
 func TestHandleAdminContentDedupAliasGroups_Success(t *testing.T) {
 	adminRepo := &fakeAdminRepo{
 		aliasGroups: []domain.DocumentAliasGroup{
-			{CanonicalID: "doc-1", CanonicalURL: "https://example.com/a", AliasURLs: []string{"https://www.example.com/a"}},
+			{CanonicalID: "doc-1", CanonicalURL: "https://example.com/a", Aliases: []domain.DocumentAlias{
+				{URL: "https://www.example.com/a", Reason: domain.DocumentAliasReasonCanonicalTag},
+			}},
 		},
 		aliasGroupsTotal: 7,
 	}
@@ -4992,16 +4994,22 @@ func TestHandleAdminContentDedupAliasGroups_Success(t *testing.T) {
 	var resp struct {
 		Total  int `json:"total"`
 		Groups []struct {
-			CanonicalID  string   `json:"canonical_id"`
-			CanonicalURL string   `json:"canonical_url"`
-			AliasURLs    []string `json:"alias_urls"`
+			CanonicalID  string `json:"canonical_id"`
+			CanonicalURL string `json:"canonical_url"`
+			Aliases      []struct {
+				URL    string `json:"url"`
+				Reason string `json:"reason"`
+			} `json:"aliases"`
 		} `json:"groups"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decoding response: %v", err)
 	}
-	if resp.Total != 7 || len(resp.Groups) != 1 || resp.Groups[0].CanonicalID != "doc-1" || len(resp.Groups[0].AliasURLs) != 1 {
+	if resp.Total != 7 || len(resp.Groups) != 1 || resp.Groups[0].CanonicalID != "doc-1" || len(resp.Groups[0].Aliases) != 1 {
 		t.Errorf("unexpected response: %+v", resp)
+	}
+	if resp.Groups[0].Aliases[0].Reason != "canonical_tag" {
+		t.Errorf("expected the alias's own reason surfaced, got %+v", resp.Groups[0].Aliases[0])
 	}
 }
 

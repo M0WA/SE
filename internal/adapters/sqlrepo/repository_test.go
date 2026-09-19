@@ -1297,12 +1297,12 @@ func TestMergeDocuments_RepointsExistingAliasOfLoser(t *testing.T) {
 		t.Fatalf("expected the one group's canonical to be doc-canonical, got %+v", groups)
 	}
 	wantAliases := map[string]bool{"https://loser.example/": true, "https://old-alias.example/": true}
-	if len(groups[0].AliasURLs) != 2 {
-		t.Fatalf("expected 2 alias URLs (the loser's own URL, plus the repointed pre-existing alias), got %+v", groups[0].AliasURLs)
+	if len(groups[0].Aliases) != 2 {
+		t.Fatalf("expected 2 aliases (the loser's own URL, plus the repointed pre-existing alias), got %+v", groups[0].Aliases)
 	}
-	for _, u := range groups[0].AliasURLs {
-		if !wantAliases[u] {
-			t.Errorf("unexpected alias URL %q", u)
+	for _, a := range groups[0].Aliases {
+		if !wantAliases[a.URL] {
+			t.Errorf("unexpected alias URL %q", a.URL)
 		}
 	}
 }
@@ -1376,8 +1376,11 @@ func TestListDocumentAliasGroups_ForwardDeclaredCanonicalHasEmptyURL(t *testing.
 	if groups[0].CanonicalURL != "" {
 		t.Errorf("expected an empty CanonicalURL for a not-yet-crawled canonical, got %q", groups[0].CanonicalURL)
 	}
-	if len(groups[0].AliasURLs) != 1 || groups[0].AliasURLs[0] != "https://alias.example/" {
-		t.Errorf("expected the one alias URL listed, got %+v", groups[0].AliasURLs)
+	if len(groups[0].Aliases) != 1 || groups[0].Aliases[0].URL != "https://alias.example/" {
+		t.Errorf("expected the one alias URL listed, got %+v", groups[0].Aliases)
+	}
+	if groups[0].Aliases[0].Reason != domain.DocumentAliasReasonCanonicalTag {
+		t.Errorf("expected the alias's own reason surfaced, got %q", groups[0].Aliases[0].Reason)
 	}
 }
 

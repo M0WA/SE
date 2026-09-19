@@ -1678,20 +1678,20 @@ func (r *Repository) ListDocumentAliasGroups(ctx context.Context, limit, offset 
 		placeholders[i] = r.dialect.Placeholder(i + 1)
 		args[i] = id
 	}
-	aliasSQL := `SELECT canonical_id, alias_url FROM document_aliases WHERE canonical_id IN (` +
+	aliasSQL := `SELECT canonical_id, alias_url, reason FROM document_aliases WHERE canonical_id IN (` +
 		strings.Join(placeholders, ",") + `) ORDER BY canonical_id, alias_url`
 	aliasRows, err := r.db.QueryContext(ctx, aliasSQL, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("listing aliases for groups: %w", err)
 	}
-	byCanonical := make(map[string][]string, len(canonicalIDs))
+	byCanonical := make(map[string][]domain.DocumentAlias, len(canonicalIDs))
 	for aliasRows.Next() {
-		var canonicalID, aliasURL string
-		if err := aliasRows.Scan(&canonicalID, &aliasURL); err != nil {
+		var canonicalID, aliasURL, reason string
+		if err := aliasRows.Scan(&canonicalID, &aliasURL, &reason); err != nil {
 			aliasRows.Close()
 			return nil, 0, fmt.Errorf("scanning alias row: %w", err)
 		}
-		byCanonical[canonicalID] = append(byCanonical[canonicalID], aliasURL)
+		byCanonical[canonicalID] = append(byCanonical[canonicalID], domain.DocumentAlias{URL: aliasURL, Reason: reason})
 	}
 	aliasRows.Close()
 	if err := aliasRows.Err(); err != nil {
@@ -1727,7 +1727,7 @@ func (r *Repository) ListDocumentAliasGroups(ctx context.Context, limit, offset 
 		groups[i] = domain.DocumentAliasGroup{
 			CanonicalID:  id,
 			CanonicalURL: canonicalURLs[id],
-			AliasURLs:    byCanonical[id],
+			Aliases:      byCanonical[id],
 		}
 	}
 	return groups, total, nil

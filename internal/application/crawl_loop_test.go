@@ -1372,6 +1372,41 @@ func TestCrawlLoop_CanonicalTagSkipsSavingItsOwnDocument(t *testing.T) {
 	}
 }
 
+// TestCrawlLoop_CanonicalTagTargetEnqueuedEvenWhenNotAnOutboundLink is the
+// regression test for a real-world gap: a page's declared canonical target
+// is very often NOT among its own outbound links (e.g. the canonical is the
+// same URL stripped of tracking params, never linked verbatim anywhere) --
+// if the canonical target is only ever discovered by chance via ordinary
+// link-following, most aliases end up permanently dangling (recorded, but
+// never resolving to an actual indexed document). The canonical target
+// itself must be enqueued directly.
+func TestCrawlLoop_CanonicalTagTargetEnqueuedEvenWhenNotAnOutboundLink(t *testing.T) {
+	fetcher := &scopedFetcher{pages: map[string]string{
+		"http://a.example/alias?utm=x": "<html>alias</html>",
+		"http://a.example/canonical":   "<html>canonical</html>",
+	}}
+	parse := func(_, pageURL string) (string, string, []string, string) {
+		if pageURL == "http://a.example/alias?utm=x" {
+			// No outbound links at all -- the canonical target is reachable
+			// only if crawlLoop enqueues it directly.
+			return "Alias", "genuegend inhalt text fuer diese seite bitte danke", nil, "http://a.example/canonical"
+		}
+		return "Canonical", "genuegend inhalt text fuer diese andere seite bitte danke", nil, ""
+	}
+	save := func(ctx context.Context, doc domain.Document) error { return nil }
+	recordAlias := func(ctx context.Context, aliasURL, canonicalID string) error { return nil }
+
+	opts := ports.CrawlOptions{SeedURLs: []string{"http://a.example/alias?utm=x"}, MaxPages: 10}
+	settings := domain.NewOperationalSettings(domain.OperationalSettingsValues{})
+	count, err := crawlLoop(context.Background(), fetcher, nil, parse, settings, opts, nil, nil, save, recordAlias, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected the canonical target to be crawled and indexed even though it was never linked, got count=%d", count)
+	}
+}
+
 // TestCrawlLoop_CanonicalTagPointingAtSelfIsNotAnAlias proves a page whose
 // canonical tag simply names itself (the common, correct case for a page
 // that IS its own canonical) is saved normally, not treated as an alias of

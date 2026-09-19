@@ -1673,9 +1673,23 @@ components:
             properties:
               canonical_id: { type: string }
               canonical_url: { type: string }
-              alias_urls:
+              aliases:
                 type: array
-                items: { type: string }
+                description: >-
+                  Every alias of this canonical document, from any reason --
+                  ordinary canonical_tag bookkeeping recorded during
+                  crawling (no document was ever created for that URL) as
+                  well as an actual content_exact/content_simhash merge (a
+                  document row WAS deleted). Conflating the two under one
+                  undifferentiated list is why each alias carries its own
+                  reason rather than the group as a whole.
+                items:
+                  type: object
+                  properties:
+                    url: { type: string }
+                    reason:
+                      type: string
+                      enum: [canonical_tag, content_exact, content_simhash]
 
     EmbeddingCandidateRequest:
       type: object

@@ -1940,10 +1940,19 @@ func (h *Handler) handleAdminContentDedupRecomputeStart(w http.ResponseWriter, r
 // default items-per-page -- same conventions as defaultVocabularyPageSize.
 const defaultAliasGroupsPageSize = 20
 
+// adminDocumentAlias mirrors domain.DocumentAlias for the wire format --
+// reason is included (not just the URL) so the admin UI can tell an actual
+// content-dedup merge apart from ordinary canonical_tag bookkeeping
+// recorded during crawling, which never deleted or merged anything.
+type adminDocumentAlias struct {
+	URL    string `json:"url"`
+	Reason string `json:"reason"`
+}
+
 type adminDocumentAliasGroup struct {
-	CanonicalID  string   `json:"canonical_id"`
-	CanonicalURL string   `json:"canonical_url"`
-	AliasURLs    []string `json:"alias_urls"`
+	CanonicalID  string               `json:"canonical_id"`
+	CanonicalURL string               `json:"canonical_url"`
+	Aliases      []adminDocumentAlias `json:"aliases"`
 }
 
 type adminAliasGroupsResponse struct {
@@ -1952,10 +1961,12 @@ type adminAliasGroupsResponse struct {
 }
 
 // handleAdminContentDedupAliasGroups lists every canonical document that
-// has at least one alias URL merged/folded into it -- the "what actually
-// got merged" transparency listing a black-box merge count can't provide,
-// letting an admin verify a dedup pass did what they expect before trusting
-// it further.
+// has at least one alias of it, from any reason -- ordinary canonical_tag
+// bookkeeping recorded during crawling as well as an actual content-dedup
+// merge (see each entry's own reason) -- the "what's actually aliased"
+// transparency listing a black-box merge count can't provide, letting an
+// admin verify a dedup pass did what they expect before trusting it
+// further.
 func (h *Handler) handleAdminContentDedupAliasGroups(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "content dedup") {
 		return
@@ -1969,7 +1980,11 @@ func (h *Handler) handleAdminContentDedupAliasGroups(w http.ResponseWriter, r *h
 	}
 	out := make([]adminDocumentAliasGroup, len(groups))
 	for i, g := range groups {
-		out[i] = adminDocumentAliasGroup{CanonicalID: g.CanonicalID, CanonicalURL: g.CanonicalURL, AliasURLs: g.AliasURLs}
+		aliases := make([]adminDocumentAlias, len(g.Aliases))
+		for j, a := range g.Aliases {
+			aliases[j] = adminDocumentAlias{URL: a.URL, Reason: a.Reason}
+		}
+		out[i] = adminDocumentAliasGroup{CanonicalID: g.CanonicalID, CanonicalURL: g.CanonicalURL, Aliases: aliases}
 	}
 	writeJSON(w, http.StatusOK, adminAliasGroupsResponse{Total: total, Groups: out})
 }
