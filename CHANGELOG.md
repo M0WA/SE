@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.15 - 2026-09-19
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Add docs/architecture.md and a CLAUDE.md rule to keep it in sync by @M0WA in https://github.com/M0WA/SE/pull/146
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.14...v4.13.15
+
+
 ## v4.13.14 - 2026-09-19
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
