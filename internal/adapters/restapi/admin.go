@@ -1636,6 +1636,10 @@ func (h *Handler) handleAdminRunScheduleNow(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	err := h.scheduledCrawls.RunScheduledCrawlNow(r.Context(), r.PathValue("id"), time.Now().UTC())
+	if errors.Is(err, ports.ErrScheduledCrawlInProgress) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, "scheduled crawl not found", map[string]bool{"ok": true})
 }
 

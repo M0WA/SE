@@ -2311,17 +2311,37 @@ func (r *Repository) MarkScheduledCrawlRun(ctx context.Context, id string, lastR
 	return requireRowsAffected(res, id)
 }
 
-// RunScheduledCrawlNow marks a schedule due immediately, discovered on
-// the ticker's next tick. Also force-clears in_progress: a crawl-server
-// restart mid-run loses the callback that would otherwise clear it, so
-// an explicit "Run now" click self-heals that stale state.
+// RunScheduledCrawlNow marks a schedule due immediately, discovered on the
+// ticker's next tick -- conditional on the schedule not already being
+// in_progress (see ports.ScheduledCrawlStore's doc comment for why forcing
+// this while a crawl is genuinely still running is unsafe). If the WHERE
+// clause matches nothing, a follow-up read distinguishes "doesn't exist"
+// from "exists but already running" so the caller gets the right error.
 func (r *Repository) RunScheduledCrawlNow(ctx context.Context, id string, now time.Time) error {
-	updateSQL := r.ph(`UPDATE scheduled_crawls SET next_run_at = %s, enabled = %s, in_progress = %s WHERE id = %s`, 1, 2, 3, 4)
-	res, err := r.db.ExecContext(ctx, updateSQL, now.UTC().Format(crawledAtLayout), true, false, id)
+	updateSQL := r.ph(`UPDATE scheduled_crawls SET next_run_at = %s, enabled = %s WHERE id = %s AND in_progress = %s`, 1, 2, 3, 4)
+	res, err := r.db.ExecContext(ctx, updateSQL, now.UTC().Format(crawledAtLayout), true, id, false)
 	if err != nil {
 		return fmt.Errorf("running scheduled crawl now (%s): %w", id, err)
 	}
-	return requireRowsAffected(res, id)
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking result for %s: %w", id, err)
+	}
+	if n > 0 {
+		return nil
+	}
+	existing, getErr := r.GetScheduledCrawl(ctx, id)
+	if getErr != nil {
+		return getErr
+	}
+	if existing.InProgress {
+		return ports.ErrScheduledCrawlInProgress
+	}
+	// Matched no rows despite existing and not being in_progress: a benign
+	// race against another concurrent write to this same row between the
+	// UPDATE and this re-check -- report not-found rather than silently
+	// succeeding on a stale read.
+	return ports.ErrScheduledCrawlNotFound
 }
 
 func (r *Repository) SetScheduledCrawlEnabled(ctx context.Context, id string, enabled bool) error {
