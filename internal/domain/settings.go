@@ -218,7 +218,7 @@ func defaultOperationalSettings() OperationalSettingsValues {
 		UserAgent:                        defaultUserAgent,
 		DefaultMaxPages:                  20000,
 		MinTextLength:                    50,
-		DefaultTopK:                      10,
+		DefaultTopK:                      5000,
 		SessionTTL:                       12 * time.Hour,
 		CrawlDelayMs:                     defaultCrawlDelayMs,
 		MaxResponseBytes:                 defaultMaxResponseBytes,
