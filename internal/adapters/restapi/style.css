@@ -4,6 +4,15 @@
 }
 
 :root {
+  /* Without this, a <select>'s own text/background follow --ink/--paper
+     (correct), but its native dropdown POPUP is chrome the browser
+     supplies, not this stylesheet -- with no color-scheme declared, the
+     browser assumes a light popup regardless of the page's own dark
+     palette, so dark-mode --ink (a near-white value) renders as
+     light-on-light in the open dropdown. Declaring both here lets the
+     browser pick native form-control chrome that actually matches
+     whichever palette prefers-color-scheme selected below. */
+  color-scheme: light dark;
   --paper: #edf0f1;
   --ink: #15202b;
   --ink-muted: #55636f;
@@ -41,8 +50,12 @@ body {
   min-height: 100vh;
 }
 
+/* min() rather than a fixed 640px: stays exactly as narrow as before once
+   the viewport itself is the binding constraint (phones, small windows),
+   but widens toward 820px as the viewport grows past ~930px, so a large
+   desktop window doesn't waste most of its width as side margin. */
 main {
-  max-width: 640px;
+  max-width: min(820px, 88vw);
   margin: 0 auto;
 }
 
@@ -103,6 +116,13 @@ form[hidden] { display: none; }
   outline: none;
   padding: 0.2rem 0;
 }
+
+/* #sort shares .field's dark-mode-aware colors/font, but not .field's
+   flex: 1 -- growing to share the row equally with #q left it far wider
+   than "Best match"/"Most recent" ever need, at the text input's expense.
+   flex: 0 1 auto sizes it to its content (shrinking if the row is tight)
+   instead. */
+#sort { flex: 0 1 auto; }
 
 /* A field's own caption -- a short name (e.g. "Alpha"), not the field's
    full explanation, which now lives behind its .hint icon (below) instead
@@ -533,17 +553,20 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
-/* Chat panel -- #chat-form comes FIRST inside it (see index.html), landing
-   in the exact same slot #search-form occupies in search mode, right after
-   .mode-row's own margin-bottom, with no margin of its own -- it inherits
-   the same flex/border-bottom treatment as #search-form for free (both are
-   plain <form> elements, and .field/button already carry their own
-   styling). #chat-status/#chat-messages then mirror #status/#results'
-   own top margins below it. Messages are told apart by alignment and a
-   quiet tint rather than rounded speech-bubble shapes, the same restrained
-   language .result already uses for its own rows. */
+/* Chat panel -- #chat-messages/#chat-status/#chat-form stay in that order
+   (input last, like a normal chat compose box: new answers grow the
+   conversation above it, not below), but neither carries a margin of its
+   own when empty -- with nothing rendered into #chat-messages yet and
+   #chat-status blank, only .mode-row's own margin-bottom and #chat-form's
+   margin-top below separate the toggle from the input, so a fresh
+   conversation starts with the input right where #search-form sits in
+   search mode; the panel only grows downward as messages/status actually
+   get content. #chat-form inherits the same flex/border-bottom treatment
+   as #search-form for free (both are plain <form> elements, and
+   .field/button already carry their own styling). Messages are told apart
+   by alignment and a quiet tint rather than rounded speech-bubble shapes,
+   the same restrained language .result already uses for its own rows. */
 #chat-messages {
-  margin-top: 0.5rem;
   max-height: 50vh;
   overflow-y: auto;
 }
@@ -573,7 +596,61 @@ button:focus-visible {
   font-size: 0.97rem;
   line-height: 1.6;
   color: var(--ink);
-  white-space: pre-wrap;
+}
+
+/* renderMarkdown (index.js) builds this structure from the model's answer
+   -- plain paragraph/list/heading text inherits .chat-msg-bubble's own
+   size/line-height above, so only the elements that need their own
+   treatment (spacing, monospace, the link color) are set here. */
+.chat-msg-assistant .chat-msg-bubble > :first-child { margin-top: 0; }
+.chat-msg-assistant .chat-msg-bubble > :last-child { margin-bottom: 0; }
+
+.chat-msg-assistant .chat-msg-bubble p { margin: 0.6rem 0; }
+
+.chat-msg-assistant .chat-msg-bubble ul,
+.chat-msg-assistant .chat-msg-bubble ol {
+  margin: 0.6rem 0;
+  padding-left: 1.4rem;
+}
+
+.chat-msg-assistant .chat-msg-bubble li { margin: 0.25rem 0; }
+
+.chat-msg-assistant .chat-msg-bubble h3,
+.chat-msg-assistant .chat-msg-bubble h4,
+.chat-msg-assistant .chat-msg-bubble h5,
+.chat-msg-assistant .chat-msg-bubble h6 {
+  margin: 0.9rem 0 0.4rem;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.chat-msg-assistant .chat-msg-bubble code {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 0.85em;
+  background: var(--accent-soft);
+  border-radius: 2px;
+  padding: 0.1em 0.3em;
+}
+
+.chat-msg-assistant .chat-msg-bubble pre {
+  margin: 0.6rem 0;
+  padding: 0.7rem 0.85rem;
+  background: var(--accent-soft);
+  border-radius: 3px;
+  overflow-x: auto;
+}
+
+.chat-msg-assistant .chat-msg-bubble pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.chat-msg-assistant .chat-msg-bubble a {
+  color: var(--accent);
+  text-decoration-color: var(--rule-strong);
 }
 
 .chat-sources {
@@ -614,6 +691,8 @@ button:focus-visible {
   font-size: 0.95rem;
   min-height: 1.2em;
 }
+
+#chat-form { margin-top: 0.6rem; }
 
 .footer-link {
   margin-top: 3.5rem;
