@@ -5453,11 +5453,13 @@ func TestHandleAdminChatEndpoint_PatchSystemPromptRoundTrips(t *testing.T) {
 // chatHookResp mirrors admin.go's unexported chatHookResponse wire shape,
 // for decoding test responses.
 type chatHookResp struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Pattern string `json:"pattern"`
-	Script  string `json:"script"`
-	Enabled bool   `json:"enabled"`
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	Pattern          string `json:"pattern"`
+	Script           string `json:"script"`
+	Enabled          bool   `json:"enabled"`
+	Prompt           string `json:"prompt"`
+	GatedByWebSearch bool   `json:"gated_by_web_search"`
 }
 
 func adminAuthedHandlerWithChatHooks(t *testing.T, store ports.ChatHookStore) (*restapi.Handler, *http.Cookie) {
@@ -5569,6 +5571,7 @@ func TestHandleAdminChatHooks_CreateThenList(t *testing.T) {
 
 	code, created := createTestChatHook(t, h, cookie, map[string]interface{}{
 		"name": "Web Search", "pattern": `SEARCH\((.+)\)`, "script": "search.sh", "enabled": true,
+		"prompt": "To search the web, output SEARCH(query).", "gated_by_web_search": true,
 	})
 	if code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d", code)
@@ -5578,6 +5581,9 @@ func TestHandleAdminChatHooks_CreateThenList(t *testing.T) {
 	}
 	if created.Pattern != `SEARCH\((.+)\)` || created.Script != "search.sh" || !created.Enabled {
 		t.Errorf("expected every field round tripped in the create response, got %+v", created)
+	}
+	if created.Prompt != "To search the web, output SEARCH(query)." || !created.GatedByWebSearch {
+		t.Errorf("expected prompt and gated_by_web_search round tripped in the create response, got %+v", created)
 	}
 
 	listReq := httptest.NewRequest(http.MethodGet, "/admin/api/chat-hooks", nil)
@@ -5713,10 +5719,12 @@ func TestHandleAdminUpdateChatHook_ReplacesEditableFields(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
 	_, created := createTestChatHook(t, h, cookie, map[string]interface{}{
 		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh", "enabled": true,
+		"prompt": "original prompt", "gated_by_web_search": true,
 	})
 
 	rec := patchChatHook(t, h, cookie, created.ID, map[string]interface{}{
 		"name": "renamed", "pattern": `B\((.+)\)`, "script": "b.sh", "enabled": false,
+		"prompt": "renamed prompt", "gated_by_web_search": false,
 	})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
@@ -5730,6 +5738,57 @@ func TestHandleAdminUpdateChatHook_ReplacesEditableFields(t *testing.T) {
 	}
 	if resp.Name != "renamed" || resp.Pattern != `B\((.+)\)` || resp.Script != "b.sh" || resp.Enabled {
 		t.Errorf("expected every editable field replaced, got %+v", resp)
+	}
+	if resp.Prompt != "renamed prompt" || resp.GatedByWebSearch {
+		t.Errorf("expected prompt and gated_by_web_search replaced, got %+v", resp)
+	}
+}
+
+// TestHandleAdminChatHooks_PromptAndGatedByWebSearchRoundTrip proves the new
+// prompt/gated_by_web_search fields flow through create, get, and update
+// unchanged -- backed by fakeChatHookStore (not the real sqlrepo-backed
+// newSettingsStoreTestRepo helper) so this test does not depend on the
+// sqlrepo chat_hooks migration for these two columns landing.
+func TestHandleAdminChatHooks_PromptAndGatedByWebSearchRoundTrip(t *testing.T) {
+	store := &fakeChatHookStore{}
+	h, cookie := adminAuthedHandlerWithChatHooks(t, store)
+
+	code, created := createTestChatHook(t, h, cookie, map[string]interface{}{
+		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+		"prompt": "hook prompt", "gated_by_web_search": true,
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", code)
+	}
+	if created.Prompt != "hook prompt" || !created.GatedByWebSearch {
+		t.Errorf("expected prompt and gated_by_web_search in the create response, got %+v", created)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/chat-hooks/"+created.ID, nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(getRec, getReq)
+	var got chatHookResp
+	if err := json.Unmarshal(getRec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding get response: %v", err)
+	}
+	if got.Prompt != "hook prompt" || !got.GatedByWebSearch {
+		t.Errorf("expected prompt and gated_by_web_search in the get response, got %+v", got)
+	}
+
+	rec := patchChatHook(t, h, cookie, created.ID, map[string]interface{}{
+		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+		"prompt": "updated prompt", "gated_by_web_search": false,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var updated chatHookResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("decoding update response: %v", err)
+	}
+	if updated.Prompt != "updated prompt" || updated.GatedByWebSearch {
+		t.Errorf("expected prompt and gated_by_web_search replaced by PATCH, got %+v", updated)
 	}
 }
 

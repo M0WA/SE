@@ -18,7 +18,7 @@ func TestNew(t *testing.T) {
 
 func TestRunHookScript_HappyPath(t *testing.T) {
 	r := New(testdataDir)
-	out, err := r.RunHookScript(context.Background(), "echo_args.sh", []string{"hello", "world; rm -rf /"})
+	out, err := r.RunHookScript(context.Background(), "echo_args.sh", []string{"hello", "world; rm -rf /"}, nil)
 	if err != nil {
 		t.Fatalf("RunHookScript: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestRunHookScript_ArgsPassedVerbatimNeverShellInterpreted(t *testing.T) {
 	// shell syntax (e.g. command substitution, redirection, chaining).
 	r := New(testdataDir)
 	dangerous := "$(echo pwned) && echo pwned2 | cat /etc/passwd `id`"
-	out, err := r.RunHookScript(context.Background(), "echo_args.sh", []string{dangerous})
+	out, err := r.RunHookScript(context.Background(), "echo_args.sh", []string{dangerous}, nil)
 	if err != nil {
 		t.Fatalf("RunHookScript: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestRunHookScript_ArgsPassedVerbatimNeverShellInterpreted(t *testing.T) {
 
 func TestRunHookScript_EmptyScriptName(t *testing.T) {
 	r := New(testdataDir)
-	if _, err := r.RunHookScript(context.Background(), "", nil); err == nil {
+	if _, err := r.RunHookScript(context.Background(), "", nil, nil); err == nil {
 		t.Fatal("expected error for empty script name, got nil")
 	}
 }
@@ -62,7 +62,7 @@ func TestRunHookScript_PathTraversalRejected(t *testing.T) {
 	}
 	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := r.RunHookScript(context.Background(), name, nil); err == nil {
+			if _, err := r.RunHookScript(context.Background(), name, nil, nil); err == nil {
 				t.Fatalf("expected error for script name %q, got nil", name)
 			}
 		})
@@ -71,14 +71,14 @@ func TestRunHookScript_PathTraversalRejected(t *testing.T) {
 
 func TestRunHookScript_NonexistentScript(t *testing.T) {
 	r := New(testdataDir)
-	if _, err := r.RunHookScript(context.Background(), "does_not_exist.sh", nil); err == nil {
+	if _, err := r.RunHookScript(context.Background(), "does_not_exist.sh", nil, nil); err == nil {
 		t.Fatal("expected error for nonexistent script, got nil")
 	}
 }
 
 func TestRunHookScript_NonZeroExit(t *testing.T) {
 	r := New(testdataDir)
-	_, err := r.RunHookScript(context.Background(), "fail.sh", nil)
+	_, err := r.RunHookScript(context.Background(), "fail.sh", nil, nil)
 	if err == nil {
 		t.Fatal("expected error for non-zero exit, got nil")
 	}
@@ -89,7 +89,7 @@ func TestRunHookScript_NonZeroExit(t *testing.T) {
 
 func TestRunHookScript_NonZeroExitLongStderrTruncated(t *testing.T) {
 	r := New(testdataDir)
-	_, err := r.RunHookScript(context.Background(), "fail_long_stderr.sh", nil)
+	_, err := r.RunHookScript(context.Background(), "fail_long_stderr.sh", nil, nil)
 	if err == nil {
 		t.Fatal("expected error for non-zero exit, got nil")
 	}
@@ -104,7 +104,7 @@ func TestRunHookScript_NonZeroExitLongStderrTruncated(t *testing.T) {
 func TestRunHookScript_Timeout(t *testing.T) {
 	r := &Runner{Dir: testdataDir, Timeout: 50 * time.Millisecond}
 	start := time.Now()
-	_, err := r.RunHookScript(context.Background(), "sleep.sh", nil)
+	_, err := r.RunHookScript(context.Background(), "sleep.sh", nil, nil)
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
@@ -125,7 +125,7 @@ func TestRunHookScript_CallerDeadlineShorterThanRunnerTimeout(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	_, err := r.RunHookScript(ctx, "sleep.sh", nil)
+	_, err := r.RunHookScript(ctx, "sleep.sh", nil, nil)
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
@@ -137,7 +137,7 @@ func TestRunHookScript_CallerDeadlineShorterThanRunnerTimeout(t *testing.T) {
 
 func TestRunHookScript_StdoutTruncation(t *testing.T) {
 	r := New(testdataDir)
-	out, err := r.RunHookScript(context.Background(), "big_output.sh", nil)
+	out, err := r.RunHookScript(context.Background(), "big_output.sh", nil, nil)
 	if err != nil {
 		t.Fatalf("RunHookScript: %v", err)
 	}
@@ -149,5 +149,47 @@ func TestRunHookScript_StdoutTruncation(t *testing.T) {
 	}
 	if !strings.HasPrefix(out, strings.Repeat("a", maxStdout)) {
 		t.Fatal("output's first maxStdout bytes should be untouched original content")
+	}
+}
+
+// TestRunHookScript_EnvReachesChildProcess proves a passed env entry
+// actually reaches the child process (not just accepted and ignored).
+func TestRunHookScript_EnvReachesChildProcess(t *testing.T) {
+	r := New(testdataDir)
+	out, err := r.RunHookScript(context.Background(), "echo_env.sh", []string{"WEB_SEARCH_BASE_URL"}, map[string]string{"WEB_SEARCH_BASE_URL": "http://searxng.example:8888"})
+	if err != nil {
+		t.Fatalf("RunHookScript: %v", err)
+	}
+	want := "http://searxng.example:8888\n"
+	if out != want {
+		t.Fatalf("output = %q, want %q", out, want)
+	}
+}
+
+// TestRunHookScript_NilEnv_BehavesExactlyAsBefore proves passing a nil env
+// map is equivalent to omitting env entirely -- the variable named is
+// simply absent from the child's environment, and nothing else about
+// execution changes.
+func TestRunHookScript_NilEnv_BehavesExactlyAsBefore(t *testing.T) {
+	r := New(testdataDir)
+	out, err := r.RunHookScript(context.Background(), "echo_env.sh", []string{"WEB_SEARCH_BASE_URL"}, nil)
+	if err != nil {
+		t.Fatalf("RunHookScript: %v", err)
+	}
+	if out != "\n" {
+		t.Fatalf("output = %q, want just a newline (variable unset)", out)
+	}
+}
+
+// TestRunHookScript_EmptyEnv_BehavesExactlyAsBefore proves an empty
+// (non-nil) env map behaves the same as a nil one.
+func TestRunHookScript_EmptyEnv_BehavesExactlyAsBefore(t *testing.T) {
+	r := New(testdataDir)
+	out, err := r.RunHookScript(context.Background(), "echo_args.sh", []string{"hi"}, map[string]string{})
+	if err != nil {
+		t.Fatalf("RunHookScript: %v", err)
+	}
+	if out != "hi\n" {
+		t.Fatalf("output = %q, want %q", out, "hi\n")
 	}
 }

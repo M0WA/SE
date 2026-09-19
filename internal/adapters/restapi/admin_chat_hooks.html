@@ -46,11 +46,25 @@
         </div>
         <input id="hook-script" class="field" type="text" required placeholder="e.g. web_search.sh">
       </div>
+      <div class="form-row">
+        <div class="label-row">
+          <label for="hook-prompt">Prompt</label>
+          <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">This hook's own static instructions, injected as a separate system message only while the hook is active (see "Gated by web search" below) -- in addition to the endpoint's own persistent system prompt (Settings -> Chat), not instead of it.</span></span>
+        </div>
+        <textarea id="hook-prompt" class="field" rows="4"></textarea>
+      </div>
       <div class="form-row form-row-check">
         <label for="hook-enabled">
           <input id="hook-enabled" type="checkbox">
           Enabled
         </label>
+      </div>
+      <div class="form-row form-row-check">
+        <label for="hook-gated-by-web-search">
+          <input id="hook-gated-by-web-search" type="checkbox">
+          Gated by web search
+        </label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When checked, this hook (and its Prompt) is only active when the chat's Web toggle is on -- the same Search the web setting (Settings -> Chat) or its per-question override, not a separate control. When unchecked, this hook is active whenever Enabled is checked, regardless of the Web toggle.</span></span>
       </div>
       <div class="form-row">
         <button id="hook-save-btn" type="submit">Save</button>

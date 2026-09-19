@@ -156,7 +156,8 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 		// does.
 		`CREATE TABLE IF NOT EXISTS chat_hooks (
 			id TEXT PRIMARY KEY, name TEXT NOT NULL, pattern TEXT NOT NULL,
-			script TEXT NOT NULL, enabled BOOLEAN NOT NULL DEFAULT true
+			script TEXT NOT NULL, enabled BOOLEAN NOT NULL DEFAULT true,
+			prompt TEXT NOT NULL DEFAULT '', gated_by_web_search BOOLEAN NOT NULL DEFAULT false
 		)`,
 		// content_dedup_lock is a single sentinel row (id = 1) whose
 		// in_progress flag TryAcquireContentDedupLock/ReleaseContentDedupLock
@@ -318,7 +319,8 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 		// See the sqlite dialect's chat_hooks comment.
 		`CREATE TABLE IF NOT EXISTS chat_hooks (
 			id VARCHAR(20) PRIMARY KEY, name VARCHAR(255) NOT NULL, pattern TEXT NOT NULL,
-			script VARCHAR(255) NOT NULL, enabled BOOLEAN NOT NULL DEFAULT true
+			script VARCHAR(255) NOT NULL, enabled BOOLEAN NOT NULL DEFAULT true,
+			prompt TEXT NOT NULL, gated_by_web_search BOOLEAN NOT NULL DEFAULT false
 		) ENGINE=InnoDB`,
 		// See the sqlite dialect's content_dedup_lock comment.
 		`CREATE TABLE IF NOT EXISTS content_dedup_lock (
@@ -475,7 +477,8 @@ func (postgresDialect) CreateSchemaSQL() []string {
 		// See the sqlite dialect's chat_hooks comment.
 		`CREATE TABLE IF NOT EXISTS chat_hooks (
 			id TEXT PRIMARY KEY, name TEXT NOT NULL, pattern TEXT NOT NULL,
-			script TEXT NOT NULL, enabled BOOLEAN NOT NULL DEFAULT true
+			script TEXT NOT NULL, enabled BOOLEAN NOT NULL DEFAULT true,
+			prompt TEXT NOT NULL DEFAULT '', gated_by_web_search BOOLEAN NOT NULL DEFAULT false
 		)`,
 		// See the sqlite dialect's content_dedup_lock comment.
 		`CREATE TABLE IF NOT EXISTS content_dedup_lock (

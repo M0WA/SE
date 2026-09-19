@@ -2125,6 +2125,25 @@ components:
         enabled:
           type: boolean
           description: Whether this hook is checked against POST /chat's answers at all.
+        prompt:
+          type: string
+          description: >-
+            This hook's own static system-prompt text. When non-empty and
+            this hook is active for a turn (enabled, and -- if
+            gated_by_web_search is true -- the turn's effective web-search
+            toggle is also on), it is injected as its own leading system
+            message, after the endpoint's persistent system_prompt and
+            before any RAG/web-search context message. Empty means no
+            hook-specific message is added even when the hook is active.
+        gated_by_web_search:
+          type: boolean
+          description: >-
+            When true, ties this hook's activation (and its prompt
+            injection) to the same effective web-search toggle that gates
+            the deterministic RAG-style web-search context injection
+            (the endpoint's web_search_enabled, overridable per-question by
+            ChatOptions.web_search). false (the default) means this hook is
+            active whenever enabled is true, unaffected by that toggle.
 
     ChatHookRequest:
       description: >-

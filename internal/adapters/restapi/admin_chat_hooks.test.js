@@ -13,7 +13,9 @@ function baseHook(overrides) {
     name: 'web_search',
     pattern: '\\[\\[search:(.+?)\\]\\]',
     script: 'web_search.sh',
+    prompt: 'Use the [[search:query]] syntax to search the web.',
     enabled: true,
+    gated_by_web_search: false,
   }, overrides);
 }
 
@@ -74,11 +76,13 @@ test('clicking "Add hook" opens a blank form', async () => {
   assert.equal(document.getElementById('hook-form-panel').hidden, false);
   assert.equal(document.getElementById('hook-form-title').textContent, 'Add hook');
   assert.equal(document.getElementById('hook-name').value, '');
+  assert.equal(document.getElementById('hook-prompt').value, '');
   assert.equal(document.getElementById('hook-enabled').checked, true);
+  assert.equal(document.getElementById('hook-gated-by-web-search').checked, false);
 });
 
 test('clicking Edit opens the form pre-filled with that hook\'s fields', async () => {
-  loadFixture(async () => ({ ok: true, json: async () => [baseHook()] }));
+  loadFixture(async () => ({ ok: true, json: async () => [baseHook({ gated_by_web_search: true })] }));
   await flush();
   document.querySelector('#hooks-table button.text-button').dispatchEvent(new window.Event('click'));
   assert.equal(document.getElementById('hook-form-panel').hidden, false);
@@ -86,7 +90,17 @@ test('clicking Edit opens the form pre-filled with that hook\'s fields', async (
   assert.equal(document.getElementById('hook-name').value, 'web_search');
   assert.equal(document.getElementById('hook-pattern').value, '\\[\\[search:(.+?)\\]\\]');
   assert.equal(document.getElementById('hook-script').value, 'web_search.sh');
+  assert.equal(document.getElementById('hook-prompt').value, 'Use the [[search:query]] syntax to search the web.');
   assert.equal(document.getElementById('hook-enabled').checked, true);
+  assert.equal(document.getElementById('hook-gated-by-web-search').checked, true);
+});
+
+test('clicking Edit on a hook with no prompt leaves the prompt field blank', async () => {
+  loadFixture(async () => ({ ok: true, json: async () => [baseHook({ prompt: '' })] }));
+  await flush();
+  document.querySelector('#hooks-table button.text-button').dispatchEvent(new window.Event('click'));
+  assert.equal(document.getElementById('hook-prompt').value, '');
+  assert.equal(document.getElementById('hook-gated-by-web-search').checked, false);
 });
 
 test('clicking Cancel hides the form', async () => {
@@ -106,7 +120,9 @@ test('submitting the form with no hook being edited POSTs a new hook, then reloa
   document.getElementById('hook-name').value = 'new_hook';
   document.getElementById('hook-pattern').value = '\\[\\[new:(.+?)\\]\\]';
   document.getElementById('hook-script').value = 'new_hook.sh';
+  document.getElementById('hook-prompt').value = 'Use [[new:query]] to invoke this hook.';
   document.getElementById('hook-enabled').checked = true;
+  document.getElementById('hook-gated-by-web-search').checked = true;
 
   let gotURL, gotOpts;
   global.fetch = async (url, opts) => {
@@ -125,7 +141,9 @@ test('submitting the form with no hook being edited POSTs a new hook, then reloa
   assert.equal(body.name, 'new_hook');
   assert.equal(body.pattern, '\\[\\[new:(.+?)\\]\\]');
   assert.equal(body.script, 'new_hook.sh');
+  assert.equal(body.prompt, 'Use [[new:query]] to invoke this hook.');
   assert.equal(body.enabled, true);
+  assert.equal(body.gated_by_web_search, true);
   assert.equal(document.getElementById('hook-form-panel').hidden, true);
 });
 
@@ -134,15 +152,17 @@ test('submitting the form while editing PATCHes that hook\'s id, then reloads th
   await flush();
   document.querySelector('#hooks-table button.text-button').dispatchEvent(new window.Event('click'));
   document.getElementById('hook-enabled').checked = false;
+  document.getElementById('hook-prompt').value = 'Updated prompt text.';
+  document.getElementById('hook-gated-by-web-search').checked = true;
 
   let gotURL, gotOpts;
   global.fetch = async (url, opts) => {
     if (opts && opts.method === 'PATCH') {
       gotURL = url;
       gotOpts = opts;
-      return { ok: true, json: async () => baseHook({ enabled: false }) };
+      return { ok: true, json: async () => baseHook({ enabled: false, prompt: 'Updated prompt text.', gated_by_web_search: true }) };
     }
-    return { ok: true, json: async () => [baseHook({ enabled: false })] };
+    return { ok: true, json: async () => [baseHook({ enabled: false, prompt: 'Updated prompt text.', gated_by_web_search: true })] };
   };
   document.getElementById('hook-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
   await flush();
@@ -150,7 +170,32 @@ test('submitting the form while editing PATCHes that hook\'s id, then reloads th
   assert.equal(gotURL, '/admin/api/chat-hooks/web_search');
   const body = JSON.parse(gotOpts.body);
   assert.equal(body.enabled, false);
+  assert.equal(body.prompt, 'Updated prompt text.');
+  assert.equal(body.gated_by_web_search, true);
   assert.equal(document.getElementById('hook-form-panel').hidden, true);
+});
+
+test('editing a hook again after a PATCH round-trips the updated prompt and gated flag', async () => {
+  let hooks = [baseHook()];
+  loadFixture(async () => ({ ok: true, json: async () => hooks }));
+  await flush();
+  document.querySelector('#hooks-table button.text-button').dispatchEvent(new window.Event('click'));
+  document.getElementById('hook-prompt').value = 'Second version of the prompt.';
+  document.getElementById('hook-gated-by-web-search').checked = true;
+
+  global.fetch = async (url, opts) => {
+    if (opts && opts.method === 'PATCH') {
+      hooks = [baseHook({ prompt: 'Second version of the prompt.', gated_by_web_search: true })];
+      return { ok: true, json: async () => hooks[0] };
+    }
+    return { ok: true, json: async () => hooks };
+  };
+  document.getElementById('hook-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
+  await flush();
+
+  document.querySelector('#hooks-table button.text-button').dispatchEvent(new window.Event('click'));
+  assert.equal(document.getElementById('hook-prompt').value, 'Second version of the prompt.');
+  assert.equal(document.getElementById('hook-gated-by-web-search').checked, true);
 });
 
 test('a failed save shows an error message and re-enables the button, without closing the form', async () => {

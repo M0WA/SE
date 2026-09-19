@@ -61,6 +61,14 @@ from `../searxng/` (`GET /search?q=...&format=json` over loopback -- see
 `../searxng/README.md` for how that instance is set up and why
 `search.formats` must include `json`). Requires `curl`.
 
+Reads its SearXNG base URL from the WEB_SEARCH_BASE_URL environment
+variable rather than a hardcoded address -- ChatService.Chat sets this from
+the SAME admin-configured endpoint setting the deterministic web-search
+context injection already uses (domain.ChatEndpoint.WebSearchBaseURL,
+Settings -> Chat), so the two never drift out of sync. Falls back to
+127.0.0.1:8888 if the variable is somehow unset (e.g. the script invoked
+standalone rather than through a real chat turn).
+
 ## web_fetch.sh
 
 `web_search.sh`'s equivalent for a specific URL instead of a search query --

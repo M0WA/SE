@@ -953,3 +953,283 @@ func TestChatService_HooksListError_Swallowed(t *testing.T) {
 		t.Fatalf("expected no hook results when ListChatHooks errors, got %v", result.HookResults)
 	}
 }
+
+// TestChatService_GatedHook_InactiveWhenWebSearchOff proves a
+// GatedByWebSearch hook contributes neither its Prompt nor an execution
+// when the effective web-search toggle is off -- even though its pattern
+// matches the answer and Enabled is true.
+func TestChatService_GatedHook_InactiveWhenWebSearchOff(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchEnabled: false}}
+	completer := &fakeChatCompleter{answer: "SEARCH[golang release notes]"}
+	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: "You can search the web.", GatedByWebSearch: true},
+	}}
+	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_search.sh": "top result"}}
+	svc := NewChatService(endpoints, completer, &fakeSearchService{}, &fakeWebSearcher{}, hooks, runner)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	result, err := svc.Chat(context.Background(), history, ChatOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, m := range completer.calledWith {
+		if m.Role == domain.ChatRoleSystem && strings.Contains(m.Content, "You can search the web.") {
+			t.Fatalf("expected the gated hook's Prompt not injected when web search is off, got %v", completer.calledWith)
+		}
+	}
+	if len(result.HookResults) != 0 || len(runner.calls) != 0 {
+		t.Fatalf("expected the gated hook not to run when web search is off, got results=%v calls=%v", result.HookResults, runner.calls)
+	}
+}
+
+// TestChatService_GatedHook_ActiveWhenWebSearchOn proves the same hook as
+// above IS active -- Prompt injected and it runs normally -- once the
+// effective web-search toggle (endpoint default here) is on.
+func TestChatService_GatedHook_ActiveWhenWebSearchOn(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchEnabled: true}}
+	completer := &fakeChatCompleter{answer: "SEARCH[golang release notes]"}
+	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: "You can search the web.", GatedByWebSearch: true},
+	}}
+	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_search.sh": "top result"}}
+	svc := NewChatService(endpoints, completer, &fakeSearchService{}, &fakeWebSearcher{}, hooks, runner)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	result, err := svc.Chat(context.Background(), history, ChatOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	found := false
+	for _, m := range completer.calledWith {
+		if m.Role == domain.ChatRoleSystem && m.Content == "You can search the web." {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected the gated hook's Prompt injected as its own system message when web search is on, got %v", completer.calledWith)
+	}
+	if len(result.HookResults) != 1 || result.HookResults[0].Output != "top result" {
+		t.Fatalf("expected the gated hook to run when web search is on, got %v", result.HookResults)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected exactly 1 script call, got %d", len(runner.calls))
+	}
+}
+
+// TestChatService_GatedHook_PerQuestionOverrideActivates proves the
+// per-question ChatOptions.WebSearch override (not just the endpoint
+// default) is what actually governs gating.
+func TestChatService_GatedHook_PerQuestionOverrideActivates(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchEnabled: false}}
+	completer := &fakeChatCompleter{answer: "SEARCH[golang release notes]"}
+	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: "You can search the web.", GatedByWebSearch: true},
+	}}
+	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_search.sh": "top result"}}
+	svc := NewChatService(endpoints, completer, &fakeSearchService{}, &fakeWebSearcher{}, hooks, runner)
+
+	on := true
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	result, err := svc.Chat(context.Background(), history, ChatOptions{WebSearch: &on})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.HookResults) != 1 {
+		t.Fatalf("expected the gated hook active via the per-question override, got %v", result.HookResults)
+	}
+}
+
+// TestChatService_UngatedHook_ActiveRegardlessOfWebSearch proves a
+// GatedByWebSearch=false hook's Prompt is injected and it runs regardless
+// of the web-search toggle's value -- today's existing behavior,
+// unaffected by adding gating for other hooks.
+func TestChatService_UngatedHook_ActiveRegardlessOfWebSearch(t *testing.T) {
+	for _, webSearchEnabled := range []bool{false, true} {
+		endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchEnabled: webSearchEnabled}}
+		completer := &fakeChatCompleter{answer: "SEARCH[golang release notes]"}
+		hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+			{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: "You can search the web.", GatedByWebSearch: false},
+		}}
+		runner := &fakeHookScriptRunner{outputs: map[string]string{"web_search.sh": "top result"}}
+		svc := NewChatService(endpoints, completer, &fakeSearchService{}, &fakeWebSearcher{}, hooks, runner)
+
+		history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+		result, err := svc.Chat(context.Background(), history, ChatOptions{})
+		if err != nil {
+			t.Fatalf("unexpected error (webSearchEnabled=%v): %v", webSearchEnabled, err)
+		}
+		found := false
+		for _, m := range completer.calledWith {
+			if m.Role == domain.ChatRoleSystem && m.Content == "You can search the web." {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected the ungated hook's Prompt injected regardless of webSearchEnabled=%v, got %v", webSearchEnabled, completer.calledWith)
+		}
+		if len(result.HookResults) != 1 {
+			t.Fatalf("expected the ungated hook to run regardless of webSearchEnabled=%v, got %v", webSearchEnabled, result.HookResults)
+		}
+	}
+}
+
+// TestChatService_TwoActiveHooksWithPrompts_TwoSeparateLeadingSystemMessages
+// proves two active hooks, each with a non-empty Prompt, produce two
+// separate leading system messages (not concatenated into one), in list
+// order, both after endpoint.SystemPrompt and before any RAG/web-search
+// context message.
+func TestChatService_TwoActiveHooksWithPrompts_TwoSeparateLeadingSystemMessages(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{
+		Enabled: true, SystemPrompt: "You are a pirate.",
+		RAGEnabled: true, RAGResultCount: 5,
+	}}
+	completer := &fakeChatCompleter{answer: "answer"}
+	search := &fakeSearchService{results: []domain.SearchResult{{URL: "http://a", Title: "A", Snippet: "snip"}}}
+	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+		{ID: "1", Name: "first", Pattern: `A\((.+?)\)`, Script: "a.sh", Enabled: true, Prompt: "First hook prompt."},
+		{ID: "2", Name: "second", Pattern: `B\((.+?)\)`, Script: "b.sh", Enabled: true, Prompt: "Second hook prompt."},
+	}}
+	svc := NewChatService(endpoints, completer, search, &fakeWebSearcher{}, hooks, &fakeHookScriptRunner{})
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(completer.calledWith) != 5 {
+		t.Fatalf("expected endpoint prompt + 2 hook prompts + RAG context + 1 history message, got %d: %v", len(completer.calledWith), completer.calledWith)
+	}
+	if completer.calledWith[0].Role != domain.ChatRoleSystem || completer.calledWith[0].Content != "You are a pirate." {
+		t.Fatalf("expected the endpoint's own SystemPrompt first, got %+v", completer.calledWith[0])
+	}
+	if completer.calledWith[1].Role != domain.ChatRoleSystem || completer.calledWith[1].Content != "First hook prompt." {
+		t.Fatalf("expected the first hook's own separate system message second, got %+v", completer.calledWith[1])
+	}
+	if completer.calledWith[2].Role != domain.ChatRoleSystem || completer.calledWith[2].Content != "Second hook prompt." {
+		t.Fatalf("expected the second hook's own separate system message third, got %+v", completer.calledWith[2])
+	}
+	if completer.calledWith[3].Role != domain.ChatRoleSystem || !strings.Contains(completer.calledWith[3].Content, "http://a") {
+		t.Fatalf("expected the RAG context message fourth, got %+v", completer.calledWith[3])
+	}
+	if completer.calledWith[4] != history[0] {
+		t.Fatalf("expected original history preserved last, got %v", completer.calledWith[4])
+	}
+}
+
+// TestChatService_EndpointSystemPrompt_InjectedWhenHooksInactiveOrNil is a
+// regression check proving the endpoint's own SystemPrompt injection never
+// depends on hook state -- neither when every hook is inactive (gated hook,
+// web search off) nor when s.hooks is nil.
+func TestChatService_EndpointSystemPrompt_InjectedWhenHooksInactiveOrNil(t *testing.T) {
+	t.Run("hooks all inactive", func(t *testing.T) {
+		endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, SystemPrompt: "You are a pirate.", WebSearchEnabled: false}}
+		completer := &fakeChatCompleter{answer: "answer"}
+		hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+			{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: "hook prompt", GatedByWebSearch: true},
+		}}
+		svc := NewChatService(endpoints, completer, &fakeSearchService{}, &fakeWebSearcher{}, hooks, &fakeHookScriptRunner{})
+
+		history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+		if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(completer.calledWith) != 2 || completer.calledWith[0].Content != "You are a pirate." {
+			t.Fatalf("expected the endpoint's SystemPrompt still injected with every hook inactive, got %v", completer.calledWith)
+		}
+	})
+
+	t.Run("hooks nil", func(t *testing.T) {
+		endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, SystemPrompt: "You are a pirate."}}
+		completer := &fakeChatCompleter{answer: "answer"}
+		svc := NewChatService(endpoints, completer, &fakeSearchService{}, &fakeWebSearcher{}, nil, nil)
+
+		history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+		if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(completer.calledWith) != 2 || completer.calledWith[0].Content != "You are a pirate." {
+			t.Fatalf("expected the endpoint's SystemPrompt still injected with s.hooks nil, got %v", completer.calledWith)
+		}
+	})
+}
+
+// TestChatService_ActiveHookWithEmptyPrompt_NoExtraSystemMessage proves an
+// empty Prompt contributes no extra system message even when its hook is
+// active (Enabled, ungated, matching answer) -- it still runs normally.
+func TestChatService_ActiveHookWithEmptyPrompt_NoExtraSystemMessage(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
+	completer := &fakeChatCompleter{answer: "SEARCH[golang release notes]"}
+	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: ""},
+	}}
+	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_search.sh": "top result"}}
+	svc := NewChatService(endpoints, completer, &fakeSearchService{}, &fakeWebSearcher{}, hooks, runner)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	result, err := svc.Chat(context.Background(), history, ChatOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// The hook matches and triggers a follow-up completion call, so
+	// completer.calledWith (the LAST call) is the follow-up's messages --
+	// check the FIRST call's messages instead for the leading-system-message
+	// assertion this test cares about.
+	firstCall := completer.allCalls[0]
+	if len(firstCall) != 1 || firstCall[0] != history[0] {
+		t.Fatalf("expected no extra system message for an empty-Prompt hook, got %v", firstCall)
+	}
+	if len(result.HookResults) != 1 {
+		t.Fatalf("expected the empty-Prompt hook to still run normally, got %v", result.HookResults)
+	}
+}
+
+// TestChatService_HookEnv_CarriesEndpointWebSearchBaseURL proves the env
+// map passed into a hook execution contains WEB_SEARCH_BASE_URL matching
+// endpoint.WebSearchBaseURL.
+func TestChatService_HookEnv_CarriesEndpointWebSearchBaseURL(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchBaseURL: "http://searxng.example:8888"}}
+	completer := &fakeChatCompleter{answer: "SEARCH[golang release notes]"}
+	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true},
+	}}
+	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_search.sh": "top result"}}
+	svc := NewChatService(endpoints, completer, &fakeSearchService{}, &fakeWebSearcher{}, hooks, runner)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected exactly 1 script call, got %d", len(runner.calls))
+	}
+	if got := runner.calls[0].env["WEB_SEARCH_BASE_URL"]; got != "http://searxng.example:8888" {
+		t.Fatalf("expected env[WEB_SEARCH_BASE_URL] = %q, got %q (env=%v)", "http://searxng.example:8888", got, runner.calls[0].env)
+	}
+}
+
+// TestTrimToBudget_ThreeLeadingSystemMessages_KeepsAllIntact extends the
+// two-message case above to three -- endpoint prompt + 2 hook prompts --
+// proving trimToBudget's generic "walk every leading system-role message"
+// logic keeps all of them, not just the first two.
+func TestTrimToBudget_ThreeLeadingSystemMessages_KeepsAllIntact(t *testing.T) {
+	messages := []domain.ChatMessage{
+		{Role: domain.ChatRoleSystem, Content: strings.Repeat("p", 15)}, // endpoint prompt, ~5 tokens
+		{Role: domain.ChatRoleSystem, Content: strings.Repeat("h", 15)}, // hook 1 prompt, ~5 tokens
+		{Role: domain.ChatRoleSystem, Content: strings.Repeat("i", 15)}, // hook 2 prompt, ~5 tokens
+		{Role: domain.ChatRoleUser, Content: strings.Repeat("old", 30)},
+		{Role: domain.ChatRoleAssistant, Content: strings.Repeat("old", 30)},
+		{Role: domain.ChatRoleUser, Content: "newest question"},
+	}
+	// Budget fits all three system messages (~15 tokens) plus the newest
+	// message (~5 tokens) but nothing else.
+	got := trimToBudget(messages, 20)
+
+	if len(got) != 4 {
+		t.Fatalf("expected all three system messages plus the newest message kept, got %d messages: %v", len(got), got)
+	}
+	if got[0] != messages[0] || got[1] != messages[1] || got[2] != messages[2] {
+		t.Fatalf("expected all three leading system messages preserved intact, got %v", got[:3])
+	}
+	if got[3].Content != "newest question" {
+		t.Fatalf("expected the newest message kept, got %v", got[3])
+	}
+}

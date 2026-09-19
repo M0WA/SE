@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -74,7 +75,20 @@ func New(dir string) *Runner {
 // (context.WithTimeout derives from ctx, so whichever deadline is sooner
 // wins). Stdout is capped at maxStdout bytes. A non-zero exit is returned
 // as an error carrying stderr's first maxStderrInError bytes.
-func (r *Runner) RunHookScript(ctx context.Context, scriptName string, args []string) (string, error) {
+//
+// env, when non-empty, is set as additional process environment variables
+// for the script (cmd.Env = append(os.Environ(), "KEY=value", ...) --
+// standard Go idiom, inherits the process's own environment plus these
+// additions -- never through a shell, so there is no risk of a value being
+// re-interpreted as shell syntax the way an interpolated command string
+// would be). These carry only ADMIN-CONFIGURED settings (e.g.
+// WEB_SEARCH_BASE_URL, sourced from domain.ChatEndpoint.WebSearchBaseURL by
+// ChatService.Chat) -- never data derived from the model's own output or a
+// hook pattern's capture group, which remain confined to args exactly as
+// before. Setting configuration via the normal OS process-environment
+// mechanism, rather than as an extra argv element, keeps args reserved
+// solely for the regex capture group per runChatHooks's security design.
+func (r *Runner) RunHookScript(ctx context.Context, scriptName string, args []string, env map[string]string) (string, error) {
 	if scriptName == "" {
 		return "", errors.New("hookrunner: script name must not be empty")
 	}
@@ -95,6 +109,12 @@ func (r *Runner) RunHookScript(ctx context.Context, scriptName string, args []st
 
 	cmd := exec.CommandContext(runCtx, resolved, args...)
 	cmd.WaitDelay = waitDelay
+	if len(env) > 0 {
+		cmd.Env = os.Environ()
+		for k, v := range env {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

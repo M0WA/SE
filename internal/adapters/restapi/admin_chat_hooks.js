@@ -7,7 +7,9 @@
   const nameEl = document.getElementById('hook-name');
   const patternEl = document.getElementById('hook-pattern');
   const scriptEl = document.getElementById('hook-script');
+  const promptEl = document.getElementById('hook-prompt');
   const enabledEl = document.getElementById('hook-enabled');
+  const gatedByWebSearchEl = document.getElementById('hook-gated-by-web-search');
   const saveBtn = document.getElementById('hook-save-btn');
   const cancelBtn = document.getElementById('hook-cancel-btn');
   const formStatusEl = document.getElementById('hook-form-status');
@@ -86,7 +88,9 @@
     nameEl.value = '';
     patternEl.value = '';
     scriptEl.value = '';
+    promptEl.value = '';
     enabledEl.checked = true;
+    gatedByWebSearchEl.checked = false;
     formStatusEl.textContent = '';
     formPanel.hidden = false;
   }
@@ -97,7 +101,9 @@
     nameEl.value = h.name;
     patternEl.value = h.pattern;
     scriptEl.value = h.script;
+    promptEl.value = h.prompt || '';
     enabledEl.checked = !!h.enabled;
+    gatedByWebSearchEl.checked = !!h.gated_by_web_search;
     formStatusEl.textContent = '';
     formPanel.hidden = false;
   }
@@ -112,7 +118,9 @@
       name: nameEl.value,
       pattern: patternEl.value,
       script: scriptEl.value,
+      prompt: promptEl.value,
       enabled: enabledEl.checked,
+      gated_by_web_search: gatedByWebSearchEl.checked,
     };
   }
 
