@@ -296,7 +296,7 @@ test('renderAdminNav includes a Chat group linking to the settings page\'s chat 
   const links = Array.from(chatGroup.querySelectorAll('a'));
   assert.equal(links.length, 1);
   assert.equal(links[0].textContent, 'Settings');
-  assert.equal(links[0].getAttribute('href'), '/admin/settings#chat-settings');
+  assert.equal(links[0].getAttribute('href'), '/admin/chat/settings');
 });
 
 test('renderAdminNav marks the entry matching the current path as current, and nothing else', () => {

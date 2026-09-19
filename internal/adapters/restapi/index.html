@@ -112,11 +112,14 @@
   <div id="chat-panel" hidden>
     <div id="chat-messages"></div>
     <div id="chat-status" class="chat-status"></div>
-    <form id="chat-form" autocomplete="off">
-      <input id="chat-input" class="field" name="message" type="text" placeholder="Ask about the index…">
-      <label class="chat-rag-toggle" for="chat-rag" title="Ground the answer in a search of the index, with sources cited">
-        <input id="chat-rag" type="checkbox" checked> Use search results
+    <div class="chat-options">
+      <label class="chat-rag-toggle" for="chat-rag">
+        <input id="chat-rag" type="checkbox" checked> RAG
       </label>
+      <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Ground the answer in a search of the index, with sources cited.</span></span>
+    </div>
+    <form id="chat-form" autocomplete="off">
+      <textarea id="chat-input" class="field" name="message" rows="2" placeholder="Ask about the index… (Enter to send, Shift+Enter for a new line)"></textarea>
       <button type="submit">Ask</button>
     </form>
   </div>

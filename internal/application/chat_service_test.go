@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"searchengine/internal/domain"
@@ -278,6 +279,121 @@ func TestChatService_RAGOverride_FalseOverridesEnabledEndpoint(t *testing.T) {
 	}
 	if len(result.Sources) != 0 {
 		t.Fatalf("expected no sources, got %v", result.Sources)
+	}
+}
+
+func TestChatService_MaxContextTokens_Zero_NoTrimming(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, MaxContextTokens: 0}}
+	completer := &fakeChatCompleter{answer: "answer"}
+	svc := NewChatService(endpoints, completer, &fakeSearchService{})
+
+	history := []domain.ChatMessage{
+		{Role: domain.ChatRoleUser, Content: strings.Repeat("x", 100)},
+		{Role: domain.ChatRoleAssistant, Content: strings.Repeat("y", 100)},
+		{Role: domain.ChatRoleUser, Content: strings.Repeat("z", 100)},
+	}
+	if _, err := svc.Chat(context.Background(), history, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(completer.calledWith) != len(history) {
+		t.Fatalf("expected no trimming with MaxContextTokens=0, got %d messages", len(completer.calledWith))
+	}
+}
+
+func TestChatService_MaxContextTokens_TrimsOldestMessages(t *testing.T) {
+	// Budget fits only the newest message (30 chars ~= 10 tokens) -- each
+	// older 90-char (~30-token) message would blow past 15.
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, MaxContextTokens: 15}}
+	completer := &fakeChatCompleter{answer: "answer"}
+	svc := NewChatService(endpoints, completer, &fakeSearchService{})
+
+	history := []domain.ChatMessage{
+		{Role: domain.ChatRoleUser, Content: strings.Repeat("a", 90)},
+		{Role: domain.ChatRoleAssistant, Content: strings.Repeat("b", 90)},
+		{Role: domain.ChatRoleUser, Content: strings.Repeat("c", 30)},
+	}
+	if _, err := svc.Chat(context.Background(), history, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(completer.calledWith) != 1 || completer.calledWith[0].Content != history[2].Content {
+		t.Fatalf("expected only the most recent message kept, got %v", completer.calledWith)
+	}
+}
+
+func TestChatService_MaxContextTokens_KeepsAsManyRecentMessagesAsFit(t *testing.T) {
+	// Budget fits the newest (10 tokens) plus the one before it (30 tokens)
+	// but not the oldest (another 30 tokens): 10+30=40 <= 40 < 70.
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, MaxContextTokens: 40}}
+	completer := &fakeChatCompleter{answer: "answer"}
+	svc := NewChatService(endpoints, completer, &fakeSearchService{})
+
+	history := []domain.ChatMessage{
+		{Role: domain.ChatRoleUser, Content: strings.Repeat("a", 90)},
+		{Role: domain.ChatRoleAssistant, Content: strings.Repeat("b", 90)},
+		{Role: domain.ChatRoleUser, Content: strings.Repeat("c", 30)},
+	}
+	if _, err := svc.Chat(context.Background(), history, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(completer.calledWith) != 2 || completer.calledWith[0] != history[1] || completer.calledWith[1] != history[2] {
+		t.Fatalf("expected the two newest messages kept, got %v", completer.calledWith)
+	}
+}
+
+func TestChatService_MaxContextTokens_AlwaysKeepsNewestMessageEvenIfOversized(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, MaxContextTokens: 1}}
+	completer := &fakeChatCompleter{answer: "answer"}
+	svc := NewChatService(endpoints, completer, &fakeSearchService{})
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: strings.Repeat("a", 300)}}
+	if _, err := svc.Chat(context.Background(), history, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(completer.calledWith) != 1 {
+		t.Fatalf("expected the single oversized message kept regardless of budget, got %v", completer.calledWith)
+	}
+}
+
+func TestChatService_MaxContextTokens_KeepsRAGSystemMessageIntact(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{
+		Enabled: true, RAGEnabled: true, RAGResultCount: 5, MaxContextTokens: 50,
+	}}
+	completer := &fakeChatCompleter{answer: "answer"}
+	search := &fakeSearchService{results: []domain.SearchResult{{URL: "http://a", Title: "A", Snippet: strings.Repeat("s", 60)}}}
+	svc := NewChatService(endpoints, completer, search)
+
+	history := []domain.ChatMessage{
+		{Role: domain.ChatRoleUser, Content: strings.Repeat("old", 30)},
+		{Role: domain.ChatRoleAssistant, Content: strings.Repeat("old", 30)},
+		{Role: domain.ChatRoleUser, Content: "newest question"},
+	}
+	if _, err := svc.Chat(context.Background(), history, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(completer.calledWith) < 2 {
+		t.Fatalf("expected at least the RAG system message plus the newest message, got %v", completer.calledWith)
+	}
+	if completer.calledWith[0].Role != domain.ChatRoleSystem {
+		t.Fatalf("expected the RAG system message to survive trimming as the first message, got role %q", completer.calledWith[0].Role)
+	}
+	last := completer.calledWith[len(completer.calledWith)-1]
+	if last.Content != "newest question" {
+		t.Fatalf("expected the newest message to survive trimming, got %v", last)
+	}
+}
+
+func TestEstimateTokens(t *testing.T) {
+	messages := []domain.ChatMessage{{Content: "abcdef"}, {Content: "abc"}}
+	if got, want := estimateTokens(messages), 3; got != want {
+		t.Fatalf("estimateTokens() = %d, want %d", got, want)
+	}
+}
+
+func TestTrimToBudget_UnderBudget_ReturnsUnchanged(t *testing.T) {
+	messages := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	got := trimToBudget(messages, 1000)
+	if len(got) != 1 {
+		t.Fatalf("expected messages unchanged, got %v", got)
 	}
 }
 

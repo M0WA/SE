@@ -33,15 +33,6 @@
   const pageRankWeightEl = document.getElementById('pagerank-weight');
   const pageRankIntervalEl = document.getElementById('pagerank-interval');
   const sessionTTLEl = document.getElementById('session-ttl');
-  const chatEnabledEl = document.getElementById('chat-enabled');
-  const chatBaseURLEl = document.getElementById('chat-base-url');
-  const chatModelEl = document.getElementById('chat-model');
-  const chatAPIKeyEl = document.getElementById('chat-api-key');
-  const chatClearAPIKeyEl = document.getElementById('chat-clear-api-key');
-  const chatRAGEnabledEl = document.getElementById('chat-rag-enabled');
-  const chatRAGResultCountEl = document.getElementById('chat-rag-result-count');
-  const chatSettingsStatusEl = document.getElementById('chat-settings-status');
-  const saveChatSettingsBtn = document.getElementById('save-chat-settings-btn');
   const status = document.getElementById('settings-status');
   const blockedTermsEl = document.getElementById('blocked-terms');
   const blockedDomainsEl = document.getElementById('blocked-domains');
@@ -336,89 +327,10 @@
     }
   }
 
-  // Chat is a third, independent resource (GET/PATCH /admin/api/chat-endpoint)
-  // -- unlike Ranking/Crawler/.../Session and Blocked/Boosted, which share
-  // the page's one form and Save button, Chat gets its own "Save chat
-  // settings" button and status line, the same way an embedding endpoint's
-  // own edit page (admin_embedding_endpoint.js) is a separate save action
-  // from the rest of the settings page.
-  //
-  // applyChatEndpoint mirrors applyEndpoint's API-key masking there: the
-  // server never echoes a stored key's real value, so this field always
-  // starts blank -- has_api_key only drives the placeholder text and
-  // whether "remove stored key" is available, never the field's value.
-  function applyChatEndpoint(c) {
-    chatEnabledEl.checked = !!c.enabled;
-    chatBaseURLEl.value = c.base_url || '';
-    chatModelEl.value = c.model || '';
-    chatAPIKeyEl.value = '';
-    chatAPIKeyEl.placeholder = c.has_api_key ? 'Leave blank to keep the current key' : '';
-    chatClearAPIKeyEl.checked = false;
-    chatClearAPIKeyEl.disabled = !c.has_api_key;
-    chatRAGEnabledEl.checked = c.rag_enabled !== false;
-    chatRAGResultCountEl.value = c.rag_result_count;
-  }
-
-  async function loadChatEndpoint() {
-    try {
-      applyChatEndpoint(await getJSON('/admin/api/chat-endpoint'));
-    } catch (err) {
-      chatSettingsStatusEl.style.color = 'var(--accent)';
-      chatSettingsStatusEl.textContent = 'Could not load chat settings: ' + err.message;
-    }
-  }
-
-  async function saveChatEndpoint() {
-    setButtonLoading(saveChatSettingsBtn, true, 'Saving…');
-    chatSettingsStatusEl.textContent = '';
-    try {
-      await patchJSON('/admin/api/chat-endpoint', {
-        base_url: chatBaseURLEl.value,
-        api_key: chatAPIKeyEl.value,
-        clear_api_key: chatClearAPIKeyEl.checked,
-        model: chatModelEl.value,
-        enabled: chatEnabledEl.checked,
-        rag_enabled: chatRAGEnabledEl.checked,
-        rag_result_count: parseInt(chatRAGResultCountEl.value, 10),
-      });
-      chatSettingsStatusEl.style.color = 'var(--ink-muted)';
-      chatSettingsStatusEl.textContent = 'Saved.';
-      // Re-fetch so the API-key field reflects the masked state (blank,
-      // with a placeholder if one is now stored) rather than whatever was
-      // just typed -- same post-save refresh as
-      // admin_embedding_endpoint.js's submit handler.
-      await loadChatEndpoint();
-    } catch (err) {
-      chatSettingsStatusEl.style.color = 'var(--accent)';
-      chatSettingsStatusEl.textContent = 'Could not save: ' + err.message;
-    } finally {
-      setButtonLoading(saveChatSettingsBtn, false);
-    }
-  }
-
-  saveChatSettingsBtn.addEventListener('click', saveChatEndpoint);
-
-  // openLinkedSection opens (and scrolls to) the <details> section named by
-  // the current URL fragment, e.g. the admin nav's "Chat > Settings" entry
-  // links to /admin/settings#chat-settings so it lands open rather than
-  // collapsed like every other <details class="group"> on this page.
-  function openLinkedSection() {
-    const id = window.location.hash.slice(1);
-    if (!id) return;
-    const section = document.getElementById(id);
-    if (!section || section.tagName !== 'DETAILS') return;
-    section.open = true;
-    // jsdom (this file's test environment) doesn't implement
-    // scrollIntoView at all -- guard rather than assume every DOM does.
-    if (typeof section.scrollIntoView === 'function') section.scrollIntoView();
-  }
-
   renderAdminNav();
   wireSignOut();
   loadSettings();
   loadOverrides();
-  loadChatEndpoint();
-  openLinkedSection();
 
   // Exports for the Node test runner only -- `typeof module` is undefined in
   // a browser's <script> tag, so this is a no-op there. See
@@ -430,7 +342,5 @@
       factorsToText, parseFactorLines,
       renderSettingsSummary, renderOverridesSummary,
       loadEmbeddingSearchWeights, collectEmbeddingSearchWeights, weightInputID,
-      applyChatEndpoint, loadChatEndpoint, saveChatEndpoint,
-      openLinkedSection,
     };
   }

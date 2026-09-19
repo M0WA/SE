@@ -42,6 +42,9 @@ var adminJobsHTML []byte
 //go:embed admin_settings.html
 var adminSettingsHTML []byte
 
+//go:embed admin_chat_settings.html
+var adminChatSettingsHTML []byte
+
 //go:embed admin_search.html
 var adminSearchHTML []byte
 
@@ -121,6 +124,9 @@ var adminJobsJS []byte
 
 //go:embed admin_settings.js
 var adminSettingsJS []byte
+
+//go:embed admin_chat_settings.js
+var adminChatSettingsJS []byte
 
 //go:embed admin_vocabulary_term.js
 var adminVocabularyTermJS []byte
@@ -379,6 +385,8 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("/admin_jobs.js", h.handleAdminJobsJS)
 	mux.HandleFunc("/admin/settings", h.requireAuthPage(h.handleAdminSettingsPage))
 	mux.HandleFunc("/admin_settings.js", h.handleAdminSettingsJS)
+	mux.HandleFunc("/admin/chat/settings", h.requireAuthPage(h.handleAdminChatSettingsPage))
+	mux.HandleFunc("/admin_chat_settings.js", h.handleAdminChatSettingsJS)
 	mux.HandleFunc("/admin/search", h.requireAuthPage(h.handleAdminSearchPage))
 	mux.HandleFunc("/admin_search.js", h.handleAdminSearchJS)
 	mux.HandleFunc("/admin/search/result", h.requireAuthPage(h.handleAdminSearchResultPage))
@@ -522,6 +530,10 @@ func (h *Handler) handleAdminJobsJS(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleAdminSettingsJS(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/javascript; charset=utf-8", adminSettingsJS)
+}
+
+func (h *Handler) handleAdminChatSettingsJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminChatSettingsJS)
 }
 
 func (h *Handler) handleAdminVocabularyTermJS(w http.ResponseWriter, r *http.Request) {
