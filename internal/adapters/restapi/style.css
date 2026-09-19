@@ -670,11 +670,20 @@ button:focus-visible {
 
 .chat-source-link:hover { color: var(--accent); text-decoration: underline; }
 
-/* .chat-rag-toggle sits inline in #chat-form between the input and the
-   submit button (a third flex child, like #search-form's own #sort
-   <select>) -- a per-question override of the admin's rag_enabled
-   default, not a settings-page control, so it lives right where the
-   question is asked. */
+/* .chat-options sits above #chat-form, not inside it -- a per-question
+   override of the admin's rag_enabled default, kept out of the compose
+   row so it doesn't compete with the (now multi-line) input and submit
+   button for space. .chat-rag-toggle's own label text is kept to just
+   "RAG"; the full explanation moved to the adjacent .hint bubble (see
+   style.css's .hint/.hint-icon/.hint-bubble, the same pattern every admin
+   field's own explanation uses) rather than a title attribute tooltip. */
+.chat-options {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
+}
+
 .chat-rag-toggle {
   display: flex;
   align-items: center;
@@ -692,7 +701,12 @@ button:focus-visible {
   min-height: 1.2em;
 }
 
-#chat-form { margin-top: 0.6rem; }
+/* align-items: flex-end (not form's own baseline default) keeps Ask
+   pinned to the bottom of chat-input as it grows past its default two
+   rows, rather than floating up near the textarea's first line. */
+#chat-form { margin-top: 0.6rem; align-items: flex-end; }
+
+#chat-input.field { min-height: 2.6rem; }
 
 .footer-link {
   margin-top: 3.5rem;

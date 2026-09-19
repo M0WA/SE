@@ -4974,13 +4974,14 @@ func TestHandleAdminContentDedupAliasGroups_ServiceError(t *testing.T) {
 // chatEndpointResp mirrors admin.go's unexported chatEndpointResponse wire
 // shape, for decoding test responses.
 type chatEndpointResp struct {
-	BaseURL        string    `json:"base_url"`
-	HasAPIKey      bool      `json:"has_api_key"`
-	Model          string    `json:"model"`
-	Enabled        bool      `json:"enabled"`
-	RAGEnabled     bool      `json:"rag_enabled"`
-	RAGResultCount int       `json:"rag_result_count"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	BaseURL          string    `json:"base_url"`
+	HasAPIKey        bool      `json:"has_api_key"`
+	Model            string    `json:"model"`
+	Enabled          bool      `json:"enabled"`
+	RAGEnabled       bool      `json:"rag_enabled"`
+	RAGResultCount   int       `json:"rag_result_count"`
+	MaxContextTokens int       `json:"max_context_tokens"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 func adminAuthedHandlerWithChatEndpoints(t *testing.T, store ports.ChatEndpointStore) (*restapi.Handler, *http.Cookie) {
@@ -5089,7 +5090,7 @@ func TestHandleAdminChatEndpoint_PatchCreatesNewConfig(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
 	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{
 		"base_url": "https://example.com/v1", "api_key": "sk-test", "model": "gpt-x",
-		"enabled": true, "rag_enabled": true, "rag_result_count": 999,
+		"enabled": true, "rag_enabled": true, "rag_result_count": 999, "max_context_tokens": 6000,
 	})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
@@ -5107,6 +5108,9 @@ func TestHandleAdminChatEndpoint_PatchCreatesNewConfig(t *testing.T) {
 	}
 	if resp.RAGResultCount != domain.MaxChatRAGResultCount {
 		t.Errorf("expected rag_result_count clamped to the max, got %d", resp.RAGResultCount)
+	}
+	if resp.MaxContextTokens != 6000 {
+		t.Errorf("expected max_context_tokens round tripped, got %d", resp.MaxContextTokens)
 	}
 	if resp.UpdatedAt.IsZero() {
 		t.Errorf("expected UpdatedAt set, got zero value")
@@ -5170,6 +5174,21 @@ func TestHandleAdminChatEndpoint_PatchClearAPIKeyRemovesIt(t *testing.T) {
 	}
 	if got.APIKey != "" {
 		t.Errorf("expected clear_api_key to remove the stored key, got %q", got.APIKey)
+	}
+}
+
+// TestHandleAdminChatEndpoint_PatchNegativeMaxContextTokensRejected mirrors
+// TestHandleAdminEmbeddingEndpoints_CreateValidation's negative-chunk-size
+// case for the same reason: MaxContextTokens shares ChunkSizeTokens' "0
+// disables, negative is invalid" convention.
+func TestHandleAdminChatEndpoint_PatchNegativeMaxContextTokensRejected(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
+	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{
+		"base_url": "https://example.com/v1", "model": "gpt-x", "max_context_tokens": -1,
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

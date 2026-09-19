@@ -1846,6 +1846,15 @@ components:
             self-heal server-side (see domain.ChatEndpoint.Clamp): a
             non-positive value becomes the default (5); anything above the
             max (20) is clamped down to it.
+        max_context_tokens:
+          type: integer
+          description: >-
+            Bounds how many tokens' worth of conversation (RAG context plus
+            message history) is ever sent to the model, approximated by
+            character count. Older messages are dropped first, oldest to
+            newest, always keeping the most recent message. 0 disables
+            trimming (the full history is sent as-is). A negative value is
+            rejected with 400.
 
     ChatEndpointRequest:
       description: >-

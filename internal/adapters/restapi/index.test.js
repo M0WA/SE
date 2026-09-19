@@ -320,6 +320,38 @@ test('submitting the chat form sends the trimmed input and clears the field', as
   assert.deepEqual(sent.messages[0], { role: 'user', content: 'hello there' });
 });
 
+test('pressing Enter in chat-input submits the form', () => {
+  let fetched = false;
+  global.fetch = async () => { fetched = true; return { ok: true, json: async () => ({ answer: 'ok' }) }; };
+  loadFixture();
+  const chatInput = document.getElementById('chat-input');
+  chatInput.value = 'hello';
+  chatInput.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  assert.equal(fetched, true);
+  assert.equal(chatInput.value, '');
+});
+
+test('pressing Shift+Enter in chat-input does not submit the form', () => {
+  let fetched = false;
+  global.fetch = async () => { fetched = true; return { ok: true, json: async () => ({ answer: 'ok' }) }; };
+  loadFixture();
+  const chatInput = document.getElementById('chat-input');
+  chatInput.value = 'hello';
+  chatInput.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true, cancelable: true }));
+  assert.equal(fetched, false);
+  assert.equal(chatInput.value, 'hello');
+});
+
+test('pressing a non-Enter key in chat-input does not submit the form', () => {
+  let fetched = false;
+  global.fetch = async () => { fetched = true; return { ok: true, json: async () => ({ answer: 'ok' }) }; };
+  loadFixture();
+  const chatInput = document.getElementById('chat-input');
+  chatInput.value = 'hello';
+  chatInput.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'a', bubbles: true, cancelable: true }));
+  assert.equal(fetched, false);
+});
+
 test('the "use search results" checkbox is checked by default, and sends rag accordingly per question', async () => {
   const { sendChatMessage } = loadFixture();
   let sent;

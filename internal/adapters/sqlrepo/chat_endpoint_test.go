@@ -2,6 +2,7 @@ package sqlrepo_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ func newChatEndpoint() domain.ChatEndpoint {
 	return domain.ChatEndpoint{
 		BaseURL: "https://openai.inference.de-txl.ionos.com/v1",
 		APIKey:  "sk-test", Model: "meta-llama/Llama-3.3-70B-Instruct",
-		Enabled: true, RAGEnabled: true, RAGResultCount: 5,
+		Enabled: true, RAGEnabled: true, RAGResultCount: 5, MaxContextTokens: 6000,
 		UpdatedAt: time.Now().UTC(),
 	}
 }
@@ -46,6 +47,9 @@ func TestSetChatEndpoint_ThenGetRoundTrips(t *testing.T) {
 	if !got.Enabled || !got.RAGEnabled || got.RAGResultCount != 5 {
 		t.Errorf("unexpected option round trip: %+v", got)
 	}
+	if got.MaxContextTokens != 6000 {
+		t.Errorf("expected MaxContextTokens to round trip, got %+v", got)
+	}
 	if got.UpdatedAt.IsZero() {
 		t.Errorf("expected UpdatedAt to round trip, got %+v", got)
 	}
@@ -65,6 +69,7 @@ func TestSetChatEndpoint_SecondCallOverwritesRatherThanDuplicating(t *testing.T)
 	e.Enabled = false
 	e.RAGEnabled = false
 	e.RAGResultCount = 12
+	e.MaxContextTokens = 9000
 	e.UpdatedAt = e.UpdatedAt.Add(time.Hour)
 	if err := repo.SetChatEndpoint(ctx, e); err != nil {
 		t.Fatalf("unexpected error on second SetChatEndpoint: %v", err)
@@ -80,6 +85,9 @@ func TestSetChatEndpoint_SecondCallOverwritesRatherThanDuplicating(t *testing.T)
 	if got.Enabled || got.RAGEnabled || got.RAGResultCount != 12 {
 		t.Errorf("expected updated flags/count to replace the original, got %+v", got)
 	}
+	if got.MaxContextTokens != 9000 {
+		t.Errorf("expected updated MaxContextTokens to replace the original, got %+v", got)
+	}
 
 	counts, err := repo.TableRowCounts(ctx)
 	if err != nil {
@@ -87,5 +95,57 @@ func TestSetChatEndpoint_SecondCallOverwritesRatherThanDuplicating(t *testing.T)
 	}
 	if counts["chat_endpoint"] != 1 {
 		t.Errorf("expected exactly one chat_endpoint row after two SetChatEndpoint calls, got %d", counts["chat_endpoint"])
+	}
+}
+
+func TestMigrateChatEndpointColumns_UpgradesPreExistingTable(t *testing.T) {
+	dsn := uniqueSQLiteDSN(t)
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open raw db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	// The pre-migration shape: no max_context_tokens column at all.
+	if _, err := db.Exec(`CREATE TABLE chat_endpoint (
+		id TEXT PRIMARY KEY, base_url TEXT NOT NULL,
+		api_key TEXT NOT NULL DEFAULT '', model TEXT NOT NULL,
+		enabled BOOLEAN NOT NULL DEFAULT false, rag_enabled BOOLEAN NOT NULL DEFAULT false,
+		rag_result_count INTEGER NOT NULL DEFAULT 0,
+		updated_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("failed to create legacy-shape table: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO chat_endpoint
+		(id, base_url, api_key, model, enabled, rag_enabled, rag_result_count, updated_at)
+		VALUES ('default', 'https://example.com/v1', 'sk-test', 'llama-3', true, true, 5, ?)`,
+		time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("failed to seed a pre-existing row: %v", err)
+	}
+
+	ctx := context.Background()
+	repo := reopenSQLiteTestRepo(t, dsn) // migrate() runs here, including migrateChatEndpointColumns
+
+	pre, err := repo.GetChatEndpoint(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error reading the pre-existing row after migration: %v", err)
+	}
+	if pre.MaxContextTokens != 0 {
+		t.Errorf("expected a pre-existing row to default to trimming disabled (0), got %+v", pre)
+	}
+	if pre.Model != "llama-3" || pre.RAGResultCount != 5 {
+		t.Errorf("expected every pre-existing field otherwise untouched, got %+v", pre)
+	}
+
+	// The table must still work normally for a fresh write afterward too.
+	fresh := newChatEndpoint()
+	if err := repo.SetChatEndpoint(ctx, fresh); err != nil {
+		t.Fatalf("unexpected error writing after migration: %v", err)
+	}
+	got, err := repo.GetChatEndpoint(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.MaxContextTokens != fresh.MaxContextTokens {
+		t.Errorf("expected a fresh write's MaxContextTokens to round trip, got %+v", got)
 	}
 }

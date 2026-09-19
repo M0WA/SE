@@ -343,6 +343,17 @@
     sendChatMessage(content);
   });
 
+  // chat-input is a <textarea> (multi-line input, so the user can compose a
+  // longer question) -- unlike a plain text <input>, a <textarea> never
+  // submits its form on Enter by itself, so this wires up the standard chat
+  // convention by hand: Enter alone sends, Shift+Enter inserts a newline.
+  chatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      chatForm.requestSubmit();
+    }
+  });
+
   const sortSelect = document.getElementById('sort');
 
   form.addEventListener('submit', (e) => {
