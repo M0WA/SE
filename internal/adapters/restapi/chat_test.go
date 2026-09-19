@@ -278,5 +278,41 @@ func TestHandleChat_SuccessWithoutSources(t *testing.T) {
 	}
 }
 
+func TestHandleChat_RAGOverrideTrue_ForcesSearchDespiteRAGDisabled(t *testing.T) {
+	search := &fakeSearch{results: []domain.SearchResult{{URL: "http://a", Title: "A", Score: 1}}}
+	svc := application.NewChatService(
+		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, RAGEnabled: false}},
+		&fakeChatCompleter{answer: "answer"}, search)
+	h, cookie := chatAuthedHandler(t, svc)
+	rec := postChat(t, h, cookie, map[string]interface{}{
+		"messages": []map[string]string{{"role": "user", "content": "what is a?"}},
+		"rag":      true,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if search.gotQ != "what is a?" {
+		t.Errorf("expected rag:true to force a search despite RAGEnabled false, search was not called")
+	}
+}
+
+func TestHandleChat_RAGOverrideFalse_SkipsSearchDespiteRAGEnabled(t *testing.T) {
+	search := &fakeSearch{results: []domain.SearchResult{{URL: "http://a", Title: "A", Score: 1}}}
+	svc := application.NewChatService(
+		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, RAGEnabled: true, RAGResultCount: 3}},
+		&fakeChatCompleter{answer: "answer"}, search)
+	h, cookie := chatAuthedHandler(t, svc)
+	rec := postChat(t, h, cookie, map[string]interface{}{
+		"messages": []map[string]string{{"role": "user", "content": "what is a?"}},
+		"rag":      false,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if search.gotQ != "" {
+		t.Errorf("expected rag:false to skip search despite RAGEnabled true, got query %q", search.gotQ)
+	}
+}
+
 var _ ports.ChatCompleter = (*fakeChatCompleter)(nil)
 var _ ports.ChatEndpointStore = (*fakeChatEndpointStore)(nil)

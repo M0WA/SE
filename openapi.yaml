@@ -1792,8 +1792,8 @@ components:
       description: >-
         One search result whose content informed a ChatResponse.answer,
         surfaced separately so the UI can render it as a clickable citation
-        rather than parsing the answer text for it. Only ever populated
-        when the configured chat endpoint has rag_enabled.
+        rather than parsing the answer text for it. Only ever populated when
+        this turn was retrieval-augmented (see ChatRequest.rag).
       properties:
         url: { type: string }
         title: { type: string }
@@ -1807,6 +1807,15 @@ components:
           minItems: 1
           maxItems: 50
           items: { $ref: "#/components/schemas/ChatMessage" }
+        rag:
+          type: boolean
+          description: >-
+            Overrides the admin-configured chat endpoint's rag_enabled
+            default for this question only -- omit to use that default.
+            true runs a search on the latest user message and grounds the
+            answer in the results (with sources cited); false sends the
+            conversation to the chat model as-is, with no connection to the
+            indexed corpus.
 
     ChatResponse:
       type: object

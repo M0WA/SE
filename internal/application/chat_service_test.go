@@ -73,7 +73,7 @@ func (f *fakeSearchService) Search(ctx context.Context, query string, opts ports
 
 func TestChatService_EmptyHistory(t *testing.T) {
 	svc := NewChatService(&fakeChatEndpointStore{}, &fakeChatCompleter{}, &fakeSearchService{})
-	_, err := svc.Chat(context.Background(), nil)
+	_, err := svc.Chat(context.Background(), nil, nil)
 	if err == nil {
 		t.Fatal("expected error for empty history, got nil")
 	}
@@ -84,7 +84,7 @@ func TestChatService_NotConfigured(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{getErr: wantErr}
 	svc := NewChatService(endpoints, &fakeChatCompleter{}, &fakeSearchService{})
 
-	_, err := svc.Chat(context.Background(), []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}})
+	_, err := svc.Chat(context.Background(), []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, nil)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("expected wrapped/equal sentinel error, got %v", err)
 	}
@@ -94,7 +94,7 @@ func TestChatService_NotConfigured_ErrIsPreserved(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{getErr: ports.ErrChatEndpointNotConfigured}
 	svc := NewChatService(endpoints, &fakeChatCompleter{}, &fakeSearchService{})
 
-	_, err := svc.Chat(context.Background(), []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}})
+	_, err := svc.Chat(context.Background(), []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, nil)
 	if !errors.Is(err, ports.ErrChatEndpointNotConfigured) {
 		t.Fatalf("expected errors.Is to match ErrChatEndpointNotConfigured, got %v", err)
 	}
@@ -104,7 +104,7 @@ func TestChatService_DisabledEndpoint(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: false}}
 	svc := NewChatService(endpoints, &fakeChatCompleter{}, &fakeSearchService{})
 
-	_, err := svc.Chat(context.Background(), []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}})
+	_, err := svc.Chat(context.Background(), []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, nil)
 	if !errors.Is(err, ports.ErrChatEndpointNotConfigured) {
 		t.Fatalf("expected ErrChatEndpointNotConfigured, got %v", err)
 	}
@@ -117,7 +117,7 @@ func TestChatService_RAGDisabled_SearchNeverCalled(t *testing.T) {
 	svc := NewChatService(endpoints, completer, search)
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
-	result, err := svc.Chat(context.Background(), history)
+	result, err := svc.Chat(context.Background(), history, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestChatService_RAGEnabled_WithResults(t *testing.T) {
 		{Role: domain.ChatRoleAssistant, Content: "first answer"},
 		{Role: domain.ChatRoleUser, Content: "second question"},
 	}
-	result, err := svc.Chat(context.Background(), history)
+	result, err := svc.Chat(context.Background(), history, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestChatService_RAGEnabled_NoUserMessage(t *testing.T) {
 	svc := NewChatService(endpoints, completer, search)
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleSystem, Content: "system only"}}
-	_, err := svc.Chat(context.Background(), history)
+	_, err := svc.Chat(context.Background(), history, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestChatService_RAGEnabled_SearchErrorFallsBack(t *testing.T) {
 	svc := NewChatService(endpoints, completer, search)
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
-	result, err := svc.Chat(context.Background(), history)
+	result, err := svc.Chat(context.Background(), history, nil)
 	if err != nil {
 		t.Fatalf("expected search error to be swallowed, got %v", err)
 	}
@@ -229,7 +229,7 @@ func TestChatService_RAGEnabled_EmptyResults(t *testing.T) {
 	svc := NewChatService(endpoints, completer, search)
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
-	result, err := svc.Chat(context.Background(), history)
+	result, err := svc.Chat(context.Background(), history, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -241,13 +241,53 @@ func TestChatService_RAGEnabled_EmptyResults(t *testing.T) {
 	}
 }
 
+func TestChatService_RAGOverride_TrueOverridesDisabledEndpoint(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, RAGEnabled: false, RAGResultCount: 3}}
+	completer := &fakeChatCompleter{answer: "answer"}
+	search := &fakeSearchService{results: []domain.SearchResult{{URL: "http://a", Title: "A", Snippet: "snip"}}}
+	svc := NewChatService(endpoints, completer, search)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	ragOn := true
+	result, err := svc.Chat(context.Background(), history, &ragOn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !search.wasCalled {
+		t.Fatal("expected search to be called when rag override is true, even with RAGEnabled false")
+	}
+	if len(result.Sources) != 1 {
+		t.Fatalf("expected one source, got %v", result.Sources)
+	}
+}
+
+func TestChatService_RAGOverride_FalseOverridesEnabledEndpoint(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, RAGEnabled: true, RAGResultCount: 3}}
+	completer := &fakeChatCompleter{answer: "answer"}
+	search := &fakeSearchService{results: []domain.SearchResult{{URL: "http://a", Title: "A", Snippet: "snip"}}}
+	svc := NewChatService(endpoints, completer, search)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	ragOff := false
+	result, err := svc.Chat(context.Background(), history, &ragOff)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if search.wasCalled {
+		t.Fatal("expected search not to be called when rag override is false, even with RAGEnabled true")
+	}
+	if len(result.Sources) != 0 {
+		t.Fatalf("expected no sources, got %v", result.Sources)
+	}
+}
+
 func TestChatService_CompleterError(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer := &fakeChatCompleter{err: errors.New("upstream 500")}
 	svc := NewChatService(endpoints, completer, &fakeSearchService{})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
-	_, err := svc.Chat(context.Background(), history)
+	_, err := svc.Chat(context.Background(), history, nil)
 	if err == nil {
 		t.Fatal("expected error from completer to propagate")
 	}
