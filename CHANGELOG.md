@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.17 - 2026-09-19
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Feed chat hook results back to the model for a real final answer by @M0WA in https://github.com/M0WA/SE/pull/151
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.16...v4.13.17
+
+
 ## v4.13.16 - 2026-09-19
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
