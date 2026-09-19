@@ -54,8 +54,8 @@ const CHAT_ENDPOINT = {
   rag_result_count: 5,
 };
 
-function loadFixture(endpoints, chatEndpoint) {
-  setupDOM(SETTINGS_HTML);
+function loadFixture(endpoints, chatEndpoint, url) {
+  setupDOM(SETTINGS_HTML, url);
   const adminHelpers = requireFresh('./admin.js');
   Object.assign(global, adminHelpers);
   global.fetch = async (url) => {
@@ -667,4 +667,28 @@ test('clicking "Save chat settings" invokes saveChatEndpoint', async () => {
   document.getElementById('save-chat-settings-btn').dispatchEvent(new window.Event('click'));
   await flush();
   assert.equal(posted, true);
+});
+
+test('visiting #chat-settings opens the Chat details section', async () => {
+  const { openLinkedSection } = loadFixture(undefined, undefined, 'http://x/admin/settings#chat-settings');
+  await flush();
+  const section = document.getElementById('chat-settings');
+  section.open = false;
+  openLinkedSection();
+  assert.equal(section.open, true);
+});
+
+test('loading the page normally (no fragment) leaves every section collapsed', async () => {
+  const { openLinkedSection } = loadFixture(undefined, undefined, 'http://x/admin/settings');
+  await flush();
+  const section = document.getElementById('chat-settings');
+  assert.equal(section.open, false);
+  openLinkedSection();
+  assert.equal(section.open, false);
+});
+
+test('a fragment naming a non-existent or non-<details> element is a no-op', async () => {
+  const { openLinkedSection } = loadFixture(undefined, undefined, 'http://x/admin/settings#missing-section');
+  await flush();
+  assert.doesNotThrow(() => openLinkedSection());
 });

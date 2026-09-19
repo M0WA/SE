@@ -398,11 +398,27 @@
 
   saveChatSettingsBtn.addEventListener('click', saveChatEndpoint);
 
+  // openLinkedSection opens (and scrolls to) the <details> section named by
+  // the current URL fragment, e.g. the admin nav's "Chat > Settings" entry
+  // links to /admin/settings#chat-settings so it lands open rather than
+  // collapsed like every other <details class="group"> on this page.
+  function openLinkedSection() {
+    const id = window.location.hash.slice(1);
+    if (!id) return;
+    const section = document.getElementById(id);
+    if (!section || section.tagName !== 'DETAILS') return;
+    section.open = true;
+    // jsdom (this file's test environment) doesn't implement
+    // scrollIntoView at all -- guard rather than assume every DOM does.
+    if (typeof section.scrollIntoView === 'function') section.scrollIntoView();
+  }
+
   renderAdminNav();
   wireSignOut();
   loadSettings();
   loadOverrides();
   loadChatEndpoint();
+  openLinkedSection();
 
   // Exports for the Node test runner only -- `typeof module` is undefined in
   // a browser's <script> tag, so this is a no-op there. See
@@ -415,5 +431,6 @@
       renderSettingsSummary, renderOverridesSummary,
       loadEmbeddingSearchWeights, collectEmbeddingSearchWeights, weightInputID,
       applyChatEndpoint, loadChatEndpoint, saveChatEndpoint,
+      openLinkedSection,
     };
   }

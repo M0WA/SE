@@ -285,6 +285,20 @@ test('renderAdminNav renders Overview plus every group from ADMIN_NAV_GROUPS', (
   assert.deepEqual(contentLinks, ['Documents', 'Content dedup']);
 });
 
+test('renderAdminNav includes a Chat group linking to the settings page\'s chat section', () => {
+  setupDOM('<!doctype html><html><body><nav id="admin-rail"></nav></body></html>', 'http://x/admin/settings');
+  const { renderAdminNav } = load();
+  renderAdminNav();
+  const rail = document.getElementById('admin-rail');
+  const groups = Array.from(rail.querySelectorAll('.rail-group'));
+  const chatGroup = groups.find((g) => g.querySelector('.rail-tab').textContent === 'Chat');
+  assert.ok(chatGroup, 'expected a Chat nav group');
+  const links = Array.from(chatGroup.querySelectorAll('a'));
+  assert.equal(links.length, 1);
+  assert.equal(links[0].textContent, 'Settings');
+  assert.equal(links[0].getAttribute('href'), '/admin/settings#chat-settings');
+});
+
 test('renderAdminNav marks the entry matching the current path as current, and nothing else', () => {
   setupDOM('<!doctype html><html><body><nav id="admin-rail"></nav></body></html>', 'http://x/admin/settings');
   const { renderAdminNav } = load();

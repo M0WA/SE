@@ -83,6 +83,15 @@ form {
   padding-bottom: 0.6rem;
 }
 
+/* An author-stylesheet display value on a bare tag selector (form, above)
+   beats the UA stylesheet's own "[hidden] { display: none }" rule
+   regardless of selector specificity -- normal-priority author rules
+   always win over normal-priority user-agent rules in the cascade. Without
+   this, setting form.hidden = true (as index.js's setMode does to hide
+   #search-form in chat mode) had no visible effect: the form kept
+   rendering as a flex row. */
+form[hidden] { display: none; }
+
 .field {
   flex: 1;
   min-width: 0;
