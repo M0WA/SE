@@ -6,6 +6,7 @@
   const syntaxNote = document.getElementById('syntax-note');
 
   const modeSwitch = document.getElementById('mode-switch');
+  const chatOptions = document.getElementById('chat-options');
   const chatPanel = document.getElementById('chat-panel');
   const chatMessages = document.getElementById('chat-messages');
   const chatStatus = document.getElementById('chat-status');
@@ -338,6 +339,7 @@
       correctionNote.hidden = true;
       results.hidden = true;
       chatPanel.hidden = false;
+      chatOptions.hidden = false;
     } else {
       form.hidden = false;
       if (syntaxNote) syntaxNote.hidden = false;
@@ -345,6 +347,7 @@
       correctionNote.hidden = correctionNoteHiddenBeforeChat;
       results.hidden = false;
       chatPanel.hidden = true;
+      chatOptions.hidden = true;
     }
   }
 

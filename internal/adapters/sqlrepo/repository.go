@@ -1733,6 +1733,61 @@ func (r *Repository) ListDocumentAliasGroups(ctx context.Context, limit, offset 
 	return groups, total, nil
 }
 
+// contentTables/settingsTables list every table ClearContent/ClearSettings
+// deletes from, child tables before the parent they reference -- deletes
+// are issued per-table (not a CASCADE) for the same cross-dialect-fragility
+// reason DeleteDocument/MergeDocuments already avoid it (SQLite's foreign
+// key enforcement isn't reliably on, and MySQL's TRUNCATE doesn't cascade
+// at all). Table names are a fixed internal list, never user input, so
+// building each statement by concatenation carries no injection risk, the
+// same reasoning TableRowCounts already relies on.
+var (
+	contentTables = []string{
+		"postings", "document_versions", "document_embeddings", "links",
+		"documents", "document_aliases", "crawl_job_pages", "crawl_jobs",
+	}
+	settingsTables = []string{"app_settings", "chat_endpoint", "embedding_http_endpoints", "scheduled_crawls"}
+)
+
+func deleteAllRows(ctx context.Context, tx *sql.Tx, tables []string) error {
+	for _, table := range tables {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table); err != nil {
+			return fmt.Errorf("clearing %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
+// ClearContent permanently deletes every crawled document and everything
+// derived from it, plus every crawl job -- see ports.AdminRepository's own
+// doc comment. Every settings table is left untouched.
+func (r *Repository) ClearContent(ctx context.Context) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if err := deleteAllRows(ctx, tx, contentTables); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ClearSettings permanently deletes every row of every settings table --
+// see ports.AdminRepository's own doc comment for why this deliberately
+// doesn't try to reset any process's own live in-memory settings.
+func (r *Repository) ClearSettings(ctx context.Context) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if err := deleteAllRows(ctx, tx, settingsTables); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // ListDocuments lists indexed pages, most recent ID first, optionally
 // narrowed to a single host (backs the per-domain admin subpage).
 // maxHostsIndexedBatch bounds how many hosts a single FollowIndexedDomains

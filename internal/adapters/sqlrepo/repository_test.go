@@ -1414,6 +1414,99 @@ func TestListDocumentAliasGroups_PaginatesByCanonicalID(t *testing.T) {
 	}
 }
 
+// TestClearContent_DeletesEveryContentTableButNoSettingsTable proves
+// ClearContent removes documents (and everything derived from it via
+// cascade), document_aliases, and crawl_jobs -- but leaves every settings
+// table untouched.
+func TestClearContent_DeletesEveryContentTableButNoSettingsTable(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+
+	doc := domain.Document{ID: "doc-a", URL: "https://a.example/", Title: "A", Text: "content", Links: []string{"https://a.example/b"}}
+	if err := repo.SaveDocument(ctx, doc, map[string][]float32{domain.EmbeddingProviderHash: {1}}, 100, 2); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := repo.RecordDocumentAlias(ctx, "https://alias.example/", "doc-a", domain.DocumentAliasReasonCanonicalTag); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := repo.SaveSetting(ctx, ports.SettingsKeyOperational, `{"UserAgent":"kept"}`); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := repo.ClearContent(ctx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	counts, err := repo.TableRowCounts(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, table := range []string{"documents", "postings", "links", "document_versions", "document_embeddings", "crawl_jobs"} {
+		if counts[table] != 0 {
+			t.Errorf("expected %s empty after ClearContent, got %d rows", table, counts[table])
+		}
+	}
+	if _, total, err := repo.ListDocumentAliasGroups(ctx, 10, 0); err != nil || total != 0 {
+		t.Errorf("expected document_aliases empty after ClearContent, got total=%d err=%v", total, err)
+	}
+
+	raw, found, err := repo.GetSetting(ctx, ports.SettingsKeyOperational)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !found || raw != `{"UserAgent":"kept"}` {
+		t.Errorf("expected app_settings left untouched by ClearContent, got found=%v raw=%q", found, raw)
+	}
+}
+
+// TestClearSettings_DeletesEverySettingsTableButNoContentTable proves
+// ClearSettings removes app_settings, chat_endpoint,
+// embedding_http_endpoints, and scheduled_crawls -- but leaves crawled
+// content untouched.
+func TestClearSettings_DeletesEverySettingsTableButNoContentTable(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+
+	doc := domain.Document{ID: "doc-a", URL: "https://a.example/", Title: "A", Text: "content"}
+	if err := repo.SaveDocument(ctx, doc, map[string][]float32{domain.EmbeddingProviderHash: {1}}, 100, 2); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := repo.SaveSetting(ctx, ports.SettingsKeyOperational, `{"UserAgent":"gone"}`); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := repo.SetChatEndpoint(ctx, domain.ChatEndpoint{BaseURL: "http://x", Enabled: true}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := repo.CreateEmbeddingEndpoint(ctx, domain.EmbeddingHTTPEndpoint{ID: "e1", Name: "E1", BaseURL: "http://x", Model: "m", Dimensions: 4}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := repo.CreateScheduledCrawl(ctx, newScheduledCrawl("sched-1", 5, time.Now())); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := repo.ClearSettings(ctx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	counts, err := repo.TableRowCounts(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, table := range []string{"app_settings", "chat_endpoint", "embedding_http_endpoints", "scheduled_crawls"} {
+		if counts[table] != 0 {
+			t.Errorf("expected %s empty after ClearSettings, got %d rows", table, counts[table])
+		}
+	}
+
+	docs, err := repo.ListDocuments(ctx, 10, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(docs) != 1 {
+		t.Errorf("expected crawled content left untouched by ClearSettings, got %d documents", len(docs))
+	}
+}
+
 func TestTryAcquireContentDedupLock_SucceedsWhenFree(t *testing.T) {
 	repo := newTestRepo(t)
 	acquired, err := repo.TryAcquireContentDedupLock(context.Background())

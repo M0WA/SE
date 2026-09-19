@@ -20,6 +20,8 @@
   --rule-strong: #94a1ab;
   --accent: #7a2035;
   --accent-soft: rgba(122, 32, 53, 0.12);
+  --danger: #a3341f;
+  --danger-soft: rgba(163, 52, 31, 0.12);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -31,6 +33,8 @@
     --rule-strong: #4b5860;
     --accent: #d98a9b;
     --accent-soft: rgba(217, 138, 155, 0.16);
+    --danger: #e08469;
+    --danger-soft: rgba(224, 132, 105, 0.16);
   }
 }
 
@@ -314,6 +318,24 @@ button:focus-visible {
   background: none;
 }
 
+/* .danger-button marks an irreversible, destructive action (see
+   admin_database.html's "Danger zone") -- same button shape as the primary
+   <button>, but in --danger instead of --ink, so it visually stands apart
+   from an ordinary primary action without inventing a whole second button
+   language. */
+.danger-button {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.danger-button:hover { background: var(--danger); color: var(--paper); }
+
+.danger-button:disabled {
+  color: var(--ink-muted);
+  border-color: var(--rule-strong);
+  background: var(--paper);
+}
+
 .text-button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 4px;
@@ -497,9 +519,20 @@ button:focus-visible {
    than an invented widget. */
 .mode-row {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  gap: 0.6rem;
   margin: 0 0 1.1rem;
 }
+
+/* #chat-options sits in .mode-row itself now (only shown in chat mode,
+   toggled by setMode in index.js), not above #chat-form -- margin-right:
+   auto pushes it flush to the row's own left edge while #mode-switch stays
+   pinned to the right, without the row's single remaining flex item
+   snapping to flex-start whenever #chat-options is hidden (which
+   justify-content: space-between would do instead). */
+#chat-options { margin-right: auto; }
 
 .mode-switch {
   position: relative;
@@ -592,10 +625,17 @@ button:focus-visible {
   word-break: break-word;
 }
 
+/* Boxed the same way .chat-msg-user's own bubble already is (a visible
+   container, not plain inline text), just in a neutral outline rather than
+   the user bubble's accent tint -- so role is still told apart at a glance
+   while both turns read as a bubble. */
 .chat-msg-assistant .chat-msg-bubble {
   font-size: 0.97rem;
   line-height: 1.6;
   color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 0.6rem 0.9rem;
 }
 
 /* renderMarkdown (index.js) builds this structure from the model's answer
@@ -677,18 +717,19 @@ button:focus-visible {
   font-style: italic;
 }
 
-/* .chat-options sits above #chat-form, not inside it -- a per-question
-   override of the admin's rag_enabled default, kept out of the compose
-   row so it doesn't compete with the (now multi-line) input and submit
-   button for space. .chat-rag-toggle's own label text is kept to just
-   "RAG"; the full explanation moved to the adjacent .hint bubble (see
-   style.css's .hint/.hint-icon/.hint-bubble, the same pattern every admin
-   field's own explanation uses) rather than a title attribute tooltip. */
+/* .chat-options sits in .mode-row alongside the search/chat switch, not
+   above #chat-form -- a per-question override of the admin's rag_enabled
+   default, kept out of the compose row so it doesn't compete with the (now
+   multi-line) input and submit button for space, and visible right next to
+   the control that put the page in chat mode in the first place.
+   .chat-rag-toggle's own label text is kept to just "RAG"; the full
+   explanation moved to the adjacent .hint bubble (see style.css's
+   .hint/.hint-icon/.hint-bubble, the same pattern every admin field's own
+   explanation uses) rather than a title attribute tooltip. */
 .chat-options {
   display: flex;
   align-items: center;
   gap: 0.35rem;
-  margin-bottom: 0.5rem;
 }
 
 .chat-rag-toggle {
