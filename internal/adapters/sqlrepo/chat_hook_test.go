@@ -16,6 +16,7 @@ func newChatHook(id string) domain.ChatHook {
 		ID: id, Name: "web_search",
 		Pattern: `\[\[search:(.+?)\]\]`, Script: "web_search.sh",
 		Enabled: true,
+		Prompt:  "To search the web, output SEARCH[query].", GatedByWebSearch: true,
 	}
 }
 
@@ -38,6 +39,9 @@ func TestCreateChatHook_ThenListRoundTrips(t *testing.T) {
 	g := got[0]
 	if g.ID != "hook1" || g.Name != "web_search" || g.Pattern != h.Pattern || g.Script != "web_search.sh" || !g.Enabled {
 		t.Errorf("unexpected round trip: %+v", g)
+	}
+	if g.Prompt != h.Prompt || !g.GatedByWebSearch {
+		t.Errorf("expected Prompt/GatedByWebSearch to round trip, got %+v", g)
 	}
 }
 
@@ -90,6 +94,8 @@ func TestUpdateChatHook_ReplacesEditableFields(t *testing.T) {
 	h.Pattern = `\[\[other:(.+?)\]\]`
 	h.Script = "other.sh"
 	h.Enabled = false
+	h.Prompt = "renamed prompt"
+	h.GatedByWebSearch = false
 	if err := repo.UpdateChatHook(ctx, h); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -104,6 +110,9 @@ func TestUpdateChatHook_ReplacesEditableFields(t *testing.T) {
 	g := got[0]
 	if g.Name != "renamed" || g.Pattern != h.Pattern || g.Script != "other.sh" || g.Enabled {
 		t.Errorf("expected every editable field replaced, got %+v", g)
+	}
+	if g.Prompt != "renamed prompt" || g.GatedByWebSearch {
+		t.Errorf("expected Prompt/GatedByWebSearch replaced too, got %+v", g)
 	}
 }
 
@@ -204,5 +213,101 @@ func TestMigrateChatEndpointColumns_UpgradesPreExistingTable_SystemPrompt(t *tes
 	}
 	if got.SystemPrompt != fresh.SystemPrompt {
 		t.Errorf("expected a fresh write's SystemPrompt to round trip, got %+v", got)
+	}
+}
+
+// TestMigrateChatHookColumns_UpgradesPreExistingTable is a real-upgrade
+// regression test proving se.mo-sys.de's own live chat_hooks rows (a real
+// "web_search" and "web_fetch" hook, both pre-dating Prompt/GatedByWebSearch)
+// won't break on the next deploy: a chat_hooks table created before those
+// two columns existed, seeded by hand via a raw connection the same way
+// TestMigrateChatEndpointColumns_UpgradesPreExistingTable_SystemPrompt seeds
+// a pre-migration chat_endpoint table, must gain both columns -- prompt
+// defaulting to "" and gated_by_web_search to false, matching a pre-existing
+// hook's previous behavior (no hook-specific message, active whenever
+// Enabled is true) -- without erroring, and the table must still work
+// normally (create/list/update) for a fresh write afterward too.
+func TestMigrateChatHookColumns_UpgradesPreExistingTable(t *testing.T) {
+	dsn := uniqueSQLiteDSN(t)
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open raw db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	// The pre-migration shape: every column up through enabled, but no
+	// prompt or gated_by_web_search.
+	if _, err := db.Exec(`CREATE TABLE chat_hooks (
+		id TEXT PRIMARY KEY, name TEXT NOT NULL, pattern TEXT NOT NULL,
+		script TEXT NOT NULL, enabled BOOLEAN NOT NULL DEFAULT true
+	)`); err != nil {
+		t.Fatalf("failed to create legacy-shape table: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO chat_hooks (id, name, pattern, script, enabled)
+		VALUES ('web_search', 'web_search', '\[\[search:(.+?)\]\]', 'web_search.sh', true)`); err != nil {
+		t.Fatalf("failed to seed a pre-existing row: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO chat_hooks (id, name, pattern, script, enabled)
+		VALUES ('web_fetch', 'web_fetch', '\[\[fetch:(.+?)\]\]', 'web_fetch.sh', true)`); err != nil {
+		t.Fatalf("failed to seed a second pre-existing row: %v", err)
+	}
+
+	ctx := context.Background()
+	repo := reopenSQLiteTestRepo(t, dsn) // migrate() runs here, including migrateChatHookColumns
+
+	pre, err := repo.ListChatHooks(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error listing pre-existing rows after migration: %v", err)
+	}
+	if len(pre) != 2 {
+		t.Fatalf("expected both pre-existing rows to survive migration, got %+v", pre)
+	}
+	for _, h := range pre {
+		if h.Prompt != "" {
+			t.Errorf("expected a pre-existing row to default to no prompt (\"\"), got %+v", h)
+		}
+		if h.GatedByWebSearch {
+			t.Errorf("expected a pre-existing row to default to ungated (false), got %+v", h)
+		}
+		if !h.Enabled || h.Script == "" {
+			t.Errorf("expected every pre-existing field otherwise untouched, got %+v", h)
+		}
+	}
+
+	// The table must still work normally for a fresh write afterward too.
+	fresh := newChatHook("fresh_hook")
+	if err := repo.CreateChatHook(ctx, fresh); err != nil {
+		t.Fatalf("unexpected error creating after migration: %v", err)
+	}
+	got, err := repo.ListChatHooks(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var found domain.ChatHook
+	for _, h := range got {
+		if h.ID == "fresh_hook" {
+			found = h
+		}
+	}
+	if found.Prompt != fresh.Prompt || found.GatedByWebSearch != fresh.GatedByWebSearch {
+		t.Errorf("expected a fresh write's Prompt/GatedByWebSearch to round trip, got %+v", found)
+	}
+
+	fresh.Prompt = "updated prompt"
+	fresh.GatedByWebSearch = false
+	if err := repo.UpdateChatHook(ctx, fresh); err != nil {
+		t.Fatalf("unexpected error updating after migration: %v", err)
+	}
+	got, err = repo.ListChatHooks(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	found = domain.ChatHook{}
+	for _, h := range got {
+		if h.ID == "fresh_hook" {
+			found = h
+		}
+	}
+	if found.Prompt != "updated prompt" || found.GatedByWebSearch {
+		t.Errorf("expected an updated write's Prompt/GatedByWebSearch to round trip, got %+v", found)
 	}
 }

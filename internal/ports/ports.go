@@ -642,6 +642,16 @@ type ChatHookStore interface {
 // resolved against a fixed, admin-controlled script directory by the
 // implementation -- it is never a path, and args are passed as a real argv
 // slice, never through a shell.
+//
+// env carries ADMIN-CONFIGURED configuration (e.g. an endpoint's own
+// WebSearchBaseURL) as additional process environment variables for the
+// script -- never anything derived from the model's own output or a
+// pattern's capture group, so this does not reopen the injection surface
+// args guards against (see application.runChatHooks's security doc
+// comment): env is set by ChatService.Chat from domain.ChatEndpoint fields
+// the admin configured ahead of time, not from a chat turn's content. A nil
+// or empty map adds nothing beyond the implementation's own base
+// environment.
 type HookScriptRunner interface {
-	RunHookScript(ctx context.Context, scriptName string, args []string) (string, error)
+	RunHookScript(ctx context.Context, scriptName string, args []string, env map[string]string) (string, error)
 }

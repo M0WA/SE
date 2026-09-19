@@ -168,6 +168,9 @@ func (r *Repository) migrate(ctx context.Context) error {
 	if err := r.migrateChatEndpointColumns(ctx); err != nil {
 		return err
 	}
+	if err := r.migrateChatHookColumns(ctx); err != nil {
+		return err
+	}
 	if err := r.migrateLegacyHTTPEmbeddingConfig(ctx); err != nil {
 		return err
 	}
@@ -335,6 +338,35 @@ func (r *Repository) migrateChatEndpointColumns(ctx context.Context) error {
 		return err
 	}
 	return addColumn("system_prompt", "system_prompt TEXT NOT NULL DEFAULT ''")
+}
+
+// migrateChatHookColumns adds prompt (see domain.ChatHook.Prompt) and
+// gated_by_web_search (see domain.ChatHook.GatedByWebSearch) to a chat_hooks
+// table that predates them -- prompt defaults to "" (no hook-specific
+// system message injected, a pre-existing hook's previous behavior) and
+// gated_by_web_search to false (active whenever Enabled is true, unaffected
+// by the Web toggle -- also a pre-existing hook's previous, and today's
+// only, behavior). chat_hooks is NOT a brand-new table -- real deployments
+// have live rows in it already, so this can't be skipped the way
+// CreateSchemaSQL alone would for a fresh install.
+func (r *Repository) migrateChatHookColumns(ctx context.Context) error {
+	existing, err := r.existingColumns(ctx, "chat_hooks")
+	if err != nil {
+		return err
+	}
+	addColumn := func(name, ddl string) error {
+		if existing[name] {
+			return nil
+		}
+		if _, err := r.db.ExecContext(ctx, "ALTER TABLE chat_hooks ADD COLUMN "+ddl); err != nil && !isAlreadyExistsError(err) {
+			return fmt.Errorf("adding %s column: %w", name, err)
+		}
+		return nil
+	}
+	if err := addColumn("prompt", "prompt TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return addColumn("gated_by_web_search", "gated_by_web_search BOOLEAN NOT NULL DEFAULT false")
 }
 
 // legacyHTTPEmbeddingSettings decodes just the fields this migration cares
@@ -2666,7 +2698,7 @@ func scanChatEndpoint(row scanner) (domain.ChatEndpoint, error) {
 	return e, nil
 }
 
-const chatHookColumns = "id, name, pattern, script, enabled"
+const chatHookColumns = "id, name, pattern, script, enabled, prompt, gated_by_web_search"
 
 // ListChatHooks lists every configured hook, ordered by name for a stable,
 // human-friendly admin table order (chat_hooks has no created_at column to
@@ -2692,8 +2724,8 @@ func (r *Repository) ListChatHooks(ctx context.Context) ([]domain.ChatHook, erro
 // CreateChatHook inserts a new admin-configured chat hook (see
 // domain.ChatHook).
 func (r *Repository) CreateChatHook(ctx context.Context, h domain.ChatHook) error {
-	insertSQL := r.ph(`INSERT INTO chat_hooks (`+chatHookColumns+`) VALUES (%s, %s, %s, %s, %s)`, 1, 2, 3, 4, 5)
-	if _, err := r.db.ExecContext(ctx, insertSQL, h.ID, h.Name, h.Pattern, h.Script, h.Enabled); err != nil {
+	insertSQL := r.ph(`INSERT INTO chat_hooks (`+chatHookColumns+`) VALUES (%s, %s, %s, %s, %s, %s, %s)`, 1, 2, 3, 4, 5, 6, 7)
+	if _, err := r.db.ExecContext(ctx, insertSQL, h.ID, h.Name, h.Pattern, h.Script, h.Enabled, h.Prompt, h.GatedByWebSearch); err != nil {
 		return fmt.Errorf("creating chat hook: %w", err)
 	}
 	return nil
@@ -2703,8 +2735,8 @@ func (r *Repository) CreateChatHook(ctx context.Context, h domain.ChatHook) erro
 // never changes after creation), returning ports.ErrChatHookNotFound if no
 // hook with h.ID exists.
 func (r *Repository) UpdateChatHook(ctx context.Context, h domain.ChatHook) error {
-	updateSQL := r.ph(`UPDATE chat_hooks SET name = %s, pattern = %s, script = %s, enabled = %s WHERE id = %s`, 1, 2, 3, 4, 5)
-	res, err := r.db.ExecContext(ctx, updateSQL, h.Name, h.Pattern, h.Script, h.Enabled, h.ID)
+	updateSQL := r.ph(`UPDATE chat_hooks SET name = %s, pattern = %s, script = %s, enabled = %s, prompt = %s, gated_by_web_search = %s WHERE id = %s`, 1, 2, 3, 4, 5, 6, 7)
+	res, err := r.db.ExecContext(ctx, updateSQL, h.Name, h.Pattern, h.Script, h.Enabled, h.Prompt, h.GatedByWebSearch, h.ID)
 	if err != nil {
 		return fmt.Errorf("updating chat hook (%s): %w", h.ID, err)
 	}
@@ -2734,7 +2766,7 @@ func requireChatHookRowsAffected(res sql.Result, id string) error {
 
 func scanChatHook(row scanner) (domain.ChatHook, error) {
 	var h domain.ChatHook
-	if err := row.Scan(&h.ID, &h.Name, &h.Pattern, &h.Script, &h.Enabled); err != nil {
+	if err := row.Scan(&h.ID, &h.Name, &h.Pattern, &h.Script, &h.Enabled, &h.Prompt, &h.GatedByWebSearch); err != nil {
 		return domain.ChatHook{}, err
 	}
 	return h, nil

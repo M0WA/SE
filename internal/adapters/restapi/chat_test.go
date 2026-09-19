@@ -102,10 +102,12 @@ type fakeHookScriptRunner struct {
 	output  string
 	err     error
 	gotArgs []string
+	gotEnv  map[string]string
 }
 
-func (f *fakeHookScriptRunner) RunHookScript(ctx context.Context, scriptName string, args []string) (string, error) {
+func (f *fakeHookScriptRunner) RunHookScript(ctx context.Context, scriptName string, args []string, env map[string]string) (string, error) {
 	f.gotArgs = args
+	f.gotEnv = env
 	if f.err != nil {
 		return "", f.err
 	}

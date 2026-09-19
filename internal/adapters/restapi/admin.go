@@ -1091,22 +1091,29 @@ func (h *Handler) handleAdminDeleteEmbeddingEndpoint(w http.ResponseWriter, r *h
 }
 
 type chatHookRequest struct {
-	Name    string `json:"name"`
-	Pattern string `json:"pattern"`
-	Script  string `json:"script"`
-	Enabled bool   `json:"enabled"`
+	Name             string `json:"name"`
+	Pattern          string `json:"pattern"`
+	Script           string `json:"script"`
+	Enabled          bool   `json:"enabled"`
+	Prompt           string `json:"prompt"`
+	GatedByWebSearch bool   `json:"gated_by_web_search"`
 }
 
 type chatHookResponse struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Pattern string `json:"pattern"`
-	Script  string `json:"script"`
-	Enabled bool   `json:"enabled"`
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	Pattern          string `json:"pattern"`
+	Script           string `json:"script"`
+	Enabled          bool   `json:"enabled"`
+	Prompt           string `json:"prompt"`
+	GatedByWebSearch bool   `json:"gated_by_web_search"`
 }
 
 func toChatHookResponse(hk domain.ChatHook) chatHookResponse {
-	return chatHookResponse{ID: hk.ID, Name: hk.Name, Pattern: hk.Pattern, Script: hk.Script, Enabled: hk.Enabled}
+	return chatHookResponse{
+		ID: hk.ID, Name: hk.Name, Pattern: hk.Pattern, Script: hk.Script, Enabled: hk.Enabled,
+		Prompt: hk.Prompt, GatedByWebSearch: hk.GatedByWebSearch,
+	}
 }
 
 // validateChatHookRequest requires a non-empty Name and Script, and a
@@ -1180,6 +1187,7 @@ func (h *Handler) handleAdminChatHooks(w http.ResponseWriter, r *http.Request) {
 		hk := domain.ChatHook{
 			ID: domain.NewChatHookID(req.Name, existingIDs), Name: req.Name,
 			Pattern: req.Pattern, Script: req.Script, Enabled: req.Enabled,
+			Prompt: req.Prompt, GatedByWebSearch: req.GatedByWebSearch,
 		}
 		if err := h.chatHooks.CreateChatHook(r.Context(), hk); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1228,7 +1236,10 @@ func (h *Handler) handleAdminUpdateChatHook(w http.ResponseWriter, r *http.Reque
 	if !validateChatHookRequest(w, req) {
 		return
 	}
-	hk := domain.ChatHook{ID: r.PathValue("id"), Name: req.Name, Pattern: req.Pattern, Script: req.Script, Enabled: req.Enabled}
+	hk := domain.ChatHook{
+		ID: r.PathValue("id"), Name: req.Name, Pattern: req.Pattern, Script: req.Script, Enabled: req.Enabled,
+		Prompt: req.Prompt, GatedByWebSearch: req.GatedByWebSearch,
+	}
 	err := h.chatHooks.UpdateChatHook(r.Context(), hk)
 	respondOrNotFound(w, err, ports.ErrChatHookNotFound, "chat hook not found", toChatHookResponse(hk))
 }

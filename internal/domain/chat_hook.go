@@ -33,6 +33,27 @@ type ChatHook struct {
 	// directory by the runner, never influenced by the match itself).
 	Script  string
 	Enabled bool
+	// Prompt is this hook's own static system-prompt text -- when non-empty
+	// AND this hook is "active" for a turn (see GatedByWebSearch and
+	// ChatService.Chat), it is injected as its own leading system message,
+	// positioned after the endpoint's persistent SystemPrompt and before
+	// any RAG/web-search context message. Typically what tells the model
+	// the hook's own invocation syntax exists at all (e.g. "to search the
+	// web, output SEARCH[query]") -- see packaging/chat-hooks/README.md's
+	// "Suggested system prompt" section, which this supersedes on a
+	// per-hook basis. Empty Prompt means no hook-specific message is added,
+	// even when the hook is active.
+	Prompt string
+	// GatedByWebSearch, when true, ties this hook's activation (and its
+	// Prompt injection) to the SAME effective web-search toggle that
+	// already gates the deterministic RAG-style web-search context
+	// injection (endpoint.WebSearchEnabled, overridden per-question by
+	// ChatOptions.WebSearch) -- the existing public chat UI's "Web"
+	// checkbox, no new UI control needed. false (the default, for a
+	// hypothetical future non-web hook) means this hook is active whenever
+	// Enabled is true, unaffected by the Web toggle -- today's existing
+	// behavior.
+	GatedByWebSearch bool
 }
 
 // ChatHookResult is the outcome of running one matched ChatHook's script

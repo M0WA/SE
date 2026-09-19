@@ -18,10 +18,13 @@ const maxHookMatchesPerTurn = 5
 
 // runChatHooks scans answer for every enabled hook's regex, and for each
 // match runs that hook's script with the match's capture group as an
-// argument, returning one ChatHookResult per match, capped at
-// maxHookMatchesPerTurn total. Best-effort: a script error/timeout produces
-// a ChatHookResult with Err set, never fails the whole chat turn -- the
-// model's own answer always reaches the user regardless.
+// argument (plus env, forwarded to every RunHookScript call unchanged --
+// runChatHooks does not need to interpret it, just pass it through; see
+// ports.HookScriptRunner's doc comment for what it carries and why),
+// returning one ChatHookResult per match, capped at maxHookMatchesPerTurn
+// total. Best-effort: a script error/timeout produces a ChatHookResult with
+// Err set, never fails the whole chat turn -- the model's own answer always
+// reaches the user regardless.
 //
 // SECURITY: capture groups come from the model's own OUTPUT (answer), which
 // can itself be influenced by untrusted web content when RAG/web-search
@@ -41,7 +44,7 @@ const maxHookMatchesPerTurn = 5
 // Create/UpdateChatHook time (admin handler layer) is expected to keep this
 // from happening in practice, but existing rows could pre-date stricter
 // validation, so this defends against that defensively.
-func runChatHooks(ctx context.Context, hooks []domain.ChatHook, runner ports.HookScriptRunner, answer string) []domain.ChatHookResult {
+func runChatHooks(ctx context.Context, hooks []domain.ChatHook, runner ports.HookScriptRunner, answer string, env map[string]string) []domain.ChatHookResult {
 	var results []domain.ChatHookResult
 	for _, h := range hooks {
 		if len(results) >= maxHookMatchesPerTurn {
@@ -66,7 +69,7 @@ func runChatHooks(ctx context.Context, hooks []domain.ChatHook, runner ports.Hoo
 				break
 			}
 			arg := m[1]
-			output, err := runner.RunHookScript(ctx, h.Script, []string{arg})
+			output, err := runner.RunHookScript(ctx, h.Script, []string{arg}, env)
 			result := domain.ChatHookResult{HookName: h.Name}
 			if err != nil {
 				result.Err = err.Error()

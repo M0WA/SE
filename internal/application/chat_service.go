@@ -107,11 +107,30 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		useWebSearch = *opts.WebSearch
 	}
 
+	// List ALL hooks early, before building the messages sent to the first
+	// completion call -- a hook's own Prompt (see below) needs to reach the
+	// model before it can decide to invoke that hook at all, so this can't
+	// wait until after an answer comes back. activeHooks is reused for the
+	// runChatHooks call after the first answer, so ListChatHooks is never
+	// called twice in one turn. A ListChatHooks error is best-effort, same
+	// convention as the RAG/web-search errors below: it just leaves
+	// activeHooks empty rather than failing the turn.
+	var activeHooks []domain.ChatHook
+	if s.hooks != nil {
+		if all, err := s.hooks.ListChatHooks(ctx); err == nil {
+			for _, h := range all {
+				if h.Enabled && (!h.GatedByWebSearch || useWebSearch) {
+					activeHooks = append(activeHooks, h)
+				}
+			}
+		}
+	}
+
 	messages := history
 	var sources []domain.ChatSource
+	var ctxBlock strings.Builder
 	if useRAG || useWebSearch {
 		if lastUser, ok := lastUserMessage(history); ok {
-			var ctxBlock strings.Builder
 			if useRAG {
 				results, err := s.search.Search(ctx, lastUser.Content, ports.SearchQuery{TopK: endpoint.RAGResultCount})
 				if err == nil && len(results) > 0 {
@@ -135,28 +154,39 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 				}
 				// A web search error is likewise best-effort.
 			}
-			if ctxBlock.Len() > 0 {
-				augmented := make([]domain.ChatMessage, 0, len(history)+1)
-				augmented = append(augmented, domain.ChatMessage{
-					Role:    domain.ChatRoleSystem,
-					Content: "Use the following search results to answer the user's question. Cite the sources you use by URL.\n\n" + ctxBlock.String(),
-				})
-				augmented = append(augmented, history...)
-				messages = augmented
-			}
 		}
 	}
 
-	// The persistent per-endpoint system prompt, when set, always leads --
-	// ahead of the RAG/web-search context message (if any), which by this
-	// point is already the first element of messages when present. Prepend
-	// it last so it lands first among any leading system messages, giving
-	// up to two: persistent prompt, then RAG/web-search context.
+	// Leading system messages, in order: (1) the persistent per-endpoint
+	// system prompt, unconditional, when set; (2) each activeHooks entry's
+	// own non-empty Prompt, in list order, each its OWN separate system
+	// message (not concatenated into one blob) -- so a hook's invocation
+	// syntax reaches the model before the first completion call, letting it
+	// decide whether to invoke that hook at all; (3) the RAG/web-search
+	// context message, if any. Building this as one ordered slice (rather
+	// than prepending piecemeal) keeps that order obvious and gives
+	// trimToBudget a single well-defined run of leading system-role
+	// messages to keep intact.
+	var leading []domain.ChatMessage
 	if endpoint.SystemPrompt != "" {
-		withPrompt := make([]domain.ChatMessage, 0, len(messages)+1)
-		withPrompt = append(withPrompt, domain.ChatMessage{Role: domain.ChatRoleSystem, Content: endpoint.SystemPrompt})
-		withPrompt = append(withPrompt, messages...)
-		messages = withPrompt
+		leading = append(leading, domain.ChatMessage{Role: domain.ChatRoleSystem, Content: endpoint.SystemPrompt})
+	}
+	for _, h := range activeHooks {
+		if h.Prompt != "" {
+			leading = append(leading, domain.ChatMessage{Role: domain.ChatRoleSystem, Content: h.Prompt})
+		}
+	}
+	if ctxBlock.Len() > 0 {
+		leading = append(leading, domain.ChatMessage{
+			Role:    domain.ChatRoleSystem,
+			Content: "Use the following search results to answer the user's question. Cite the sources you use by URL.\n\n" + ctxBlock.String(),
+		})
+	}
+	if len(leading) > 0 {
+		withLeading := make([]domain.ChatMessage, 0, len(leading)+len(messages))
+		withLeading = append(withLeading, leading...)
+		withLeading = append(withLeading, messages...)
+		messages = withLeading
 	}
 
 	contextTrimmed := false
@@ -171,13 +201,16 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		return ChatResult{}, fmt.Errorf("chat: %w", err)
 	}
 
+	// Reuse the same activeHooks list computed above -- ListChatHooks is
+	// never called a second time in one turn. env carries only
+	// ADMIN-CONFIGURED endpoint config (never anything derived from the
+	// model's own answer or a capture group) -- see
+	// ports.HookScriptRunner's doc comment for why this doesn't reopen
+	// runChatHooks's security surface.
 	var hookResults []domain.ChatHookResult
-	if s.hooks != nil {
-		if enabledHooks, err := s.hooks.ListChatHooks(ctx); err == nil {
-			hookResults = runChatHooks(ctx, enabledHooks, s.hookRunner, answer)
-		}
-		// A ListChatHooks error is intentionally swallowed here, same
-		// best-effort convention as the RAG/web-search errors above.
+	if len(activeHooks) > 0 {
+		env := map[string]string{"WEB_SEARCH_BASE_URL": endpoint.WebSearchBaseURL}
+		hookResults = runChatHooks(ctx, activeHooks, s.hookRunner, answer, env)
 	}
 
 	// A tool call's own raw text (e.g. "<web_search>golang release
@@ -261,12 +294,12 @@ func estimateTokens(messages []domain.ChatMessage) int {
 }
 
 // trimToBudget drops the oldest messages in messages -- keeping every
-// leading system-role message intact (there can now be up to two: the
-// persistent per-endpoint SystemPrompt, then the RAG/web-search context
-// message, see ChatService.Chat), and always keeping at least the single
-// most recent message even if it alone exceeds budget, since trimming it
-// away would leave nothing left to answer -- until the estimated token
-// count fits within maxTokens.
+// leading system-role message intact (there can now be several: the
+// persistent per-endpoint SystemPrompt, then one per active chat hook's own
+// Prompt, then the RAG/web-search context message, see ChatService.Chat),
+// and always keeping at least the single most recent message even if it
+// alone exceeds budget, since trimming it away would leave nothing left to
+// answer -- until the estimated token count fits within maxTokens.
 func trimToBudget(messages []domain.ChatMessage, maxTokens int) []domain.ChatMessage {
 	if estimateTokens(messages) <= maxTokens {
 		return messages
