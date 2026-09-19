@@ -14,6 +14,12 @@ chown searchengine:searchengine /var/lib/searchengine
 # under it.
 mkdir -p /var/lib/searchengine/tmp
 chown searchengine:searchengine /var/lib/searchengine/tmp
+# CHAT_HOOKS_DIR (see searchengine.env) is deliberately NOT created here --
+# same as packaging/searxng/'s Docker Compose file, installing chat hook
+# scripts is a manual step (see packaging/chat-hooks/README.md): they're
+# static, admin-authored config, not something any service writes to at
+# runtime, so they don't belong under /var/lib/searchengine with what
+# postinst does manage here.
 if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     systemctl daemon-reload
     systemctl enable searchengine-search.service

@@ -618,3 +618,30 @@ type ChatCompleter interface {
 type WebSearcher interface {
 	Search(ctx context.Context, baseURL, query string, count int) ([]domain.WebSearchResult, error)
 }
+
+// ErrChatHookNotFound is returned by ChatHookStore's Update and Delete when
+// no hook with the given ID exists -- ChatHookStore's sibling of
+// ErrEmbeddingEndpointNotFound above.
+var ErrChatHookNotFound = errors.New("chat hook not found")
+
+// ChatHookStore persists the admin-configured domain.ChatHook rows -- a
+// list of many, like EmbeddingEndpointStore, unlike the single-row
+// ChatEndpointStore above: an admin can define several hooks over time.
+type ChatHookStore interface {
+	ListChatHooks(ctx context.Context) ([]domain.ChatHook, error)
+	CreateChatHook(ctx context.Context, h domain.ChatHook) error
+	// UpdateChatHook returns ErrChatHookNotFound if no hook with h.ID exists.
+	UpdateChatHook(ctx context.Context, h domain.ChatHook) error
+	// DeleteChatHook returns ErrChatHookNotFound if no hook with id exists.
+	DeleteChatHook(ctx context.Context, id string) error
+}
+
+// HookScriptRunner executes one hook's script with capture groups as argv
+// (NEVER shell-interpolated -- see application.runChatHooks's own security
+// doc comment), returning its stdout or an error/timeout. scriptName is
+// resolved against a fixed, admin-controlled script directory by the
+// implementation -- it is never a path, and args are passed as a real argv
+// slice, never through a shell.
+type HookScriptRunner interface {
+	RunHookScript(ctx context.Context, scriptName string, args []string) (string, error)
+}

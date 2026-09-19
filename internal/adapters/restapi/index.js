@@ -244,7 +244,12 @@
   // every call and the backend silently drops the oldest messages to fit
   // the endpoint's token budget, without this note a user would have no way
   // to know this answer was generated without seeing the full conversation.
-  function renderChatMessage(role, content, sources, contextTrimmed) {
+  // hookResults (also assistant-only, also never echoed back into
+  // chatHistory) is one entry per regex-triggered chat hook that matched
+  // this turn's answer -- each rendered as its own folded <details>, closed
+  // by default, so a hook's raw output/error is available on demand without
+  // cluttering the answer itself.
+  function renderChatMessage(role, content, sources, contextTrimmed, hookResults) {
     const msg = document.createElement('div');
     msg.className = role === 'user' ? 'chat-msg chat-msg-user' : 'chat-msg chat-msg-assistant';
 
@@ -277,6 +282,20 @@
       note.className = 'chat-context-note';
       note.textContent = 'Older messages were dropped from context to fit the model’s limit.';
       msg.appendChild(note);
+    }
+
+    if (role === 'assistant' && hookResults && hookResults.length > 0) {
+      for (const hr of hookResults) {
+        const details = document.createElement('details');
+        details.className = 'chat-hook-result' + (hr.err ? ' chat-hook-result-error' : '');
+        const summary = document.createElement('summary');
+        summary.textContent = hr.hook_name;
+        details.appendChild(summary);
+        const pre = document.createElement('pre');
+        pre.textContent = hr.err ? hr.err : hr.output;
+        details.appendChild(pre);
+        msg.appendChild(details);
+      }
     }
 
     chatMessages.appendChild(msg);
@@ -314,7 +333,7 @@
       }
       const data = await resp.json();
       chatHistory.push({ role: 'assistant', content: data.answer });
-      renderChatMessage('assistant', data.answer, data.sources || [], data.context_trimmed);
+      renderChatMessage('assistant', data.answer, data.sources || [], data.context_trimmed, data.hook_results || []);
       chatStatus.textContent = '';
     } catch (err) {
       chatStatus.textContent = 'Chat failed: could not reach the server.';

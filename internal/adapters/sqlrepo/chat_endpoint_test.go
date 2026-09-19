@@ -17,7 +17,8 @@ func newChatEndpoint() domain.ChatEndpoint {
 		APIKey:  "sk-test", Model: "meta-llama/Llama-3.3-70B-Instruct",
 		Enabled: true, RAGEnabled: true, RAGResultCount: 5, MaxContextTokens: 6000,
 		WebSearchEnabled: true, WebSearchBaseURL: "http://127.0.0.1:8888", WebSearchResultCount: 5,
-		UpdatedAt: time.Now().UTC(),
+		SystemPrompt: "You are a helpful assistant.",
+		UpdatedAt:    time.Now().UTC(),
 	}
 }
 
@@ -54,6 +55,9 @@ func TestSetChatEndpoint_ThenGetRoundTrips(t *testing.T) {
 	if !got.WebSearchEnabled || got.WebSearchBaseURL != "http://127.0.0.1:8888" || got.WebSearchResultCount != 5 {
 		t.Errorf("expected web search fields to round trip, got %+v", got)
 	}
+	if got.SystemPrompt != "You are a helpful assistant." {
+		t.Errorf("expected SystemPrompt to round trip, got %+v", got)
+	}
 	if got.UpdatedAt.IsZero() {
 		t.Errorf("expected UpdatedAt to round trip, got %+v", got)
 	}
@@ -77,6 +81,7 @@ func TestSetChatEndpoint_SecondCallOverwritesRatherThanDuplicating(t *testing.T)
 	e.WebSearchEnabled = false
 	e.WebSearchBaseURL = "http://new-searx.example"
 	e.WebSearchResultCount = 15
+	e.SystemPrompt = "You are a rotated assistant."
 	e.UpdatedAt = e.UpdatedAt.Add(time.Hour)
 	if err := repo.SetChatEndpoint(ctx, e); err != nil {
 		t.Fatalf("unexpected error on second SetChatEndpoint: %v", err)
@@ -97,6 +102,9 @@ func TestSetChatEndpoint_SecondCallOverwritesRatherThanDuplicating(t *testing.T)
 	}
 	if got.WebSearchEnabled || got.WebSearchBaseURL != "http://new-searx.example" || got.WebSearchResultCount != 15 {
 		t.Errorf("expected updated web search fields to replace the original, got %+v", got)
+	}
+	if got.SystemPrompt != "You are a rotated assistant." {
+		t.Errorf("expected updated SystemPrompt to replace the original, got %+v", got)
 	}
 
 	counts, err := repo.TableRowCounts(ctx)

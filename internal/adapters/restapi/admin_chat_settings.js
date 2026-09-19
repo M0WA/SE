@@ -3,6 +3,7 @@
   const chatModelEl = document.getElementById('chat-model');
   const chatAPIKeyEl = document.getElementById('chat-api-key');
   const chatClearAPIKeyEl = document.getElementById('chat-clear-api-key');
+  const chatSystemPromptEl = document.getElementById('chat-system-prompt');
   const chatRAGEnabledEl = document.getElementById('chat-rag-enabled');
   const chatRAGResultCountEl = document.getElementById('chat-rag-result-count');
   const chatMaxContextTokensEl = document.getElementById('chat-max-context-tokens');
@@ -25,6 +26,7 @@
     chatAPIKeyEl.placeholder = c.has_api_key ? 'Leave blank to keep the current key' : '';
     chatClearAPIKeyEl.checked = false;
     chatClearAPIKeyEl.disabled = !c.has_api_key;
+    chatSystemPromptEl.value = c.system_prompt || '';
     chatRAGEnabledEl.checked = c.rag_enabled !== false;
     chatRAGResultCountEl.value = c.rag_result_count;
     chatMaxContextTokensEl.value = c.max_context_tokens || 0;
@@ -52,6 +54,7 @@
         clear_api_key: chatClearAPIKeyEl.checked,
         model: chatModelEl.value,
         enabled: chatEnabledEl.checked,
+        system_prompt: chatSystemPromptEl.value,
         rag_enabled: chatRAGEnabledEl.checked,
         rag_result_count: parseInt(chatRAGResultCountEl.value, 10),
         max_context_tokens: parseInt(chatMaxContextTokensEl.value, 10) || 0,

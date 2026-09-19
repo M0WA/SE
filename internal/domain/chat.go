@@ -75,7 +75,17 @@ type ChatEndpoint struct {
 	// WebSearchResultCount bounds how many web results are fetched when
 	// WebSearchEnabled -- see DefaultChatWebSearchResultCount/Min/Max.
 	WebSearchResultCount int
-	UpdatedAt            time.Time
+	// SystemPrompt, when non-empty, is injected as a leading system-role
+	// domain.ChatMessage ahead of the rest of the conversation on every
+	// turn (see chat_service.go's Chat) -- before the RAG/web-search
+	// context system message, if any, so an admin-authored persona/
+	// instruction always takes precedence. Invisible in the rendered chat
+	// UI, same as the RAG/web-search context message already is (the
+	// public chat UI only ever renders user/assistant roles). Always
+	// preserved by trimToBudget's context trimming, never dropped even
+	// when the conversation is trimmed to fit MaxContextTokens.
+	SystemPrompt string
+	UpdatedAt    time.Time
 }
 
 // DefaultChatRAGResultCount/MinChatRAGResultCount/MaxChatRAGResultCount

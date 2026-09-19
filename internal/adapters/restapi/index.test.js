@@ -328,6 +328,42 @@ test('sendChatMessage renders no context-trimmed note when context_trimmed is ab
   assert.equal(assistantMsg.querySelector('.chat-context-note'), null);
 });
 
+test('sendChatMessage renders a folded, closed <details> per hook result', async () => {
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      answer: 'answer',
+      hook_results: [
+        { hook_name: 'web_search', output: '{"results":[]}' },
+        { hook_name: 'broken_hook', err: 'script timed out' },
+      ],
+    }),
+  });
+  const { sendChatMessage } = loadFixture();
+  await sendChatMessage('q');
+  const assistantMsg = document.getElementById('chat-messages').children[1];
+  const results = assistantMsg.querySelectorAll('.chat-hook-result');
+  assert.equal(results.length, 2);
+
+  assert.equal(results[0].open, false);
+  assert.equal(results[0].querySelector('summary').textContent, 'web_search');
+  assert.equal(results[0].querySelector('pre').textContent, '{"results":[]}');
+  assert.equal(results[0].classList.contains('chat-hook-result-error'), false);
+
+  assert.equal(results[1].open, false);
+  assert.equal(results[1].querySelector('summary').textContent, 'broken_hook');
+  assert.equal(results[1].querySelector('pre').textContent, 'script timed out');
+  assert.equal(results[1].classList.contains('chat-hook-result-error'), true);
+});
+
+test('sendChatMessage renders no hook-result elements when hook_results is absent', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'answer' }) });
+  const { sendChatMessage } = loadFixture();
+  await sendChatMessage('q');
+  const assistantMsg = document.getElementById('chat-messages').children[1];
+  assert.equal(assistantMsg.querySelectorAll('.chat-hook-result').length, 0);
+});
+
 test('sendChatMessage renders the server error text on a non-ok response', async () => {
   global.fetch = async () => ({ ok: false, text: async () => ' endpoint not configured ' });
   const { sendChatMessage } = loadFixture();

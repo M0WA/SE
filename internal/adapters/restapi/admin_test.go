@@ -5150,6 +5150,7 @@ type chatEndpointResp struct {
 	WebSearchEnabled     bool      `json:"web_search_enabled"`
 	WebSearchBaseURL     string    `json:"web_search_base_url"`
 	WebSearchResultCount int       `json:"web_search_result_count"`
+	SystemPrompt         string    `json:"system_prompt"`
 	UpdatedAt            time.Time `json:"updated_at"`
 }
 
@@ -5402,5 +5403,437 @@ func TestHandleAdminChatEndpoint_PatchStoreError(t *testing.T) {
 	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{"base_url": "https://example.com"})
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleAdminChatEndpoint_PatchSystemPromptRoundTrips proves
+// system_prompt round-trips through PATCH and a subsequent GET, and that a
+// PATCH omitting it clears it back to "" (unlike api_key, it has no
+// preserve-when-blank special case -- every PATCH is a full replace of it).
+func TestHandleAdminChatEndpoint_PatchSystemPromptRoundTrips(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
+
+	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{
+		"base_url": "https://example.com/v1", "model": "gpt-x", "system_prompt": "You are a helpful librarian.",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp chatEndpointResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.SystemPrompt != "You are a helpful librarian." {
+		t.Errorf("expected system_prompt round tripped in the PATCH response, got %q", resp.SystemPrompt)
+	}
+
+	code, got := getChatEndpoint(t, h, cookie)
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if got.SystemPrompt != "You are a helpful librarian." {
+		t.Errorf("expected system_prompt round tripped in a subsequent GET, got %q", got.SystemPrompt)
+	}
+
+	rec = patchChatEndpoint(t, h, cookie, map[string]interface{}{
+		"base_url": "https://example.com/v1", "model": "gpt-x",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.SystemPrompt != "" {
+		t.Errorf("expected a PATCH omitting system_prompt to clear it, got %q", resp.SystemPrompt)
+	}
+}
+
+// chatHookResp mirrors admin.go's unexported chatHookResponse wire shape,
+// for decoding test responses.
+type chatHookResp struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Pattern string `json:"pattern"`
+	Script  string `json:"script"`
+	Enabled bool   `json:"enabled"`
+}
+
+func adminAuthedHandlerWithChatHooks(t *testing.T, store ports.ChatHookStore) (*restapi.Handler, *http.Cookie) {
+	t.Helper()
+	return adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, ChatHooks: store,
+	})
+}
+
+func createTestChatHook(t *testing.T, h *restapi.Handler, cookie *http.Cookie, body map[string]interface{}) (int, chatHookResp) {
+	t.Helper()
+	data, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/chat-hooks", bytes.NewReader(data))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	var resp chatHookResp
+	if rec.Code == http.StatusCreated {
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decoding create response: %v", err)
+		}
+	}
+	return rec.Code, resp
+}
+
+func patchChatHook(t *testing.T, h *restapi.Handler, cookie *http.Cookie, id string, body map[string]interface{}) *httptest.ResponseRecorder {
+	t.Helper()
+	data, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/chat-hooks/"+id, bytes.NewReader(data))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	return rec
+}
+
+func TestHandleAdminChatHooks_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/chat-hooks", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when chat hooks aren't configured, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminChatHooks_MethodNotAllowed(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/chat-hooks", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminChatHooks_CreateInvalidJSON(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/chat-hooks", bytes.NewReader([]byte("{not json")))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+// TestHandleAdminChatHooks_CreateValidation covers every
+// validateChatHookRequest rejection branch: empty name, empty script, a
+// pattern that fails to compile, and a pattern with the wrong capture
+// group count (zero or more than one) -- see runChatHooks's security
+// doc comment for why exactly one capture group is enforced here.
+func TestHandleAdminChatHooks_CreateValidation(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
+
+	cases := []struct {
+		name string
+		body map[string]interface{}
+	}{
+		{"missing name", map[string]interface{}{"pattern": `SEARCH\((.+)\)`, "script": "search.sh"}},
+		{"missing script", map[string]interface{}{"name": "web_search", "pattern": `SEARCH\((.+)\)`}},
+		{"invalid regex", map[string]interface{}{"name": "web_search", "pattern": `SEARCH\((.+`, "script": "search.sh"}},
+		{"no capture groups", map[string]interface{}{"name": "web_search", "pattern": `SEARCH`, "script": "search.sh"}},
+		{"two capture groups", map[string]interface{}{"name": "web_search", "pattern": `SEARCH\((.+)\)-(.+)`, "script": "search.sh"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, _ := json.Marshal(tc.body)
+			req := httptest.NewRequest(http.MethodPost, "/admin/api/chat-hooks", bytes.NewReader(data))
+			req.AddCookie(cookie)
+			rec := httptest.NewRecorder()
+			h.RoutesAdmin().ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestHandleAdminChatHooks_CreateThenList proves a created hook's ID is
+// minted from its name and it shows up in a subsequent list.
+func TestHandleAdminChatHooks_CreateThenList(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
+
+	code, created := createTestChatHook(t, h, cookie, map[string]interface{}{
+		"name": "Web Search", "pattern": `SEARCH\((.+)\)`, "script": "search.sh", "enabled": true,
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", code)
+	}
+	if created.ID != "web_search" {
+		t.Errorf("expected the ID minted from the name, got %q", created.ID)
+	}
+	if created.Pattern != `SEARCH\((.+)\)` || created.Script != "search.sh" || !created.Enabled {
+		t.Errorf("expected every field round tripped in the create response, got %+v", created)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/admin/api/chat-hooks", nil)
+	listReq.AddCookie(cookie)
+	listRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", listRec.Code)
+	}
+	var list []chatHookResp
+	if err := json.Unmarshal(listRec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decoding list response: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != "web_search" {
+		t.Errorf("expected the created hook listed, got %+v", list)
+	}
+}
+
+// TestHandleAdminChatHooks_CreateDedupesIDOnNameCollision proves two hooks
+// created with the same name get distinct IDs, per domain.NewChatHookID's
+// dedupe rule.
+func TestHandleAdminChatHooks_CreateDedupesIDOnNameCollision(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
+
+	_, first := createTestChatHook(t, h, cookie, map[string]interface{}{
+		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+	})
+	_, second := createTestChatHook(t, h, cookie, map[string]interface{}{
+		"name": "hook", "pattern": `B\((.+)\)`, "script": "b.sh",
+	})
+	if first.ID == second.ID {
+		t.Errorf("expected distinct IDs for two hooks named the same, got both %q", first.ID)
+	}
+}
+
+func TestHandleAdminChatHooks_ListError(t *testing.T) {
+	store := &fakeChatHookStore{listErr: errors.New("db unavailable")}
+	h, cookie := adminAuthedHandlerWithChatHooks(t, store)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/chat-hooks", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminChatHooks_CreateListErrorPropagates(t *testing.T) {
+	store := &fakeChatHookStore{listErr: errors.New("db unavailable")}
+	h, cookie := adminAuthedHandlerWithChatHooks(t, store)
+	code, _ := createTestChatHook(t, h, cookie, map[string]interface{}{
+		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+	})
+	if code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", code)
+	}
+}
+
+func TestHandleAdminChatHooks_CreateStoreError(t *testing.T) {
+	store := &fakeChatHookStore{createErr: errors.New("write failed")}
+	h, cookie := adminAuthedHandlerWithChatHooks(t, store)
+	code, _ := createTestChatHook(t, h, cookie, map[string]interface{}{
+		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+	})
+	if code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", code)
+	}
+}
+
+func TestHandleAdminGetChatHook_Success(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
+	_, created := createTestChatHook(t, h, cookie, map[string]interface{}{
+		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/chat-hooks/"+created.ID, nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got chatHookResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if got.ID != created.ID {
+		t.Errorf("expected the created hook, got %+v", got)
+	}
+}
+
+func TestHandleAdminGetChatHook_NotFound(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/chat-hooks/missing", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminGetChatHook_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/chat-hooks/anything", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminGetChatHook_ListError(t *testing.T) {
+	store := &fakeChatHookStore{listErr: errors.New("db unavailable")}
+	h, cookie := adminAuthedHandlerWithChatHooks(t, store)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/chat-hooks/anything", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+// TestHandleAdminUpdateChatHook_ReplacesEditableFields proves a PATCH
+// replaces every editable field (not the ID).
+func TestHandleAdminUpdateChatHook_ReplacesEditableFields(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
+	_, created := createTestChatHook(t, h, cookie, map[string]interface{}{
+		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh", "enabled": true,
+	})
+
+	rec := patchChatHook(t, h, cookie, created.ID, map[string]interface{}{
+		"name": "renamed", "pattern": `B\((.+)\)`, "script": "b.sh", "enabled": false,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp chatHookResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.ID != created.ID {
+		t.Errorf("expected ID unchanged by PATCH, got %q, was %q", resp.ID, created.ID)
+	}
+	if resp.Name != "renamed" || resp.Pattern != `B\((.+)\)` || resp.Script != "b.sh" || resp.Enabled {
+		t.Errorf("expected every editable field replaced, got %+v", resp)
+	}
+}
+
+func TestHandleAdminUpdateChatHook_InvalidJSON(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/chat-hooks/anything", bytes.NewReader([]byte("{not json")))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminUpdateChatHook_InvalidPattern(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
+	_, created := createTestChatHook(t, h, cookie, map[string]interface{}{
+		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+	})
+	rec := patchChatHook(t, h, cookie, created.ID, map[string]interface{}{
+		"name": "hook", "pattern": `no groups here`, "script": "a.sh",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleAdminUpdateChatHook_NotFound(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
+	rec := patchChatHook(t, h, cookie, "missing", map[string]interface{}{
+		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+	})
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleAdminUpdateChatHook_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	rec := patchChatHook(t, h, cookie, "anything", map[string]interface{}{
+		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+	})
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminUpdateChatHook_StoreError(t *testing.T) {
+	store := &fakeChatHookStore{updateErr: errors.New("write failed")}
+	h, cookie := adminAuthedHandlerWithChatHooks(t, store)
+	rec := patchChatHook(t, h, cookie, "anything", map[string]interface{}{
+		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+	})
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleAdminDeleteChatHook_Success(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
+	_, created := createTestChatHook(t, h, cookie, map[string]interface{}{
+		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+	})
+
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/chat-hooks/"+created.ID, nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/chat-hooks/"+created.ID, nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusNotFound {
+		t.Errorf("expected the deleted hook to 404 afterward, got %d", getRec.Code)
+	}
+}
+
+func TestHandleAdminDeleteChatHook_NotFound(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/chat-hooks/missing", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDeleteChatHook_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/chat-hooks/anything", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
 	}
 }
