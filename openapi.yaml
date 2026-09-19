@@ -1816,6 +1816,14 @@ components:
             answer in the results (with sources cited); false sends the
             conversation to the chat model as-is, with no connection to the
             indexed corpus.
+        web_search:
+          type: boolean
+          description: >-
+            rag's exact counterpart for a live web search (via a
+            self-hosted SearXNG instance) instead of this instance's own
+            index -- overrides web_search_enabled for this question only,
+            omit to use that default. Independent of rag: either, both, or
+            neither may apply to the same question.
 
     ChatResponse:
       type: object
@@ -1855,6 +1863,27 @@ components:
             newest, always keeping the most recent message. 0 disables
             trimming (the full history is sent as-is). A negative value is
             rejected with 400.
+        web_search_enabled:
+          type: boolean
+          description: >-
+            When true, the latest user message is also used as a live web
+            search query (via web_search_base_url) and matching results are
+            folded into the same context message as RAG's, ahead of the
+            rest of history. Independent of rag_enabled -- either, both, or
+            neither may apply.
+        web_search_base_url:
+          type: string
+          description: >-
+            A self-hosted SearXNG instance's base URL, e.g.
+            http://127.0.0.1:8888 -- queried at
+            <web_search_base_url>/search?q=...&format=json. Required for
+            web_search_enabled to actually do anything.
+        web_search_result_count:
+          type: integer
+          description: >-
+            How many web search results are retrieved when
+            web_search_enabled. Bounds self-heal server-side the same way
+            as rag_result_count (default 5, max 20).
 
     ChatEndpointRequest:
       description: >-

@@ -297,21 +297,38 @@ func (r *Repository) migrateEmbeddingEndpointColumns(ctx context.Context) error 
 }
 
 // migrateChatEndpointColumns adds max_context_tokens (see
-// domain.ChatEndpoint.MaxContextTokens) to a chat_endpoint table that
-// predates it, defaulting to 0 ("disabled") -- a pre-existing endpoint's
-// previous untrimmed behavior.
+// domain.ChatEndpoint.MaxContextTokens) and the three web_search_* columns
+// (see domain.ChatEndpoint.WebSearchEnabled/WebSearchBaseURL/
+// WebSearchResultCount) to a chat_endpoint table that predates them --
+// max_context_tokens defaults to 0 ("disabled"), web_search_enabled to
+// false and web_search_base_url to ” (both leave web search off, a
+// pre-existing endpoint's previous behavior), web_search_result_count to 0
+// (self-heals to the real default via domain.ChatEndpoint.Clamp on the
+// next save, same convention as rag_result_count's own 0 default).
 func (r *Repository) migrateChatEndpointColumns(ctx context.Context) error {
 	existing, err := r.existingColumns(ctx, "chat_endpoint")
 	if err != nil {
 		return err
 	}
-	if existing["max_context_tokens"] {
+	addColumn := func(name, ddl string) error {
+		if existing[name] {
+			return nil
+		}
+		if _, err := r.db.ExecContext(ctx, "ALTER TABLE chat_endpoint ADD COLUMN "+ddl); err != nil && !isAlreadyExistsError(err) {
+			return fmt.Errorf("adding %s column: %w", name, err)
+		}
 		return nil
 	}
-	if _, err := r.db.ExecContext(ctx, "ALTER TABLE chat_endpoint ADD COLUMN max_context_tokens INTEGER NOT NULL DEFAULT 0"); err != nil && !isAlreadyExistsError(err) {
-		return fmt.Errorf("adding max_context_tokens column: %w", err)
+	if err := addColumn("max_context_tokens", "max_context_tokens INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
 	}
-	return nil
+	if err := addColumn("web_search_enabled", "web_search_enabled BOOLEAN NOT NULL DEFAULT false"); err != nil {
+		return err
+	}
+	if err := addColumn("web_search_base_url", "web_search_base_url TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return addColumn("web_search_result_count", "web_search_result_count INTEGER NOT NULL DEFAULT 0")
 }
 
 // legacyHTTPEmbeddingSettings decodes just the fields this migration cares
@@ -2543,7 +2560,7 @@ func scanEmbeddingEndpoint(row scanner) (domain.EmbeddingHTTPEndpoint, error) {
 // key.
 const chatEndpointRowID = "default"
 
-const chatEndpointColumns = "base_url, api_key, model, enabled, rag_enabled, rag_result_count, max_context_tokens, updated_at"
+const chatEndpointColumns = "base_url, api_key, model, enabled, rag_enabled, rag_result_count, max_context_tokens, web_search_enabled, web_search_base_url, web_search_result_count, updated_at"
 
 // GetChatEndpoint returns the single admin-configured chat endpoint, or
 // ports.ErrChatEndpointNotConfigured if it has never been saved.
@@ -2567,7 +2584,8 @@ func (r *Repository) GetChatEndpoint(ctx context.Context) (domain.ChatEndpoint, 
 func (r *Repository) SetChatEndpoint(ctx context.Context, e domain.ChatEndpoint) error {
 	_, err := r.db.ExecContext(ctx, r.dialect.UpsertChatEndpointSQL(),
 		chatEndpointRowID, e.BaseURL, e.APIKey, e.Model, e.Enabled, e.RAGEnabled, e.RAGResultCount,
-		e.MaxContextTokens, e.UpdatedAt.UTC().Format(crawledAtLayout),
+		e.MaxContextTokens, e.WebSearchEnabled, e.WebSearchBaseURL, e.WebSearchResultCount,
+		e.UpdatedAt.UTC().Format(crawledAtLayout),
 	)
 	if err != nil {
 		return fmt.Errorf("setting chat endpoint: %w", err)
@@ -2579,7 +2597,8 @@ func scanChatEndpoint(row scanner) (domain.ChatEndpoint, error) {
 	var e domain.ChatEndpoint
 	var updatedAt string
 	if err := row.Scan(&e.BaseURL, &e.APIKey, &e.Model, &e.Enabled, &e.RAGEnabled,
-		&e.RAGResultCount, &e.MaxContextTokens, &updatedAt); err != nil {
+		&e.RAGResultCount, &e.MaxContextTokens, &e.WebSearchEnabled, &e.WebSearchBaseURL,
+		&e.WebSearchResultCount, &updatedAt); err != nil {
 		return domain.ChatEndpoint{}, err
 	}
 	e.UpdatedAt = parseCrawledAt(updatedAt)
