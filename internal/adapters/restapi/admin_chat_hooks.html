@@ -19,7 +19,7 @@
   </div>
 
   <h2>Chat hooks</h2>
-  <p class="lede" style="margin: 0 0 1.5rem;">Regex triggers matched against every chat answer: whenever a hook's pattern matches, the matched capture group is passed as an argument to its script, and the script's output is fed straight back to the model for a real, results-informed final answer -- the model's own tool-call text is never shown to the user. The raw script output is still shown separately as a labeled, folded aside for transparency. A lightweight, deliberately narrow tool-calling mechanism -- not a general plugin system. Needs a system prompt (Settings -> Chat) that actually tells the model when and how to invoke a hook -- see <code>packaging/chat-hooks/README.md</code> for a suggested one.</p>
+  <p class="lede" style="margin: 0 0 1.5rem;">A regex match against a chat answer runs a script with the matched text as its argument; the result is fed back to the model for a real answer, and shown separately as a folded aside. Needs a system prompt (Settings -> Chat) telling the model how to invoke a hook -- see <code>packaging/chat-hooks/README.md</code>.</p>
 
   <button id="add-hook-btn" class="text-button" type="button">Add hook</button>
   <div id="hooks-status" class="panel-status"></div>

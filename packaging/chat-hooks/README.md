@@ -19,30 +19,20 @@ transparency panel.)
 
 ## Suggested system prompt (Settings -> Chat -> System prompt)
 
-The model only emits a hook's invocation syntax if told to. For the
-`web_search` hook below (pattern `<web_search>([^<]+)</web_search>`), an
-admin-configured system prompt along these lines is what actually makes it
-fire:
+The model only emits a hook's invocation syntax if told to:
 
 ```
-You may invoke a live web search at any time by outputting exactly
-<web_search>your query here</web_search> and nothing else in that reply.
-Do this whenever you need current or specific information you are not
-already certain about. You will then be given the search results as a
-new message and should answer the user's original question from them --
-never just repeat or describe the tool call itself.
+To search the web: output only <web_search>query</web_search>.
+To fetch a URL: output only <web_fetch>https://...</web_fetch>.
+You'll get the result as a new message -- answer from it, don't repeat the tool call.
 ```
-
-That last sentence matters: without it, a model that doesn't already expect
-a follow-up turn may just restate the tool call again instead of actually
-reading the results it's handed.
 
 ## Install
 
 ```sh
 mkdir -p /etc/searchengine/hooks
-cp web_search.sh /etc/searchengine/hooks/
-chmod +x /etc/searchengine/hooks/web_search.sh
+cp web_search.sh web_fetch.sh /etc/searchengine/hooks/
+chmod +x /etc/searchengine/hooks/web_search.sh /etc/searchengine/hooks/web_fetch.sh
 ```
 
 `/etc/searchengine` already holds this deployment's other static,
@@ -70,6 +60,18 @@ Proxies a hook's capture group straight to the self-hosted SearXNG instance
 from `../searxng/` (`GET /search?q=...&format=json` over loopback -- see
 `../searxng/README.md` for how that instance is set up and why
 `search.formats` must include `json`). Requires `curl`.
+
+## web_fetch.sh
+
+`web_search.sh`'s equivalent for a specific URL instead of a search query --
+fetches the capture group directly (`http`/`https` only, redirects locked to
+the same two schemes, response capped at 1MB). Requires `curl`.
+**SSRF caveat**: the URL comes from the model's own output, which can be
+indirectly attacker-influenced (see `application.runChatHooks`'s security
+note) -- this script does not block requests to internal/private addresses.
+Only enable this hook if that's an acceptable risk for your deployment, or
+add a network-level restriction (e.g. a forward proxy allowlist) in front of
+it.
 
 ## Adding another hook script
 
