@@ -11,25 +11,38 @@ import (
 )
 
 // ChatService orchestrates a chat turn: load the single admin-configured
-// domain.ChatEndpoint, optionally augment the conversation with a
-// retrieval-augmented-generation (RAG) system message built from the
-// existing search index, then delegate the actual completion call to a
-// ports.ChatCompleter. Kept separate from hybridSearchService so chat's
-// single-endpoint Get/Set config (ports.ChatEndpointStore) never gets
-// confused with the multi-endpoint blended CRUD ports.EmbeddingEndpointStore
-// uses.
+// domain.ChatEndpoint, optionally augment the conversation with context
+// from one or both of two independent sources -- retrieval-augmented
+// generation (RAG) against the existing search index, and a live web
+// search via ports.WebSearcher -- then delegate the actual completion call
+// to a ports.ChatCompleter. Kept separate from hybridSearchService so
+// chat's single-endpoint Get/Set config (ports.ChatEndpointStore) never
+// gets confused with the multi-endpoint blended CRUD
+// ports.EmbeddingEndpointStore uses.
 type ChatService struct {
 	endpoints ports.ChatEndpointStore
 	completer ports.ChatCompleter
 	search    ports.SearchService
+	webSearch ports.WebSearcher
 }
 
-// NewChatService wires a ChatService from its three collaborators: the
+// NewChatService wires a ChatService from its four collaborators: the
 // endpoint config store, the client that actually talks to the configured
-// OpenAI-compatible endpoint, and the existing hybrid search service used
-// for RAG context.
-func NewChatService(endpoints ports.ChatEndpointStore, completer ports.ChatCompleter, search ports.SearchService) *ChatService {
-	return &ChatService{endpoints: endpoints, completer: completer, search: search}
+// OpenAI-compatible endpoint, the existing hybrid search service used for
+// RAG context, and a live web searcher used for web-search context.
+func NewChatService(endpoints ports.ChatEndpointStore, completer ports.ChatCompleter, search ports.SearchService, webSearch ports.WebSearcher) *ChatService {
+	return &ChatService{endpoints: endpoints, completer: completer, search: search, webSearch: webSearch}
+}
+
+// ChatOptions carries this turn's per-question overrides for
+// ChatService.Chat -- a nil field falls back to the admin-configured
+// endpoint default (domain.ChatEndpoint.RAGEnabled/WebSearchEnabled), a
+// non-nil one decides for this question only, letting the chat UI's
+// per-question toggles override a fixed global setting without changing
+// it.
+type ChatOptions struct {
+	RAG       *bool
+	WebSearch *bool
 }
 
 // ChatResult is one completed chat turn's answer, plus the search results
@@ -42,17 +55,19 @@ type ChatResult struct {
 }
 
 // Chat answers the conversation in history using the admin-configured chat
-// endpoint. Whether this turn is retrieval-augmented is decided by
-// ragOverride when non-nil (the per-question toggle in the chat UI),
-// falling back to endpoint.RAGEnabled otherwise -- so an admin's default
-// can still be overridden per question without changing it globally. When
-// RAG applies, the last user message is used as a search query against
-// s.search, and any results found are woven in as a system message ahead
-// of the rest of history -- a search error at this stage is treated as
-// best-effort (the plain history is still sent, unaugmented) rather than
-// failing the whole call, since RAG context is an enhancement, not a
+// endpoint. Each of opts.RAG/opts.WebSearch, when non-nil, decides for this
+// question only whether that source is used, falling back to
+// endpoint.RAGEnabled/WebSearchEnabled otherwise -- so an admin's default
+// can still be overridden per question without changing it globally. Both
+// sources can apply at once: the last user message is used as the query
+// against whichever of s.search (this instance's own index) and
+// s.webSearch (a live web search) are enabled, and any results found from
+// either are woven together into one system message ahead of the rest of
+// history. A failure from either source at this stage is treated as
+// best-effort (that source's results are simply omitted) rather than
+// failing the whole call, since this context is an enhancement, not a
 // requirement, of answering.
-func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, ragOverride *bool) (ChatResult, error) {
+func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, opts ChatOptions) (ChatResult, error) {
 	if len(history) == 0 {
 		return ChatResult{}, errors.New("chat: message history must not be empty")
 	}
@@ -66,31 +81,51 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, ra
 	}
 
 	useRAG := endpoint.RAGEnabled
-	if ragOverride != nil {
-		useRAG = *ragOverride
+	if opts.RAG != nil {
+		useRAG = *opts.RAG
+	}
+	useWebSearch := endpoint.WebSearchEnabled
+	if opts.WebSearch != nil {
+		useWebSearch = *opts.WebSearch
 	}
 
 	messages := history
 	var sources []domain.ChatSource
-	if useRAG {
+	if useRAG || useWebSearch {
 		if lastUser, ok := lastUserMessage(history); ok {
-			results, err := s.search.Search(ctx, lastUser.Content, ports.SearchQuery{TopK: endpoint.RAGResultCount})
-			if err == nil && len(results) > 0 {
-				sources = make([]domain.ChatSource, 0, len(results))
-				var ctxBlock strings.Builder
-				ctxBlock.WriteString("Use the following search results to answer the user's question. Cite the sources you use by URL.\n\n")
-				for _, r := range results {
-					fmt.Fprintf(&ctxBlock, "Title: %s\nURL: %s\nSnippet: %s\n\n", r.Title, r.URL, r.Snippet)
-					sources = append(sources, domain.ChatSource{URL: r.URL, Title: r.Title})
+			var ctxBlock strings.Builder
+			if useRAG {
+				results, err := s.search.Search(ctx, lastUser.Content, ports.SearchQuery{TopK: endpoint.RAGResultCount})
+				if err == nil && len(results) > 0 {
+					ctxBlock.WriteString("Indexed search results:\n\n")
+					for _, r := range results {
+						fmt.Fprintf(&ctxBlock, "Title: %s\nURL: %s\nSnippet: %s\n\n", r.Title, r.URL, r.Snippet)
+						sources = append(sources, domain.ChatSource{URL: r.URL, Title: r.Title})
+					}
 				}
+				// A search error is intentionally swallowed here: RAG
+				// context is best-effort.
+			}
+			if useWebSearch && endpoint.WebSearchBaseURL != "" && s.webSearch != nil {
+				webResults, err := s.webSearch.Search(ctx, endpoint.WebSearchBaseURL, lastUser.Content, endpoint.WebSearchResultCount)
+				if err == nil && len(webResults) > 0 {
+					ctxBlock.WriteString("Live web search results:\n\n")
+					for _, r := range webResults {
+						fmt.Fprintf(&ctxBlock, "Title: %s\nURL: %s\nSnippet: %s\n\n", r.Title, r.URL, r.Snippet)
+						sources = append(sources, domain.ChatSource{URL: r.URL, Title: r.Title})
+					}
+				}
+				// A web search error is likewise best-effort.
+			}
+			if ctxBlock.Len() > 0 {
 				augmented := make([]domain.ChatMessage, 0, len(history)+1)
-				augmented = append(augmented, domain.ChatMessage{Role: domain.ChatRoleSystem, Content: ctxBlock.String()})
+				augmented = append(augmented, domain.ChatMessage{
+					Role:    domain.ChatRoleSystem,
+					Content: "Use the following search results to answer the user's question. Cite the sources you use by URL.\n\n" + ctxBlock.String(),
+				})
 				augmented = append(augmented, history...)
 				messages = augmented
 			}
-			// A search error is intentionally swallowed here: RAG context
-			// is best-effort, and the chat call still proceeds against the
-			// plain history below.
 		}
 	}
 

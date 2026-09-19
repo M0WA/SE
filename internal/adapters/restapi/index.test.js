@@ -269,7 +269,7 @@ test('sendChatMessage on success appends both turns to history and renders sourc
   // At the moment the request was sent, chatHistory held only the user's
   // just-appended turn -- the assistant's reply is pushed only afterward,
   // once the response comes back.
-  assert.deepEqual(JSON.parse(gotOpts.body), { messages: [{ role: 'user', content: 'what is the answer?' }], rag: true });
+  assert.deepEqual(JSON.parse(gotOpts.body), { messages: [{ role: 'user', content: 'what is the answer?' }], rag: true, web_search: true });
 
   assert.equal(chatHistory.length, 2);
   assert.deepEqual(chatHistory[0], { role: 'user', content: 'what is the answer?' });
@@ -384,6 +384,21 @@ test('the "use search results" checkbox is checked by default, and sends rag acc
   chatRag.checked = false;
   await sendChatMessage('second question');
   assert.equal(sent.rag, false);
+});
+
+test('the "web" checkbox is checked by default, and sends web_search accordingly per question', async () => {
+  const { sendChatMessage } = loadFixture();
+  let sent;
+  global.fetch = async (url, opts) => { sent = JSON.parse(opts.body); return { ok: true, json: async () => ({ answer: 'ok' }) }; };
+  const chatWebSearch = document.getElementById('chat-web-search');
+  assert.equal(chatWebSearch.checked, true);
+
+  await sendChatMessage('first question');
+  assert.equal(sent.web_search, true);
+
+  chatWebSearch.checked = false;
+  await sendChatMessage('second question');
+  assert.equal(sent.web_search, false);
 });
 
 test('sign-out posts to /logout on click', async () => {

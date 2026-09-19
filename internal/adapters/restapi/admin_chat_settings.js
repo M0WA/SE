@@ -6,6 +6,9 @@
   const chatRAGEnabledEl = document.getElementById('chat-rag-enabled');
   const chatRAGResultCountEl = document.getElementById('chat-rag-result-count');
   const chatMaxContextTokensEl = document.getElementById('chat-max-context-tokens');
+  const chatWebSearchEnabledEl = document.getElementById('chat-web-search-enabled');
+  const chatWebSearchBaseURLEl = document.getElementById('chat-web-search-base-url');
+  const chatWebSearchResultCountEl = document.getElementById('chat-web-search-result-count');
   const chatSettingsStatusEl = document.getElementById('chat-settings-status');
   const saveChatSettingsBtn = document.getElementById('save-chat-settings-btn');
 
@@ -25,6 +28,9 @@
     chatRAGEnabledEl.checked = c.rag_enabled !== false;
     chatRAGResultCountEl.value = c.rag_result_count;
     chatMaxContextTokensEl.value = c.max_context_tokens || 0;
+    chatWebSearchEnabledEl.checked = !!c.web_search_enabled;
+    chatWebSearchBaseURLEl.value = c.web_search_base_url || '';
+    chatWebSearchResultCountEl.value = c.web_search_result_count;
   }
 
   async function loadChatEndpoint() {
@@ -49,6 +55,9 @@
         rag_enabled: chatRAGEnabledEl.checked,
         rag_result_count: parseInt(chatRAGResultCountEl.value, 10),
         max_context_tokens: parseInt(chatMaxContextTokensEl.value, 10) || 0,
+        web_search_enabled: chatWebSearchEnabledEl.checked,
+        web_search_base_url: chatWebSearchBaseURLEl.value,
+        web_search_result_count: parseInt(chatWebSearchResultCountEl.value, 10),
       });
       chatSettingsStatusEl.style.color = 'var(--ink-muted)';
       chatSettingsStatusEl.textContent = 'Saved.';

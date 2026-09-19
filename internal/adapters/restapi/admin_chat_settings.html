@@ -84,6 +84,31 @@
   </section>
 
   <section class="panel">
+    <h2>Web search</h2>
+    <div class="form-row form-row-check">
+      <label for="chat-web-search-enabled">
+        <span class="field-wrap" data-default="Off"><input id="chat-web-search-enabled" type="checkbox"></span>
+        Search the web
+      </label>
+      <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When on, each message first runs a live web search (via the SearXNG instance below) and the top results are given to the chat model as context, with sources cited in the answer. Independent of RAG above -- both can be on at once.</span></span>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="chat-web-search-base-url">SearXNG base URL</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">A self-hosted SearXNG instance's base URL, e.g. http://127.0.0.1:8888 -- queried at &lt;base_url&gt;/search?q=...&amp;format=json.</span></span>
+      </div>
+      <span class="field-wrap" data-default="(none)"><input id="chat-web-search-base-url" class="field" type="text" placeholder="http://127.0.0.1:8888"></span>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="chat-web-search-result-count">Web search result count</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How many top web search results are given to the chat model as context when web search is enabled.</span></span>
+      </div>
+      <span class="field-wrap" data-default="5"><input id="chat-web-search-result-count" class="field" type="number" step="1" min="1" max="20"></span>
+    </div>
+  </section>
+
+  <section class="panel">
     <button id="save-chat-settings-btn" type="button">Save chat settings</button>
     <span id="chat-settings-status" class="error-text"></span>
   </section>

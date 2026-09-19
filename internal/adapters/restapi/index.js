@@ -12,6 +12,7 @@
   const chatForm = document.getElementById('chat-form');
   const chatInput = document.getElementById('chat-input');
   const chatRag = document.getElementById('chat-rag');
+  const chatWebSearch = document.getElementById('chat-web-search');
 
   // chatHistory is the full running conversation, sent in full on every
   // /chat call -- the backend is stateless and has no server-side session,
@@ -277,9 +278,9 @@
   // sendChatMessage appends the user's turn to chatHistory, renders it
   // immediately, then POSTs the full history to /chat -- see runSearch
   // above for the same ok/non-ok/network-failure pattern this mirrors.
-  // rag is read fresh from the checkbox on every call, so switching it
-  // mid-conversation only ever affects the question being asked right now,
-  // not history already answered under the other setting.
+  // rag/web_search are read fresh from their checkboxes on every call, so
+  // switching either mid-conversation only ever affects the question being
+  // asked right now, not history already answered under other settings.
   async function sendChatMessage(content) {
     chatHistory.push({ role: 'user', content });
     renderChatMessage('user', content);
@@ -288,7 +289,7 @@
       const resp = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: chatHistory, rag: chatRag.checked }),
+        body: JSON.stringify({ messages: chatHistory, rag: chatRag.checked, web_search: chatWebSearch.checked }),
       });
       if (!resp.ok) {
         const msg = await resp.text();
