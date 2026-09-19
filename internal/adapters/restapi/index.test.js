@@ -166,12 +166,14 @@ test('setMode toggles the switch and swaps panel visibility in both directions',
   const modeSwitch = document.getElementById('mode-switch');
   const searchForm = document.getElementById('search-form');
   const chatPanel = document.getElementById('chat-panel');
+  const chatOptions = document.getElementById('chat-options');
   const syntaxNote = document.getElementById('syntax-note');
   const status = document.getElementById('status');
   const resultsEl = document.getElementById('results');
 
   assert.equal(modeSwitch.getAttribute('aria-checked'), 'false');
   assert.equal(chatPanel.hidden, true);
+  assert.equal(chatOptions.hidden, true);
 
   setMode('chat');
   assert.equal(modeSwitch.getAttribute('aria-checked'), 'true');
@@ -180,6 +182,7 @@ test('setMode toggles the switch and swaps panel visibility in both directions',
   assert.equal(status.hidden, true);
   assert.equal(resultsEl.hidden, true);
   assert.equal(chatPanel.hidden, false);
+  assert.equal(chatOptions.hidden, false);
 
   setMode('search');
   assert.equal(modeSwitch.getAttribute('aria-checked'), 'false');
@@ -188,6 +191,7 @@ test('setMode toggles the switch and swaps panel visibility in both directions',
   assert.equal(status.hidden, false);
   assert.equal(resultsEl.hidden, false);
   assert.equal(chatPanel.hidden, true);
+  assert.equal(chatOptions.hidden, true);
 });
 
 test('the mode switch button toggles mode on click', () => {

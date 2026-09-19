@@ -80,6 +80,11 @@ type fakeAdminRepo struct {
 	gotAliasLimit    int
 	gotAliasOffset   int
 
+	clearContentErr     error
+	clearContentCalled  bool
+	clearSettingsErr    error
+	clearSettingsCalled bool
+
 	// mu guards deletedIDs, written from handleAdminDeleteDomainDocuments'
 	// own background goroutine and read back from a test's polling
 	// goroutine -- unlike deletedID above (only ever touched synchronously
@@ -182,6 +187,14 @@ func (f *fakeAdminRepo) ListDocumentAliasGroups(_ context.Context, limit, offset
 		return nil, 0, f.aliasGroupsErr
 	}
 	return f.aliasGroups, f.aliasGroupsTotal, nil
+}
+func (f *fakeAdminRepo) ClearContent(context.Context) error {
+	f.clearContentCalled = true
+	return f.clearContentErr
+}
+func (f *fakeAdminRepo) ClearSettings(context.Context) error {
+	f.clearSettingsCalled = true
+	return f.clearSettingsErr
 }
 
 type fakeDebugSearch struct {
@@ -4365,6 +4378,105 @@ func TestHandleAdminDatabase_ServiceError(t *testing.T) {
 func TestHandleAdminDatabase_MethodNotAllowed(t *testing.T) {
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/database", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminClearContent_Success(t *testing.T) {
+	adminRepo := &fakeAdminRepo{}
+	h, cookie := adminAuthedHandler(t, adminRepo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/database/clear-content", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !adminRepo.clearContentCalled {
+		t.Error("expected ClearContent called")
+	}
+}
+
+func TestHandleAdminClearContent_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, nil, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/database/clear-content", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminClearContent_ServiceError(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{clearContentErr: errors.New("boom")}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/database/clear-content", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminClearContent_MethodNotAllowed(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/database/clear-content", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+// TestHandleAdminClearSettings_Success proves both the DB clear and the
+// immediate in-memory reset of this process's own tuning/operational/
+// overrides settings happen on success.
+func TestHandleAdminClearSettings_Success(t *testing.T) {
+	adminRepo := &fakeAdminRepo{}
+	h, cookie := adminAuthedHandler(t, adminRepo, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/database/clear-settings", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !adminRepo.clearSettingsCalled {
+		t.Error("expected ClearSettings called")
+	}
+}
+
+func TestHandleAdminClearSettings_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, nil, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/database/clear-settings", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminClearSettings_ServiceError(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{clearSettingsErr: errors.New("boom")}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/database/clear-settings", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminClearSettings_MethodNotAllowed(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/database/clear-settings", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)

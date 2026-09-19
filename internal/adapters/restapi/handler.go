@@ -438,6 +438,8 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("GET /admin/api/embeddings/recompute", h.requireAuthAPI(h.handleAdminEmbeddingsRecomputeStatus))
 	mux.HandleFunc("POST /admin/api/embeddings/recompute", h.requireAuthAPI(h.handleAdminEmbeddingsRecomputeStart))
 	mux.HandleFunc("GET /admin/api/database", h.requireAuthAPI(h.handleAdminDatabase))
+	mux.HandleFunc("POST /admin/api/database/clear-content", h.requireAuthAPI(h.handleAdminClearContent))
+	mux.HandleFunc("POST /admin/api/database/clear-settings", h.requireAuthAPI(h.handleAdminClearSettings))
 	mux.HandleFunc("GET /admin/api/content-dedup", h.requireAuthAPI(h.handleAdminContentDedupStatus))
 	mux.HandleFunc("POST /admin/api/content-dedup/recompute", h.requireAuthAPI(h.handleAdminContentDedupRecomputeStart))
 	mux.HandleFunc("GET /admin/api/content-dedup/alias-groups", h.requireAuthAPI(h.handleAdminContentDedupAliasGroups))

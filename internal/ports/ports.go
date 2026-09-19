@@ -309,6 +309,28 @@ type AdminRepository interface {
 	// at least one alias, read live from document_aliases (not a cached
 	// run) so the "what got merged" listing stays accurate over time.
 	ListDocumentAliasGroups(ctx context.Context, limit, offset int) (groups []domain.DocumentAliasGroup, total int, err error)
+	// ClearContent permanently deletes every crawled document (cascading to
+	// postings/links/document_versions/document_embeddings), every
+	// document_aliases row, and every crawl_jobs row (cascading to
+	// crawl_job_pages) -- everything the admin database page's "Clear
+	// content" button offers, and nothing else: every settings table
+	// (app_settings, chat_endpoint, embedding_http_endpoints,
+	// scheduled_crawls) is left untouched.
+	ClearContent(ctx context.Context) error
+	// ClearSettings permanently deletes every row of every settings table
+	// (app_settings, chat_endpoint, embedding_http_endpoints,
+	// scheduled_crawls) -- everything the admin database page's "Clear
+	// settings" button offers; crawled content itself is left untouched.
+	// Deliberately does NOT reset any process's own in-memory settings:
+	// bootstrap.SyncSettings' loadSetting leaves a caller's existing value
+	// untouched whenever a key is missing, the same as a transient read
+	// error, so a later poll finding these rows gone can't tell "cleared on
+	// purpose" apart from "DB hiccup" -- treating both as "reset to
+	// defaults" would risk wiping live settings on a momentary blip. The
+	// caller handling this request resets its own in-memory settings
+	// immediately instead; other processes pick up the change once
+	// restarted.
+	ClearSettings(ctx context.Context) error
 }
 
 // --- Primary (driving) ports ---

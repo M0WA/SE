@@ -34,6 +34,27 @@
     <h2>Tables</h2>
     <div id="db-tables"></div>
   </section>
+
+  <section class="panel">
+    <h2>Danger zone</h2>
+    <p class="tuning-hint">Both actions below are immediate and permanent -- there is no undo.</p>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="db-clear-content-btn">Clear content</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Permanently deletes every crawled document (and everything derived from it: postings, links, versions, embeddings, aliases) plus every crawl job. Every settings table is left untouched.</span></span>
+      </div>
+      <button id="db-clear-content-btn" type="button" class="danger-button">Clear content</button>
+    </div>
+    <div id="db-clear-content-status" class="panel-status"></div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="db-clear-settings-btn">Clear settings</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Permanently deletes every settings row (tuning, operational, overrides, chat endpoint, embedding endpoints, crawl schedules). Takes effect immediately on this admin-server; restart search-server and crawl-server to fully apply. Crawled content is left untouched.</span></span>
+      </div>
+      <button id="db-clear-settings-btn" type="button" class="danger-button">Clear settings</button>
+    </div>
+    <div id="db-clear-settings-status" class="panel-status"></div>
+  </section>
 </main>
 </div>
 <script src="/admin.js"></script>
