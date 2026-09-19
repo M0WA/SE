@@ -150,13 +150,32 @@ test('clicking Recompute now reports the error and stops the button loading on f
   assert.equal(document.getElementById('dedup-recompute-btn').disabled, false);
 });
 
-test('buildGroupsTable renders one row per group with its canonical URL and joined alias URLs', () => {
+test('buildGroupsTable renders one row per group with its canonical URL and joined aliases, each labeled by reason', () => {
   const { buildGroupsTable } = loadFixture();
   const table = buildGroupsTable([
-    { canonical_id: 'doc-1', canonical_url: 'https://example.com/a', alias_urls: ['https://www.example.com/a', 'https://mirror.example/a'] },
+    {
+      canonical_id: 'doc-1',
+      canonical_url: 'https://example.com/a',
+      aliases: [
+        { url: 'https://www.example.com/a', reason: 'canonical_tag' },
+        { url: 'https://mirror.example/a', reason: 'content_exact' },
+      ],
+    },
   ]);
   const cells = Array.from(table.querySelectorAll('tbody td')).map((td) => td.textContent);
-  assert.deepEqual(cells, ['https://example.com/a', 'https://www.example.com/a, https://mirror.example/a']);
+  assert.deepEqual(cells, [
+    'https://example.com/a',
+    'https://www.example.com/a (canonical tag), https://mirror.example/a (exact-content merge)',
+  ]);
+});
+
+test('buildGroupsTable falls back to the raw reason string for an unrecognized value', () => {
+  const { buildGroupsTable } = loadFixture();
+  const table = buildGroupsTable([
+    { canonical_id: 'doc-1', canonical_url: 'https://example.com/a', aliases: [{ url: 'https://alt.example/a', reason: 'something_new' }] },
+  ]);
+  const cells = Array.from(table.querySelectorAll('tbody td')).map((td) => td.textContent);
+  assert.deepEqual(cells, ['https://example.com/a', 'https://alt.example/a (something_new)']);
 });
 
 test('renderGroupsPager hides the pager when everything fits on one page', () => {

@@ -229,7 +229,13 @@ func crawlLoop(
 		selfURL := domain.CanonicalizeURL(u, v.URLAliasWWWEnabled)
 		// A <link rel="canonical"> naming a different URL means this
 		// page's content only ever indexes under that URL -- no document
-		// row is created for u, but its outbound links are still enqueued.
+		// row is created for u. Its outbound links are enqueued as usual,
+		// plus the canonical target itself: without this, the target is
+		// only ever crawled if it happens to also be linked from elsewhere,
+		// which real sites frequently don't do for their own canonical URLs
+		// (e.g. one stripped of tracking params), leaving most aliases
+		// permanently dangling -- recorded, but never resolving to an
+		// actual indexed document.
 		if recordAlias != nil && canonicalURL != "" {
 			if canon := domain.CanonicalizeURL(canonicalURL, v.URLAliasWWWEnabled); canon != selfURL {
 				_ = recordAlias(ctx, selfURL, documentID(canon, v.URLAliasWWWEnabled))
@@ -238,7 +244,7 @@ func crawlLoop(
 					DocLength: len(trimmed), LinksFound: len(links),
 					FetchedAt: attemptedAt, DurationMs: durationMs,
 				})
-				enqueue(links)
+				enqueue(append(links, canonicalURL))
 				continue
 			}
 		}

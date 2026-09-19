@@ -71,11 +71,27 @@
   const GROUPS_PAGE_SIZE = 20;
   let groupsPage = 0;
 
+  // Reason labels match domain.DocumentAliasReason* -- canonical_tag is
+  // ordinary crawl-time bookkeeping (no document was ever deleted or even
+  // created for that URL), while content_exact/content_simhash are actual
+  // content-dedup merges (a document row WAS deleted). Shown per alias
+  // (not per group) since a single canonical document can accumulate
+  // aliases from more than one source over time.
+  const ALIAS_REASON_LABELS = {
+    canonical_tag: 'canonical tag',
+    content_exact: 'exact-content merge',
+    content_simhash: 'near-duplicate merge',
+  };
+
+  function formatAlias(a) {
+    return a.url + ' (' + (ALIAS_REASON_LABELS[a.reason] || a.reason) + ')';
+  }
+
   function buildGroupsTable(groups) {
     return buildTable(
-      [{ label: 'canonical URL' }, { label: 'alias URLs' }],
+      [{ label: 'canonical URL' }, { label: 'aliases' }],
       groups,
-      (g) => [urlCell(g.canonical_url), urlCell(g.alias_urls.join(', '))],
+      (g) => [urlCell(g.canonical_url), urlCell(g.aliases.map(formatAlias).join(', '))],
     );
   }
 
