@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"searchengine/internal/adapters/httpchat"
+	"searchengine/internal/adapters/httpsearxng"
 	"searchengine/internal/adapters/restapi"
 	"searchengine/internal/adapters/settingscrypto"
 	"searchengine/internal/application"
@@ -62,7 +63,7 @@ func main() {
 		Health:        repo,
 		Sessions:      repo,
 		ChatEndpoints: repo,
-		Chat:          application.NewChatService(repo, httpchat.New(), searchSvc),
+		Chat:          application.NewChatService(repo, httpchat.New(), searchSvc, httpsearxng.New()),
 	})
 
 	addr := bootstrap.GetEnv("SEARCH_LISTEN_ADDR", "127.0.0.1:8080")

@@ -16,6 +16,7 @@ func newChatEndpoint() domain.ChatEndpoint {
 		BaseURL: "https://openai.inference.de-txl.ionos.com/v1",
 		APIKey:  "sk-test", Model: "meta-llama/Llama-3.3-70B-Instruct",
 		Enabled: true, RAGEnabled: true, RAGResultCount: 5, MaxContextTokens: 6000,
+		WebSearchEnabled: true, WebSearchBaseURL: "http://127.0.0.1:8888", WebSearchResultCount: 5,
 		UpdatedAt: time.Now().UTC(),
 	}
 }
@@ -50,6 +51,9 @@ func TestSetChatEndpoint_ThenGetRoundTrips(t *testing.T) {
 	if got.MaxContextTokens != 6000 {
 		t.Errorf("expected MaxContextTokens to round trip, got %+v", got)
 	}
+	if !got.WebSearchEnabled || got.WebSearchBaseURL != "http://127.0.0.1:8888" || got.WebSearchResultCount != 5 {
+		t.Errorf("expected web search fields to round trip, got %+v", got)
+	}
 	if got.UpdatedAt.IsZero() {
 		t.Errorf("expected UpdatedAt to round trip, got %+v", got)
 	}
@@ -70,6 +74,9 @@ func TestSetChatEndpoint_SecondCallOverwritesRatherThanDuplicating(t *testing.T)
 	e.RAGEnabled = false
 	e.RAGResultCount = 12
 	e.MaxContextTokens = 9000
+	e.WebSearchEnabled = false
+	e.WebSearchBaseURL = "http://new-searx.example"
+	e.WebSearchResultCount = 15
 	e.UpdatedAt = e.UpdatedAt.Add(time.Hour)
 	if err := repo.SetChatEndpoint(ctx, e); err != nil {
 		t.Fatalf("unexpected error on second SetChatEndpoint: %v", err)
@@ -88,6 +95,9 @@ func TestSetChatEndpoint_SecondCallOverwritesRatherThanDuplicating(t *testing.T)
 	if got.MaxContextTokens != 9000 {
 		t.Errorf("expected updated MaxContextTokens to replace the original, got %+v", got)
 	}
+	if got.WebSearchEnabled || got.WebSearchBaseURL != "http://new-searx.example" || got.WebSearchResultCount != 15 {
+		t.Errorf("expected updated web search fields to replace the original, got %+v", got)
+	}
 
 	counts, err := repo.TableRowCounts(ctx)
 	if err != nil {
@@ -105,7 +115,8 @@ func TestMigrateChatEndpointColumns_UpgradesPreExistingTable(t *testing.T) {
 		t.Fatalf("failed to open raw db: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	// The pre-migration shape: no max_context_tokens column at all.
+	// The pre-migration shape: no max_context_tokens or web_search_* columns
+	// at all.
 	if _, err := db.Exec(`CREATE TABLE chat_endpoint (
 		id TEXT PRIMARY KEY, base_url TEXT NOT NULL,
 		api_key TEXT NOT NULL DEFAULT '', model TEXT NOT NULL,
@@ -132,6 +143,9 @@ func TestMigrateChatEndpointColumns_UpgradesPreExistingTable(t *testing.T) {
 	if pre.MaxContextTokens != 0 {
 		t.Errorf("expected a pre-existing row to default to trimming disabled (0), got %+v", pre)
 	}
+	if pre.WebSearchEnabled || pre.WebSearchBaseURL != "" || pre.WebSearchResultCount != 0 {
+		t.Errorf("expected a pre-existing row to default to web search off/unconfigured, got %+v", pre)
+	}
 	if pre.Model != "llama-3" || pre.RAGResultCount != 5 {
 		t.Errorf("expected every pre-existing field otherwise untouched, got %+v", pre)
 	}
@@ -147,5 +161,8 @@ func TestMigrateChatEndpointColumns_UpgradesPreExistingTable(t *testing.T) {
 	}
 	if got.MaxContextTokens != fresh.MaxContextTokens {
 		t.Errorf("expected a fresh write's MaxContextTokens to round trip, got %+v", got)
+	}
+	if got.WebSearchEnabled != fresh.WebSearchEnabled || got.WebSearchBaseURL != fresh.WebSearchBaseURL || got.WebSearchResultCount != fresh.WebSearchResultCount {
+		t.Errorf("expected a fresh write's web search fields to round trip, got %+v", got)
 	}
 }

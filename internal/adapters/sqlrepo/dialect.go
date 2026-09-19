@@ -49,11 +49,13 @@ func (sqliteDialect) UpsertDocumentAliasSQL() string {
 	          canonical_id=excluded.canonical_id, reason=excluded.reason, created_at=excluded.created_at, host=excluded.host`
 }
 func (sqliteDialect) UpsertChatEndpointSQL() string {
-	return `INSERT INTO chat_endpoint (id, base_url, api_key, model, enabled, rag_enabled, rag_result_count, max_context_tokens, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	return `INSERT INTO chat_endpoint (id, base_url, api_key, model, enabled, rag_enabled, rag_result_count, max_context_tokens, web_search_enabled, web_search_base_url, web_search_result_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	        ON CONFLICT(id) DO UPDATE SET
 	          base_url=excluded.base_url, api_key=excluded.api_key, model=excluded.model,
 	          enabled=excluded.enabled, rag_enabled=excluded.rag_enabled,
 	          rag_result_count=excluded.rag_result_count, max_context_tokens=excluded.max_context_tokens,
+	          web_search_enabled=excluded.web_search_enabled, web_search_base_url=excluded.web_search_base_url,
+	          web_search_result_count=excluded.web_search_result_count,
 	          updated_at=excluded.updated_at`
 }
 func (sqliteDialect) SeedContentDedupLockSQL() string {
@@ -141,6 +143,9 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			enabled BOOLEAN NOT NULL DEFAULT false, rag_enabled BOOLEAN NOT NULL DEFAULT false,
 			rag_result_count INTEGER NOT NULL DEFAULT 0,
 			max_context_tokens INTEGER NOT NULL DEFAULT 0,
+			web_search_enabled BOOLEAN NOT NULL DEFAULT false,
+			web_search_base_url TEXT NOT NULL DEFAULT '',
+			web_search_result_count INTEGER NOT NULL DEFAULT 0,
 			updated_at TEXT NOT NULL
 		)`,
 		// content_dedup_lock is a single sentinel row (id = 1) whose
@@ -204,11 +209,13 @@ func (mysqlDialect) UpsertDocumentAliasSQL() string {
 	        ON DUPLICATE KEY UPDATE canonical_id=VALUES(canonical_id), reason=VALUES(reason), created_at=VALUES(created_at), host=VALUES(host)`
 }
 func (mysqlDialect) UpsertChatEndpointSQL() string {
-	return `INSERT INTO chat_endpoint (id, base_url, api_key, model, enabled, rag_enabled, rag_result_count, max_context_tokens, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	return `INSERT INTO chat_endpoint (id, base_url, api_key, model, enabled, rag_enabled, rag_result_count, max_context_tokens, web_search_enabled, web_search_base_url, web_search_result_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	        ON DUPLICATE KEY UPDATE
 	          base_url=VALUES(base_url), api_key=VALUES(api_key), model=VALUES(model),
 	          enabled=VALUES(enabled), rag_enabled=VALUES(rag_enabled),
 	          rag_result_count=VALUES(rag_result_count), max_context_tokens=VALUES(max_context_tokens),
+	          web_search_enabled=VALUES(web_search_enabled), web_search_base_url=VALUES(web_search_base_url),
+	          web_search_result_count=VALUES(web_search_result_count),
 	          updated_at=VALUES(updated_at)`
 }
 func (mysqlDialect) SeedContentDedupLockSQL() string {
@@ -291,6 +298,9 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			enabled BOOLEAN NOT NULL DEFAULT false, rag_enabled BOOLEAN NOT NULL DEFAULT false,
 			rag_result_count INT NOT NULL DEFAULT 0,
 			max_context_tokens INT NOT NULL DEFAULT 0,
+			web_search_enabled BOOLEAN NOT NULL DEFAULT false,
+			web_search_base_url TEXT NOT NULL,
+			web_search_result_count INT NOT NULL DEFAULT 0,
 			updated_at VARCHAR(64) NOT NULL
 		) ENGINE=InnoDB`,
 		// See the sqlite dialect's content_dedup_lock comment.
@@ -350,11 +360,13 @@ func (postgresDialect) UpsertDocumentAliasSQL() string {
 	          canonical_id=EXCLUDED.canonical_id, reason=EXCLUDED.reason, created_at=EXCLUDED.created_at, host=EXCLUDED.host`
 }
 func (postgresDialect) UpsertChatEndpointSQL() string {
-	return `INSERT INTO chat_endpoint (id, base_url, api_key, model, enabled, rag_enabled, rag_result_count, max_context_tokens, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	return `INSERT INTO chat_endpoint (id, base_url, api_key, model, enabled, rag_enabled, rag_result_count, max_context_tokens, web_search_enabled, web_search_base_url, web_search_result_count, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	        ON CONFLICT (id) DO UPDATE SET
 	          base_url=EXCLUDED.base_url, api_key=EXCLUDED.api_key, model=EXCLUDED.model,
 	          enabled=EXCLUDED.enabled, rag_enabled=EXCLUDED.rag_enabled,
 	          rag_result_count=EXCLUDED.rag_result_count, max_context_tokens=EXCLUDED.max_context_tokens,
+	          web_search_enabled=EXCLUDED.web_search_enabled, web_search_base_url=EXCLUDED.web_search_base_url,
+	          web_search_result_count=EXCLUDED.web_search_result_count,
 	          updated_at=EXCLUDED.updated_at`
 }
 func (postgresDialect) SeedContentDedupLockSQL() string {
@@ -436,6 +448,9 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			enabled BOOLEAN NOT NULL DEFAULT false, rag_enabled BOOLEAN NOT NULL DEFAULT false,
 			rag_result_count INT NOT NULL DEFAULT 0,
 			max_context_tokens INT NOT NULL DEFAULT 0,
+			web_search_enabled BOOLEAN NOT NULL DEFAULT false,
+			web_search_base_url TEXT NOT NULL DEFAULT '',
+			web_search_result_count INT NOT NULL DEFAULT 0,
 			updated_at TEXT NOT NULL
 		)`,
 		// See the sqlite dialect's content_dedup_lock comment.
