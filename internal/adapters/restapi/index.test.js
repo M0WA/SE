@@ -348,3 +348,82 @@ test('sign-out posts to /logout on click', async () => {
   assert.equal(fetchedURL, '/logout');
   assert.equal(fetchedOpts.method, 'POST');
 });
+
+test('escapeHTML neutralizes tags and entities', () => {
+  const { escapeHTML } = loadFixture();
+  assert.equal(escapeHTML('<script>alert(1)</script>'), '&lt;script&gt;alert(1)&lt;/script&gt;');
+  assert.equal(escapeHTML('a & b'), 'a &amp; b');
+});
+
+test('renderInline renders bold, italic, inline code, and links', () => {
+  const { renderInline } = loadFixture();
+  assert.equal(renderInline('a **bold** word'), 'a <strong>bold</strong> word');
+  assert.equal(renderInline('an *italic* word'), 'an <em>italic</em> word');
+  assert.equal(renderInline('some `code` here'), 'some <code>code</code> here');
+  assert.equal(
+    renderInline('a [link](https://example.com) here'),
+    'a <a href="https://example.com" target="_blank" rel="noopener noreferrer">link</a> here',
+  );
+});
+
+test('renderInline never interprets markdown syntax found inside a code span', () => {
+  const { renderInline } = loadFixture();
+  assert.equal(renderInline('`**not bold**`'), '<code>**not bold**</code>');
+});
+
+test('renderMarkdown escapes raw HTML in the model output before applying any markdown', () => {
+  const { renderMarkdown } = loadFixture();
+  assert.equal(renderMarkdown('<img src=x onerror=alert(1)>'), '<p>&lt;img src=x onerror=alert(1)&gt;</p>');
+});
+
+test('renderMarkdown wraps a single line of plain text in one paragraph', () => {
+  const { renderMarkdown } = loadFixture();
+  assert.equal(renderMarkdown('hello world'), '<p>hello world</p>');
+});
+
+test('renderMarkdown joins consecutive non-blank lines into one paragraph with <br>, and starts a new paragraph on a blank line', () => {
+  const { renderMarkdown } = loadFixture();
+  assert.equal(renderMarkdown('line one\nline two\n\nsecond paragraph'), '<p>line one<br>line two</p><p>second paragraph</p>');
+});
+
+test('renderMarkdown renders a fenced code block verbatim, untouched by inline formatting', () => {
+  const { renderMarkdown } = loadFixture();
+  assert.equal(renderMarkdown('```\nconst a = 1;\n```'), '<pre><code>const a = 1;</code></pre>');
+});
+
+test('renderMarkdown renders a language-tagged fence the same as an untagged one', () => {
+  const { renderMarkdown } = loadFixture();
+  assert.equal(renderMarkdown('```js\nconst a = 1;\n```'), '<pre><code>const a = 1;</code></pre>');
+});
+
+test('renderMarkdown renders a "-" unordered list as <ul><li>', () => {
+  const { renderMarkdown } = loadFixture();
+  assert.equal(renderMarkdown('- one\n- two'), '<ul><li>one</li><li>two</li></ul>');
+});
+
+test('renderMarkdown renders a "1." ordered list as <ol><li>', () => {
+  const { renderMarkdown } = loadFixture();
+  assert.equal(renderMarkdown('1. one\n2. two'), '<ol><li>one</li><li>two</li></ol>');
+});
+
+test('renderMarkdown renders an ATX heading as a heading tag two levels down, applying inline formatting', () => {
+  const { renderMarkdown } = loadFixture();
+  assert.equal(renderMarkdown('## **Bold** heading'), '<h4><strong>Bold</strong> heading</h4>');
+});
+
+test('renderMarkdown handles a heading, a paragraph, a list, and a code block together in one answer', () => {
+  const { renderMarkdown } = loadFixture();
+  const md = '# Summary\n\nHere is what I found:\n\n- first point\n- second point\n\n```\nfoo()\n```';
+  assert.equal(
+    renderMarkdown(md),
+    '<h3>Summary</h3><p>Here is what I found:</p><ul><li>first point</li><li>second point</li></ul><pre><code>foo()</code></pre>',
+  );
+});
+
+test('sendChatMessage renders the assistant answer as markdown', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'a **bold** claim' }) });
+  const { sendChatMessage } = loadFixture();
+  await sendChatMessage('q');
+  const bubble = document.getElementById('chat-messages').children[1].querySelector('.chat-msg-bubble');
+  assert.equal(bubble.innerHTML, '<p>a <strong>bold</strong> claim</p>');
+});
