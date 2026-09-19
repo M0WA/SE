@@ -54,17 +54,28 @@ or add a real `location` block for it in `packaging/nginx/searchengine.conf`.
 
 ## Keep the architecture documentation in sync
 
-`docs/architecture.md` (with its embedded Mermaid diagram) documents every
-component in the hexagonal architecture -- `internal/domain`, `internal/ports`,
-`internal/application`, every `internal/adapters/*` package, the three
-binaries, and how they connect to external systems (Postgres/SQLite, nginx,
-the crawl-server network call, HTTP embedding/chat endpoints, IONOS
-monitoring). **Whenever a component is added, removed, or its relationships
-change -- a new adapter package, a new port/use-case, a binary's
-responsibilities shifting, a new external dependency -- update
-`docs/architecture.md` and its diagram in the same change.** Treat an
-architectural change without a matching doc update as incomplete work, same
-as `openapi.yaml`/the nginx config above.
+`docs/architecture.md` documents every component in the hexagonal
+architecture -- `internal/domain`, `internal/ports`, `internal/application`,
+every `internal/adapters/*` package, the three binaries, and how they connect
+to external systems (Postgres/SQLite, nginx, the crawl-server network call,
+HTTP embedding/chat endpoints -- including the self-hosted vLLM instances on
+gpu.mo-sys.de, IONOS monitoring). **Whenever a component is added, removed,
+or its relationships change -- a new adapter package, a new port/use-case, a
+binary's responsibilities shifting, a new external dependency -- update
+`docs/architecture.md` in the same change.** Treat an architectural change
+without a matching doc update as incomplete work, same as `openapi.yaml`/the
+nginx config above.
+
+The diagram is **not** embedded as a Mermaid code block in the markdown --
+GitHub's markdown renderer doesn't reliably render Mermaid diagrams (a real,
+observed failure, not a hypothetical one), so it silently shows the raw code
+instead. The diagram lives as its own source file, `docs/architecture.mmd`,
+rendered to a real picture, `docs/architecture.svg`, which the markdown
+embeds as a plain image. **Editing the architecture means editing
+`docs/architecture.mmd` and regenerating `docs/architecture.svg` in the same
+change** (see `docs/architecture.md`'s own top section for the exact
+`mmdc` command) -- an `.mmd` edit with a stale `.svg` is incomplete work,
+same as any other change here.
 
 ## Before committing
 
