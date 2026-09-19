@@ -228,6 +228,25 @@ test('switching back to search does not clear chat history or messages', async (
   assert.equal(document.getElementById('chat-messages').children.length, 2);
 });
 
+test('renderChatMessage scrolls #chat-messages to the bottom after appending', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'hi there' }) });
+  const { sendChatMessage } = loadFixture();
+  const chatMessages = document.getElementById('chat-messages');
+  // jsdom never computes real layout, so scrollHeight is always 0 by
+  // default -- stub it to a distinct value per call so scrollTop actually
+  // moving to match it (rather than being left at its own default of 0)
+  // proves the scroll call ran, not just that both happen to be 0.
+  let fakeScrollHeight = 100;
+  Object.defineProperty(chatMessages, 'scrollHeight', { get: () => fakeScrollHeight, configurable: true });
+
+  await sendChatMessage('hello');
+  assert.equal(chatMessages.scrollTop, 100, 'expected scroll after the user turn is rendered');
+
+  fakeScrollHeight = 250;
+  await sendChatMessage('another question');
+  assert.equal(chatMessages.scrollTop, 250, 'expected scroll again after the assistant turn is rendered');
+});
+
 test('sendChatMessage on success appends both turns to history and renders sources', async () => {
   let gotURL, gotOpts;
   global.fetch = async (url, opts) => {
