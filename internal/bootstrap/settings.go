@@ -40,7 +40,22 @@ func applySettingsOnce(ctx context.Context, store ports.SettingsStore, tuning *d
 		}
 	}
 	if op != nil {
-		var v domain.OperationalSettingsValues
+		// Seeded with the built-in defaults (not a zero-valued struct)
+		// before unmarshaling: json.Unmarshal only overwrites fields present
+		// in the stored blob, so a field added to OperationalSettingsValues
+		// after this instance's blob was last saved -- most importantly a
+		// bool like ContentDedupEnabled/URLAliasWWWEnabled, which
+		// OperationalSettings.Set() deliberately never self-heals, since a
+		// real `false` is indistinguishable from "omitted" -- keeps its
+		// sensible default instead of silently regressing to Go's zero
+		// value (false) forever, until an admin happens to re-save the full
+		// settings form.
+		v := domain.DefaultOperationalSettings().Get()
+		// EmbeddingSearchWeights is excluded from the defaults seed above:
+		// the legacy-migration check just below needs to tell "the stored
+		// blob never had this key" (nil/empty) apart from "explicitly set,"
+		// which the seeded default map would otherwise mask.
+		v.EmbeddingSearchWeights = nil
 		if loadSetting(ctx, store, ports.SettingsKeyOperational, &v) {
 			// Upgrade migration: a blob saved before EmbeddingSearchWeights
 			// existed still decodes the deprecated EmbeddingProvider field --
