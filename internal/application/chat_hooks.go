@@ -27,8 +27,8 @@ const maxHookMatchesPerTurn = 5
 // reaches the user regardless.
 //
 // SECURITY: capture groups come from the model's own OUTPUT (answer), which
-// can itself be influenced by untrusted web content when RAG/web-search
-// context is enabled (indirect prompt injection). The ONLY thing a matched
+// can itself be influenced by untrusted web content when search context is
+// enabled (indirect prompt injection). The ONLY thing a matched
 // capture group can ever influence is an argv VALUE passed to a script
 // whose IDENTITY was fixed by the admin ahead of time (hook.Script, never
 // derived from the match itself) -- this function and every

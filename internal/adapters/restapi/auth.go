@@ -115,6 +115,42 @@ func (h *Handler) requireAuthAPI(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// internalAPIKeyHeader is the header a trusted local caller (e.g. a
+// SearXNG engine plugin) presents to requireAuthAPIOrInternalKey in place
+// of a session cookie.
+const internalAPIKeyHeader = "X-Internal-API-Key"
+
+// requireAuthAPIOrInternalKey gates a JSON endpoint the same way
+// requireAuthAPI does, plus one additional bypass: when
+// h.internalSearchAPIKey is configured (non-empty) and the request's
+// X-Internal-API-Key header matches it exactly, the request is let through
+// with no session check at all. This exists so a trusted same-host caller
+// -- a SearXNG engine plugin folding this instance's own index into
+// SearXNG's aggregated search, rather than /search staying a
+// browser-session-only endpoint -- can call /search without ever having a
+// browser session. It's opt-in and secure-by-default: h.internalSearchAPIKey
+// is empty unless an admin explicitly sets SEARCH_INTERNAL_API_KEY, in
+// which case this behaves byte-for-byte like requireAuthAPI (session
+// cookie required, 401 otherwise). The comparison uses
+// subtle.ConstantTimeCompare rather than ==, so a caller without the key
+// can't learn it one byte at a time via response-timing differences.
+func (h *Handler) requireAuthAPIOrInternalKey(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if h.internalSearchAPIKey != "" {
+			got := r.Header.Get(internalAPIKeyHeader)
+			if subtle.ConstantTimeCompare([]byte(got), []byte(h.internalSearchAPIKey)) == 1 {
+				next(w, r)
+				return
+			}
+		}
+		if !h.isAuthenticated(r) {
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
+}
+
 func isHTTPS(r *http.Request) bool {
 	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 }

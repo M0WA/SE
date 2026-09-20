@@ -3,8 +3,12 @@
 `se.mo-sys.de` runs a self-hosted [SearXNG](https://github.com/searxng/searxng)
 metasearch instance, in Docker, so the chat feature (`internal/adapters/httpsearxng`)
 can search the live web instead of only the local index. Configured with
-exactly two upstream engines -- Bing, Brave, and DuckDuckGo -- everything else
-SearXNG ships with is disabled (see `settings.yml`'s `keep_only`).
+three upstream engines -- Bing, Brave, and DuckDuckGo -- plus one of this
+repo's own, `searchengine` (`../searxng-engine/`), which folds this
+instance's own indexed corpus into the same blended results instead of
+querying it out of band the way the old, separate "RAG" mechanism did --
+everything else SearXNG ships with is disabled (see `settings.yml`'s
+`keep_only`).
 
 This is independent of the `searchengine` binaries/package -- it's a separate
 Docker service on the VM, not shipped in the `searchengine` .deb, the same
@@ -26,15 +30,22 @@ systemctl is-active docker
 ```sh
 mkdir -p /opt/searxng
 cp docker-compose.yml settings.yml /opt/searxng/
+cp ../searxng-engine/searchengine_index.py /opt/searxng/
 cd /opt/searxng
 sed -i "s/REPLACE_WITH_OPENSSL_RAND_HEX_32/$(openssl rand -hex 32)/" settings.yml
+sed -i "s/REPLACE_WITH_SEARCH_INTERNAL_API_KEY/$(openssl rand -hex 32)/" settings.yml
 ```
 
+Set the exact same value from that second `sed` as `SEARCH_INTERNAL_API_KEY`
+in `/etc/searchengine/searchengine.env` on the box running `cmd/search`, then
+restart `searchengine-search` -- see `../searxng-engine/README.md`'s
+Authentication section for why both sides need to agree on this value.
+
 **Never commit the filled-in `settings.yml`** -- `secret_key` signs SearXNG's
-own session cookies. The tracked copy in this directory keeps the
-placeholder; only the deployed `/opt/searxng/settings.yml` has the real value
-(same convention `../prometheus/README.md` uses for its `prometheus.yml`
-API key).
+own session cookies, and `internal_api_key` grants unauthenticated access to
+`/search`. The tracked copy in this directory keeps both as placeholders;
+only the deployed `/opt/searxng/settings.yml` has the real values (same
+convention `../prometheus/README.md` uses for its `prometheus.yml` API key).
 
 Install the systemd unit (manages `docker compose up`/`down` the same way
 every other service on this box is `systemctl`-controlled, rather than
@@ -77,7 +88,14 @@ from before a settings change (needs `docker compose restart searxng` from
   nothing but localhost can even reach.
 - A `settings.yml` edit needs `docker compose restart searxng` (from
   `/opt/searxng`) to take effect -- it's read once at container startup, not
-  watched for changes.
+  watched for changes. Deploying a change to `searchengine_index.py` itself
+  needs the same restart (and, if the file is new rather than an edit, `cp`
+  it into `/opt/searxng/` first) -- it's bind-mounted read-only, so the
+  container only ever sees whatever the host file said at its last start.
+- `searchengine` (the engine above) silently returns zero results if
+  `SEARCH_INTERNAL_API_KEY` isn't set on `cmd/search`, or doesn't match
+  `internal_api_key` here -- see `../searxng-engine/README.md`'s
+  Authentication section before assuming the engine itself is broken.
 - If SearXNG's upstream image changes its default engine list or config
   schema, `use_default_settings.engines.keep_only` re-resolves against
   whatever engines still exist under those exact names (`bing`, `brave`,

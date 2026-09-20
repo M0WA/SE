@@ -206,6 +206,14 @@ type Handler struct {
 	// production (see New), overridden by tests so testEmbeddingConnectivity
 	// never makes a real network call from the test suite.
 	newEmbedder func(domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider
+	// internalSearchAPIKey, when set, is an optional pre-shared key letting
+	// a trusted local caller (e.g. a SearXNG engine plugin querying this
+	// instance's own index as just another search engine) call /search
+	// without a browser session, via requireAuthAPIOrInternalKey -- see its
+	// doc comment. Empty by default, meaning the bypass does not exist at
+	// all: /search stays session-cookie-only, exactly as before this field
+	// existed.
+	internalSearchAPIKey string
 }
 
 // Config wires a Handler's dependencies. Crawler/CrawlJobs are used only
@@ -288,6 +296,12 @@ type Config struct {
 	// Meaningless on crawl-server/search-server, which never call those
 	// handlers.
 	SettingsEncryptionKey []byte
+	// InternalSearchAPIKey, when set, lets a trusted local caller (e.g. a
+	// SearXNG engine plugin) call the public /search endpoint via the
+	// X-Internal-API-Key header instead of a session cookie -- see
+	// requireAuthAPIOrInternalKey's doc comment. Empty by default, meaning
+	// the bypass does not exist at all.
+	InternalSearchAPIKey string
 }
 
 func New(cfg Config) *Handler {
@@ -331,6 +345,7 @@ func New(cfg Config) *Handler {
 		crawlInternalToken:    cfg.CrawlInternalToken,
 		settingsEncryptionKey: cfg.SettingsEncryptionKey,
 		newEmbedder:           newEmbedder,
+		internalSearchAPIKey:  cfg.InternalSearchAPIKey,
 	}
 }
 
@@ -367,7 +382,7 @@ func (h *Handler) RoutesSearch() http.Handler {
 	mux.HandleFunc("/", h.requireAuthPage(h.handleIndex))
 	mux.HandleFunc("/style.css", h.handleStyle)
 	mux.HandleFunc("/index.js", h.handleIndexJS)
-	mux.HandleFunc("/search", h.requireAuthAPI(h.handleSearch))
+	mux.HandleFunc("/search", h.requireAuthAPIOrInternalKey(h.handleSearch))
 	mux.HandleFunc("POST /chat", h.requireAuthAPI(h.handleChat))
 	mux.HandleFunc("/healthz", h.handleHealthz)
 	return withSecurityHeaders(mux)

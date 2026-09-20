@@ -4,8 +4,6 @@
   const chatAPIKeyEl = document.getElementById('chat-api-key');
   const chatClearAPIKeyEl = document.getElementById('chat-clear-api-key');
   const chatSystemPromptEl = document.getElementById('chat-system-prompt');
-  const chatRAGEnabledEl = document.getElementById('chat-rag-enabled');
-  const chatRAGResultCountEl = document.getElementById('chat-rag-result-count');
   const chatMaxContextTokensEl = document.getElementById('chat-max-context-tokens');
   const chatWebSearchEnabledEl = document.getElementById('chat-web-search-enabled');
   const chatWebSearchBaseURLEl = document.getElementById('chat-web-search-base-url');
@@ -25,7 +23,7 @@
   // does (see admin.js's estimateTokensClient) from whatever's currently
   // in the form, rather than showing a real server-computed count. Global
   // prompt + hook prompts are shown against the configured max conversation
-  // length as "remaining" budget for RAG/web context and history -- when
+  // length as "remaining" budget for web-search context and history -- when
   // no budget is configured (0), there's nothing to show as "remaining",
   // so the chart just compares the two prompt pieces to each other.
   function renderTokenUsageDonut() {
@@ -61,8 +59,6 @@
     chatClearAPIKeyEl.checked = false;
     chatClearAPIKeyEl.disabled = !c.has_api_key;
     chatSystemPromptEl.value = c.system_prompt || '';
-    chatRAGEnabledEl.checked = c.rag_enabled !== false;
-    chatRAGResultCountEl.value = c.rag_result_count;
     chatMaxContextTokensEl.value = c.max_context_tokens || 0;
     chatWebSearchEnabledEl.checked = !!c.web_search_enabled;
     chatWebSearchBaseURLEl.value = c.web_search_base_url || '';
@@ -106,8 +102,6 @@
         model: chatModelEl.value,
         enabled: chatEnabledEl.checked,
         system_prompt: chatSystemPromptEl.value,
-        rag_enabled: chatRAGEnabledEl.checked,
-        rag_result_count: parseInt(chatRAGResultCountEl.value, 10),
         max_context_tokens: parseInt(chatMaxContextTokensEl.value, 10) || 0,
         web_search_enabled: chatWebSearchEnabledEl.checked,
         web_search_base_url: chatWebSearchBaseURLEl.value,

@@ -152,6 +152,7 @@ All variables are read once at process startup (`bootstrap.GetEnv`/`os.Getenv`),
 | `DB_DSN` | `"file:search.db?cache=shared"` | search, admin, crawl | The data-source-name/connection string for the SQL database (path for SQLite, connection URL for Postgres/MySQL). |
 | `SETTINGS_ENCRYPTION_KEY` | none — empty string; encryption disabled if unset | search, admin, crawl | Hex-encoded AES-256 key used to encrypt/decrypt sensitive stored settings (e.g. the embedding/chat endpoint API keys) at rest in the DB. Each binary opens its own key independently at startup. |
 | `CHAT_HOOKS_DIR` | `"/etc/searchengine/hooks"` | search | Directory on disk where every configured `ChatHook`'s script file must live for the hook runner to find and execute it. |
+| `SEARCH_INTERNAL_API_KEY` | none — empty string; bypass disabled if unset | search | Optional pre-shared key letting a trusted local caller (a SearXNG engine plugin folding this instance's own index into SearXNG's aggregated search) call the public `/search` endpoint via an `X-Internal-API-Key` header instead of a browser session cookie. Empty by default: with no key configured, `/search` behaves exactly as it always has (session-cookie-only, `401` otherwise). |
 | `SEARCH_LISTEN_ADDR` | `"127.0.0.1:8080"` | search | The host:port the public, internet-facing search HTTP server binds and listens on. |
 | `ADMIN_USER` | none — empty string | admin | Username required for admin-server sign-in. If unset (with `ADMIN_PASSWORD`), `/crawl` and `/admin` refuse all sign-ins (logged as a warning, not fatal). |
 | `ADMIN_PASSWORD` | none — empty string | admin | Password required for admin-server sign-in, paired with `ADMIN_USER`. |
@@ -298,13 +299,16 @@ Everything below lives in the shared SQL database and is edited only through `in
 | `chat-api-key` | empty | blank on update keeps stored value | API key/bearer token for the chat backend; encrypted at rest. |
 | `chat-model` | none, required | — | Model name used for chat-completions requests. |
 | `chat-enabled` | `false` | boolean | Gates whether chat will call out to this endpoint at all. |
-| `chat-rag-enabled` | `false` | boolean | Turns on retrieval-augmented generation from the local index. |
-| `chat-rag-result-count` | `5` | `[1, 20]`, substitutes default for ≤0 | How many search results are retrieved when RAG is enabled. |
 | `chat-max-context-tokens` | `0` (no trimming) | — | Bounds tokens' worth of conversation sent to the model (approximated by character count); oldest messages trimmed first. |
-| `chat-web-search-enabled` | `false` | boolean | Turns on live web search (via SearXNG) as additional chat context, independent of RAG. |
+| `chat-web-search-enabled` | `false` | boolean | Turns on live web search (via SearXNG) as additional chat context. |
 | `chat-web-search-base-url` | none | required when web search enabled | Base URL of the SearXNG instance; queried at `<WebSearchBaseURL>/search?q=...&format=json`. |
 | `chat-web-search-result-count` | `5` | `[1, 20]` | How many web results are fetched when web search is enabled. |
 | `chat-system-prompt` | empty (none injected) | — | Optional leading system-role message injected ahead of the rest of the conversation on every turn; never dropped by context trimming. |
+
+Chat no longer has a separate retrieval-augmented-generation (RAG) toggle
+against this instance's own index. To blend this instance's own index into
+chat's web-search results instead, add it as a SearXNG engine -- see
+`packaging/searxng-engine/README.md`.
 
 ### Chat hooks (`admin_chat_hooks.html`)
 

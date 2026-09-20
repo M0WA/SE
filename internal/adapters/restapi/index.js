@@ -12,7 +12,6 @@
   const chatStatus = document.getElementById('chat-status');
   const chatForm = document.getElementById('chat-form');
   const chatInput = document.getElementById('chat-input');
-  const chatRag = document.getElementById('chat-rag');
   const chatWebSearch = document.getElementById('chat-web-search');
 
   // chatHistory is the full running conversation, sent in full on every
@@ -98,7 +97,7 @@
 
   // tokenUsageSegments turns the backend's flat token_usage breakdown into
   // the {label, value, color} shape buildDonutSVG/buildDonutLegend expect
-  // -- a fixed 4-way split (global prompt, active hook prompts, RAG/web
+  // -- a fixed 4-way split (global prompt, active hook prompts, web-search
   // context, conversation history) shared by every turn, regardless of
   // which pieces were actually nonzero this time.
   function tokenUsageSegments(u) {
@@ -424,9 +423,9 @@
   // sendChatMessage appends the user's turn to chatHistory, renders it
   // immediately, then POSTs the full history to /chat -- see runSearch
   // above for the same ok/non-ok/network-failure pattern this mirrors.
-  // rag/web_search are read fresh from their checkboxes on every call, so
-  // switching either mid-conversation only ever affects the question being
-  // asked right now, not history already answered under other settings.
+  // web_search is read fresh from its checkbox on every call, so switching
+  // it mid-conversation only ever affects the question being asked right
+  // now, not history already answered under other settings.
   async function sendChatMessage(content) {
     chatHistory.push({ role: 'user', content });
     renderChatMessage('user', content);
@@ -435,7 +434,7 @@
       const resp = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: chatHistory, rag: chatRag.checked, web_search: chatWebSearch.checked }),
+        body: JSON.stringify({ messages: chatHistory, web_search: chatWebSearch.checked }),
       });
       if (!resp.ok) {
         const msg = await resp.text();

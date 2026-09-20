@@ -63,14 +63,21 @@ func main() {
 	// hasn't set CHAT_HOOKS_DIR yet can still configure hooks; scripts just
 	// won't resolve to anything until the directory exists and is populated.
 	chatHooksDir := bootstrap.GetEnv("CHAT_HOOKS_DIR", "/etc/searchengine/hooks")
+	// internalSearchAPIKey is unset (empty) by default, meaning the
+	// /search internal-key bypass doesn't exist at all -- see
+	// requireAuthAPIOrInternalKey's doc comment. An admin opts in by
+	// setting SEARCH_INTERNAL_API_KEY, letting a trusted local caller
+	// (e.g. a SearXNG engine plugin) call /search without a session.
+	internalSearchAPIKey := bootstrap.GetEnv("SEARCH_INTERNAL_API_KEY", "")
 
 	handler := restapi.New(restapi.Config{
-		Search:        searchSvc,
-		OpSettings:    opSettings,
-		Health:        repo,
-		Sessions:      repo,
-		ChatEndpoints: repo,
-		Chat:          application.NewChatService(repo, httpchat.New(), searchSvc, httpsearxng.New(), repo, hookrunner.New(chatHooksDir)),
+		Search:               searchSvc,
+		OpSettings:           opSettings,
+		Health:               repo,
+		Sessions:             repo,
+		ChatEndpoints:        repo,
+		InternalSearchAPIKey: internalSearchAPIKey,
+		Chat:                 application.NewChatService(repo, httpchat.New(), httpsearxng.New(), repo, hookrunner.New(chatHooksDir)),
 	})
 
 	addr := bootstrap.GetEnv("SEARCH_LISTEN_ADDR", "127.0.0.1:8080")

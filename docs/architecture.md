@@ -35,7 +35,7 @@ Pure logic — every file imports only the Go standard library, with no SQL, HTT
 | Scheduled crawls (`scheduled_crawl.go`) | `ScheduledCrawl` model for admin-created recurring or one-off crawl definitions. |
 | PageRank (`pagerank.go`) | Iterative `PageRank` computation over the crawled link graph; persisted `PageRankStatus`. |
 | Operational & tuning settings (`settings.go`, `tuning.go`, `link_scope.go`, `renderer.go`, `url_normalize.go`) | `OperationalSettings`, `TuningSettings`, link-scope/renderer enums, `CanonicalizeURL`. |
-| Chat (`chat.go`) | `ChatMessage`, `ChatSource`, `WebSearchResult`, `ChatEndpoint` config with RAG and web-search augmentation settings. |
+| Chat (`chat.go`) | `ChatMessage`, `ChatSource`, `WebSearchResult`, `ChatEndpoint` config with web-search augmentation settings. |
 | Corpus stats cache (`corpus_stats.go`) | Concurrency-safe cached snapshot of corpus-wide totals BM25 scoring needs per request. |
 | Overview/admin metrics shapes (`overview_metrics.go`) | Pure data shapes feeding the admin Overview page's charts. |
 
@@ -80,7 +80,7 @@ Orchestration/use-case layer; verified to import only `internal/domain` and `int
 | `TriggerDueCrawls` (scheduler) | Finds and triggers due scheduled crawls, records completion/next-run state. | `ScheduledCrawlStore` |
 | `RecoverInterruptedCrawls` | Resumes or fails crawl jobs left queued/running when crawl-server last stopped. | `CrawlJobStore` |
 | `RenderAwareFetcher` | Routes fetches through a headless-browser `Renderer` when requested. | `AuthFetcher`, `Renderer` |
-| `ChatService` | Orchestrates one chat turn: loads config, optional RAG/web-search augmentation, history trimming, delegates completion. | `ChatEndpointStore`, `ChatCompleter`, `SearchService`, `WebSearcher` |
+| `ChatService` | Orchestrates one chat turn: loads config, optional web-search augmentation, history trimming, delegates completion. | `ChatEndpointStore`, `ChatCompleter`, `WebSearcher` |
 
 ### Adapters (`internal/adapters`)
 

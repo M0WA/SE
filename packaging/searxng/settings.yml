@@ -19,15 +19,32 @@ use_default_settings:
       - bing
       - brave
       - duckduckgo
+      - searchengine
 
 # keep_only above only controls which engines survive the default list --
 # it doesn't flip an individual engine's own disabled/inactive flag, and
 # bing ships with disabled: true by default (unlike brave/duckduckgo, which
 # ship enabled), so it needs this explicit override on top of keep_only or
 # it's kept in the list but never actually queried.
+#
+# searchengine below is not a default-shipped engine at all (keep_only's
+# allowlist mechanism only filters the defaults) -- it needs its own full
+# entry here, backed by ../searxng-engine/searchengine_index.py bind-mounted
+# into this container (see docker-compose.yml). internal_api_key is
+# REPLACE'd the same way secret_key below is: never a real value in this
+# tracked file, only in the deployed copy -- see ../searxng-engine/README.md
+# for what it's for and internal_api_key: "" empty is a hard failure mode
+# (every request gets 401), not a silent no-op.
 engines:
   - name: bing
     disabled: false
+  - name: searchengine
+    engine: searchengine_index
+    shortcut: se
+    disabled: false
+    base_url: "http://127.0.0.1:8080"
+    top_k: 10
+    internal_api_key: "REPLACE_WITH_SEARCH_INTERNAL_API_KEY"
 
 general:
   instance_name: "se.mo-sys.de internal search"

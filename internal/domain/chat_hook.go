@@ -37,7 +37,7 @@ type ChatHook struct {
 	// AND this hook is "active" for a turn (see GatedByWebSearch and
 	// ChatService.Chat), it is injected as its own leading system message,
 	// positioned after the endpoint's persistent SystemPrompt and before
-	// any RAG/web-search context message. Typically what tells the model
+	// any search-context message. Typically what tells the model
 	// the hook's own invocation syntax exists at all (e.g. "to search the
 	// web, output SEARCH[query]") -- see packaging/chat-hooks/README.md's
 	// "Suggested system prompt" section, which this supersedes on a
@@ -46,8 +46,8 @@ type ChatHook struct {
 	Prompt string
 	// GatedByWebSearch, when true, ties this hook's activation (and its
 	// Prompt injection) to the SAME effective web-search toggle that
-	// already gates the deterministic RAG-style web-search context
-	// injection (endpoint.WebSearchEnabled, overridden per-question by
+	// already gates the deterministic web-search context injection
+	// (endpoint.WebSearchEnabled, overridden per-question by
 	// ChatOptions.WebSearch) -- the existing public chat UI's "Web"
 	// checkbox, no new UI control needed. false (the default, for a
 	// hypothetical future non-web hook) means this hook is active whenever
