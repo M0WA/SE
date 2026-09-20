@@ -5140,16 +5140,15 @@ func TestHandleAdminContentDedupAliasGroups_ServiceError(t *testing.T) {
 // chatEndpointResp mirrors admin.go's unexported chatEndpointResponse wire
 // shape, for decoding test responses.
 type chatEndpointResp struct {
-	BaseURL              string    `json:"base_url"`
-	HasAPIKey            bool      `json:"has_api_key"`
-	Model                string    `json:"model"`
-	Enabled              bool      `json:"enabled"`
-	MaxContextTokens     int       `json:"max_context_tokens"`
-	WebSearchEnabled     bool      `json:"web_search_enabled"`
-	WebSearchBaseURL     string    `json:"web_search_base_url"`
-	WebSearchResultCount int       `json:"web_search_result_count"`
-	SystemPrompt         string    `json:"system_prompt"`
-	UpdatedAt            time.Time `json:"updated_at"`
+	BaseURL          string    `json:"base_url"`
+	HasAPIKey        bool      `json:"has_api_key"`
+	Model            string    `json:"model"`
+	Enabled          bool      `json:"enabled"`
+	MaxContextTokens int       `json:"max_context_tokens"`
+	WebSearchEnabled bool      `json:"web_search_enabled"`
+	WebSearchBaseURL string    `json:"web_search_base_url"`
+	SystemPrompt     string    `json:"system_prompt"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 func adminAuthedHandlerWithChatEndpoints(t *testing.T, store ports.ChatEndpointStore) (*restapi.Handler, *http.Cookie) {
@@ -5217,8 +5216,8 @@ func TestHandleAdminChatEndpoint_GetDefaultsWhenNothingSaved(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", code)
 	}
-	if resp.WebSearchEnabled || resp.WebSearchResultCount != domain.DefaultChatWebSearchResultCount {
-		t.Errorf("expected web search off by default (needs a base URL configured) with a default result count, got %+v", resp)
+	if resp.WebSearchEnabled {
+		t.Errorf("expected web search off by default (needs a base URL configured), got %+v", resp)
 	}
 	if resp.HasAPIKey || resp.BaseURL != "" || resp.Model != "" || resp.Enabled || resp.WebSearchBaseURL != "" {
 		t.Errorf("expected zero-ish defaults otherwise, got %+v", resp)
@@ -5251,15 +5250,14 @@ func TestHandleAdminChatEndpoint_GetStoreError(t *testing.T) {
 }
 
 // TestHandleAdminChatEndpoint_PatchCreatesNewConfig proves a PATCH with no
-// prior saved config creates one, never echoes the API key back, and
-// clamps web_search_result_count via domain.ChatEndpoint.Clamp.
+// prior saved config creates one, never echoing the API key back.
 func TestHandleAdminChatEndpoint_PatchCreatesNewConfig(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
 	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{
 		"base_url": "https://example.com/v1", "api_key": "sk-test", "model": "gpt-x",
 		"enabled": true, "max_context_tokens": 6000,
-		"web_search_enabled": true, "web_search_base_url": "http://127.0.0.1:8888", "web_search_result_count": 999,
+		"web_search_enabled": true, "web_search_base_url": "http://127.0.0.1:8888",
 	})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
@@ -5280,9 +5278,6 @@ func TestHandleAdminChatEndpoint_PatchCreatesNewConfig(t *testing.T) {
 	}
 	if !resp.WebSearchEnabled || resp.WebSearchBaseURL != "http://127.0.0.1:8888" {
 		t.Errorf("expected web search fields round tripped, got %+v", resp)
-	}
-	if resp.WebSearchResultCount != domain.MaxChatWebSearchResultCount {
-		t.Errorf("expected web_search_result_count clamped to the max, got %d", resp.WebSearchResultCount)
 	}
 	if resp.UpdatedAt.IsZero() {
 		t.Errorf("expected UpdatedAt set, got zero value")

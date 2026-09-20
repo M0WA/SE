@@ -12,49 +12,48 @@ import (
 )
 
 // ChatService orchestrates a chat turn: load the single admin-configured
-// domain.ChatEndpoint, optionally augment the conversation with context
-// from a live web search via ports.WebSearcher, then delegate the actual
-// completion call to a ports.ChatCompleter. Kept separate from
+// domain.ChatEndpoint, activate any regex-triggered chat hooks whose
+// gating the turn's effective web-search toggle satisfies, then delegate
+// the actual completion call to a ports.ChatCompleter. Kept separate from
 // hybridSearchService so chat's single-endpoint Get/Set config
 // (ports.ChatEndpointStore) never gets confused with the multi-endpoint
 // blended CRUD ports.EmbeddingEndpointStore uses.
 type ChatService struct {
 	endpoints ports.ChatEndpointStore
 	completer ports.ChatCompleter
-	webSearch ports.WebSearcher
 	// hooks and hookRunner are both nil-safe (see Chat): a deployment that
 	// hasn't wired regex-triggered chat hooks yet simply gets an empty
-	// ChatResult.HookResults every turn, same convention as s.webSearch's
-	// own nil check.
+	// ChatResult.HookResults every turn.
 	hooks      ports.ChatHookStore
 	hookRunner ports.HookScriptRunner
 }
 
-// NewChatService wires a ChatService from its five collaborators: the
+// NewChatService wires a ChatService from its four collaborators: the
 // endpoint config store, the client that actually talks to the configured
-// OpenAI-compatible endpoint, a live web searcher used for search context,
-// and the store/runner pair behind regex-triggered chat hooks (see
-// chat_hooks.go).
-func NewChatService(endpoints ports.ChatEndpointStore, completer ports.ChatCompleter, webSearch ports.WebSearcher, hooks ports.ChatHookStore, hookRunner ports.HookScriptRunner) *ChatService {
-	return &ChatService{endpoints: endpoints, completer: completer, webSearch: webSearch, hooks: hooks, hookRunner: hookRunner}
+// OpenAI-compatible endpoint, and the store/runner pair behind
+// regex-triggered chat hooks (see chat_hooks.go).
+func NewChatService(endpoints ports.ChatEndpointStore, completer ports.ChatCompleter, hooks ports.ChatHookStore, hookRunner ports.HookScriptRunner) *ChatService {
+	return &ChatService{endpoints: endpoints, completer: completer, hooks: hooks, hookRunner: hookRunner}
 }
 
 // ChatOptions carries this turn's per-question overrides for
 // ChatService.Chat -- a nil field falls back to the admin-configured
 // endpoint default (domain.ChatEndpoint.WebSearchEnabled), a non-nil one
 // decides for this question only, letting the chat UI's per-question
-// toggle override a fixed global setting without changing it.
+// toggle override a fixed global setting without changing it. See
+// WebSearch's own doc comment for what the toggle actually does.
 type ChatOptions struct {
+	// WebSearch, when non-nil, decides for this question only whether every
+	// ChatHook with GatedByWebSearch=true is active -- it does not itself
+	// perform a search or fetch anything; it only decides which hooks the
+	// model is offered, leaving the model to invoke them (e.g. a
+	// "web_search" or "web_fetch" hook) if it chooses to.
 	WebSearch *bool
 }
 
-// ChatResult is one completed chat turn's answer, plus the search results
-// (if any) whose content informed it -- surfaced separately from Answer so
-// the UI can render them as clickable citations rather than parsing the
-// answer text for them.
+// ChatResult is one completed chat turn's answer.
 type ChatResult struct {
-	Answer  string
-	Sources []domain.ChatSource
+	Answer string
 	// ContextTrimmed reports whether trimToBudget actually dropped one or
 	// more older messages to fit endpoint.MaxContextTokens for this turn --
 	// the client sends its full running history on every call (the backend
@@ -77,7 +76,7 @@ type ChatResult struct {
 // TokenUsage is one turn's leading-context token estimate, broken down by
 // where each piece came from -- see estimateTokens for the (deliberately
 // approximate, character-count-based) estimation method. GlobalPromptTokens/
-// HookPromptTokens/ContextTokens are computed directly from the same pieces
+// HookPromptTokens are computed directly from the same pieces
 // ChatService.Chat assembles into `leading`, so they're exact for what was
 // actually sent (not re-derived from the final message list). HistoryTokens
 // is measured after trimToBudget, so it reflects what actually made it into
@@ -87,22 +86,19 @@ type ChatResult struct {
 type TokenUsage struct {
 	GlobalPromptTokens int
 	HookPromptTokens   int
-	ContextTokens      int
 	HistoryTokens      int
 	MaxContextTokens   int
 }
 
 // Chat answers the conversation in history using the admin-configured chat
 // endpoint. opts.WebSearch, when non-nil, decides for this question only
-// whether web-search context is used, falling back to
+// whether GatedByWebSearch chat hooks are active, falling back to
 // endpoint.WebSearchEnabled otherwise -- so an admin's default can still be
-// overridden per question without changing it globally. When enabled, the
-// last user message is used as the query against s.webSearch (a live web
-// search), and any results found are folded into one system message ahead
-// of the rest of history. A failure at this stage is treated as
-// best-effort (results are simply omitted) rather than failing the whole
-// call, since this context is an enhancement, not a requirement, of
-// answering.
+// overridden per question without changing it globally. This layer never
+// performs a web search or fetch itself: it only decides which hooks the
+// model is offered (their Prompt injected, their pattern eligible to match
+// the answer) and leaves the model to invoke them, same as any other
+// active hook.
 func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, opts ChatOptions) (ChatResult, error) {
 	if len(history) == 0 {
 		return ChatResult{}, errors.New("chat: message history must not be empty")
@@ -126,9 +122,8 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	// model before it can decide to invoke that hook at all, so this can't
 	// wait until after an answer comes back. activeHooks is reused for the
 	// runChatHooks call after the first answer, so ListChatHooks is never
-	// called twice in one turn. A ListChatHooks error is best-effort, same
-	// convention as the web-search error below: it just leaves activeHooks
-	// empty rather than failing the turn.
+	// called twice in one turn. A ListChatHooks error is best-effort: it
+	// just leaves activeHooks empty rather than failing the turn.
 	var activeHooks []domain.ChatHook
 	if s.hooks != nil {
 		if all, err := s.hooks.ListChatHooks(ctx); err == nil {
@@ -141,34 +136,16 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	}
 
 	messages := history
-	var sources []domain.ChatSource
-	var ctxBlock strings.Builder
-	if useWebSearch {
-		if lastUser, ok := lastUserMessage(history); ok {
-			if endpoint.WebSearchBaseURL != "" && s.webSearch != nil {
-				webResults, err := s.webSearch.Search(ctx, endpoint.WebSearchBaseURL, lastUser.Content, endpoint.WebSearchResultCount)
-				if err == nil && len(webResults) > 0 {
-					ctxBlock.WriteString("Search results:\n\n")
-					for _, r := range webResults {
-						fmt.Fprintf(&ctxBlock, "Title: %s\nURL: %s\nSnippet: %s\n\n", r.Title, r.URL, r.Snippet)
-						sources = append(sources, domain.ChatSource{URL: r.URL, Title: r.Title})
-					}
-				}
-				// A web search error is best-effort.
-			}
-		}
-	}
 
 	// Leading system messages, in order: (1) the persistent per-endpoint
 	// system prompt, unconditional, when set; (2) each activeHooks entry's
 	// own non-empty Prompt, in list order, each its OWN separate system
 	// message (not concatenated into one blob) -- so a hook's invocation
 	// syntax reaches the model before the first completion call, letting it
-	// decide whether to invoke that hook at all; (3) the search-context
-	// message, if any. Building this as one ordered slice (rather
-	// than prepending piecemeal) keeps that order obvious and gives
-	// trimToBudget a single well-defined run of leading system-role
-	// messages to keep intact.
+	// decide whether to invoke that hook at all. Building this as one
+	// ordered slice (rather than prepending piecemeal) keeps that order
+	// obvious and gives trimToBudget a single well-defined run of leading
+	// system-role messages to keep intact.
 	tokenUsage := TokenUsage{MaxContextTokens: endpoint.MaxContextTokens}
 	var leading []domain.ChatMessage
 	if endpoint.SystemPrompt != "" {
@@ -182,14 +159,6 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 			leading = append(leading, msg)
 			tokenUsage.HookPromptTokens += estimateTokens([]domain.ChatMessage{msg})
 		}
-	}
-	if ctxBlock.Len() > 0 {
-		msg := domain.ChatMessage{
-			Role:    domain.ChatRoleSystem,
-			Content: "Use the following search results to answer the user's question. Cite the sources you use by URL.\n\n" + ctxBlock.String(),
-		}
-		leading = append(leading, msg)
-		tokenUsage.ContextTokens = estimateTokens([]domain.ChatMessage{msg})
 	}
 	if len(leading) > 0 {
 		withLeading := make([]domain.ChatMessage, 0, len(leading)+len(messages))
@@ -261,21 +230,21 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		currentMessages = followUp
 	}
 
-	return ChatResult{Answer: answer, Sources: sources, ContextTrimmed: contextTrimmed, HookResults: hookResults, TokenUsage: tokenUsage}, nil
+	return ChatResult{Answer: answer, ContextTrimmed: contextTrimmed, HookResults: hookResults, TokenUsage: tokenUsage}, nil
 }
 
 // promptDatePlaceholder, when present in the global system prompt or a
-// hook's own Prompt, is replaced with today's date -- lets an admin write a
-// prompt like "today is %T" so the model has a concrete anchor for judging
-// whether cached/trained-in information could be stale, without needing to
-// re-save the setting every day.
-const promptDatePlaceholder = "%T"
+// hook's own Prompt, is replaced with the current UTC date and time -- lets
+// an admin write a prompt like "the current time is %c" so the model has a
+// concrete anchor for judging whether cached/trained-in information could
+// be stale, without needing to re-save the setting every day.
+const promptDatePlaceholder = "%c"
 
 func expandPromptPlaceholders(prompt string) string {
 	if !strings.Contains(prompt, promptDatePlaceholder) {
 		return prompt
 	}
-	return strings.ReplaceAll(prompt, promptDatePlaceholder, time.Now().UTC().Format("Monday, January 2, 2006"))
+	return strings.ReplaceAll(prompt, promptDatePlaceholder, time.Now().UTC().Format("Monday, January 2, 2006 15:04:05 MST"))
 }
 
 // maxHookFollowUpRounds bounds how many times ChatService.Chat will feed a
@@ -365,16 +334,4 @@ func trimToBudget(messages []domain.ChatMessage, maxTokens int) []domain.ChatMes
 	kept = append(kept, system...)
 	kept = append(kept, rest[start:]...)
 	return kept
-}
-
-// lastUserMessage returns the last domain.ChatRoleUser message in history,
-// so web search always searches on the most recent thing the user actually
-// asked rather than an earlier turn or an assistant/system message.
-func lastUserMessage(history []domain.ChatMessage) (domain.ChatMessage, bool) {
-	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Role == domain.ChatRoleUser {
-			return history[i], true
-		}
-	}
-	return domain.ChatMessage{}, false
 }

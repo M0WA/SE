@@ -1,8 +1,10 @@
 # SearXNG (internal web search for the chat feature)
 
 `se.mo-sys.de` runs a self-hosted [SearXNG](https://github.com/searxng/searxng)
-metasearch instance, in Docker, so the chat feature (`internal/adapters/httpsearxng`)
-can search the live web instead of only the local index. Configured with
+metasearch instance, in Docker, so the chat feature's `web_search` chat hook
+script (`packaging/chat-hooks/web_search.sh`) can search the live web
+instead of only the local index -- the model itself decides whether to
+invoke it, this instance never queries SearXNG on its own. Configured with
 three upstream engines -- Bing, Brave, and DuckDuckGo -- plus one of this
 repo's own, `searchengine` (`../searxng-engine/`), which folds this
 instance's own indexed corpus into the same blended results instead of
@@ -86,9 +88,9 @@ from before a settings change (needs `docker compose restart searxng` from
   same as the bridge setup did.
 - `search.formats` includes `json` deliberately -- SearXNG disables it by
   default as an anti-scraping measure for public instances, but this
-  instance has exactly one caller (`internal/adapters/httpsearxng`, over
-  loopback), so there's no scraping surface being protected by leaving it
-  off.
+  instance has exactly one caller (the `web_search` chat hook script,
+  over loopback), so there's no scraping surface being protected by
+  leaving it off.
 - `server.limiter: false` -- SearXNG's rate limiter needs a Redis backend;
   skipped rather than standing up Redis solely to protect an instance
   nothing but localhost can even reach.

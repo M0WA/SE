@@ -20,16 +20,16 @@ const (
 type chatRequest struct {
 	Messages []domain.ChatMessage `json:"messages"`
 	// WebSearch, when present, overrides the admin-configured default for
-	// this question only (via a self-hosted SearXNG instance) -- omitted
-	// (nil) falls back to domain.ChatEndpoint.WebSearchEnabled, letting the
-	// chat UI's per-question toggle decide instead of a fixed global
-	// setting.
+	// this question only: it decides whether GatedByWebSearch chat hooks
+	// (e.g. a "web_search"/"web_fetch" hook) are active, not whether a
+	// search is performed directly -- omitted (nil) falls back to
+	// domain.ChatEndpoint.WebSearchEnabled, letting the chat UI's
+	// per-question toggle decide instead of a fixed global setting.
 	WebSearch *bool `json:"web_search,omitempty"`
 }
 
 type chatResponse struct {
-	Answer  string              `json:"answer"`
-	Sources []domain.ChatSource `json:"sources,omitempty"`
+	Answer string `json:"answer"`
 	// ContextTrimmed is true when one or more of the conversation's older
 	// messages were dropped server-side to fit the endpoint's configured
 	// token budget before this answer was generated -- omitted (so it reads
@@ -42,7 +42,7 @@ type chatResponse struct {
 	// TokenUsage is this turn's estimated context breakdown (see
 	// application.TokenUsage) -- always present, since every turn sends at
 	// least a history message, letting the chat UI show a token-usage
-	// diagram for every answer, not just ones with hooks/sources.
+	// diagram for every answer, not just ones with hooks.
 	TokenUsage chatTokenUsageResponse `json:"token_usage"`
 }
 
@@ -54,7 +54,6 @@ type chatResponse struct {
 type chatTokenUsageResponse struct {
 	GlobalPromptTokens int `json:"global_prompt_tokens"`
 	HookPromptTokens   int `json:"hook_prompt_tokens"`
-	ContextTokens      int `json:"context_tokens"`
 	HistoryTokens      int `json:"history_tokens"`
 	MaxContextTokens   int `json:"max_context_tokens,omitempty"`
 }
@@ -123,7 +122,7 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, chatResponse{
-		Answer: result.Answer, Sources: result.Sources, ContextTrimmed: result.ContextTrimmed,
+		Answer: result.Answer, ContextTrimmed: result.ContextTrimmed,
 		HookResults: toChatHookResultResponses(result.HookResults),
 		TokenUsage:  chatTokenUsageResponse(result.TokenUsage),
 	})

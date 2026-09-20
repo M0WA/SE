@@ -71,30 +71,8 @@ func (f *fakeChatCompleter) Complete(ctx context.Context, endpoint domain.ChatEn
 	return f.answer, nil
 }
 
-// fakeWebSearcher is a minimal ports.WebSearcher fake recording the
-// baseURL/query/count it was called with.
-type fakeWebSearcher struct {
-	results     []domain.WebSearchResult
-	err         error
-	wasCalled   bool
-	calledURL   string
-	calledQuery string
-	calledCount int
-}
-
-func (f *fakeWebSearcher) Search(ctx context.Context, baseURL, query string, count int) ([]domain.WebSearchResult, error) {
-	f.wasCalled = true
-	f.calledURL = baseURL
-	f.calledQuery = query
-	f.calledCount = count
-	if f.err != nil {
-		return nil, f.err
-	}
-	return f.results, nil
-}
-
 func TestChatService_EmptyHistory(t *testing.T) {
-	svc := NewChatService(&fakeChatEndpointStore{}, &fakeChatCompleter{}, &fakeWebSearcher{}, nil, nil)
+	svc := NewChatService(&fakeChatEndpointStore{}, &fakeChatCompleter{}, nil, nil)
 	_, err := svc.Chat(context.Background(), nil, ChatOptions{})
 	if err == nil {
 		t.Fatal("expected error for empty history, got nil")
@@ -104,7 +82,7 @@ func TestChatService_EmptyHistory(t *testing.T) {
 func TestChatService_NotConfigured(t *testing.T) {
 	wantErr := errors.New("boom")
 	endpoints := &fakeChatEndpointStore{getErr: wantErr}
-	svc := NewChatService(endpoints, &fakeChatCompleter{}, &fakeWebSearcher{}, nil, nil)
+	svc := NewChatService(endpoints, &fakeChatCompleter{}, nil, nil)
 
 	_, err := svc.Chat(context.Background(), []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, ChatOptions{})
 	if !errors.Is(err, wantErr) {
@@ -114,7 +92,7 @@ func TestChatService_NotConfigured(t *testing.T) {
 
 func TestChatService_NotConfigured_ErrIsPreserved(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{getErr: ports.ErrChatEndpointNotConfigured}
-	svc := NewChatService(endpoints, &fakeChatCompleter{}, &fakeWebSearcher{}, nil, nil)
+	svc := NewChatService(endpoints, &fakeChatCompleter{}, nil, nil)
 
 	_, err := svc.Chat(context.Background(), []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, ChatOptions{})
 	if !errors.Is(err, ports.ErrChatEndpointNotConfigured) {
@@ -124,7 +102,7 @@ func TestChatService_NotConfigured_ErrIsPreserved(t *testing.T) {
 
 func TestChatService_DisabledEndpoint(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: false}}
-	svc := NewChatService(endpoints, &fakeChatCompleter{}, &fakeWebSearcher{}, nil, nil)
+	svc := NewChatService(endpoints, &fakeChatCompleter{}, nil, nil)
 
 	_, err := svc.Chat(context.Background(), []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, ChatOptions{})
 	if !errors.Is(err, ports.ErrChatEndpointNotConfigured) {
@@ -132,167 +110,10 @@ func TestChatService_DisabledEndpoint(t *testing.T) {
 	}
 }
 
-func TestChatService_WebSearchDisabled_WebSearcherNeverCalled(t *testing.T) {
-	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchEnabled: false, WebSearchBaseURL: "http://searx.example"}}
-	completer := &fakeChatCompleter{answer: "the answer"}
-	webSearch := &fakeWebSearcher{results: []domain.WebSearchResult{{URL: "http://x", Title: "X", Snippet: "snip"}}}
-	svc := NewChatService(endpoints, completer, webSearch, nil, nil)
-
-	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
-	result, err := svc.Chat(context.Background(), history, ChatOptions{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if webSearch.wasCalled {
-		t.Fatal("expected web search not to be called when WebSearchEnabled is false")
-	}
-	if len(result.Sources) != 0 {
-		t.Fatalf("expected no sources, got %v", result.Sources)
-	}
-}
-
-func TestChatService_WebSearchEnabled_WithResults(t *testing.T) {
-	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{
-		Enabled: true, WebSearchEnabled: true, WebSearchBaseURL: "http://searx.example", WebSearchResultCount: 3,
-	}}
-	completer := &fakeChatCompleter{answer: "web answer"}
-	webSearch := &fakeWebSearcher{results: []domain.WebSearchResult{
-		{URL: "http://a", Title: "A", Snippet: "snippet a"},
-		{URL: "http://b", Title: "B", Snippet: "snippet b"},
-	}}
-	svc := NewChatService(endpoints, completer, webSearch, nil, nil)
-
-	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "second question"}}
-	result, err := svc.Chat(context.Background(), history, ChatOptions{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !webSearch.wasCalled {
-		t.Fatal("expected web search to be called when WebSearchEnabled")
-	}
-	if webSearch.calledURL != "http://searx.example" {
-		t.Fatalf("expected baseURL from endpoint.WebSearchBaseURL, got %q", webSearch.calledURL)
-	}
-	if webSearch.calledQuery != "second question" {
-		t.Fatalf("expected search on last user message, got %q", webSearch.calledQuery)
-	}
-	if webSearch.calledCount != 3 {
-		t.Fatalf("expected count from endpoint.WebSearchResultCount, got %d", webSearch.calledCount)
-	}
-	if len(result.Sources) != 2 || result.Sources[0].URL != "http://a" || result.Sources[1].URL != "http://b" {
-		t.Fatalf("unexpected sources: %v", result.Sources)
-	}
-	if len(completer.calledWith) != len(history)+1 {
-		t.Fatalf("expected one prepended system message, got %d messages", len(completer.calledWith))
-	}
-	if completer.calledWith[0].Role != domain.ChatRoleSystem {
-		t.Fatalf("expected first message to be the web-search system message, got role %q", completer.calledWith[0].Role)
-	}
-	if result.Answer != "web answer" {
-		t.Fatalf("unexpected answer: %q", result.Answer)
-	}
-}
-
-func TestChatService_WebSearchEnabled_NoBaseURLSkipsSearch(t *testing.T) {
-	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchEnabled: true, WebSearchBaseURL: ""}}
-	completer := &fakeChatCompleter{answer: "answer"}
-	webSearch := &fakeWebSearcher{results: []domain.WebSearchResult{{URL: "http://a", Title: "A"}}}
-	svc := NewChatService(endpoints, completer, webSearch, nil, nil)
-
-	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
-	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if webSearch.wasCalled {
-		t.Fatal("expected web search not to be called when WebSearchBaseURL is empty")
-	}
-}
-
-func TestChatService_WebSearchEnabled_SearchErrorFallsBack(t *testing.T) {
-	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchEnabled: true, WebSearchBaseURL: "http://searx.example", WebSearchResultCount: 5}}
-	completer := &fakeChatCompleter{answer: "plain answer"}
-	webSearch := &fakeWebSearcher{err: errors.New("searxng down")}
-	svc := NewChatService(endpoints, completer, webSearch, nil, nil)
-
-	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
-	result, err := svc.Chat(context.Background(), history, ChatOptions{})
-	if err != nil {
-		t.Fatalf("expected web search error to be swallowed, got %v", err)
-	}
-	if result.Answer != "plain answer" {
-		t.Fatalf("unexpected answer: %q", result.Answer)
-	}
-	if len(result.Sources) != 0 {
-		t.Fatalf("expected no sources on web search error, got %v", result.Sources)
-	}
-	if len(completer.calledWith) != 1 {
-		t.Fatalf("expected plain history passed through on web search error, got %v", completer.calledWith)
-	}
-}
-
-func TestChatService_WebSearchEnabled_EmptyResults(t *testing.T) {
-	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchEnabled: true, WebSearchBaseURL: "http://searx.example", WebSearchResultCount: 5}}
-	completer := &fakeChatCompleter{answer: "plain answer"}
-	webSearch := &fakeWebSearcher{results: []domain.WebSearchResult{}}
-	svc := NewChatService(endpoints, completer, webSearch, nil, nil)
-
-	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
-	result, err := svc.Chat(context.Background(), history, ChatOptions{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(result.Sources) != 0 {
-		t.Fatalf("expected no sources for empty results, got %v", result.Sources)
-	}
-	if len(completer.calledWith) != 1 {
-		t.Fatalf("expected no system message prepended for empty results, got %v", completer.calledWith)
-	}
-}
-
-func TestChatService_WebSearchOverride_TrueOverridesDisabledEndpoint(t *testing.T) {
-	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchEnabled: false, WebSearchBaseURL: "http://searx.example", WebSearchResultCount: 3}}
-	completer := &fakeChatCompleter{answer: "answer"}
-	webSearch := &fakeWebSearcher{results: []domain.WebSearchResult{{URL: "http://a", Title: "A"}}}
-	svc := NewChatService(endpoints, completer, webSearch, nil, nil)
-
-	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
-	on := true
-	result, err := svc.Chat(context.Background(), history, ChatOptions{WebSearch: &on})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !webSearch.wasCalled {
-		t.Fatal("expected web search to be called when override is true, even with WebSearchEnabled false")
-	}
-	if len(result.Sources) != 1 {
-		t.Fatalf("expected one source, got %v", result.Sources)
-	}
-}
-
-func TestChatService_WebSearchOverride_FalseOverridesEnabledEndpoint(t *testing.T) {
-	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchEnabled: true, WebSearchBaseURL: "http://searx.example", WebSearchResultCount: 3}}
-	completer := &fakeChatCompleter{answer: "answer"}
-	webSearch := &fakeWebSearcher{results: []domain.WebSearchResult{{URL: "http://a", Title: "A"}}}
-	svc := NewChatService(endpoints, completer, webSearch, nil, nil)
-
-	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
-	off := false
-	result, err := svc.Chat(context.Background(), history, ChatOptions{WebSearch: &off})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if webSearch.wasCalled {
-		t.Fatal("expected web search not to be called when override is false, even with WebSearchEnabled true")
-	}
-	if len(result.Sources) != 0 {
-		t.Fatalf("expected no sources, got %v", result.Sources)
-	}
-}
-
 func TestChatService_MaxContextTokens_Zero_NoTrimming(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, MaxContextTokens: 0}}
 	completer := &fakeChatCompleter{answer: "answer"}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, nil, nil)
+	svc := NewChatService(endpoints, completer, nil, nil)
 
 	history := []domain.ChatMessage{
 		{Role: domain.ChatRoleUser, Content: strings.Repeat("x", 100)},
@@ -316,7 +137,7 @@ func TestChatService_MaxContextTokens_TrimsOldestMessages(t *testing.T) {
 	// older 90-char (~30-token) message would blow past 15.
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, MaxContextTokens: 15}}
 	completer := &fakeChatCompleter{answer: "answer"}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, nil, nil)
+	svc := NewChatService(endpoints, completer, nil, nil)
 
 	history := []domain.ChatMessage{
 		{Role: domain.ChatRoleUser, Content: strings.Repeat("a", 90)},
@@ -340,7 +161,7 @@ func TestChatService_MaxContextTokens_KeepsAsManyRecentMessagesAsFit(t *testing.
 	// but not the oldest (another 30 tokens): 10+30=40 <= 40 < 70.
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, MaxContextTokens: 40}}
 	completer := &fakeChatCompleter{answer: "answer"}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, nil, nil)
+	svc := NewChatService(endpoints, completer, nil, nil)
 
 	history := []domain.ChatMessage{
 		{Role: domain.ChatRoleUser, Content: strings.Repeat("a", 90)},
@@ -358,7 +179,7 @@ func TestChatService_MaxContextTokens_KeepsAsManyRecentMessagesAsFit(t *testing.
 func TestChatService_MaxContextTokens_AlwaysKeepsNewestMessageEvenIfOversized(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, MaxContextTokens: 1}}
 	completer := &fakeChatCompleter{answer: "answer"}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, nil, nil)
+	svc := NewChatService(endpoints, completer, nil, nil)
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: strings.Repeat("a", 300)}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -373,13 +194,13 @@ func TestChatService_MaxContextTokens_AlwaysKeepsNewestMessageEvenIfOversized(t 
 	}
 }
 
-func TestChatService_MaxContextTokens_KeepsWebSearchSystemMessageIntact(t *testing.T) {
-	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{
-		Enabled: true, WebSearchEnabled: true, WebSearchBaseURL: "http://searx.example", WebSearchResultCount: 5, MaxContextTokens: 50,
-	}}
+func TestChatService_MaxContextTokens_KeepsHookPromptSystemMessageIntact(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, MaxContextTokens: 50}}
 	completer := &fakeChatCompleter{answer: "answer"}
-	webSearch := &fakeWebSearcher{results: []domain.WebSearchResult{{URL: "http://a", Title: "A", Snippet: strings.Repeat("s", 60)}}}
-	svc := NewChatService(endpoints, completer, webSearch, nil, nil)
+	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: strings.Repeat("s", 60)},
+	}}
+	svc := NewChatService(endpoints, completer, hooks, &fakeHookScriptRunner{})
 
 	history := []domain.ChatMessage{
 		{Role: domain.ChatRoleUser, Content: strings.Repeat("old", 30)},
@@ -390,10 +211,10 @@ func TestChatService_MaxContextTokens_KeepsWebSearchSystemMessageIntact(t *testi
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(completer.calledWith) < 2 {
-		t.Fatalf("expected at least the web-search system message plus the newest message, got %v", completer.calledWith)
+		t.Fatalf("expected at least the hook prompt system message plus the newest message, got %v", completer.calledWith)
 	}
 	if completer.calledWith[0].Role != domain.ChatRoleSystem {
-		t.Fatalf("expected the web-search system message to survive trimming as the first message, got role %q", completer.calledWith[0].Role)
+		t.Fatalf("expected the hook prompt system message to survive trimming as the first message, got role %q", completer.calledWith[0].Role)
 	}
 	last := completer.calledWith[len(completer.calledWith)-1]
 	if last.Content != "newest question" {
@@ -419,7 +240,7 @@ func TestTrimToBudget_UnderBudget_ReturnsUnchanged(t *testing.T) {
 func TestChatService_CompleterError(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer := &fakeChatCompleter{err: errors.New("upstream 500")}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, nil, nil)
+	svc := NewChatService(endpoints, completer, nil, nil)
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	_, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -434,7 +255,7 @@ func TestChatService_CompleterError(t *testing.T) {
 func TestChatService_SystemPromptAlone_SoleLeadingSystemMessage(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, SystemPrompt: "You are a pirate."}}
 	completer := &fakeChatCompleter{answer: "answer"}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, nil, nil)
+	svc := NewChatService(endpoints, completer, nil, nil)
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -451,42 +272,12 @@ func TestChatService_SystemPromptAlone_SoleLeadingSystemMessage(t *testing.T) {
 	}
 }
 
-// TestChatService_SystemPromptPlusWebSearch_TwoLeadingSystemMessagesPromptFirst
-// proves the persistent prompt and the search-context message can coexist
-// as two leading system messages, with the persistent prompt always first.
-func TestChatService_SystemPromptPlusWebSearch_TwoLeadingSystemMessagesPromptFirst(t *testing.T) {
-	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{
-		Enabled: true, SystemPrompt: "You are a pirate.",
-		WebSearchEnabled: true, WebSearchBaseURL: "http://searx.example", WebSearchResultCount: 5,
-	}}
-	completer := &fakeChatCompleter{answer: "answer"}
-	webSearch := &fakeWebSearcher{results: []domain.WebSearchResult{{URL: "http://a", Title: "A", Snippet: "snip"}}}
-	svc := NewChatService(endpoints, completer, webSearch, nil, nil)
-
-	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
-	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(completer.calledWith) != 3 {
-		t.Fatalf("expected persistent prompt + search system message + 1 history message, got %v", completer.calledWith)
-	}
-	if completer.calledWith[0].Role != domain.ChatRoleSystem || completer.calledWith[0].Content != "You are a pirate." {
-		t.Fatalf("expected the persistent prompt to come first, got %+v", completer.calledWith[0])
-	}
-	if completer.calledWith[1].Role != domain.ChatRoleSystem || !strings.Contains(completer.calledWith[1].Content, "http://a") {
-		t.Fatalf("expected the search context message second, got %+v", completer.calledWith[1])
-	}
-	if completer.calledWith[2] != history[0] {
-		t.Fatalf("expected original history preserved after both system messages, got %v", completer.calledWith[2])
-	}
-}
-
 // TestChatService_EmptySystemPrompt_NoLeadingPromptMessage proves an empty
 // SystemPrompt behaves exactly as before its addition -- no regression.
 func TestChatService_EmptySystemPrompt_NoLeadingPromptMessage(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, SystemPrompt: ""}}
 	completer := &fakeChatCompleter{answer: "answer"}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, nil, nil)
+	svc := NewChatService(endpoints, completer, nil, nil)
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -527,7 +318,7 @@ func TestTrimToBudget_TwoLeadingSystemMessages_KeepsBothAndNewest(t *testing.T) 
 func TestChatService_HooksNil_HookResultsEmpty(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer := &fakeChatCompleter{answer: "answer"}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, nil, nil)
+	svc := NewChatService(endpoints, completer, nil, nil)
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -550,7 +341,7 @@ func TestChatService_HooksConfigured_MatchingAnswerPopulatesHookResults(t *testi
 		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true},
 	}}
 	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_search.sh": "top result"}}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, hooks, runner)
+	svc := NewChatService(endpoints, completer, hooks, runner)
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -583,7 +374,7 @@ func TestChatService_HookFires_FeedsResultsBackForFinalAnswer(t *testing.T) {
 		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true},
 	}}
 	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_search.sh": `{"results":["go 1.26 release notes"]}`}}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, hooks, runner)
+	svc := NewChatService(endpoints, completer, hooks, runner)
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "what's new in the latest go release?"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -635,7 +426,7 @@ func TestChatService_HookRetries_SecondToolCallAlsoProcessed(t *testing.T) {
 		{ID: "1", Name: "web_fetch", Pattern: `FETCH\[(.+?)\]`, Script: "web_fetch.sh", Enabled: true},
 	}}
 	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_fetch.sh": "<empty/blocked page>"}}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, hooks, runner)
+	svc := NewChatService(endpoints, completer, hooks, runner)
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "what does example.com say?"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -672,7 +463,7 @@ func TestChatService_HookRetries_CappedAtMaxFollowUpRounds(t *testing.T) {
 		{ID: "1", Name: "web_fetch", Pattern: `FETCH\[(.+?)\]`, Script: "web_fetch.sh", Enabled: true},
 	}}
 	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_fetch.sh": "<empty/blocked page>"}}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, hooks, runner)
+	svc := NewChatService(endpoints, completer, hooks, runner)
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "what does example.com say?"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -703,7 +494,7 @@ func TestChatService_HookFollowUpCompletionErrors_FallsBackToOriginalAnswer(t *t
 		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true},
 	}}
 	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_search.sh": "results"}}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, hooks, runner)
+	svc := NewChatService(endpoints, completer, hooks, runner)
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -741,7 +532,7 @@ func TestChatService_NoHookMatch_OnlyOneCompletionCall(t *testing.T) {
 	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
 		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true},
 	}}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, hooks, &fakeHookScriptRunner{})
+	svc := NewChatService(endpoints, completer, hooks, &fakeHookScriptRunner{})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -788,7 +579,7 @@ func TestChatService_HooksListError_Swallowed(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer := &fakeChatCompleter{answer: "answer"}
 	hooks := &fakeChatHookStore{err: errors.New("db down")}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, hooks, &fakeHookScriptRunner{})
+	svc := NewChatService(endpoints, completer, hooks, &fakeHookScriptRunner{})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -811,7 +602,7 @@ func TestChatService_GatedHook_InactiveWhenWebSearchOff(t *testing.T) {
 		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: "You can search the web.", GatedByWebSearch: true},
 	}}
 	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_search.sh": "top result"}}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, hooks, runner)
+	svc := NewChatService(endpoints, completer, hooks, runner)
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -838,7 +629,7 @@ func TestChatService_GatedHook_ActiveWhenWebSearchOn(t *testing.T) {
 		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: "You can search the web.", GatedByWebSearch: true},
 	}}
 	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_search.sh": "top result"}}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, hooks, runner)
+	svc := NewChatService(endpoints, completer, hooks, runner)
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -872,7 +663,7 @@ func TestChatService_GatedHook_PerQuestionOverrideActivates(t *testing.T) {
 		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: "You can search the web.", GatedByWebSearch: true},
 	}}
 	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_search.sh": "top result"}}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, hooks, runner)
+	svc := NewChatService(endpoints, completer, hooks, runner)
 
 	on := true
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
@@ -897,7 +688,7 @@ func TestChatService_UngatedHook_ActiveRegardlessOfWebSearch(t *testing.T) {
 			{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: "You can search the web.", GatedByWebSearch: false},
 		}}
 		runner := &fakeHookScriptRunner{outputs: map[string]string{"web_search.sh": "top result"}}
-		svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, hooks, runner)
+		svc := NewChatService(endpoints, completer, hooks, runner)
 
 		history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 		result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -922,27 +713,24 @@ func TestChatService_UngatedHook_ActiveRegardlessOfWebSearch(t *testing.T) {
 // TestChatService_TwoActiveHooksWithPrompts_TwoSeparateLeadingSystemMessages
 // proves two active hooks, each with a non-empty Prompt, produce two
 // separate leading system messages (not concatenated into one), in list
-// order, both after endpoint.SystemPrompt and before any search-context
-// message.
+// order, after endpoint.SystemPrompt and before the conversation history.
 func TestChatService_TwoActiveHooksWithPrompts_TwoSeparateLeadingSystemMessages(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{
 		Enabled: true, SystemPrompt: "You are a pirate.",
-		WebSearchEnabled: true, WebSearchBaseURL: "http://searx.example", WebSearchResultCount: 5,
 	}}
 	completer := &fakeChatCompleter{answer: "answer"}
-	webSearch := &fakeWebSearcher{results: []domain.WebSearchResult{{URL: "http://a", Title: "A", Snippet: "snip"}}}
 	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
 		{ID: "1", Name: "first", Pattern: `A\((.+?)\)`, Script: "a.sh", Enabled: true, Prompt: "First hook prompt."},
 		{ID: "2", Name: "second", Pattern: `B\((.+?)\)`, Script: "b.sh", Enabled: true, Prompt: "Second hook prompt."},
 	}}
-	svc := NewChatService(endpoints, completer, webSearch, hooks, &fakeHookScriptRunner{})
+	svc := NewChatService(endpoints, completer, hooks, &fakeHookScriptRunner{})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(completer.calledWith) != 5 {
-		t.Fatalf("expected endpoint prompt + 2 hook prompts + search context + 1 history message, got %d: %v", len(completer.calledWith), completer.calledWith)
+	if len(completer.calledWith) != 4 {
+		t.Fatalf("expected endpoint prompt + 2 hook prompts + 1 history message, got %d: %v", len(completer.calledWith), completer.calledWith)
 	}
 	if completer.calledWith[0].Role != domain.ChatRoleSystem || completer.calledWith[0].Content != "You are a pirate." {
 		t.Fatalf("expected the endpoint's own SystemPrompt first, got %+v", completer.calledWith[0])
@@ -953,11 +741,8 @@ func TestChatService_TwoActiveHooksWithPrompts_TwoSeparateLeadingSystemMessages(
 	if completer.calledWith[2].Role != domain.ChatRoleSystem || completer.calledWith[2].Content != "Second hook prompt." {
 		t.Fatalf("expected the second hook's own separate system message third, got %+v", completer.calledWith[2])
 	}
-	if completer.calledWith[3].Role != domain.ChatRoleSystem || !strings.Contains(completer.calledWith[3].Content, "http://a") {
-		t.Fatalf("expected the search context message fourth, got %+v", completer.calledWith[3])
-	}
-	if completer.calledWith[4] != history[0] {
-		t.Fatalf("expected original history preserved last, got %v", completer.calledWith[4])
+	if completer.calledWith[3] != history[0] {
+		t.Fatalf("expected original history preserved last, got %v", completer.calledWith[3])
 	}
 }
 
@@ -972,7 +757,7 @@ func TestChatService_EndpointSystemPrompt_InjectedWhenHooksInactiveOrNil(t *test
 		hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
 			{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: "hook prompt", GatedByWebSearch: true},
 		}}
-		svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, hooks, &fakeHookScriptRunner{})
+		svc := NewChatService(endpoints, completer, hooks, &fakeHookScriptRunner{})
 
 		history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 		if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -986,7 +771,7 @@ func TestChatService_EndpointSystemPrompt_InjectedWhenHooksInactiveOrNil(t *test
 	t.Run("hooks nil", func(t *testing.T) {
 		endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, SystemPrompt: "You are a pirate."}}
 		completer := &fakeChatCompleter{answer: "answer"}
-		svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, nil, nil)
+		svc := NewChatService(endpoints, completer, nil, nil)
 
 		history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 		if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -998,18 +783,20 @@ func TestChatService_EndpointSystemPrompt_InjectedWhenHooksInactiveOrNil(t *test
 	})
 }
 
-// TestChatService_SystemPromptDatePlaceholder_Expanded proves a literal "%T"
+// TestChatService_SystemPromptDatePlaceholder_Expanded proves a literal "%c"
 // in either the endpoint's global SystemPrompt or an active hook's own
-// Prompt is replaced with today's date before reaching the model -- lets an
-// admin anchor "assume this may be outdated" language to a concrete date
-// without re-saving the setting every day.
+// Prompt is replaced with the current date and time before reaching the
+// model -- lets an admin anchor "assume this may be outdated" language to a
+// concrete timestamp without re-saving the setting every day. Compared at
+// minute granularity (dropping seconds) so this doesn't flake on a rare
+// second-boundary race between the call and this assertion.
 func TestChatService_SystemPromptDatePlaceholder_Expanded(t *testing.T) {
-	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, SystemPrompt: "Today is %T."}}
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, SystemPrompt: "Today is %c."}}
 	completer := &fakeChatCompleter{answers: []string{"SEARCH[news]", "done"}}
 	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
-		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: "Also today is %T."},
+		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: "Also today is %c."},
 	}}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, hooks, &fakeHookScriptRunner{})
+	svc := NewChatService(endpoints, completer, hooks, &fakeHookScriptRunner{})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -1018,12 +805,12 @@ func TestChatService_SystemPromptDatePlaceholder_Expanded(t *testing.T) {
 	if len(completer.calledWith) < 2 {
 		t.Fatalf("expected at least 2 leading messages, got %v", completer.calledWith)
 	}
-	today := time.Now().UTC().Format("Monday, January 2, 2006")
-	if strings.Contains(completer.calledWith[0].Content, "%T") || !strings.Contains(completer.calledWith[0].Content, today) {
-		t.Errorf("expected the global prompt's %%T expanded to %q, got %q", today, completer.calledWith[0].Content)
+	now := time.Now().UTC().Format("Monday, January 2, 2006 15:04")
+	if strings.Contains(completer.calledWith[0].Content, "%c") || !strings.Contains(completer.calledWith[0].Content, now) {
+		t.Errorf("expected the global prompt's %%c expanded to contain %q, got %q", now, completer.calledWith[0].Content)
 	}
-	if strings.Contains(completer.calledWith[1].Content, "%T") || !strings.Contains(completer.calledWith[1].Content, today) {
-		t.Errorf("expected the hook prompt's %%T expanded to %q, got %q", today, completer.calledWith[1].Content)
+	if strings.Contains(completer.calledWith[1].Content, "%c") || !strings.Contains(completer.calledWith[1].Content, now) {
+		t.Errorf("expected the hook prompt's %%c expanded to contain %q, got %q", now, completer.calledWith[1].Content)
 	}
 }
 
@@ -1034,15 +821,13 @@ func TestChatService_SystemPromptDatePlaceholder_Expanded(t *testing.T) {
 // history.
 func TestChatService_TokenUsage_AttributesEachPieceCorrectly(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{
-		Enabled: true, SystemPrompt: "You are a pirate.",
-		WebSearchEnabled: true, WebSearchBaseURL: "http://searx.example", WebSearchResultCount: 3, MaxContextTokens: 10000,
+		Enabled: true, SystemPrompt: "You are a pirate.", MaxContextTokens: 10000,
 	}}
 	completer := &fakeChatCompleter{answer: "plain answer"}
-	webSearch := &fakeWebSearcher{results: []domain.WebSearchResult{{URL: "http://a", Title: "A", Snippet: "info about a"}}}
 	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
 		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: "Use SEARCH[term] to search."},
 	}}
-	svc := NewChatService(endpoints, completer, webSearch, hooks, &fakeHookScriptRunner{})
+	svc := NewChatService(endpoints, completer, hooks, &fakeHookScriptRunner{})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "what is a?"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -1056,9 +841,6 @@ func TestChatService_TokenUsage_AttributesEachPieceCorrectly(t *testing.T) {
 	}
 	if u.HookPromptTokens <= 0 {
 		t.Errorf("expected a nonzero HookPromptTokens for the one active hook's prompt, got %+v", u)
-	}
-	if u.ContextTokens <= 0 {
-		t.Errorf("expected a nonzero ContextTokens now that web search produced a result, got %+v", u)
 	}
 	if u.HistoryTokens != estimateTokens(history) {
 		t.Errorf("expected HistoryTokens to match the (untrimmed, since nothing exceeded budget) history estimate, got %+v", u)
@@ -1074,7 +856,7 @@ func TestChatService_TokenUsage_AttributesEachPieceCorrectly(t *testing.T) {
 func TestChatService_TokenUsage_ZeroWhenNothingConfigured(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer := &fakeChatCompleter{answer: "answer"}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, nil, nil)
+	svc := NewChatService(endpoints, completer, nil, nil)
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -1083,7 +865,7 @@ func TestChatService_TokenUsage_ZeroWhenNothingConfigured(t *testing.T) {
 	}
 
 	u := result.TokenUsage
-	if u.GlobalPromptTokens != 0 || u.HookPromptTokens != 0 || u.ContextTokens != 0 || u.MaxContextTokens != 0 {
+	if u.GlobalPromptTokens != 0 || u.HookPromptTokens != 0 || u.MaxContextTokens != 0 {
 		t.Errorf("expected every configured-piece field to be zero, got %+v", u)
 	}
 	if u.HistoryTokens != estimateTokens(history) {
@@ -1101,7 +883,7 @@ func TestChatService_ActiveHookWithEmptyPrompt_NoExtraSystemMessage(t *testing.T
 		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: ""},
 	}}
 	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_search.sh": "top result"}}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, hooks, runner)
+	svc := NewChatService(endpoints, completer, hooks, runner)
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -1131,7 +913,7 @@ func TestChatService_HookEnv_CarriesEndpointWebSearchBaseURL(t *testing.T) {
 		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true},
 	}}
 	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_search.sh": "top result"}}
-	svc := NewChatService(endpoints, completer, &fakeWebSearcher{}, hooks, runner)
+	svc := NewChatService(endpoints, completer, hooks, runner)
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {

@@ -35,7 +35,7 @@ Pure logic — every file imports only the Go standard library, with no SQL, HTT
 | Scheduled crawls (`scheduled_crawl.go`) | `ScheduledCrawl` model for admin-created recurring or one-off crawl definitions. |
 | PageRank (`pagerank.go`) | Iterative `PageRank` computation over the crawled link graph; persisted `PageRankStatus`. |
 | Operational & tuning settings (`settings.go`, `tuning.go`, `link_scope.go`, `renderer.go`, `url_normalize.go`) | `OperationalSettings`, `TuningSettings`, link-scope/renderer enums, `CanonicalizeURL`. |
-| Chat (`chat.go`) | `ChatMessage`, `ChatSource`, `WebSearchResult`, `ChatEndpoint` config with web-search augmentation settings. |
+| Chat (`chat.go`) | `ChatMessage`, `ChatEndpoint` config -- web search/fetch is exclusively via admin-configured `ChatHook`s the model invokes (see `chat_hook.go`), not a direct search performed by this layer. |
 | Corpus stats cache (`corpus_stats.go`) | Concurrency-safe cached snapshot of corpus-wide totals BM25 scoring needs per request. |
 | Overview/admin metrics shapes (`overview_metrics.go`) | Pure data shapes feeding the admin Overview page's charts. |
 
@@ -62,7 +62,6 @@ Pure logic — every file imports only the Go standard library, with no SQL, HTT
 | `ScheduledCrawlStore` | CRUD + scheduling operations on `ScheduledCrawl`, shared by admin CRUD and the crawl-server ticker. | `sqlrepo` |
 | `EmbeddingEndpointStore`, `ChatEndpointStore` | CRUD/get-set for admin-configured embedding and chat endpoint config. | `sqlrepo` |
 | `ChatCompleter` | Calls an OpenAI-compatible chat-completions endpoint. | `httpchat` |
-| `WebSearcher` | Live web search for chat's optional augmentation. | `httpsearxng` |
 
 ### Application (`internal/application`)
 
@@ -98,7 +97,6 @@ Orchestration/use-case layer; verified to import only `internal/domain` and `int
 | `hashembed` | Dependency-free fallback embedding provider via feature hashing. |
 | `httpembed` | Calls an OpenAI-compatible embeddings HTTP endpoint (e.g. IONOS AI Model Hub) with chunking and rate-limit-aware retry. |
 | `httpchat` | Calls an OpenAI-compatible chat-completions endpoint. |
-| `httpsearxng` | Calls a self-hosted SearXNG instance's JSON search API. |
 | `crawlclient` | HTTP client `cmd/admin` uses to delegate crawl-job operations to `cmd/crawl`. |
 | `settingscrypto` | AES-256-GCM encryption of the admin-configured embedding/chat API key at rest. |
 
@@ -116,7 +114,7 @@ The dev/test deployment (`se.mo-sys.de`) runs all three Go binaries as independe
 
 nginx is the public entrypoint on 80/443 and splits traffic by path: `/login`, `/logout`, and `/admin` (a plain string-prefix match, not path-segment-aware) route to admin-server on `127.0.0.1:8081`; everything else falls through the catch-all to search-server on `127.0.0.1:8080`. crawl-server (`127.0.0.1:8082`) is deliberately given no location block and must never be exposed publicly. A separate, non-public server block on `127.0.0.1:8090` exposes nginx's `stub_status` for scraping.
 
-Observability is host-level and independent of the searchengine package itself: a Prometheus agent (`--enable-feature=agent`, no local TSDB) on `127.0.0.1:9090` scrapes `node-exporter` (9100, host metrics), `nginx-exporter` (9113, via `stub_status`), `postgres-exporter` (9187, reusing the same `DB_DSN` from `searchengine.env`), and optionally SearXNG's own OpenMetrics endpoint, then `remote_write`-forwards everything to an external **IONOS Monitoring Service** pipeline. SearXNG itself — a self-hosted metasearch instance backing the chat feature's live web search (`httpsearxng`) — runs as a separate Docker Compose deployment on `127.0.0.1:8888`, entirely outside the searchengine `.deb`. Everything on the host binds to `127.0.0.1` only, since there is no host firewall.
+Observability is host-level and independent of the searchengine package itself: a Prometheus agent (`--enable-feature=agent`, no local TSDB) on `127.0.0.1:9090` scrapes `node-exporter` (9100, host metrics), `nginx-exporter` (9113, via `stub_status`), `postgres-exporter` (9187, reusing the same `DB_DSN` from `searchengine.env`), and optionally SearXNG's own OpenMetrics endpoint, then `remote_write`-forwards everything to an external **IONOS Monitoring Service** pipeline. SearXNG itself — a self-hosted metasearch instance a "web_search" chat hook script queries when the model invokes it (see `packaging/chat-hooks/`) — runs as a separate Docker Compose deployment on `127.0.0.1:8888`, entirely outside the searchengine `.deb`. Everything on the host binds to `127.0.0.1` only, since there is no host firewall.
 
 The admin-configured embedding and chat endpoints (`httpembed`/`httpchat` — generic OpenAI-compatible HTTP clients at the code level) currently point at a dedicated inference host, `gpu.mo-sys.de` (a single NVIDIA H200 NVL GPU), rather than a third-party hosted API. Two independent `vLLM` server processes run there, sharing the one GPU: one serving `Alibaba-NLP/gte-Qwen2-7B-instruct` in pooling/embed mode on `:8000` (backing `httpembed`), and one serving `RedHatAI/Qwen2.5-72B-Instruct-FP8-dynamic` in normal generate mode on `:8001` (backing `httpchat`, `--max-model-len 32768`, no YaRN long-context scaling enabled). Each runs as its own systemd unit, bound to the host's private network interface only, gated by its own bearer API key. The same host also runs `node-exporter` and NVIDIA's `DCGM` GPU exporter, remote-written into the same IONOS Monitoring Service pipeline as `se.mo-sys.de`, distinguished by its own `external_labels.site` (`gpu-h200`).
 

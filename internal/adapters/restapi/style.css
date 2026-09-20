@@ -354,7 +354,8 @@ button:focus-visible {
 
 /* .donut-row pairs a buildDonutSVG chart with its buildDonutLegend list
    side by side -- used both by admin_chat_settings.js's static context-
-   budget preview and index.js's per-turn token-usage diagram in chat. */
+   budget preview and index.js's persistent token-usage diagram next to
+   the chat's Web checkbox (see .chat-token-usage below). */
 .donut-row {
   display: flex;
   align-items: center;
@@ -742,23 +743,6 @@ button:focus-visible {
   text-decoration-color: var(--rule-strong);
 }
 
-.chat-sources {
-  margin-top: 0.6rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.chat-source-link {
-  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
-  font-size: 0.78rem;
-  color: var(--ink-muted);
-  text-decoration: none;
-  word-break: break-all;
-}
-
-.chat-source-link:hover { color: var(--accent); text-decoration: underline; }
-
 .chat-context-note {
   margin-top: 0.5rem;
   color: var(--ink-muted);
@@ -807,15 +791,23 @@ button:focus-visible {
   color: var(--accent);
 }
 
-/* .chat-token-usage: this turn's token-usage donut, folded the same way as
-   .chat-hook-result above (closed by default, same box/summary treatment)
-   -- it's supplementary detail on every single turn, so it stays out of
-   the way unless opened, rather than the answer itself. */
-.chat-token-usage .donut-row {
-  padding: 0.6rem 0.85rem;
-  border-top: 1px solid var(--rule);
-  gap: 1rem;
+/* .chat-token-usage: a persistent running-total badge next to the Web
+   checkbox (see #chat-token-usage in index.html), not per-turn like the
+   answer itself -- reuses the .hint/.hint-bubble pattern (see above) so
+   the full donut breakdown is one hover/focus away instead of always
+   taking up space in the toolbar row. Hidden until the first answer sets
+   it (see index.js's renderTokenUsage). */
+.chat-token-usage {
+  font-size: 0.82rem;
+  color: var(--ink-muted);
+  white-space: nowrap;
 }
+
+.chat-token-usage .hint-bubble {
+  padding: 0.6rem 0.85rem;
+}
+
+.chat-token-usage .donut-row { gap: 1rem; }
 
 .chat-token-usage .donut-chart { width: 84px; height: 84px; }
 
@@ -840,6 +832,11 @@ button:focus-visible {
    index.js's setMode setting chatOptions.hidden = true (to hide RAG/Web in
    search mode) would otherwise have no visible effect. */
 .chat-options[hidden] { display: none; }
+
+/* Same fix again, same reason: .chat-token-usage is also a .hint (display:
+   inline-flex, an author rule), so index.js's renderTokenUsage setting
+   chatTokenUsage.hidden = true/false needs this explicit override too. */
+.chat-token-usage[hidden] { display: none; }
 
 .chat-rag-toggle {
   display: flex;

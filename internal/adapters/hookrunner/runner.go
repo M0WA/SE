@@ -24,10 +24,9 @@ const defaultTimeout = 10 * time.Second
 
 // maxStdout caps how much of a hook script's stdout is kept in memory and
 // returned to the caller, so a misbehaving script can't balloon memory or
-// response size. Same "cap and note" convention as httpsearxng's truncate
-// helper (internal/adapters/httpsearxng/client.go), scaled up since a
-// hook's legitimate output (e.g. web search results) is naturally larger
-// than an HTTP error body.
+// response size. Same "cap and note" convention as domain.TruncateWithNote's
+// other callers, scaled up since a hook's legitimate output (e.g. web
+// search results) is naturally larger than an HTTP error body.
 const maxStdout = 64 * 1024
 
 // maxStderrInError bounds how much of a failing script's stderr is folded

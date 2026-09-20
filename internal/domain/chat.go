@@ -17,24 +17,6 @@ type ChatMessage struct {
 	Content string `json:"content"`
 }
 
-// ChatSource is one search result surfaced to the user as supporting
-// evidence for a search-augmented chat answer.
-type ChatSource struct {
-	URL   string `json:"url"`
-	Title string `json:"title"`
-}
-
-// WebSearchResult is one result from a live web search (see
-// ports.WebSearcher), narrowed to just what a chat turn needs to fold into
-// its context -- distinct from ChatSource (a citation already surfaced to
-// the user) and from SearchResult (this instance's own indexed corpus,
-// which carries ranking fields a live web search has no equivalent of).
-type WebSearchResult struct {
-	Title   string
-	URL     string
-	Snippet string
-}
-
 // ChatEndpoint is the single admin-configured chat-completions backend --
 // unlike the embedding endpoints (a list of many blended providers), chat
 // only ever has one active configuration at a time.
@@ -48,56 +30,34 @@ type ChatEndpoint struct {
 	// endpoint at all.
 	Enabled bool
 	// MaxContextTokens bounds how many tokens' worth of conversation
-	// (search context plus message history) ChatService.Chat will send to
-	// the model, approximated by character count -- see that package's
-	// trimToBudget. Older messages are dropped first, oldest to newest,
+	// (leading system messages plus message history) ChatService.Chat will
+	// send to the model, approximated by character count -- see that
+	// package's trimToBudget. Older messages are dropped first, oldest to newest,
 	// always keeping the most recent user message. 0 disables trimming
 	// (the full history is sent as-is), same convention as
 	// EmbeddingHTTPEndpoint.ChunkSizeTokens.
 	MaxContextTokens int
-	// WebSearchEnabled turns on live web search (via a self-hosted SearXNG
-	// instance, see ports.WebSearcher) as additional chat context, folded
-	// into the conversation as a system context message before the
-	// completion call.
+	// WebSearchEnabled is the "Web" toggle's default: when on (as either
+	// this admin-configured default or the per-question ChatOptions.WebSearch
+	// override), every ChatHook with GatedByWebSearch=true becomes active for
+	// the turn -- its Prompt is injected and its pattern is matched against
+	// the answer, letting the model invoke it (e.g. a "web_search" or
+	// "web_fetch" hook) rather than this layer performing a search itself.
 	WebSearchEnabled bool
-	// WebSearchBaseURL is the SearXNG instance's base URL, e.g.
-	// http://127.0.0.1:8888 -- ports.WebSearcher GETs
-	// <WebSearchBaseURL>/search?q=...&format=json.
+	// WebSearchBaseURL is the self-hosted SearXNG instance's base URL, e.g.
+	// http://127.0.0.1:8888 -- passed to every active hook's script as the
+	// WEB_SEARCH_BASE_URL environment variable (see
+	// ports.HookScriptRunner), so a "web_search" hook script knows which
+	// instance to query without the admin repeating the URL per hook.
 	WebSearchBaseURL string
-	// WebSearchResultCount bounds how many web results are fetched when
-	// WebSearchEnabled -- see DefaultChatWebSearchResultCount/Min/Max.
-	WebSearchResultCount int
 	// SystemPrompt, when non-empty, is injected as a leading system-role
 	// domain.ChatMessage ahead of the rest of the conversation on every
-	// turn (see chat_service.go's Chat) -- before the search-context
-	// system message, if any, so an admin-authored persona/instruction
-	// always takes precedence. Invisible in the rendered chat UI, same as
-	// the search-context message already is (the public chat UI only ever
-	// renders user/assistant roles). Always
-	// preserved by trimToBudget's context trimming, never dropped even
-	// when the conversation is trimmed to fit MaxContextTokens.
+	// turn (see chat_service.go's Chat) -- before any active hook's own
+	// Prompt, if any, so an admin-authored persona/instruction always takes
+	// precedence. Invisible in the rendered chat UI, same as a hook's Prompt
+	// already is (the public chat UI only ever renders user/assistant
+	// roles). Always preserved by trimToBudget's context trimming, never
+	// dropped even when the conversation is trimmed to fit MaxContextTokens.
 	SystemPrompt string
 	UpdatedAt    time.Time
-}
-
-// DefaultChatWebSearchResultCount/Min/MaxChatWebSearchResultCount bound
-// ChatEndpoint.WebSearchResultCount, same self-healing convention as every
-// other admin-tunable numeric setting in this repo (see e.g.
-// OperationalSettingsValues.Set's clamping for FuzzyMaxEditDistance).
-const (
-	DefaultChatWebSearchResultCount = 5
-	MinChatWebSearchResultCount     = 1
-	MaxChatWebSearchResultCount     = 20
-)
-
-// Clamp self-heals WebSearchResultCount into its own [Min,Max] range,
-// substituting the default for a non-positive value the same way
-// ContentDedupSimHashMaxDistance's own Set-time clamping does for an
-// admin-supplied zero/negative.
-func (e *ChatEndpoint) Clamp() {
-	if e.WebSearchResultCount <= 0 {
-		e.WebSearchResultCount = DefaultChatWebSearchResultCount
-	} else if e.WebSearchResultCount > MaxChatWebSearchResultCount {
-		e.WebSearchResultCount = MaxChatWebSearchResultCount
-	}
 }

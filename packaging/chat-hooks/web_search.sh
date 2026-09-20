@@ -10,9 +10,8 @@
 #
 # WEB_SEARCH_BASE_URL: the SearXNG instance's base URL, read from the
 # process environment -- set by internal/adapters/hookrunner.Runner from
-# ChatService.Chat's own env map, which is built from the SAME
-# ADMIN-CONFIGURED domain.ChatEndpoint.WebSearchBaseURL setting the
-# deterministic RAG-style web-search context injection already uses
+# ChatService.Chat's own env map, which is built from the
+# ADMIN-CONFIGURED domain.ChatEndpoint.WebSearchBaseURL setting
 # (Settings -> Chat), never a value derived from the model's own output or
 # a capture group -- see ports.HookScriptRunner's and
 # internal/adapters/hookrunner.Runner.RunHookScript's doc comments for why
