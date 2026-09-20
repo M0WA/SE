@@ -272,7 +272,13 @@ func (r *Repository) migrateScheduledCrawlColumns(ctx context.Context) error {
 	// domain.ScheduledCrawl.InProgress and application.TriggerDueCrawls for
 	// why the two must never be conflated. Defaults to false for a
 	// pre-existing row: nothing was mid-run when this column didn't exist.
-	return addColumn("in_progress", "in_progress BOOLEAN NOT NULL DEFAULT false")
+	if err := addColumn("in_progress", "in_progress BOOLEAN NOT NULL DEFAULT false"); err != nil {
+		return err
+	}
+	// job_id backs ResetStaleInProgress's crash-recovery check (see
+	// domain.ScheduledCrawl.JobID) -- '' for a pre-existing row is exactly
+	// right, since in_progress also defaults to false for one.
+	return addColumn("job_id", "job_id TEXT NOT NULL DEFAULT ''")
 }
 
 // migrateEmbeddingEndpointColumns adds the chunking columns (see
@@ -2312,7 +2318,7 @@ const scheduledCrawlColumns = `id, seed_urls, max_pages, respect_robots, user_ag
 	link_scope, allowed_domains, blocked_domains, follow_indexed_domains,
 	use_sitemap, fetch_timeout_seconds, min_text_length,
 	crawl_delay_ms, max_response_kb, prioritize_unindexed, recurring,
-	interval_minutes, max_runs, run_count, renderer, enabled, in_progress, last_run_at, next_run_at, created_at`
+	interval_minutes, max_runs, run_count, renderer, enabled, in_progress, job_id, last_run_at, next_run_at, created_at`
 
 // CreateScheduledCrawl inserts a new crawl definition -- the one
 // representation of a crawl the admin sets up, whether it recurs or (see
@@ -2331,15 +2337,15 @@ func (r *Repository) CreateScheduledCrawl(ctx context.Context, s domain.Schedule
 		return fmt.Errorf("encoding blocked domains: %w", err)
 	}
 	insertSQL := r.ph(`INSERT INTO scheduled_crawls (`+scheduledCrawlColumns+`)
-	                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`,
-		1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28)
+	                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`,
+		1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29)
 	_, err = r.db.ExecContext(ctx, insertSQL,
 		s.ID, string(seedJSON), s.MaxPages, s.RespectRobots, s.UserAgent,
 		s.Cookie, s.BasicAuthUser, s.BasicAuthPass,
 		s.LinkScope, string(allowedJSON), string(blockedJSON), s.FollowIndexedDomains,
 		s.UseSitemap, s.FetchTimeoutSeconds, s.MinTextLength,
 		s.CrawlDelayMs, s.MaxResponseKB, s.PrioritizeUnindexed, s.Recurring,
-		s.IntervalMinutes, s.MaxRuns, s.RunCount, s.Renderer, s.Enabled, s.InProgress,
+		s.IntervalMinutes, s.MaxRuns, s.RunCount, s.Renderer, s.Enabled, s.InProgress, s.JobID,
 		nullableTimeString(s.LastRunAt), s.NextRunAt.UTC().Format(crawledAtLayout), s.CreatedAt.UTC().Format(crawledAtLayout),
 	)
 	if err != nil {
@@ -2471,12 +2477,14 @@ func (r *Repository) DueScheduledCrawls(ctx context.Context, now time.Time) ([]d
 
 // MarkScheduledCrawlRun records a schedule's trigger or finish --
 // TriggerDueCrawls calls this twice per run: once provisionally with
-// inProgress=true, again on completion. enabled (the admin's toggle) and
-// inProgress (what blocks double-triggering) are deliberately separate.
-func (r *Repository) MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time, enabled, inProgress bool, runCount int) error {
-	updateSQL := r.ph(`UPDATE scheduled_crawls SET last_run_at = %s, next_run_at = %s, enabled = %s, in_progress = %s, run_count = %s WHERE id = %s`, 1, 2, 3, 4, 5, 6)
+// inProgress=true and jobID set to the run's domain.CrawlJob, again on
+// completion with inProgress=false and jobID="". enabled (the admin's
+// toggle) and inProgress (what blocks double-triggering) are deliberately
+// separate.
+func (r *Repository) MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time, enabled, inProgress bool, runCount int, jobID string) error {
+	updateSQL := r.ph(`UPDATE scheduled_crawls SET last_run_at = %s, next_run_at = %s, enabled = %s, in_progress = %s, run_count = %s, job_id = %s WHERE id = %s`, 1, 2, 3, 4, 5, 6, 7)
 	res, err := r.db.ExecContext(ctx, updateSQL,
-		lastRunAt.UTC().Format(crawledAtLayout), nextRunAt.UTC().Format(crawledAtLayout), enabled, inProgress, runCount, id)
+		lastRunAt.UTC().Format(crawledAtLayout), nextRunAt.UTC().Format(crawledAtLayout), enabled, inProgress, runCount, jobID, id)
 	if err != nil {
 		return fmt.Errorf("marking scheduled crawl run (%s): %w", id, err)
 	}
@@ -2525,14 +2533,35 @@ func (r *Repository) SetScheduledCrawlEnabled(ctx context.Context, id string, en
 	return requireRowsAffected(res, id)
 }
 
-// ResetStaleInProgress clears in_progress for every schedule stuck true,
-// run once at crawl-server startup before the ticker's first tick --
-// nothing can genuinely be in-progress the instant this process starts,
-// since the goroutine that would clear it died with whatever process set
-// it. Returns how many rows were reset (0 is the healthy case).
+// ResetStaleInProgress clears in_progress for every schedule stuck true
+// whose job_id does NOT correspond to a still-queued/running crawl_jobs
+// row, run once at crawl-server startup before the ticker's first tick and
+// always after RecoverInterruptedCrawls (whose resumed jobs must already
+// be reflected in crawl_jobs' status by the time this query runs).
+//
+// This is deliberately NOT "clear every stuck-true row" -- an earlier
+// version of this method did exactly that, on the reasoning that "nothing
+// can genuinely be in-progress the instant this process starts, since the
+// in-memory closure that would clear it died with whatever process set
+// it." That reasoning has a real gap: RecoverInterruptedCrawls, which runs
+// moments before this in the same startup sequence, can RESUME a job that
+// was queued/running when the process died -- that job (and the schedule
+// that triggered it) really is in progress again, right now, in this very
+// process. Blindly clearing in_progress for it let the very next scheduler
+// tick trigger a SECOND, duplicate crawl of the same site while the
+// resumed one was still running (confirmed in production against
+// cnn.com). job_id NOT IN (a still-active crawl_jobs row) correctly
+// distinguishes "this schedule's job is genuinely gone" (job_id is ” from
+// before this column existed, the job was deleted, or it reached a
+// terminal status) from "this schedule's job was just resumed and is
+// still actually running." Returns how many rows were reset (0 is the
+// healthy case).
 func (r *Repository) ResetStaleInProgress(ctx context.Context) (int, error) {
-	updateSQL := r.ph(`UPDATE scheduled_crawls SET in_progress = %s WHERE in_progress = %s`, 1, 2)
-	res, err := r.db.ExecContext(ctx, updateSQL, false, true)
+	updateSQL := r.ph(`UPDATE scheduled_crawls SET in_progress = %s, job_id = %s
+	                    WHERE in_progress = %s
+	                      AND job_id NOT IN (SELECT id FROM crawl_jobs WHERE status = %s OR status = %s)`,
+		1, 2, 3, 4, 5)
+	res, err := r.db.ExecContext(ctx, updateSQL, false, "", true, string(domain.CrawlJobQueued), string(domain.CrawlJobRunning))
 	if err != nil {
 		return 0, fmt.Errorf("resetting stale in_progress flags: %w", err)
 	}
@@ -2829,7 +2858,7 @@ func scanScheduledCrawl(row scanner) (domain.ScheduledCrawl, error) {
 		&s.LinkScope, &allowedJSON, &blockedJSON, &s.FollowIndexedDomains,
 		&s.UseSitemap, &s.FetchTimeoutSeconds, &s.MinTextLength,
 		&s.CrawlDelayMs, &s.MaxResponseKB, &s.PrioritizeUnindexed, &s.Recurring,
-		&s.IntervalMinutes, &s.MaxRuns, &s.RunCount, &s.Renderer, &s.Enabled, &s.InProgress,
+		&s.IntervalMinutes, &s.MaxRuns, &s.RunCount, &s.Renderer, &s.Enabled, &s.InProgress, &s.JobID,
 		&lastRunAt, &nextRunAt, &createdAt); err != nil {
 		return domain.ScheduledCrawl{}, err
 	}

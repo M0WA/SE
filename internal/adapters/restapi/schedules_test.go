@@ -72,7 +72,7 @@ func (f *fakeScheduledCrawlStore) DeleteScheduledCrawl(_ context.Context, id str
 func (f *fakeScheduledCrawlStore) DueScheduledCrawls(context.Context, time.Time) ([]domain.ScheduledCrawl, error) {
 	return nil, nil
 }
-func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(context.Context, string, time.Time, time.Time, bool, bool, int) error {
+func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(context.Context, string, time.Time, time.Time, bool, bool, int, string) error {
 	return nil
 }
 
