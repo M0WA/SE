@@ -230,6 +230,18 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		currentMessages = followUp
 	}
 
+	// A hook's own invocation syntax (e.g. "<web_search>query</web_search>")
+	// is meant for this layer to consume, never for the user to see -- but
+	// it can still end up in the returned answer: the model echoing/
+	// repeating it in an otherwise-real answer, or the "keep the current
+	// answer" fallback above returning a still-bare tool call when the
+	// last follow-up completion call itself failed. Strip every match of
+	// every hook active THIS turn (not every configured hook -- the model
+	// was only ever told about these) before it ever reaches the client;
+	// the structured HookResults panel is the one place that invocation
+	// (and its result) is shown.
+	answer = stripHookCallTags(answer, activeHooks)
+
 	return ChatResult{Answer: answer, ContextTrimmed: contextTrimmed, HookResults: hookResults, TokenUsage: tokenUsage}, nil
 }
 

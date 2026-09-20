@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"regexp"
+	"strings"
 
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
@@ -80,4 +81,21 @@ func runChatHooks(ctx context.Context, hooks []domain.ChatHook, runner ports.Hoo
 		}
 	}
 	return results
+}
+
+// stripHookCallTags removes every match of every hook in hooks' own Pattern
+// from answer, then trims the result -- see ChatService.Chat's own call
+// site for why this runs once, after the whole follow-up loop, never
+// in-loop (an in-loop strip would erase the very tag runChatHooks needs to
+// match on the next round). A hook whose Pattern fails to compile is
+// skipped, same as runChatHooks does for the same reason.
+func stripHookCallTags(answer string, hooks []domain.ChatHook) string {
+	for _, h := range hooks {
+		re, err := regexp.Compile(h.Pattern)
+		if err != nil {
+			continue
+		}
+		answer = re.ReplaceAllString(answer, "")
+	}
+	return strings.TrimSpace(answer)
 }
