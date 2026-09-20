@@ -47,23 +47,17 @@ type chatResponse struct {
 	TokenUsage chatTokenUsageResponse `json:"token_usage"`
 }
 
-// chatTokenUsageResponse is the wire shape of application.TokenUsage.
+// chatTokenUsageResponse is the wire shape of application.TokenUsage -- kept
+// with identical field names/types/order so a plain type conversion
+// (chatTokenUsageResponse(result.TokenUsage), see handleChat) works; struct
+// tags don't affect convertibility, only field shape does, so this must stay
+// in lockstep with application.TokenUsage's own field list.
 type chatTokenUsageResponse struct {
 	GlobalPromptTokens int `json:"global_prompt_tokens"`
 	HookPromptTokens   int `json:"hook_prompt_tokens"`
 	ContextTokens      int `json:"context_tokens"`
 	HistoryTokens      int `json:"history_tokens"`
 	MaxContextTokens   int `json:"max_context_tokens,omitempty"`
-}
-
-func toChatTokenUsageResponse(u application.TokenUsage) chatTokenUsageResponse {
-	return chatTokenUsageResponse{
-		GlobalPromptTokens: u.GlobalPromptTokens,
-		HookPromptTokens:   u.HookPromptTokens,
-		ContextTokens:      u.ContextTokens,
-		HistoryTokens:      u.HistoryTokens,
-		MaxContextTokens:   u.MaxContextTokens,
-	}
 }
 
 // chatHookResultResponse is the wire shape of one domain.ChatHookResult.
@@ -133,6 +127,6 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, chatResponse{
 		Answer: result.Answer, Sources: result.Sources, ContextTrimmed: result.ContextTrimmed,
 		HookResults: toChatHookResultResponses(result.HookResults),
-		TokenUsage:  toChatTokenUsageResponse(result.TokenUsage),
+		TokenUsage:  chatTokenUsageResponse(result.TokenUsage),
 	})
 }
