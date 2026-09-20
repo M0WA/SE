@@ -49,6 +49,18 @@ paging = False
 # repo's own se.mo-sys.de deployment.
 base_url = "http://127.0.0.1:8080"
 
+# SearXNG defaults every engine's outbound network to HTTPS-only
+# (searx/network/network.py's initialize() hardcodes
+# default_params['enable_http'] = False, independent of anything in
+# settings.yml) and rejects a plain http:// URL with
+# curl_cffi.requests.exceptions.InvalidSchema -- this engine talks to
+# cmd/search over plain HTTP, so it needs its own per-engine network with
+# HTTP allowed. SearXNG's engine loader (network.py's iter_networks())
+# builds that automatically from any default_params key (enable_http,
+# verify, ...) that's also present as a module attribute here, which is
+# what this is for -- removing it reintroduces the InvalidSchema crash.
+enable_http = True
+
 # Passed straight through as /search's own ?top_k= query parameter.
 top_k = 10
 
