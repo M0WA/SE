@@ -306,6 +306,101 @@ func TestHandleSearch_Unauthenticated_Returns401(t *testing.T) {
 	}
 }
 
+// TestHandleSearch_NoInternalKeyConfigured_StillRequiresSession proves the
+// default-off behavior of requireAuthAPIOrInternalKey is byte-for-byte
+// identical to plain requireAuthAPI: with InternalSearchAPIKey left unset,
+// a request with no session cookie and no X-Internal-API-Key header at all
+// still gets a plain 401, exactly as /search behaved before this bypass
+// existed.
+func TestHandleSearch_NoInternalKeyConfigured_StillRequiresSession(t *testing.T) {
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
+	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen", nil)
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 when InternalSearchAPIKey is unset, got %d", rec.Code)
+	}
+	if rec.Body.String() != "authentication required\n" {
+		t.Errorf("expected the exact unauthenticated error body, got %q", rec.Body.String())
+	}
+}
+
+// TestHandleSearch_CorrectInternalKey_BypassesSession proves a trusted
+// caller (e.g. the SearXNG engine plugin) that presents the exact
+// configured X-Internal-API-Key reaches handleSearch with no session
+// cookie at all.
+func TestHandleSearch_CorrectInternalKey_BypassesSession(t *testing.T) {
+	fs := &fakeSearch{results: []domain.SearchResult{{URL: "http://a", Score: 1}}}
+	h := restapi.New(restapi.Config{Search: fs, InternalSearchAPIKey: "s3cret-key"})
+
+	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen", nil)
+	req.Header.Set("X-Internal-API-Key", "s3cret-key")
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 with a correct internal key and no session, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if fs.gotQ != "katzen" {
+		t.Errorf("expected the bypassed request to reach handleSearch, got query %q", fs.gotQ)
+	}
+}
+
+// TestHandleSearch_WrongInternalKey_StillRequiresSession proves a wrong
+// X-Internal-API-Key does not fall through to the bypass, and (with no
+// session cookie either) still gets a plain 401 -- a wrong key is not
+// itself treated as an authenticated session.
+func TestHandleSearch_WrongInternalKey_StillRequiresSession(t *testing.T) {
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, InternalSearchAPIKey: "s3cret-key"})
+
+	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen", nil)
+	req.Header.Set("X-Internal-API-Key", "wrong-key")
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 with a wrong internal key, got %d", rec.Code)
+	}
+}
+
+// TestHandleSearch_ValidSessionWithInternalKeyConfigured_StillWorks is
+// regression coverage that configuring InternalSearchAPIKey doesn't
+// disturb the normal session-cookie path: a valid session with no
+// X-Internal-API-Key header at all still works exactly as before.
+func TestHandleSearch_ValidSessionWithInternalKeyConfigured_StillWorks(t *testing.T) {
+	fs := &fakeSearch{results: []domain.SearchResult{{URL: "http://a", Score: 1}}}
+	h := restapi.New(restapi.Config{
+		Search: fs, Jobs: nil,
+		AdminUser: testAdminUser, AdminPass: testAdminPass,
+		InternalSearchAPIKey: "s3cret-key",
+	})
+
+	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
+	loginReq := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
+	loginRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusOK {
+		t.Fatalf("login failed: %d %s", loginRec.Code, loginRec.Body.String())
+	}
+	cookies := loginRec.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatalf("expected a session cookie after login")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen", nil)
+	req.AddCookie(cookies[0])
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 via the normal session path, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if fs.gotQ != "katzen" {
+		t.Errorf("expected the session-authenticated request to reach handleSearch, got query %q", fs.gotQ)
+	}
+}
+
 // TestHandleSearch_SurfacesCorrectedTerms verifies a fuzzy correction made
 // by the search service reaches the public /search JSON response, so a
 // caller/UI can show it transparently rather than the query being silently

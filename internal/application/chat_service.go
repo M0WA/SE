@@ -13,17 +13,14 @@ import (
 
 // ChatService orchestrates a chat turn: load the single admin-configured
 // domain.ChatEndpoint, optionally augment the conversation with context
-// from one or both of two independent sources -- retrieval-augmented
-// generation (RAG) against the existing search index, and a live web
-// search via ports.WebSearcher -- then delegate the actual completion call
-// to a ports.ChatCompleter. Kept separate from hybridSearchService so
-// chat's single-endpoint Get/Set config (ports.ChatEndpointStore) never
-// gets confused with the multi-endpoint blended CRUD
-// ports.EmbeddingEndpointStore uses.
+// from a live web search via ports.WebSearcher, then delegate the actual
+// completion call to a ports.ChatCompleter. Kept separate from
+// hybridSearchService so chat's single-endpoint Get/Set config
+// (ports.ChatEndpointStore) never gets confused with the multi-endpoint
+// blended CRUD ports.EmbeddingEndpointStore uses.
 type ChatService struct {
 	endpoints ports.ChatEndpointStore
 	completer ports.ChatCompleter
-	search    ports.SearchService
 	webSearch ports.WebSearcher
 	// hooks and hookRunner are both nil-safe (see Chat): a deployment that
 	// hasn't wired regex-triggered chat hooks yet simply gets an empty
@@ -33,23 +30,21 @@ type ChatService struct {
 	hookRunner ports.HookScriptRunner
 }
 
-// NewChatService wires a ChatService from its six collaborators: the
+// NewChatService wires a ChatService from its five collaborators: the
 // endpoint config store, the client that actually talks to the configured
-// OpenAI-compatible endpoint, the existing hybrid search service used for
-// RAG context, a live web searcher used for web-search context, and the
-// store/runner pair behind regex-triggered chat hooks (see chat_hooks.go).
-func NewChatService(endpoints ports.ChatEndpointStore, completer ports.ChatCompleter, search ports.SearchService, webSearch ports.WebSearcher, hooks ports.ChatHookStore, hookRunner ports.HookScriptRunner) *ChatService {
-	return &ChatService{endpoints: endpoints, completer: completer, search: search, webSearch: webSearch, hooks: hooks, hookRunner: hookRunner}
+// OpenAI-compatible endpoint, a live web searcher used for search context,
+// and the store/runner pair behind regex-triggered chat hooks (see
+// chat_hooks.go).
+func NewChatService(endpoints ports.ChatEndpointStore, completer ports.ChatCompleter, webSearch ports.WebSearcher, hooks ports.ChatHookStore, hookRunner ports.HookScriptRunner) *ChatService {
+	return &ChatService{endpoints: endpoints, completer: completer, webSearch: webSearch, hooks: hooks, hookRunner: hookRunner}
 }
 
 // ChatOptions carries this turn's per-question overrides for
 // ChatService.Chat -- a nil field falls back to the admin-configured
-// endpoint default (domain.ChatEndpoint.RAGEnabled/WebSearchEnabled), a
-// non-nil one decides for this question only, letting the chat UI's
-// per-question toggles override a fixed global setting without changing
-// it.
+// endpoint default (domain.ChatEndpoint.WebSearchEnabled), a non-nil one
+// decides for this question only, letting the chat UI's per-question
+// toggle override a fixed global setting without changing it.
 type ChatOptions struct {
-	RAG       *bool
 	WebSearch *bool
 }
 
@@ -74,8 +69,8 @@ type ChatResult struct {
 	// TokenUsage breaks down the estimated size of what was actually sent to
 	// the model for this turn's first completion call -- lets the chat UI
 	// show where a turn's context budget went (global prompt vs. active
-	// hooks' own prompts vs. RAG/web-search context vs. conversation
-	// history) instead of just a single opaque total.
+	// hooks' own prompts vs. search context vs. conversation history)
+	// instead of just a single opaque total.
 	TokenUsage TokenUsage
 }
 
@@ -98,18 +93,16 @@ type TokenUsage struct {
 }
 
 // Chat answers the conversation in history using the admin-configured chat
-// endpoint. Each of opts.RAG/opts.WebSearch, when non-nil, decides for this
-// question only whether that source is used, falling back to
-// endpoint.RAGEnabled/WebSearchEnabled otherwise -- so an admin's default
-// can still be overridden per question without changing it globally. Both
-// sources can apply at once: the last user message is used as the query
-// against whichever of s.search (this instance's own index) and
-// s.webSearch (a live web search) are enabled, and any results found from
-// either are woven together into one system message ahead of the rest of
-// history. A failure from either source at this stage is treated as
-// best-effort (that source's results are simply omitted) rather than
-// failing the whole call, since this context is an enhancement, not a
-// requirement, of answering.
+// endpoint. opts.WebSearch, when non-nil, decides for this question only
+// whether web-search context is used, falling back to
+// endpoint.WebSearchEnabled otherwise -- so an admin's default can still be
+// overridden per question without changing it globally. When enabled, the
+// last user message is used as the query against s.webSearch (a live web
+// search), and any results found are folded into one system message ahead
+// of the rest of history. A failure at this stage is treated as
+// best-effort (results are simply omitted) rather than failing the whole
+// call, since this context is an enhancement, not a requirement, of
+// answering.
 func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, opts ChatOptions) (ChatResult, error) {
 	if len(history) == 0 {
 		return ChatResult{}, errors.New("chat: message history must not be empty")
@@ -123,10 +116,6 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		return ChatResult{}, ports.ErrChatEndpointNotConfigured
 	}
 
-	useRAG := endpoint.RAGEnabled
-	if opts.RAG != nil {
-		useRAG = *opts.RAG
-	}
 	useWebSearch := endpoint.WebSearchEnabled
 	if opts.WebSearch != nil {
 		useWebSearch = *opts.WebSearch
@@ -138,8 +127,8 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	// wait until after an answer comes back. activeHooks is reused for the
 	// runChatHooks call after the first answer, so ListChatHooks is never
 	// called twice in one turn. A ListChatHooks error is best-effort, same
-	// convention as the RAG/web-search errors below: it just leaves
-	// activeHooks empty rather than failing the turn.
+	// convention as the web-search error below: it just leaves activeHooks
+	// empty rather than failing the turn.
 	var activeHooks []domain.ChatHook
 	if s.hooks != nil {
 		if all, err := s.hooks.ListChatHooks(ctx); err == nil {
@@ -154,30 +143,18 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	messages := history
 	var sources []domain.ChatSource
 	var ctxBlock strings.Builder
-	if useRAG || useWebSearch {
+	if useWebSearch {
 		if lastUser, ok := lastUserMessage(history); ok {
-			if useRAG {
-				results, err := s.search.Search(ctx, lastUser.Content, ports.SearchQuery{TopK: endpoint.RAGResultCount})
-				if err == nil && len(results) > 0 {
-					ctxBlock.WriteString("Indexed search results:\n\n")
-					for _, r := range results {
-						fmt.Fprintf(&ctxBlock, "Title: %s\nURL: %s\nSnippet: %s\n\n", r.Title, r.URL, r.Snippet)
-						sources = append(sources, domain.ChatSource{URL: r.URL, Title: r.Title})
-					}
-				}
-				// A search error is intentionally swallowed here: RAG
-				// context is best-effort.
-			}
-			if useWebSearch && endpoint.WebSearchBaseURL != "" && s.webSearch != nil {
+			if endpoint.WebSearchBaseURL != "" && s.webSearch != nil {
 				webResults, err := s.webSearch.Search(ctx, endpoint.WebSearchBaseURL, lastUser.Content, endpoint.WebSearchResultCount)
 				if err == nil && len(webResults) > 0 {
-					ctxBlock.WriteString("Live web search results:\n\n")
+					ctxBlock.WriteString("Search results:\n\n")
 					for _, r := range webResults {
 						fmt.Fprintf(&ctxBlock, "Title: %s\nURL: %s\nSnippet: %s\n\n", r.Title, r.URL, r.Snippet)
 						sources = append(sources, domain.ChatSource{URL: r.URL, Title: r.Title})
 					}
 				}
-				// A web search error is likewise best-effort.
+				// A web search error is best-effort.
 			}
 		}
 	}
@@ -187,8 +164,8 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	// own non-empty Prompt, in list order, each its OWN separate system
 	// message (not concatenated into one blob) -- so a hook's invocation
 	// syntax reaches the model before the first completion call, letting it
-	// decide whether to invoke that hook at all; (3) the RAG/web-search
-	// context message, if any. Building this as one ordered slice (rather
+	// decide whether to invoke that hook at all; (3) the search-context
+	// message, if any. Building this as one ordered slice (rather
 	// than prepending piecemeal) keeps that order obvious and gives
 	// trimToBudget a single well-defined run of leading system-role
 	// messages to keep intact.
@@ -367,8 +344,8 @@ func estimateTokens(messages []domain.ChatMessage) int {
 // trimToBudget drops the oldest messages in messages -- keeping every
 // leading system-role message intact (there can now be several: the
 // persistent per-endpoint SystemPrompt, then one per active chat hook's own
-// Prompt, then the RAG/web-search context message, see ChatService.Chat),
-// and always keeping at least the single most recent message even if it
+// Prompt, then the search-context message, see ChatService.Chat), and
+// always keeping at least the single most recent message even if it
 // alone exceeds budget, since trimming it away would leave nothing left to
 // answer -- until the estimated token count fits within maxTokens.
 func trimToBudget(messages []domain.ChatMessage, maxTokens int) []domain.ChatMessage {
@@ -404,8 +381,8 @@ func trimToBudget(messages []domain.ChatMessage, maxTokens int) []domain.ChatMes
 }
 
 // lastUserMessage returns the last domain.ChatRoleUser message in history,
-// so RAG always searches on the most recent thing the user actually asked
-// rather than an earlier turn or an assistant/system message.
+// so web search always searches on the most recent thing the user actually
+// asked rather than an earlier turn or an assistant/system message.
 func lastUserMessage(history []domain.ChatMessage) (domain.ChatMessage, bool) {
 	for i := len(history) - 1; i >= 0; i-- {
 		if history[i].Role == domain.ChatRoleUser {

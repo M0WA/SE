@@ -17,7 +17,7 @@
 <div class="admin-shell">
 <nav class="admin-rail" id="admin-rail" aria-label="Admin sections"></nav>
 <main>
-  <p class="lede" style="margin: 0 0 1.5rem;">The chat-completions backend the public search page's Chat mode talks to, and whether it grounds its answers in a search of the index.</p>
+  <p class="lede" style="margin: 0 0 1.5rem;">The chat-completions backend the public search page's Chat mode talks to, and whether it grounds its answers in a live web search -- this instance's own index can be blended into those results too, by adding it as a SearXNG engine (see packaging/searxng-engine/README.md) rather than as a separate mechanism here.</p>
 
   <section class="panel">
     <h2>Chat endpoint</h2>
@@ -69,38 +69,13 @@
   </section>
 
   <section class="panel">
-    <h2>Retrieval-augmented answers</h2>
-    <div class="form-row form-row-check">
-      <label for="chat-rag-enabled">
-        <span class="field-wrap" data-default="On"><input id="chat-rag-enabled" type="checkbox"></span>
-        Retrieval-augmented answers (RAG)
-      </label>
-      <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When on, each message first runs a search and the top results are given to the chat model as context, with sources cited in the answer. When off, messages go straight to the model with no connection to the indexed corpus.</span></span>
-    </div>
-    <div class="form-row">
-      <div class="label-row">
-        <label for="chat-rag-result-count">RAG result count</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How many top search results are given to the chat model as context when RAG is enabled.</span></span>
-      </div>
-      <span class="field-wrap" data-default="5"><input id="chat-rag-result-count" class="field" type="number" step="1" min="1" max="20"></span>
-    </div>
-    <div class="form-row">
-      <div class="label-row">
-        <label for="chat-max-context-tokens">Max conversation length (tokens)</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Bounds how much conversation (RAG context plus message history, estimated by character count) is sent to the model per turn. Older messages are dropped first, oldest to newest -- the most recent message is always kept. 0 disables trimming and sends the full conversation as-is, which can eventually exceed the model's own context limit.</span></span>
-      </div>
-      <span class="field-wrap" data-default="Disabled"><input id="chat-max-context-tokens" class="field" type="number" step="1" min="0"></span>
-    </div>
-  </section>
-
-  <section class="panel">
     <h2>Web search</h2>
     <div class="form-row form-row-check">
       <label for="chat-web-search-enabled">
         <span class="field-wrap" data-default="Off"><input id="chat-web-search-enabled" type="checkbox"></span>
         Search the web
       </label>
-      <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When on, each message first runs a live web search (via the SearXNG instance below) and the top results are given to the chat model as context, with sources cited in the answer. Independent of RAG above -- both can be on at once.</span></span>
+      <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When on, each message first runs a live web search (via the SearXNG instance below) and the top results are given to the chat model as context, with sources cited in the answer.</span></span>
     </div>
     <div class="form-row">
       <div class="label-row">
@@ -120,7 +95,14 @@
 
   <section class="panel">
     <h2>Context budget</h2>
-    <p class="lede" style="margin: 0 0 1rem;">Roughly how the system prompt, active chat hooks' own prompts, and the max conversation length above break down -- estimated by character count, the same rough method the backend itself uses for trimming, not real model tokenization.</p>
+    <p class="lede" style="margin: 0 0 1rem;">Roughly how the system prompt, active chat hooks' own prompts, and the max conversation length below break down -- estimated by character count, the same rough method the backend itself uses for trimming, not real model tokenization.</p>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="chat-max-context-tokens">Max conversation length (tokens)</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Bounds how much conversation (web-search context plus message history, estimated by character count) is sent to the model per turn. Older messages are dropped first, oldest to newest -- the most recent message is always kept. 0 disables trimming and sends the full conversation as-is, which can eventually exceed the model's own context limit.</span></span>
+      </div>
+      <span class="field-wrap" data-default="Disabled"><input id="chat-max-context-tokens" class="field" type="number" step="1" min="0"></span>
+    </div>
     <div id="chat-token-usage" class="donut-row"></div>
   </section>
 

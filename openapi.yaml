@@ -107,11 +107,10 @@ paths:
       description: >-
         Sends the given message history to the single admin-configured chat
         endpoint (see /admin/api/chat-endpoint), optionally augmenting it
-        with retrieval-augmented-generation (RAG) context built from this
-        same search index -- see ChatResponse.sources. A message's role must
-        be "user" or "assistant"; "system" is rejected, since that role is
-        reserved for server-injected RAG context, never something a client
-        can supply to try to override the system prompt.
+        with live web-search context -- see ChatResponse.sources. A message's
+        role must be "user" or "assistant"; "system" is rejected, since that
+        role is reserved for server-injected web-search context, never
+        something a client can supply to try to override the system prompt.
       requestBody:
         required: true
         content:
@@ -689,9 +688,9 @@ paths:
         Unlike the embedding endpoints (many blended providers), chat only
         ever has one active configuration -- this is Get/Set on a single
         row, not CRUD on a collection. Never fails just because nothing's
-        been saved yet: returns a zero-ish default (rag_enabled true,
-        rag_result_count at its default, everything else empty/false)
-        instead, same spirit as /admin/api/settings always succeeding.
+        been saved yet: returns a zero-ish default (web_search_result_count
+        at its default, everything else empty/false) instead, same spirit
+        as /admin/api/settings always succeeding.
       responses:
         "200":
           description: OK
@@ -707,7 +706,7 @@ paths:
         GET/PATCH response never echoes the real key back (see
         has_api_key), leaving api_key blank here preserves whatever's
         already stored rather than clearing it -- clear_api_key is the
-        explicit way to actually remove it. rag_result_count is
+        explicit way to actually remove it. web_search_result_count is
         self-healing: a non-positive value becomes the default, and it's
         clamped into range otherwise (see domain.ChatEndpoint.Clamp).
       requestBody:
@@ -1934,8 +1933,8 @@ components:
           enum: [user, assistant]
           description: >-
             "system" is never accepted from a client -- that role is
-            reserved for server-injected RAG context built from search
-            results.
+            reserved for server-injected web-search context built from
+            search results.
         content: { type: string, description: "Max 4000 characters." }
 
     ChatSource:
@@ -1944,7 +1943,8 @@ components:
         One search result whose content informed a ChatResponse.answer,
         surfaced separately so the UI can render it as a clickable citation
         rather than parsing the answer text for it. Only ever populated when
-        this turn was retrieval-augmented (see ChatRequest.rag).
+        this turn's answer was grounded in a live web search (see
+        ChatRequest.web_search).
       properties:
         url: { type: string }
         title: { type: string }
@@ -1958,23 +1958,16 @@ components:
           minItems: 1
           maxItems: 50
           items: { $ref: "#/components/schemas/ChatMessage" }
-        rag:
-          type: boolean
-          description: >-
-            Overrides the admin-configured chat endpoint's rag_enabled
-            default for this question only -- omit to use that default.
-            true runs a search on the latest user message and grounds the
-            answer in the results (with sources cited); false sends the
-            conversation to the chat model as-is, with no connection to the
-            indexed corpus.
         web_search:
           type: boolean
           description: >-
-            rag's exact counterpart for a live web search (via a
-            self-hosted SearXNG instance) instead of this instance's own
-            index -- overrides web_search_enabled for this question only,
-            omit to use that default. Independent of rag: either, both, or
-            neither may apply to the same question.
+            Overrides the admin-configured chat endpoint's
+            web_search_enabled default for this question only -- omit to
+            use that default. true runs a live web search (via a
+            self-hosted SearXNG instance) on the latest user message and
+            grounds the answer in the results (with sources cited); false
+            sends the conversation to the chat model as-is, with no
+            web-search context.
 
     ChatResponse:
       type: object
@@ -2025,8 +2018,8 @@ components:
         context_tokens:
           type: integer
           description: >-
-            Estimated size of the RAG/web-search context message built
-            from this turn's search results, when either produced any (0
+            Estimated size of the web-search context message built from
+            this turn's search results, when it produced any (0
             otherwise).
         history_tokens:
           type: integer
@@ -2061,36 +2054,21 @@ components:
         enabled:
           type: boolean
           description: Whether POST /chat will actually call out to this endpoint at all.
-        rag_enabled:
-          type: boolean
-          description: >-
-            When true, the latest user message is used as a search query
-            and matching results are folded into the conversation as
-            RAG context ahead of the rest of history.
-        rag_result_count:
-          type: integer
-          description: >-
-            How many search results are retrieved when rag_enabled. Bounds
-            self-heal server-side (see domain.ChatEndpoint.Clamp): a
-            non-positive value becomes the default (5); anything above the
-            max (20) is clamped down to it.
         max_context_tokens:
           type: integer
           description: >-
-            Bounds how many tokens' worth of conversation (RAG context plus
-            message history) is ever sent to the model, approximated by
-            character count. Older messages are dropped first, oldest to
-            newest, always keeping the most recent message. 0 disables
-            trimming (the full history is sent as-is). A negative value is
-            rejected with 400.
+            Bounds how many tokens' worth of conversation (web-search
+            context plus message history) is ever sent to the model,
+            approximated by character count. Older messages are dropped
+            first, oldest to newest, always keeping the most recent
+            message. 0 disables trimming (the full history is sent as-is).
+            A negative value is rejected with 400.
         web_search_enabled:
           type: boolean
           description: >-
             When true, the latest user message is also used as a live web
             search query (via web_search_base_url) and matching results are
-            folded into the same context message as RAG's, ahead of the
-            rest of history. Independent of rag_enabled -- either, both, or
-            neither may apply.
+            folded into a context message ahead of the rest of history.
         web_search_base_url:
           type: string
           description: >-
@@ -2102,14 +2080,15 @@ components:
           type: integer
           description: >-
             How many web search results are retrieved when
-            web_search_enabled. Bounds self-heal server-side the same way
-            as rag_result_count (default 5, max 20).
+            web_search_enabled. Bounds self-heal server-side (see
+            domain.ChatEndpoint.Clamp): a non-positive value becomes the
+            default (5); anything above the max (20) is clamped down to it.
         system_prompt:
           type: string
           description: >-
             When non-empty, injected as a leading system-role message ahead
             of the rest of the conversation on every turn -- before the
-            RAG/web-search context message, if any, so an admin-authored
+            web-search context message, if any, so an admin-authored
             persona/instruction always takes precedence. Invisible in the
             rendered chat UI. Never dropped by max_context_tokens' context
             trimming, even when the rest of the conversation is trimmed to
@@ -2172,14 +2151,14 @@ components:
             gated_by_web_search is true -- the turn's effective web-search
             toggle is also on), it is injected as its own leading system
             message, after the endpoint's persistent system_prompt and
-            before any RAG/web-search context message. Empty means no
+            before any web-search context message. Empty means no
             hook-specific message is added even when the hook is active.
         gated_by_web_search:
           type: boolean
           description: >-
             When true, ties this hook's activation (and its prompt
             injection) to the same effective web-search toggle that gates
-            the deterministic RAG-style web-search context injection
+            the deterministic web-search context injection
             (the endpoint's web_search_enabled, overridable per-question by
             ChatOptions.web_search). false (the default) means this hook is
             active whenever enabled is true, unaffected by that toggle.

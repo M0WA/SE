@@ -20,16 +20,11 @@ const (
 
 type chatRequest struct {
 	Messages []domain.ChatMessage `json:"messages"`
-	// RAG, when present, overrides the admin-configured default for this
-	// question only -- omitted (nil) falls back to
-	// domain.ChatEndpoint.RAGEnabled, letting the chat UI's per-question
-	// toggle decide instead of a fixed global setting.
-	RAG *bool `json:"rag,omitempty"`
-	// WebSearch is RAG's exact counterpart for live web search (via a
-	// self-hosted SearXNG instance) instead of this instance's own index --
-	// omitted falls back to domain.ChatEndpoint.WebSearchEnabled. Both may
-	// be set independently; either, both, or neither can apply to the same
-	// question.
+	// WebSearch, when present, overrides the admin-configured default for
+	// this question only (via a self-hosted SearXNG instance) -- omitted
+	// (nil) falls back to domain.ChatEndpoint.WebSearchEnabled, letting the
+	// chat UI's per-question toggle decide instead of a fixed global
+	// setting.
 	WebSearch *bool `json:"web_search,omitempty"`
 }
 
@@ -91,11 +86,10 @@ func toChatHookResultResponses(results []domain.ChatHookResult) []chatHookResult
 
 // handleChat answers one chat turn against the search-server-only,
 // admin-configured chat endpoint (h.chat) -- see application.ChatService's
-// doc comment for the retrieval-augmented-generation behavior this
-// delegates to. A client-supplied message is never allowed to claim
-// domain.ChatRoleSystem: that role is reserved for server-injected RAG
-// context, never something a client can inject to try to override the
-// system prompt.
+// doc comment for the web-search-grounding behavior this delegates to. A
+// client-supplied message is never allowed to claim domain.ChatRoleSystem:
+// that role is reserved for server-injected context, never something a
+// client can inject to try to override the system prompt.
 func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
@@ -127,7 +121,7 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := h.chat.Chat(r.Context(), req.Messages, application.ChatOptions{RAG: req.RAG, WebSearch: req.WebSearch})
+	result, err := h.chat.Chat(r.Context(), req.Messages, application.ChatOptions{WebSearch: req.WebSearch})
 	if errors.Is(err, ports.ErrChatEndpointNotConfigured) {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return

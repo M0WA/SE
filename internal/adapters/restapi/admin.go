@@ -1281,8 +1281,6 @@ type chatEndpointRequest struct {
 	APIKey               string `json:"api_key"`
 	Model                string `json:"model"`
 	Enabled              bool   `json:"enabled"`
-	RAGEnabled           bool   `json:"rag_enabled"`
-	RAGResultCount       int    `json:"rag_result_count"`
 	MaxContextTokens     int    `json:"max_context_tokens"`
 	WebSearchEnabled     bool   `json:"web_search_enabled"`
 	WebSearchBaseURL     string `json:"web_search_base_url"`
@@ -1308,8 +1306,6 @@ type chatEndpointResponse struct {
 	HasAPIKey            bool   `json:"has_api_key"`
 	Model                string `json:"model"`
 	Enabled              bool   `json:"enabled"`
-	RAGEnabled           bool   `json:"rag_enabled"`
-	RAGResultCount       int    `json:"rag_result_count"`
 	MaxContextTokens     int    `json:"max_context_tokens"`
 	WebSearchEnabled     bool   `json:"web_search_enabled"`
 	WebSearchBaseURL     string `json:"web_search_base_url"`
@@ -1323,7 +1319,6 @@ type chatEndpointResponse struct {
 func toChatEndpointResponse(e domain.ChatEndpoint) chatEndpointResponse {
 	return chatEndpointResponse{
 		BaseURL: e.BaseURL, HasAPIKey: e.APIKey != "", Model: e.Model, Enabled: e.Enabled,
-		RAGEnabled: e.RAGEnabled, RAGResultCount: e.RAGResultCount,
 		MaxContextTokens: e.MaxContextTokens, UpdatedAt: e.UpdatedAt,
 		WebSearchEnabled: e.WebSearchEnabled, WebSearchBaseURL: e.WebSearchBaseURL,
 		WebSearchResultCount: e.WebSearchResultCount, SystemPrompt: e.SystemPrompt,
@@ -1336,7 +1331,6 @@ func toChatEndpointResponse(e domain.ChatEndpoint) chatEndpointResponse {
 // /admin/api/settings always succeeding.
 func defaultChatEndpointResponse() chatEndpointResponse {
 	return chatEndpointResponse{
-		RAGEnabled: true, RAGResultCount: domain.DefaultChatRAGResultCount,
 		WebSearchResultCount: domain.DefaultChatWebSearchResultCount,
 	}
 }
@@ -1387,7 +1381,6 @@ func (h *Handler) handleAdminChatEndpoint(w http.ResponseWriter, r *http.Request
 		}
 		e := domain.ChatEndpoint{
 			BaseURL: req.BaseURL, APIKey: apiKey, Model: req.Model, Enabled: req.Enabled,
-			RAGEnabled: req.RAGEnabled, RAGResultCount: req.RAGResultCount,
 			MaxContextTokens: req.MaxContextTokens,
 			WebSearchEnabled: req.WebSearchEnabled, WebSearchBaseURL: req.WebSearchBaseURL,
 			WebSearchResultCount: req.WebSearchResultCount, SystemPrompt: req.SystemPrompt,

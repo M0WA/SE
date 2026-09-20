@@ -5144,8 +5144,6 @@ type chatEndpointResp struct {
 	HasAPIKey            bool      `json:"has_api_key"`
 	Model                string    `json:"model"`
 	Enabled              bool      `json:"enabled"`
-	RAGEnabled           bool      `json:"rag_enabled"`
-	RAGResultCount       int       `json:"rag_result_count"`
 	MaxContextTokens     int       `json:"max_context_tokens"`
 	WebSearchEnabled     bool      `json:"web_search_enabled"`
 	WebSearchBaseURL     string    `json:"web_search_base_url"`
@@ -5219,9 +5217,6 @@ func TestHandleAdminChatEndpoint_GetDefaultsWhenNothingSaved(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", code)
 	}
-	if !resp.RAGEnabled || resp.RAGResultCount != domain.DefaultChatRAGResultCount {
-		t.Errorf("expected RAG defaults (enabled, default result count), got %+v", resp)
-	}
 	if resp.WebSearchEnabled || resp.WebSearchResultCount != domain.DefaultChatWebSearchResultCount {
 		t.Errorf("expected web search off by default (needs a base URL configured) with a default result count, got %+v", resp)
 	}
@@ -5257,13 +5252,13 @@ func TestHandleAdminChatEndpoint_GetStoreError(t *testing.T) {
 
 // TestHandleAdminChatEndpoint_PatchCreatesNewConfig proves a PATCH with no
 // prior saved config creates one, never echoes the API key back, and
-// clamps rag_result_count via domain.ChatEndpoint.Clamp.
+// clamps web_search_result_count via domain.ChatEndpoint.Clamp.
 func TestHandleAdminChatEndpoint_PatchCreatesNewConfig(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
 	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{
 		"base_url": "https://example.com/v1", "api_key": "sk-test", "model": "gpt-x",
-		"enabled": true, "rag_enabled": true, "rag_result_count": 999, "max_context_tokens": 6000,
+		"enabled": true, "max_context_tokens": 6000,
 		"web_search_enabled": true, "web_search_base_url": "http://127.0.0.1:8888", "web_search_result_count": 999,
 	})
 	if rec.Code != http.StatusOK {
@@ -5277,11 +5272,8 @@ func TestHandleAdminChatEndpoint_PatchCreatesNewConfig(t *testing.T) {
 		t.Fatalf("decoding response: %v", err)
 	}
 	if !resp.HasAPIKey || resp.BaseURL != "https://example.com/v1" || resp.Model != "gpt-x" ||
-		!resp.Enabled || !resp.RAGEnabled {
+		!resp.Enabled {
 		t.Errorf("unexpected response: %+v", resp)
-	}
-	if resp.RAGResultCount != domain.MaxChatRAGResultCount {
-		t.Errorf("expected rag_result_count clamped to the max, got %d", resp.RAGResultCount)
 	}
 	if resp.MaxContextTokens != 6000 {
 		t.Errorf("expected max_context_tokens round tripped, got %d", resp.MaxContextTokens)

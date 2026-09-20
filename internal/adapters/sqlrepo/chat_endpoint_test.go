@@ -15,7 +15,7 @@ func newChatEndpoint() domain.ChatEndpoint {
 	return domain.ChatEndpoint{
 		BaseURL: "https://openai.inference.de-txl.ionos.com/v1",
 		APIKey:  "sk-test", Model: "meta-llama/Llama-3.3-70B-Instruct",
-		Enabled: true, RAGEnabled: true, RAGResultCount: 5, MaxContextTokens: 6000,
+		Enabled: true, MaxContextTokens: 6000,
 		WebSearchEnabled: true, WebSearchBaseURL: "http://127.0.0.1:8888", WebSearchResultCount: 5,
 		SystemPrompt: "You are a helpful assistant.",
 		UpdatedAt:    time.Now().UTC(),
@@ -46,7 +46,7 @@ func TestSetChatEndpoint_ThenGetRoundTrips(t *testing.T) {
 	if got.BaseURL != e.BaseURL || got.APIKey != e.APIKey || got.Model != e.Model {
 		t.Errorf("unexpected round trip: %+v", got)
 	}
-	if !got.Enabled || !got.RAGEnabled || got.RAGResultCount != 5 {
+	if !got.Enabled {
 		t.Errorf("unexpected option round trip: %+v", got)
 	}
 	if got.MaxContextTokens != 6000 {
@@ -75,8 +75,6 @@ func TestSetChatEndpoint_SecondCallOverwritesRatherThanDuplicating(t *testing.T)
 	e.APIKey = "sk-rotated"
 	e.Model = "new-model"
 	e.Enabled = false
-	e.RAGEnabled = false
-	e.RAGResultCount = 12
 	e.MaxContextTokens = 9000
 	e.WebSearchEnabled = false
 	e.WebSearchBaseURL = "http://new-searx.example"
@@ -94,8 +92,8 @@ func TestSetChatEndpoint_SecondCallOverwritesRatherThanDuplicating(t *testing.T)
 	if got.BaseURL != "https://new.example/v1" || got.APIKey != "sk-rotated" || got.Model != "new-model" {
 		t.Errorf("expected every editable field replaced, got %+v", got)
 	}
-	if got.Enabled || got.RAGEnabled || got.RAGResultCount != 12 {
-		t.Errorf("expected updated flags/count to replace the original, got %+v", got)
+	if got.Enabled {
+		t.Errorf("expected updated flags to replace the original, got %+v", got)
 	}
 	if got.MaxContextTokens != 9000 {
 		t.Errorf("expected updated MaxContextTokens to replace the original, got %+v", got)
@@ -154,7 +152,7 @@ func TestMigrateChatEndpointColumns_UpgradesPreExistingTable(t *testing.T) {
 	if pre.WebSearchEnabled || pre.WebSearchBaseURL != "" || pre.WebSearchResultCount != 0 {
 		t.Errorf("expected a pre-existing row to default to web search off/unconfigured, got %+v", pre)
 	}
-	if pre.Model != "llama-3" || pre.RAGResultCount != 5 {
+	if pre.Model != "llama-3" {
 		t.Errorf("expected every pre-existing field otherwise untouched, got %+v", pre)
 	}
 

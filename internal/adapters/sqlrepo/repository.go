@@ -2676,7 +2676,11 @@ func (r *Repository) GetChatEndpoint(ctx context.Context) (domain.ChatEndpoint, 
 // in-place replace on every call after.
 func (r *Repository) SetChatEndpoint(ctx context.Context, e domain.ChatEndpoint) error {
 	_, err := r.db.ExecContext(ctx, r.dialect.UpsertChatEndpointSQL(),
-		chatEndpointRowID, e.BaseURL, e.APIKey, e.Model, e.Enabled, e.RAGEnabled, e.RAGResultCount,
+		// false, 0: rag_enabled/rag_result_count are orphaned columns --
+		// domain.ChatEndpoint no longer has a RAG concept, but the columns
+		// stay (no schema migration needed) so the statement's
+		// column/placeholder count is unchanged.
+		chatEndpointRowID, e.BaseURL, e.APIKey, e.Model, e.Enabled, false, 0,
 		e.MaxContextTokens, e.WebSearchEnabled, e.WebSearchBaseURL, e.WebSearchResultCount,
 		e.SystemPrompt, e.UpdatedAt.UTC().Format(crawledAtLayout),
 	)
@@ -2689,8 +2693,14 @@ func (r *Repository) SetChatEndpoint(ctx context.Context, e domain.ChatEndpoint)
 func scanChatEndpoint(row scanner) (domain.ChatEndpoint, error) {
 	var e domain.ChatEndpoint
 	var updatedAt string
-	if err := row.Scan(&e.BaseURL, &e.APIKey, &e.Model, &e.Enabled, &e.RAGEnabled,
-		&e.RAGResultCount, &e.MaxContextTokens, &e.WebSearchEnabled, &e.WebSearchBaseURL,
+	// ragEnabledUnused/ragResultCountUnused: rag_enabled/rag_result_count are
+	// orphaned columns -- domain.ChatEndpoint no longer has a RAG concept,
+	// but the columns stay (no schema migration needed), so these two
+	// throwaway locals just absorb the Scan positionally.
+	var ragEnabledUnused bool
+	var ragResultCountUnused int
+	if err := row.Scan(&e.BaseURL, &e.APIKey, &e.Model, &e.Enabled, &ragEnabledUnused,
+		&ragResultCountUnused, &e.MaxContextTokens, &e.WebSearchEnabled, &e.WebSearchBaseURL,
 		&e.WebSearchResultCount, &e.SystemPrompt, &updatedAt); err != nil {
 		return domain.ChatEndpoint{}, err
 	}

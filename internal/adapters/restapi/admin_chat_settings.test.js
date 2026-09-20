@@ -14,8 +14,6 @@ function baseChatEndpoint(overrides) {
     model: 'llama-3',
     enabled: true,
     system_prompt: 'You are a helpful assistant.',
-    rag_enabled: true,
-    rag_result_count: 5,
     max_context_tokens: 6000,
     web_search_enabled: true,
     web_search_base_url: 'http://127.0.0.1:8888',
@@ -52,8 +50,6 @@ test('loadChatEndpoint populates every chat field from the GET response', async 
   assert.equal(document.getElementById('chat-base-url').value, 'http://localhost:8000/v1');
   assert.equal(document.getElementById('chat-model').value, 'llama-3');
   assert.equal(document.getElementById('chat-system-prompt').value, 'You are a helpful assistant.');
-  assert.equal(document.getElementById('chat-rag-enabled').checked, true);
-  assert.equal(document.getElementById('chat-rag-result-count').value, '5');
   assert.equal(document.getElementById('chat-max-context-tokens').value, '6000');
   assert.equal(document.getElementById('chat-web-search-enabled').checked, true);
   assert.equal(document.getElementById('chat-web-search-base-url').value, 'http://127.0.0.1:8888');
@@ -75,12 +71,11 @@ test('loadChatEndpoint never populates the API key field, even when one is store
   assert.equal(document.getElementById('chat-clear-api-key').disabled, false);
 });
 
-test('loadChatEndpoint disables "remove stored key" and defaults RAG off when nothing is stored', async () => {
-  loadFixture(baseChatEndpoint({ has_api_key: false, rag_enabled: false }));
+test('loadChatEndpoint disables "remove stored key" when nothing is stored', async () => {
+  loadFixture(baseChatEndpoint({ has_api_key: false }));
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(document.getElementById('chat-api-key').placeholder, '');
   assert.equal(document.getElementById('chat-clear-api-key').disabled, true);
-  assert.equal(document.getElementById('chat-rag-enabled').checked, false);
 });
 
 test('loadChatEndpoint defaults max-context-tokens to 0 when unset', async () => {
@@ -109,8 +104,6 @@ test('saveChatEndpoint PATCHes every field, including max_context_tokens', async
   document.getElementById('chat-model').value = 'gpt-oss';
   document.getElementById('chat-api-key').value = 'sk-new-key';
   document.getElementById('chat-system-prompt').value = 'Answer tersely.';
-  document.getElementById('chat-rag-enabled').checked = false;
-  document.getElementById('chat-rag-result-count').value = '8';
   document.getElementById('chat-max-context-tokens').value = '8000';
   document.getElementById('chat-web-search-enabled').checked = true;
   document.getElementById('chat-web-search-base-url').value = 'http://127.0.0.1:8888';
@@ -134,8 +127,6 @@ test('saveChatEndpoint PATCHes every field, including max_context_tokens', async
   assert.equal(gotBody.model, 'gpt-oss');
   assert.equal(gotBody.api_key, 'sk-new-key');
   assert.equal(gotBody.system_prompt, 'Answer tersely.');
-  assert.equal(gotBody.rag_enabled, false);
-  assert.equal(gotBody.rag_result_count, 8);
   assert.equal(gotBody.max_context_tokens, 8000);
   assert.equal(gotBody.web_search_enabled, true);
   assert.equal(gotBody.web_search_base_url, 'http://127.0.0.1:8888');
