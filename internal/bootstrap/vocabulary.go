@@ -33,7 +33,7 @@ type VocabularySource interface {
 // vocabulary scan per request, picking up terms crawled/deleted elsewhere
 // within a poll interval.
 func SyncVocabulary(ctx context.Context, source VocabularySource, cache *domain.VocabularyCache) {
-	pollRefresh(ctx, vocabularyPollInterval, func() { refreshVocabulary(ctx, source, cache) })
+	PollRefresh(ctx, vocabularyPollInterval, func() { refreshVocabulary(ctx, source, cache) })
 }
 
 func refreshVocabulary(ctx context.Context, source VocabularySource, cache *domain.VocabularyCache) {

@@ -263,6 +263,90 @@ test('buildTable renders zero body rows for an empty row list', () => {
   assert.equal(table.querySelectorAll('tbody tr').length, 0);
 });
 
+test('regexFilter returns items unchanged and clears the error for a blank pattern', () => {
+  const { regexFilter } = load();
+  const errorEl = document.createElement('div');
+  errorEl.textContent = 'stale error';
+  const items = ['a', 'b'];
+  assert.equal(regexFilter(items, '', errorEl, () => false), items);
+  assert.equal(errorEl.textContent, '');
+});
+
+test('regexFilter filters via testFn and clears any previous error', () => {
+  const { regexFilter } = load();
+  const errorEl = document.createElement('div');
+  errorEl.textContent = 'stale error';
+  const result = regexFilter(['foo', 'bar', 'baz'], 'ba', errorEl, (re, item) => re.test(item));
+  assert.deepEqual(result, ['bar', 'baz']);
+  assert.equal(errorEl.textContent, '');
+});
+
+test('regexFilter reports an invalid pattern with the default prefix and returns items unchanged', () => {
+  const { regexFilter } = load();
+  const errorEl = document.createElement('div');
+  const items = ['a'];
+  const result = regexFilter(items, '(', errorEl, () => true);
+  assert.equal(result, items);
+  assert.equal(errorEl.textContent.startsWith('Invalid regex: '), true);
+});
+
+test('regexFilter uses a custom error prefix when given one', () => {
+  const { regexFilter } = load();
+  const errorEl = document.createElement('div');
+  regexFilter(['a'], '(', errorEl, () => true, 'Invalid pattern');
+  assert.equal(errorEl.textContent.startsWith('Invalid pattern: '), true);
+});
+
+test('pollWhileInProgress schedules a new timer when in progress and none is running', () => {
+  const { pollWhileInProgress } = load();
+  const originalSetTimeout = global.setTimeout;
+  let scheduledFn, scheduledMs;
+  global.setTimeout = (fn, ms) => { scheduledFn = fn; scheduledMs = ms; return 'fake-timer'; };
+  try {
+    const reload = () => {};
+    const result = pollWhileInProgress(true, null, reload);
+    assert.equal(result, 'fake-timer');
+    assert.equal(scheduledFn, reload);
+    assert.equal(scheduledMs, 2000);
+  } finally {
+    global.setTimeout = originalSetTimeout;
+  }
+});
+
+test('pollWhileInProgress leaves an already-scheduled timer alone', () => {
+  const { pollWhileInProgress } = load();
+  const originalSetTimeout = global.setTimeout;
+  let calls = 0;
+  global.setTimeout = () => { calls++; return 'new-timer'; };
+  try {
+    const result = pollWhileInProgress(true, 'existing-timer', () => {});
+    assert.equal(result, 'existing-timer');
+    assert.equal(calls, 0);
+  } finally {
+    global.setTimeout = originalSetTimeout;
+  }
+});
+
+test('pollWhileInProgress clears a running timer once no longer in progress', () => {
+  const { pollWhileInProgress } = load();
+  const originalClearTimeout = global.clearTimeout;
+  let cleared;
+  global.clearTimeout = (handle) => { cleared = handle; };
+  try {
+    const result = pollWhileInProgress(false, 'existing-timer', () => {});
+    assert.equal(result, null);
+    assert.equal(cleared, 'existing-timer');
+  } finally {
+    global.clearTimeout = originalClearTimeout;
+  }
+});
+
+test('pollWhileInProgress is a no-op when not in progress and nothing is scheduled', () => {
+  const { pollWhileInProgress } = load();
+  const result = pollWhileInProgress(false, null, () => {});
+  assert.equal(result, null);
+});
+
 test('renderAdminNav is a no-op when the page has no #admin-rail element', () => {
   const { renderAdminNav } = load();
   assert.doesNotThrow(() => renderAdminNav());

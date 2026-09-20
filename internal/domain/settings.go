@@ -363,11 +363,7 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 	// domain.ReconcileActiveProvider, applied by callers with both this
 	// and the live endpoint list. EmbeddingTitleWeight's 0 is meaningful
 	// (disables title blending), so it's clamped below, not substituted.
-	if v.EmbeddingTitleWeight < 0 {
-		v.EmbeddingTitleWeight = 0
-	} else if v.EmbeddingTitleWeight > 1 {
-		v.EmbeddingTitleWeight = 1
-	}
+	v.EmbeddingTitleWeight = clamp(v.EmbeddingTitleWeight, 0, 1)
 	// An unrecognized ContentDedupMethod self-heals to the always-valid
 	// "exact" method, same convention as DefaultRenderer/LinkScope above.
 	if v.ContentDedupMethod != ContentDedupMethodExact && v.ContentDedupMethod != ContentDedupMethodSimHash {

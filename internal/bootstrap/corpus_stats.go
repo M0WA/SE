@@ -28,7 +28,7 @@ type CorpusStatsSource interface {
 // full-table scan per query term, picking up crawled/deleted documents
 // within a poll interval.
 func SyncCorpusStats(ctx context.Context, source CorpusStatsSource, cache *domain.CorpusStatsCache) {
-	pollRefresh(ctx, corpusStatsPollInterval, func() { refreshCorpusStats(ctx, source, cache) })
+	PollRefresh(ctx, corpusStatsPollInterval, func() { refreshCorpusStats(ctx, source, cache) })
 }
 
 func refreshCorpusStats(ctx context.Context, source CorpusStatsSource, cache *domain.CorpusStatsCache) {

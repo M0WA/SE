@@ -118,6 +118,17 @@ func (v RankingOverridesValues) clone() RankingOverridesValues {
 	return out
 }
 
+// appendIfNew appends item to out and marks it in seen, unless seen already
+// has it -- the ordered-dedupe idiom shared by normalizeTerms and
+// normalizeDomains below.
+func appendIfNew(out []string, seen map[string]bool, item string) []string {
+	if seen[item] {
+		return out
+	}
+	seen[item] = true
+	return append(out, item)
+}
+
 // normalizeTerms tokenizes every raw entry the same way document text is,
 // so a blocked/boosted word matches regardless of case/punctuation, and
 // dedupes the result. A multi-word entry ("New York") expands into each
@@ -127,37 +138,41 @@ func normalizeTerms(raw []string) []string {
 	var out []string
 	for _, r := range raw {
 		for _, t := range Tokenize(r) {
-			if !seen[t] {
-				seen[t] = true
-				out = append(out, t)
-			}
+			out = appendIfNew(out, seen, t)
 		}
 	}
 	return out
 }
 
-// normalizeTermFactors is normalizeTerms for a term->factor map. Entries
-// with a non-positive factor are dropped -- a boost of zero or less isn't
-// a boost, and silently omitting it is simpler than rejecting the whole
-// Set call, consistent with how OperationalSettings substitutes rather
-// than validates.
-func normalizeTermFactors(raw map[string]float64) map[string]float64 {
+// normalizeFactors is the shared shape behind normalizeTermFactors and
+// normalizeDomainFactors: entries with a non-positive factor are dropped --
+// a boost of zero or less isn't a boost, and silently omitting it is
+// simpler than rejecting the whole Set call, consistent with how
+// OperationalSettings substitutes rather than validates. keys maps one raw
+// map key to the (possibly several, possibly zero) normalized keys it
+// should be written under.
+func normalizeFactors(raw map[string]float64, keys func(string) []string) map[string]float64 {
 	if len(raw) == 0 {
 		return nil
 	}
 	out := make(map[string]float64, len(raw))
-	for term, factor := range raw {
+	for k, factor := range raw {
 		if factor <= 0 {
 			continue
 		}
-		for _, t := range Tokenize(term) {
-			out[t] = factor
+		for _, key := range keys(k) {
+			out[key] = factor
 		}
 	}
 	if len(out) == 0 {
 		return nil
 	}
 	return out
+}
+
+// normalizeTermFactors is normalizeTerms for a term->factor map.
+func normalizeTermFactors(raw map[string]float64) map[string]float64 {
+	return normalizeFactors(raw, Tokenize)
 }
 
 // normalizeDomain lowercases a domain entry, accepting a full URL (e.g.
@@ -169,8 +184,8 @@ func normalizeDomain(raw string) string {
 		return ""
 	}
 	if strings.Contains(raw, "://") {
-		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
-			return strings.ToLower(u.Hostname())
+		if h := HostOf(raw); h != "" {
+			return h
 		}
 	}
 	return raw
@@ -180,35 +195,20 @@ func normalizeDomains(raw []string) []string {
 	seen := make(map[string]bool)
 	var out []string
 	for _, r := range raw {
-		d := normalizeDomain(r)
-		if d == "" || seen[d] {
-			continue
+		if d := normalizeDomain(r); d != "" {
+			out = appendIfNew(out, seen, d)
 		}
-		seen[d] = true
-		out = append(out, d)
 	}
 	return out
 }
 
 func normalizeDomainFactors(raw map[string]float64) map[string]float64 {
-	if len(raw) == 0 {
-		return nil
-	}
-	out := make(map[string]float64, len(raw))
-	for host, factor := range raw {
-		if factor <= 0 {
-			continue
+	return normalizeFactors(raw, func(host string) []string {
+		if d := normalizeDomain(host); d != "" {
+			return []string{d}
 		}
-		d := normalizeDomain(host)
-		if d == "" {
-			continue
-		}
-		out[d] = factor
-	}
-	if len(out) == 0 {
 		return nil
-	}
-	return out
+	})
 }
 
 // RankingOverrides holds the overrides, safe for concurrent use: read on

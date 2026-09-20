@@ -310,32 +310,22 @@ func formatHookResultsForModel(results []domain.ChatHookResult) string {
 			fmt.Fprintf(&b, "error: %s\n\n", r.Err)
 			continue
 		}
-		fmt.Fprintf(&b, "%s\n\n", truncateForModel(r.Output))
+		fmt.Fprintf(&b, "%s\n\n", domain.TruncateWithNote(r.Output, maxHookOutputCharsForModel))
 	}
 	return b.String()
 }
 
-func truncateForModel(s string) string {
-	return domain.TruncateWithNote(s, maxHookOutputCharsForModel)
-}
-
-// approxCharsPerToken mirrors httpembed's own conservative token estimate
-// (overestimates real token count, so trimming stops a little early rather
-// than a little late, matching that package's identical reasoning for its
-// own constant of the same value).
-const approxCharsPerToken = 3
-
 // estimateTokens sums messages' character-count-based token estimate (see
-// approxCharsPerToken) -- exact tokenization isn't worth the complexity
-// here, since trimToBudget drops a whole message at a time, which already
-// has slack an exact tokenizer's extra precision wouldn't meaningfully
-// improve.
+// domain.ApproxCharsPerToken) -- exact tokenization isn't worth the
+// complexity here, since trimToBudget drops a whole message at a time,
+// which already has slack an exact tokenizer's extra precision wouldn't
+// meaningfully improve.
 func estimateTokens(messages []domain.ChatMessage) int {
 	chars := 0
 	for _, m := range messages {
 		chars += len(m.Content)
 	}
-	return chars / approxCharsPerToken
+	return chars / domain.ApproxCharsPerToken
 }
 
 // trimToBudget drops the oldest messages in messages -- keeping every

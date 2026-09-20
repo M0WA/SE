@@ -87,7 +87,7 @@ func (c *Client) Complete(ctx context.Context, endpoint domain.ChatEndpoint, mes
 		return "", fmt.Errorf("httpchat: reading response body: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("httpchat: chat completions endpoint returned status %d: %s", resp.StatusCode, truncate(redact(body, endpoint.APIKey)))
+		return "", fmt.Errorf("httpchat: chat completions endpoint returned status %d: %s", resp.StatusCode, domain.TruncateWithEllipsis(domain.RedactSecret(string(body), endpoint.APIKey), 500))
 	}
 
 	var parsed chatCompletionResponse
@@ -98,24 +98,4 @@ func (c *Client) Complete(ctx context.Context, endpoint domain.ChatEndpoint, mes
 		return "", fmt.Errorf("httpchat: chat completions endpoint returned no choices")
 	}
 	return parsed.Choices[0].Message.Content, nil
-}
-
-// truncate bounds how much of a non-2xx response body an error message
-// carries, so a large HTML error page doesn't blow up a log line.
-func truncate(s string) string {
-	const max = 500
-	if len(s) > max {
-		return s[:max] + "..."
-	}
-	return s
-}
-
-// redact removes every occurrence of apiKey from body before it's ever
-// included in an error, so a gateway that echoes request headers back in its
-// error bodies can't leak the Authorization header via a wrapped error.
-func redact(body []byte, apiKey string) string {
-	if apiKey == "" {
-		return string(body)
-	}
-	return strings.ReplaceAll(string(body), apiKey, "[REDACTED]")
 }

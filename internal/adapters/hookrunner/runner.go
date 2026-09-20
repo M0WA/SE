@@ -126,7 +126,7 @@ func (r *Runner) RunHookScript(ctx context.Context, scriptName string, args []st
 		return "", fmt.Errorf("hookrunner: script %q timed out after %s", scriptName, timeout)
 	}
 	if err != nil {
-		return "", fmt.Errorf("hookrunner: script %q failed: %v: %s", scriptName, err, truncate(stderr.String(), maxStderrInError))
+		return "", fmt.Errorf("hookrunner: script %q failed: %v: %s", scriptName, err, domain.TruncateWithEllipsis(stderr.String(), maxStderrInError))
 	}
 
 	return truncateStdout(stdout.String()), nil
@@ -135,12 +135,4 @@ func (r *Runner) RunHookScript(ctx context.Context, scriptName string, args []st
 // truncateStdout caps s at maxStdout bytes, appending a note when it does.
 func truncateStdout(s string) string {
 	return domain.TruncateWithNote(s, maxStdout)
-}
-
-// truncate caps s at max bytes for inclusion in an error message.
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
 }

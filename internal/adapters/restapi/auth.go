@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
-	"encoding/json"
 	"log"
 	"net/http"
 	"net/url"
@@ -181,8 +180,7 @@ func safeNext(next string) string {
 }
 
 func (h *Handler) handleLoginPage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireGetOrHead(w, r) {
 		return
 	}
 	if h.isAuthenticated(r) {
@@ -299,9 +297,8 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req loginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+	req, ok := decodeJSON[loginRequest](w, r)
+	if !ok {
 		return
 	}
 	if !h.checkCredentials(req.Username, req.Password) {
@@ -318,34 +315,33 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not create session", http.StatusInternalServerError)
 		return
 	}
+	h.setSessionCookie(w, r, token, int(sessionTTL.Seconds()))
+	writeJSON(w, http.StatusOK, map[string]string{"redirect": safeNext(req.Next)})
+}
+
+// setSessionCookie sets (or, with value="" and maxAge=-1, clears) the
+// session cookie -- shared by handleLogin and handleLogout, which
+// otherwise each built the identical http.Cookie literal differing only
+// in Value and MaxAge.
+func (h *Handler) setSessionCookie(w http.ResponseWriter, r *http.Request, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
-		Value:    token,
+		Value:    value,
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   isHTTPS(r),
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(sessionTTL.Seconds()),
+		MaxAge:   maxAge,
 	})
-	writeJSON(w, http.StatusOK, map[string]string{"redirect": safeNext(req.Next)})
 }
 
 func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	if c, err := r.Cookie(sessionCookieName); err == nil {
 		_ = h.sessions.RevokeSession(r.Context(), c.Value)
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   isHTTPS(r),
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   -1,
-	})
+	h.setSessionCookie(w, r, "", -1)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

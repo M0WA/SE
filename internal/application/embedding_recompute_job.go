@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"time"
 
@@ -114,19 +113,7 @@ func RunEmbeddingRecomputeJobWithStatus(ctx context.Context, repo ports.Embeddin
 // error, missing key, or bad value all just return the zero value;
 // "nothing to show yet" is never an error.
 func LoadEmbeddingRecomputeStatus(ctx context.Context, settings ports.SettingsStore) domain.EmbeddingRecomputeStatus {
-	if settings == nil {
-		return domain.EmbeddingRecomputeStatus{}
-	}
-	value, found, err := settings.GetSetting(ctx, ports.SettingsKeyEmbeddingRecomputeStatus)
-	if err != nil || !found {
-		return domain.EmbeddingRecomputeStatus{}
-	}
-	var status domain.EmbeddingRecomputeStatus
-	if err := json.Unmarshal([]byte(value), &status); err != nil {
-		log.Printf("decoding embedding recompute status: %v", err)
-		return domain.EmbeddingRecomputeStatus{}
-	}
-	return status
+	return loadJSONStatus[domain.EmbeddingRecomputeStatus](ctx, settings, ports.SettingsKeyEmbeddingRecomputeStatus, "embedding recompute status")
 }
 
 // ResetStaleEmbeddingRecomputeStatus clears a leftover InProgress=true back
@@ -149,15 +136,5 @@ func ResetStaleEmbeddingRecomputeStatus(ctx context.Context, settings ports.Sett
 }
 
 func saveEmbeddingRecomputeStatus(ctx context.Context, settings ports.SettingsStore, status domain.EmbeddingRecomputeStatus) {
-	if settings == nil {
-		return
-	}
-	data, err := json.Marshal(status)
-	if err != nil {
-		log.Printf("encoding embedding recompute status: %v", err)
-		return
-	}
-	if err := settings.SaveSetting(ctx, ports.SettingsKeyEmbeddingRecomputeStatus, string(data)); err != nil {
-		log.Printf("saving embedding recompute status: %v", err)
-	}
+	saveJSONStatus(ctx, settings, ports.SettingsKeyEmbeddingRecomputeStatus, "embedding recompute status", status)
 }

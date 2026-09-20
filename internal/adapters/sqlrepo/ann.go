@@ -20,7 +20,6 @@ import (
 type annState struct {
 	mu        sync.RWMutex
 	available map[string]bool
-	dims      map[string]int
 }
 
 func (a *annState) isAvailable(provider string) bool {
@@ -29,17 +28,17 @@ func (a *annState) isAvailable(provider string) bool {
 	return a.available[provider]
 }
 
-func (a *annState) markAvailable(provider string, dims int) {
+// markAvailable no longer remembers dims -- nothing ever read the map this
+// used to build; a size mismatch against a pre-existing column is already
+// caught independently by ensureVectorColumn's own vectorColumnType
+// comparison against the DB catalog, checked fresh on every EnableANN run.
+func (a *annState) markAvailable(provider string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.available == nil {
 		a.available = make(map[string]bool)
 	}
-	if a.dims == nil {
-		a.dims = make(map[string]int)
-	}
 	a.available[provider] = true
-	a.dims[provider] = dims
 }
 
 // vectorColumnNameFor and vectorIndexNameFor name a provider's pgvector
@@ -99,7 +98,7 @@ func (r *Repository) enableANNForProvider(ctx context.Context, provider string, 
 		log.Printf("sqlrepo: could not backfill pgvector column for %s (%v) -- falling back to brute-force semantic search for %s this process's lifetime", provider, err, provider)
 		return
 	}
-	r.ann.markAvailable(provider, dims)
+	r.ann.markAvailable(provider)
 }
 
 // backfillVectorColumn populates provider's pgvector column for any

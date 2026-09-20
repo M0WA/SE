@@ -16,7 +16,7 @@ func TestPollRefresh_RunsImmediatelyThenOnEveryTick(t *testing.T) {
 	defer cancel()
 
 	var calls int64
-	pollRefresh(ctx, 10*time.Millisecond, func() { atomic.AddInt64(&calls, 1) })
+	PollRefresh(ctx, 10*time.Millisecond, func() { atomic.AddInt64(&calls, 1) })
 
 	if got := atomic.LoadInt64(&calls); got != 1 {
 		t.Fatalf("expected exactly 1 synchronous call before pollRefresh returns, got %d", got)
@@ -38,7 +38,7 @@ func TestPollRefresh_StopsAfterContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	var calls int64
-	pollRefresh(ctx, 5*time.Millisecond, func() { atomic.AddInt64(&calls, 1) })
+	PollRefresh(ctx, 5*time.Millisecond, func() { atomic.AddInt64(&calls, 1) })
 	cancel()
 
 	// Give any in-flight tick a moment to land, then snapshot the count --

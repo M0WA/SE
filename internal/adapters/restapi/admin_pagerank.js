@@ -40,12 +40,7 @@
     kvRow(configEl, 'Recompute interval (Tuning)', s.recompute_interval_minutes + ' min');
 
     setButtonLoading(recomputeBtn, s.recompute_in_progress, 'Recomputing…');
-    if (s.recompute_in_progress) {
-      if (!pollTimer) pollTimer = setTimeout(() => { pollTimer = null; load(); }, 2000);
-    } else if (pollTimer) {
-      clearTimeout(pollTimer);
-      pollTimer = null;
-    }
+    pollTimer = pollWhileInProgress(s.recompute_in_progress, pollTimer, () => { pollTimer = null; load(); });
   }
 
   async function load() {

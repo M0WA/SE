@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"searchengine/internal/domain"
 )
 
 // requestTimeout bounds a single embeddings call -- generous for a slow
@@ -37,12 +39,6 @@ const maxResponseBytes = 1 << 20
 // defaults EmbeddingHTTPDimensions itself, but a directly-constructed
 // Embedder (e.g. in a test) still gets a sane, non-zero value.
 const defaultDimensions = 128
-
-// approxCharsPerToken estimates token count from char count when no
-// TokenizeURL is configured. Deliberately lower than real English's ~4
-// chars/token so the estimate errs toward smaller chunks -- overflowing
-// the token budget is the failure mode chunking exists to prevent.
-const approxCharsPerToken = 3
 
 // maxTokenizeSplitDepth bounds how many times fitChunkToTokenBudget
 // recursively halves a chunk that verified over budget -- a hard backstop
@@ -336,7 +332,7 @@ func (e *Embedder) embedOnce(ctx context.Context, reqBody []byte) ([]float32, *h
 		return nil, resp, fmt.Errorf("httpembed: reading response body: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, resp, fmt.Errorf("httpembed: embeddings endpoint returned status %d: %s", resp.StatusCode, truncate(redact(body, e.apiKey)))
+		return nil, resp, fmt.Errorf("httpembed: embeddings endpoint returned status %d: %s", resp.StatusCode, domain.TruncateWithEllipsis(domain.RedactSecret(string(body), e.apiKey), 500))
 	}
 
 	var parsed embeddingResponse
@@ -368,7 +364,7 @@ func (e *Embedder) chunkText(ctx context.Context, text string) ([]string, error)
 		return []string{text}, nil
 	}
 
-	charBudget := e.chunkSizeTokens * approxCharsPerToken
+	charBudget := e.chunkSizeTokens * domain.ApproxCharsPerToken
 	var chunks []string
 	var current []string
 	currentLen := 0
@@ -404,7 +400,7 @@ func (e *Embedder) chunkText(ctx context.Context, text string) ([]string, error)
 	}
 	// Exact mode: the character estimate above is only a starting point,
 	// deliberately conservative but not infallible (dense-script text like
-	// CJK tokenizes far denser than approxCharsPerToken assumes) -- verify
+	// CJK tokenizes far denser than domain.ApproxCharsPerToken assumes) -- verify
 	// each chunk against the endpoint's own tokenizer and split further
 	// (never trim/discard) anything that measures over budget.
 	verified := make([]string, 0, len(chunks))
@@ -537,14 +533,14 @@ func (e *Embedder) countTokens(ctx context.Context, text string) (int, error) {
 		return 0, fmt.Errorf("httpembed: reading tokenize response body: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return 0, fmt.Errorf("httpembed: tokenize endpoint returned status %d: %s", resp.StatusCode, truncate(redact(body, e.apiKey)))
+		return 0, fmt.Errorf("httpembed: tokenize endpoint returned status %d: %s", resp.StatusCode, domain.TruncateWithEllipsis(domain.RedactSecret(string(body), e.apiKey), 500))
 	}
 	var parsed tokenizeResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return 0, fmt.Errorf("httpembed: decoding tokenize response: %w", err)
 	}
 	if parsed.Count == nil {
-		return 0, fmt.Errorf("httpembed: tokenize response missing \"count\" field: %s", truncate(redact(body, e.apiKey)))
+		return 0, fmt.Errorf("httpembed: tokenize response missing \"count\" field: %s", domain.TruncateWithEllipsis(domain.RedactSecret(string(body), e.apiKey), 500))
 	}
 	return *parsed.Count, nil
 }
@@ -625,7 +621,7 @@ func (e *Embedder) listModelsOnce(ctx context.Context) ([]string, *http.Response
 		return nil, resp, fmt.Errorf("httpembed: reading response body: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, resp, fmt.Errorf("httpembed: models endpoint returned status %d: %s", resp.StatusCode, truncate(redact(body, e.apiKey)))
+		return nil, resp, fmt.Errorf("httpembed: models endpoint returned status %d: %s", resp.StatusCode, domain.TruncateWithEllipsis(domain.RedactSecret(string(body), e.apiKey), 500))
 	}
 
 	var parsed modelsResponse
@@ -637,25 +633,4 @@ func (e *Embedder) listModelsOnce(ctx context.Context) ([]string, *http.Response
 		ids = append(ids, m.ID)
 	}
 	return ids, resp, nil
-}
-
-// truncate bounds how much of a non-2xx response body an error message
-// carries, so a large HTML error page doesn't blow up a log line.
-func truncate(s string) string {
-	const max = 500
-	if len(s) > max {
-		return s[:max] + "..."
-	}
-	return s
-}
-
-// redact removes every occurrence of apiKey from body before it's ever
-// included in an error -- this error is persisted to a crawl job's record
-// and shown in the admin UI, so a gateway that echoes request headers back
-// in its error bodies could otherwise leak the Authorization header.
-func redact(body []byte, apiKey string) string {
-	if apiKey == "" {
-		return string(body)
-	}
-	return strings.ReplaceAll(string(body), apiKey, "[REDACTED]")
 }
