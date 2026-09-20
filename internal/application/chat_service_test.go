@@ -776,7 +776,7 @@ func TestChatService_HooksNil_HookResultsEmpty(t *testing.T) {
 // ChatResult.HookResults.
 func TestChatService_HooksConfigured_MatchingAnswerPopulatesHookResults(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
-	completer := &fakeChatCompleter{answer: "Sure, SEARCH[golang release notes] coming up"}
+	completer := &fakeChatCompleter{answers: []string{"Sure, SEARCH[golang release notes] coming up", "done"}}
 	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
 		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true},
 	}}
@@ -797,11 +797,13 @@ func TestChatService_HooksConfigured_MatchingAnswerPopulatesHookResults(t *testi
 }
 
 // TestChatService_HookFires_FeedsResultsBackForFinalAnswer proves a hook
-// match triggers exactly one follow-up completion call, whose messages are
-// the original ones plus the tool-call assistant turn plus a system message
-// carrying the hook's results, and that the RETURNED answer is the
-// follow-up's own answer, not the bare tool-call text the model first
-// emitted.
+// match triggers a follow-up completion call (exactly one here, since the
+// follow-up's own answer doesn't itself match a hook pattern -- see
+// TestChatService_HookRetries_SecondToolCallAlsoProcessed for the
+// multi-round case), whose messages are the original ones plus the
+// tool-call assistant turn plus a system message carrying the hook's
+// results, and that the RETURNED answer is the follow-up's own answer, not
+// the bare tool-call text the model first emitted.
 func TestChatService_HookFires_FeedsResultsBackForFinalAnswer(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer := &fakeChatCompleter{answers: []string{
@@ -842,6 +844,81 @@ func TestChatService_HookFires_FeedsResultsBackForFinalAnswer(t *testing.T) {
 	}
 	if followUp[2].Role != domain.ChatRoleSystem || !strings.Contains(followUp[2].Content, `{"results":["go 1.26 release notes"]}`) {
 		t.Fatalf("expected a system message carrying the hook's results, got %+v", followUp[2])
+	}
+}
+
+// TestChatService_HookRetries_SecondToolCallAlsoProcessed is the regression
+// test for a real, reported failure: a model whose first fetch/search comes
+// back empty or blocked reasonably tries again in its own follow-up answer
+// (e.g. a second <web_fetch> for a different URL) -- that second tool call
+// used to be left completely unprocessed (the old "exactly one follow-up
+// round" limit), leaving a dangling, unanswered tool-call tag as the whole
+// turn's Answer instead of a real response. Both rounds' hook results
+// should be accumulated into the final ChatResult.
+func TestChatService_HookRetries_SecondToolCallAlsoProcessed(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
+	completer := &fakeChatCompleter{answers: []string{
+		"FETCH[https://example.com/blocked]",
+		"That page looks blocked, let me try another one. FETCH[https://example.com/mirror]",
+		"The mirror page says hello world.",
+	}}
+	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+		{ID: "1", Name: "web_fetch", Pattern: `FETCH\[(.+?)\]`, Script: "web_fetch.sh", Enabled: true},
+	}}
+	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_fetch.sh": "<empty/blocked page>"}}
+	svc := NewChatService(endpoints, completer, &fakeSearchService{}, &fakeWebSearcher{}, hooks, runner)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "what does example.com say?"}}
+	result, err := svc.Chat(context.Background(), history, ChatOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Answer != "The mirror page says hello world." {
+		t.Fatalf("expected the SECOND follow-up's real answer returned, not a dangling tool-call tag, got %q", result.Answer)
+	}
+	if len(result.HookResults) != 2 {
+		t.Fatalf("expected both rounds' hook results accumulated, got %+v", result.HookResults)
+	}
+	if len(completer.allCalls) != 3 {
+		t.Fatalf("expected 3 completion calls (initial + 2 follow-ups), got %d", len(completer.allCalls))
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("expected the script run once per round (2 total), got %d", len(runner.calls))
+	}
+	if runner.calls[0].args[0] != "https://example.com/blocked" || runner.calls[1].args[0] != "https://example.com/mirror" {
+		t.Fatalf("expected each round's own capture group passed through, got %+v", runner.calls)
+	}
+}
+
+// TestChatService_HookRetries_CappedAtMaxFollowUpRounds proves the retry
+// loop is bounded: a model that keeps invoking a hook in every answer stops
+// being fed back after maxHookFollowUpRounds rounds, rather than looping
+// forever -- the last completion's own answer (which may still contain a
+// bare tool-call tag) is returned as-is once the cap is hit.
+func TestChatService_HookRetries_CappedAtMaxFollowUpRounds(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
+	completer := &fakeChatCompleter{answer: "FETCH[https://example.com/never-satisfied]"}
+	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+		{ID: "1", Name: "web_fetch", Pattern: `FETCH\[(.+?)\]`, Script: "web_fetch.sh", Enabled: true},
+	}}
+	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_fetch.sh": "<empty/blocked page>"}}
+	svc := NewChatService(endpoints, completer, &fakeSearchService{}, &fakeWebSearcher{}, hooks, runner)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "what does example.com say?"}}
+	result, err := svc.Chat(context.Background(), history, ChatOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(completer.allCalls) != maxHookFollowUpRounds+1 {
+		t.Fatalf("expected exactly maxHookFollowUpRounds+1 (%d) completion calls, got %d", maxHookFollowUpRounds+1, len(completer.allCalls))
+	}
+	if len(result.HookResults) != maxHookFollowUpRounds {
+		t.Fatalf("expected exactly maxHookFollowUpRounds (%d) hook results accumulated, got %d", maxHookFollowUpRounds, len(result.HookResults))
+	}
+	if result.Answer != "FETCH[https://example.com/never-satisfied]" {
+		t.Fatalf("expected the last completion's own (still-unsatisfied) answer returned once the cap is hit, got %q", result.Answer)
 	}
 }
 
@@ -960,7 +1037,7 @@ func TestChatService_HooksListError_Swallowed(t *testing.T) {
 // matches the answer and Enabled is true.
 func TestChatService_GatedHook_InactiveWhenWebSearchOff(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchEnabled: false}}
-	completer := &fakeChatCompleter{answer: "SEARCH[golang release notes]"}
+	completer := &fakeChatCompleter{answers: []string{"SEARCH[golang release notes]", "done"}}
 	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
 		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: "You can search the web.", GatedByWebSearch: true},
 	}}
@@ -987,7 +1064,7 @@ func TestChatService_GatedHook_InactiveWhenWebSearchOff(t *testing.T) {
 // effective web-search toggle (endpoint default here) is on.
 func TestChatService_GatedHook_ActiveWhenWebSearchOn(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchEnabled: true}}
-	completer := &fakeChatCompleter{answer: "SEARCH[golang release notes]"}
+	completer := &fakeChatCompleter{answers: []string{"SEARCH[golang release notes]", "done"}}
 	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
 		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: "You can search the web.", GatedByWebSearch: true},
 	}}
@@ -1021,7 +1098,7 @@ func TestChatService_GatedHook_ActiveWhenWebSearchOn(t *testing.T) {
 // default) is what actually governs gating.
 func TestChatService_GatedHook_PerQuestionOverrideActivates(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchEnabled: false}}
-	completer := &fakeChatCompleter{answer: "SEARCH[golang release notes]"}
+	completer := &fakeChatCompleter{answers: []string{"SEARCH[golang release notes]", "done"}}
 	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
 		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: "You can search the web.", GatedByWebSearch: true},
 	}}
@@ -1046,7 +1123,7 @@ func TestChatService_GatedHook_PerQuestionOverrideActivates(t *testing.T) {
 func TestChatService_UngatedHook_ActiveRegardlessOfWebSearch(t *testing.T) {
 	for _, webSearchEnabled := range []bool{false, true} {
 		endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchEnabled: webSearchEnabled}}
-		completer := &fakeChatCompleter{answer: "SEARCH[golang release notes]"}
+		completer := &fakeChatCompleter{answers: []string{"SEARCH[golang release notes]", "done"}}
 		hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
 			{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: "You can search the web.", GatedByWebSearch: false},
 		}}
@@ -1157,7 +1234,7 @@ func TestChatService_EndpointSystemPrompt_InjectedWhenHooksInactiveOrNil(t *test
 // active (Enabled, ungated, matching answer) -- it still runs normally.
 func TestChatService_ActiveHookWithEmptyPrompt_NoExtraSystemMessage(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
-	completer := &fakeChatCompleter{answer: "SEARCH[golang release notes]"}
+	completer := &fakeChatCompleter{answers: []string{"SEARCH[golang release notes]", "done"}}
 	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
 		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: ""},
 	}}
@@ -1187,7 +1264,7 @@ func TestChatService_ActiveHookWithEmptyPrompt_NoExtraSystemMessage(t *testing.T
 // endpoint.WebSearchBaseURL.
 func TestChatService_HookEnv_CarriesEndpointWebSearchBaseURL(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchBaseURL: "http://searxng.example:8888"}}
-	completer := &fakeChatCompleter{answer: "SEARCH[golang release notes]"}
+	completer := &fakeChatCompleter{answers: []string{"SEARCH[golang release notes]", "done"}}
 	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
 		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true},
 	}}
