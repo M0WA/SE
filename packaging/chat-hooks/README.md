@@ -9,15 +9,35 @@ shell, never concatenated into a command string (see
 comments).
 
 When a hook fires, its script's output is fed straight back to the model in
-one follow-up completion call (the model's own tool-call text plus the
+a follow-up completion call (the model's own tool-call text plus the
 results, as a new turn) -- `ChatService.Chat` returns THAT follow-up answer
 as the turn's Answer, not the model's bare tool-call text. A user never sees
 the raw `<web_search>...</web_search>`-style syntax itself; they see the
 model's real, results-informed answer. (`ChatResult.HookResults` still
 carries the raw tool output separately, for the chat UI's own folded
-transparency panel.)
+transparency panel.) This repeats up to `maxHookFollowUpRounds` (2) times if
+the model's own follow-up answer invokes a hook again -- e.g. a fetch came
+back blocked/empty and it reasonably tries a different URL -- rather than
+leaving that second tool call unprocessed.
 
-## Suggested prompts
+## Suggested global system prompt (Settings -> Chat -> System prompt)
+
+The endpoint-level System prompt is unconditional and always injected,
+regardless of which hooks are active -- it's the right place for a general
+instruction that isn't tied to any one tool:
+
+```
+Assume your training data may be outdated. When something could have
+changed or you are not certain, use web search or a URL fetch instead of
+relying on memory, whenever those tools are available to you.
+```
+
+"Whenever those tools are available to you" matters: the hooks themselves
+are gated by the chat's Web toggle (`ChatHook.GatedByWebSearch`), so they
+may not always be there to use -- the global prompt shouldn't imply they
+always are.
+
+## Suggested per-hook prompts
 
 Each hook has its own Prompt field (Settings -> Chat -> Hooks -> edit a
 hook), injected only while that hook is active -- not the endpoint-level

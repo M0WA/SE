@@ -115,14 +115,31 @@ func (f *fakeHookScriptRunner) RunHookScript(ctx context.Context, scriptName str
 }
 
 // fakeChatCompleter is a minimal ports.ChatCompleter fake.
+// answers, when non-empty, lets a test give a different answer to each
+// successive call (e.g. a tool-call answer, then a real final answer for
+// the hook follow-up round) -- mirrors
+// internal/application/chat_service_test.go's own fakeChatCompleter for the
+// same reason: ChatService.Chat's hook follow-up loop calls Complete more
+// than once per turn, and a fixed answer that itself matches a hook's
+// pattern would otherwise keep matching every round.
 type fakeChatCompleter struct {
-	answer string
-	err    error
+	answer    string
+	answers   []string
+	err       error
+	callCount int
 }
 
 func (f *fakeChatCompleter) Complete(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage) (string, error) {
 	if f.err != nil {
 		return "", f.err
+	}
+	idx := f.callCount
+	f.callCount++
+	if len(f.answers) > 0 {
+		if idx >= len(f.answers) {
+			idx = len(f.answers) - 1
+		}
+		return f.answers[idx], nil
 	}
 	return f.answer, nil
 }
@@ -492,7 +509,7 @@ func TestHandleChat_SuccessWithHookResults(t *testing.T) {
 	runner := &fakeHookScriptRunner{output: "cats are great"}
 	svc := application.NewChatService(
 		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}},
-		&fakeChatCompleter{answer: "Let me check: SEARCH(cats)"}, &fakeSearch{}, &fakeWebSearcher{}, hooks, runner)
+		&fakeChatCompleter{answers: []string{"Let me check: SEARCH(cats)", "Cats are great pets."}}, &fakeSearch{}, &fakeWebSearcher{}, hooks, runner)
 	h, cookie := chatAuthedHandler(t, svc)
 	rec := postChat(t, h, cookie, map[string]interface{}{
 		"messages": []map[string]string{{"role": "user", "content": "tell me about cats"}},
