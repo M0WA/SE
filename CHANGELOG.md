@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.21 - 2026-09-20
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Fix crawl saves failing on pages served in a legacy charset by @M0WA in https://github.com/M0WA/SE/pull/161
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.20...v4.13.21
+
+
 ## v4.13.20 - 2026-09-20
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
