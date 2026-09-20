@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.29 - 2026-09-20
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Strip hook-call tags from chat answers by @M0WA in https://github.com/M0WA/SE/pull/184
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.28...v4.13.29
+
+
 ## v4.13.28 - 2026-09-20
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
