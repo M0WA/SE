@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.27 - 2026-09-20
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Stop injecting web-search results in chat; use hooks only by @M0WA in https://github.com/M0WA/SE/pull/177
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.26...v4.13.27
+
+
 ## v4.13.26 - 2026-09-20
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
