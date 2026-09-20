@@ -13,10 +13,9 @@ import (
 // so it's always escaped before any <mark> tag is added (a term containing
 // an HTML metacharacter like "AT&T" may then fail to highlight -- acceptable).
 func Snippet(text string, phrases, terms []string, maxLen int) string {
-	lower := strings.ToLower(text)
-	pos := indexOfEarliest(lower, phrases)
+	pos := indexOfEarliest(text, phrases)
 	if pos == -1 {
-		pos = indexOfEarliest(lower, terms)
+		pos = indexOfEarliest(text, terms)
 	}
 	if pos == -1 {
 		if len(text) <= maxLen {
@@ -50,36 +49,65 @@ func Snippet(text string, phrases, terms []string, maxLen int) string {
 	return snippet
 }
 
-// indexOfEarliest returns the lowest index at which any of words occurs in
-// lower (already-lowercased haystack), or -1 if none of them occur at all.
-func indexOfEarliest(lower string, words []string) int {
+// caseInsensitiveFinder compiles word into a case-insensitive regexp whose
+// match offsets are always valid byte offsets within whatever string it is
+// matched against -- unlike searching a separately lowercased copy (the
+// previous approach here), which silently breaks whenever
+// strings.ToLower changes a string's byte length, as it does for some
+// Unicode characters (e.g. Turkish İ, German ẞ): offsets found in the
+// lowercased copy no longer line up with the original string, and slicing
+// the original at those offsets can read out of range or misalign
+// entirely. This was the root cause of a real crash ("slice bounds out of
+// range") triggered by ordinary crawled content containing such a
+// character. Returns nil (matches nothing) for an empty word or one that
+// fails to compile as a regexp (defensive -- Tokenize-derived words
+// shouldn't normally fail this).
+func caseInsensitiveFinder(word string) *regexp.Regexp {
+	if word == "" {
+		return nil
+	}
+	re, err := regexp.Compile(`(?i)` + regexp.QuoteMeta(word))
+	if err != nil {
+		return nil
+	}
+	return re
+}
+
+// indexOfEarliest returns the lowest byte offset at which any of words
+// occurs in text (case-insensitively), or -1 if none of them occur at all.
+func indexOfEarliest(text string, words []string) int {
 	pos := -1
 	for _, w := range words {
-		if p := strings.Index(lower, w); p != -1 && (pos == -1 || p < pos) {
-			pos = p
+		re := caseInsensitiveFinder(w)
+		if re == nil {
+			continue
+		}
+		if loc := re.FindStringIndex(text); loc != nil && (pos == -1 || loc[0] < pos) {
+			pos = loc[0]
 		}
 	}
 	return pos
 }
 
 func highlight(s, term string) string {
-	lower := strings.ToLower(s)
-	var b strings.Builder
-	i := 0
-	for {
-		idx := strings.Index(lower[i:], term)
-		if idx == -1 {
-			b.WriteString(s[i:])
-			break
-		}
-		start := i + idx
-		end := start + len(term)
-		b.WriteString(s[i:start])
-		b.WriteString("<mark>")
-		b.WriteString(s[start:end])
-		b.WriteString("</mark>")
-		i = end
+	re := caseInsensitiveFinder(term)
+	if re == nil {
+		return s
 	}
+	matches := re.FindAllStringIndex(s, -1)
+	if matches == nil {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for _, m := range matches {
+		b.WriteString(s[last:m[0]])
+		b.WriteString("<mark>")
+		b.WriteString(s[m[0]:m[1]])
+		b.WriteString("</mark>")
+		last = m[1]
+	}
+	b.WriteString(s[last:])
 	return b.String()
 }
 

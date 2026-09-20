@@ -99,3 +99,23 @@ func TestSnippet_EscapesHTMLNoMatchLongTextTruncated(t *testing.T) {
 		t.Errorf("expected escaped prefix, got: %s", got)
 	}
 }
+
+// TestSnippet_UnicodeCaseFoldingLengthChange_NoPanic is the regression test
+// for a real crash on real crawled content: strings.ToLower can change a
+// string's byte length for certain Unicode characters (the Turkish dotted
+// capital İ, U+0130, lowercases to "i" + a combining dot above -- 2 bytes
+// become 3), which used to break Snippet's byte-offset math (it searched a
+// separately lowercased copy, then sliced the ORIGINAL string at the same
+// offsets) with "slice bounds out of range". The fix matches
+// case-insensitively directly against the original string instead, so no
+// lowercased copy -- and no length mismatch -- ever exists. Repeats the
+// length-changing character many times so the resulting byte-length drift
+// would be large enough to run the original code past the end of the
+// snippet window, the exact shape of the real crash.
+func TestSnippet_UnicodeCaseFoldingLengthChange_NoPanic(t *testing.T) {
+	text := strings.Repeat("İ", 100) + " Katzen sind toll." + strings.Repeat(" filler", 50)
+	snippet := domain.Snippet(text, nil, []string{"katzen"}, 200)
+	if !strings.Contains(snippet, "<mark>") {
+		t.Errorf("expected the term still highlighted despite the preceding Unicode text, got: %s", snippet)
+	}
+}
