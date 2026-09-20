@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
@@ -169,11 +170,11 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	// messages to keep intact.
 	var leading []domain.ChatMessage
 	if endpoint.SystemPrompt != "" {
-		leading = append(leading, domain.ChatMessage{Role: domain.ChatRoleSystem, Content: endpoint.SystemPrompt})
+		leading = append(leading, domain.ChatMessage{Role: domain.ChatRoleSystem, Content: expandPromptPlaceholders(endpoint.SystemPrompt)})
 	}
 	for _, h := range activeHooks {
 		if h.Prompt != "" {
-			leading = append(leading, domain.ChatMessage{Role: domain.ChatRoleSystem, Content: h.Prompt})
+			leading = append(leading, domain.ChatMessage{Role: domain.ChatRoleSystem, Content: expandPromptPlaceholders(h.Prompt)})
 		}
 	}
 	if ctxBlock.Len() > 0 {
@@ -251,6 +252,20 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 }
 
 // maxHookFollowUpRounds bounds how many times ChatService.Chat will feed a
+// promptDatePlaceholder, when present in the global system prompt or a
+// hook's own Prompt, is replaced with today's date -- lets an admin write a
+// prompt like "today is %T" so the model has a concrete anchor for judging
+// whether cached/trained-in information could be stale, without needing to
+// re-save the setting every day.
+const promptDatePlaceholder = "%T"
+
+func expandPromptPlaceholders(prompt string) string {
+	if !strings.Contains(prompt, promptDatePlaceholder) {
+		return prompt
+	}
+	return strings.ReplaceAll(prompt, promptDatePlaceholder, time.Now().UTC().Format("Monday, January 2, 2006"))
+}
+
 // hook's results back to the model and ask again -- each round costs one
 // more completion call and (via maxHookMatchesPerTurn, chat_hooks.go) up to
 // maxHookMatchesPerTurn more script executions, so this is a real cost
