@@ -167,6 +167,34 @@ func (r *Repository) List(ctx context.Context) ([]domain.CrawlJobSummary, error)
 	return out, rows.Err()
 }
 
+// ListActive returns every crawl job currently Queued or Running -- a
+// cheap, targeted query (unlike List, which scans the whole table
+// including every historical job) used to check for an already-active
+// crawl of the same seed before starting a new one (see
+// restapi.Handler.TriggerScheduledCrawl).
+func (r *Repository) ListActive(ctx context.Context) ([]domain.CrawlJobSummary, error) {
+	query := r.ph(`SELECT `+crawlJobColumns+` FROM crawl_jobs WHERE status = %s OR status = %s ORDER BY created_at DESC`, 1, 2)
+	rows, err := r.db.QueryContext(ctx, query, string(domain.CrawlJobQueued), string(domain.CrawlJobRunning))
+	if err != nil {
+		return nil, fmt.Errorf("querying active crawl jobs: %w", err)
+	}
+	defer rows.Close()
+
+	out := []domain.CrawlJobSummary{}
+	for rows.Next() {
+		job, err := scanCrawlJob(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning crawl job: %w", err)
+		}
+		out = append(out, domain.CrawlJobSummary{
+			ID: job.ID, Request: job.Request, Status: job.Status,
+			PagesCrawled: job.PagesCrawled, Error: job.Error,
+			CreatedAt: job.CreatedAt, StartedAt: job.StartedAt, FinishedAt: job.FinishedAt,
+		})
+	}
+	return out, rows.Err()
+}
+
 // PruneCrawlJobs deletes every crawl job beyond the maxRetained most
 // recently created, cascading to their crawl_job_pages rows -- called
 // periodically by cmd/crawl's own maintenance ticker, not part of
