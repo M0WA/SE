@@ -22,6 +22,13 @@
   --accent-soft: rgba(122, 32, 53, 0.12);
   --danger: #a3341f;
   --danger-soft: rgba(163, 52, 31, 0.12);
+  /* --chart-* (donut-chart segment colors, see admin.js's buildDonutSVG):
+     three additional hues distinct from --accent/--danger, since a chart
+     segment isn't an accent or an error state -- just one category among
+     several needing its own identifiable color. */
+  --chart-1: #2f6690;
+  --chart-2: #b06a1f;
+  --chart-3: #3d7a4c;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -35,6 +42,9 @@
     --accent-soft: rgba(217, 138, 155, 0.16);
     --danger: #e08469;
     --danger-soft: rgba(224, 132, 105, 0.16);
+    --chart-1: #7fb2d9;
+    --chart-2: #e0a457;
+    --chart-3: #8fd19e;
   }
 }
 
@@ -340,6 +350,35 @@ button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 4px;
   border-radius: 2px;
+}
+
+/* .donut-row pairs a buildDonutSVG chart with its buildDonutLegend list
+   side by side -- used both by admin_chat_settings.js's static context-
+   budget preview and index.js's per-turn token-usage diagram in chat. */
+.donut-row {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.donut-chart { flex: none; }
+
+.donut-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+}
+
+.donut-legend-row { display: flex; align-items: center; gap: 0.5rem; }
+
+.donut-legend-swatch {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  flex: none;
 }
 
 /* .icon-button (admin_jobs.js's job/schedule action cells): the glyph
@@ -768,6 +807,18 @@ button:focus-visible {
   color: var(--accent);
 }
 
+/* .chat-token-usage: this turn's token-usage donut, folded the same way as
+   .chat-hook-result above (closed by default, same box/summary treatment)
+   -- it's supplementary detail on every single turn, so it stays out of
+   the way unless opened, rather than the answer itself. */
+.chat-token-usage .donut-row {
+  padding: 0.6rem 0.85rem;
+  border-top: 1px solid var(--rule);
+  gap: 1rem;
+}
+
+.chat-token-usage .donut-chart { width: 84px; height: 84px; }
+
 /* .chat-options sits in .mode-row alongside the search/chat switch, not
    above #chat-form -- a per-question override of the admin's rag_enabled
    default, kept out of the compose row so it doesn't compete with the (now
@@ -807,12 +858,29 @@ button:focus-visible {
   min-height: 1.2em;
 }
 
-/* align-items: flex-end (not form's own baseline default) keeps Ask
+/* align-items: flex-end (not form's own baseline default) keeps #chat-send
    pinned to the bottom of chat-input as it grows past its default two
    rows, rather than floating up near the textarea's first line. */
 #chat-form { margin-top: 0.6rem; align-items: flex-end; }
 
 #chat-input.field { min-height: 2.6rem; }
+
+/* #chat-send: a play-icon glyph rather than a text label, so it reads as
+   "start" the same way a media player's play button does -- fixed
+   width/height (rather than the bare <button> rule's padding-driven size)
+   keeps it a small square regardless of glyph metrics, and line-height: 1
+   plus flex centering keeps the glyph vertically centered in it. */
+#chat-send {
+  flex: none;
+  width: 2.6rem;
+  height: 2.6rem;
+  padding: 0;
+  font-size: 1.1rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 
 .footer-link {
   margin-top: 3.5rem;

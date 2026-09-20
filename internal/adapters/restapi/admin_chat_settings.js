@@ -12,6 +12,40 @@
   const chatWebSearchResultCountEl = document.getElementById('chat-web-search-result-count');
   const chatSettingsStatusEl = document.getElementById('chat-settings-status');
   const saveChatSettingsBtn = document.getElementById('save-chat-settings-btn');
+  const chatTokenUsageEl = document.getElementById('chat-token-usage');
+
+  // enabledHookPrompts is populated once by loadChatEndpoint (see below) --
+  // rendered every time the system prompt textarea changes, so an admin
+  // sees the split update live while editing without waiting for a save.
+  let enabledHookPrompts = [];
+
+  // renderTokenUsageDonut is the static, settings-page counterpart of
+  // index.js's per-turn donut: since there's no live chat turn here, it
+  // estimates each piece the same way the backend's own estimateTokens
+  // does (see admin.js's estimateTokensClient) from whatever's currently
+  // in the form, rather than showing a real server-computed count. Global
+  // prompt + hook prompts are shown against the configured max conversation
+  // length as "remaining" budget for RAG/web context and history -- when
+  // no budget is configured (0), there's nothing to show as "remaining",
+  // so the chart just compares the two prompt pieces to each other.
+  function renderTokenUsageDonut() {
+    clear(chatTokenUsageEl);
+    const globalTokens = estimateTokensClient(chatSystemPromptEl.value);
+    const hookTokens = enabledHookPrompts.reduce((sum, p) => sum + estimateTokensClient(p), 0);
+    const maxTokens = parseInt(chatMaxContextTokensEl.value, 10) || 0;
+    const segments = [
+      { label: 'Global prompt', value: globalTokens, color: 'var(--chart-1)' },
+      { label: 'Active hook prompts', value: hookTokens, color: 'var(--chart-2)' },
+    ];
+    if (maxTokens > 0) {
+      segments.push({ label: 'Remaining for context/history', value: Math.max(0, maxTokens - globalTokens - hookTokens), color: 'var(--rule)' });
+    }
+    chatTokenUsageEl.appendChild(buildDonutSVG(segments));
+    chatTokenUsageEl.appendChild(buildDonutLegend(segments));
+  }
+
+  chatSystemPromptEl.addEventListener('input', renderTokenUsageDonut);
+  chatMaxContextTokensEl.addEventListener('input', renderTokenUsageDonut);
 
   // applyChatEndpoint mirrors admin_embedding_endpoint.js's applyEndpoint API-
   // key masking: the server never echoes a stored key's real value, so this
@@ -35,6 +69,21 @@
     chatWebSearchResultCountEl.value = c.web_search_result_count;
   }
 
+  // loadEnabledHookPrompts fetches the hooks list from its own settings
+  // page (Settings -> Chat -> Hooks) purely to feed this page's context-
+  // budget preview -- best-effort, same convention as every other
+  // best-effort fetch on this page: a failure here shouldn't block the
+  // chat endpoint's own settings from loading, so it just leaves the hook-
+  // prompt slice at 0 rather than surfacing an error.
+  async function loadEnabledHookPrompts() {
+    try {
+      const hooks = await getJSON('/admin/api/chat-hooks');
+      enabledHookPrompts = hooks.filter((h) => h.enabled && h.prompt).map((h) => h.prompt);
+    } catch (err) {
+      enabledHookPrompts = [];
+    }
+  }
+
   async function loadChatEndpoint() {
     try {
       applyChatEndpoint(await getJSON('/admin/api/chat-endpoint'));
@@ -42,6 +91,8 @@
       chatSettingsStatusEl.style.color = 'var(--accent)';
       chatSettingsStatusEl.textContent = 'Could not load chat settings: ' + err.message;
     }
+    await loadEnabledHookPrompts();
+    renderTokenUsageDonut();
   }
 
   async function saveChatEndpoint() {
@@ -87,5 +138,5 @@
   // a browser's <script> tag, so this is a no-op there. See
   // internal/adapters/restapi/admin_chat_settings.test.js.
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { applyChatEndpoint, loadChatEndpoint, saveChatEndpoint };
+    module.exports = { applyChatEndpoint, loadChatEndpoint, saveChatEndpoint, renderTokenUsageDonut };
   }

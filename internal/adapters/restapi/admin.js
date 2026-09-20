@@ -499,6 +499,97 @@ function wireVocabularySearch() {
   loadVocabulary();
 }
 
+// estimateTokensClient mirrors application.estimateTokens's own
+// deliberately approximate character-count-based estimate (3 chars/token)
+// -- used by admin_chat_settings.js to preview a configured prompt's
+// approximate size against the context budget before it's ever sent in a
+// real turn, when there's no live chat response to read the real
+// server-computed estimate from instead.
+const APPROX_CHARS_PER_TOKEN = 3;
+function estimateTokensClient(text) {
+  return Math.ceil((text || '').length / APPROX_CHARS_PER_TOKEN);
+}
+
+// buildDonutSVG renders segments (an array of {label, value, color}) as an
+// SVG ring, each segment's arc length proportional to its share of the
+// total -- built from stroke-dasharray/dashoffset on concentric circles
+// rather than a canvas or a charting library, so it stays a plain,
+// dependency-free DOM node like every other element these admin pages
+// build. A zero/negative-total input (nothing configured yet) renders a
+// single muted full ring instead of an empty svg, so the chart's presence
+// doesn't silently disappear the moment every value is 0.
+function buildDonutSVG(segments, opts) {
+  opts = opts || {};
+  const size = opts.size || 120;
+  const strokeWidth = opts.strokeWidth || 16;
+  const r = (size - strokeWidth) / 2;
+  const c = size / 2;
+  const circumference = 2 * Math.PI * r;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 ' + size + ' ' + size);
+  svg.setAttribute('width', String(size));
+  svg.setAttribute('height', String(size));
+  svg.classList.add('donut-chart');
+
+  const total = segments.reduce((sum, s) => sum + Math.max(0, s.value), 0);
+  if (total <= 0) {
+    const bg = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    bg.setAttribute('cx', String(c));
+    bg.setAttribute('cy', String(c));
+    bg.setAttribute('r', String(r));
+    bg.setAttribute('fill', 'none');
+    bg.setAttribute('stroke', 'var(--rule)');
+    bg.setAttribute('stroke-width', String(strokeWidth));
+    svg.appendChild(bg);
+    return svg;
+  }
+
+  let offset = 0;
+  for (const seg of segments) {
+    const value = Math.max(0, seg.value);
+    if (value === 0) continue;
+    const dash = (value / total) * circumference;
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', String(c));
+    circle.setAttribute('cy', String(c));
+    circle.setAttribute('r', String(r));
+    circle.setAttribute('fill', 'none');
+    circle.setAttribute('stroke', seg.color);
+    circle.setAttribute('stroke-width', String(strokeWidth));
+    circle.setAttribute('stroke-dasharray', dash + ' ' + (circumference - dash));
+    circle.setAttribute('stroke-dashoffset', String(-offset));
+    circle.setAttribute('transform', 'rotate(-90 ' + c + ' ' + c + ')');
+    const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    title.textContent = seg.label + ': ' + seg.value;
+    circle.appendChild(title);
+    svg.appendChild(circle);
+    offset += dash;
+  }
+  return svg;
+}
+
+// buildDonutLegend renders one line per segment (a color swatch, label, and
+// value) below/beside a buildDonutSVG chart -- the chart alone can't convey
+// exact numbers or which color is which, so every use of buildDonutSVG in
+// these admin pages pairs it with this.
+function buildDonutLegend(segments) {
+  const list = document.createElement('div');
+  list.className = 'donut-legend';
+  for (const seg of segments) {
+    const row = document.createElement('div');
+    row.className = 'donut-legend-row';
+    const swatch = document.createElement('span');
+    swatch.className = 'donut-legend-swatch';
+    swatch.style.background = seg.color;
+    row.appendChild(swatch);
+    const label = document.createElement('span');
+    label.textContent = seg.label + ': ' + seg.value.toLocaleString();
+    row.appendChild(label);
+    list.appendChild(row);
+  }
+  return list;
+}
+
 // Exports for the Node test runner only -- `typeof module` is undefined in
 // a browser's <script> tag, so this is a no-op there. See
 // internal/adapters/restapi/admin.test.js.
@@ -510,5 +601,6 @@ if (typeof module !== 'undefined' && module.exports) {
     linesToText, parseLines,
     ADMIN_NAV_GROUPS, renderAdminNav,
     wireSignOut, loadStats, loadVocabulary, wireVocabularySearch,
+    estimateTokensClient, buildDonutSVG, buildDonutLegend,
   };
 }

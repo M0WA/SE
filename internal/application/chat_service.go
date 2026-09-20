@@ -71,6 +71,30 @@ type ChatResult struct {
 	// order beyond match order -- empty whenever s.hooks is nil or no
 	// enabled hook's pattern matched.
 	HookResults []domain.ChatHookResult
+	// TokenUsage breaks down the estimated size of what was actually sent to
+	// the model for this turn's first completion call -- lets the chat UI
+	// show where a turn's context budget went (global prompt vs. active
+	// hooks' own prompts vs. RAG/web-search context vs. conversation
+	// history) instead of just a single opaque total.
+	TokenUsage TokenUsage
+}
+
+// TokenUsage is one turn's leading-context token estimate, broken down by
+// where each piece came from -- see estimateTokens for the (deliberately
+// approximate, character-count-based) estimation method. GlobalPromptTokens/
+// HookPromptTokens/ContextTokens are computed directly from the same pieces
+// ChatService.Chat assembles into `leading`, so they're exact for what was
+// actually sent (not re-derived from the final message list). HistoryTokens
+// is measured after trimToBudget, so it reflects what actually made it into
+// the request, not the client's full untrimmed history. MaxContextTokens
+// echoes endpoint.MaxContextTokens (0 means unbounded) so the UI can render
+// usage against the configured budget, not just relative proportions.
+type TokenUsage struct {
+	GlobalPromptTokens int
+	HookPromptTokens   int
+	ContextTokens      int
+	HistoryTokens      int
+	MaxContextTokens   int
 }
 
 // Chat answers the conversation in history using the admin-configured chat
@@ -168,20 +192,27 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	// than prepending piecemeal) keeps that order obvious and gives
 	// trimToBudget a single well-defined run of leading system-role
 	// messages to keep intact.
+	tokenUsage := TokenUsage{MaxContextTokens: endpoint.MaxContextTokens}
 	var leading []domain.ChatMessage
 	if endpoint.SystemPrompt != "" {
-		leading = append(leading, domain.ChatMessage{Role: domain.ChatRoleSystem, Content: expandPromptPlaceholders(endpoint.SystemPrompt)})
+		msg := domain.ChatMessage{Role: domain.ChatRoleSystem, Content: expandPromptPlaceholders(endpoint.SystemPrompt)}
+		leading = append(leading, msg)
+		tokenUsage.GlobalPromptTokens = estimateTokens([]domain.ChatMessage{msg})
 	}
 	for _, h := range activeHooks {
 		if h.Prompt != "" {
-			leading = append(leading, domain.ChatMessage{Role: domain.ChatRoleSystem, Content: expandPromptPlaceholders(h.Prompt)})
+			msg := domain.ChatMessage{Role: domain.ChatRoleSystem, Content: expandPromptPlaceholders(h.Prompt)}
+			leading = append(leading, msg)
+			tokenUsage.HookPromptTokens += estimateTokens([]domain.ChatMessage{msg})
 		}
 	}
 	if ctxBlock.Len() > 0 {
-		leading = append(leading, domain.ChatMessage{
+		msg := domain.ChatMessage{
 			Role:    domain.ChatRoleSystem,
 			Content: "Use the following search results to answer the user's question. Cite the sources you use by URL.\n\n" + ctxBlock.String(),
-		})
+		}
+		leading = append(leading, msg)
+		tokenUsage.ContextTokens = estimateTokens([]domain.ChatMessage{msg})
 	}
 	if len(leading) > 0 {
 		withLeading := make([]domain.ChatMessage, 0, len(leading)+len(messages))
@@ -196,6 +227,11 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		messages = trimToBudget(messages, endpoint.MaxContextTokens)
 		contextTrimmed = len(messages) < before
 	}
+	// messages[len(leading):] is the actual conversation history sent to the
+	// model this turn -- post-trim, since trimToBudget only ever drops
+	// history messages, never the leading system messages just measured
+	// above (see trimToBudget's own doc comment).
+	tokenUsage.HistoryTokens = estimateTokens(messages[len(leading):])
 
 	answer, err := s.completer.Complete(ctx, endpoint, messages)
 	if err != nil {
@@ -248,7 +284,7 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		currentMessages = followUp
 	}
 
-	return ChatResult{Answer: answer, Sources: sources, ContextTrimmed: contextTrimmed, HookResults: hookResults}, nil
+	return ChatResult{Answer: answer, Sources: sources, ContextTrimmed: contextTrimmed, HookResults: hookResults, TokenUsage: tokenUsage}, nil
 }
 
 // maxHookFollowUpRounds bounds how many times ChatService.Chat will feed a

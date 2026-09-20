@@ -364,6 +364,73 @@ test('sendChatMessage renders no hook-result elements when hook_results is absen
   assert.equal(assistantMsg.querySelectorAll('.chat-hook-result').length, 0);
 });
 
+test('sendChatMessage renders a folded token-usage donut with a chart and one legend row per segment', async () => {
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      answer: 'answer',
+      token_usage: { global_prompt_tokens: 10, hook_prompt_tokens: 5, context_tokens: 20, history_tokens: 3, max_context_tokens: 1000 },
+    }),
+  });
+  const { sendChatMessage } = loadFixture();
+  await sendChatMessage('q');
+  const assistantMsg = document.getElementById('chat-messages').children[1];
+  const usage = assistantMsg.querySelector('.chat-token-usage');
+  assert.ok(usage, 'expected a .chat-token-usage element');
+  assert.equal(usage.open, false);
+  assert.equal(usage.querySelector('summary').textContent, 'Token usage: 38 / 1,000');
+  assert.equal(usage.querySelectorAll('svg.donut-chart').length, 1);
+  assert.equal(usage.querySelectorAll('.donut-legend-row').length, 4);
+});
+
+test('sendChatMessage omits the max-context suffix and renders 0 for token_usage fields the response leaves out', async () => {
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({ answer: 'answer', token_usage: { history_tokens: 7 } }),
+  });
+  const { sendChatMessage } = loadFixture();
+  await sendChatMessage('q');
+  const usage = document.getElementById('chat-messages').children[1].querySelector('.chat-token-usage');
+  assert.equal(usage.querySelector('summary').textContent, 'Token usage: 7');
+});
+
+test('sendChatMessage renders no token-usage element when token_usage is absent', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'answer' }) });
+  const { sendChatMessage } = loadFixture();
+  await sendChatMessage('q');
+  const assistantMsg = document.getElementById('chat-messages').children[1];
+  assert.equal(assistantMsg.querySelectorAll('.chat-token-usage').length, 0);
+});
+
+test('buildDonutSVG renders one circle per nonzero segment, skipping zero-value ones', () => {
+  const { buildDonutSVG } = loadFixture();
+  const svg = buildDonutSVG([{ label: 'a', value: 3, color: 'red' }, { label: 'b', value: 0, color: 'blue' }, { label: 'c', value: 1, color: 'green' }]);
+  assert.equal(svg.querySelectorAll('circle').length, 2);
+});
+
+test('buildDonutSVG renders a single muted ring when every segment is zero', () => {
+  const { buildDonutSVG } = loadFixture();
+  const svg = buildDonutSVG([{ label: 'a', value: 0, color: 'red' }]);
+  const circles = svg.querySelectorAll('circle');
+  assert.equal(circles.length, 1);
+  assert.equal(circles[0].getAttribute('stroke'), 'var(--rule)');
+});
+
+test('buildDonutLegend renders a swatch and label:value text per segment', () => {
+  const { buildDonutLegend } = loadFixture();
+  const legend = buildDonutLegend([{ label: 'History', value: 1234, color: 'var(--ink-muted)' }]);
+  const row = legend.querySelector('.donut-legend-row');
+  assert.equal(row.querySelector('.donut-legend-swatch').style.background, 'var(--ink-muted)');
+  assert.equal(row.textContent, 'History: 1,234');
+});
+
+test('tokenUsageSegments maps the flat response shape to the four fixed chart segments', () => {
+  const { tokenUsageSegments } = loadFixture();
+  const segments = tokenUsageSegments({ global_prompt_tokens: 1, hook_prompt_tokens: 2, context_tokens: 3, history_tokens: 4 });
+  assert.deepEqual(segments.map((s) => s.value), [1, 2, 3, 4]);
+  assert.deepEqual(segments.map((s) => s.label), ['Global prompt', 'Hook prompts', 'Search context', 'Conversation history']);
+});
+
 test('sendChatMessage renders the server error text on a non-ok response', async () => {
   global.fetch = async () => ({ ok: false, text: async () => ' endpoint not configured ' });
   const { sendChatMessage } = loadFixture();
