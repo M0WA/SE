@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
@@ -1227,6 +1228,35 @@ func TestChatService_EndpointSystemPrompt_InjectedWhenHooksInactiveOrNil(t *test
 			t.Fatalf("expected the endpoint's SystemPrompt still injected with s.hooks nil, got %v", completer.calledWith)
 		}
 	})
+}
+
+// TestChatService_SystemPromptDatePlaceholder_Expanded proves a literal "%T"
+// in either the endpoint's global SystemPrompt or an active hook's own
+// Prompt is replaced with today's date before reaching the model -- lets an
+// admin anchor "assume this may be outdated" language to a concrete date
+// without re-saving the setting every day.
+func TestChatService_SystemPromptDatePlaceholder_Expanded(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, SystemPrompt: "Today is %T."}}
+	completer := &fakeChatCompleter{answers: []string{"SEARCH[news]", "done"}}
+	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: "Also today is %T."},
+	}}
+	svc := NewChatService(endpoints, completer, &fakeSearchService{}, &fakeWebSearcher{}, hooks, &fakeHookScriptRunner{})
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(completer.calledWith) < 2 {
+		t.Fatalf("expected at least 2 leading messages, got %v", completer.calledWith)
+	}
+	today := time.Now().UTC().Format("Monday, January 2, 2006")
+	if strings.Contains(completer.calledWith[0].Content, "%T") || !strings.Contains(completer.calledWith[0].Content, today) {
+		t.Errorf("expected the global prompt's %%T expanded to %q, got %q", today, completer.calledWith[0].Content)
+	}
+	if strings.Contains(completer.calledWith[1].Content, "%T") || !strings.Contains(completer.calledWith[1].Content, today) {
+		t.Errorf("expected the hook prompt's %%T expanded to %q, got %q", today, completer.calledWith[1].Content)
+	}
 }
 
 // TestChatService_ActiveHookWithEmptyPrompt_NoExtraSystemMessage proves an

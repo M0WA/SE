@@ -27,15 +27,24 @@ regardless of which hooks are active -- it's the right place for a general
 instruction that isn't tied to any one tool:
 
 ```
-Assume your training data may be outdated. When something could have
-changed or you are not certain, use web search or a URL fetch instead of
-relying on memory, whenever those tools are available to you.
+Today is %T. Assume your training data may be outdated. When something
+could have changed or you are not certain, use web search or a URL fetch
+instead of relying on memory, whenever those tools are available to you.
+Double-check anything you get from the internet before relying on it -- a
+follow-up web search or fetching the page itself -- and make sure the
+information is actually recent, not just present.
 ```
 
 "Whenever those tools are available to you" matters: the hooks themselves
 are gated by the chat's Web toggle (`ChatHook.GatedByWebSearch`), so they
 may not always be there to use -- the global prompt shouldn't imply they
 always are.
+
+`%T` is replaced with today's date (e.g. "Friday, September 20, 2026")
+every time a prompt is assembled for a turn -- `application.expandPromptPlaceholders`
+runs it against both the global System prompt and each active hook's own
+Prompt, so either can use it to give the model a concrete anchor for
+judging staleness instead of a vague "could be outdated."
 
 ## Suggested per-hook prompts
 

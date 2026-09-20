@@ -331,3 +331,44 @@ test('clicking an inactive column header switches to it at its default direction
     assert.ok(findHeader().textContent.includes('▼'));
   });
 });
+
+test('setIconLabel gives an element an icon glyph, a hover title, and an aria-label carrying the real action name', () => {
+  const { setIconLabel, ACTION_ICONS } = loadFixture();
+  const btn = document.createElement('button');
+  setIconLabel(btn, 'delete', 'Delete');
+  assert.equal(btn.textContent, ACTION_ICONS.delete);
+  assert.equal(btn.title, 'Delete');
+  assert.equal(btn.getAttribute('aria-label'), 'Delete');
+  assert.ok(btn.classList.contains('icon-button'));
+});
+
+test('viewButtonCell shows a View icon button always, and a Cancel icon button only for an active job', () => {
+  const { viewButtonCell, ACTION_ICONS } = loadFixture();
+
+  const done = viewButtonCell({ id: 'j1', status: 'done' });
+  const doneButtons = done.querySelectorAll('button');
+  assert.equal(doneButtons.length, 1);
+  assert.equal(doneButtons[0].textContent, ACTION_ICONS.view);
+  assert.equal(doneButtons[0].title, 'View');
+
+  const running = viewButtonCell({ id: 'j2', status: 'running' });
+  const runningButtons = running.querySelectorAll('button');
+  assert.equal(runningButtons.length, 2);
+  assert.equal(runningButtons[1].textContent, ACTION_ICONS.cancel);
+  assert.equal(runningButtons[1].title, 'Cancel');
+});
+
+test('crawlActionsCell shows Run now/Edit/Delete as icon buttons/links with the real names as hover text', () => {
+  const { crawlActionsCell, ACTION_ICONS } = loadFixture();
+  const td = crawlActionsCell({ id: 's1' });
+  const buttons = td.querySelectorAll('button');
+  const link = td.querySelector('a');
+  assert.equal(buttons.length, 2);
+  assert.equal(buttons[0].textContent, ACTION_ICONS.run);
+  assert.equal(buttons[0].title, 'Run now');
+  assert.equal(link.textContent, ACTION_ICONS.edit);
+  assert.equal(link.title, 'Edit');
+  assert.equal(link.getAttribute('href'), '/admin/schedule/s1');
+  assert.equal(buttons[1].textContent, ACTION_ICONS.delete);
+  assert.equal(buttons[1].title, 'Delete');
+});
