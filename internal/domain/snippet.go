@@ -13,9 +13,17 @@ import (
 // so it's always escaped before any <mark> tag is added (a term containing
 // an HTML metacharacter like "AT&T" may then fail to highlight -- acceptable).
 func Snippet(text string, phrases, terms []string, maxLen int) string {
-	pos := indexOfEarliest(text, phrases)
+	// Compiled once per call and reused across every use below (indexOfEarliest
+	// runs one pass over phrases and one over terms; highlight/
+	// highlightOutsideMarks run once more per phrase/term) -- word count is
+	// typically small, but this still avoids recompiling the identical
+	// pattern for the same word up to four times over within one call.
+	phraseFinders := compileFinders(phrases)
+	termFinders := compileFinders(terms)
+
+	pos := indexOfEarliest(text, phraseFinders)
 	if pos == -1 {
-		pos = indexOfEarliest(text, terms)
+		pos = indexOfEarliest(text, termFinders)
 	}
 	if pos == -1 {
 		if len(text) <= maxLen {
@@ -34,11 +42,11 @@ func Snippet(text string, phrases, terms []string, maxLen int) string {
 	}
 	snippet := html.EscapeString(text[start:end])
 
-	for _, p := range phrases {
-		snippet = highlight(snippet, p)
+	for _, re := range phraseFinders {
+		snippet = highlight(snippet, re)
 	}
-	for _, t := range terms {
-		snippet = highlightOutsideMarks(snippet, t)
+	for _, re := range termFinders {
+		snippet = highlightOutsideMarks(snippet, re)
 	}
 	if start > 0 {
 		snippet = "… " + snippet
@@ -73,15 +81,24 @@ func caseInsensitiveFinder(word string) *regexp.Regexp {
 	return re
 }
 
-// indexOfEarliest returns the lowest byte offset at which any of words
-// occurs in text (case-insensitively), or -1 if none of them occur at all.
-func indexOfEarliest(text string, words []string) int {
-	pos := -1
+// compileFinders compiles every word via caseInsensitiveFinder, dropping any
+// that return nil (empty or uncompilable) so callers never need to nil-check
+// individual entries.
+func compileFinders(words []string) []*regexp.Regexp {
+	finders := make([]*regexp.Regexp, 0, len(words))
 	for _, w := range words {
-		re := caseInsensitiveFinder(w)
-		if re == nil {
-			continue
+		if re := caseInsensitiveFinder(w); re != nil {
+			finders = append(finders, re)
 		}
+	}
+	return finders
+}
+
+// indexOfEarliest returns the lowest byte offset at which any of finders
+// matches text, or -1 if none of them match at all.
+func indexOfEarliest(text string, finders []*regexp.Regexp) int {
+	pos := -1
+	for _, re := range finders {
 		if loc := re.FindStringIndex(text); loc != nil && (pos == -1 || loc[0] < pos) {
 			pos = loc[0]
 		}
@@ -89,11 +106,11 @@ func indexOfEarliest(text string, words []string) int {
 	return pos
 }
 
-func highlight(s, term string) string {
-	re := caseInsensitiveFinder(term)
-	if re == nil {
-		return s
-	}
+// highlight is only ever called with a re from compileFinders' output
+// (never nil -- compileFinders drops every word that fails to compile), so
+// unlike caseInsensitiveFinder's other callers, it never needs its own nil
+// check.
+func highlight(s string, re *regexp.Regexp) string {
 	matches := re.FindAllStringIndex(s, -1)
 	if matches == nil {
 		return s
@@ -117,18 +134,18 @@ var markRe = regexp.MustCompile(`(?s)<mark>.*?</mark>`)
 // a <mark> span from a prior (higher-priority) highlight pass -- so a
 // phrase's own words don't get separately re-wrapped inside the phrase's
 // own contiguous span.
-func highlightOutsideMarks(s, term string) string {
+func highlightOutsideMarks(s string, re *regexp.Regexp) string {
 	spans := markRe.FindAllStringIndex(s, -1)
 	if spans == nil {
-		return highlight(s, term)
+		return highlight(s, re)
 	}
 	var b strings.Builder
 	last := 0
 	for _, span := range spans {
-		b.WriteString(highlight(s[last:span[0]], term))
+		b.WriteString(highlight(s[last:span[0]], re))
 		b.WriteString(s[span[0]:span[1]])
 		last = span[1]
 	}
-	b.WriteString(highlight(s[last:], term))
+	b.WriteString(highlight(s[last:], re))
 	return b.String()
 }

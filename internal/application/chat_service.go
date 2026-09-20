@@ -237,8 +237,8 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	// surface.
 	var hookResults []domain.ChatHookResult
 	currentMessages := messages
+	env := map[string]string{"WEB_SEARCH_BASE_URL": endpoint.WebSearchBaseURL}
 	for round := 0; round < maxHookFollowUpRounds && len(activeHooks) > 0; round++ {
-		env := map[string]string{"WEB_SEARCH_BASE_URL": endpoint.WebSearchBaseURL}
 		roundResults := runChatHooks(ctx, activeHooks, s.hookRunner, answer, env)
 		if len(roundResults) == 0 {
 			break
@@ -264,7 +264,6 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	return ChatResult{Answer: answer, Sources: sources, ContextTrimmed: contextTrimmed, HookResults: hookResults, TokenUsage: tokenUsage}, nil
 }
 
-// maxHookFollowUpRounds bounds how many times ChatService.Chat will feed a
 // promptDatePlaceholder, when present in the global system prompt or a
 // hook's own Prompt, is replaced with today's date -- lets an admin write a
 // prompt like "today is %T" so the model has a concrete anchor for judging
@@ -279,6 +278,7 @@ func expandPromptPlaceholders(prompt string) string {
 	return strings.ReplaceAll(prompt, promptDatePlaceholder, time.Now().UTC().Format("Monday, January 2, 2006"))
 }
 
+// maxHookFollowUpRounds bounds how many times ChatService.Chat will feed a
 // hook's results back to the model and ask again -- each round costs one
 // more completion call and (via maxHookMatchesPerTurn, chat_hooks.go) up to
 // maxHookMatchesPerTurn more script executions, so this is a real cost
@@ -316,10 +316,7 @@ func formatHookResultsForModel(results []domain.ChatHookResult) string {
 }
 
 func truncateForModel(s string) string {
-	if len(s) <= maxHookOutputCharsForModel {
-		return s
-	}
-	return s[:maxHookOutputCharsForModel] + fmt.Sprintf("... [truncated, %d bytes total]", len(s))
+	return domain.TruncateWithNote(s, maxHookOutputCharsForModel)
 }
 
 // approxCharsPerToken mirrors httpembed's own conservative token estimate

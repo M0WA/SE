@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"searchengine/internal/domain"
 )
 
 // defaultTimeout bounds how long a single hook script may run before it is
@@ -132,10 +134,7 @@ func (r *Runner) RunHookScript(ctx context.Context, scriptName string, args []st
 
 // truncateStdout caps s at maxStdout bytes, appending a note when it does.
 func truncateStdout(s string) string {
-	if len(s) <= maxStdout {
-		return s
-	}
-	return s[:maxStdout] + fmt.Sprintf("... [truncated, %d bytes total]", len(s))
+	return domain.TruncateWithNote(s, maxStdout)
 }
 
 // truncate caps s at max bytes for inclusion in an error message.

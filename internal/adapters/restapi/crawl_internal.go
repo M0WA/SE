@@ -2,7 +2,6 @@ package restapi
 
 import (
 	"context"
-	"crypto/subtle"
 	"errors"
 	"log"
 	"net/http"
@@ -117,8 +116,7 @@ func (h *Handler) requireCrawlInternalToken(next http.HandlerFunc) http.HandlerF
 			next(w, r)
 			return
 		}
-		got := r.Header.Get("X-Internal-Token")
-		if subtle.ConstantTimeCompare([]byte(got), []byte(h.crawlInternalToken)) != 1 {
+		if !requestHasSecretHeader(r, "X-Internal-Token", h.crawlInternalToken) {
 			http.Error(w, "invalid or missing internal token", http.StatusUnauthorized)
 			return
 		}

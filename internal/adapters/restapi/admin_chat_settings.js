@@ -80,14 +80,21 @@
     }
   }
 
+  // The chat-endpoint fetch and loadEnabledHookPrompts hit disjoint
+  // endpoints and populate disjoint state -- run them concurrently rather
+  // than one after the other, so this page's load time isn't paying for
+  // two round-trips back to back.
   async function loadChatEndpoint() {
-    try {
-      applyChatEndpoint(await getJSON('/admin/api/chat-endpoint'));
-    } catch (err) {
+    const [endpointResult] = await Promise.allSettled([
+      getJSON('/admin/api/chat-endpoint'),
+      loadEnabledHookPrompts(),
+    ]);
+    if (endpointResult.status === 'fulfilled') {
+      applyChatEndpoint(endpointResult.value);
+    } else {
       chatSettingsStatusEl.style.color = 'var(--accent)';
-      chatSettingsStatusEl.textContent = 'Could not load chat settings: ' + err.message;
+      chatSettingsStatusEl.textContent = 'Could not load chat settings: ' + endpointResult.reason.message;
     }
-    await loadEnabledHookPrompts();
     renderTokenUsageDonut();
   }
 

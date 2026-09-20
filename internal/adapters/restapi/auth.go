@@ -136,12 +136,9 @@ const internalAPIKeyHeader = "X-Internal-API-Key"
 // can't learn it one byte at a time via response-timing differences.
 func (h *Handler) requireAuthAPIOrInternalKey(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if h.internalSearchAPIKey != "" {
-			got := r.Header.Get(internalAPIKeyHeader)
-			if subtle.ConstantTimeCompare([]byte(got), []byte(h.internalSearchAPIKey)) == 1 {
-				next(w, r)
-				return
-			}
+		if h.internalSearchAPIKey != "" && requestHasSecretHeader(r, internalAPIKeyHeader, h.internalSearchAPIKey) {
+			next(w, r)
+			return
 		}
 		if !h.isAuthenticated(r) {
 			http.Error(w, "authentication required", http.StatusUnauthorized)
@@ -149,6 +146,17 @@ func (h *Handler) requireAuthAPIOrInternalKey(next http.HandlerFunc) http.Handle
 		}
 		next(w, r)
 	}
+}
+
+// requestHasSecretHeader reports whether r carries header set to exactly
+// secret, compared via subtle.ConstantTimeCompare (not ==) so a caller
+// without the right value can't learn it one byte at a time via
+// response-timing differences -- shared by every shared-secret-header check
+// in this package (requireAuthAPIOrInternalKey above, requireCrawlInternalToken
+// in crawl_internal.go), so that comparison detail only needs to be gotten
+// right once.
+func requestHasSecretHeader(r *http.Request, header, secret string) bool {
+	return subtle.ConstantTimeCompare([]byte(r.Header.Get(header)), []byte(secret)) == 1
 }
 
 func isHTTPS(r *http.Request) bool {
