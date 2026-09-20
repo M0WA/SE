@@ -791,6 +791,42 @@ button:focus-visible {
   color: var(--accent);
 }
 
+/* .chat-hook-target shows what a fetch/search hook was actually called
+   with (a URL or a query) inside the outer, open-by-default fold -- see
+   renderChatMessage's fetch/search branches. Same monospace family as
+   .chat-hook-result summary above, for a consistent "raw value" look. */
+.chat-hook-target {
+  margin: 0.35rem 0.6rem;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 0.8rem;
+}
+
+/* .chat-hook-results-list renders a parsed web_search hook's results
+   (title/url pairs) directly inside the outer fold, one link per line --
+   .chat-source-link's old font choice no longer exists in this file, so
+   this matches .chat-hook-result's own summary/pre sizing instead. */
+.chat-hook-results-list {
+  list-style: none;
+  margin: 0 0.6rem 0.5rem;
+  padding: 0;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 0.78rem;
+}
+
+.chat-hook-results-list li {
+  margin-top: 0.25rem;
+}
+
+/* .chat-hook-response is the nested, closed-by-default fold holding a
+   fetch/search hook's raw response/error -- it also carries
+   .chat-hook-result (see renderChatMessage), so it gets that class's
+   border/summary/pre styling for free and only needs its own spacing
+   here. */
+.chat-hook-response {
+  margin-top: 0.4rem;
+  margin-left: 0;
+}
+
 /* .chat-token-usage: a persistent running-total badge next to the Web
    checkbox (see #chat-token-usage in index.html), not per-turn like the
    answer itself -- reuses the .hint/.hint-bubble pattern (see above) so
@@ -798,9 +834,21 @@ button:focus-visible {
    taking up space in the toolbar row. Hidden until the first answer sets
    it (see index.js's renderTokenUsage). */
 .chat-token-usage {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   font-size: 0.82rem;
   color: var(--ink-muted);
   white-space: nowrap;
+}
+
+/* .chat-token-usage-mini: the always-visible tiny donut next to the
+   summary number (see #chat-token-usage-mini in index.html) -- distinct
+   from the larger .chat-token-usage .donut-chart inside the hover bubble,
+   which stays as-is. */
+.chat-token-usage-mini {
+  display: inline-flex;
+  align-items: center;
 }
 
 .chat-token-usage .hint-bubble {

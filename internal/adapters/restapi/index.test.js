@@ -161,6 +161,13 @@ test('runSearch reports a network-error message when fetch throws', async () => 
   assert.equal(document.getElementById('status').textContent, 'Search failed: could not reach the server.');
 });
 
+test('defaults to chat mode on load', () => {
+  loadFixture();
+  assert.equal(document.getElementById('chat-panel').hidden, false);
+  assert.equal(document.getElementById('search-form').hidden, true);
+  assert.equal(document.getElementById('mode-switch').getAttribute('aria-checked'), 'true');
+});
+
 test('setMode toggles the switch and swaps panel visibility in both directions', () => {
   const { setMode } = loadFixture();
   const modeSwitch = document.getElementById('mode-switch');
@@ -171,9 +178,13 @@ test('setMode toggles the switch and swaps panel visibility in both directions',
   const status = document.getElementById('status');
   const resultsEl = document.getElementById('results');
 
-  assert.equal(modeSwitch.getAttribute('aria-checked'), 'false');
-  assert.equal(chatPanel.hidden, true);
-  assert.equal(chatOptions.hidden, true);
+  // The page now defaults to chat mode on load (see the new
+  // 'defaults to chat mode on load' test below), so before any explicit
+  // setMode call here the switch is already checked and the chat panel
+  // already visible.
+  assert.equal(modeSwitch.getAttribute('aria-checked'), 'true');
+  assert.equal(chatPanel.hidden, false);
+  assert.equal(chatOptions.hidden, false);
 
   setMode('chat');
   assert.equal(modeSwitch.getAttribute('aria-checked'), 'true');
@@ -199,13 +210,15 @@ test('the mode switch button toggles mode on click', () => {
   const modeSwitch = document.getElementById('mode-switch');
   const chatPanel = document.getElementById('chat-panel');
 
-  modeSwitch.dispatchEvent(new window.Event('click', { bubbles: true }));
-  assert.equal(modeSwitch.getAttribute('aria-checked'), 'true');
-  assert.equal(chatPanel.hidden, false);
-
+  // Chat is already the default on load, so the first click switches to
+  // search, and the second click switches back to chat.
   modeSwitch.dispatchEvent(new window.Event('click', { bubbles: true }));
   assert.equal(modeSwitch.getAttribute('aria-checked'), 'false');
   assert.equal(chatPanel.hidden, true);
+
+  modeSwitch.dispatchEvent(new window.Event('click', { bubbles: true }));
+  assert.equal(modeSwitch.getAttribute('aria-checked'), 'true');
+  assert.equal(chatPanel.hidden, false);
 });
 
 test('setMode restores a hidden correction-note rather than forcing it open', () => {
@@ -346,6 +359,119 @@ test('sendChatMessage renders no hook-result elements when hook_results is absen
   assert.equal(assistantMsg.querySelectorAll('.chat-hook-result').length, 0);
 });
 
+test('sendChatMessage renders a fetch-named hook result as an open outer fold with a link and a closed nested response fold', async () => {
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      answer: 'answer',
+      hook_results: [
+        { hook_name: 'web_fetch', input: 'https://example.com/page', output: 'page contents here' },
+      ],
+    }),
+  });
+  const { sendChatMessage } = loadFixture();
+  await sendChatMessage('q');
+  const assistantMsg = document.getElementById('chat-messages').children[1];
+  const outer = assistantMsg.querySelector('.chat-hook-result');
+  assert.notEqual(outer, null);
+  assert.equal(outer.hasAttribute('open'), true);
+  assert.equal(outer.querySelector('summary').textContent, 'web_fetch');
+
+  const link = outer.querySelector('.chat-hook-target a');
+  assert.notEqual(link, null);
+  assert.equal(link.getAttribute('href'), 'https://example.com/page');
+  assert.equal(link.textContent, 'https://example.com/page');
+
+  const nested = outer.querySelector('.chat-hook-response');
+  assert.notEqual(nested, null);
+  assert.equal(nested.hasAttribute('open'), false);
+  assert.equal(nested.querySelector('summary').textContent, 'Response');
+  assert.equal(nested.querySelector('pre').textContent, 'page contents here');
+});
+
+test('sendChatMessage renders a search-named hook result\'s parsed results list, with the raw JSON still in the nested fold', async () => {
+  const rawOutput = JSON.stringify({
+    results: [
+      { title: 'First', url: 'https://a.example' },
+      { title: 'Second', url: 'https://b.example' },
+      { title: 'Third', url: 'https://c.example' },
+      { title: 'Fourth', url: 'https://d.example' },
+      { title: 'Fifth', url: 'https://e.example' },
+      { title: 'Sixth', url: 'https://f.example' },
+    ],
+  });
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      answer: 'answer',
+      hook_results: [
+        { hook_name: 'web_search', input: 'golang release notes', output: rawOutput },
+      ],
+    }),
+  });
+  const { sendChatMessage } = loadFixture();
+  await sendChatMessage('q');
+  const assistantMsg = document.getElementById('chat-messages').children[1];
+  const outer = assistantMsg.querySelector('.chat-hook-result');
+  assert.equal(outer.hasAttribute('open'), true);
+  assert.equal(outer.querySelector('.chat-hook-target code').textContent, 'golang release notes');
+
+  const items = outer.querySelectorAll('.chat-hook-results-list li');
+  assert.equal(items.length, 5, 'expected the results list capped at 5 entries');
+  assert.equal(items[0].querySelector('a').textContent, 'First');
+  assert.equal(items[0].querySelector('a').getAttribute('href'), 'https://a.example');
+
+  const nested = outer.querySelector('.chat-hook-response');
+  assert.notEqual(nested, null);
+  assert.equal(nested.hasAttribute('open'), false);
+  assert.equal(nested.querySelector('summary').textContent, 'Raw output');
+  assert.equal(nested.querySelector('pre').textContent, rawOutput);
+});
+
+test('sendChatMessage renders no results list for a search-named hook whose output is not valid JSON, but still shows the raw output fold', async () => {
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      answer: 'answer',
+      hook_results: [
+        { hook_name: 'web_search', input: 'golang release notes', output: 'not json at all' },
+      ],
+    }),
+  });
+  const { sendChatMessage } = loadFixture();
+  await sendChatMessage('q');
+  const assistantMsg = document.getElementById('chat-messages').children[1];
+  const outer = assistantMsg.querySelector('.chat-hook-result');
+  assert.equal(outer.querySelectorAll('.chat-hook-results-list').length, 0);
+
+  const nested = outer.querySelector('.chat-hook-response');
+  assert.notEqual(nested, null);
+  assert.equal(nested.hasAttribute('open'), false);
+  assert.equal(nested.querySelector('pre').textContent, 'not json at all');
+});
+
+test('sendChatMessage keeps the old single-level, closed-by-default rendering for a generic/other-named hook result', async () => {
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      answer: 'answer',
+      hook_results: [
+        { hook_name: 'lookup_docs', input: 'ignored for generic hooks', output: 'doc contents' },
+      ],
+    }),
+  });
+  const { sendChatMessage } = loadFixture();
+  await sendChatMessage('q');
+  const assistantMsg = document.getElementById('chat-messages').children[1];
+  const results = assistantMsg.querySelectorAll('.chat-hook-result');
+  assert.equal(results.length, 1);
+  assert.equal(results[0].hasAttribute('open'), false);
+  assert.equal(results[0].classList.contains('chat-hook-response'), false);
+  assert.equal(results[0].querySelector('summary').textContent, 'lookup_docs');
+  assert.equal(results[0].querySelector('pre').textContent, 'doc contents');
+  assert.equal(results[0].querySelectorAll('.chat-hook-target').length, 0);
+});
+
 test('sendChatMessage shows the persistent token-usage badge next to the Web checkbox, not in the chat', async () => {
   global.fetch = async () => ({
     ok: true,
@@ -361,10 +487,12 @@ test('sendChatMessage shows the persistent token-usage badge next to the Web che
 
   const usage = document.getElementById('chat-token-usage');
   assert.equal(usage.hidden, false);
-  assert.equal(document.getElementById('chat-token-usage-summary').textContent, 'Tokens: 18 / 1,000');
+  assert.equal(document.getElementById('chat-token-usage-summary').textContent, '18 / 1,000');
   const donut = document.getElementById('chat-token-usage-donut');
   assert.equal(donut.querySelectorAll('svg.donut-chart').length, 1);
   assert.equal(donut.querySelectorAll('.donut-legend-row').length, 3);
+  const mini = document.getElementById('chat-token-usage-mini');
+  assert.equal(mini.querySelectorAll('svg.donut-chart').length, 1);
 });
 
 test('sendChatMessage omits the max-context suffix and renders 0 for token_usage fields the response leaves out', async () => {
@@ -374,7 +502,7 @@ test('sendChatMessage omits the max-context suffix and renders 0 for token_usage
   });
   const { sendChatMessage } = loadFixture();
   await sendChatMessage('q');
-  assert.equal(document.getElementById('chat-token-usage-summary').textContent, 'Tokens: 7');
+  assert.equal(document.getElementById('chat-token-usage-summary').textContent, '7');
 });
 
 test('sendChatMessage keeps the token-usage badge hidden when token_usage is absent', async () => {
