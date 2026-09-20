@@ -289,13 +289,16 @@ func TestRunScheduledCrawlNow_SucceedsWhenNotInProgress(t *testing.T) {
 	}
 }
 
-// TestResetStaleInProgress_ClearsEveryStuckFlag mirrors what
-// cmd/crawl/main.go runs once at startup: every schedule stuck
-// in_progress=true (from a restart that interrupted its triggered run,
-// with nothing left to ever clear it -- see ResetStaleInProgress's own
-// doc comment) is reset, while a schedule that was never in progress is
-// left alone.
-func TestResetStaleInProgress_ClearsEveryStuckFlag(t *testing.T) {
+// TestResetStaleInProgress_ClearsFlagsWithNoMatchingActiveJob mirrors what
+// cmd/crawl/main.go runs once at startup, after RecoverInterruptedCrawls:
+// every schedule stuck in_progress=true whose JobID doesn't correspond to a
+// still-queued/running crawl_jobs row (from a restart that interrupted its
+// triggered run, with nothing left to ever clear it -- see
+// ResetStaleInProgress's own doc comment) is reset, while a schedule that
+// was never in progress is left alone. Neither stuck row here has a JobID
+// at all (as if it predates that column, or its job was deleted), which is
+// exactly the "no matching active job" case.
+func TestResetStaleInProgress_ClearsFlagsWithNoMatchingActiveJob(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
 
@@ -338,6 +341,75 @@ func TestResetStaleInProgress_ClearsEveryStuckFlag(t *testing.T) {
 	}
 	if len(due) != 3 {
 		t.Errorf("expected all 3 schedules to be due after the reset, got %d", len(due))
+	}
+}
+
+// TestResetStaleInProgress_LeavesFlagAloneWhenJobStillActive is the
+// regression test for a real production incident: a schedule's InProgress
+// flag must NOT be cleared when its JobID still points to a queued/running
+// crawl_jobs row -- exactly the shape left behind when
+// RecoverInterruptedCrawls resumes a job moments before this runs at
+// crawl-server startup. The earlier, job-unaware version of
+// ResetStaleInProgress cleared every stuck-true row unconditionally, which
+// let the very next scheduler tick start a second, duplicate crawl of the
+// same site while the resumed one was still running.
+func TestResetStaleInProgress_LeavesFlagAloneWhenJobStillActive(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+
+	job, err := repo.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"https://cnn.com"}, MaxPages: 20000})
+	if err != nil {
+		t.Fatalf("unexpected error creating crawl job: %v", err)
+	}
+	if err := repo.MarkRunning(ctx, job.ID); err != nil {
+		t.Fatalf("unexpected error marking job running: %v", err)
+	}
+
+	stillRunning := newScheduledCrawl("sched-cnn", 30, time.Now().UTC().Add(-time.Hour))
+	stillRunning.InProgress = true
+	stillRunning.JobID = job.ID
+	if err := repo.CreateScheduledCrawl(ctx, stillRunning); err != nil {
+		t.Fatalf("unexpected error creating schedule: %v", err)
+	}
+
+	reset, err := repo.ResetStaleInProgress(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reset != 0 {
+		t.Errorf("expected 0 rows reset while the referenced job is still running, got %d", reset)
+	}
+
+	got, err := repo.GetScheduledCrawl(ctx, "sched-cnn")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !got.InProgress || got.JobID != job.ID {
+		t.Errorf("expected InProgress and JobID left untouched, got %+v", got)
+	}
+
+	// The whole point: it must still be excluded from DueScheduledCrawls,
+	// so a second, duplicate crawl of the same site is never triggered
+	// while the resumed one is still running.
+	due, err := repo.DueScheduledCrawls(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(due) != 0 {
+		t.Errorf("expected the still-running schedule to stay excluded from DueScheduledCrawls, got %+v", due)
+	}
+
+	// Once the job actually finishes, a subsequent ResetStaleInProgress
+	// call (e.g. the next restart) correctly clears it.
+	if err := repo.MarkDone(ctx, job.ID); err != nil {
+		t.Fatalf("unexpected error marking job done: %v", err)
+	}
+	reset, err = repo.ResetStaleInProgress(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reset != 1 {
+		t.Errorf("expected the row to be reset once its job has finished, got %d", reset)
 	}
 }
 
@@ -390,7 +462,7 @@ func TestUpdateScheduledCrawl_ReplacesEditableFields(t *testing.T) {
 	// Give it a real RunCount before editing, so the assertion below can
 	// prove UpdateScheduledCrawl leaves it alone (like LastRunAt) even
 	// though MaxRuns -- the cap it's compared against -- does change.
-	if err := repo.MarkScheduledCrawlRun(ctx, "sched-1", now, now.Add(30*time.Minute), true, false, 3); err != nil {
+	if err := repo.MarkScheduledCrawlRun(ctx, "sched-1", now, now.Add(30*time.Minute), true, false, 3, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -547,7 +619,7 @@ func TestMarkScheduledCrawlRun_AdvancesLastAndNextRun(t *testing.T) {
 	}
 
 	nextRun := now.Add(30 * time.Minute)
-	if err := repo.MarkScheduledCrawlRun(ctx, "sched-1", now, nextRun, true, false, 1); err != nil {
+	if err := repo.MarkScheduledCrawlRun(ctx, "sched-1", now, nextRun, true, false, 1, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -591,7 +663,7 @@ func TestMarkScheduledCrawlRun_PersistsEnabled(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if err := repo.MarkScheduledCrawlRun(ctx, "once", now, now, false, false, 1); err != nil {
+	if err := repo.MarkScheduledCrawlRun(ctx, "once", now, now, false, false, 1, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -604,10 +676,12 @@ func TestMarkScheduledCrawlRun_PersistsEnabled(t *testing.T) {
 	}
 }
 
-// TestMarkScheduledCrawlRun_PersistsInProgress proves the inProgress param
-// is actually written -- what application.TriggerDueCrawls' trigger-time
-// call relies on to keep DueScheduledCrawls from picking this entry up
-// again while it's still running, without touching enabled at all.
+// TestMarkScheduledCrawlRun_PersistsInProgress proves the inProgress and
+// jobID params are actually written -- what application.TriggerDueCrawls'
+// trigger-time call relies on to keep DueScheduledCrawls from picking this
+// entry up again while it's still running, without touching enabled at
+// all, and what ResetStaleInProgress relies on at the next crawl-server
+// startup to tell a genuinely-still-running run apart from a stale one.
 func TestMarkScheduledCrawlRun_PersistsInProgress(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
@@ -618,16 +692,16 @@ func TestMarkScheduledCrawlRun_PersistsInProgress(t *testing.T) {
 	}
 
 	// Simulate TriggerDueCrawls' trigger-time call: enabled stays true,
-	// inProgress becomes true.
-	if err := repo.MarkScheduledCrawlRun(ctx, "sched-1", now, now.Add(30*time.Minute), true, true, 1); err != nil {
+	// inProgress becomes true, jobID records the triggered run.
+	if err := repo.MarkScheduledCrawlRun(ctx, "sched-1", now, now.Add(30*time.Minute), true, true, 1, "job-1"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got, err := repo.ListScheduledCrawls(ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(got) != 1 || !got[0].Enabled || !got[0].InProgress {
-		t.Errorf("expected enabled=true, in_progress=true after the trigger-time call, got %+v", got)
+	if len(got) != 1 || !got[0].Enabled || !got[0].InProgress || got[0].JobID != "job-1" {
+		t.Errorf("expected enabled=true, in_progress=true, job_id=job-1 after the trigger-time call, got %+v", got)
 	}
 
 	// The entry must not be due again while in_progress, even though
@@ -640,22 +714,22 @@ func TestMarkScheduledCrawlRun_PersistsInProgress(t *testing.T) {
 		t.Errorf("expected the in-progress entry to be excluded from DueScheduledCrawls, got %+v", due)
 	}
 
-	// Simulate onDone: inProgress clears back to false.
-	if err := repo.MarkScheduledCrawlRun(ctx, "sched-1", now, now.Add(30*time.Minute), true, false, 1); err != nil {
+	// Simulate onDone: inProgress and jobID both clear.
+	if err := repo.MarkScheduledCrawlRun(ctx, "sched-1", now, now.Add(30*time.Minute), true, false, 1, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got, err = repo.ListScheduledCrawls(ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(got) != 1 || got[0].InProgress {
-		t.Errorf("expected in_progress cleared after the onDone-style call, got %+v", got)
+	if len(got) != 1 || got[0].InProgress || got[0].JobID != "" {
+		t.Errorf("expected in_progress and job_id cleared after the onDone-style call, got %+v", got)
 	}
 }
 
 func TestMarkScheduledCrawlRun_NotFound(t *testing.T) {
 	repo := newTestRepo(t)
-	err := repo.MarkScheduledCrawlRun(context.Background(), "missing", time.Now(), time.Now(), true, false, 1)
+	err := repo.MarkScheduledCrawlRun(context.Background(), "missing", time.Now(), time.Now(), true, false, 1, "")
 	if !errors.Is(err, ports.ErrScheduledCrawlNotFound) {
 		t.Errorf("expected ErrScheduledCrawlNotFound, got %v", err)
 	}
