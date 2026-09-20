@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.26 - 2026-09-20
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Tell web_search hook to verify facts via web_fetch, not search excerpts by @M0WA in https://github.com/M0WA/SE/pull/174
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.25...v4.13.26
+
+
 ## v4.13.25 - 2026-09-20
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
