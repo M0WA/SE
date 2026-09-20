@@ -201,43 +201,63 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		return ChatResult{}, fmt.Errorf("chat: %w", err)
 	}
 
-	// Reuse the same activeHooks list computed above -- ListChatHooks is
-	// never called a second time in one turn. env carries only
-	// ADMIN-CONFIGURED endpoint config (never anything derived from the
-	// model's own answer or a capture group) -- see
-	// ports.HookScriptRunner's doc comment for why this doesn't reopen
-	// runChatHooks's security surface.
-	var hookResults []domain.ChatHookResult
-	if len(activeHooks) > 0 {
-		env := map[string]string{"WEB_SEARCH_BASE_URL": endpoint.WebSearchBaseURL}
-		hookResults = runChatHooks(ctx, activeHooks, s.hookRunner, answer, env)
-	}
-
 	// A tool call's own raw text (e.g. "<web_search>golang release
-	// notes</web_search>") is never the final answer a user sees: when a
-	// hook actually fired, feed its own tool-call turn plus the hook's
-	// results back to the model in one follow-up completion, so it reads
-	// and responds to what the tool actually found rather than the caller
-	// seeing the bare invocation syntax. Exactly one follow-up round --
-	// the follow-up's own answer is returned as-is even if it happens to
-	// also match a hook pattern, rather than looping again, bounding the
-	// worst-case cost of one turn to two completions regardless of what
-	// the model does.
-	if len(hookResults) > 0 {
-		followUp := make([]domain.ChatMessage, 0, len(messages)+2)
-		followUp = append(followUp, messages...)
-		followUp = append(followUp, domain.ChatMessage{Role: domain.ChatRoleAssistant, Content: answer})
-		followUp = append(followUp, domain.ChatMessage{Role: domain.ChatRoleSystem, Content: formatHookResultsForModel(hookResults)})
-		if finalAnswer, err := s.completer.Complete(ctx, endpoint, followUp); err == nil {
-			answer = finalAnswer
+	// notes</web_search>") is never the final answer a user sees: whenever a
+	// hook fires, its own tool-call turn plus the hook's results are fed
+	// back to the model in a follow-up completion, so it reads and responds
+	// to what the tool actually found rather than the caller seeing the bare
+	// invocation syntax. This repeats up to maxHookFollowUpRounds times --
+	// not just once -- because a model that reasonably decides to retry
+	// (e.g. a fetch came back with an empty/blocked page, so it tries
+	// another URL or another search) makes ANOTHER tool call in that
+	// follow-up answer; capping this at exactly one round used to leave that
+	// second tool call completely unprocessed, landing in the user's face as
+	// a dangling, unanswered tool-call tag instead of a real answer. Every
+	// round's hookResults are accumulated into the final ChatResult, so the
+	// UI's folded transparency panel shows every attempt, not just the last.
+	// Reuses the SAME activeHooks list computed above every round --
+	// ListChatHooks is never called again mid-turn. env carries only
+	// ADMIN-CONFIGURED endpoint config (never anything derived from the
+	// model's own answer or a capture group) -- see ports.HookScriptRunner's
+	// doc comment for why this doesn't reopen runChatHooks's security
+	// surface.
+	var hookResults []domain.ChatHookResult
+	currentMessages := messages
+	for round := 0; round < maxHookFollowUpRounds && len(activeHooks) > 0; round++ {
+		env := map[string]string{"WEB_SEARCH_BASE_URL": endpoint.WebSearchBaseURL}
+		roundResults := runChatHooks(ctx, activeHooks, s.hookRunner, answer, env)
+		if len(roundResults) == 0 {
+			break
 		}
-		// A follow-up completion error is best-effort, same convention as
-		// every other augmentation source in this method: the original
-		// tool-call text is returned rather than failing the whole turn.
+		hookResults = append(hookResults, roundResults...)
+
+		followUp := make([]domain.ChatMessage, 0, len(currentMessages)+2)
+		followUp = append(followUp, currentMessages...)
+		followUp = append(followUp, domain.ChatMessage{Role: domain.ChatRoleAssistant, Content: answer})
+		followUp = append(followUp, domain.ChatMessage{Role: domain.ChatRoleSystem, Content: formatHookResultsForModel(roundResults)})
+
+		finalAnswer, err := s.completer.Complete(ctx, endpoint, followUp)
+		if err != nil {
+			// Best-effort, same convention as every other augmentation
+			// source in this method: keep the current answer (which may
+			// still be a bare tool call) rather than failing the turn.
+			break
+		}
+		answer = finalAnswer
+		currentMessages = followUp
 	}
 
 	return ChatResult{Answer: answer, Sources: sources, ContextTrimmed: contextTrimmed, HookResults: hookResults}, nil
 }
+
+// maxHookFollowUpRounds bounds how many times ChatService.Chat will feed a
+// hook's results back to the model and ask again -- each round costs one
+// more completion call and (via maxHookMatchesPerTurn, chat_hooks.go) up to
+// maxHookMatchesPerTurn more script executions, so this is a real cost
+// bound, not just a correctness one. 2 is enough for the common
+// "one tool call, maybe one retry" pattern without letting a model stuck
+// repeatedly retrying run up an unbounded number of completions.
+const maxHookFollowUpRounds = 2
 
 // maxHookOutputCharsForModel bounds how much of each hook result's own
 // Output formatHookResultsForModel feeds back into the follow-up completion
