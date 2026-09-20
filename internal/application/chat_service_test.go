@@ -351,7 +351,7 @@ func TestChatService_HooksConfigured_MatchingAnswerPopulatesHookResults(t *testi
 	if len(result.HookResults) != 1 {
 		t.Fatalf("expected 1 hook result, got %v", result.HookResults)
 	}
-	if result.HookResults[0].HookName != "web_search" || result.HookResults[0].Output != "top result" {
+	if result.HookResults[0].HookName != "web_search" || result.HookResults[0].Input != "golang release notes" || result.HookResults[0].Output != "top result" {
 		t.Fatalf("unexpected hook result: %+v", result.HookResults[0])
 	}
 }

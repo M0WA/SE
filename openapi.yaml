@@ -2023,6 +2023,7 @@ components:
         client regardless.
       properties:
         hook_name: { type: string, description: "The matching hook's name (ChatHook.name), not its id." }
+        input: { type: string, description: "The regex capture group's own raw text passed to the hook's script -- a URL for a \"fetch\"-named hook, a search term for a \"search\"-named hook. Omitted if the capture group was empty." }
         output: { type: string, description: "The script's raw stdout, capped in size. Empty when err is set." }
         err: { type: string, description: "Non-empty if the script failed or timed out; output is empty then." }
 

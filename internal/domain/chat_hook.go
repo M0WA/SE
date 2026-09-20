@@ -58,8 +58,13 @@ type ChatHook struct {
 // show it.
 type ChatHookResult struct {
 	HookName string
-	Output   string // the script's raw stdout
-	Err      string // non-empty if the script failed or timed out; Output is empty then
+	// Input is the regex capture group's own raw text passed to Script -- the
+	// tool call's own argument (e.g. a URL for a "fetch"-named hook, a search
+	// term for a "search"-named hook), surfaced here so the UI can show what
+	// was actually requested without parsing Output.
+	Input  string
+	Output string // the script's raw stdout
+	Err    string // non-empty if the script failed or timed out; Output is empty then
 }
 
 // ChatHookIDPattern is every valid ChatHook.ID -- same shape as

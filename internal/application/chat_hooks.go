@@ -70,7 +70,7 @@ func runChatHooks(ctx context.Context, hooks []domain.ChatHook, runner ports.Hoo
 			}
 			arg := m[1]
 			output, err := runner.RunHookScript(ctx, h.Script, []string{arg}, env)
-			result := domain.ChatHookResult{HookName: h.Name}
+			result := domain.ChatHookResult{HookName: h.Name, Input: arg}
 			if err != nil {
 				result.Err = err.Error()
 			} else {
