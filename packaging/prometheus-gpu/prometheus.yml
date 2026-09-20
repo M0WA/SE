@@ -1,0 +1,55 @@
+## Deployed to /etc/prometheus/prometheus.yml on gpu.mo-sys.de. Runs
+## Prometheus in --agent mode (see prometheus.default's ARGS): no local
+## TSDB, no query API -- it only scrapes the local exporters below and
+## forwards everything to the IONOS monitoring platform via remote_write,
+## the same pipeline ../prometheus/prometheus.yml (se.mo-sys.de) pushes
+## into. See README.md.
+##
+## <IONOS_METRICS_ENDPOINT> and <IONOS_APIKEY> come from the monitoring
+## pipeline created in the IONOS DCD (Observability > Monitoring). Fill
+## these in on the deployed copy only -- never commit real values here.
+##
+## site: gpu-h200 is baked in (not a <SITE_NAME> placeholder like
+## ../prometheus/prometheus.yml) because, unlike that file, this one is
+## only ever deployed to this one host -- see ../prometheus/prometheus.yml's
+## own comment for why external_labels.site must be unique per host
+## pushing into the same IONOS pipeline (discovered live: a second host's
+## identically-labeled node_load1 etc. silently collided with
+## se.mo-sys.de's in the same Mimir series before this was added).
+
+global:
+  external_labels:
+    site: gpu-h200
+  scrape_interval: 30s
+
+scrape_configs:
+  - job_name: node
+    static_configs:
+      - targets: ["127.0.0.1:9100"]
+
+  # NVIDIA DCGM exporter (see README.md's dcgm-exporter section) -- GPU
+  # utilization, memory, temperature, power draw, per the H200 NVL.
+  - job_name: gpu
+    static_configs:
+      - targets: ["127.0.0.1:9400"]
+
+  # Both self-hosted vLLM instances (see ../../docs/architecture.md's
+  # Deployment section) -- each serves its own OpenAI-compatible /metrics.
+  # <GPU_HOST_PRIVATE_IP> is this box's own private-network address (the
+  # vllm services bind it, not loopback, so cmd/search on se.mo-sys.de can
+  # reach them too) -- fill in on the deployed copy, not a secret but
+  # host-specific, same convention as everything else marked "fill in" here.
+  - job_name: vllm
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["<GPU_HOST_PRIVATE_IP>:8000"]
+
+  - job_name: vllm-chat
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["<GPU_HOST_PRIVATE_IP>:8001"]
+
+remote_write:
+  - url: "https://<IONOS_METRICS_ENDPOINT>/api/v1/push"
+    headers:
+      APIKEY: "<IONOS_APIKEY>"
