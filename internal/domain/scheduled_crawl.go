@@ -65,9 +65,18 @@ type ScheduledCrawl struct {
 	// clears it -- prevents a slow run from being double-triggered by the
 	// next tick, without (mis)using Enabled as that mutex.
 	InProgress bool
-	LastRunAt  *time.Time
-	NextRunAt  time.Time
-	CreatedAt  time.Time
+	// JobID is the domain.CrawlJob this schedule's current in-progress run
+	// created, "" whenever InProgress is false. Lets a crash-recovery pass
+	// at crawl-server startup tell "this schedule's job was just resumed
+	// and is genuinely still running" apart from "this schedule's
+	// InProgress flag is stale, its job is long gone" -- see
+	// ports.ScheduledCrawlStore.ResetStaleInProgress's doc comment for the
+	// production incident (two concurrent crawls of the same site) this
+	// distinction exists to prevent.
+	JobID     string
+	LastRunAt *time.Time
+	NextRunAt time.Time
+	CreatedAt time.Time
 }
 
 var scheduledCrawlSeq int64

@@ -63,7 +63,7 @@ func (f *fakeScheduledCrawlStore) DueScheduledCrawls(_ context.Context, now time
 	return due, nil
 }
 
-func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(_ context.Context, id string, lastRunAt, nextRunAt time.Time, enabled, inProgress bool, runCount int) error {
+func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(_ context.Context, id string, lastRunAt, nextRunAt time.Time, enabled, inProgress bool, runCount int, jobID string) error {
 	f.markCalls++
 	if f.markErr != nil {
 		return f.markErr
@@ -80,6 +80,7 @@ func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(_ context.Context, id st
 	s.Enabled = enabled
 	s.InProgress = inProgress
 	s.RunCount = runCount
+	s.JobID = jobID
 	f.schedules[id] = s
 	return nil
 }

@@ -32,7 +32,7 @@ func TriggerDueCrawls(ctx context.Context, store ports.ScheduledCrawlStore, trig
 		stillEnabled := s.Recurring && (s.MaxRuns <= 0 || runCount < s.MaxRuns)
 		onDone := func() {
 			finishedAt := time.Now()
-			if err := store.MarkScheduledCrawlRun(context.Background(), s.ID, finishedAt, finishedAt.Add(interval), stillEnabled, false, runCount); err != nil {
+			if err := store.MarkScheduledCrawlRun(context.Background(), s.ID, finishedAt, finishedAt.Add(interval), stillEnabled, false, runCount, ""); err != nil {
 				log.Printf("recording completion for scheduled crawl %s: %v", s.ID, err)
 			}
 		}
@@ -44,10 +44,13 @@ func TriggerDueCrawls(ctx context.Context, store ports.ScheduledCrawlStore, trig
 		}
 
 		// enabled stays s.Enabled -- this call's only job is marking the
-		// entry in-progress. next_run_at is a placeholder for the UI;
-		// onDone overwrites it with the real finish+interval.
+		// entry in-progress (and recording jobID, so a crash-recovery pass
+		// at next startup can tell this run apart from a genuinely stale
+		// one -- see ports.ScheduledCrawlStore.ResetStaleInProgress).
+		// next_run_at is a placeholder for the UI; onDone overwrites it
+		// with the real finish+interval.
 		nextRun := now.Add(interval)
-		if err := store.MarkScheduledCrawlRun(ctx, s.ID, now, nextRun, s.Enabled, true, runCount); err != nil {
+		if err := store.MarkScheduledCrawlRun(ctx, s.ID, now, nextRun, s.Enabled, true, runCount, jobID); err != nil {
 			log.Printf("recording run for scheduled crawl %s (job %s): %v", s.ID, jobID, err)
 			continue
 		}

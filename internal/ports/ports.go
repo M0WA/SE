@@ -533,7 +533,10 @@ type ScheduledCrawlStore interface {
 	// run and runCount; a one-off or MaxRuns-capped entry passes
 	// enabled=false. inProgress, separate from enabled, stays true for the
 	// run's duration so DueScheduledCrawls can't double-trigger a long crawl.
-	MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time, enabled, inProgress bool, runCount int) error
+	// jobID is the domain.CrawlJob this run created (set at trigger time,
+	// cleared to "" by onDone) -- see domain.ScheduledCrawl.JobID and
+	// ResetStaleInProgress below for why it's tracked.
+	MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time, enabled, inProgress bool, runCount int, jobID string) error
 	// RunScheduledCrawlNow sets NextRunAt to now and re-enables if paused,
 	// leaving every other field untouched -- picked up by the next
 	// scheduler tick. Deliberately does NOT force-clear InProgress: a
@@ -545,8 +548,13 @@ type ScheduledCrawlStore interface {
 	// crawlLoop goroutines racing to archive the same document's previous
 	// version via SaveDocument can violate document_versions' primary key
 	// (confirmed in production: two concurrent jobs for the same site,
-	// one crashed with a duplicate-key error). Returns
-	// ErrScheduledCrawlNotFound if unknown, ErrScheduledCrawlInProgress if
+	// one crashed with a duplicate-key error -- and confirmed a second
+	// time, a subtler recurrence: ResetStaleInProgress used to clear
+	// InProgress unconditionally for every stuck-true row regardless of
+	// whether its job had actually stopped, including one a same-startup
+	// RecoverInterruptedCrawls pass had just resumed and was still
+	// genuinely running -- see ResetStaleInProgress's own doc comment).
+	// Returns ErrScheduledCrawlNotFound if unknown, ErrScheduledCrawlInProgress if
 	// a crawl is already running for it.
 	RunScheduledCrawlNow(ctx context.Context, id string, now time.Time) error
 	// SetScheduledCrawlEnabled flips only Enabled, leaving NextRunAt (and
@@ -558,9 +566,18 @@ type ScheduledCrawlStore interface {
 	// paused-then-resumed crawl's next run further out than expected.
 	// Returns ErrScheduledCrawlNotFound if unknown.
 	SetScheduledCrawlEnabled(ctx context.Context, id string, enabled bool) error
-	// ResetStaleInProgress clears every stuck-true InProgress flag -- run
-	// once at crawl-server startup, before anything queries
-	// DueScheduledCrawls. Returns how many rows were reset.
+	// ResetStaleInProgress clears a stuck-true InProgress flag -- run once
+	// at crawl-server startup, before anything queries DueScheduledCrawls,
+	// and always AFTER RecoverInterruptedCrawls (whose resumed jobs must
+	// already be reflected in crawl_jobs' status by the time this runs).
+	// A schedule is only cleared when its JobID doesn't correspond to a
+	// still-queued/running job -- one RecoverInterruptedCrawls just resumed
+	// is left untouched, since it really is still in progress. Clearing it
+	// anyway (the original, job-unaware version of this method) let the
+	// very next scheduler tick start a second, duplicate crawl of the same
+	// site while the resumed one was still running -- see
+	// RunScheduledCrawlNow's doc comment for the production incident this
+	// guards against. Returns how many rows were reset.
 	ResetStaleInProgress(ctx context.Context) (int, error)
 }
 
