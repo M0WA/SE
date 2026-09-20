@@ -91,6 +91,23 @@ file, a new admin-configurable field, a new required install step -- update
 without a matching doc update as incomplete work, same as every other rule
 in this section.
 
+## Keep the Grafana dashboards in sync
+
+`packaging/grafana/dashboards/*.json` are the tracked source of truth for
+every Grafana dashboard backing this deployment's monitoring (see
+`packaging/grafana/README.md` for the full list and their datasource/panel
+layout) -- host and Postgres metrics, SearXNG per-engine metrics, and GPU/
+vLLM metrics, each fed by `packaging/prometheus/` or
+`packaging/prometheus-gpu/`. These dashboards get edited live (Grafana UI or
+API) far more often than this repo's other config, which makes them easy to
+silently drift: a dashboard that only ever exists in Grafana's own database
+is not "documented" in any sense this repo's other sync rules assume.
+**Whenever a dashboard is created or edited live -- a new panel, a new
+template variable, a new dashboard entirely -- re-export it into
+`packaging/grafana/dashboards/` in the same change** (see that directory's
+README for the exact export command). Treat a live-only dashboard edit as
+incomplete work, same as every other rule in this section.
+
 ## Before committing
 
 - `go build ./...`, `go vet ./...`, `gofmt -l .` must be clean.

@@ -121,7 +121,28 @@ This is the ordered install flow for a fresh Debian/Ubuntu host. Steps 1–2 and
     docker compose restart searxng   # config is read once at container startup
     ```
 
-14. **(Optional) Install chat hook scripts.** *(Manual — `postinst` deliberately does not create `CHAT_HOOKS_DIR`.)* Two example scripts ship in the repo: `web_search.sh` (proxies to SearXNG) and `web_fetch.sh` (fetches a specific URL directly — has a documented SSRF caveat, only enable it if that residual risk is acceptable for your deployment). See [packaging/chat-hooks/README.md](../packaging/chat-hooks/README.md).
+14. **(Optional) GPU host monitoring → IONOS pipeline.** *(Manual, on the separate GPU host running vLLM — see step 17.)* Same IONOS pipeline as step 11, a second independent Prometheus agent. See [packaging/prometheus-gpu/README.md](../packaging/prometheus-gpu/README.md).
+    ```
+    apt-get install prometheus prometheus-node-exporter
+    cp packaging/prometheus/prometheus.default /etc/default/prometheus
+    cp packaging/prometheus/prometheus-node-exporter.default /etc/default/prometheus-node-exporter
+    docker run -d --name dcgm-exporter --restart unless-stopped --gpus all --cap-add SYS_ADMIN -p 127.0.0.1:9400:9400 nvcr.io/nvidia/k8s/dcgm-exporter:latest
+    # fill in packaging/prometheus-gpu/prometheus.yml's placeholders -> /etc/prometheus/prometheus.yml, chown root:prometheus, chmod 640 -- never commit filled-in values
+    systemctl daemon-reload
+    systemctl enable --now prometheus-node-exporter prometheus
+    promtool check config /etc/prometheus/prometheus.yml
+    ```
+
+15. **(Optional) Import the Grafana dashboards.** Only relevant if some/all of steps 11, 13, and 14 were done — each dashboard only shows data for the metrics its own pipeline actually collects. See [packaging/grafana/README.md](../packaging/grafana/README.md).
+    ```
+    for f in packaging/grafana/dashboards/*.json; do
+      curl -s -X POST -H "Authorization: Bearer <GRAFANA_API_TOKEN>" -H "Content-Type: application/json" \
+        -d "{\"dashboard\": $(cat "$f"), \"overwrite\": true}" \
+        "https://<your-grafana-instance>/api/dashboards/db"
+    done
+    ```
+
+16. **(Optional) Install chat hook scripts.** *(Manual — `postinst` deliberately does not create `CHAT_HOOKS_DIR`.)* Two example scripts ship in the repo: `web_search.sh` (proxies to SearXNG) and `web_fetch.sh` (fetches a specific URL directly — has a documented SSRF caveat, only enable it if that residual risk is acceptable for your deployment). See [packaging/chat-hooks/README.md](../packaging/chat-hooks/README.md).
     ```
     mkdir -p /etc/searchengine/hooks
     cp packaging/chat-hooks/web_search.sh packaging/chat-hooks/web_fetch.sh /etc/searchengine/hooks/
@@ -129,7 +150,7 @@ This is the ordered install flow for a fresh Debian/Ubuntu host. Steps 1–2 and
     # then configure the matching ChatHook (Pattern + Script=web_search.sh or web_fetch.sh) under Settings -> Chat -> Hooks in the admin UI
     ```
 
-15. **(Optional) Configure an embedding and chat inference backend.** The admin UI's `domain.EmbeddingHTTPEndpoint` (edited on `admin_embedding_endpoint.html`) and `domain.ChatEndpoint` (edited on `admin_chat_settings.html`) each point at a plain OpenAI-compatible HTTP endpoint — `httpembed`/`httpchat` are generic clients, so any such API works, self-hosted or third-party. As a concrete reference, the `se.mo-sys.de` dev deployment points both at self-hosted [vLLM](https://github.com/vllm-project/vllm) server processes on a separate dedicated GPU host (one NVIDIA H200 NVL), each its own systemd unit gated by its own bearer API key:
+17. **(Optional) Configure an embedding and chat inference backend.** The admin UI's `domain.EmbeddingHTTPEndpoint` (edited on `admin_embedding_endpoint.html`) and `domain.ChatEndpoint` (edited on `admin_chat_settings.html`) each point at a plain OpenAI-compatible HTTP endpoint — `httpembed`/`httpchat` are generic clients, so any such API works, self-hosted or third-party. As a concrete reference, the `se.mo-sys.de` dev deployment points both at self-hosted [vLLM](https://github.com/vllm-project/vllm) server processes on a separate dedicated GPU host (one NVIDIA H200 NVL), each its own systemd unit gated by its own bearer API key:
     ```
     # Embeddings: Alibaba-NLP/gte-Qwen2-7B-instruct
     vllm serve Alibaba-NLP/gte-Qwen2-7B-instruct --runner pooling --convert embed
@@ -139,7 +160,7 @@ This is the ordered install flow for a fresh Debian/Ubuntu host. Steps 1–2 and
     ```
     Point `EmbeddingHTTPEndpoint.BaseURL`/`Model` and `ChatEndpoint.BaseURL`/`Model` at these processes' `/v1` base URLs and set each endpoint's API key to the matching bearer token.
 
-16. **Final smoke test of the whole stack.**
+18. **Final smoke test of the whole stack.**
     ```
     systemctl is-active searchengine-search searchengine-admin searchengine-crawl nginx
     curl -sk https://your.domain.example/
@@ -188,6 +209,8 @@ All variables are read once at process startup (`bootstrap.GetEnv`/`os.Getenv`),
 | `packaging/searxng/docker-compose.yml` | `/opt/searxng/docker-compose.yml` | Manual | Docker Compose service definition for self-hosted SearXNG. See [packaging/searxng/README.md](../packaging/searxng/README.md). |
 | `packaging/searxng/settings.yml` | `/opt/searxng/settings.yml` | Manual | SearXNG application config (engines, `secret_key`, limiter, JSON output format). |
 | `packaging/searxng/searxng.service` | `/etc/systemd/system/searxng.service` | Manual | systemd unit wrapping `docker compose up`/`down` for the SearXNG stack. |
+| `packaging/prometheus-gpu/prometheus.yml` | `/etc/prometheus/prometheus.yml` (on the GPU host) | Manual | Prometheus agent-mode scrape/`remote_write` config for `gpu.mo-sys.de` — node, DCGM GPU, and both vLLM instances. See [packaging/prometheus-gpu/README.md](../packaging/prometheus-gpu/README.md). |
+| `packaging/grafana/dashboards/*.json` | Imported via Grafana's API, not a filesystem path | Manual | Tracked source of truth for every Grafana dashboard (`se.mo-sys.de`, `postgres`, `searxng`, `gpu.mo-sys.de`). See [packaging/grafana/README.md](../packaging/grafana/README.md). |
 
 ## Runtime settings (admin UI)
 
