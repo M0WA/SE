@@ -591,8 +591,7 @@ func (h *Handler) handleAdminCrawlJS(w http.ResponseWriter, r *http.Request) {
 // admin.js) except for how they're addressed and what content type/bytes
 // they serve.
 func serveStatic(w http.ResponseWriter, r *http.Request, contentType string, content []byte) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireGetOrHead(w, r) {
 		return
 	}
 	w.Header().Set("Content-Type", contentType)
@@ -608,8 +607,7 @@ type searchResponse struct {
 }
 
 func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 	query := r.URL.Query().Get("q")
@@ -675,8 +673,7 @@ type healthResponse struct {
 // HealthChecker means always healthy; otherwise 503 on a failed DB ping),
 // registered identically on all three Routes* muxes.
 func (h *Handler) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireGetOrHead(w, r) {
 		return
 	}
 	if h.health != nil {

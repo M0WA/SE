@@ -167,18 +167,8 @@
   }
 
   function filterJobs(jobs, pattern) {
-    if (!pattern) {
-      jobsFilterErrorEl.textContent = '';
-      return jobs;
-    }
-    try {
-      const re = new RegExp(pattern, 'i');
-      jobsFilterErrorEl.textContent = '';
-      return jobs.filter((j) => re.test(seedSummary(j.request.seed_urls)) || re.test(j.status));
-    } catch (err) {
-      jobsFilterErrorEl.textContent = 'Invalid regex: ' + err.message;
-      return jobs;
-    }
+    return regexFilter(jobs, pattern, jobsFilterErrorEl,
+      (re, j) => re.test(seedSummary(j.request.seed_urls)) || re.test(j.status));
   }
 
   function renderJobs(jobs) {
@@ -269,19 +259,8 @@
   }
 
   function filterPages(pages, pattern) {
-    if (!pattern) {
-      jobDetailFilterErrorEl.textContent = '';
-      return pages;
-    }
-    try {
-      const re = new RegExp(pattern, 'i');
-      jobDetailFilterErrorEl.textContent = '';
-      return pages.filter((p) =>
-        re.test(p.url) || re.test(p.status) || re.test(p.title || '') || re.test(p.error || ''));
-    } catch (err) {
-      jobDetailFilterErrorEl.textContent = 'Invalid regex: ' + err.message;
-      return pages;
-    }
+    return regexFilter(pages, pattern, jobDetailFilterErrorEl,
+      (re, p) => re.test(p.url) || re.test(p.status) || re.test(p.title || '') || re.test(p.error || ''));
   }
 
   // JOB_DETAIL_COLUMNS drives both the sortable headers and the sort
@@ -451,18 +430,7 @@
   }
 
   function filterCrawls(crawls, pattern) {
-    if (!pattern) {
-      crawlsFilterErrorEl.textContent = '';
-      return crawls;
-    }
-    try {
-      const re = new RegExp(pattern, 'i');
-      crawlsFilterErrorEl.textContent = '';
-      return crawls.filter((s) => re.test(seedSummary(s.seed_urls)));
-    } catch (err) {
-      crawlsFilterErrorEl.textContent = 'Invalid regex: ' + err.message;
-      return crawls;
-    }
+    return regexFilter(crawls, pattern, crawlsFilterErrorEl, (re, s) => re.test(seedSummary(s.seed_urls)));
   }
 
   function crawlRecurrenceCell(s) {

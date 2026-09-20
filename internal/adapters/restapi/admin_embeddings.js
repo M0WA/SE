@@ -75,12 +75,7 @@
       kvRow(recomputeResultEl, 'Duration', s.duration_ms + ' ms');
     }
 
-    if (s.in_progress) {
-      if (!pollTimer) pollTimer = setTimeout(() => { pollTimer = null; loadRecomputeStatus(); }, 2000);
-    } else if (pollTimer) {
-      clearTimeout(pollTimer);
-      pollTimer = null;
-    }
+    pollTimer = pollWhileInProgress(s.in_progress, pollTimer, () => { pollTimer = null; loadRecomputeStatus(); });
   }
 
   async function loadRecomputeStatus() {

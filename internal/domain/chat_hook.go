@@ -1,10 +1,7 @@
 package domain
 
 import (
-	"fmt"
 	"regexp"
-	"strings"
-	"time"
 )
 
 // ChatHook is one admin-configured regex trigger: whenever a chat turn's
@@ -71,8 +68,6 @@ type ChatHookResult struct {
 // VARCHAR(20) column.
 var ChatHookIDPattern = regexp.MustCompile(`^[a-z0-9_]{1,20}$`)
 
-var chatHookSlugRE = regexp.MustCompile(`[^a-z0-9]+`)
-
 // NewChatHookID derives an ID from a display name the same way
 // NewEmbeddingEndpointID does (lowercased, non-alphanumeric runs collapsed,
 // trimmed to fit ChatHookIDPattern), appending the shortest numeric suffix
@@ -80,24 +75,5 @@ var chatHookSlugRE = regexp.MustCompile(`[^a-z0-9]+`)
 // hook's ID). Falls back to a timestamp-derived ID if name has no
 // alphanumeric characters.
 func NewChatHookID(name string, existing map[string]bool) string {
-	slug := strings.Trim(chatHookSlugRE.ReplaceAllString(strings.ToLower(strings.TrimSpace(name)), "_"), "_")
-	if len(slug) > 20 {
-		slug = strings.Trim(slug[:20], "_")
-	}
-	if slug == "" {
-		slug = fmt.Sprintf("hook%d", time.Now().UnixNano()%1_000_000_000)
-	}
-	if !existing[slug] {
-		return slug
-	}
-	for n := 2; ; n++ {
-		suffix := fmt.Sprintf("_%d", n)
-		base := slug
-		if len(base)+len(suffix) > 20 {
-			base = base[:20-len(suffix)]
-		}
-		if candidate := base + suffix; !existing[candidate] {
-			return candidate
-		}
-	}
+	return mintSlugID(name, existing, "hook")
 }

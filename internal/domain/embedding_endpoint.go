@@ -1,9 +1,7 @@
 package domain
 
 import (
-	"fmt"
 	"regexp"
-	"strings"
 	"time"
 )
 
@@ -62,34 +60,13 @@ type EmbeddingHTTPEndpoint struct {
 // nothing outside this pattern is ever accepted as an ID.
 var EmbeddingEndpointIDPattern = regexp.MustCompile(`^[a-z0-9_]{1,20}$`)
 
-var embeddingEndpointSlugRE = regexp.MustCompile(`[^a-z0-9]+`)
-
 // NewEmbeddingEndpointID derives an ID from a display name (lowercased,
 // non-alphanumeric runs collapsed, trimmed to fit EmbeddingEndpointIDPattern)
 // and appends the shortest numeric suffix that avoids colliding with a key
 // in existing (every other configured endpoint's ID, plus "hash"). Falls
 // back to a timestamp-derived ID if name has no alphanumeric characters.
 func NewEmbeddingEndpointID(name string, existing map[string]bool) string {
-	slug := strings.Trim(embeddingEndpointSlugRE.ReplaceAllString(strings.ToLower(strings.TrimSpace(name)), "_"), "_")
-	if len(slug) > 20 {
-		slug = strings.Trim(slug[:20], "_")
-	}
-	if slug == "" {
-		slug = fmt.Sprintf("ep%d", time.Now().UnixNano()%1_000_000_000)
-	}
-	if !existing[slug] {
-		return slug
-	}
-	for n := 2; ; n++ {
-		suffix := fmt.Sprintf("_%d", n)
-		base := slug
-		if len(base)+len(suffix) > 20 {
-			base = base[:20-len(suffix)]
-		}
-		if candidate := base + suffix; !existing[candidate] {
-			return candidate
-		}
-	}
+	return mintSlugID(name, existing, "ep")
 }
 
 // ReconcileSearchWeights keeps only entries naming a still-enabled

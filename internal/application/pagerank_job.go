@@ -2,8 +2,6 @@ package application
 
 import (
 	"context"
-	"encoding/json"
-	"log"
 	"time"
 
 	"searchengine/internal/domain"
@@ -72,31 +70,9 @@ func RunPageRankJobWithStatus(ctx context.Context, repo ports.PageRankRepository
 // handler. A nil settings, store error, missing key, or bad value all
 // just return the zero value; "nothing to show yet" is never an error.
 func LoadPageRankStatus(ctx context.Context, settings ports.SettingsStore) domain.PageRankStatus {
-	if settings == nil {
-		return domain.PageRankStatus{}
-	}
-	value, found, err := settings.GetSetting(ctx, ports.SettingsKeyPageRankStatus)
-	if err != nil || !found {
-		return domain.PageRankStatus{}
-	}
-	var status domain.PageRankStatus
-	if err := json.Unmarshal([]byte(value), &status); err != nil {
-		log.Printf("decoding pagerank status: %v", err)
-		return domain.PageRankStatus{}
-	}
-	return status
+	return loadJSONStatus[domain.PageRankStatus](ctx, settings, ports.SettingsKeyPageRankStatus, "pagerank status")
 }
 
 func savePageRankStatus(ctx context.Context, settings ports.SettingsStore, status domain.PageRankStatus) {
-	if settings == nil {
-		return
-	}
-	data, err := json.Marshal(status)
-	if err != nil {
-		log.Printf("encoding pagerank status: %v", err)
-		return
-	}
-	if err := settings.SaveSetting(ctx, ports.SettingsKeyPageRankStatus, string(data)); err != nil {
-		log.Printf("saving pagerank status: %v", err)
-	}
+	saveJSONStatus(ctx, settings, ports.SettingsKeyPageRankStatus, "pagerank status", status)
 }

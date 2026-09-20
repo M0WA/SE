@@ -2,8 +2,10 @@ package domain
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"hash/fnv"
+	"math/bits"
 	"strings"
 	"time"
 )
@@ -85,9 +87,7 @@ func SimHash64(text string) uint64 {
 // and the 16-hex-character string documents.simhash actually stores.
 func EncodeSimHash64(h uint64) string {
 	b := make([]byte, 8)
-	for i := 0; i < 8; i++ {
-		b[i] = byte(h >> uint(56-8*i))
-	}
+	binary.BigEndian.PutUint64(b, h)
 	return hex.EncodeToString(b)
 }
 
@@ -96,11 +96,7 @@ func DecodeSimHash64(s string) uint64 {
 	if err != nil || len(b) != 8 {
 		return 0
 	}
-	var h uint64
-	for i := 0; i < 8; i++ {
-		h |= uint64(b[i]) << uint(56-8*i)
-	}
-	return h
+	return binary.BigEndian.Uint64(b)
 }
 
 // HammingDistance64 counts the differing bits between two SimHash64
@@ -108,11 +104,5 @@ func DecodeSimHash64(s string) uint64 {
 // RunContentDedupJob compares against OperationalSettingsValues.
 // ContentDedupSimHashMaxDistance.
 func HammingDistance64(a, b uint64) int {
-	x := a ^ b
-	count := 0
-	for x != 0 {
-		x &= x - 1
-		count++
-	}
-	return count
+	return bits.OnesCount64(a ^ b)
 }

@@ -300,13 +300,5 @@ func (h *Handler) handleDeleteEndedCrawlJobs(w http.ResponseWriter, r *http.Requ
 
 func (h *Handler) handleGetCrawlJob(w http.ResponseWriter, r *http.Request) {
 	job, err := h.crawlJobs.Get(r.Context(), r.PathValue("id"))
-	if errors.Is(err, domain.ErrCrawlJobNotFound) {
-		http.Error(w, "crawl job not found", http.StatusNotFound)
-		return
-	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, job)
+	respondOrNotFound(w, err, domain.ErrCrawlJobNotFound, "crawl job not found", job)
 }

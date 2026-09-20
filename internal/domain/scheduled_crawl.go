@@ -1,8 +1,6 @@
 package domain
 
 import (
-	"fmt"
-	"sync/atomic"
 	"time"
 )
 
@@ -85,5 +83,5 @@ var scheduledCrawlSeq int64
 // scheme as newCrawlJobID: unique within a process without needing a
 // database round-trip first.
 func NewScheduledCrawlID() string {
-	return fmt.Sprintf("sched-%d-%d", time.Now().UnixNano(), atomic.AddInt64(&scheduledCrawlSeq, 1))
+	return newSeqID("sched", &scheduledCrawlSeq)
 }

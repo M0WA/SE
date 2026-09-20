@@ -30,6 +30,17 @@ func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 	return true
 }
 
+// requireGetOrHead is requireMethod for the (rarer) case of a handler that
+// accepts both GET and HEAD -- a plain static/health response, never a
+// single-method API endpoint.
+func requireGetOrHead(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return false
+	}
+	return true
+}
+
 // requireConfigured writes 503 and reports false if a dependency this
 // endpoint needs wasn't wired up in Config.
 func requireConfigured(w http.ResponseWriter, configured bool, what string) bool {
@@ -54,6 +65,62 @@ func respondOrNotFound(w http.ResponseWriter, err, notFound error, notFoundMsg s
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+// resolveUpdatedAPIKey implements the shared "blank means unchanged,
+// explicit clear flag means remove it" convention every PATCH handler with a
+// redacted secret field (embedding endpoint, chat endpoint) uses: a
+// non-empty newVal is encrypted and used, an empty newVal with clear set
+// removes the stored key, and an empty newVal with clear unset leaves
+// existing untouched.
+func (h *Handler) resolveUpdatedAPIKey(existing, newVal string, clear bool) string {
+	if newVal != "" {
+		return h.encryptAPIKey(newVal)
+	}
+	if clear {
+		return ""
+	}
+	return existing
+}
+
+// mapSlice converts each element of in via f, preserving order and length --
+// the "make a slice of the same length, loop with index, convert one
+// element" shape every domain-to-wire-response conversion in this file
+// repeats.
+func mapSlice[T, U any](in []T, f func(T) U) []U {
+	out := make([]U, len(in))
+	for i, x := range in {
+		out[i] = f(x)
+	}
+	return out
+}
+
+// existingIDSet builds the "already-taken IDs" set a freshly minted
+// slug ID (NewEmbeddingEndpointID, NewChatHookID) is deduped against,
+// optionally pre-seeded with reserved IDs (e.g. the built-in hash
+// provider's own ID, which is never itself in the existing list but must
+// still never be minted for a new endpoint).
+func existingIDSet[T any](existing []T, id func(T) string, seed ...string) map[string]bool {
+	ids := make(map[string]bool, len(existing)+len(seed))
+	for _, s := range seed {
+		ids[s] = true
+	}
+	for _, e := range existing {
+		ids[id(e)] = true
+	}
+	return ids
+}
+
+// decodeJSON decodes r's JSON body into a T, writing a 400 and reporting
+// false on any decode error -- the "invalid JSON body" 3-line check every
+// PATCH/POST admin handler with a request struct repeats.
+func decodeJSON[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
+	var req T
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return req, false
+	}
+	return req, true
 }
 
 // intQueryParam reads name from r's query string as an int, falling back
@@ -202,10 +269,9 @@ func (h *Handler) handleAdminVocabulary(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	out := make([]adminTermStat, len(terms))
-	for i, t := range terms {
-		out[i] = adminTermStat{Term: t.Term, DocFreq: t.DocFreq, TotalFreq: t.TotalFreq}
-	}
+	out := mapSlice(terms, func(t domain.TermStat) adminTermStat {
+		return adminTermStat{Term: t.Term, DocFreq: t.DocFreq, TotalFreq: t.TotalFreq}
+	})
 	writeJSON(w, http.StatusOK, adminVocabularyResponse{VocabularySize: vocabSize, MatchedCount: matched, Terms: out})
 }
 
@@ -236,15 +302,14 @@ func (h *Handler) handleAdminDocuments(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	out := make([]adminDocument, len(docs))
-	for i, d := range docs {
-		out[i] = adminDocument{
+	out := mapSlice(docs, func(d domain.IndexedDocument) adminDocument {
+		return adminDocument{
 			ID: d.ID, URL: d.URL, Host: d.Host, Title: d.Title,
 			DocLength: d.DocLength, Version: d.Version, CrawledAt: d.CrawledAt,
 			InternalLinks: d.InternalLinks, ExternalLinks: d.ExternalLinks, Backlinks: d.Backlinks,
 			PageRank: d.PageRank,
 		}
-	}
+	})
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -275,10 +340,7 @@ func (h *Handler) handleAdminDeleteDomainDocuments(w http.ResponseWriter, r *htt
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	ids := make([]string, len(docs))
-	for i, d := range docs {
-		ids[i] = d.ID
-	}
+	ids := mapSlice(docs, func(d domain.IndexedDocument) string { return d.ID })
 
 	go func() {
 		ctx := context.Background()
@@ -304,6 +366,10 @@ type adminDomainSummary struct {
 	DocCount int    `json:"doc_count"`
 }
 
+func toAdminDomainSummary(d domain.DomainSummary) adminDomainSummary {
+	return adminDomainSummary{Host: d.Host, DocCount: d.DocCount}
+}
+
 // handleAdminSearchDomains backs the Documents page's domain search: an
 // empty or missing q returns an empty list on purpose, so domains are
 // discoverable by name rather than dumped in full by default.
@@ -317,10 +383,7 @@ func (h *Handler) handleAdminSearchDomains(w http.ResponseWriter, r *http.Reques
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	out := make([]adminDomainSummary, len(domains))
-	for i, d := range domains {
-		out[i] = adminDomainSummary{Host: d.Host, DocCount: d.DocCount}
-	}
+	out := mapSlice(domains, toAdminDomainSummary)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -361,22 +424,16 @@ func (h *Handler) handleAdminDocumentsOverview(w http.ResponseWriter, r *http.Re
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	topDomains := make([]adminDomainSummary, len(overview.TopDomains))
-	for i, d := range overview.TopDomains {
-		topDomains[i] = adminDomainSummary{Host: d.Host, DocCount: d.DocCount}
-	}
-	ageBuckets := make([]adminAgeBucket, len(overview.AgeBuckets))
-	for i, b := range overview.AgeBuckets {
-		ageBuckets[i] = adminAgeBucket{Label: b.Label, Count: b.Count}
-	}
-	versionCounts := make([]adminVersionCount, len(overview.VersionCounts))
-	for i, v := range overview.VersionCounts {
-		versionCounts[i] = adminVersionCount{Version: v.Version, Count: v.Count}
-	}
-	storedVersionCounts := make([]adminStoredVersionsCount, len(overview.StoredVersionCounts))
-	for i, s := range overview.StoredVersionCounts {
-		storedVersionCounts[i] = adminStoredVersionsCount{StoredVersions: s.StoredVersions, DocCount: s.DocCount}
-	}
+	topDomains := mapSlice(overview.TopDomains, toAdminDomainSummary)
+	ageBuckets := mapSlice(overview.AgeBuckets, func(b domain.AgeBucket) adminAgeBucket {
+		return adminAgeBucket{Label: b.Label, Count: b.Count}
+	})
+	versionCounts := mapSlice(overview.VersionCounts, func(v domain.VersionCount) adminVersionCount {
+		return adminVersionCount{Version: v.Version, Count: v.Count}
+	})
+	storedVersionCounts := mapSlice(overview.StoredVersionCounts, func(s domain.StoredVersionsCount) adminStoredVersionsCount {
+		return adminStoredVersionsCount{StoredVersions: s.StoredVersions, DocCount: s.DocCount}
+	})
 	writeJSON(w, http.StatusOK, adminDocumentsOverview{
 		TopDomains: topDomains, AgeBuckets: ageBuckets,
 		TotalDomains: overview.TotalDomains, VersionCounts: versionCounts,
@@ -403,10 +460,9 @@ func (h *Handler) handleAdminDocumentVersions(w http.ResponseWriter, r *http.Req
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	out := make([]adminDocumentVersion, len(versions))
-	for i, v := range versions {
-		out[i] = adminDocumentVersion{Version: v.Version, Title: v.Title, DocLength: v.DocLength, CrawledAt: v.CrawledAt}
-	}
+	out := mapSlice(versions, func(v domain.DocumentVersion) adminDocumentVersion {
+		return adminDocumentVersion{Version: v.Version, Title: v.Title, DocLength: v.DocLength, CrawledAt: v.CrawledAt}
+	})
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -464,10 +520,7 @@ func (h *Handler) handleAdminPostings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	ids := make([]string, len(postings))
-	for i, p := range postings {
-		ids[i] = p.DocID
-	}
+	ids := mapSlice(postings, func(p domain.PostingStats) string { return p.DocID })
 	docs, err := h.admin.DocumentsByIDs(r.Context(), ids)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -539,13 +592,11 @@ func (h *Handler) handleAdminSearch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	out := make([]adminDebugResult, len(results))
-	for i, res := range results {
-		terms := make([]adminTermScore, len(res.BM25Terms))
-		for j, t := range res.BM25Terms {
-			terms[j] = adminTermScore{Term: t.Term, TermFreq: t.TermFreq, DocFreq: t.DocFreq, DocLength: t.DocLength, Score: t.Score}
-		}
-		out[i] = adminDebugResult{
+	out := mapSlice(results, func(res domain.HybridResult) adminDebugResult {
+		terms := mapSlice(res.BM25Terms, func(t domain.TermScore) adminTermScore {
+			return adminTermScore{Term: t.Term, TermFreq: t.TermFreq, DocFreq: t.DocFreq, DocLength: t.DocLength, Score: t.Score}
+		})
+		return adminDebugResult{
 			DocID: res.DocID, URL: res.URL, Title: res.Title, Snippet: res.Snippet,
 			BM25Score: res.BM25Score, NormBM25: res.NormBM25, SemanticSim: res.SemanticSim,
 			PageRank: res.PageRank, NormalizedPageRank: res.NormalizedPageRank, FinalScore: res.FinalScore,
@@ -553,7 +604,7 @@ func (h *Handler) handleAdminSearch(w http.ResponseWriter, r *http.Request) {
 			Alpha:     res.Alpha, K1: res.K1, B: res.B, PageRankWeight: res.PageRankWeight,
 			CorrectedTerms: res.CorrectedTerms,
 		}
-	}
+	})
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -789,9 +840,8 @@ func (h *Handler) handleAdminEmbeddingsModels(w http.ResponseWriter, r *http.Req
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-	var req embeddingCandidateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+	req, ok := decodeJSON[embeddingCandidateRequest](w, r)
+	if !ok {
 		return
 	}
 	if req.BaseURL == "" {
@@ -828,9 +878,8 @@ func (h *Handler) handleAdminEmbeddingsTest(w http.ResponseWriter, r *http.Reque
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-	var req embeddingCandidateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+	req, ok := decodeJSON[embeddingCandidateRequest](w, r)
+	if !ok {
 		return
 	}
 	endpoint := h.resolveCandidateAPIKey(r.Context(), req.toEndpoint(), req.ID)
@@ -995,15 +1044,10 @@ func (h *Handler) handleAdminEmbeddingEndpoints(w http.ResponseWriter, r *http.R
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		out := make([]embeddingEndpointResponse, len(endpoints))
-		for i, e := range endpoints {
-			out[i] = toEmbeddingEndpointResponse(e)
-		}
-		writeJSON(w, http.StatusOK, out)
+		writeJSON(w, http.StatusOK, mapSlice(endpoints, toEmbeddingEndpointResponse))
 	case http.MethodPost:
-		var req embeddingEndpointRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		req, ok := decodeJSON[embeddingEndpointRequest](w, r)
+		if !ok {
 			return
 		}
 		if !validateEmbeddingEndpointRequest(w, req) {
@@ -1014,10 +1058,7 @@ func (h *Handler) handleAdminEmbeddingEndpoints(w http.ResponseWriter, r *http.R
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		existingIDs := map[string]bool{domain.EmbeddingProviderHash: true}
-		for _, e := range existing {
-			existingIDs[e.ID] = true
-		}
+		existingIDs := existingIDSet(existing, func(e domain.EmbeddingHTTPEndpoint) string { return e.ID }, domain.EmbeddingProviderHash)
 		e := domain.EmbeddingHTTPEndpoint{
 			ID:   domain.NewEmbeddingEndpointID(req.Name, existingIDs),
 			Name: req.Name, BaseURL: req.BaseURL, APIKey: h.encryptAPIKey(req.APIKey),
@@ -1052,9 +1093,8 @@ func (h *Handler) handleAdminUpdateEmbeddingEndpoint(w http.ResponseWriter, r *h
 	if !requireConfigured(w, h.embeddingEndpoints != nil, "embedding endpoints") {
 		return
 	}
-	var req embeddingEndpointRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+	req, ok := decodeJSON[embeddingEndpointRequest](w, r)
+	if !ok {
 		return
 	}
 	if !validateEmbeddingEndpointRequest(w, req) {
@@ -1066,12 +1106,7 @@ func (h *Handler) handleAdminUpdateEmbeddingEndpoint(w http.ResponseWriter, r *h
 		respondOrNotFound(w, err, ports.ErrEmbeddingEndpointNotFound, "embedding endpoint not found", nil)
 		return
 	}
-	apiKey := existing.APIKey
-	if req.APIKey != "" {
-		apiKey = h.encryptAPIKey(req.APIKey)
-	} else if req.ClearAPIKey {
-		apiKey = ""
-	}
+	apiKey := h.resolveUpdatedAPIKey(existing.APIKey, req.APIKey, req.ClearAPIKey)
 	e := domain.EmbeddingHTTPEndpoint{
 		ID: id, Name: req.Name, BaseURL: req.BaseURL, APIKey: apiKey,
 		Model: req.Model, Dimensions: req.Dimensions, RateLimitPerSecond: req.RateLimitPerSecond,
@@ -1161,15 +1196,10 @@ func (h *Handler) handleAdminChatHooks(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		out := make([]chatHookResponse, len(hooks))
-		for i, hk := range hooks {
-			out[i] = toChatHookResponse(hk)
-		}
-		writeJSON(w, http.StatusOK, out)
+		writeJSON(w, http.StatusOK, mapSlice(hooks, toChatHookResponse))
 	case http.MethodPost:
-		var req chatHookRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		req, ok := decodeJSON[chatHookRequest](w, r)
+		if !ok {
 			return
 		}
 		if !validateChatHookRequest(w, req) {
@@ -1180,10 +1210,7 @@ func (h *Handler) handleAdminChatHooks(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		existingIDs := make(map[string]bool, len(existing))
-		for _, hk := range existing {
-			existingIDs[hk.ID] = true
-		}
+		existingIDs := existingIDSet(existing, func(hk domain.ChatHook) string { return hk.ID })
 		hk := domain.ChatHook{
 			ID: domain.NewChatHookID(req.Name, existingIDs), Name: req.Name,
 			Pattern: req.Pattern, Script: req.Script, Enabled: req.Enabled,
@@ -1228,9 +1255,8 @@ func (h *Handler) handleAdminUpdateChatHook(w http.ResponseWriter, r *http.Reque
 	if !requireConfigured(w, h.chatHooks != nil, "chat hooks") {
 		return
 	}
-	var req chatHookRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+	req, ok := decodeJSON[chatHookRequest](w, r)
+	if !ok {
 		return
 	}
 	if !validateChatHookRequest(w, req) {
@@ -1358,9 +1384,8 @@ func (h *Handler) handleAdminChatEndpoint(w http.ResponseWriter, r *http.Request
 		}
 		writeJSON(w, http.StatusOK, toChatEndpointResponse(e))
 	case http.MethodPatch:
-		var req chatEndpointRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		req, ok := decodeJSON[chatEndpointRequest](w, r)
+		if !ok {
 			return
 		}
 		if !validateChatEndpointRequest(w, req) {
@@ -1374,11 +1399,7 @@ func (h *Handler) handleAdminChatEndpoint(w http.ResponseWriter, r *http.Request
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if req.APIKey != "" {
-			apiKey = h.encryptAPIKey(req.APIKey)
-		} else if req.ClearAPIKey {
-			apiKey = ""
-		}
+		apiKey = h.resolveUpdatedAPIKey(apiKey, req.APIKey, req.ClearAPIKey)
 		e := domain.ChatEndpoint{
 			BaseURL: req.BaseURL, APIKey: apiKey, Model: req.Model, Enabled: req.Enabled,
 			MaxContextTokens: req.MaxContextTokens,
@@ -1413,9 +1434,8 @@ func (h *Handler) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, h.currentSettings())
 	case http.MethodPost:
-		var req settingsResponse
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		req, ok := decodeJSON[settingsResponse](w, r)
+		if !ok {
 			return
 		}
 		h.settings.Set(req.Tuning.Alpha, req.Tuning.K1, req.Tuning.B)
@@ -1471,9 +1491,8 @@ func (h *Handler) handleAdminOverrides(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, h.currentOverrides())
 	case http.MethodPost:
-		var req overridesValues
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		req, ok := decodeJSON[overridesValues](w, r)
+		if !ok {
 			return
 		}
 		h.overrides.Set(req.toSettingsValues())
@@ -1713,15 +1732,10 @@ func (h *Handler) handleAdminSchedules(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		out := make([]scheduledCrawlResponse, len(schedules))
-		for i, s := range schedules {
-			out[i] = toScheduledCrawlResponse(s)
-		}
-		writeJSON(w, http.StatusOK, out)
+		writeJSON(w, http.StatusOK, mapSlice(schedules, toScheduledCrawlResponse))
 	case http.MethodPost:
-		var req scheduledCrawlRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		req, ok := decodeJSON[scheduledCrawlRequest](w, r)
+		if !ok {
 			return
 		}
 		if !validateScheduledCrawlRequest(w, req) {
@@ -1784,9 +1798,8 @@ func (h *Handler) handleAdminUpdateSchedule(w http.ResponseWriter, r *http.Reque
 	if !requireConfigured(w, h.scheduledCrawls != nil, "scheduled crawls") {
 		return
 	}
-	var req scheduledCrawlRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+	req, ok := decodeJSON[scheduledCrawlRequest](w, r)
+	if !ok {
 		return
 	}
 	if !validateScheduledCrawlRequest(w, req) {
@@ -2145,14 +2158,12 @@ func (h *Handler) handleAdminContentDedupAliasGroups(w http.ResponseWriter, r *h
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	out := make([]adminDocumentAliasGroup, len(groups))
-	for i, g := range groups {
-		aliases := make([]adminDocumentAlias, len(g.Aliases))
-		for j, a := range g.Aliases {
-			aliases[j] = adminDocumentAlias{URL: a.URL, Reason: a.Reason}
-		}
-		out[i] = adminDocumentAliasGroup{CanonicalID: g.CanonicalID, CanonicalURL: g.CanonicalURL, Aliases: aliases}
-	}
+	out := mapSlice(groups, func(g domain.DocumentAliasGroup) adminDocumentAliasGroup {
+		aliases := mapSlice(g.Aliases, func(a domain.DocumentAlias) adminDocumentAlias {
+			return adminDocumentAlias{URL: a.URL, Reason: a.Reason}
+		})
+		return adminDocumentAliasGroup{CanonicalID: g.CanonicalID, CanonicalURL: g.CanonicalURL, Aliases: aliases}
+	})
 	writeJSON(w, http.StatusOK, adminAliasGroupsResponse{Total: total, Groups: out})
 }
 
@@ -2298,11 +2309,6 @@ type adminDailyDuration struct {
 	AvgDurationMs float64 `json:"avg_duration_ms"`
 }
 
-type adminPageRankBucket struct {
-	Label string `json:"label"`
-	Count int    `json:"count"`
-}
-
 // adminOverviewRunningJob is the inline-visible detail for one currently
 // running crawl job on the Overview page -- just enough to summarize it
 // (seedSummary already renders SeedURLs client-side the same way the
@@ -2330,7 +2336,7 @@ type adminOverviewMetrics struct {
 	DailyFetchOutcomes []adminDailyFetchOutcome `json:"daily_fetch_outcomes"`
 	DocumentsByDay     []adminDailyCount        `json:"documents_by_day"`
 	FetchDurationByDay []adminDailyDuration     `json:"fetch_duration_by_day"`
-	PageRankBuckets    []adminPageRankBucket    `json:"pagerank_buckets"`
+	PageRankBuckets    []adminAgeBucket         `json:"pagerank_buckets"`
 	// PageRankOrphanThreshold documents the fixed cutoff PageRankOrphanCount/
 	// PageRankOrphanPercent were computed against (domain.
 	// PageRankOrphanThreshold), so the client can label the stat tile
@@ -2436,7 +2442,7 @@ func (h *Handler) handleAdminOverviewMetrics(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	for _, b := range buckets {
-		resp.PageRankBuckets = append(resp.PageRankBuckets, adminPageRankBucket{Label: b.Label, Count: b.Count})
+		resp.PageRankBuckets = append(resp.PageRankBuckets, adminAgeBucket{Label: b.Label, Count: b.Count})
 	}
 	resp.PageRankOrphanCount = orphanCount
 	resp.PageRankTotalDocs = totalDocs

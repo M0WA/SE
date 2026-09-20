@@ -99,18 +99,19 @@ func crawlLoop(
 			}
 		}
 	}
+	popFront := func(q *[]string) (string, bool) {
+		if len(*q) == 0 {
+			return "", false
+		}
+		u := (*q)[0]
+		*q = (*q)[1:]
+		return u, true
+	}
 	dequeue := func() (string, bool) {
-		if len(freshQueue) > 0 {
-			u := freshQueue[0]
-			freshQueue = freshQueue[1:]
+		if u, ok := popFront(&freshQueue); ok {
 			return u, true
 		}
-		if len(knownQueue) > 0 {
-			u := knownQueue[0]
-			knownQueue = knownQueue[1:]
-			return u, true
-		}
-		return "", false
+		return popFront(&knownQueue)
 	}
 	// enqueue precedence: BlockedDomains always rejects; then LinkScope or
 	// AllowedDomains allows; finally, if isDomainIndexed is available, a

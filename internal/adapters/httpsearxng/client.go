@@ -84,7 +84,7 @@ func (c *Client) Search(ctx context.Context, baseURL, query string, count int) (
 		return nil, fmt.Errorf("httpsearxng: reading response body: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("httpsearxng: search endpoint returned status %d: %s", resp.StatusCode, truncate(string(body)))
+		return nil, fmt.Errorf("httpsearxng: search endpoint returned status %d: %s", resp.StatusCode, domain.TruncateWithEllipsis(string(body), 500))
 	}
 
 	var parsed searxngResponse
@@ -100,14 +100,4 @@ func (c *Client) Search(ctx context.Context, baseURL, query string, count int) (
 		results[i] = domain.WebSearchResult{Title: r.Title, URL: r.URL, Snippet: r.Content}
 	}
 	return results, nil
-}
-
-// truncate bounds how much of a non-2xx response body an error message
-// carries, so a large HTML error page doesn't blow up a log line.
-func truncate(s string) string {
-	const max = 500
-	if len(s) > max {
-		return s[:max] + "..."
-	}
-	return s
 }

@@ -191,27 +191,27 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 	// Score the semantic side against a bounded candidate set, not the
 	// whole corpus: every BM25 hit plus a fixed-size sample of the rest,
 	// so a purely semantic match can still be found without a full scan.
-	bm25HitIDs := make([]string, 0, len(bm25PerDoc))
-	for id := range bm25PerDoc {
-		bm25HitIDs = append(bm25HitIDs, id)
-	}
+	bm25HitIDs := mapKeys(bm25PerDoc)
 	// A site:/-site: host may only exist as a document_aliases row now (its
 	// content merged elsewhere), and SiteAllowed compares a candidate's own
 	// canonical host -- expand both lists with the resolved canonical host
 	// so the filter still matches, without touching SiteAllowed itself.
-	if len(parsed.Sites) > 0 {
-		aliasHosts, err := s.repo.ResolveAliasHosts(ctx, parsed.Sites)
+	expandAliasHosts := func(sites []string) ([]string, error) {
+		if len(sites) == 0 {
+			return sites, nil
+		}
+		aliasHosts, err := s.repo.ResolveAliasHosts(ctx, sites)
 		if err != nil {
 			return nil, err
 		}
-		parsed.Sites = append(parsed.Sites, aliasHosts...)
+		return append(sites, aliasHosts...), nil
 	}
-	if len(parsed.ExcludedSites) > 0 {
-		aliasHosts, err := s.repo.ResolveAliasHosts(ctx, parsed.ExcludedSites)
-		if err != nil {
-			return nil, err
-		}
-		parsed.ExcludedSites = append(parsed.ExcludedSites, aliasHosts...)
+	var err error
+	if parsed.Sites, err = expandAliasHosts(parsed.Sites); err != nil {
+		return nil, err
+	}
+	if parsed.ExcludedSites, err = expandAliasHosts(parsed.ExcludedSites); err != nil {
+		return nil, err
 	}
 	// A site: filter must never depend on whether its matches happen to be
 	// a BM25 hit or land in the semantic sample below -- forcing them into
@@ -291,10 +291,7 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 		len(overrides.BlockedTerms) > 0 || len(overrides.BoostedTerms) > 0
 	var recencyOrder []string
 	if parsed.HasConstraints() || hasOverrides || recency {
-		ids := make([]string, 0, len(candidateIDs))
-		for id := range candidateIDs {
-			ids = append(ids, id)
-		}
+		ids := mapKeys(candidateIDs)
 		if recency {
 			docs, err := s.repo.DocumentsByIDsSortedByCrawledAt(ctx, ids)
 			if err != nil {

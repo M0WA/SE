@@ -26,8 +26,9 @@ func (e *Embedder) Dimensions() int { return e.dims }
 func (e *Embedder) Embed(_ context.Context, text string) ([]float32, error) {
 	vec := make([]float32, e.dims)
 	tokens := domain.Tokenize(text)
+	h := fnv.New32a()
 	for _, tok := range tokens {
-		h := fnv.New32a()
+		h.Reset()
 		_, _ = h.Write([]byte(tok))
 		idx := int(h.Sum32()) % e.dims
 		if idx < 0 {

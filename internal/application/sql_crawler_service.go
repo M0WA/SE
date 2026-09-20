@@ -109,10 +109,7 @@ func (c *sqlCrawlerService) buildIsIndexed(ctx context.Context, seeds []string) 
 			hostSet[u.Host] = true
 		}
 	}
-	hosts := make([]string, 0, len(hostSet))
-	for h := range hostSet {
-		hosts = append(hosts, h)
-	}
+	hosts := mapKeys(hostSet)
 	ids, err := c.repo.DocumentIDsByHost(ctx, hosts)
 	if err != nil {
 		return nil, err
