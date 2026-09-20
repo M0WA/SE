@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.24 - 2026-09-20
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Simplify: dedupe truncate/constant-time-header helpers, cut regexp recompilation, fix a garbled doc comment by @M0WA in https://github.com/M0WA/SE/pull/169
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.23...v4.13.24
+
+
 ## v4.13.23 - 2026-09-20
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
