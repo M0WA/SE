@@ -14,6 +14,7 @@
   const chatInput = document.getElementById('chat-input');
   const chatWebSearch = document.getElementById('chat-web-search');
   const chatTokenUsage = document.getElementById('chat-token-usage');
+  const chatTokenUsageMini = document.getElementById('chat-token-usage-mini');
   const chatTokenUsageSummary = document.getElementById('chat-token-usage-summary');
   const chatTokenUsageDonut = document.getElementById('chat-token-usage-donut');
 
@@ -123,10 +124,12 @@
       return;
     }
     const total = (tokenUsage.global_prompt_tokens || 0) + (tokenUsage.hook_prompt_tokens || 0) + (tokenUsage.history_tokens || 0);
-    chatTokenUsageSummary.textContent = 'Tokens: ' + total.toLocaleString() +
+    const segments = tokenUsageSegments(tokenUsage);
+    clear(chatTokenUsageMini);
+    chatTokenUsageMini.appendChild(buildDonutSVG(segments, { size: 14, strokeWidth: 4 }));
+    chatTokenUsageSummary.textContent = total.toLocaleString() +
       (tokenUsage.max_context_tokens ? ' / ' + tokenUsage.max_context_tokens.toLocaleString() : '');
     clear(chatTokenUsageDonut);
-    const segments = tokenUsageSegments(tokenUsage);
     chatTokenUsageDonut.appendChild(buildDonutSVG(segments));
     chatTokenUsageDonut.appendChild(buildDonutLegend(segments));
     chatTokenUsage.hidden = false;
@@ -339,6 +342,23 @@
     return html.join('');
   }
 
+  // buildHookResponseFold builds the nested, closed-by-default <details>
+  // that holds a hook result's raw output/error -- shared by the fetch and
+  // search two-level renderings in renderChatMessage below. It reuses
+  // .chat-hook-result's own box/summary/pre styling by adding that class
+  // alongside .chat-hook-response, rather than duplicating those rules.
+  function buildHookResponseFold(hr, summaryText) {
+    const nested = document.createElement('details');
+    nested.className = 'chat-hook-result chat-hook-response' + (hr.err ? ' chat-hook-result-error' : '');
+    const summary = document.createElement('summary');
+    summary.textContent = summaryText;
+    nested.appendChild(summary);
+    const pre = document.createElement('pre');
+    pre.textContent = hr.err || hr.output;
+    nested.appendChild(pre);
+    return nested;
+  }
+
   // renderChatMessage appends one message to #chat-messages for a
   // {role, content} turn. User and assistant turns are told apart by
   // alignment and a quiet tint (see .chat-msg-user/.chat-msg-assistant in
@@ -380,15 +400,93 @@
 
     if (role === 'assistant' && hookResults && hookResults.length > 0) {
       for (const hr of hookResults) {
-        const details = document.createElement('details');
-        details.className = 'chat-hook-result' + (hr.err ? ' chat-hook-result-error' : '');
-        const summary = document.createElement('summary');
-        summary.textContent = hr.hook_name;
-        details.appendChild(summary);
-        const pre = document.createElement('pre');
-        pre.textContent = hr.err ? hr.err : hr.output;
-        details.appendChild(pre);
-        msg.appendChild(details);
+        const name = (hr.hook_name || '').toLowerCase();
+        const input = hr.input || '';
+
+        if (name.includes('fetch') && input) {
+          // Two-level fold: the outer <details> (open by default) shows
+          // what was fetched via a real link; the raw response/error is
+          // tucked away in a nested, closed-by-default fold so the target
+          // URL is the first thing seen without the (often long) response
+          // body pushing it out of view.
+          const details = document.createElement('details');
+          details.className = 'chat-hook-result' + (hr.err ? ' chat-hook-result-error' : '');
+          details.open = true;
+          const summary = document.createElement('summary');
+          summary.textContent = hr.hook_name;
+          details.appendChild(summary);
+
+          const target = document.createElement('div');
+          target.className = 'chat-hook-target';
+          const link = document.createElement('a');
+          link.href = input;
+          link.textContent = input;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          target.appendChild(link);
+          details.appendChild(target);
+
+          details.appendChild(buildHookResponseFold(hr, hr.err ? 'Error' : 'Response'));
+          msg.appendChild(details);
+        } else if (name.includes('search') && input) {
+          // Same open-by-default outer fold, but the target is a query
+          // string (not a link), and -- best effort -- a parsed result
+          // list is shown directly, with the raw JSON still available in
+          // the nested fold for anyone who wants it.
+          const details = document.createElement('details');
+          details.className = 'chat-hook-result' + (hr.err ? ' chat-hook-result-error' : '');
+          details.open = true;
+          const summary = document.createElement('summary');
+          summary.textContent = hr.hook_name;
+          details.appendChild(summary);
+
+          const target = document.createElement('div');
+          target.className = 'chat-hook-target';
+          const code = document.createElement('code');
+          code.textContent = input;
+          target.appendChild(code);
+          details.appendChild(target);
+
+          let parsed = null;
+          try {
+            parsed = JSON.parse(hr.output);
+          } catch (e) {
+            parsed = null;
+          }
+          if (parsed && Array.isArray(parsed.results) &&
+              parsed.results.every((r) => r && typeof r.title === 'string' && typeof r.url === 'string')) {
+            const list = document.createElement('ul');
+            list.className = 'chat-hook-results-list';
+            for (const r of parsed.results.slice(0, 5)) {
+              const li = document.createElement('li');
+              const a = document.createElement('a');
+              a.href = r.url;
+              a.textContent = r.title || r.url;
+              a.target = '_blank';
+              a.rel = 'noopener noreferrer';
+              li.appendChild(a);
+              list.appendChild(li);
+            }
+            details.appendChild(list);
+          }
+
+          details.appendChild(buildHookResponseFold(hr, hr.err ? 'Error' : 'Raw output'));
+          msg.appendChild(details);
+        } else {
+          // Generic fallback: today's original single-level, closed-by-
+          // default rendering, unchanged -- used for any hook name that
+          // isn't fetch/search-shaped, and also when a fetch/search hook
+          // fired without a captured input to show.
+          const details = document.createElement('details');
+          details.className = 'chat-hook-result' + (hr.err ? ' chat-hook-result-error' : '');
+          const summary = document.createElement('summary');
+          summary.textContent = hr.hook_name;
+          details.appendChild(summary);
+          const pre = document.createElement('pre');
+          pre.textContent = hr.err ? hr.err : hr.output;
+          details.appendChild(pre);
+          msg.appendChild(details);
+        }
       }
     }
 
@@ -469,6 +567,8 @@
     const isChat = modeSwitch.getAttribute('aria-checked') === 'true';
     setMode(isChat ? 'search' : 'chat');
   });
+
+  setMode('chat');
 
   chatForm.addEventListener('submit', (e) => {
     e.preventDefault();
