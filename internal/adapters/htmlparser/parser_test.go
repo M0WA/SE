@@ -1,9 +1,11 @@
 package htmlparser_test
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"searchengine/internal/adapters/htmlparser"
 )
@@ -102,5 +104,42 @@ func TestParse_MalformedCanonicalHrefIgnored(t *testing.T) {
 	_, _, _, canonicalURL := htmlparser.Parse(strings.NewReader(raw), "https://basis.example/start")
 	if canonicalURL != "" {
 		t.Errorf("expected a malformed canonical href ignored, got %q", canonicalURL)
+	}
+}
+
+// TestParse_LegacyEncodingViaMetaCharsetIsTranscodedToUTF8 is the
+// regression test for a real crawl failure: html.Parse has no charset
+// handling of its own and requires already-UTF-8 input, so a page actually
+// served in a legacy encoding used to leak its raw, non-UTF-8 bytes
+// straight into the extracted text -- which Postgres's strict UTF8 column
+// encoding then rejected outright at save time. Windows-1252 encodes "ü"
+// and "ß" as single bytes (0xFC, 0xDF) that are not valid UTF-8 on their
+// own; a page declaring that charset via <meta charset> must still come
+// out as correctly transcoded, valid UTF-8 text.
+func TestParse_LegacyEncodingViaMetaCharsetIsTranscodedToUTF8(t *testing.T) {
+	raw := []byte("<html><head><meta charset=\"windows-1252\"></head><body><p>Gr\xfc\xdfe</p></body></html>")
+	_, text, _, _ := htmlparser.Parse(bytes.NewReader(raw), "https://basis.example/start")
+	if !utf8.ValidString(text) {
+		t.Fatalf("expected valid UTF-8 output, got invalid bytes: %q", text)
+	}
+	if !strings.Contains(text, "Grüße") {
+		t.Errorf("expected the windows-1252 bytes correctly transcoded to \"Grüße\", got %q", text)
+	}
+}
+
+// TestParse_InvalidUTF8BytesReplacedWithoutPropagating is the regression
+// test for the defensive backstop on top of charset detection: a page
+// explicitly declared UTF-8 (so no transcoding is attempted) whose body
+// still contains a stray invalid byte must still come out as valid UTF-8
+// -- Postgres has zero tolerance for anything less, so this must be an
+// absolute guarantee, not just "usually true after charset detection."
+func TestParse_InvalidUTF8BytesReplacedWithoutPropagating(t *testing.T) {
+	raw := []byte("<html><head><meta charset=\"utf-8\"></head><body><p>Berlin\xa0Wahl</p></body></html>")
+	title, text, _, _ := htmlparser.Parse(bytes.NewReader(raw), "https://basis.example/start")
+	if !utf8.ValidString(title) || !utf8.ValidString(text) {
+		t.Fatalf("expected valid UTF-8 output, got title=%q text=%q", title, text)
+	}
+	if !strings.Contains(text, "Berlin") || !strings.Contains(text, "Wahl") {
+		t.Errorf("expected the surrounding valid text preserved around the bad byte, got %q", text)
 	}
 }
