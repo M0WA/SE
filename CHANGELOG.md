@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.25 - 2026-09-20
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Fix the searchengine SearXNG engine: InvalidSchema crash + unreachable host by @M0WA in https://github.com/M0WA/SE/pull/171
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.24...v4.13.25
+
+
 ## v4.13.24 - 2026-09-20
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
