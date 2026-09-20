@@ -1008,6 +1008,20 @@ button:focus-visible {
   margin: 0 auto;
 }
 
+/* On every admin page built from the two-column .admin-shell, .page-header
+   (brand + Sign out) sits directly in body, above BOTH .admin-rail and
+   main -- a full-width bar over the nav menu, not nested inside main's own
+   820px column beside it. (The drill-down "back link" pages -- e.g.
+   admin_domain.html -- have no rail at all, so their .page-header stays
+   nested in main, sized to match; this rule only fires for the shell
+   layout.) */
+body.admin > .page-header {
+  max-width: 1060px;
+  margin: 0 auto 2rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--rule);
+}
+
 body.admin main { max-width: 820px; margin: 0; flex: 1; min-width: 0; }
 
 .admin-rail {

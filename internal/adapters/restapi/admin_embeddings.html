@@ -10,14 +10,13 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
 </head>
 <body class="admin">
+<div class="page-header">
+  <a class="mark" href="/">se.</a>
+  <button id="sign-out" class="text-button" type="button">Sign out</button>
+</div>
 <div class="admin-shell">
 <nav class="admin-rail" id="admin-rail" aria-label="Admin sections"></nav>
 <main>
-  <div class="page-header">
-    <a class="mark" href="/">se.</a>
-    <button id="sign-out" class="text-button" type="button">Sign out</button>
-  </div>
-
   <p class="lede" style="margin: 0 0 1.5rem;">Semantic search's vector space: the built-in hash provider plus any number of configured HTTP embedding endpoints, which one(s) are enabled, and which one is active for search. The hash toggle and active-for-search choice are configured on <a href="/admin/settings">Settings</a>; each HTTP endpoint's own base URL/model/key/dimensions/rate limit is managed on <a href="/admin/embeddings/endpoints">HTTP endpoints</a>.</p>
 
   <section class="panel">
