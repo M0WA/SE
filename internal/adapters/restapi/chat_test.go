@@ -495,6 +495,7 @@ func TestHandleChat_SuccessWithHookResults(t *testing.T) {
 		Answer      string `json:"answer"`
 		HookResults []struct {
 			HookName string `json:"hook_name"`
+			Input    string `json:"input"`
 			Output   string `json:"output"`
 			Err      string `json:"err"`
 		} `json:"hook_results"`
@@ -505,7 +506,7 @@ func TestHandleChat_SuccessWithHookResults(t *testing.T) {
 	if len(resp.HookResults) != 1 {
 		t.Fatalf("expected one hook result, got %+v", resp.HookResults)
 	}
-	if resp.HookResults[0].HookName != "web_search" || resp.HookResults[0].Output != "cats are great" || resp.HookResults[0].Err != "" {
+	if resp.HookResults[0].HookName != "web_search" || resp.HookResults[0].Input != "cats" || resp.HookResults[0].Output != "cats are great" || resp.HookResults[0].Err != "" {
 		t.Errorf("unexpected hook result: %+v", resp.HookResults[0])
 	}
 	if len(runner.gotArgs) != 1 || runner.gotArgs[0] != "cats" {

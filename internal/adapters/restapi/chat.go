@@ -61,6 +61,7 @@ type chatTokenUsageResponse struct {
 // chatHookResultResponse is the wire shape of one domain.ChatHookResult.
 type chatHookResultResponse struct {
 	HookName string `json:"hook_name"`
+	Input    string `json:"input,omitempty"`
 	Output   string `json:"output,omitempty"`
 	Err      string `json:"err,omitempty"`
 }
@@ -72,7 +73,7 @@ type chatHookResultResponse struct {
 // regardless of nil-ness.
 func toChatHookResultResponses(results []domain.ChatHookResult) []chatHookResultResponse {
 	return mapSlice(results, func(r domain.ChatHookResult) chatHookResultResponse {
-		return chatHookResultResponse{HookName: r.HookName, Output: r.Output, Err: r.Err}
+		return chatHookResultResponse{HookName: r.HookName, Input: r.Input, Output: r.Output, Err: r.Err}
 	})
 }
 

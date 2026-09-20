@@ -61,7 +61,7 @@ func TestRunChatHooks_MatchingPattern_RunsScriptWithCaptureGroupArgs(t *testing.
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d: %v", len(results), results)
 	}
-	if results[0].HookName != "web_search" || results[0].Output != "search results" || results[0].Err != "" {
+	if results[0].HookName != "web_search" || results[0].Input != "golang release notes" || results[0].Output != "search results" || results[0].Err != "" {
 		t.Fatalf("unexpected result: %+v", results[0])
 	}
 	if len(runner.calls) != 1 {
