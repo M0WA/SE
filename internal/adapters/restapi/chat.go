@@ -45,6 +45,30 @@ type chatResponse struct {
 	// against Answer this turn (see application.ChatResult.HookResults) --
 	// omitted entirely on the common case of no configured/matching hooks.
 	HookResults []chatHookResultResponse `json:"hook_results,omitempty"`
+	// TokenUsage is this turn's estimated context breakdown (see
+	// application.TokenUsage) -- always present, since every turn sends at
+	// least a history message, letting the chat UI show a token-usage
+	// diagram for every answer, not just ones with hooks/sources.
+	TokenUsage chatTokenUsageResponse `json:"token_usage"`
+}
+
+// chatTokenUsageResponse is the wire shape of application.TokenUsage.
+type chatTokenUsageResponse struct {
+	GlobalPromptTokens int `json:"global_prompt_tokens"`
+	HookPromptTokens   int `json:"hook_prompt_tokens"`
+	ContextTokens      int `json:"context_tokens"`
+	HistoryTokens      int `json:"history_tokens"`
+	MaxContextTokens   int `json:"max_context_tokens,omitempty"`
+}
+
+func toChatTokenUsageResponse(u application.TokenUsage) chatTokenUsageResponse {
+	return chatTokenUsageResponse{
+		GlobalPromptTokens: u.GlobalPromptTokens,
+		HookPromptTokens:   u.HookPromptTokens,
+		ContextTokens:      u.ContextTokens,
+		HistoryTokens:      u.HistoryTokens,
+		MaxContextTokens:   u.MaxContextTokens,
+	}
 }
 
 // chatHookResultResponse is the wire shape of one domain.ChatHookResult.
@@ -115,5 +139,6 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, chatResponse{
 		Answer: result.Answer, Sources: result.Sources, ContextTrimmed: result.ContextTrimmed,
 		HookResults: toChatHookResultResponses(result.HookResults),
+		TokenUsage:  toChatTokenUsageResponse(result.TokenUsage),
 	})
 }

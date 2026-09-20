@@ -2001,6 +2001,45 @@ components:
             answer this turn, in match order. Omitted entirely when no
             hook is configured/enabled or none matched.
           items: { $ref: "#/components/schemas/ChatHookResult" }
+        token_usage: { $ref: "#/components/schemas/ChatTokenUsage" }
+
+    ChatTokenUsage:
+      type: object
+      description: >-
+        This turn's estimated context breakdown, by where each piece came
+        from -- lets a client render a token-usage diagram instead of just
+        an opaque total. Token counts are a deliberately approximate,
+        character-count-based estimate (see application.estimateTokens),
+        not exact model tokenization. Always present, since every turn
+        sends at least the conversation history.
+      properties:
+        global_prompt_tokens:
+          type: integer
+          description: Estimated size of ChatEndpointOptions.system_prompt, when set (0 otherwise).
+        hook_prompt_tokens:
+          type: integer
+          description: >-
+            Sum of the estimated size of every active chat hook's own
+            prompt this turn (a hook is active when enabled and, if
+            gated_by_web_search, web search is also on for this turn).
+        context_tokens:
+          type: integer
+          description: >-
+            Estimated size of the RAG/web-search context message built
+            from this turn's search results, when either produced any (0
+            otherwise).
+        history_tokens:
+          type: integer
+          description: >-
+            Estimated size of the conversation history actually sent to
+            the model this turn, after any trimming to fit
+            max_context_tokens.
+        max_context_tokens:
+          type: integer
+          description: >-
+            Echoes ChatEndpointOptions.max_context_tokens. Omitted (reads
+            as 0) when no budget is configured, meaning trimming never
+            happens.
 
     ChatHookResult:
       type: object

@@ -24,13 +24,16 @@ function baseChatEndpoint(overrides) {
   }, overrides);
 }
 
-function loadFixture(chatEndpoint, fetchImpl) {
+function loadFixture(chatEndpoint, fetchImpl, hooks) {
   setupDOM(CHAT_SETTINGS_HTML);
   const adminHelpers = requireFresh('./admin.js');
   Object.assign(global, adminHelpers);
   global.fetch = fetchImpl || (async (url) => {
     if (url.includes('/admin/api/chat-endpoint')) {
       return { ok: true, json: async () => chatEndpoint || baseChatEndpoint() };
+    }
+    if (url.includes('/admin/api/chat-hooks')) {
+      return { ok: true, json: async () => hooks || [] };
     }
     return { ok: true, json: async () => ({}) };
   });
@@ -188,10 +191,69 @@ test('saveChatEndpoint shows an error message and re-enables the button on failu
   };
   const { saveChatEndpoint } = requireFresh('./admin_chat_settings.js');
   await saveChatEndpoint();
+  // requireFresh re-executes the module, which auto-invokes its own
+  // loadChatEndpoint() (and, via that, loadEnabledHookPrompts()) as a
+  // dangling promise this test never awaits directly -- flush it before
+  // teardownDOM (in afterEach) deletes global.document, or its tail
+  // (renderTokenUsageDonut) can fire against a torn-down DOM.
+  await new Promise((resolve) => setTimeout(resolve, 0));
 
   const status = document.getElementById('chat-settings-status');
   assert.equal(status.textContent.includes('chat endpoint save failed'), true);
   assert.equal(document.getElementById('save-chat-settings-btn').disabled, false);
+});
+
+test('renderTokenUsageDonut renders a chart and a legend row per segment, including active hook prompts', async () => {
+  loadFixture(baseChatEndpoint({ system_prompt: 'x'.repeat(30), max_context_tokens: 1000 }), undefined, [
+    { id: 'h1', name: 'web_search', enabled: true, prompt: 'y'.repeat(15) },
+    { id: 'h2', name: 'disabled_hook', enabled: false, prompt: 'z'.repeat(999) },
+    { id: 'h3', name: 'no_prompt_hook', enabled: true, prompt: '' },
+  ]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const container = document.getElementById('chat-token-usage');
+  assert.equal(container.querySelectorAll('svg.donut-chart').length, 1);
+  const rows = container.querySelectorAll('.donut-legend-row');
+  // Global prompt, active hook prompts (only h1 counts -- h2 is disabled,
+  // h3 has no prompt), and "remaining" since max_context_tokens > 0.
+  assert.equal(rows.length, 3);
+  assert.match(rows[0].textContent, /Global prompt: \d+/);
+  assert.match(rows[1].textContent, /Active hook prompts: \d+/);
+  assert.match(rows[2].textContent, /Remaining for context\/history: \d+/);
+});
+
+test('renderTokenUsageDonut omits the "remaining" segment when no max context tokens is configured', async () => {
+  loadFixture(baseChatEndpoint({ system_prompt: 'x'.repeat(30), max_context_tokens: 0 }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const rows = document.getElementById('chat-token-usage').querySelectorAll('.donut-legend-row');
+  assert.equal(rows.length, 2);
+});
+
+test('editing the system prompt or max context tokens re-renders the donut live', async () => {
+  loadFixture(baseChatEndpoint({ system_prompt: '', max_context_tokens: 0 }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('chat-token-usage').querySelectorAll('.donut-legend-row').length, 2);
+
+  document.getElementById('chat-max-context-tokens').value = '500';
+  document.getElementById('chat-max-context-tokens').dispatchEvent(new window.Event('input'));
+  assert.equal(document.getElementById('chat-token-usage').querySelectorAll('.donut-legend-row').length, 3);
+
+  document.getElementById('chat-system-prompt').value = 'hello';
+  document.getElementById('chat-system-prompt').dispatchEvent(new window.Event('input'));
+  const globalRow = document.getElementById('chat-token-usage').querySelectorAll('.donut-legend-row')[0];
+  assert.match(globalRow.textContent, /Global prompt: [1-9]\d*/);
+});
+
+test('renderTokenUsageDonut leaves hook prompts out when the hooks fetch fails', async () => {
+  loadFixture(baseChatEndpoint(), async (url) => {
+    if (url.includes('/admin/api/chat-endpoint')) {
+      return { ok: true, json: async () => baseChatEndpoint() };
+    }
+    return { ok: false, status: 500, text: async () => 'hooks down' };
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const rows = document.getElementById('chat-token-usage').querySelectorAll('.donut-legend-row');
+  assert.match(rows[1].textContent, /Active hook prompts: 0/);
 });
 
 test('clicking "Save chat settings" invokes saveChatEndpoint', async () => {

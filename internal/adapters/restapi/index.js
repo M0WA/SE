@@ -20,6 +20,96 @@
   // so the client is the only place this state lives.
   const chatHistory = [];
 
+  // buildDonutSVG/buildDonutLegend render a per-turn token-usage chart from
+  // {label, value, color} segments -- a small, local duplicate of
+  // admin.js's own copy (see admin_chat_settings.js's context-budget
+  // preview) rather than a shared import: this is the public search page,
+  // served by search-server, and admin.js is only routed to admin-server
+  // paths (see packaging/nginx/searchengine.conf) -- pulling it in here
+  // would mean either a cross-server fetch or restructuring routing for a
+  // ~30-line helper, not worth it.
+  function buildDonutSVG(segments, opts) {
+    opts = opts || {};
+    const size = opts.size || 72;
+    const strokeWidth = opts.strokeWidth || 12;
+    const r = (size - strokeWidth) / 2;
+    const c = size / 2;
+    const circumference = 2 * Math.PI * r;
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 ' + size + ' ' + size);
+    svg.setAttribute('width', String(size));
+    svg.setAttribute('height', String(size));
+    svg.classList.add('donut-chart');
+
+    const total = segments.reduce((sum, s) => sum + Math.max(0, s.value), 0);
+    if (total <= 0) {
+      const bg = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      bg.setAttribute('cx', String(c));
+      bg.setAttribute('cy', String(c));
+      bg.setAttribute('r', String(r));
+      bg.setAttribute('fill', 'none');
+      bg.setAttribute('stroke', 'var(--rule)');
+      bg.setAttribute('stroke-width', String(strokeWidth));
+      svg.appendChild(bg);
+      return svg;
+    }
+
+    let offset = 0;
+    for (const seg of segments) {
+      const value = Math.max(0, seg.value);
+      if (value === 0) continue;
+      const dash = (value / total) * circumference;
+      const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      circle.setAttribute('cx', String(c));
+      circle.setAttribute('cy', String(c));
+      circle.setAttribute('r', String(r));
+      circle.setAttribute('fill', 'none');
+      circle.setAttribute('stroke', seg.color);
+      circle.setAttribute('stroke-width', String(strokeWidth));
+      circle.setAttribute('stroke-dasharray', dash + ' ' + (circumference - dash));
+      circle.setAttribute('stroke-dashoffset', String(-offset));
+      circle.setAttribute('transform', 'rotate(-90 ' + c + ' ' + c + ')');
+      const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+      title.textContent = seg.label + ': ' + seg.value;
+      circle.appendChild(title);
+      svg.appendChild(circle);
+      offset += dash;
+    }
+    return svg;
+  }
+
+  function buildDonutLegend(segments) {
+    const list = document.createElement('div');
+    list.className = 'donut-legend';
+    for (const seg of segments) {
+      const row = document.createElement('div');
+      row.className = 'donut-legend-row';
+      const swatch = document.createElement('span');
+      swatch.className = 'donut-legend-swatch';
+      swatch.style.background = seg.color;
+      row.appendChild(swatch);
+      const label = document.createElement('span');
+      label.textContent = seg.label + ': ' + seg.value.toLocaleString();
+      row.appendChild(label);
+      list.appendChild(row);
+    }
+    return list;
+  }
+
+  // tokenUsageSegments turns the backend's flat token_usage breakdown into
+  // the {label, value, color} shape buildDonutSVG/buildDonutLegend expect
+  // -- a fixed 4-way split (global prompt, active hook prompts, RAG/web
+  // context, conversation history) shared by every turn, regardless of
+  // which pieces were actually nonzero this time.
+  function tokenUsageSegments(u) {
+    return [
+      { label: 'Global prompt', value: u.global_prompt_tokens || 0, color: 'var(--chart-1)' },
+      { label: 'Hook prompts', value: u.hook_prompt_tokens || 0, color: 'var(--chart-2)' },
+      { label: 'Search context', value: u.context_tokens || 0, color: 'var(--chart-3)' },
+      { label: 'Conversation history', value: u.history_tokens || 0, color: 'var(--ink-muted)' },
+    ];
+  }
+
   // renderCorrectionNote shows a quiet, transparent note when the search
   // service fuzzy-corrected a misspelled query term (see corrected_terms on
   // each result) -- the displayed query itself is never silently rewritten,
@@ -248,8 +338,11 @@
   // chatHistory) is one entry per regex-triggered chat hook that matched
   // this turn's answer -- each rendered as its own folded <details>, closed
   // by default, so a hook's raw output/error is available on demand without
-  // cluttering the answer itself.
-  function renderChatMessage(role, content, sources, contextTrimmed, hookResults) {
+  // cluttering the answer itself. tokenUsage (also assistant-only) is this
+  // turn's token_usage breakdown -- rendered as its own folded donut chart,
+  // same reasoning: useful to check, not something to show unasked on
+  // every single turn.
+  function renderChatMessage(role, content, sources, contextTrimmed, hookResults, tokenUsage) {
     const msg = document.createElement('div');
     msg.className = role === 'user' ? 'chat-msg chat-msg-user' : 'chat-msg chat-msg-assistant';
 
@@ -298,6 +391,24 @@
       }
     }
 
+    if (role === 'assistant' && tokenUsage) {
+      const details = document.createElement('details');
+      details.className = 'chat-hook-result chat-token-usage';
+      const summary = document.createElement('summary');
+      const total = (tokenUsage.global_prompt_tokens || 0) + (tokenUsage.hook_prompt_tokens || 0) +
+        (tokenUsage.context_tokens || 0) + (tokenUsage.history_tokens || 0);
+      summary.textContent = 'Token usage: ' + total.toLocaleString() +
+        (tokenUsage.max_context_tokens ? ' / ' + tokenUsage.max_context_tokens.toLocaleString() : '');
+      details.appendChild(summary);
+      const row = document.createElement('div');
+      row.className = 'donut-row';
+      const segments = tokenUsageSegments(tokenUsage);
+      row.appendChild(buildDonutSVG(segments));
+      row.appendChild(buildDonutLegend(segments));
+      details.appendChild(row);
+      msg.appendChild(details);
+    }
+
     chatMessages.appendChild(msg);
     // Scroll so the new turn's own beginning lands at the top of the
     // visible area -- #chat-messages is a fixed-height, scrollable box (see
@@ -333,7 +444,7 @@
       }
       const data = await resp.json();
       chatHistory.push({ role: 'assistant', content: data.answer });
-      renderChatMessage('assistant', data.answer, data.sources || [], data.context_trimmed, data.hook_results || []);
+      renderChatMessage('assistant', data.answer, data.sources || [], data.context_trimmed, data.hook_results || [], data.token_usage);
       chatStatus.textContent = '';
     } catch (err) {
       chatStatus.textContent = 'Chat failed: could not reach the server.';
@@ -430,5 +541,6 @@
       renderCorrectionNote, clear, scoreRow, renderResults, runSearch,
       chatHistory, renderChatMessage, sendChatMessage, setMode,
       escapeHTML, renderInline, renderMarkdown,
+      buildDonutSVG, buildDonutLegend, tokenUsageSegments,
     };
   }

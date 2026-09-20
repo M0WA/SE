@@ -119,6 +119,12 @@
   </section>
 
   <section class="panel">
+    <h2>Context budget</h2>
+    <p class="lede" style="margin: 0 0 1rem;">Roughly how the system prompt, active chat hooks' own prompts, and the max conversation length above break down -- estimated by character count, the same rough method the backend itself uses for trimming, not real model tokenization.</p>
+    <div id="chat-token-usage" class="donut-row"></div>
+  </section>
+
+  <section class="panel">
     <button id="save-chat-settings-btn" type="button">Save chat settings</button>
     <span id="chat-settings-status" class="error-text"></span>
   </section>

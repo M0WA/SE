@@ -359,6 +359,58 @@ func TestHandleChat_SuccessWithSources(t *testing.T) {
 	}
 }
 
+// TestHandleChat_TokenUsageBreakdown proves token_usage's four components
+// (global prompt, hook prompts, RAG/web context, history) are wired through
+// from application.TokenUsage to the wire response, each attributed to the
+// right piece rather than lumped into one total.
+func TestHandleChat_TokenUsageBreakdown(t *testing.T) {
+	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+		{ID: "h1", Name: "web_search", Pattern: `SEARCH\(([^)]+)\)`, Script: "search.sh", Enabled: true, Prompt: "Use SEARCH(term) to search."},
+	}}
+	svc := application.NewChatService(
+		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{
+			Enabled: true, SystemPrompt: "You are a pirate.", RAGEnabled: true, RAGResultCount: 3, MaxContextTokens: 10000,
+		}},
+		&fakeChatCompleter{answer: "plain answer"},
+		&fakeSearch{results: []domain.SearchResult{{URL: "http://a", Title: "A", Snippet: "info about a", Score: 1}}},
+		&fakeWebSearcher{}, hooks, &fakeHookScriptRunner{})
+	h, cookie := chatAuthedHandler(t, svc)
+	rec := postChat(t, h, cookie, map[string]interface{}{
+		"messages": []map[string]string{{"role": "user", "content": "what is a?"}},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		TokenUsage struct {
+			GlobalPromptTokens int `json:"global_prompt_tokens"`
+			HookPromptTokens   int `json:"hook_prompt_tokens"`
+			ContextTokens      int `json:"context_tokens"`
+			HistoryTokens      int `json:"history_tokens"`
+			MaxContextTokens   int `json:"max_context_tokens"`
+		} `json:"token_usage"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	u := resp.TokenUsage
+	if u.GlobalPromptTokens <= 0 {
+		t.Errorf("expected a nonzero global prompt token count, got %+v", u)
+	}
+	if u.HookPromptTokens <= 0 {
+		t.Errorf("expected a nonzero hook prompt token count (hook is enabled, ungated), got %+v", u)
+	}
+	if u.ContextTokens <= 0 {
+		t.Errorf("expected a nonzero context token count (RAG produced a result), got %+v", u)
+	}
+	if u.HistoryTokens <= 0 {
+		t.Errorf("expected a nonzero history token count (the user's own question), got %+v", u)
+	}
+	if u.MaxContextTokens != 10000 {
+		t.Errorf("expected max_context_tokens echoed from the endpoint config, got %+v", u)
+	}
+}
+
 func TestHandleChat_SuccessWithoutSources(t *testing.T) {
 	svc := application.NewChatService(
 		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}},

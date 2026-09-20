@@ -1259,6 +1259,70 @@ func TestChatService_SystemPromptDatePlaceholder_Expanded(t *testing.T) {
 	}
 }
 
+// TestChatService_TokenUsage_AttributesEachPieceCorrectly proves
+// ChatResult.TokenUsage counts each leading-message category against the
+// right field (not lumped into one total) and that HistoryTokens reflects
+// what was actually sent post-trim, not the client's full untrimmed
+// history.
+func TestChatService_TokenUsage_AttributesEachPieceCorrectly(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{
+		Enabled: true, SystemPrompt: "You are a pirate.",
+		RAGEnabled: true, RAGResultCount: 3, MaxContextTokens: 10000,
+	}}
+	completer := &fakeChatCompleter{answer: "plain answer"}
+	search := &fakeSearchService{results: []domain.SearchResult{{URL: "http://a", Title: "A", Snippet: "info about a"}}}
+	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true, Prompt: "Use SEARCH[term] to search."},
+	}}
+	svc := NewChatService(endpoints, completer, search, &fakeWebSearcher{}, hooks, &fakeHookScriptRunner{})
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "what is a?"}}
+	result, err := svc.Chat(context.Background(), history, ChatOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	u := result.TokenUsage
+	if u.GlobalPromptTokens != estimateTokens([]domain.ChatMessage{{Role: domain.ChatRoleSystem, Content: "You are a pirate."}}) {
+		t.Errorf("expected GlobalPromptTokens to match the system prompt's own estimate, got %+v", u)
+	}
+	if u.HookPromptTokens <= 0 {
+		t.Errorf("expected a nonzero HookPromptTokens for the one active hook's prompt, got %+v", u)
+	}
+	if u.ContextTokens <= 0 {
+		t.Errorf("expected a nonzero ContextTokens now that RAG produced a result, got %+v", u)
+	}
+	if u.HistoryTokens != estimateTokens(history) {
+		t.Errorf("expected HistoryTokens to match the (untrimmed, since nothing exceeded budget) history estimate, got %+v", u)
+	}
+	if u.MaxContextTokens != 10000 {
+		t.Errorf("expected MaxContextTokens echoed from the endpoint config, got %+v", u)
+	}
+}
+
+// TestChatService_TokenUsage_ZeroWhenNothingConfigured proves every field is
+// simply zero when there's no system prompt, no active hooks, and no
+// RAG/web-search context -- only the history itself contributes.
+func TestChatService_TokenUsage_ZeroWhenNothingConfigured(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
+	completer := &fakeChatCompleter{answer: "answer"}
+	svc := NewChatService(endpoints, completer, &fakeSearchService{}, &fakeWebSearcher{}, nil, nil)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	result, err := svc.Chat(context.Background(), history, ChatOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	u := result.TokenUsage
+	if u.GlobalPromptTokens != 0 || u.HookPromptTokens != 0 || u.ContextTokens != 0 || u.MaxContextTokens != 0 {
+		t.Errorf("expected every configured-piece field to be zero, got %+v", u)
+	}
+	if u.HistoryTokens != estimateTokens(history) {
+		t.Errorf("expected HistoryTokens to still reflect the conversation itself, got %+v", u)
+	}
+}
+
 // TestChatService_ActiveHookWithEmptyPrompt_NoExtraSystemMessage proves an
 // empty Prompt contributes no extra system message even when its hook is
 // active (Enabled, ungated, matching answer) -- it still runs normally.
