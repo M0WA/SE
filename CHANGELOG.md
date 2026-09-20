@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.23 - 2026-09-20
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Fold RAG into SearXNG as a blended engine instead of a separate toggle by @M0WA in https://github.com/M0WA/SE/pull/167
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.22...v4.13.23
+
+
 ## v4.13.22 - 2026-09-20
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
