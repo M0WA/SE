@@ -342,6 +342,16 @@ button:focus-visible {
   border-radius: 2px;
 }
 
+/* .icon-button (admin_jobs.js's job/schedule action cells): the glyph
+   itself needs to read clearly at a glance, bigger than this page's normal
+   0.9rem text-button label, and the browser's native title tooltip plus
+   aria-label (set alongside this class, see setIconLabel) carry the actual
+   action name that used to be the visible label. */
+.icon-button {
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
 /* A small inline spinner for a button mid-action (see setButtonLoading in
    admin.js) -- a plain ring in the current text color rather than a
    branded/colored spinner, so it reads as "busy" wherever it's dropped in

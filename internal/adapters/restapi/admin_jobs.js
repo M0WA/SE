@@ -53,6 +53,24 @@
     return s.charAt(0).toUpperCase() + s.slice(1);
   }
 
+  // ACTION_ICONS: this page's action buttons/links (View/Cancel on a job
+  // row, Run now/Edit/Delete on a schedule row) show a single icon glyph
+  // instead of a text label, to keep these dense tables narrow -- the
+  // action's name moves to title (native hover tooltip) and aria-label
+  // (so it's still announced, not just shown), rather than being lost.
+  const ACTION_ICONS = { view: '\u{1F50D}', cancel: '✕', run: '▶', edit: '✎', delete: '\u{1F5D1}' };
+
+  // setIconLabel gives el (a <button> or <a>) an icon glyph as its only
+  // visible content plus a hover title and an aria-label carrying the real
+  // action name -- shared by every action button/link built below so the
+  // icon/tooltip/accessible-name wiring can't drift between them.
+  function setIconLabel(el, iconKey, label) {
+    el.classList.add('icon-button');
+    el.textContent = ACTION_ICONS[iconKey];
+    el.title = label;
+    el.setAttribute('aria-label', label);
+  }
+
   function formatDuration(startedAt, finishedAt) {
     if (!startedAt) return '—';
     const start = new Date(startedAt).getTime();
@@ -122,14 +140,14 @@
     const viewBtn = document.createElement('button');
     viewBtn.type = 'button';
     viewBtn.className = 'text-button';
-    viewBtn.textContent = 'View';
+    setIconLabel(viewBtn, 'view', 'View');
     viewBtn.addEventListener('click', () => loadJobDetail(job.id));
     td.appendChild(viewBtn);
     if (ACTIVE_STATUSES.includes(job.status)) {
       const cancelBtn = document.createElement('button');
       cancelBtn.type = 'button';
       cancelBtn.className = 'text-button';
-      cancelBtn.textContent = 'Cancel';
+      setIconLabel(cancelBtn, 'cancel', 'Cancel');
       cancelBtn.addEventListener('click', () => cancelJob(job.id, cancelBtn));
       td.appendChild(cancelBtn);
     }
@@ -492,18 +510,18 @@
     const runBtn = document.createElement('button');
     runBtn.type = 'button';
     runBtn.className = 'text-button';
-    runBtn.textContent = 'Run now';
+    setIconLabel(runBtn, 'run', 'Run now');
     runBtn.addEventListener('click', () => runScheduleNow(s, runBtn));
     td.appendChild(runBtn);
     const editLink = document.createElement('a');
     editLink.className = 'text-button';
     editLink.href = '/admin/schedule/' + encodeURIComponent(s.id);
-    editLink.textContent = 'Edit';
+    setIconLabel(editLink, 'edit', 'Edit');
     td.appendChild(editLink);
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'text-button';
-    btn.textContent = 'Delete';
+    setIconLabel(btn, 'delete', 'Delete');
     btn.addEventListener('click', () => deleteCrawl(s.id));
     td.appendChild(btn);
     return td;
@@ -584,6 +602,7 @@
     module.exports = {
       capitalize, formatDuration, formatSpeed, updateJobSpeeds, formatMs,
       clearEndedJobs,
+      ACTION_ICONS, setIconLabel, viewButtonCell, crawlActionsCell,
       filterJobs, filterPages, filterCrawls,
       crawlRecurrenceCell, crawlLinkScopeCell, toggleCrawlEnabled,
       LINK_SCOPE_LABELS, RENDERER_LABELS,
