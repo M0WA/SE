@@ -17,15 +17,48 @@ model's real, results-informed answer. (`ChatResult.HookResults` still
 carries the raw tool output separately, for the chat UI's own folded
 transparency panel.)
 
-## Suggested system prompt (Settings -> Chat -> System prompt)
+## Suggested prompts
 
-The model only emits a hook's invocation syntax if told to:
+Each hook has its own Prompt field (Settings -> Chat -> Hooks -> edit a
+hook), injected only while that hook is active -- not the endpoint-level
+System prompt, which is unconditional and shared by everything. A hook only
+emits its invocation syntax if told to, and told firmly enough: a model
+that already has an opinion about a well-known URL or topic will otherwise
+just answer from its own (possibly wrong or outdated) memory instead of
+actually calling the tool, which defeats the point of having one. Say so
+explicitly rather than leaving it implied:
+
+web_search's Prompt:
 
 ```
-To search the web: output only <web_search>query</web_search>.
-To fetch a URL: output only <web_fetch>https://...</web_fetch>.
-You'll get the result as a new message -- answer from it, don't repeat the tool call.
+When the user asks about something that could have changed (people in
+office, current events, prices, versions, schedules, or anything
+time-sensitive), you must search with <web_search>query</web_search>
+before answering, even if you already feel confident -- your training
+data can be outdated. Output only the tag, nothing else, and wait for
+real results as a new message before answering. Never guess or answer
+from memory for time-sensitive facts.
 ```
+
+web_fetch's Prompt:
+
+```
+When the user asks about a specific URL or its content, you must fetch it
+with <web_fetch>https://...</web_fetch> before answering, even if you
+already feel confident or were given unrelated search results -- those
+are not the page itself. Output only the tag, nothing else, and wait for
+the real page content as a new message before answering. Never guess,
+recall from memory, or describe what you assume the page contains.
+```
+
+The "even if you already feel confident" phrasing matters: a model with a
+strong prior about a well-known URL or fact (e.g. wikipedia.org's title, a
+head-of-state's name) will otherwise just answer from memory instead of
+actually calling the tool, especially when RAG/deterministic web-search
+context is also enabled and gives it something that merely looks like
+"I already did research." Naming that failure mode explicitly and telling
+it to call the tool anyway measurably improves (though, being an LLM,
+never perfectly guarantees) actual tool use over a shorter, softer prompt.
 
 ## Install
 
