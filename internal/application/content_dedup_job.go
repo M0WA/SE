@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"time"
 
@@ -118,6 +117,20 @@ func RunContentDedupJob(ctx context.Context, repo ports.ContentDedupRepository, 
 // row saved before this feature existed, not yet caught up by the
 // migration backfill) is skipped rather than grouped with every other
 // empty-hash row.
+// groupsOfAtLeastTwo returns only byKey's groups with more than one member
+// -- a single fingerprint sharing its key with nothing else isn't a
+// duplicate. Shared by groupByExactHash (string keys) and groupBySimHash
+// (int union-find root keys) below.
+func groupsOfAtLeastTwo[K comparable](byKey map[K][]domain.DocumentFingerprint) [][]domain.DocumentFingerprint {
+	groups := make([][]domain.DocumentFingerprint, 0, len(byKey))
+	for _, g := range byKey {
+		if len(g) > 1 {
+			groups = append(groups, g)
+		}
+	}
+	return groups
+}
+
 func groupByExactHash(fingerprints []domain.DocumentFingerprint) [][]domain.DocumentFingerprint {
 	byHash := make(map[string][]domain.DocumentFingerprint)
 	for _, f := range fingerprints {
@@ -126,13 +139,7 @@ func groupByExactHash(fingerprints []domain.DocumentFingerprint) [][]domain.Docu
 		}
 		byHash[f.ContentHash] = append(byHash[f.ContentHash], f)
 	}
-	groups := make([][]domain.DocumentFingerprint, 0, len(byHash))
-	for _, g := range byHash {
-		if len(g) > 1 {
-			groups = append(groups, g)
-		}
-	}
-	return groups
+	return groupsOfAtLeastTwo(byHash)
 }
 
 // groupBySimHash finds near-duplicate groups via 4-band LSH bucketing plus
@@ -204,13 +211,7 @@ func groupBySimHash(fingerprints []domain.DocumentFingerprint, maxDistance int) 
 		root := find(i)
 		byRoot[root] = append(byRoot[root], f)
 	}
-	groups := make([][]domain.DocumentFingerprint, 0, len(byRoot))
-	for _, g := range byRoot {
-		if len(g) > 1 {
-			groups = append(groups, g)
-		}
-	}
-	return groups
+	return groupsOfAtLeastTwo(byRoot)
 }
 
 // chooseCanonical picks which document in a duplicate group survives:
@@ -280,35 +281,11 @@ func RunContentDedupJobWithStatus(ctx context.Context, repo ports.ContentDedupRe
 }
 
 // LoadContentDedupStatus reads the persisted status back -- used
-// internally and by the admin GET handler. A nil settings, store error,
-// missing key, or bad value all just return the zero value; "nothing to
-// show yet" is never an error.
+// internally and by the admin GET handler.
 func LoadContentDedupStatus(ctx context.Context, settings ports.SettingsStore) domain.ContentDedupStatus {
-	if settings == nil {
-		return domain.ContentDedupStatus{}
-	}
-	value, found, err := settings.GetSetting(ctx, ports.SettingsKeyContentDedupStatus)
-	if err != nil || !found {
-		return domain.ContentDedupStatus{}
-	}
-	var status domain.ContentDedupStatus
-	if err := json.Unmarshal([]byte(value), &status); err != nil {
-		log.Printf("decoding content dedup status: %v", err)
-		return domain.ContentDedupStatus{}
-	}
-	return status
+	return loadJSONStatus[domain.ContentDedupStatus](ctx, settings, ports.SettingsKeyContentDedupStatus, "content dedup status")
 }
 
 func saveContentDedupStatus(ctx context.Context, settings ports.SettingsStore, status domain.ContentDedupStatus) {
-	if settings == nil {
-		return
-	}
-	data, err := json.Marshal(status)
-	if err != nil {
-		log.Printf("encoding content dedup status: %v", err)
-		return
-	}
-	if err := settings.SaveSetting(ctx, ports.SettingsKeyContentDedupStatus, string(data)); err != nil {
-		log.Printf("saving content dedup status: %v", err)
-	}
+	saveJSONStatus(ctx, settings, ports.SettingsKeyContentDedupStatus, "content dedup status", status)
 }

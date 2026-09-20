@@ -114,7 +114,7 @@ func (r *Repository) MarkCancelled(ctx context.Context, id string) error {
 // (insertion order, served by crawl_job_pages' own auto-increment primary
 // key). Returns domain.ErrCrawlJobNotFound if no job with this ID exists.
 func (r *Repository) Get(ctx context.Context, id string) (domain.CrawlJob, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT `+crawlJobColumns+` FROM crawl_jobs WHERE id = `+r.dialect.Placeholder(1), id)
+	row := r.db.QueryRowContext(ctx, r.ph(`SELECT `+crawlJobColumns+` FROM crawl_jobs WHERE id = %s`, 1), id)
 	job, err := scanCrawlJob(row)
 	if err == sql.ErrNoRows {
 		return domain.CrawlJob{}, domain.ErrCrawlJobNotFound
@@ -123,9 +123,9 @@ func (r *Repository) Get(ctx context.Context, id string) (domain.CrawlJob, error
 		return domain.CrawlJob{}, fmt.Errorf("querying crawl job: %w", err)
 	}
 
-	rows, err := r.db.QueryContext(ctx,
+	rows, err := r.db.QueryContext(ctx, r.ph(
 		`SELECT url, status, title, error, doc_length, links_found, duration_ms, fetched_at
-		 FROM crawl_job_pages WHERE job_id = `+r.dialect.Placeholder(1)+` ORDER BY id ASC`, id)
+		 FROM crawl_job_pages WHERE job_id = %s ORDER BY id ASC`, 1), id)
 	if err != nil {
 		return domain.CrawlJob{}, fmt.Errorf("querying crawl job pages: %w", err)
 	}

@@ -23,16 +23,8 @@
   // filterJobs pattern: a case-insensitive regex matched against title and
   // URL, with invalid patterns reported rather than thrown.
   function filterDocs(docs, pattern) {
-    filterErrorEl.textContent = '';
-    if (!pattern) return docs;
-    let re;
-    try {
-      re = new RegExp(pattern, 'i');
-    } catch (err) {
-      filterErrorEl.textContent = 'Invalid pattern: ' + err.message;
-      return docs;
-    }
-    return docs.filter((d) => re.test(d.title || '') || re.test(d.url || ''));
+    return regexFilter(docs, pattern, filterErrorEl,
+      (re, d) => re.test(d.title || '') || re.test(d.url || ''), 'Invalid pattern');
   }
 
   function buildChart(docs) {

@@ -184,23 +184,11 @@ func (c *contentDedupRecomputer) lastRun() time.Time {
 // completion callback so next_run_at reflects when a crawl actually
 // finished, not just when it started.
 func runScheduler(ctx context.Context, store ports.ScheduledCrawlStore, handler *restapi.Handler) {
-	triggerDue := func() {
+	bootstrap.PollRefresh(ctx, schedulerPollInterval, func() {
 		if _, err := application.TriggerDueCrawls(ctx, store, handler.TriggerScheduledCrawl, time.Now()); err != nil {
 			log.Printf("checking scheduled crawls: %v", err)
 		}
-	}
-	triggerDue()
-
-	ticker := time.NewTicker(schedulerPollInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			triggerDue()
-		}
-	}
+	})
 }
 
 // crawlJobPruner is satisfied by *sqlrepo.Repository's PruneCrawlJobs --
@@ -216,23 +204,11 @@ type crawlJobPruner interface {
 // fixed poll interval for as long as ctx stays alive -- an admin raising
 // or lowering the limit takes effect within one poll tick either way.
 func runCrawlJobPruner(ctx context.Context, pruner crawlJobPruner, opSettings *domain.OperationalSettings) {
-	prune := func() {
+	bootstrap.PollRefresh(ctx, crawlJobPrunePollInterval, func() {
 		if err := pruner.PruneCrawlJobs(ctx, opSettings.Get().MaxRetainedCrawlJobs); err != nil {
 			log.Printf("pruning crawl jobs: %v", err)
 		}
-	}
-	prune()
-
-	ticker := time.NewTicker(crawlJobPrunePollInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			prune()
-		}
-	}
+	})
 }
 
 func main() {

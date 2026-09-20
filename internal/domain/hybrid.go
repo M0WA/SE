@@ -62,12 +62,7 @@ type HybridResult struct {
 // CombineScores blends BM25 and cosine similarity into a final score.
 // alpha=1 -> pure BM25, alpha=0 -> pure semantic.
 func CombineScores(candidates []HybridResult, alpha float64) []HybridResult {
-	if alpha < 0 {
-		alpha = 0
-	}
-	if alpha > 1 {
-		alpha = 1
-	}
+	alpha = clamp(alpha, 0, 1)
 
 	maxBM25 := 0.0
 	for _, c := range candidates {

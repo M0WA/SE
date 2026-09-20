@@ -3,9 +3,7 @@ package domain
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -161,7 +159,7 @@ var crawlJobSeq int64
 // in-memory store and sqlrepo's persistent one, so both name jobs exactly
 // the same way.
 func NewCrawlJobID() string {
-	return fmt.Sprintf("job-%d-%d", time.Now().UnixNano(), atomic.AddInt64(&crawlJobSeq, 1))
+	return newSeqID("job", &crawlJobSeq)
 }
 
 // Create registers a new job in CrawlJobQueued status and returns it.
@@ -269,11 +267,11 @@ func (s *CrawlJobStore) List(_ context.Context) ([]CrawlJobSummary, error) {
 	return out, nil
 }
 
-// isEndedStatus reports whether a job in this status has finished one way
-// or another (as opposed to CrawlJobQueued/CrawlJobRunning, which are still
-// active) -- shared by DeleteEndedCrawlJobs here and sqlrepo's DB-backed
-// equivalent so both agree on exactly what "ended" means.
-func isEndedStatus(status CrawlJobStatus) bool {
+// IsEndedCrawlJobStatus reports whether a job in this status has finished
+// one way or another (as opposed to CrawlJobQueued/CrawlJobRunning, which
+// are still active) -- shared by DeleteEndedCrawlJobs here and sqlrepo's
+// DB-backed equivalent so both agree on exactly what "ended" means.
+func IsEndedCrawlJobStatus(status CrawlJobStatus) bool {
 	return status == CrawlJobDone || status == CrawlJobFailed || status == CrawlJobCancelled
 }
 
@@ -288,7 +286,7 @@ func (s *CrawlJobStore) DeleteEndedCrawlJobs(_ context.Context) (int, error) {
 	kept := s.order[:0]
 	removed := 0
 	for _, id := range s.order {
-		if isEndedStatus(s.jobs[id].Status) {
+		if IsEndedCrawlJobStatus(s.jobs[id].Status) {
 			delete(s.jobs, id)
 			removed++
 			continue

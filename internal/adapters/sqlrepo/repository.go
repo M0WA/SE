@@ -183,6 +183,22 @@ func (r *Repository) migrate(ctx context.Context) error {
 	return r.ensureDocumentAliasHostIndex(ctx)
 }
 
+// addColumnIfMissing adds ddl (a full "<name> <type> ..." column
+// definition) to table via ALTER TABLE, unless existing (from
+// r.existingColumns(ctx, table)) already lists name -- shared by every
+// migrate*Columns function below, which otherwise each hand-rolled this
+// identical "check existing, ALTER TABLE, tolerate a concurrent-migration
+// race via isAlreadyExistsError" closure themselves.
+func (r *Repository) addColumnIfMissing(ctx context.Context, table string, existing map[string]bool, name, ddl string) error {
+	if existing[name] {
+		return nil
+	}
+	if _, err := r.db.ExecContext(ctx, "ALTER TABLE "+table+" ADD COLUMN "+ddl); err != nil && !isAlreadyExistsError(err) {
+		return fmt.Errorf("adding %s column: %w", name, err)
+	}
+	return nil
+}
+
 // migrateScheduledCrawlColumns adds per-crawl override columns to a
 // scheduled_crawls table that predates them (CREATE TABLE IF NOT EXISTS
 // only shapes a fresh table). A pre-existing schedule defaults to
@@ -192,79 +208,70 @@ func (r *Repository) migrateScheduledCrawlColumns(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	addColumn := func(name, ddl string) error {
-		if existing[name] {
-			return nil
-		}
-		if _, err := r.db.ExecContext(ctx, "ALTER TABLE scheduled_crawls ADD COLUMN "+ddl); err != nil && !isAlreadyExistsError(err) {
-			return fmt.Errorf("adding %s column: %w", name, err)
-		}
-		return nil
-	}
-	if err := addColumn("fetch_timeout_seconds", "fetch_timeout_seconds INTEGER NOT NULL DEFAULT 0"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "scheduled_crawls", existing, "fetch_timeout_seconds", "fetch_timeout_seconds INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
-	if err := addColumn("min_text_length", "min_text_length INTEGER NOT NULL DEFAULT 0"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "scheduled_crawls", existing, "min_text_length", "min_text_length INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
-	if err := addColumn("crawl_delay_ms", "crawl_delay_ms INTEGER NOT NULL DEFAULT 0"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "scheduled_crawls", existing, "crawl_delay_ms", "crawl_delay_ms INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
-	if err := addColumn("max_response_kb", "max_response_kb INTEGER NOT NULL DEFAULT 0"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "scheduled_crawls", existing, "max_response_kb", "max_response_kb INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
-	if err := addColumn("prioritize_unindexed", "prioritize_unindexed BOOLEAN NOT NULL DEFAULT false"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "scheduled_crawls", existing, "prioritize_unindexed", "prioritize_unindexed BOOLEAN NOT NULL DEFAULT false"); err != nil {
 		return err
 	}
-	if err := addColumn("cookie", "cookie TEXT NOT NULL DEFAULT ''"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "scheduled_crawls", existing, "cookie", "cookie TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	if err := addColumn("basic_auth_user", "basic_auth_user TEXT NOT NULL DEFAULT ''"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "scheduled_crawls", existing, "basic_auth_user", "basic_auth_user TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	if err := addColumn("basic_auth_pass", "basic_auth_pass TEXT NOT NULL DEFAULT ''"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "scheduled_crawls", existing, "basic_auth_pass", "basic_auth_pass TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	// Recurring defaults to true for a pre-existing row -- every schedule
 	// that predates this column really was a recurring one; the
 	// run-once-then-disable shape is new.
-	if err := addColumn("recurring", "recurring BOOLEAN NOT NULL DEFAULT true"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "scheduled_crawls", existing, "recurring", "recurring BOOLEAN NOT NULL DEFAULT true"); err != nil {
 		return err
 	}
 	// max_runs 0 (the default) means unlimited for both a pre-existing row
 	// and a freshly created one that never set it -- run_count 0 is simply
 	// "hasn't run yet", true for every pre-existing row too since this
 	// column didn't exist to increment before now.
-	if err := addColumn("max_runs", "max_runs INTEGER NOT NULL DEFAULT 0"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "scheduled_crawls", existing, "max_runs", "max_runs INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
-	if err := addColumn("run_count", "run_count INTEGER NOT NULL DEFAULT 0"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "scheduled_crawls", existing, "run_count", "run_count INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
 	// renderer defaults to '' (domain.RendererDefault) for a pre-existing
 	// row -- inherit whatever the Tuning page's global default is, same as
 	// a freshly created schedule that never set it.
-	if err := addColumn("renderer", "renderer TEXT NOT NULL DEFAULT ''"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "scheduled_crawls", existing, "renderer", "renderer TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	// link_scope replaces the old allow_off_domain_links boolean (left in
 	// place, unused). Defaulting a pre-existing row to '' (inherit the
 	// Tuning page's global default) rather than translating the old
 	// boolean is deliberate -- downwards compatibility isn't a concern here.
-	if err := addColumn("link_scope", "link_scope TEXT NOT NULL DEFAULT ''"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "scheduled_crawls", existing, "link_scope", "link_scope TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	// allowed_domains/blocked_domains default to '[]' (no list -- LinkScope
 	// alone decides scope, same as a freshly created schedule that never
 	// set either) for a pre-existing row; follow_indexed_domains defaults
 	// to false, same as every other boolean override added before it.
-	if err := addColumn("allowed_domains", "allowed_domains TEXT NOT NULL DEFAULT '[]'"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "scheduled_crawls", existing, "allowed_domains", "allowed_domains TEXT NOT NULL DEFAULT '[]'"); err != nil {
 		return err
 	}
-	if err := addColumn("blocked_domains", "blocked_domains TEXT NOT NULL DEFAULT '[]'"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "scheduled_crawls", existing, "blocked_domains", "blocked_domains TEXT NOT NULL DEFAULT '[]'"); err != nil {
 		return err
 	}
-	if err := addColumn("follow_indexed_domains", "follow_indexed_domains BOOLEAN NOT NULL DEFAULT false"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "scheduled_crawls", existing, "follow_indexed_domains", "follow_indexed_domains BOOLEAN NOT NULL DEFAULT false"); err != nil {
 		return err
 	}
 	// in_progress tracks "a triggered run for this entry hasn't finished
@@ -272,13 +279,13 @@ func (r *Repository) migrateScheduledCrawlColumns(ctx context.Context) error {
 	// domain.ScheduledCrawl.InProgress and application.TriggerDueCrawls for
 	// why the two must never be conflated. Defaults to false for a
 	// pre-existing row: nothing was mid-run when this column didn't exist.
-	if err := addColumn("in_progress", "in_progress BOOLEAN NOT NULL DEFAULT false"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "scheduled_crawls", existing, "in_progress", "in_progress BOOLEAN NOT NULL DEFAULT false"); err != nil {
 		return err
 	}
 	// job_id backs ResetStaleInProgress's crash-recovery check (see
 	// domain.ScheduledCrawl.JobID) -- '' for a pre-existing row is exactly
 	// right, since in_progress also defaults to false for one.
-	return addColumn("job_id", "job_id TEXT NOT NULL DEFAULT ''")
+	return r.addColumnIfMissing(ctx, "scheduled_crawls", existing, "job_id", "job_id TEXT NOT NULL DEFAULT ''")
 }
 
 // migrateEmbeddingEndpointColumns adds the chunking columns (see
@@ -290,19 +297,10 @@ func (r *Repository) migrateEmbeddingEndpointColumns(ctx context.Context) error 
 	if err != nil {
 		return err
 	}
-	addColumn := func(name, ddl string) error {
-		if existing[name] {
-			return nil
-		}
-		if _, err := r.db.ExecContext(ctx, "ALTER TABLE embedding_http_endpoints ADD COLUMN "+ddl); err != nil && !isAlreadyExistsError(err) {
-			return fmt.Errorf("adding %s column: %w", name, err)
-		}
-		return nil
-	}
-	if err := addColumn("chunk_size_tokens", "chunk_size_tokens INTEGER NOT NULL DEFAULT 0"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "embedding_http_endpoints", existing, "chunk_size_tokens", "chunk_size_tokens INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
-	return addColumn("tokenize_url", "tokenize_url TEXT NOT NULL DEFAULT ''")
+	return r.addColumnIfMissing(ctx, "embedding_http_endpoints", existing, "tokenize_url", "tokenize_url TEXT NOT NULL DEFAULT ''")
 }
 
 // migrateChatEndpointColumns adds max_context_tokens (see
@@ -322,28 +320,19 @@ func (r *Repository) migrateChatEndpointColumns(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	addColumn := func(name, ddl string) error {
-		if existing[name] {
-			return nil
-		}
-		if _, err := r.db.ExecContext(ctx, "ALTER TABLE chat_endpoint ADD COLUMN "+ddl); err != nil && !isAlreadyExistsError(err) {
-			return fmt.Errorf("adding %s column: %w", name, err)
-		}
-		return nil
-	}
-	if err := addColumn("max_context_tokens", "max_context_tokens INTEGER NOT NULL DEFAULT 0"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "chat_endpoint", existing, "max_context_tokens", "max_context_tokens INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
-	if err := addColumn("web_search_enabled", "web_search_enabled BOOLEAN NOT NULL DEFAULT false"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "chat_endpoint", existing, "web_search_enabled", "web_search_enabled BOOLEAN NOT NULL DEFAULT false"); err != nil {
 		return err
 	}
-	if err := addColumn("web_search_base_url", "web_search_base_url TEXT NOT NULL DEFAULT ''"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "chat_endpoint", existing, "web_search_base_url", "web_search_base_url TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	if err := addColumn("web_search_result_count", "web_search_result_count INTEGER NOT NULL DEFAULT 0"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "chat_endpoint", existing, "web_search_result_count", "web_search_result_count INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
-	return addColumn("system_prompt", "system_prompt TEXT NOT NULL DEFAULT ''")
+	return r.addColumnIfMissing(ctx, "chat_endpoint", existing, "system_prompt", "system_prompt TEXT NOT NULL DEFAULT ''")
 }
 
 // migrateChatHookColumns adds prompt (see domain.ChatHook.Prompt) and
@@ -360,19 +349,10 @@ func (r *Repository) migrateChatHookColumns(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	addColumn := func(name, ddl string) error {
-		if existing[name] {
-			return nil
-		}
-		if _, err := r.db.ExecContext(ctx, "ALTER TABLE chat_hooks ADD COLUMN "+ddl); err != nil && !isAlreadyExistsError(err) {
-			return fmt.Errorf("adding %s column: %w", name, err)
-		}
-		return nil
-	}
-	if err := addColumn("prompt", "prompt TEXT NOT NULL DEFAULT ''"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "chat_hooks", existing, "prompt", "prompt TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	return addColumn("gated_by_web_search", "gated_by_web_search BOOLEAN NOT NULL DEFAULT false")
+	return r.addColumnIfMissing(ctx, "chat_hooks", existing, "gated_by_web_search", "gated_by_web_search BOOLEAN NOT NULL DEFAULT false")
 }
 
 // legacyHTTPEmbeddingSettings decodes just the fields this migration cares
@@ -539,34 +519,25 @@ func (r *Repository) migrateDocumentColumns(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	addColumn := func(name, ddl string) error {
-		if existing[name] {
-			return nil
-		}
-		if _, err := r.db.ExecContext(ctx, "ALTER TABLE documents ADD COLUMN "+ddl); err != nil && !isAlreadyExistsError(err) {
-			return fmt.Errorf("adding %s column: %w", name, err)
-		}
-		return nil
-	}
-	if err := addColumn("host", "host TEXT NOT NULL DEFAULT ''"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "documents", existing, "host", "host TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	if err := addColumn("version", "version INTEGER NOT NULL DEFAULT 1"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "documents", existing, "version", "version INTEGER NOT NULL DEFAULT 1"); err != nil {
 		return err
 	}
-	if err := addColumn("crawled_at", "crawled_at TEXT NOT NULL DEFAULT ''"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "documents", existing, "crawled_at", "crawled_at TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	if err := addColumn("norm_embedding", "norm_embedding REAL NOT NULL DEFAULT 0"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "documents", existing, "norm_embedding", "norm_embedding REAL NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
-	if err := addColumn("pagerank", "pagerank REAL NOT NULL DEFAULT 0"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "documents", existing, "pagerank", "pagerank REAL NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
-	if err := addColumn("content_hash", "content_hash TEXT NOT NULL DEFAULT ''"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "documents", existing, "content_hash", "content_hash TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	if err := addColumn("simhash", "simhash TEXT NOT NULL DEFAULT ''"); err != nil {
+	if err := r.addColumnIfMissing(ctx, "documents", existing, "simhash", "simhash TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	if err := r.backfillHost(ctx); err != nil {
@@ -587,10 +558,8 @@ func (r *Repository) migrateDocumentAliasColumns(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if !existing["host"] {
-		if _, err := r.db.ExecContext(ctx, "ALTER TABLE document_aliases ADD COLUMN host TEXT NOT NULL DEFAULT ''"); err != nil && !isAlreadyExistsError(err) {
-			return fmt.Errorf("adding host column to document_aliases: %w", err)
-		}
+	if err := r.addColumnIfMissing(ctx, "document_aliases", existing, "host", "host TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
 	}
 	return r.backfillDocumentAliasHosts(ctx)
 }
@@ -1851,14 +1820,7 @@ func (r *Repository) HostsIndexed(ctx context.Context, hosts []string) (map[stri
 	if len(hosts) > maxHostsIndexedBatch {
 		hosts = hosts[:maxHostsIndexedBatch]
 	}
-	conditions := make([]string, 0, len(hosts))
-	args := make([]interface{}, 0, len(hosts)*2)
-	pos := 1
-	for _, h := range hosts {
-		conditions = append(conditions, fmt.Sprintf("(host = %s OR host LIKE %s)", r.dialect.Placeholder(pos), r.dialect.Placeholder(pos+1)))
-		args = append(args, h, "%."+h)
-		pos += 2
-	}
+	conditions, args, _ := r.hostMatchConditions("host", hosts, 1)
 	query := `SELECT DISTINCT host FROM documents WHERE ` + strings.Join(conditions, " OR ")
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -2320,21 +2282,28 @@ const scheduledCrawlColumns = `id, seed_urls, max_pages, respect_robots, user_ag
 	crawl_delay_ms, max_response_kb, prioritize_unindexed, recurring,
 	interval_minutes, max_runs, run_count, renderer, enabled, in_progress, job_id, last_run_at, next_run_at, created_at`
 
+// marshalScheduledCrawlJSON encodes the three list fields CreateScheduledCrawl
+// and UpdateScheduledCrawl both need as JSON columns.
+func marshalScheduledCrawlJSON(s domain.ScheduledCrawl) (seedJSON, allowedJSON, blockedJSON []byte, err error) {
+	if seedJSON, err = json.Marshal(s.SeedURLs); err != nil {
+		return nil, nil, nil, fmt.Errorf("encoding seed urls: %w", err)
+	}
+	if allowedJSON, err = json.Marshal(s.AllowedDomains); err != nil {
+		return nil, nil, nil, fmt.Errorf("encoding allowed domains: %w", err)
+	}
+	if blockedJSON, err = json.Marshal(s.BlockedDomains); err != nil {
+		return nil, nil, nil, fmt.Errorf("encoding blocked domains: %w", err)
+	}
+	return seedJSON, allowedJSON, blockedJSON, nil
+}
+
 // CreateScheduledCrawl inserts a new crawl definition -- the one
 // representation of a crawl the admin sets up, whether it recurs or (see
 // s.Recurring) just runs once.
 func (r *Repository) CreateScheduledCrawl(ctx context.Context, s domain.ScheduledCrawl) error {
-	seedJSON, err := json.Marshal(s.SeedURLs)
+	seedJSON, allowedJSON, blockedJSON, err := marshalScheduledCrawlJSON(s)
 	if err != nil {
-		return fmt.Errorf("encoding seed urls: %w", err)
-	}
-	allowedJSON, err := json.Marshal(s.AllowedDomains)
-	if err != nil {
-		return fmt.Errorf("encoding allowed domains: %w", err)
-	}
-	blockedJSON, err := json.Marshal(s.BlockedDomains)
-	if err != nil {
-		return fmt.Errorf("encoding blocked domains: %w", err)
+		return err
 	}
 	insertSQL := r.ph(`INSERT INTO scheduled_crawls (`+scheduledCrawlColumns+`)
 	                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`,
@@ -2394,17 +2363,9 @@ func (r *Repository) ListScheduledCrawls(ctx context.Context) ([]domain.Schedule
 // raise, lower, or clear the cap), just not how many runs have already
 // counted against it.
 func (r *Repository) UpdateScheduledCrawl(ctx context.Context, s domain.ScheduledCrawl) error {
-	seedJSON, err := json.Marshal(s.SeedURLs)
+	seedJSON, allowedJSON, blockedJSON, err := marshalScheduledCrawlJSON(s)
 	if err != nil {
-		return fmt.Errorf("encoding seed urls: %w", err)
-	}
-	allowedJSON, err := json.Marshal(s.AllowedDomains)
-	if err != nil {
-		return fmt.Errorf("encoding allowed domains: %w", err)
-	}
-	blockedJSON, err := json.Marshal(s.BlockedDomains)
-	if err != nil {
-		return fmt.Errorf("encoding blocked domains: %w", err)
+		return err
 	}
 	updateSQL := r.ph(`UPDATE scheduled_crawls SET
 	                      seed_urls = %s, max_pages = %s, respect_robots = %s, user_agent = %s,
@@ -2427,7 +2388,7 @@ func (r *Repository) UpdateScheduledCrawl(ctx context.Context, s domain.Schedule
 	if err != nil {
 		return fmt.Errorf("updating scheduled crawl (%s): %w", s.ID, err)
 	}
-	return requireRowsAffected(res, s.ID)
+	return requireRowsAffected(res, s.ID, ports.ErrScheduledCrawlNotFound)
 }
 
 func (r *Repository) DeleteScheduledCrawl(ctx context.Context, id string) error {
@@ -2435,19 +2396,24 @@ func (r *Repository) DeleteScheduledCrawl(ctx context.Context, id string) error 
 	if err != nil {
 		return fmt.Errorf("deleting scheduled crawl (%s): %w", id, err)
 	}
-	return requireRowsAffected(res, id)
+	return requireRowsAffected(res, id, ports.ErrScheduledCrawlNotFound)
 }
 
 // requireRowsAffected turns a zero-rows-affected result into
 // ErrScheduledCrawlNotFound, so callers can tell "nothing to do" apart from
 // "that ID doesn't exist".
-func requireRowsAffected(res sql.Result, id string) error {
+// requireRowsAffected turns a zero-rows-affected result into notFound, so
+// a caller can tell "nothing to do" apart from "that ID doesn't exist" --
+// shared by every resource's Update/Delete (each with its own not-found
+// sentinel: ports.ErrScheduledCrawlNotFound, ErrEmbeddingEndpointNotFound,
+// ErrChatHookNotFound, ...).
+func requireRowsAffected(res sql.Result, id string, notFound error) error {
 	n, err := res.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("checking result for %s: %w", id, err)
 	}
 	if n == 0 {
-		return ports.ErrScheduledCrawlNotFound
+		return notFound
 	}
 	return nil
 }
@@ -2488,7 +2454,7 @@ func (r *Repository) MarkScheduledCrawlRun(ctx context.Context, id string, lastR
 	if err != nil {
 		return fmt.Errorf("marking scheduled crawl run (%s): %w", id, err)
 	}
-	return requireRowsAffected(res, id)
+	return requireRowsAffected(res, id, ports.ErrScheduledCrawlNotFound)
 }
 
 // RunScheduledCrawlNow marks a schedule due immediately, discovered on the
@@ -2530,7 +2496,7 @@ func (r *Repository) SetScheduledCrawlEnabled(ctx context.Context, id string, en
 	if err != nil {
 		return fmt.Errorf("setting scheduled crawl %s enabled=%v: %w", id, enabled, err)
 	}
-	return requireRowsAffected(res, id)
+	return requireRowsAffected(res, id, ports.ErrScheduledCrawlNotFound)
 }
 
 // ResetStaleInProgress clears in_progress for every schedule stuck true
@@ -2638,7 +2604,7 @@ func (r *Repository) UpdateEmbeddingEndpoint(ctx context.Context, e domain.Embed
 	if err != nil {
 		return fmt.Errorf("updating embedding endpoint (%s): %w", e.ID, err)
 	}
-	return requireEmbeddingEndpointRowsAffected(res, e.ID)
+	return requireRowsAffected(res, e.ID, ports.ErrEmbeddingEndpointNotFound)
 }
 
 // DeleteEmbeddingEndpoint removes an endpoint's config only -- its stored
@@ -2649,18 +2615,7 @@ func (r *Repository) DeleteEmbeddingEndpoint(ctx context.Context, id string) err
 	if err != nil {
 		return fmt.Errorf("deleting embedding endpoint (%s): %w", id, err)
 	}
-	return requireEmbeddingEndpointRowsAffected(res, id)
-}
-
-func requireEmbeddingEndpointRowsAffected(res sql.Result, id string) error {
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("checking result for %s: %w", id, err)
-	}
-	if n == 0 {
-		return ports.ErrEmbeddingEndpointNotFound
-	}
-	return nil
+	return requireRowsAffected(res, id, ports.ErrEmbeddingEndpointNotFound)
 }
 
 func scanEmbeddingEndpoint(row scanner) (domain.EmbeddingHTTPEndpoint, error) {
@@ -2779,7 +2734,7 @@ func (r *Repository) UpdateChatHook(ctx context.Context, h domain.ChatHook) erro
 	if err != nil {
 		return fmt.Errorf("updating chat hook (%s): %w", h.ID, err)
 	}
-	return requireChatHookRowsAffected(res, h.ID)
+	return requireRowsAffected(res, h.ID, ports.ErrChatHookNotFound)
 }
 
 // DeleteChatHook removes a hook's config, returning ports.ErrChatHookNotFound
@@ -2789,18 +2744,7 @@ func (r *Repository) DeleteChatHook(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("deleting chat hook (%s): %w", id, err)
 	}
-	return requireChatHookRowsAffected(res, id)
-}
-
-func requireChatHookRowsAffected(res sql.Result, id string) error {
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("checking result for %s: %w", id, err)
-	}
-	if n == 0 {
-		return ports.ErrChatHookNotFound
-	}
-	return nil
+	return requireRowsAffected(res, id, ports.ErrChatHookNotFound)
 }
 
 func scanChatHook(row scanner) (domain.ChatHook, error) {

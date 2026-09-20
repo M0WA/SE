@@ -1,7 +1,6 @@
 package restapi
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -67,15 +66,15 @@ type chatHookResultResponse struct {
 	Err      string `json:"err,omitempty"`
 }
 
+// toChatHookResultResponses' empty-input case naturally returns a
+// zero-length (non-nil) slice, which is fine: HookResults' own
+// "omitempty" tag omits it from the JSON response either way, since
+// encoding/json's omitempty treats a zero-length slice as empty
+// regardless of nil-ness.
 func toChatHookResultResponses(results []domain.ChatHookResult) []chatHookResultResponse {
-	if len(results) == 0 {
-		return nil
-	}
-	out := make([]chatHookResultResponse, len(results))
-	for i, r := range results {
-		out[i] = chatHookResultResponse{HookName: r.HookName, Output: r.Output, Err: r.Err}
-	}
-	return out
+	return mapSlice(results, func(r domain.ChatHookResult) chatHookResultResponse {
+		return chatHookResultResponse{HookName: r.HookName, Output: r.Output, Err: r.Err}
+	})
 }
 
 // handleChat answers one chat turn against the search-server-only,
@@ -91,9 +90,8 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.chat != nil, "chat") {
 		return
 	}
-	var req chatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+	req, ok := decodeJSON[chatRequest](w, r)
+	if !ok {
 		return
 	}
 	if len(req.Messages) == 0 {

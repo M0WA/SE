@@ -201,6 +201,27 @@ function buildTable(headers, rows, cellsForRow) {
   return table;
 }
 
+// regexFilter implements the shared "case-insensitive regex against an
+// already-fetched in-memory array" client-side admin list filter (see
+// filterJobs/filterPages/filterCrawls in admin_jobs.js, filterDocs in
+// admin_domain.js): a blank pattern returns items unchanged, a valid one
+// filters via testFn(re, item), and an invalid one reports errorPrefix plus
+// the regex engine's own message into errorEl rather than throwing.
+function regexFilter(items, pattern, errorEl, testFn, errorPrefix) {
+  if (!pattern) {
+    errorEl.textContent = '';
+    return items;
+  }
+  try {
+    const re = new RegExp(pattern, 'i');
+    errorEl.textContent = '';
+    return items.filter((item) => testFn(re, item));
+  } catch (err) {
+    errorEl.textContent = (errorPrefix || 'Invalid regex') + ': ' + err.message;
+    return items;
+  }
+}
+
 // ADMIN_NAV_GROUPS is the admin sidebar's single source of truth for
 // grouping and order -- every top-level admin page used to carry its own
 // copy of the same flat, ten-link <nav>, differing only in which entry had
@@ -499,6 +520,22 @@ function wireVocabularySearch() {
   loadVocabulary();
 }
 
+// pollWhileInProgress implements the shared "keep re-fetching status every
+// 2s while a background job is running, stop the moment it isn't" pattern
+// (see admin_pagerank.js, admin_embeddings.js, admin_content_dedup.js's own
+// recompute-status polling): call it with the latest inProgress flag, the
+// caller's current timer handle, and its own reload callback (which the
+// caller is responsible for clearing its own timer variable inside, e.g.
+// `() => { pollTimer = null; load(); }`), and store the return value back
+// into that timer variable.
+function pollWhileInProgress(inProgress, pollTimer, reload) {
+  if (inProgress) {
+    return pollTimer || setTimeout(reload, 2000);
+  }
+  if (pollTimer) clearTimeout(pollTimer);
+  return null;
+}
+
 // estimateTokensClient mirrors application.estimateTokens's own
 // deliberately approximate character-count-based estimate (3 chars/token)
 // -- used by admin_chat_settings.js to preview a configured prompt's
@@ -598,9 +635,9 @@ if (typeof module !== 'undefined' && module.exports) {
     clear, setButtonLoading, normalizeURL, kvRow, listItem, buildTile, checkResponse,
     getJSON, postJSON, deleteRequest, patchJSON,
     textCell, snippetCell, urlCell, seedSummary, formatTimestamp, buildTable,
-    linesToText, parseLines,
+    linesToText, parseLines, regexFilter,
     ADMIN_NAV_GROUPS, renderAdminNav,
-    wireSignOut, loadStats, loadVocabulary, wireVocabularySearch,
+    wireSignOut, loadStats, loadVocabulary, wireVocabularySearch, pollWhileInProgress,
     estimateTokensClient, buildDonutSVG, buildDonutLegend,
   };
 }

@@ -29,7 +29,7 @@ type PoolConfigurer interface {
 // nil if unused; pool gets DB pool settings re-applied each tick,
 // embeddingEndpoints self-heals weights against disabled/deleted providers.
 func SyncSettings(ctx context.Context, store ports.SettingsStore, tuning *domain.TuningSettings, op *domain.OperationalSettings, overrides *domain.RankingOverrides, pool PoolConfigurer, embeddingEndpoints ports.EmbeddingEndpointStore) {
-	pollRefresh(ctx, settingsPollInterval, func() { applySettingsOnce(ctx, store, tuning, op, overrides, pool, embeddingEndpoints) })
+	PollRefresh(ctx, settingsPollInterval, func() { applySettingsOnce(ctx, store, tuning, op, overrides, pool, embeddingEndpoints) })
 }
 
 func applySettingsOnce(ctx context.Context, store ports.SettingsStore, tuning *domain.TuningSettings, op *domain.OperationalSettings, overrides *domain.RankingOverrides, pool PoolConfigurer, embeddingEndpoints ports.EmbeddingEndpointStore) {

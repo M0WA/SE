@@ -1,6 +1,9 @@
 package domain
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // TruncateWithNote caps s at max bytes, appending a note naming the
 // original length when it does -- shared by every caller that needs to
@@ -14,3 +17,40 @@ func TruncateWithNote(s string, max int) string {
 	}
 	return s[:max] + fmt.Sprintf("... [truncated, %d bytes total]", len(s))
 }
+
+// TruncateWithEllipsis caps s at max bytes, appending a plain "..." when it
+// does -- shared by every HTTP-client adapter (httpembed, httpchat,
+// httpsearxng, hookrunner) that bounds how much of a non-2xx response
+// body/stderr an error message carries, so a large HTML error page or a
+// runaway script doesn't blow up a log line. Distinct from
+// TruncateWithNote's own "... [truncated, N bytes total]" suffix -- these
+// adapters' error text predates that format and changing it would change
+// the exact error text they produce.
+func TruncateWithEllipsis(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
+}
+
+// RedactSecret replaces every occurrence of secret in s with "[REDACTED]",
+// or returns s unchanged if secret is empty -- shared by every HTTP-client
+// adapter that must keep an API key out of an error message a gateway
+// might otherwise echo back in a response body (that error can end up
+// persisted to a crawl job's record or shown in an admin page, so this
+// isn't just a log-line concern).
+func RedactSecret(s, secret string) string {
+	if secret == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, secret, "[REDACTED]")
+}
+
+// ApproxCharsPerToken estimates a text's token count from its character
+// count when no real tokenizer is available (httpembed's chunking when no
+// TokenizeURL is configured, application.estimateTokens for the chat
+// context budget). Deliberately lower than real English's ~4 chars/token
+// so the estimate errs toward assuming MORE tokens than there really are --
+// overflowing a token budget is the failure mode this exists to prevent,
+// in both callers.
+const ApproxCharsPerToken = 3
