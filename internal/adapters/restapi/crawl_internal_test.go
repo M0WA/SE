@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -96,8 +98,8 @@ func TestRoutesCrawlInternal_TokenConfigured_HealthzStaysOpen(t *testing.T) {
 // rather than losing already-crawled pages over it.
 type erroringCrawlJobStore struct {
 	ports.CrawlJobStore
-	createErr, markRunningErr, appendPageErr, markDoneErr, markFailedErr, getErr, listErr, deleteEndedErr error
-	createCalls, markRunningCalls, appendPageCalls, markDoneCalls, markFailedCalls                        int32
+	createErr, markRunningErr, appendPageErr, markDoneErr, markFailedErr, getErr, listErr, listActiveErr, deleteEndedErr error
+	createCalls, markRunningCalls, appendPageCalls, markDoneCalls, markFailedCalls                                       int32
 }
 
 func (e *erroringCrawlJobStore) Create(ctx context.Context, req domain.CrawlJobRequest) (domain.CrawlJob, error) {
@@ -147,6 +149,12 @@ func (e *erroringCrawlJobStore) List(ctx context.Context) ([]domain.CrawlJobSumm
 	}
 	return e.CrawlJobStore.List(ctx)
 }
+func (e *erroringCrawlJobStore) ListActive(ctx context.Context) ([]domain.CrawlJobSummary, error) {
+	if e.listActiveErr != nil {
+		return nil, e.listActiveErr
+	}
+	return e.CrawlJobStore.ListActive(ctx)
+}
 func (e *erroringCrawlJobStore) DeleteEndedCrawlJobs(ctx context.Context) (int, error) {
 	if e.deleteEndedErr != nil {
 		return 0, e.deleteEndedErr
@@ -168,6 +176,71 @@ func startCrawl(t *testing.T, h *restapi.Handler, opts ports.CrawlOptions) strin
 		t.Fatal("expected a non-empty job_id")
 	}
 	return jobID
+}
+
+// TestTriggerScheduledCrawl_RefusesWhenSeedAlreadyActive is the regression
+// test for the production incident this guard exists to prevent (see
+// sqlrepo.Repository.ResetStaleInProgress's own doc comment): a schedule's
+// own scheduled_crawls.in_progress bookkeeping getting out of sync (a
+// scheduler race, a code/schema transition) must never be the ONLY thing
+// stopping the same seed from being crawled twice at once.
+func TestTriggerScheduledCrawl_RefusesWhenSeedAlreadyActive(t *testing.T) {
+	bc := newBlockingCrawler()
+	h := restapi.New(restapi.Config{Crawler: bc, CrawlJobs: domain.NewCrawlJobStore()})
+
+	firstID := startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"https://cnn.com"}})
+	select {
+	case <-bc.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the first job to start")
+	}
+	defer close(bc.release)
+
+	_, err := h.TriggerScheduledCrawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"https://cnn.com"}}, nil)
+	if !errors.Is(err, domain.ErrCrawlAlreadyActiveForSeed) {
+		t.Fatalf("expected ErrCrawlAlreadyActiveForSeed, got %v", err)
+	}
+
+	waitForJobStatus(t, h, firstID, domain.CrawlJobRunning)
+}
+
+// TestTriggerScheduledCrawl_AllowsDifferentSeedWhileOneIsActive proves the
+// guard is scoped to overlapping seeds only, not "one crawl at a time"
+// globally.
+func TestTriggerScheduledCrawl_AllowsDifferentSeedWhileOneIsActive(t *testing.T) {
+	dispatch := &dispatchingCrawler{}
+	first := newBlockingCrawler()
+	dispatch.push(first)
+	h := restapi.New(restapi.Config{Crawler: dispatch, CrawlJobs: domain.NewCrawlJobStore()})
+
+	startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"https://cnn.com"}})
+	select {
+	case <-first.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the first job to start")
+	}
+	defer close(first.release)
+
+	second := newBlockingCrawler()
+	dispatch.push(second)
+	if _, err := h.TriggerScheduledCrawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"https://bz-berlin.de"}}, nil); err != nil {
+		t.Fatalf("unexpected error starting a crawl for a different seed: %v", err)
+	}
+	defer close(second.release)
+}
+
+// TestTriggerScheduledCrawl_PropagatesActiveCheckError proves a ListActive
+// failure is surfaced as an error (so application.TriggerDueCrawls logs and
+// retries next tick) rather than silently proceeding to trigger a
+// duplicate.
+func TestTriggerScheduledCrawl_PropagatesActiveCheckError(t *testing.T) {
+	store := &erroringCrawlJobStore{CrawlJobStore: domain.NewCrawlJobStore(), listActiveErr: errors.New("db unavailable")}
+	h := restapi.New(restapi.Config{Crawler: &fakeCrawler{}, CrawlJobs: store})
+
+	_, err := h.TriggerScheduledCrawl(context.Background(), ports.CrawlOptions{SeedURLs: []string{"https://cnn.com"}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "db unavailable") {
+		t.Fatalf("expected the ListActive error to propagate, got %v", err)
+	}
 }
 
 // waitForJob polls GET /jobs/{id} through the real handler until the job
@@ -437,7 +510,7 @@ func TestHandleCrawlInternal_ConcurrentJobsAllComplete(t *testing.T) {
 	h := newCrawlServerHandler(&fakeCrawler{count: 1})
 	var ids []string
 	for i := 0; i < 5; i++ {
-		ids = append(ids, startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"http://a"}}))
+		ids = append(ids, startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{fmt.Sprintf("http://a%d", i)}}))
 	}
 	for _, id := range ids {
 		job := waitForJob(t, h, id)
@@ -513,7 +586,7 @@ func TestCancelCrawlJob_StopsAQueuedJob(t *testing.T) {
 	for i := range blockers {
 		blockers[i] = newBlockingCrawler()
 		dispatch.push(blockers[i])
-		startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"http://a"}})
+		startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{fmt.Sprintf("http://a%d", i)}})
 	}
 	for _, bc := range blockers {
 		select {
@@ -562,7 +635,7 @@ func TestRunCrawlJob_RespectsConfiguredMaxConcurrentCrawls(t *testing.T) {
 	for i := range blockers {
 		blockers[i] = newBlockingCrawler()
 		dispatch.push(blockers[i])
-		startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"http://a"}})
+		startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{fmt.Sprintf("http://a%d", i)}})
 	}
 	defer func() {
 		for _, bc := range blockers {
@@ -593,7 +666,7 @@ func TestRunCrawlJob_MaxConcurrentCrawlsResizeAdmitsAlreadyQueuedJob(t *testing.
 	for i := range blockers {
 		blockers[i] = newBlockingCrawler()
 		dispatch.push(blockers[i])
-		startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"http://a"}})
+		startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{fmt.Sprintf("http://a%d", i)}})
 	}
 	defer func() {
 		for _, bc := range blockers {

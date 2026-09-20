@@ -201,6 +201,45 @@ func TestRepository_ListCrawlJobsOmitsPerPageDetail(t *testing.T) {
 	}
 }
 
+// TestRepository_ListActiveOnlyReturnsQueuedAndRunning proves ListActive
+// filters out ended jobs (done/failed/cancelled), unlike List which returns
+// every job ever created -- the targeted query TriggerScheduledCrawl's
+// same-seed guard relies on.
+func TestRepository_ListActiveOnlyReturnsQueuedAndRunning(t *testing.T) {
+	ctx := context.Background()
+	repo := newTestRepo(t)
+
+	queued, _ := repo.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://queued"}})
+	running, _ := repo.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://running"}})
+	if err := repo.MarkRunning(ctx, running.ID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	done, _ := repo.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://done"}})
+	if err := repo.MarkDone(ctx, done.ID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	failed, _ := repo.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://failed"}})
+	if err := repo.MarkFailed(ctx, failed.ID, errors.New("boom")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	cancelled, _ := repo.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://cancelled"}})
+	if err := repo.MarkCancelled(ctx, cancelled.ID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	active, err := repo.ListActive(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	gotIDs := map[string]bool{}
+	for _, j := range active {
+		gotIDs[j.ID] = true
+	}
+	if len(active) != 2 || !gotIDs[queued.ID] || !gotIDs[running.ID] {
+		t.Errorf("expected only the queued and running jobs, got %+v", active)
+	}
+}
+
 func TestRepository_AppendPageOnUnknownJobIsNoop(t *testing.T) {
 	repo := newTestRepo(t)
 	if err := repo.AppendPage(context.Background(), "never-created", domain.CrawlPageEvent{URL: "http://a", Status: domain.CrawlPageIndexed, FetchedAt: time.Now()}); err != nil {

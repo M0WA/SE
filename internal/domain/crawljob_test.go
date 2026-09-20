@@ -162,6 +162,35 @@ func TestCrawlJobStore_ListOmitsPerPageDetail(t *testing.T) {
 	}
 }
 
+// TestCrawlJobStore_ListActiveOnlyReturnsQueuedAndRunning mirrors
+// sqlrepo's own TestRepository_ListActiveOnlyReturnsQueuedAndRunning, so
+// both ports.CrawlJobStore implementations agree on ListActive's contract.
+func TestCrawlJobStore_ListActiveOnlyReturnsQueuedAndRunning(t *testing.T) {
+	ctx := context.Background()
+	s := domain.NewCrawlJobStore()
+	queued, _ := s.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://queued"}})
+	running, _ := s.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://running"}})
+	_ = s.MarkRunning(ctx, running.ID)
+	done, _ := s.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://done"}})
+	_ = s.MarkDone(ctx, done.ID)
+	failed, _ := s.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://failed"}})
+	_ = s.MarkFailed(ctx, failed.ID, errors.New("boom"))
+	cancelled, _ := s.Create(ctx, domain.CrawlJobRequest{SeedURLs: []string{"http://cancelled"}})
+	_ = s.MarkCancelled(ctx, cancelled.ID)
+
+	active, err := s.ListActive(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	gotIDs := map[string]bool{}
+	for _, j := range active {
+		gotIDs[j.ID] = true
+	}
+	if len(active) != 2 || !gotIDs[queued.ID] || !gotIDs[running.ID] {
+		t.Errorf("expected only the queued and running jobs, got %+v", active)
+	}
+}
+
 func TestCrawlJobStore_DeleteEndedCrawlJobsRemovesDoneFailedCancelledOnly(t *testing.T) {
 	ctx := context.Background()
 	s := domain.NewCrawlJobStore()

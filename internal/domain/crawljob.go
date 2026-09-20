@@ -13,6 +13,16 @@ import (
 // must be producible by an in-memory, domain-only implementation.
 var ErrCrawlJobNotFound = errors.New("crawl job not found")
 
+// ErrCrawlAlreadyActiveForSeed is returned when a new crawl is about to be
+// started (scheduled trigger or one-off) for a seed URL that some other
+// Queued/Running job is already crawling -- the same seed must never have
+// two crawls running at once (see
+// restapi.Handler.TriggerScheduledCrawl/hasActiveJobForSeeds), regardless
+// of how the two triggers came to overlap (a scheduler race, a stale
+// scheduled_crawls.in_progress flag, a manual "run now" while one is
+// already in flight, ...).
+var ErrCrawlAlreadyActiveForSeed = errors.New("a crawl is already active for this seed")
+
 // CrawlJobStatus is where a triggered crawl currently stands.
 type CrawlJobStatus string
 
@@ -263,6 +273,21 @@ func (s *CrawlJobStore) List(_ context.Context) ([]CrawlJobSummary, error) {
 	out := make([]CrawlJobSummary, 0, len(s.order))
 	for i := len(s.order) - 1; i >= 0; i-- {
 		out = append(out, s.jobs[s.order[i]].summary())
+	}
+	return out, nil
+}
+
+// ListActive returns every crawl job currently Queued or Running, same
+// contract as sqlrepo's DB-backed equivalent.
+func (s *CrawlJobStore) ListActive(_ context.Context) ([]CrawlJobSummary, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []CrawlJobSummary
+	for i := len(s.order) - 1; i >= 0; i-- {
+		j := s.jobs[s.order[i]]
+		if !IsEndedCrawlJobStatus(j.Status) {
+			out = append(out, j.summary())
+		}
 	}
 	return out, nil
 }

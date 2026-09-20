@@ -456,6 +456,10 @@ type CrawlJobStore interface {
 	MarkCancelled(ctx context.Context, id string) error
 	Get(ctx context.Context, id string) (domain.CrawlJob, error)
 	List(ctx context.Context) ([]domain.CrawlJobSummary, error)
+	// ListActive returns every job currently Queued or Running -- a cheap,
+	// targeted subset of List (never scans ended jobs) used to check for
+	// an already-active crawl of the same seed before starting a new one.
+	ListActive(ctx context.Context) ([]domain.CrawlJobSummary, error)
 	// DeleteEndedCrawlJobs deletes every job in domain.CrawlJobDone,
 	// CrawlJobFailed, or CrawlJobCancelled status, leaving queued/running
 	// jobs untouched, and returns how many were removed.
