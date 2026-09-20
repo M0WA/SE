@@ -3,6 +3,7 @@ package restapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -128,7 +129,25 @@ func (h *Handler) requireCrawlInternalToken(next http.HandlerFunc) http.HandlerF
 // and calls onDone exactly once it finishes -- so TriggerDueCrawls
 // advances next_run_at only once truly done. ctx only scopes the Create
 // call; the crawl itself runs against context.Background().
+//
+// Refuses with domain.ErrCrawlAlreadyActiveForSeed if any currently
+// Queued/Running job already covers one of opts.SeedURLs -- a
+// defense-in-depth check independent of scheduled_crawls' own in_progress
+// bookkeeping, which a code/schema transition or a scheduler race could
+// otherwise get out of sync with (this exact class of bug hit production
+// against cnn.com once already; see
+// sqlrepo.Repository.ResetStaleInProgress's own doc comment). The caller
+// (application.TriggerDueCrawls) treats this the same as any other trigger
+// failure: logged and skipped, retried on the next tick.
 func (h *Handler) TriggerScheduledCrawl(ctx context.Context, opts ports.CrawlOptions, onDone func()) (string, error) {
+	active, err := h.hasActiveJobForSeeds(ctx, opts.SeedURLs)
+	if err != nil {
+		return "", err
+	}
+	if active {
+		return "", domain.ErrCrawlAlreadyActiveForSeed
+	}
+
 	job, err := h.createCrawlJob(ctx, opts)
 	if err != nil {
 		return "", err
@@ -141,6 +160,27 @@ func (h *Handler) TriggerScheduledCrawl(ctx context.Context, opts ports.CrawlOpt
 	}()
 
 	return job.ID, nil
+}
+
+// hasActiveJobForSeeds reports whether any currently Queued/Running crawl
+// job shares at least one seed URL with seedURLs.
+func (h *Handler) hasActiveJobForSeeds(ctx context.Context, seedURLs []string) (bool, error) {
+	active, err := h.crawlJobs.ListActive(ctx)
+	if err != nil {
+		return false, fmt.Errorf("checking for an already-active crawl: %w", err)
+	}
+	seeds := make(map[string]bool, len(seedURLs))
+	for _, u := range seedURLs {
+		seeds[u] = true
+	}
+	for _, j := range active {
+		for _, u := range j.Request.SeedURLs {
+			if seeds[u] {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // createCrawlJob persists a new job record for opts -- TriggerScheduledCrawl's

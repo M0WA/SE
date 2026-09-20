@@ -73,6 +73,18 @@ func (f *fakeCrawlJobStore) List(context.Context) ([]domain.CrawlJobSummary, err
 	}
 	return out, nil
 }
+func (f *fakeCrawlJobStore) ListActive(context.Context) ([]domain.CrawlJobSummary, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	var out []domain.CrawlJobSummary
+	for _, j := range f.jobs {
+		if !domain.IsEndedCrawlJobStatus(j.Status) {
+			out = append(out, j)
+		}
+	}
+	return out, nil
+}
 
 // TestRecoverInterruptedCrawls_ResumesQueuedAndRunningJobsInPlace proves the
 // core behavior: an interrupted job without credentials is resumed under
