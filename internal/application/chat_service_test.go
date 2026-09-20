@@ -454,8 +454,10 @@ func TestChatService_HookRetries_SecondToolCallAlsoProcessed(t *testing.T) {
 // TestChatService_HookRetries_CappedAtMaxFollowUpRounds proves the retry
 // loop is bounded: a model that keeps invoking a hook in every answer stops
 // being fed back after maxHookFollowUpRounds rounds, rather than looping
-// forever -- the last completion's own answer (which may still contain a
-// bare tool-call tag) is returned as-is once the cap is hit.
+// forever -- the last completion's own answer, once the cap is hit, is
+// still a bare, still-unsatisfied tool-call tag, which stripHookCallTags
+// then removes entirely (see its own tests), so the user sees an empty
+// answer rather than a dangling tag.
 func TestChatService_HookRetries_CappedAtMaxFollowUpRounds(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer := &fakeChatCompleter{answer: "FETCH[https://example.com/never-satisfied]"}
@@ -477,16 +479,20 @@ func TestChatService_HookRetries_CappedAtMaxFollowUpRounds(t *testing.T) {
 	if len(result.HookResults) != maxHookFollowUpRounds {
 		t.Fatalf("expected exactly maxHookFollowUpRounds (%d) hook results accumulated, got %d", maxHookFollowUpRounds, len(result.HookResults))
 	}
-	if result.Answer != "FETCH[https://example.com/never-satisfied]" {
-		t.Fatalf("expected the last completion's own (still-unsatisfied) answer returned once the cap is hit, got %q", result.Answer)
+	if result.Answer != "" {
+		t.Fatalf("expected the still-unsatisfied tool-call tag stripped once the cap is hit, got %q", result.Answer)
 	}
 }
 
 // TestChatService_HookFollowUpCompletionErrors_FallsBackToOriginalAnswer
 // proves a failed follow-up completion is best-effort, same convention as
 // every other augmentation source in ChatService.Chat: the turn still
-// succeeds, just with the model's original (unhelpful, bare tool-call)
-// answer rather than failing outright.
+// succeeds, falling back to the model's original answer -- but since that
+// fallback answer is nothing but the bare tool-call tag itself, and
+// stripHookCallTags strips exactly that, the user-visible result is empty
+// rather than a dangling "<web_search>..." tag (see
+// TestStripHookCallTags_LeavesSurroundingProseIntact for the case where
+// the tag is only PART of the answer).
 func TestChatService_HookFollowUpCompletionErrors_FallsBackToOriginalAnswer(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer := &erroringOnSecondCallCompleter{firstAnswer: "SEARCH[golang release notes]"}
@@ -501,8 +507,48 @@ func TestChatService_HookFollowUpCompletionErrors_FallsBackToOriginalAnswer(t *t
 	if err != nil {
 		t.Fatalf("expected the follow-up completion error to be swallowed, got %v", err)
 	}
-	if result.Answer != "SEARCH[golang release notes]" {
-		t.Fatalf("expected the original tool-call answer kept on follow-up failure, got %q", result.Answer)
+	if result.Answer != "" {
+		t.Fatalf("expected the bare tool-call tag stripped from the fallback answer, got %q", result.Answer)
+	}
+}
+
+// TestStripHookCallTags_LeavesSurroundingProseIntact is the regression test
+// for a real, reported failure: a follow-up answer that echoes a NEW tool
+// call alongside real prose (e.g. "Let me try another source.
+// <web_fetch>https://...</web_fetch>") must have only the tag itself
+// removed, keeping the prose the user actually reads.
+func TestStripHookCallTags_LeavesSurroundingProseIntact(t *testing.T) {
+	hooks := []domain.ChatHook{
+		{ID: "1", Name: "web_fetch", Pattern: `<web_fetch>([^<]+)</web_fetch>`, Enabled: true},
+	}
+	got := stripHookCallTags("Let me try another source.\n\n<web_fetch>https://example.com</web_fetch>", hooks)
+	if got != "Let me try another source." {
+		t.Errorf("expected only the tag stripped, prose kept, got %q", got)
+	}
+}
+
+// TestStripHookCallTags_OnlyStripsActiveHookPatterns proves a hook not in
+// the passed-in list (e.g. one gated off this turn) never has its pattern
+// stripped from the answer -- only text matching an active hook's own
+// Pattern is ever touched.
+func TestStripHookCallTags_OnlyStripsActiveHookPatterns(t *testing.T) {
+	hooks := []domain.ChatHook{
+		{ID: "1", Name: "web_search", Pattern: `<web_search>([^<]+)</web_search>`, Enabled: true},
+	}
+	got := stripHookCallTags("See <web_fetch>https://example.com</web_fetch> for details.", hooks)
+	if got != "See <web_fetch>https://example.com</web_fetch> for details." {
+		t.Errorf("expected an inactive hook's pattern left untouched, got %q", got)
+	}
+}
+
+// TestStripHookCallTags_InvalidPatternSkipped proves a hook whose Pattern
+// fails to compile is skipped rather than panicking or failing the turn --
+// same defensive convention runChatHooks itself uses.
+func TestStripHookCallTags_InvalidPatternSkipped(t *testing.T) {
+	hooks := []domain.ChatHook{{ID: "1", Name: "broken", Pattern: `(unclosed`, Enabled: true}}
+	got := stripHookCallTags("plain answer", hooks)
+	if got != "plain answer" {
+		t.Errorf("expected the answer unchanged when the hook's pattern fails to compile, got %q", got)
 	}
 }
 
