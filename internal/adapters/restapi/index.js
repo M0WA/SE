@@ -13,6 +13,9 @@
   const chatForm = document.getElementById('chat-form');
   const chatInput = document.getElementById('chat-input');
   const chatWebSearch = document.getElementById('chat-web-search');
+  const chatTokenUsage = document.getElementById('chat-token-usage');
+  const chatTokenUsageSummary = document.getElementById('chat-token-usage-summary');
+  const chatTokenUsageDonut = document.getElementById('chat-token-usage-donut');
 
   // chatHistory is the full running conversation, sent in full on every
   // /chat call -- the backend is stateless and has no server-side session,
@@ -97,16 +100,36 @@
 
   // tokenUsageSegments turns the backend's flat token_usage breakdown into
   // the {label, value, color} shape buildDonutSVG/buildDonutLegend expect
-  // -- a fixed 4-way split (global prompt, active hook prompts, web-search
-  // context, conversation history) shared by every turn, regardless of
-  // which pieces were actually nonzero this time.
+  // -- a fixed 3-way split (global prompt, active hook prompts, conversation
+  // history) shared by every turn, regardless of which pieces were actually
+  // nonzero this time.
   function tokenUsageSegments(u) {
     return [
       { label: 'Global prompt', value: u.global_prompt_tokens || 0, color: 'var(--chart-1)' },
       { label: 'Hook prompts', value: u.hook_prompt_tokens || 0, color: 'var(--chart-2)' },
-      { label: 'Search context', value: u.context_tokens || 0, color: 'var(--chart-3)' },
       { label: 'Conversation history', value: u.history_tokens || 0, color: 'var(--ink-muted)' },
     ];
+  }
+
+  // renderTokenUsage updates the persistent token-usage summary shown next
+  // to the Web checkbox (see #chat-token-usage in index.html) -- unlike the
+  // old per-turn folded donut this replaces, it stays visible and up to
+  // date for the whole chat session once a first answer sets it, rather
+  // than being buried inside each individual chat bubble. Passing a falsy
+  // tokenUsage (e.g. before any turn has completed) hides it.
+  function renderTokenUsage(tokenUsage) {
+    if (!tokenUsage) {
+      chatTokenUsage.hidden = true;
+      return;
+    }
+    const total = (tokenUsage.global_prompt_tokens || 0) + (tokenUsage.hook_prompt_tokens || 0) + (tokenUsage.history_tokens || 0);
+    chatTokenUsageSummary.textContent = 'Tokens: ' + total.toLocaleString() +
+      (tokenUsage.max_context_tokens ? ' / ' + tokenUsage.max_context_tokens.toLocaleString() : '');
+    clear(chatTokenUsageDonut);
+    const segments = tokenUsageSegments(tokenUsage);
+    chatTokenUsageDonut.appendChild(buildDonutSVG(segments));
+    chatTokenUsageDonut.appendChild(buildDonutLegend(segments));
+    chatTokenUsage.hidden = false;
   }
 
   // renderCorrectionNote shows a quiet, transparent note when the search
@@ -323,25 +346,19 @@
   // own text is rendered as markdown (renderMarkdown escapes it first, so
   // this is safe against anything the model emits); a user's own typed
   // text is shown as plain text -- markdown syntax they typed is not
-  // something they'd expect reinterpreted. sources (only ever present on
-  // the assistant's most recent turn -- chatHistory itself never carries
-  // them, since the backend contract doesn't echo them back on later
-  // turns) are rendered as a small link list underneath, same
-  // title-or-url fallback renderResults already uses for r.title || r.url.
-  // contextTrimmed (also assistant-only) surfaces the backend's
-  // context_trimmed flag: since the client resends its whole chatHistory on
-  // every call and the backend silently drops the oldest messages to fit
-  // the endpoint's token budget, without this note a user would have no way
-  // to know this answer was generated without seeing the full conversation.
-  // hookResults (also assistant-only, also never echoed back into
-  // chatHistory) is one entry per regex-triggered chat hook that matched
-  // this turn's answer -- each rendered as its own folded <details>, closed
-  // by default, so a hook's raw output/error is available on demand without
-  // cluttering the answer itself. tokenUsage (also assistant-only) is this
-  // turn's token_usage breakdown -- rendered as its own folded donut chart,
-  // same reasoning: useful to check, not something to show unasked on
-  // every single turn.
-  function renderChatMessage(role, content, sources, contextTrimmed, hookResults, tokenUsage) {
+  // something they'd expect reinterpreted. contextTrimmed (assistant-only)
+  // surfaces the backend's context_trimmed flag: since the client resends
+  // its whole chatHistory on every call and the backend silently drops the
+  // oldest messages to fit the endpoint's token budget, without this note a
+  // user would have no way to know this answer was generated without seeing
+  // the full conversation. hookResults (also assistant-only, never echoed
+  // back into chatHistory) is one entry per regex-triggered chat hook that
+  // matched this turn's answer -- each rendered as its own folded
+  // <details>, closed by default, so a hook's raw output/error is available
+  // on demand without cluttering the answer itself. Token usage is NOT
+  // rendered here -- see renderTokenUsage, which keeps one persistent
+  // summary next to the Web checkbox instead of repeating it per turn.
+  function renderChatMessage(role, content, contextTrimmed, hookResults) {
     const msg = document.createElement('div');
     msg.className = role === 'user' ? 'chat-msg chat-msg-user' : 'chat-msg chat-msg-assistant';
 
@@ -353,21 +370,6 @@
       bubble.textContent = content;
     }
     msg.appendChild(bubble);
-
-    if (role === 'assistant' && sources && sources.length > 0) {
-      const list = document.createElement('div');
-      list.className = 'chat-sources';
-      for (const s of sources) {
-        const link = document.createElement('a');
-        link.className = 'chat-source-link';
-        link.href = s.url;
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-        link.textContent = s.title || s.url;
-        list.appendChild(link);
-      }
-      msg.appendChild(list);
-    }
 
     if (role === 'assistant' && contextTrimmed) {
       const note = document.createElement('div');
@@ -388,24 +390,6 @@
         details.appendChild(pre);
         msg.appendChild(details);
       }
-    }
-
-    if (role === 'assistant' && tokenUsage) {
-      const details = document.createElement('details');
-      details.className = 'chat-hook-result chat-token-usage';
-      const summary = document.createElement('summary');
-      const total = (tokenUsage.global_prompt_tokens || 0) + (tokenUsage.hook_prompt_tokens || 0) +
-        (tokenUsage.context_tokens || 0) + (tokenUsage.history_tokens || 0);
-      summary.textContent = 'Token usage: ' + total.toLocaleString() +
-        (tokenUsage.max_context_tokens ? ' / ' + tokenUsage.max_context_tokens.toLocaleString() : '');
-      details.appendChild(summary);
-      const row = document.createElement('div');
-      row.className = 'donut-row';
-      const segments = tokenUsageSegments(tokenUsage);
-      row.appendChild(buildDonutSVG(segments));
-      row.appendChild(buildDonutLegend(segments));
-      details.appendChild(row);
-      msg.appendChild(details);
     }
 
     chatMessages.appendChild(msg);
@@ -443,7 +427,8 @@
       }
       const data = await resp.json();
       chatHistory.push({ role: 'assistant', content: data.answer });
-      renderChatMessage('assistant', data.answer, data.sources || [], data.context_trimmed, data.hook_results || [], data.token_usage);
+      renderChatMessage('assistant', data.answer, data.context_trimmed, data.hook_results || []);
+      renderTokenUsage(data.token_usage);
       chatStatus.textContent = '';
     } catch (err) {
       chatStatus.textContent = 'Chat failed: could not reach the server.';
@@ -540,6 +525,6 @@
       renderCorrectionNote, clear, scoreRow, renderResults, runSearch,
       chatHistory, renderChatMessage, sendChatMessage, setMode,
       escapeHTML, renderInline, renderMarkdown,
-      buildDonutSVG, buildDonutLegend, tokenUsageSegments,
+      buildDonutSVG, buildDonutLegend, tokenUsageSegments, renderTokenUsage,
     };
   }

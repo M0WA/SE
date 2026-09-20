@@ -75,21 +75,14 @@
         <span class="field-wrap" data-default="Off"><input id="chat-web-search-enabled" type="checkbox"></span>
         Search the web
       </label>
-      <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When on, each message first runs a live web search (via the SearXNG instance below) and the top results are given to the chat model as context, with sources cited in the answer.</span></span>
+      <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When on (as the default, or the chat page's own per-question Web toggle), every chat hook gated to web search becomes available to the model -- it decides whether to invoke a "web_search"/"web_fetch" hook, not this setting.</span></span>
     </div>
     <div class="form-row">
       <div class="label-row">
         <label for="chat-web-search-base-url">SearXNG base URL</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">A self-hosted SearXNG instance's base URL, e.g. http://127.0.0.1:8888 -- queried at &lt;base_url&gt;/search?q=...&amp;format=json.</span></span>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">A self-hosted SearXNG instance's base URL, e.g. http://127.0.0.1:8888 -- passed to every active hook's script as the WEB_SEARCH_BASE_URL environment variable, so a "web_search" hook script knows which instance to query.</span></span>
       </div>
       <span class="field-wrap" data-default="(none)"><input id="chat-web-search-base-url" class="field" type="text" placeholder="http://127.0.0.1:8888"></span>
-    </div>
-    <div class="form-row">
-      <div class="label-row">
-        <label for="chat-web-search-result-count">Web search result count</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How many top web search results are given to the chat model as context when web search is enabled.</span></span>
-      </div>
-      <span class="field-wrap" data-default="5"><input id="chat-web-search-result-count" class="field" type="number" step="1" min="1" max="20"></span>
     </div>
   </section>
 

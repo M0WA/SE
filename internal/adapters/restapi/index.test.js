@@ -257,17 +257,14 @@ test('renderChatMessage scrolls #chat-messages so the new turn\'s own beginning 
   assert.equal(chatMessages.scrollTop, 300, 'expected scroll again to the newest assistant turn\'s own top');
 });
 
-test('sendChatMessage on success appends both turns to history and renders sources', async () => {
+test('sendChatMessage on success appends both turns to history and renders the answer', async () => {
   let gotURL, gotOpts;
   global.fetch = async (url, opts) => {
     gotURL = url;
     gotOpts = opts;
     return {
       ok: true,
-      json: async () => ({
-        answer: 'The answer is 42.',
-        sources: [{ url: 'http://a', title: 'A' }, { url: 'http://b', title: '' }],
-      }),
+      json: async () => ({ answer: 'The answer is 42.' }),
     };
   };
   const { sendChatMessage, chatHistory } = loadFixture();
@@ -292,22 +289,7 @@ test('sendChatMessage on success appends both turns to history and renders sourc
   assert.equal(messages[1].className, 'chat-msg chat-msg-assistant');
   assert.equal(messages[1].querySelector('.chat-msg-bubble').textContent, 'The answer is 42.');
 
-  const links = messages[1].querySelectorAll('.chat-source-link');
-  assert.equal(links.length, 2);
-  assert.equal(links[0].getAttribute('href'), 'http://a');
-  assert.equal(links[0].textContent, 'A');
-  assert.equal(links[1].getAttribute('href'), 'http://b');
-  assert.equal(links[1].textContent, 'http://b');
-
   assert.equal(document.getElementById('chat-status').textContent, '');
-});
-
-test('sendChatMessage renders an assistant message with no source list when none are given', async () => {
-  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'no sources here' }) });
-  const { sendChatMessage } = loadFixture();
-  await sendChatMessage('q');
-  const assistantMsg = document.getElementById('chat-messages').children[1];
-  assert.equal(assistantMsg.querySelector('.chat-sources'), null);
 });
 
 test('sendChatMessage renders a context-trimmed note when the backend flags context_trimmed', async () => {
@@ -364,23 +346,25 @@ test('sendChatMessage renders no hook-result elements when hook_results is absen
   assert.equal(assistantMsg.querySelectorAll('.chat-hook-result').length, 0);
 });
 
-test('sendChatMessage renders a folded token-usage donut with a chart and one legend row per segment', async () => {
+test('sendChatMessage shows the persistent token-usage badge next to the Web checkbox, not in the chat', async () => {
   global.fetch = async () => ({
     ok: true,
     json: async () => ({
       answer: 'answer',
-      token_usage: { global_prompt_tokens: 10, hook_prompt_tokens: 5, context_tokens: 20, history_tokens: 3, max_context_tokens: 1000 },
+      token_usage: { global_prompt_tokens: 10, hook_prompt_tokens: 5, history_tokens: 3, max_context_tokens: 1000 },
     }),
   });
   const { sendChatMessage } = loadFixture();
   await sendChatMessage('q');
   const assistantMsg = document.getElementById('chat-messages').children[1];
-  const usage = assistantMsg.querySelector('.chat-token-usage');
-  assert.ok(usage, 'expected a .chat-token-usage element');
-  assert.equal(usage.open, false);
-  assert.equal(usage.querySelector('summary').textContent, 'Token usage: 38 / 1,000');
-  assert.equal(usage.querySelectorAll('svg.donut-chart').length, 1);
-  assert.equal(usage.querySelectorAll('.donut-legend-row').length, 4);
+  assert.equal(assistantMsg.querySelectorAll('.chat-token-usage').length, 0);
+
+  const usage = document.getElementById('chat-token-usage');
+  assert.equal(usage.hidden, false);
+  assert.equal(document.getElementById('chat-token-usage-summary').textContent, 'Tokens: 18 / 1,000');
+  const donut = document.getElementById('chat-token-usage-donut');
+  assert.equal(donut.querySelectorAll('svg.donut-chart').length, 1);
+  assert.equal(donut.querySelectorAll('.donut-legend-row').length, 3);
 });
 
 test('sendChatMessage omits the max-context suffix and renders 0 for token_usage fields the response leaves out', async () => {
@@ -390,16 +374,14 @@ test('sendChatMessage omits the max-context suffix and renders 0 for token_usage
   });
   const { sendChatMessage } = loadFixture();
   await sendChatMessage('q');
-  const usage = document.getElementById('chat-messages').children[1].querySelector('.chat-token-usage');
-  assert.equal(usage.querySelector('summary').textContent, 'Token usage: 7');
+  assert.equal(document.getElementById('chat-token-usage-summary').textContent, 'Tokens: 7');
 });
 
-test('sendChatMessage renders no token-usage element when token_usage is absent', async () => {
+test('sendChatMessage keeps the token-usage badge hidden when token_usage is absent', async () => {
   global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'answer' }) });
   const { sendChatMessage } = loadFixture();
   await sendChatMessage('q');
-  const assistantMsg = document.getElementById('chat-messages').children[1];
-  assert.equal(assistantMsg.querySelectorAll('.chat-token-usage').length, 0);
+  assert.equal(document.getElementById('chat-token-usage').hidden, true);
 });
 
 test('buildDonutSVG renders one circle per nonzero segment, skipping zero-value ones', () => {
@@ -424,11 +406,18 @@ test('buildDonutLegend renders a swatch and label:value text per segment', () =>
   assert.equal(row.textContent, 'History: 1,234');
 });
 
-test('tokenUsageSegments maps the flat response shape to the four fixed chart segments', () => {
+test('tokenUsageSegments maps the flat response shape to the three fixed chart segments', () => {
   const { tokenUsageSegments } = loadFixture();
-  const segments = tokenUsageSegments({ global_prompt_tokens: 1, hook_prompt_tokens: 2, context_tokens: 3, history_tokens: 4 });
-  assert.deepEqual(segments.map((s) => s.value), [1, 2, 3, 4]);
-  assert.deepEqual(segments.map((s) => s.label), ['Global prompt', 'Hook prompts', 'Search context', 'Conversation history']);
+  const segments = tokenUsageSegments({ global_prompt_tokens: 1, hook_prompt_tokens: 2, history_tokens: 4 });
+  assert.deepEqual(segments.map((s) => s.value), [1, 2, 4]);
+  assert.deepEqual(segments.map((s) => s.label), ['Global prompt', 'Hook prompts', 'Conversation history']);
+});
+
+test('renderTokenUsage hides the badge for a falsy tokenUsage', () => {
+  const { renderTokenUsage } = loadFixture();
+  document.getElementById('chat-token-usage').hidden = false;
+  renderTokenUsage(null);
+  assert.equal(document.getElementById('chat-token-usage').hidden, true);
 });
 
 test('sendChatMessage renders the server error text on a non-ok response', async () => {

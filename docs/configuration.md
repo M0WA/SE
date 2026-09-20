@@ -305,9 +305,8 @@ Everything below lives in the shared SQL database and is edited only through `in
 | `chat-model` | none, required | — | Model name used for chat-completions requests. |
 | `chat-enabled` | `false` | boolean | Gates whether chat will call out to this endpoint at all. |
 | `chat-max-context-tokens` | `0` (no trimming) | — | Bounds tokens' worth of conversation sent to the model (approximated by character count); oldest messages trimmed first. |
-| `chat-web-search-enabled` | `false` | boolean | Turns on live web search (via SearXNG) as additional chat context. |
-| `chat-web-search-base-url` | none | required when web search enabled | Base URL of the SearXNG instance; queried at `<WebSearchBaseURL>/search?q=...&format=json`. |
-| `chat-web-search-result-count` | `5` | `[1, 20]` | How many web results are fetched when web search is enabled. |
+| `chat-web-search-enabled` | `false` | boolean | The "Web" toggle's default (overridable per question): when on, every chat hook with `gated_by_web_search` becomes available to the model. This setting never performs a search or fetch itself -- see "Chat hooks" below. |
+| `chat-web-search-base-url` | none | required for a `web_search` hook to work | Base URL of the SearXNG instance; passed to every active hook's script as the `WEB_SEARCH_BASE_URL` environment variable. |
 | `chat-system-prompt` | empty (none injected) | — | Optional leading system-role message injected ahead of the rest of the conversation on every turn; never dropped by context trimming. |
 
 Chat no longer has a separate retrieval-augmented-generation (RAG) toggle

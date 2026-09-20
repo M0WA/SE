@@ -34,7 +34,6 @@ flowchart LR
     HashEmbed["hashembed"]
     HTTPEmbed["httpembed"]
     HTTPChat["httpchat"]
-    HTTPSearx["httpsearxng"]
     CrawlClient["crawlclient"]
     SettingsCrypto["settingscrypto"]
   end
@@ -73,10 +72,9 @@ flowchart LR
   App --> HashEmbed
   App --> HTTPEmbed
   App --> HTTPChat
-  App --> HTTPSearx
   HTTPEmbed --> EmbedAPI
   HTTPChat --> ChatAPI
-  HTTPSearx --> SearXNG
+  App -.->|"web_search chat hook<br/>script (hookrunner)"| SearXNG
 
   Nginx -.->|"stub_status via<br/>prometheus-nginx-exporter"| IONOSMon
   SQLRepo -.->|"postgres-exporter"| IONOSMon

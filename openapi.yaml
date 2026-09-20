@@ -106,11 +106,14 @@ paths:
       summary: Answer one chat turn against the admin-configured chat endpoint
       description: >-
         Sends the given message history to the single admin-configured chat
-        endpoint (see /admin/api/chat-endpoint), optionally augmenting it
-        with live web-search context -- see ChatResponse.sources. A message's
-        role must be "user" or "assistant"; "system" is rejected, since that
-        role is reserved for server-injected web-search context, never
-        something a client can supply to try to override the system prompt.
+        endpoint (see /admin/api/chat-endpoint). This endpoint never performs
+        a web search or page fetch itself -- ChatRequest.web_search only
+        decides which GatedByWebSearch chat hooks (see /admin/api/chat-hooks)
+        are offered to the model, which then decides whether to invoke one.
+        A message's role must be "user" or "assistant"; "system" is
+        rejected, since that role is reserved for server-injected content
+        (the endpoint's own system prompt, active hook prompts), never
+        something a client can supply to try to override it.
       requestBody:
         required: true
         content:
@@ -688,9 +691,8 @@ paths:
         Unlike the embedding endpoints (many blended providers), chat only
         ever has one active configuration -- this is Get/Set on a single
         row, not CRUD on a collection. Never fails just because nothing's
-        been saved yet: returns a zero-ish default (web_search_result_count
-        at its default, everything else empty/false) instead, same spirit
-        as /admin/api/settings always succeeding.
+        been saved yet: returns a zero-ish default (everything empty/false)
+        instead, same spirit as /admin/api/settings always succeeding.
       responses:
         "200":
           description: OK
@@ -706,9 +708,7 @@ paths:
         GET/PATCH response never echoes the real key back (see
         has_api_key), leaving api_key blank here preserves whatever's
         already stored rather than clearing it -- clear_api_key is the
-        explicit way to actually remove it. web_search_result_count is
-        self-healing: a non-positive value becomes the default, and it's
-        clamped into range otherwise (see domain.ChatEndpoint.Clamp).
+        explicit way to actually remove it.
       requestBody:
         required: true
         content:
@@ -1933,21 +1933,9 @@ components:
           enum: [user, assistant]
           description: >-
             "system" is never accepted from a client -- that role is
-            reserved for server-injected web-search context built from
-            search results.
+            reserved for server-injected content (the endpoint's own
+            system prompt, active chat hook prompts).
         content: { type: string, description: "Max 4000 characters." }
-
-    ChatSource:
-      type: object
-      description: >-
-        One search result whose content informed a ChatResponse.answer,
-        surfaced separately so the UI can render it as a clickable citation
-        rather than parsing the answer text for it. Only ever populated when
-        this turn's answer was grounded in a live web search (see
-        ChatRequest.web_search).
-      properties:
-        url: { type: string }
-        title: { type: string }
 
     ChatRequest:
       type: object
@@ -1963,19 +1951,17 @@ components:
           description: >-
             Overrides the admin-configured chat endpoint's
             web_search_enabled default for this question only -- omit to
-            use that default. true runs a live web search (via a
-            self-hosted SearXNG instance) on the latest user message and
-            grounds the answer in the results (with sources cited); false
-            sends the conversation to the chat model as-is, with no
-            web-search context.
+            use that default. Does not itself perform a search or fetch:
+            true makes every GatedByWebSearch chat hook (see
+            /admin/api/chat-hooks) available to the model this turn (its
+            prompt injected, its pattern eligible to match the answer),
+            letting the model invoke one if it chooses to; false makes none
+            of them available.
 
     ChatResponse:
       type: object
       properties:
         answer: { type: string }
-        sources:
-          type: array
-          items: { $ref: "#/components/schemas/ChatSource" }
         context_trimmed:
           type: boolean
           description: >-
@@ -2015,12 +2001,6 @@ components:
             Sum of the estimated size of every active chat hook's own
             prompt this turn (a hook is active when enabled and, if
             gated_by_web_search, web search is also on for this turn).
-        context_tokens:
-          type: integer
-          description: >-
-            Estimated size of the web-search context message built from
-            this turn's search results, when it produced any (0
-            otherwise).
         history_tokens:
           type: integer
           description: >-
@@ -2057,8 +2037,8 @@ components:
         max_context_tokens:
           type: integer
           description: >-
-            Bounds how many tokens' worth of conversation (web-search
-            context plus message history) is ever sent to the model,
+            Bounds how many tokens' worth of conversation (leading system
+            messages plus message history) is ever sent to the model,
             approximated by character count. Older messages are dropped
             first, oldest to newest, always keeping the most recent
             message. 0 disables trimming (the full history is sent as-is).
@@ -2066,29 +2046,25 @@ components:
         web_search_enabled:
           type: boolean
           description: >-
-            When true, the latest user message is also used as a live web
-            search query (via web_search_base_url) and matching results are
-            folded into a context message ahead of the rest of history.
+            The "Web" toggle's default (overridable per question via
+            ChatRequest.web_search): when true, every chat hook (see
+            /admin/api/chat-hooks) with gated_by_web_search becomes
+            available to the model -- its prompt injected, its pattern
+            eligible to match the answer. This endpoint never performs a
+            search or fetch itself.
         web_search_base_url:
           type: string
           description: >-
             A self-hosted SearXNG instance's base URL, e.g.
-            http://127.0.0.1:8888 -- queried at
-            <web_search_base_url>/search?q=...&format=json. Required for
-            web_search_enabled to actually do anything.
-        web_search_result_count:
-          type: integer
-          description: >-
-            How many web search results are retrieved when
-            web_search_enabled. Bounds self-heal server-side (see
-            domain.ChatEndpoint.Clamp): a non-positive value becomes the
-            default (5); anything above the max (20) is clamped down to it.
+            http://127.0.0.1:8888 -- passed to every active chat hook's
+            script as the WEB_SEARCH_BASE_URL environment variable, so a
+            "web_search" hook script knows which instance to query.
         system_prompt:
           type: string
           description: >-
             When non-empty, injected as a leading system-role message ahead
-            of the rest of the conversation on every turn -- before the
-            web-search context message, if any, so an admin-authored
+            of the rest of the conversation on every turn -- before any
+            active chat hook's own prompt, if any, so an admin-authored
             persona/instruction always takes precedence. Invisible in the
             rendered chat UI. Never dropped by max_context_tokens' context
             trimming, even when the rest of the conversation is trimmed to

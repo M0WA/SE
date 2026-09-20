@@ -625,17 +625,6 @@ type ChatCompleter interface {
 	Complete(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage) (string, error)
 }
 
-// WebSearcher performs a live web search (e.g. against a self-hosted
-// SearXNG instance) for chat's optional web-search augmentation -- a
-// distinct data source from SearchService (this instance's own indexed
-// corpus), so a chat turn can draw on either, both, or neither
-// independently. baseURL is passed per call, not bound at construction,
-// the same convention ChatCompleter.Complete uses for domain.ChatEndpoint
-// -- one stateless client works regardless of admin-configured changes.
-type WebSearcher interface {
-	Search(ctx context.Context, baseURL, query string, count int) ([]domain.WebSearchResult, error)
-}
-
 // ErrChatHookNotFound is returned by ChatHookStore's Update and Delete when
 // no hook with the given ID exists -- ChatHookStore's sibling of
 // ErrEmbeddingEndpointNotFound above.
