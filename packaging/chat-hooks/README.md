@@ -67,7 +67,18 @@ before answering, even if you already feel confident -- your training
 data can be outdated. Output only the tag, nothing else, and wait for
 real results as a new message before answering. Never guess or answer
 from memory for time-sensitive facts.
+
+Search results only give you a title, URL, and a short excerpt -- an
+excerpt is not enough to verify a fact, and can be stale, truncated, or
+taken out of context. Once you have results, fetch the URL that looks
+most likely to answer the question with <web_fetch>https://...</web_fetch>
+and confirm the fact against the actual page content before answering.
+Only answer from the excerpts alone if fetching genuinely isn't possible.
 ```
+
+The added paragraph only makes sense when the web_fetch hook is also
+enabled (see below) -- it tells the model to chain the two tools rather
+than treat a search engine's own excerpt as sufficient verification.
 
 web_fetch's Prompt:
 
