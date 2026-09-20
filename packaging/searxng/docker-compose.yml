@@ -3,11 +3,18 @@ services:
     image: searxng/searxng:latest
     container_name: searxng
     restart: unless-stopped
-    # Loopback only -- see ../README.md's Notes on why every port bound on
-    # this box is 127.0.0.1, not 0.0.0.0: no firewall in front of it, so
-    # anything else is directly internet-reachable the instant it starts.
-    ports:
-      - "127.0.0.1:8888:8080"
+    # Host networking -- required so this container's loopback IS the
+    # host's loopback: the searchengine engine (../searxng-engine/) talks
+    # to cmd/search on 127.0.0.1:8080, which binds loopback-only for
+    # security (see ../README.md's Notes) and is therefore unreachable
+    # from a container on its own bridge network/IP -- a bridge network +
+    # published port (the previous setup here) only forwards *inbound*
+    # traffic to this container, it doesn't give the container a route to
+    # a loopback-bound service on the host. GRANIAN_HOST/GRANIAN_PORT below
+    # keep SearXNG itself bound to 127.0.0.1 only under host networking,
+    # preserving the same no-firewall-in-front loopback-only posture the
+    # old bridge + "127.0.0.1:8888:8080" port mapping gave us.
+    network_mode: host
     volumes:
       - ./settings.yml:/etc/searxng/settings.yml:ro
       # ../searxng-engine/searchengine_index.py, copied here at deploy time
@@ -16,6 +23,8 @@ services:
       - ./searchengine_index.py:/usr/local/searxng/searx/engines/searchengine_index.py:ro
     environment:
       - SEARXNG_BASE_URL=http://127.0.0.1:8888/
+      - GRANIAN_HOST=127.0.0.1
+      - GRANIAN_PORT=8888
     # SearXNG's own documented minimal capability set: its entrypoint still
     # needs to chown/chmod its cache dir and drop from root to its own
     # unprivileged user on every start, which is what these four allow;

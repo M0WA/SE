@@ -77,7 +77,13 @@ from before a settings change (needs `docker compose restart searxng` from
 - Bound `127.0.0.1` only, same reasoning as every other service in
   `../prometheus/README.md`'s Notes -- nothing outside this host (or even
   outside `searchengine`'s own processes on it) needs to reach this
-  directly.
+  directly. `docker-compose.yml` uses `network_mode: host` (not a bridge +
+  published port) specifically so the `searchengine` engine can reach
+  `cmd/search` on the host's own `127.0.0.1:8080` -- see
+  `../searxng-engine/README.md`'s Install section for why a bridge network
+  can't do this -- with `GRANIAN_HOST=127.0.0.1`/`GRANIAN_PORT=8888` (its
+  environment) keeping SearXNG itself loopback-only under host networking,
+  same as the bridge setup did.
 - `search.formats` includes `json` deliberately -- SearXNG disables it by
   default as an anti-scraping measure for public instances, but this
   instance has exactly one caller (`internal/adapters/httpsearxng`, over

@@ -105,6 +105,33 @@ cd /opt/searxng
 docker compose restart searxng
 ```
 
+## Two connectivity gotchas, both already handled by `../searxng/docker-compose.yml`
+
+These bit this engine hard enough during initial deployment that they're
+worth calling out explicitly, in case either setting is ever "cleaned up"
+without realizing why it's there:
+
+- **`enable_http = True` on this module.** SearXNG's network layer
+  (`searx/network/network.py`'s `initialize()`) hardcodes every engine's
+  outbound network to HTTPS-only by default (`enable_http: False`),
+  independent of anything in `settings.yml` -- a plain `http://` URL (this
+  engine's `base_url` is always `http://...`, since it's a loopback call)
+  gets rejected with `curl_cffi.requests.exceptions.InvalidSchema` before a
+  connection is even attempted. SearXNG's engine loader reads a matching
+  `enable_http` attribute directly off this module if present and builds a
+  per-engine network from it -- that's what the `enable_http = True` in
+  `searchengine_index.py` is for; removing it reintroduces the crash.
+- **`network_mode: host` on the SearXNG container.** A container on its own
+  bridge network has its own loopback, separate from the host's -- so even
+  with `enable_http` fixed, `base_url = "http://127.0.0.1:8080"` would
+  connect to *the SearXNG container itself* (which also happens to answer
+  on `/search`, returning its own HTML instead of `cmd/search`'s JSON) or
+  time out, not to `cmd/search`, which binds `127.0.0.1:8080` on the host
+  only. `../searxng/docker-compose.yml` uses `network_mode: host` so the
+  container's loopback *is* the host's loopback, with
+  `GRANIAN_HOST`/`GRANIAN_PORT` keeping SearXNG itself loopback-only under
+  that setup -- see its README's Notes.
+
 ## Authentication: SEARCH_INTERNAL_API_KEY
 
 `/search` is a normal, session-cookie-gated endpoint on `cmd/search` --

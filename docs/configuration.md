@@ -97,15 +97,20 @@ This is the ordered install flow for a fresh Debian/Ubuntu host. Steps 1–2 and
     promtool check config /etc/prometheus/prometheus.yml
     ```
 
-12. **(Optional) Stand up SearXNG** for the chat feature's live web search. *(Manual, Docker-based.)* See [packaging/searxng/README.md](../packaging/searxng/README.md).
+12. **(Optional) Stand up SearXNG** for the chat feature's live web search. *(Manual, Docker-based.)* See [packaging/searxng/README.md](../packaging/searxng/README.md). Includes `searchengine`, a custom SearXNG engine ([packaging/searxng-engine/README.md](../packaging/searxng-engine/README.md)) that folds this deployment's own indexed corpus into the blended results, in place of the old, separate "RAG" mechanism.
     ```
     apt-get install docker.io docker-compose
     mkdir -p /opt/searxng
     cp packaging/searxng/docker-compose.yml packaging/searxng/settings.yml /opt/searxng/
-    cd /opt/searxng && sed -i "s/REPLACE_WITH_OPENSSL_RAND_HEX_32/$(openssl rand -hex 32)/" settings.yml   # never commit the filled-in file
+    cp packaging/searxng-engine/searchengine_index.py /opt/searxng/
+    cd /opt/searxng
+    sed -i "s/REPLACE_WITH_OPENSSL_RAND_HEX_32/$(openssl rand -hex 32)/" settings.yml   # never commit the filled-in file
+    sed -i "s/REPLACE_WITH_SEARCH_INTERNAL_API_KEY/$(openssl rand -hex 32)/" settings.yml   # same key must also become SEARCH_INTERNAL_API_KEY below
     cp packaging/searxng/searxng.service /etc/systemd/system/searxng.service
     systemctl daemon-reload
     systemctl enable --now searxng
+    # set SEARCH_INTERNAL_API_KEY in /etc/searchengine/searchengine.env to the same value as internal_api_key above, then:
+    systemctl restart searchengine-search
     curl -s 'http://127.0.0.1:8888/search?q=test&format=json' | head -c 300
     ```
 
