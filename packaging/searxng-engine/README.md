@@ -62,12 +62,12 @@ use_default_settings:
       - bing
       - brave
       - duckduckgo
-      - searchengine
+      - local-se
 
 engines:
   - name: bing
     disabled: false
-  - name: searchengine
+  - name: local-se
     engine: searchengine_index
     shortcut: se
     disabled: false
@@ -75,6 +75,13 @@ engines:
     top_k: 10
     internal_api_key: "REPLACE_WITH_SEARCH_INTERNAL_API_KEY"
 ```
+
+Named `local-se` rather than `searchengine` -- SearXNG's engine display
+name shows up in results/metrics (`engine_name` label), and `local-se`
+reads clearly as "this deployment's own, small local index" alongside a
+second SearXNG upstream (`searxng-site`, see `../searxng/settings.yml`)
+without implying it's a general-purpose search engine the way the bare
+product name would.
 
 `base_url`/`top_k`/`internal_api_key` above are not fields SearXNG itself
 understands -- they're `searchengine_index.py`'s own module-level

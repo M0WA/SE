@@ -6,7 +6,7 @@ script (`packaging/chat-hooks/web_search.sh`) can search the live web
 instead of only the local index -- the model itself decides whether to
 invoke it, this instance never queries SearXNG on its own. Configured with
 three upstream engines -- Bing, Brave, and DuckDuckGo -- plus one of this
-repo's own, `searchengine` (`../searxng-engine/`), which folds this
+repo's own, `local-se` (`../searxng-engine/`), which folds this
 instance's own indexed corpus into the same blended results instead of
 querying it out of band the way the old, separate "RAG" mechanism did --
 everything else SearXNG ships with is disabled (see `settings.yml`'s
@@ -83,7 +83,7 @@ from before a settings change (needs `docker compose restart searxng` from
   `../prometheus/README.md`'s Notes -- nothing outside this host (or even
   outside `searchengine`'s own processes on it) needs to reach this
   directly. `docker-compose.yml` uses `network_mode: host` (not a bridge +
-  published port) specifically so the `searchengine` engine can reach
+  published port) specifically so the `local-se` engine can reach
   `cmd/search` on the host's own `127.0.0.1:8080` -- see
   `../searxng-engine/README.md`'s Install section for why a bridge network
   can't do this -- with `GRANIAN_HOST=127.0.0.1`/`GRANIAN_PORT=8888` (its
@@ -103,7 +103,7 @@ from before a settings change (needs `docker compose restart searxng` from
   needs the same restart (and, if the file is new rather than an edit, `cp`
   it into `/opt/searxng/` first) -- it's bind-mounted read-only, so the
   container only ever sees whatever the host file said at its last start.
-- `searchengine` (the engine above) silently returns zero results if
+- `local-se` (the engine above) silently returns zero results if
   `SEARCH_INTERNAL_API_KEY` isn't set on `cmd/search`, or doesn't match
   `internal_api_key` here -- see `../searxng-engine/README.md`'s
   Authentication section before assuming the engine itself is broken.

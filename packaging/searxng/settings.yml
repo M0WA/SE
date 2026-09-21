@@ -19,7 +19,7 @@ use_default_settings:
       - bing
       - brave
       - duckduckgo
-      - searchengine
+      - local-se
 
 # keep_only above only controls which engines survive the default list --
 # it doesn't flip an individual engine's own disabled/inactive flag, and
@@ -27,21 +27,24 @@ use_default_settings:
 # ship enabled), so it needs this explicit override on top of keep_only or
 # it's kept in the list but never actually queried.
 #
-# searchengine below is not a default-shipped engine at all (keep_only's
+# local-se below is not a default-shipped engine at all (keep_only's
 # allowlist mechanism only filters the defaults) -- it needs its own full
 # entry here, backed by ../searxng-engine/searchengine_index.py bind-mounted
-# into this container (see docker-compose.yml). internal_api_key is
-# REPLACE'd the same way secret_key below is: never a real value in this
-# tracked file, only in the deployed copy -- see ../searxng-engine/README.md
-# for what it's for and internal_api_key: "" empty is a hard failure mode
-# (every request gets 401), not a silent no-op.
+# into this container (see docker-compose.yml). Named "local-se" (not
+# "searchengine") to read clearly alongside searxng-site below: this is the
+# small, local index this deployment itself crawls and indexes, not a
+# general-purpose search engine. internal_api_key is REPLACE'd the same way
+# secret_key below is: never a real value in this tracked file, only in the
+# deployed copy -- see ../searxng-engine/README.md for what it's for and
+# internal_api_key: "" empty is a hard failure mode (every request gets
+# 401), not a silent no-op.
 #
 # searxng-site queries a second, separately-operated SearXNG instance
 # (https://searxng.site/) as one more upstream, via SearXNG's own built-in
-# generic json_engine -- no custom module needed (unlike searchengine
-# above), since a SearXNG instance's own /search?format=json response is
-# already a flat {"results": [{"url", "title", "content", ...}]} shape
-# json_engine understands directly. That target instance must itself have
+# generic json_engine -- no custom module needed (unlike local-se above),
+# since a SearXNG instance's own /search?format=json response is already a
+# flat {"results": [{"url", "title", "content", ...}]} shape json_engine
+# understands directly. That target instance must itself have
 # `search.formats` including json (same requirement this instance has, see
 # search.formats below) and must not be blocking this box's outbound
 # requests via its own bot-detection/rate limiter -- a 403/429 here most
@@ -50,7 +53,7 @@ use_default_settings:
 engines:
   - name: bing
     disabled: false
-  - name: searchengine
+  - name: local-se
     engine: searchengine_index
     shortcut: se
     disabled: false
