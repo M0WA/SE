@@ -15,6 +15,15 @@ type User struct {
 	ID           string
 	Username     string
 	PasswordHash string // bcrypt hash (bcrypt.DefaultCost) -- the plaintext password is never stored or logged
+	// CustomPrompt is free text this user has set for themselves (via the
+	// self-service /account page) -- injected as its own leading system
+	// message in every chat turn THEY send, in addition to (not instead of)
+	// the admin-configured endpoint-wide SystemPrompt and any active chat
+	// hooks' own prompts. Expanded through the same %c-style placeholder
+	// mechanism application.expandPromptPlaceholders already applies to
+	// those (see application.ChatService.Chat). Empty means no per-user
+	// prompt is injected.
+	CustomPrompt string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }

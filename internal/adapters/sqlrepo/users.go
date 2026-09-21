@@ -10,7 +10,7 @@ import (
 	"searchengine/internal/ports"
 )
 
-const userColumns = "id, username, password_hash, created_at, updated_at"
+const userColumns = "id, username, password_hash, custom_prompt, created_at, updated_at"
 
 // ListUsers lists every DB-backed regular-user account, ordered by
 // username for a stable, human-friendly admin table order (mirrors
@@ -67,8 +67,8 @@ func (r *Repository) GetUserByUsername(ctx context.Context, username string) (do
 // so this is a real constraint enforced under concurrent creates, not just
 // a check-then-insert race).
 func (r *Repository) CreateUser(ctx context.Context, u domain.User) error {
-	insertSQL := r.ph(`INSERT INTO users (`+userColumns+`) VALUES (%s, %s, %s, %s, %s)`, 1, 2, 3, 4, 5)
-	_, err := r.db.ExecContext(ctx, insertSQL, u.ID, u.Username, u.PasswordHash,
+	insertSQL := r.ph(`INSERT INTO users (`+userColumns+`) VALUES (%s, %s, %s, %s, %s, %s)`, 1, 2, 3, 4, 5, 6)
+	_, err := r.db.ExecContext(ctx, insertSQL, u.ID, u.Username, u.PasswordHash, u.CustomPrompt,
 		u.CreatedAt.UTC().Format(crawledAtLayout), u.UpdatedAt.UTC().Format(crawledAtLayout))
 	if err != nil {
 		if isUniqueViolationError(err) {
@@ -81,11 +81,13 @@ func (r *Repository) CreateUser(ctx context.Context, u domain.User) error {
 
 // UpdateUser replaces u's stored fields wholesale (ID never changes after
 // creation), returning ports.ErrUserNotFound if no row with u.ID exists.
-// Used for a password reset -- see restapi.handleAdminUpdateUser, which
-// loads the existing row first and only changes PasswordHash/UpdatedAt.
+// Used both for an admin password reset (restapi.handleAdminUpdateUser,
+// which loads the existing row first and only changes PasswordHash/
+// UpdatedAt) and a user's own self-service password/custom-prompt update
+// (restapi.handleAccount, same load-then-selectively-change pattern).
 func (r *Repository) UpdateUser(ctx context.Context, u domain.User) error {
-	updateSQL := r.ph(`UPDATE users SET username = %s, password_hash = %s, updated_at = %s WHERE id = %s`, 1, 2, 3, 4)
-	res, err := r.db.ExecContext(ctx, updateSQL, u.Username, u.PasswordHash, u.UpdatedAt.UTC().Format(crawledAtLayout), u.ID)
+	updateSQL := r.ph(`UPDATE users SET username = %s, password_hash = %s, custom_prompt = %s, updated_at = %s WHERE id = %s`, 1, 2, 3, 4, 5)
+	res, err := r.db.ExecContext(ctx, updateSQL, u.Username, u.PasswordHash, u.CustomPrompt, u.UpdatedAt.UTC().Format(crawledAtLayout), u.ID)
 	if err != nil {
 		return fmt.Errorf("updating user (%s): %w", u.ID, err)
 	}
@@ -104,7 +106,7 @@ func (r *Repository) DeleteUser(ctx context.Context, id string) error {
 func scanUser(row scanner) (domain.User, error) {
 	var u domain.User
 	var createdAt, updatedAt string
-	if err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.CustomPrompt, &createdAt, &updatedAt); err != nil {
 		return domain.User{}, err
 	}
 	u.CreatedAt = parseCrawledAt(createdAt)

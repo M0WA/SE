@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — account</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<div class="page-header">
+  <a class="mark" href="/">se.</a>
+  <button id="sign-out" class="text-button" type="button">Sign out</button>
+</div>
+<div class="admin-shell">
+<main>
+  <h2>Your account</h2>
+  <p class="lede" style="margin: 0 0 1.5rem;">Change your password and set a personal prompt that's added to every chat turn you send, on top of the site's own configured prompt.</p>
+
+  <div id="account-status" class="panel-status"></div>
+
+  <section class="panel" id="account-panel" hidden>
+    <form id="account-form" class="stacked-form">
+      <div class="form-row">
+        <label>Username</label>
+        <input id="account-username" class="field" type="text" disabled>
+      </div>
+      <div class="form-row">
+        <div class="label-row">
+          <label for="account-password">New password</label>
+          <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Leave blank to keep your current password. At least 8 characters if set.</span></span>
+        </div>
+        <input id="account-password" class="field" type="password" autocomplete="new-password" minlength="8" placeholder="Leave blank to keep current password">
+      </div>
+      <div class="form-row">
+        <div class="label-row">
+          <label for="account-custom-prompt">Personal prompt</label>
+          <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Free text injected as your own system message on every chat turn you send, in addition to the site's own configured prompt. Leave empty for none.</span></span>
+        </div>
+        <textarea id="account-custom-prompt" class="field" rows="24" maxlength="4000" placeholder="e.g. Always answer concisely and cite sources when possible."></textarea>
+      </div>
+      <div class="form-row">
+        <button id="account-save-btn" type="submit">Save</button>
+      </div>
+      <span id="account-form-status" class="error-text"></span>
+    </form>
+  </section>
+</main>
+</div>
+<script src="/account.js"></script>
+</body>
+</html>

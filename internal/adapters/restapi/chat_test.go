@@ -168,6 +168,31 @@ func chatAuthedHandler(t *testing.T, chat *application.ChatService) (*restapi.Ha
 	return h, cookies[0]
 }
 
+// chatAuthedHandlerWithUser mirrors chatAuthedHandler, but logs in as u (a
+// domain.User whose PasswordHash is testUserPasswordHash) via a real
+// POST /login instead of the hardcoded admin -- for tests proving
+// handleChat resolves the role=user session's own domain.User.CustomPrompt
+// into ChatOptions.
+func chatAuthedHandlerWithUser(t *testing.T, chat *application.ChatService, store ports.UserStore, u domain.User) (*restapi.Handler, *http.Cookie) {
+	t.Helper()
+	h := restapi.New(restapi.Config{
+		Search: &fakeSearch{}, Chat: chat, Users: store,
+		AdminUser: testAdminUser, AdminPass: testAdminPass,
+	})
+	body, _ := json.Marshal(map[string]string{"username": u.Username, "password": testUserPassword})
+	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("user login failed: %d %s", rec.Code, rec.Body.String())
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatalf("expected a session cookie after login")
+	}
+	return h, cookies[0]
+}
+
 func postChat(t *testing.T, h *restapi.Handler, cookie *http.Cookie, body interface{}) *httptest.ResponseRecorder {
 	t.Helper()
 	var data []byte
@@ -357,6 +382,104 @@ func TestHandleChat_TokenUsageBreakdown(t *testing.T) {
 	}
 	if u.MaxContextTokens != 10000 {
 		t.Errorf("expected max_context_tokens echoed from the endpoint config, got %+v", u)
+	}
+}
+
+// TestHandleChat_UserCustomPromptReachesChatOptions proves a chat request
+// from a role=user session whose domain.User.CustomPrompt is non-empty
+// actually reaches application.ChatOptions -- verified end to end via the
+// response's token_usage.user_prompt_tokens, which is only nonzero when
+// ChatService.Chat actually injected opts.UserCustomPrompt as its own
+// leading system message.
+func TestHandleChat_UserCustomPromptReachesChatOptions(t *testing.T) {
+	store := &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}}
+	store.users[0].CustomPrompt = "Always answer in haiku."
+	svc := application.NewChatService(
+		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}},
+		&fakeChatCompleter{answer: "plain answer"}, nil, nil)
+	h, cookie := chatAuthedHandlerWithUser(t, svc, store, store.users[0])
+	rec := postChat(t, h, cookie, map[string]interface{}{
+		"messages": []map[string]string{{"role": "user", "content": "hi"}},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		TokenUsage struct {
+			UserPromptTokens int `json:"user_prompt_tokens"`
+		} `json:"token_usage"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.TokenUsage.UserPromptTokens <= 0 {
+		t.Errorf("expected a nonzero user_prompt_tokens, got %+v", resp.TokenUsage)
+	}
+}
+
+// TestHandleChat_AdminRoleNeverLooksUpAPerUserPrompt proves a chat request
+// from a role=admin session (no associated domain.User at all) never even
+// attempts a per-user lookup, let alone injects anything -- checked via
+// fakeUserStore.getCount, not just an empty result, since an admin session
+// has no userID to look up in the first place.
+func TestHandleChat_AdminRoleNeverLooksUpAPerUserPrompt(t *testing.T) {
+	store := &fakeUserStore{}
+	svc := application.NewChatService(
+		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}},
+		&fakeChatCompleter{answer: "plain answer"}, nil, nil)
+	h := restapi.New(restapi.Config{
+		Search: &fakeSearch{}, Chat: svc, Users: store,
+		AdminUser: testAdminUser, AdminPass: testAdminPass,
+	})
+	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
+	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login failed: %d %s", rec.Code, rec.Body.String())
+	}
+	cookie := rec.Result().Cookies()[0]
+
+	chatRec := postChat(t, h, cookie, map[string]interface{}{
+		"messages": []map[string]string{{"role": "user", "content": "hi"}},
+	})
+	if chatRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", chatRec.Code, chatRec.Body.String())
+	}
+	if store.getCount != 0 {
+		t.Errorf("expected no GetUser calls for an admin session, got %d", store.getCount)
+	}
+	if strings.Contains(chatRec.Body.String(), `"user_prompt_tokens":1`) {
+		t.Errorf("expected no user prompt injected for an admin session, got %s", chatRec.Body.String())
+	}
+}
+
+// TestHandleChat_UserRoleGetUserErrorStillCompletesChat proves a chat
+// request from a role=user session whose GetUser call errors still
+// completes the chat turn normally -- best-effort, non-fatal, same
+// convention as every other per-turn augmentation in ChatService.Chat.
+func TestHandleChat_UserRoleGetUserErrorStillCompletesChat(t *testing.T) {
+	store := &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}}
+	svc := application.NewChatService(
+		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}},
+		&fakeChatCompleter{answer: "plain answer"}, nil, nil)
+	h, cookie := chatAuthedHandlerWithUser(t, svc, store, store.users[0])
+	store.getErr = errors.New("db unavailable")
+
+	rec := postChat(t, h, cookie, map[string]interface{}{
+		"messages": []map[string]string{{"role": "user", "content": "hi"}},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected the chat turn to still complete (200) despite the GetUser error, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Answer string `json:"answer"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.Answer != "plain answer" {
+		t.Errorf("expected the answer unaffected by the lookup error, got %q", resp.Answer)
 	}
 }
 

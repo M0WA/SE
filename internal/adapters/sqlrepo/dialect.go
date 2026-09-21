@@ -198,7 +198,8 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 		// at the application layer, to close the race between the two).
 		`CREATE TABLE IF NOT EXISTS users (
 			id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE,
-			password_hash TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+			password_hash TEXT NOT NULL, custom_prompt TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 		)`,
 	}
 }
@@ -359,7 +360,8 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 		// See the sqlite dialect's users comment.
 		`CREATE TABLE IF NOT EXISTS users (
 			id VARCHAR(20) PRIMARY KEY, username VARCHAR(255) NOT NULL UNIQUE,
-			password_hash VARCHAR(255) NOT NULL, created_at VARCHAR(64) NOT NULL, updated_at VARCHAR(64) NOT NULL
+			password_hash VARCHAR(255) NOT NULL, custom_prompt TEXT NOT NULL DEFAULT '',
+			created_at VARCHAR(64) NOT NULL, updated_at VARCHAR(64) NOT NULL
 		) ENGINE=InnoDB`,
 	}
 }
@@ -523,7 +525,8 @@ func (postgresDialect) CreateSchemaSQL() []string {
 		// See the sqlite dialect's users comment.
 		`CREATE TABLE IF NOT EXISTS users (
 			id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE,
-			password_hash TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+			password_hash TEXT NOT NULL, custom_prompt TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 		)`,
 	}
 }

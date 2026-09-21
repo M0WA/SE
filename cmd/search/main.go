@@ -75,6 +75,7 @@ func main() {
 		Health:               repo,
 		Sessions:             repo,
 		ChatEndpoints:        repo,
+		Users:                repo,
 		InternalSearchAPIKey: internalSearchAPIKey,
 		Chat:                 application.NewChatService(repo, httpchat.New(), repo, hookrunner.New(chatHooksDir)),
 	})

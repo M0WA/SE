@@ -121,7 +121,9 @@ test('renderResults clears any previous correction note when there is none this 
 
 test('submitting an empty query shows a prompt and does not search', () => {
   let fetched = false;
-  global.fetch = async () => { fetched = true; return { ok: true, json: async () => ({ results: [] }) }; };
+  // Ignores index.js's own on-load /session call (unrelated to this test)
+  // and only tracks whether an actual search request went out.
+  global.fetch = async (url) => { if (String(url).startsWith('/search')) fetched = true; return { ok: true, json: async () => ({ results: [] }) }; };
   loadFixture();
   document.getElementById('results').appendChild(document.createElement('div'));
   document.getElementById('q').value = '   ';
@@ -477,7 +479,7 @@ test('sendChatMessage shows the persistent token-usage badge next to the Web che
     ok: true,
     json: async () => ({
       answer: 'answer',
-      token_usage: { global_prompt_tokens: 10, hook_prompt_tokens: 5, history_tokens: 3, max_context_tokens: 1000 },
+      token_usage: { global_prompt_tokens: 10, hook_prompt_tokens: 5, user_prompt_tokens: 2, history_tokens: 3, max_context_tokens: 1000 },
     }),
   });
   const { sendChatMessage } = loadFixture();
@@ -487,10 +489,10 @@ test('sendChatMessage shows the persistent token-usage badge next to the Web che
 
   const usage = document.getElementById('chat-token-usage');
   assert.equal(usage.hidden, false);
-  assert.equal(document.getElementById('chat-token-usage-summary').textContent, '18 / 1,000');
+  assert.equal(document.getElementById('chat-token-usage-summary').textContent, '20 / 1,000');
   const donut = document.getElementById('chat-token-usage-donut');
   assert.equal(donut.querySelectorAll('svg.donut-chart').length, 1);
-  assert.equal(donut.querySelectorAll('.donut-legend-row').length, 3);
+  assert.equal(donut.querySelectorAll('.donut-legend-row').length, 4);
   const mini = document.getElementById('chat-token-usage-mini');
   assert.equal(mini.querySelectorAll('svg.donut-chart').length, 1);
 });
@@ -534,11 +536,11 @@ test('buildDonutLegend renders a swatch and label:value text per segment', () =>
   assert.equal(row.textContent, 'History: 1,234');
 });
 
-test('tokenUsageSegments maps the flat response shape to the three fixed chart segments', () => {
+test('tokenUsageSegments maps the flat response shape to the four fixed chart segments', () => {
   const { tokenUsageSegments } = loadFixture();
-  const segments = tokenUsageSegments({ global_prompt_tokens: 1, hook_prompt_tokens: 2, history_tokens: 4 });
-  assert.deepEqual(segments.map((s) => s.value), [1, 2, 4]);
-  assert.deepEqual(segments.map((s) => s.label), ['Global prompt', 'Hook prompts', 'Conversation history']);
+  const segments = tokenUsageSegments({ global_prompt_tokens: 1, hook_prompt_tokens: 2, user_prompt_tokens: 8, history_tokens: 4 });
+  assert.deepEqual(segments.map((s) => s.value), [1, 2, 8, 4]);
+  assert.deepEqual(segments.map((s) => s.label), ['Global prompt', 'Hook prompts', 'Your prompt', 'Conversation history']);
 });
 
 test('renderTokenUsage hides the badge for a falsy tokenUsage', () => {
@@ -566,7 +568,7 @@ test('sendChatMessage renders a generic failure message when fetch throws', asyn
 
 test('submitting an empty chat message is a no-op', () => {
   let fetched = false;
-  global.fetch = async () => { fetched = true; return { ok: true, json: async () => ({ answer: '' }) }; };
+  global.fetch = async (url) => { if (url === '/chat') fetched = true; return { ok: true, json: async () => ({ answer: '' }) }; };
   loadFixture();
   document.getElementById('chat-input').value = '   ';
   document.getElementById('chat-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
@@ -589,7 +591,7 @@ test('submitting the chat form sends the trimmed input and clears the field', as
 
 test('pressing Enter in chat-input submits the form', () => {
   let fetched = false;
-  global.fetch = async () => { fetched = true; return { ok: true, json: async () => ({ answer: 'ok' }) }; };
+  global.fetch = async (url) => { if (url === '/chat') fetched = true; return { ok: true, json: async () => ({ answer: 'ok' }) }; };
   loadFixture();
   const chatInput = document.getElementById('chat-input');
   chatInput.value = 'hello';
@@ -600,7 +602,7 @@ test('pressing Enter in chat-input submits the form', () => {
 
 test('pressing Shift+Enter in chat-input does not submit the form', () => {
   let fetched = false;
-  global.fetch = async () => { fetched = true; return { ok: true, json: async () => ({ answer: 'ok' }) }; };
+  global.fetch = async (url) => { if (url === '/chat') fetched = true; return { ok: true, json: async () => ({ answer: 'ok' }) }; };
   loadFixture();
   const chatInput = document.getElementById('chat-input');
   chatInput.value = 'hello';
@@ -611,7 +613,7 @@ test('pressing Shift+Enter in chat-input does not submit the form', () => {
 
 test('pressing a non-Enter key in chat-input does not submit the form', () => {
   let fetched = false;
-  global.fetch = async () => { fetched = true; return { ok: true, json: async () => ({ answer: 'ok' }) }; };
+  global.fetch = async (url) => { if (url === '/chat') fetched = true; return { ok: true, json: async () => ({ answer: 'ok' }) }; };
   loadFixture();
   const chatInput = document.getElementById('chat-input');
   chatInput.value = 'hello';
@@ -646,6 +648,38 @@ test('sign-out posts to /logout on click', async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(fetchedURL, '/logout');
   assert.equal(fetchedOpts.method, 'POST');
+});
+
+test('loadSession shows the admin link for an admin-role session', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ role: 'admin' }) });
+  const { loadSession } = loadFixture();
+  await loadSession();
+  assert.equal(document.getElementById('admin-link').hidden, false);
+  assert.equal(document.getElementById('account-link').hidden, true);
+});
+
+test('loadSession shows the account link for a user-role session', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ role: 'user' }) });
+  const { loadSession } = loadFixture();
+  await loadSession();
+  assert.equal(document.getElementById('account-link').hidden, false);
+  assert.equal(document.getElementById('admin-link').hidden, true);
+});
+
+test('loadSession keeps both links hidden on a non-ok /session response', async () => {
+  global.fetch = async () => ({ ok: false, status: 401, text: async () => 'unauthorized' });
+  const { loadSession } = loadFixture();
+  await loadSession();
+  assert.equal(document.getElementById('admin-link').hidden, true);
+  assert.equal(document.getElementById('account-link').hidden, true);
+});
+
+test('loadSession keeps both links hidden when the fetch throws', async () => {
+  global.fetch = async () => { throw new Error('network down'); };
+  const { loadSession } = loadFixture();
+  await loadSession();
+  assert.equal(document.getElementById('admin-link').hidden, true);
+  assert.equal(document.getElementById('account-link').hidden, true);
 });
 
 test('escapeHTML neutralizes tags and entities', () => {

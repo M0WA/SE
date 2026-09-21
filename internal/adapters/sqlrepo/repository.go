@@ -174,6 +174,9 @@ func (r *Repository) migrate(ctx context.Context) error {
 	if err := r.migrateSessionColumns(ctx); err != nil {
 		return err
 	}
+	if err := r.migrateUserColumns(ctx); err != nil {
+		return err
+	}
 	if err := r.migrateLegacyHTTPEmbeddingConfig(ctx); err != nil {
 		return err
 	}
@@ -372,6 +375,21 @@ func (r *Repository) migrateSessionColumns(ctx context.Context) error {
 		return err
 	}
 	return r.addColumnIfMissing(ctx, "sessions", existing, "user_id", "user_id TEXT NOT NULL DEFAULT ''")
+}
+
+// migrateUserColumns adds custom_prompt to a users table that predates the
+// per-user custom chat prompt feature -- this exact users table was itself
+// only just added (see migrateSessionColumns' own doc comment for the same
+// era) and is already live in production without this column, so this
+// needs the same non-destructive ALTER TABLE pattern, not a fresh
+// CREATE TABLE. A pre-existing user row defaults to custom_prompt=” --
+// correct: no user could have set one before this column existed.
+func (r *Repository) migrateUserColumns(ctx context.Context) error {
+	existing, err := r.existingColumns(ctx, "users")
+	if err != nil {
+		return err
+	}
+	return r.addColumnIfMissing(ctx, "users", existing, "custom_prompt", "custom_prompt TEXT NOT NULL DEFAULT ''")
 }
 
 // legacyHTTPEmbeddingSettings decodes just the fields this migration cares

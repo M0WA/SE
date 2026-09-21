@@ -39,6 +39,12 @@ tags:
     description: Public search (search-server)
   - name: auth
     description: Session login/logout (shared, proxied to admin-server)
+  - name: account
+    description: >-
+      Self-service account management for a signed-in regular-user
+      (role=user) session -- password change and personal chat prompt
+      (search-server). Always 403 for the hardcoded admin account, which
+      has no underlying User row to act on.
   - name: admin
     description: Admin diagnostics, tuning, and content management (admin-server)
   - name: crawl-internal
@@ -184,6 +190,75 @@ paths:
               schema:
                 type: object
                 properties: { ok: { type: boolean } }
+  /session:
+    get:
+      tags: [auth]
+      summary: Who the current session is
+      description: >-
+        Resolves the se_session cookie's role server-side -- reachable by
+        EITHER role (unlike every /account/* route), so the search page's
+        own JS can decide which nav link to show (admin backend for
+        role=admin, the self-service account page for role=user) without
+        needing to attempt either route first.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # --------------------------------------------------------------- account
+  /account/api:
+    get:
+      tags: [account]
+      summary: Get the current session's own account
+      description: >-
+        There is no id in the path -- a regular-user session can only ever
+        see or change its own row, resolved server-side from the
+        se_session cookie. Never includes a password or password hash in
+        the response, same discipline as /admin/api/users.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: The signed-in session is the hardcoded admin account, which has no User row to act on.
+          content:
+            text/plain: { schema: { type: string } }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    patch:
+      tags: [account]
+      summary: Change the current session's own password and/or personal chat prompt
+      description: >-
+        Both fields are optional and independent -- password, when
+        present, is validated and hashed the same way as
+        /admin/api/users' own password fields (8-72 characters); an
+        invalid one is rejected (400), never silently ignored.
+        custom_prompt, when present (including an explicit empty string,
+        to clear it), replaces the stored value outright; omitting it
+        entirely leaves the existing value untouched. See UpdateAccountRequest.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateAccountRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: The signed-in session is the hardcoded admin account, which has no User row to act on.
+          content:
+            text/plain: { schema: { type: string } }
+        "503": { $ref: "#/components/responses/NotConfigured" }
 
   # ----------------------------------------------------------------- admin
   /admin/api/stats:
@@ -2100,6 +2175,15 @@ components:
         global_prompt_tokens:
           type: integer
           description: Estimated size of ChatEndpointOptions.system_prompt, when set (0 otherwise).
+        user_prompt_tokens:
+          type: integer
+          description: >-
+            Estimated size of the calling user's own personal custom prompt
+            (see GET /account/api's custom_prompt), when the session is a
+            regular-user account with one set (0 otherwise -- always 0 for
+            the hardcoded admin account, which has no custom prompt of its
+            own). Injected as its own leading system message, after the
+            global prompt and before any hook prompts.
         hook_prompt_tokens:
           type: integer
           description: >-
@@ -2290,6 +2374,50 @@ components:
         username: { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    SessionResponse:
+      type: object
+      properties:
+        role:
+          type: string
+          enum: [admin, user]
+          description: The current session's role, resolved server-side from the se_session cookie.
+
+    AccountResponse:
+      type: object
+      description: >-
+        A regular-user's self-service view of their own account -- never
+        includes a password or password hash, same discipline as User.
+      properties:
+        username: { type: string }
+        custom_prompt:
+          type: string
+          description: >-
+            Free text injected as its own leading system message on every
+            chat turn this user sends (see POST /chat), in addition to
+            (not instead of) the admin-configured endpoint-wide system
+            prompt and any active chat hooks' own prompts. Empty string
+            when unset.
+
+    UpdateAccountRequest:
+      type: object
+      description: >-
+        Both fields are optional pointers, independently -- omitted means
+        "leave unchanged", which for custom_prompt is distinct from an
+        explicit empty string (clears it back to empty).
+      properties:
+        password:
+          type: string
+          description: >-
+            New plaintext password, hashed with bcrypt before storage and
+            never stored or returned as-is. 8-72 characters when present;
+            omit to keep the current password.
+        custom_prompt:
+          type: string
+          description: >-
+            New value for the personal chat prompt, up to 4000 characters.
+            Pass an empty string to clear it; omit the field entirely to
+            leave it unchanged.
 
     CreateUserRequest:
       type: object

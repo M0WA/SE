@@ -27,6 +27,11 @@ type fakeUserStore struct {
 	createErr error
 	updateErr error
 	deleteErr error
+	// getCount counts GetUser calls -- used by chat_test.go's
+	// TestHandleChat_AdminRoleNeverLooksUpAPerUserPrompt to prove a
+	// role=admin session never even attempts a per-user prompt lookup, not
+	// just that the result is empty.
+	getCount int
 }
 
 func (f *fakeUserStore) ListUsers(ctx context.Context) ([]domain.User, error) {
@@ -37,6 +42,7 @@ func (f *fakeUserStore) ListUsers(ctx context.Context) ([]domain.User, error) {
 }
 
 func (f *fakeUserStore) GetUser(ctx context.Context, id string) (domain.User, error) {
+	f.getCount++
 	if f.getErr != nil {
 		return domain.User{}, f.getErr
 	}

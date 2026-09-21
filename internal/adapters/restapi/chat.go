@@ -53,6 +53,7 @@ type chatResponse struct {
 // in lockstep with application.TokenUsage's own field list.
 type chatTokenUsageResponse struct {
 	GlobalPromptTokens int `json:"global_prompt_tokens"`
+	UserPromptTokens   int `json:"user_prompt_tokens"`
 	HookPromptTokens   int `json:"hook_prompt_tokens"`
 	HistoryTokens      int `json:"history_tokens"`
 	MaxContextTokens   int `json:"max_context_tokens,omitempty"`
@@ -75,6 +76,27 @@ func toChatHookResultResponses(results []domain.ChatHookResult) []chatHookResult
 	return mapSlice(results, func(r domain.ChatHookResult) chatHookResultResponse {
 		return chatHookResultResponse{HookName: r.HookName, Input: r.Input, Output: r.Output, Err: r.Err}
 	})
+}
+
+// userCustomPromptFor resolves the current session's per-user custom chat
+// prompt (domain.User.CustomPrompt), for injection into ChatOptions --
+// empty whenever there's nothing to inject: an admin session (no
+// associated domain.User row at all), h.users not configured, or a lookup
+// error/empty CustomPrompt. Every failure here is best-effort and silent by
+// design -- a per-user prompt is a nice-to-have personalization, never
+// something that should fail an otherwise-working chat turn. Uses the
+// single sessionRoleFor lookup already available rather than querying
+// h.sessions.ValidSession a second time.
+func (h *Handler) userCustomPromptFor(r *http.Request) string {
+	role, userID, ok := h.sessionRoleFor(r)
+	if !ok || role != domain.RoleUser || userID == "" || h.users == nil {
+		return ""
+	}
+	u, err := h.users.GetUser(r.Context(), userID)
+	if err != nil {
+		return ""
+	}
+	return u.CustomPrompt
 }
 
 // handleChat answers one chat turn against the search-server-only,
@@ -113,7 +135,9 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := h.chat.Chat(r.Context(), req.Messages, application.ChatOptions{WebSearch: req.WebSearch})
+	result, err := h.chat.Chat(r.Context(), req.Messages, application.ChatOptions{
+		WebSearch: req.WebSearch, UserCustomPrompt: h.userCustomPromptFor(r),
+	})
 	if errors.Is(err, ports.ErrChatEndpointNotConfigured) {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return

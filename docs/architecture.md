@@ -51,7 +51,7 @@ Pure logic — every file imports only the Go standard library, with no SQL, HTT
 | `SQLRepository` | Broad relational-DB port: document save/versioning/embeddings, postings/corpus-stats/vocabulary lookups, alias resolution, ANN semantic search. | `sqlrepo` |
 | `PageRankRepository`, `ContentDedupRepository`, `EmbeddingRepository` | Narrow slices of `SQLRepository`, scoped to exactly what each background job needs. | `sqlrepo` |
 | `SessionStore` | Shared-DB login session tokens, each carrying a role (admin vs. regular user) and, for a regular user, which `User` it belongs to. | `sqlrepo` |
-| `UserStore` | CRUD for DB-backed regular-user accounts (distinct from the single hardcoded admin account) -- search-only access, managed entirely through the admin backend. | `sqlrepo` |
+| `UserStore` | CRUD for DB-backed regular-user accounts (distinct from the single hardcoded admin account) -- search-only access. Accounts themselves (create/delete) are admin-managed; each account's own password and personal chat prompt (`User.CustomPrompt`, injected into every chat turn that account sends) are self-service, changed by the signed-in user via search-server's `/account` page. | `sqlrepo` |
 | `HealthChecker` | Cheap DB liveness check backing `/healthz`. | `sqlrepo` |
 | `AdminRepository` | Read-mostly admin diagnostics port (stats, listings, time series, pool stats). | `sqlrepo` |
 | `SearchService` | Primary driving port for public search. | `internal/application` (hybrid search use case) |
@@ -103,7 +103,7 @@ Orchestration/use-case layer; verified to import only `internal/domain` and `int
 
 ## Binaries
 
-- **`cmd/search`** — public, internet-facing. Serves the index/search page, the `/search` JSON API, and chat endpoints. Per nginx routing, this is the only one of the three exposed directly to the public internet. Reads/writes the shared SQL database via `sqlrepo` but never calls the other two binaries directly.
+- **`cmd/search`** — public, internet-facing. Serves the index/search page, the `/search` JSON API, chat endpoints, `/session` (role lookup for the page's own nav), and `/account`/`/account/api` (a signed-in regular user's self-service password/personal-chat-prompt page). Per nginx routing, this is the only one of the three exposed directly to the public internet. Reads/writes the shared SQL database via `sqlrepo` but never calls the other two binaries directly.
 - **`cmd/admin`** — internal, reached only via nginx's `/admin`, `/login`, `/logout` prefixes. Hosts every `/admin/api/*` endpoint (settings, embedding endpoints, PageRank, content-dedup, sessions/auth, diagnostics, scheduled crawls, chat endpoints). It never fetches pages or touches robots.txt/documents itself — it only starts and polls crawl jobs on crawl-server over the network via `crawlclient` (default `CRAWL_SERVER_URL=http://127.0.0.1:8082`, optional shared-secret `X-Internal-Token`).
 - **`cmd/crawl`** — internal only, never exposed by nginx. Runs actual crawls (fetch, robots check, HTML parse, embed, persist), tracks crawl-job state, and exposes an internal HTTP surface (`RoutesCrawlInternal`, default `127.0.0.1:8082`) that only `cmd/admin`'s `crawlclient` calls. Also runs background schedulers (scheduled-crawl trigger poller, PageRank recompute, content-dedup recompute, crawl-job pruner) and recovers interrupted jobs on startup.
 
