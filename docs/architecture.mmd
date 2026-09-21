@@ -16,6 +16,7 @@ flowchart LR
     Admin["cmd/admin<br/>internal, 127.0.0.1:8081"]
     Crawl["cmd/crawl<br/>internal only, 127.0.0.1:8082"]
     MCPWeb["cmd/mcp-web<br/>spawned stdio subprocess<br/>(not a service)"]
+    MCPDatetime["cmd/mcp-datetime<br/>spawned stdio subprocess<br/>(not a service)"]
   end
 
   subgraph Core["Core: domain + ports + application"]
@@ -80,6 +81,7 @@ flowchart LR
   HTTPChat --> ChatAPI
   App --> MCPClient
   MCPClient -.->|"spawns as child process"| MCPWeb
+  MCPClient -.->|"spawns as child process"| MCPDatetime
   MCPWeb -->|"web_search tool"| SearXNG
 
   Nginx -.->|"stub_status via<br/>prometheus-nginx-exporter"| IONOSMon
