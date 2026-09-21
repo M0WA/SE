@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.31 - 2026-09-21
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Auto-detect max_context_tokens from the configured chat model by @M0WA in https://github.com/M0WA/SE/pull/189
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.30...v4.13.31
+
+
 ## v4.13.30 - 2026-09-21
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
