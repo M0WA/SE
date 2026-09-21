@@ -1,14 +1,14 @@
 // Command mcp-datetime is a first-party MCP (Model Context Protocol) server
 // exposing a single "get_datetime" tool that reports the current date and
-// time -- the replacement for the old %c/strftime placeholder mechanism
-// (see application.expandPromptPlaceholders/strftime): rather than the
-// server always injecting a formatted timestamp into the system prompt on
-// every turn (whether or not the model actually needed one), the model now
-// calls this tool only when it actually needs to reason about "now,"
-// exactly the same on-demand pattern web_search/web_fetch (cmd/mcp-web)
-// already use. Spawned as a stdio subprocess by internal/adapters/mcpclient
-// (see domain.MCPServer's Transport="stdio" configuration) rather than run
-// as a systemd service.
+// time -- the replacement for the old %c/strftime prompt-placeholder
+// mechanism, which has been removed entirely: rather than the server
+// always injecting a formatted timestamp into the system prompt on every
+// turn (whether or not the model actually needed one), the model now calls
+// this tool only when it actually needs to reason about "now," exactly the
+// same on-demand pattern web_search/web_fetch (cmd/mcp-web) already use.
+// Spawned as a stdio subprocess by internal/adapters/mcpclient (see
+// domain.MCPServer's Transport="stdio" configuration) rather than run as a
+// systemd service.
 package main
 
 import (
