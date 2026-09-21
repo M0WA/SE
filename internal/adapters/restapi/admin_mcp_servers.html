@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — mcp servers</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<div class="page-header">
+  <a class="mark" href="/">se.</a>
+  <button id="sign-out" class="text-button" type="button">Sign out</button>
+</div>
+<div class="admin-shell">
+<nav class="admin-rail" id="admin-rail" aria-label="Admin sections"></nav>
+<main>
+  <h2>MCP servers</h2>
+  <p class="lede" style="margin: 0 0 1.5rem;">Each server is connected to at the start of a chat turn; every tool it exposes is offered to the chat model as a native tool-calling function, and the model decides whether and when to call one. Requires the configured chat endpoint to support native tool-calling (e.g. vLLM launched with <code>--enable-auto-tool-choice</code>).</p>
+
+  <a id="add-server-link" class="text-button" href="/admin/mcp-servers/new">Add server</a>
+  <div id="servers-status" class="panel-status"></div>
+  <div id="servers-table"></div>
+</main>
+</div>
+<script src="/admin.js"></script>
+<script src="/admin_mcp_servers.js"></script>
+</body>
+</html>

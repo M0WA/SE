@@ -20,8 +20,8 @@ const (
 type chatRequest struct {
 	Messages []domain.ChatMessage `json:"messages"`
 	// WebSearch, when present, overrides the admin-configured default for
-	// this question only: it decides whether GatedByWebSearch chat hooks
-	// (e.g. a "web_search"/"web_fetch" hook) are active, not whether a
+	// this question only: it decides whether GatedByWebSearch MCP servers
+	// (e.g. a "web_search"/"web_fetch" tool) are active, not whether a
 	// search is performed directly -- omitted (nil) falls back to
 	// domain.ChatEndpoint.WebSearchEnabled, letting the chat UI's
 	// per-question toggle decide instead of a fixed global setting.
@@ -35,14 +35,14 @@ type chatResponse struct {
 	// token budget before this answer was generated -- omitted (so it reads
 	// as false) on the common case where nothing was trimmed.
 	ContextTrimmed bool `json:"context_trimmed,omitempty"`
-	// HookResults carries one entry per tool call the model made this turn
-	// (see application.ChatResult.HookResults) -- omitted entirely on the
-	// common case of no configured hooks or no tool call made.
-	HookResults []chatHookResultResponse `json:"hook_results,omitempty"`
+	// ToolResults carries one entry per tool call the model made this turn
+	// (see application.ChatResult.ToolResults) -- omitted entirely on the
+	// common case of no configured MCP servers or no tool call made.
+	ToolResults []toolCallResultResponse `json:"tool_results,omitempty"`
 	// TokenUsage is this turn's estimated context breakdown (see
 	// application.TokenUsage) -- always present, since every turn sends at
 	// least a history message, letting the chat UI show a token-usage
-	// diagram for every answer, not just ones with hooks.
+	// diagram for every answer, not just ones with tool calls.
 	TokenUsage chatTokenUsageResponse `json:"token_usage"`
 }
 
@@ -54,27 +54,27 @@ type chatResponse struct {
 type chatTokenUsageResponse struct {
 	GlobalPromptTokens int `json:"global_prompt_tokens"`
 	UserPromptTokens   int `json:"user_prompt_tokens"`
-	HookPromptTokens   int `json:"hook_prompt_tokens"`
+	ToolPromptTokens   int `json:"tool_prompt_tokens"`
 	HistoryTokens      int `json:"history_tokens"`
 	MaxContextTokens   int `json:"max_context_tokens,omitempty"`
 }
 
-// chatHookResultResponse is the wire shape of one domain.ChatHookResult.
-type chatHookResultResponse struct {
-	HookName string `json:"hook_name"`
-	Input    string `json:"input,omitempty"`
-	Output   string `json:"output,omitempty"`
-	Err      string `json:"err,omitempty"`
+// toolCallResultResponse is the wire shape of one domain.ToolCallResult.
+type toolCallResultResponse struct {
+	ToolName  string `json:"tool_name"`
+	Arguments string `json:"arguments,omitempty"`
+	Output    string `json:"output,omitempty"`
+	Err       string `json:"err,omitempty"`
 }
 
-// toChatHookResultResponses' empty-input case naturally returns a
-// zero-length (non-nil) slice, which is fine: HookResults' own
+// toToolCallResultResponses' empty-input case naturally returns a
+// zero-length (non-nil) slice, which is fine: ToolResults' own
 // "omitempty" tag omits it from the JSON response either way, since
 // encoding/json's omitempty treats a zero-length slice as empty
 // regardless of nil-ness.
-func toChatHookResultResponses(results []domain.ChatHookResult) []chatHookResultResponse {
-	return mapSlice(results, func(r domain.ChatHookResult) chatHookResultResponse {
-		return chatHookResultResponse{HookName: r.HookName, Input: r.Input, Output: r.Output, Err: r.Err}
+func toToolCallResultResponses(results []domain.ToolCallResult) []toolCallResultResponse {
+	return mapSlice(results, func(r domain.ToolCallResult) toolCallResultResponse {
+		return toolCallResultResponse{ToolName: r.ToolName, Arguments: r.Arguments, Output: r.Output, Err: r.Err}
 	})
 }
 
@@ -156,7 +156,7 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, chatResponse{
 		Answer: result.Answer, ContextTrimmed: result.ContextTrimmed,
-		HookResults: toChatHookResultResponses(result.HookResults),
+		ToolResults: toToolCallResultResponses(result.ToolResults),
 		TokenUsage:  chatTokenUsageResponse(result.TokenUsage),
 	})
 }

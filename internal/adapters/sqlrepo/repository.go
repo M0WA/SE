@@ -168,9 +168,6 @@ func (r *Repository) migrate(ctx context.Context) error {
 	if err := r.migrateChatEndpointColumns(ctx); err != nil {
 		return err
 	}
-	if err := r.migrateChatHookColumns(ctx); err != nil {
-		return err
-	}
 	if err := r.migrateSessionColumns(ctx); err != nil {
 		return err
 	}
@@ -338,62 +335,6 @@ func (r *Repository) migrateChatEndpointColumns(ctx context.Context) error {
 		return err
 	}
 	return r.addColumnIfMissing(ctx, "chat_endpoint", existing, "system_prompt", "system_prompt TEXT NOT NULL DEFAULT ''")
-}
-
-// migrateChatHookColumns adds prompt (see domain.ChatHook.Prompt),
-// gated_by_web_search (see domain.ChatHook.GatedByWebSearch), and --
-// for native tool-calling -- description and parameters (see
-// domain.ChatHook.Description/Parameters) to a chat_hooks table that
-// predates them. The old pattern column (regex-based tool invocation,
-// superseded by parameters) is left in place, unused, rather than dropped
-// -- chat_hooks is NOT a brand-new table -- real deployments have live rows
-// in it already, so none of this can be skipped the way CreateSchemaSQL
-// alone would for a fresh install.
-func (r *Repository) migrateChatHookColumns(ctx context.Context) error {
-	existing, err := r.existingColumns(ctx, "chat_hooks")
-	if err != nil {
-		return err
-	}
-	if err := r.addColumnIfMissing(ctx, "chat_hooks", existing, "prompt", "prompt TEXT NOT NULL DEFAULT ''"); err != nil {
-		return err
-	}
-	if err := r.addColumnIfMissing(ctx, "chat_hooks", existing, "gated_by_web_search", "gated_by_web_search BOOLEAN NOT NULL DEFAULT false"); err != nil {
-		return err
-	}
-	if err := r.addColumnIfMissing(ctx, "chat_hooks", existing, "parameters", "parameters TEXT NOT NULL DEFAULT '{}'"); err != nil {
-		return err
-	}
-	if err := r.addColumnIfMissing(ctx, "chat_hooks", existing, "description", "description TEXT NOT NULL DEFAULT ''"); err != nil {
-		return err
-	}
-	return r.backfillWebToolParameters(ctx)
-}
-
-// backfillWebToolParameters sets a sane default parameters/description for
-// pre-existing web_search/web_fetch chat_hooks rows -- a bare '{}'/”
-// (parameters/description's own ALTER TABLE default above) isn't a usable
-// tool definition, so without this an already-configured deployment (the
-// two hook names packaging/chat-hooks ships scripts for) would silently
-// lose its working hooks the moment this migration lands, and an admin
-// would have to notice and hand-reconfigure both. The `parameters = '{}'`
-// guard makes this idempotent and never clobbers a row an admin already
-// customized (its own name match plus a still-default parameters value is
-// what marks a row as "never touched since this migration/column existed").
-func (r *Repository) backfillWebToolParameters(ctx context.Context) error {
-	updateSQL := r.ph(`UPDATE chat_hooks SET parameters = %s, description = %s WHERE name = %s AND parameters = '{}'`, 1, 2, 3)
-	if _, err := r.db.ExecContext(ctx, updateSQL,
-		`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`,
-		"Search the web for current information on a topic.",
-		"web_search"); err != nil {
-		return fmt.Errorf("backfilling web_search parameters: %w", err)
-	}
-	if _, err := r.db.ExecContext(ctx, updateSQL,
-		`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`,
-		"Fetch the text content of a specific URL.",
-		"web_fetch"); err != nil {
-		return fmt.Errorf("backfilling web_fetch parameters: %w", err)
-	}
-	return nil
 }
 
 // migrateSessionColumns adds role/user_id to a sessions table that predates
@@ -2479,7 +2420,7 @@ func (r *Repository) DeleteScheduledCrawl(ctx context.Context, id string) error 
 // a caller can tell "nothing to do" apart from "that ID doesn't exist" --
 // shared by every resource's Update/Delete (each with its own not-found
 // sentinel: ports.ErrScheduledCrawlNotFound, ErrEmbeddingEndpointNotFound,
-// ErrChatHookNotFound, ...).
+// ErrMCPServerNotFound, ...).
 func requireRowsAffected(res sql.Result, id string, notFound error) error {
 	n, err := res.RowsAffected()
 	if err != nil {
@@ -2770,72 +2711,79 @@ func scanChatEndpoint(row scanner) (domain.ChatEndpoint, error) {
 	return e, nil
 }
 
-const chatHookColumns = "id, name, description, parameters, script, enabled, prompt, gated_by_web_search"
+const mcpServerColumns = "id, name, transport, command, args, base_url, api_key, enabled, prompt, gated_by_web_search"
 
-// ListChatHooks lists every configured hook, ordered by name for a stable,
-// human-friendly admin table order (chat_hooks has no created_at column to
-// order by insertion, unlike embedding_http_endpoints).
-func (r *Repository) ListChatHooks(ctx context.Context) ([]domain.ChatHook, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT `+chatHookColumns+` FROM chat_hooks ORDER BY name ASC`)
+// ListMCPServers lists every configured server, ordered by name for a
+// stable, human-friendly admin table order (mirrors the old chat_hooks
+// table's own convention -- no created_at column to order by insertion).
+func (r *Repository) ListMCPServers(ctx context.Context) ([]domain.MCPServer, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+mcpServerColumns+` FROM mcp_servers ORDER BY name ASC`)
 	if err != nil {
-		return nil, fmt.Errorf("querying chat hooks: %w", err)
+		return nil, fmt.Errorf("querying mcp servers: %w", err)
 	}
 	defer rows.Close()
 
-	var out []domain.ChatHook
+	var out []domain.MCPServer
 	for rows.Next() {
-		h, err := scanChatHook(rows)
+		s, err := scanMCPServer(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scanning chat hook: %w", err)
+			return nil, fmt.Errorf("scanning mcp server: %w", err)
 		}
-		out = append(out, h)
+		out = append(out, s)
 	}
 	return out, rows.Err()
 }
 
-// CreateChatHook inserts a new admin-configured chat hook (see
-// domain.ChatHook). pattern (the vestigial old regex column -- see
-// dialect.go's chat_hooks comment) is always written as ” here, purely to
-// satisfy its still-live NOT NULL constraint; it's never read anywhere in
-// application code.
-func (r *Repository) CreateChatHook(ctx context.Context, h domain.ChatHook) error {
-	insertSQL := r.ph(`INSERT INTO chat_hooks (`+chatHookColumns+`, pattern) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)`, 1, 2, 3, 4, 5, 6, 7, 8, 9)
-	if _, err := r.db.ExecContext(ctx, insertSQL, h.ID, h.Name, h.Description, string(h.Parameters), h.Script, h.Enabled, h.Prompt, h.GatedByWebSearch, ""); err != nil {
-		return fmt.Errorf("creating chat hook: %w", err)
+// CreateMCPServer inserts a new admin-configured MCP server (see
+// domain.MCPServer).
+func (r *Repository) CreateMCPServer(ctx context.Context, s domain.MCPServer) error {
+	args, err := json.Marshal(s.Args)
+	if err != nil {
+		return fmt.Errorf("encoding args: %w", err)
+	}
+	insertSQL := r.ph(`INSERT INTO mcp_servers (`+mcpServerColumns+`) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+	if _, err := r.db.ExecContext(ctx, insertSQL, s.ID, s.Name, s.Transport, s.Command, string(args), s.BaseURL, s.APIKey, s.Enabled, s.Prompt, s.GatedByWebSearch); err != nil {
+		return fmt.Errorf("creating mcp server: %w", err)
 	}
 	return nil
 }
 
-// UpdateChatHook replaces h's editable fields (everything but ID, which
-// never changes after creation), returning ports.ErrChatHookNotFound if no
-// hook with h.ID exists.
-func (r *Repository) UpdateChatHook(ctx context.Context, h domain.ChatHook) error {
-	updateSQL := r.ph(`UPDATE chat_hooks SET name = %s, description = %s, parameters = %s, script = %s, enabled = %s, prompt = %s, gated_by_web_search = %s WHERE id = %s`, 1, 2, 3, 4, 5, 6, 7, 8)
-	res, err := r.db.ExecContext(ctx, updateSQL, h.Name, h.Description, string(h.Parameters), h.Script, h.Enabled, h.Prompt, h.GatedByWebSearch, h.ID)
+// UpdateMCPServer replaces s's editable fields (everything but ID, which
+// never changes after creation), returning ports.ErrMCPServerNotFound if no
+// server with s.ID exists.
+func (r *Repository) UpdateMCPServer(ctx context.Context, s domain.MCPServer) error {
+	args, err := json.Marshal(s.Args)
 	if err != nil {
-		return fmt.Errorf("updating chat hook (%s): %w", h.ID, err)
+		return fmt.Errorf("encoding args: %w", err)
 	}
-	return requireRowsAffected(res, h.ID, ports.ErrChatHookNotFound)
+	updateSQL := r.ph(`UPDATE mcp_servers SET name = %s, transport = %s, command = %s, args = %s, base_url = %s, api_key = %s, enabled = %s, prompt = %s, gated_by_web_search = %s WHERE id = %s`, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+	res, err := r.db.ExecContext(ctx, updateSQL, s.Name, s.Transport, s.Command, string(args), s.BaseURL, s.APIKey, s.Enabled, s.Prompt, s.GatedByWebSearch, s.ID)
+	if err != nil {
+		return fmt.Errorf("updating mcp server (%s): %w", s.ID, err)
+	}
+	return requireRowsAffected(res, s.ID, ports.ErrMCPServerNotFound)
 }
 
-// DeleteChatHook removes a hook's config, returning ports.ErrChatHookNotFound
-// if no hook with id exists.
-func (r *Repository) DeleteChatHook(ctx context.Context, id string) error {
-	res, err := r.db.ExecContext(ctx, r.ph(`DELETE FROM chat_hooks WHERE id = %s`, 1), id)
+// DeleteMCPServer removes a server's config, returning
+// ports.ErrMCPServerNotFound if no server with id exists.
+func (r *Repository) DeleteMCPServer(ctx context.Context, id string) error {
+	res, err := r.db.ExecContext(ctx, r.ph(`DELETE FROM mcp_servers WHERE id = %s`, 1), id)
 	if err != nil {
-		return fmt.Errorf("deleting chat hook (%s): %w", id, err)
+		return fmt.Errorf("deleting mcp server (%s): %w", id, err)
 	}
-	return requireRowsAffected(res, id, ports.ErrChatHookNotFound)
+	return requireRowsAffected(res, id, ports.ErrMCPServerNotFound)
 }
 
-func scanChatHook(row scanner) (domain.ChatHook, error) {
-	var h domain.ChatHook
-	var parameters string
-	if err := row.Scan(&h.ID, &h.Name, &h.Description, &parameters, &h.Script, &h.Enabled, &h.Prompt, &h.GatedByWebSearch); err != nil {
-		return domain.ChatHook{}, err
+func scanMCPServer(row scanner) (domain.MCPServer, error) {
+	var s domain.MCPServer
+	var args string
+	if err := row.Scan(&s.ID, &s.Name, &s.Transport, &s.Command, &args, &s.BaseURL, &s.APIKey, &s.Enabled, &s.Prompt, &s.GatedByWebSearch); err != nil {
+		return domain.MCPServer{}, err
 	}
-	h.Parameters = json.RawMessage(parameters)
-	return h, nil
+	if err := json.Unmarshal([]byte(args), &s.Args); err != nil {
+		return domain.MCPServer{}, fmt.Errorf("decoding args: %w", err)
+	}
+	return s, nil
 }
 
 func nullableTimeString(t *time.Time) sql.NullString {

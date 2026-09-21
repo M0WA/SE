@@ -44,74 +44,104 @@ func (f *fakeChatEndpointStore) SetChatEndpoint(ctx context.Context, e domain.Ch
 	return nil
 }
 
-// fakeChatHookStore is a minimal ports.ChatHookStore fake -- a small local
-// copy, same reasoning as fakeChatEndpointStore's own doc comment. Shared
-// by admin_test.go's chat hook CRUD handler tests and this file's
-// hook_results-in-a-chat-response test.
-type fakeChatHookStore struct {
-	hooks     []domain.ChatHook
+// fakeMCPServerStore is a minimal ports.MCPServerStore fake -- a small
+// local copy, same reasoning as fakeChatEndpointStore's own doc comment.
+// Shared by admin_test.go's MCP server CRUD handler tests and this file's
+// tool_results-in-a-chat-response tests.
+type fakeMCPServerStore struct {
+	servers   []domain.MCPServer
 	listErr   error
 	createErr error
 	updateErr error
 	deleteErr error
 }
 
-func (f *fakeChatHookStore) ListChatHooks(ctx context.Context) ([]domain.ChatHook, error) {
+func (f *fakeMCPServerStore) ListMCPServers(ctx context.Context) ([]domain.MCPServer, error) {
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
-	return f.hooks, nil
+	return f.servers, nil
 }
 
-func (f *fakeChatHookStore) CreateChatHook(ctx context.Context, h domain.ChatHook) error {
+func (f *fakeMCPServerStore) CreateMCPServer(ctx context.Context, s domain.MCPServer) error {
 	if f.createErr != nil {
 		return f.createErr
 	}
-	f.hooks = append(f.hooks, h)
+	f.servers = append(f.servers, s)
 	return nil
 }
 
-func (f *fakeChatHookStore) UpdateChatHook(ctx context.Context, h domain.ChatHook) error {
+func (f *fakeMCPServerStore) UpdateMCPServer(ctx context.Context, s domain.MCPServer) error {
 	if f.updateErr != nil {
 		return f.updateErr
 	}
-	for i, existing := range f.hooks {
-		if existing.ID == h.ID {
-			f.hooks[i] = h
+	for i, existing := range f.servers {
+		if existing.ID == s.ID {
+			f.servers[i] = s
 			return nil
 		}
 	}
-	return ports.ErrChatHookNotFound
+	return ports.ErrMCPServerNotFound
 }
 
-func (f *fakeChatHookStore) DeleteChatHook(ctx context.Context, id string) error {
+func (f *fakeMCPServerStore) DeleteMCPServer(ctx context.Context, id string) error {
 	if f.deleteErr != nil {
 		return f.deleteErr
 	}
-	for i, existing := range f.hooks {
+	for i, existing := range f.servers {
 		if existing.ID == id {
-			f.hooks = append(f.hooks[:i], f.hooks[i+1:]...)
+			f.servers = append(f.servers[:i], f.servers[i+1:]...)
 			return nil
 		}
 	}
-	return ports.ErrChatHookNotFound
+	return ports.ErrMCPServerNotFound
 }
 
-// fakeHookScriptRunner is a minimal ports.HookScriptRunner fake.
-type fakeHookScriptRunner struct {
-	output  string
-	err     error
-	gotArgs []string
-	gotEnv  map[string]string
+// mcpCall records one CallTool invocation against a fakeMCPSession -- mirrors
+// internal/application/chat_service_test.go's own small helper.
+type mcpCall struct {
+	name          string
+	argumentsJSON string
 }
 
-func (f *fakeHookScriptRunner) RunHookScript(ctx context.Context, scriptName string, args []string, env map[string]string) (string, error) {
-	f.gotArgs = args
-	f.gotEnv = env
-	if f.err != nil {
-		return "", f.err
+// fakeMCPSession is a minimal ports.MCPSession fake.
+type fakeMCPSession struct {
+	outputs map[string]string
+	errs    map[string]string
+	calls   []mcpCall
+	closed  bool
+}
+
+func (s *fakeMCPSession) CallTool(ctx context.Context, name, argumentsJSON string) (string, error) {
+	s.calls = append(s.calls, mcpCall{name: name, argumentsJSON: argumentsJSON})
+	if s.errs != nil {
+		if e, ok := s.errs[name]; ok {
+			return "", errors.New(e)
+		}
 	}
-	return f.output, nil
+	return s.outputs[name], nil
+}
+
+func (s *fakeMCPSession) Close() { s.closed = true }
+
+// fakeMCPToolProvider is a minimal ports.MCPToolProvider fake -- mirrors
+// internal/application/chat_service_test.go's own small helper.
+type fakeMCPToolProvider struct {
+	tools   []domain.MCPTool
+	session *fakeMCPSession
+}
+
+func (p *fakeMCPToolProvider) Open(ctx context.Context, servers []domain.MCPServer, env map[string]string) (ports.MCPSession, []domain.MCPTool) {
+	if p.session == nil {
+		p.session = &fakeMCPSession{}
+	}
+	return p.session, p.tools
+}
+
+// mcpTool builds a domain.MCPTool with a bare, valid InputSchema -- mirrors
+// internal/application/chat_service_test.go's own small helper.
+func mcpTool(name, description string) domain.MCPTool {
+	return domain.MCPTool{Name: name, Description: description, InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)}
 }
 
 // fakeChatCompleter is a minimal ports.ChatCompleter fake.
@@ -149,17 +179,13 @@ func (f *fakeChatCompleter) Complete(ctx context.Context, endpoint domain.ChatEn
 	return domain.ChatMessage{Role: domain.ChatRoleAssistant, Content: f.answer}, nil
 }
 
-// toolCallMessage/singleStringParams/argsJSON mirror
+// toolCallMessage/argsJSON mirror
 // internal/application/chat_service_test.go's own small helpers for
-// building a tool-call response and a matching single-property JSON-schema
-// hook, kept as a small local copy since that package's own helpers are
-// unexported in a different package.
+// building a tool-call response and its arguments, kept as a small local
+// copy since that package's own helpers are unexported in a different
+// package.
 func toolCallMessage(id, name, argumentsJSON string) domain.ChatMessage {
 	return domain.ChatMessage{Role: domain.ChatRoleAssistant, ToolCalls: []domain.ToolCall{{ID: id, Name: name, Arguments: argumentsJSON}}}
-}
-
-func singleStringParams(propertyName string) json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"` + propertyName + `":{"type":"string"}},"required":["` + propertyName + `"]}`)
 }
 
 func argsJSON(propertyName, value string) string {
@@ -362,19 +388,19 @@ func TestHandleChat_ServiceError(t *testing.T) {
 }
 
 // TestHandleChat_TokenUsageBreakdown proves token_usage's three components
-// (global prompt, hook prompts, history) are wired through from
+// (global prompt, tool prompts, history) are wired through from
 // application.TokenUsage to the wire response, each attributed to the
 // right piece rather than lumped into one total.
 func TestHandleChat_TokenUsageBreakdown(t *testing.T) {
-	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
-		{ID: "h1", Name: "web_search", Description: "Search the web.", Parameters: singleStringParams("query"), Script: "search.sh", Enabled: true, Prompt: "Use the web_search tool when helpful."},
+	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
+		{ID: "s1", Name: "web", Transport: "stdio", Command: "mcp-web", Enabled: true, Prompt: "Use the web_search tool when helpful."},
 	}}
 	svc := application.NewChatService(
 		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{
 			Enabled: true, SystemPrompt: "You are a pirate.", MaxContextTokens: 10000,
 		}},
 		&fakeChatCompleter{answer: "plain answer"},
-		hooks, &fakeHookScriptRunner{})
+		servers, &fakeMCPToolProvider{})
 	h, cookie := chatAuthedHandler(t, svc)
 	rec := postChat(t, h, cookie, map[string]interface{}{
 		"messages": []map[string]string{{"role": "user", "content": "what is a?"}},
@@ -385,7 +411,7 @@ func TestHandleChat_TokenUsageBreakdown(t *testing.T) {
 	var resp struct {
 		TokenUsage struct {
 			GlobalPromptTokens int `json:"global_prompt_tokens"`
-			HookPromptTokens   int `json:"hook_prompt_tokens"`
+			ToolPromptTokens   int `json:"tool_prompt_tokens"`
 			HistoryTokens      int `json:"history_tokens"`
 			MaxContextTokens   int `json:"max_context_tokens"`
 		} `json:"token_usage"`
@@ -397,8 +423,8 @@ func TestHandleChat_TokenUsageBreakdown(t *testing.T) {
 	if u.GlobalPromptTokens <= 0 {
 		t.Errorf("expected a nonzero global prompt token count, got %+v", u)
 	}
-	if u.HookPromptTokens <= 0 {
-		t.Errorf("expected a nonzero hook prompt token count (hook is enabled, ungated), got %+v", u)
+	if u.ToolPromptTokens <= 0 {
+		t.Errorf("expected a nonzero tool prompt token count (server is enabled, ungated), got %+v", u)
 	}
 	if u.HistoryTokens <= 0 {
 		t.Errorf("expected a nonzero history token count (the user's own question), got %+v", u)
@@ -570,21 +596,25 @@ func TestHandleChat_ContextTrimmed_SetWhenOlderMessagesDropped(t *testing.T) {
 	}
 }
 
-// TestHandleChat_WebSearchOverrideTrue_ActivatesGatedHook proves the
-// web_search:true request override activates a GatedByWebSearch hook end to
-// end through the real HTTP handler, even though the endpoint's own default
-// is off -- the "Web" toggle now only ever decides which hooks are offered
-// to the model, never performs a search itself.
-func TestHandleChat_WebSearchOverrideTrue_ActivatesGatedHook(t *testing.T) {
-	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
-		{ID: "h1", Name: "web_search", Description: "Search the web.", Parameters: singleStringParams("query"), Script: "search.sh", Enabled: true, GatedByWebSearch: true},
+// TestHandleChat_WebSearchOverrideTrue_ActivatesGatedServer proves the
+// web_search:true request override activates a GatedByWebSearch server end
+// to end through the real HTTP handler, even though the endpoint's own
+// default is off -- the "Web" toggle now only ever decides which servers'
+// tools are offered to the model, never performs a search itself.
+func TestHandleChat_WebSearchOverrideTrue_ActivatesGatedServer(t *testing.T) {
+	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
+		{ID: "s1", Name: "web", Transport: "stdio", Command: "mcp-web", Enabled: true, GatedByWebSearch: true},
 	}}
+	provider := &fakeMCPToolProvider{
+		tools:   []domain.MCPTool{mcpTool("web_search", "Search the web.")},
+		session: &fakeMCPSession{outputs: map[string]string{"web_search": "results"}},
+	}
 	svc := application.NewChatService(
 		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchEnabled: false}},
 		&fakeChatCompleter{responses: []domain.ChatMessage{
 			toolCallMessage("call_1", "web_search", argsJSON("query", "cats")),
 			{Role: domain.ChatRoleAssistant, Content: "done"},
-		}}, hooks, &fakeHookScriptRunner{output: "results"})
+		}}, servers, provider)
 	h, cookie := chatAuthedHandler(t, svc)
 	rec := postChat(t, h, cookie, map[string]interface{}{
 		"messages":   []map[string]string{{"role": "user", "content": "tell me about cats"}},
@@ -593,21 +623,25 @@ func TestHandleChat_WebSearchOverrideTrue_ActivatesGatedHook(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"hook_results"`) {
-		t.Errorf("expected web_search:true to activate the gated hook despite WebSearchEnabled false, got %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), `"tool_results"`) {
+		t.Errorf("expected web_search:true to activate the gated server despite WebSearchEnabled false, got %s", rec.Body.String())
 	}
 }
 
-// TestHandleChat_WebSearchOverrideFalse_DeactivatesGatedHook is the mirror
-// case: web_search:false deactivates a GatedByWebSearch hook even though
-// the endpoint's own default is on.
-func TestHandleChat_WebSearchOverrideFalse_DeactivatesGatedHook(t *testing.T) {
-	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
-		{ID: "h1", Name: "web_search", Description: "Search the web.", Parameters: singleStringParams("query"), Script: "search.sh", Enabled: true, GatedByWebSearch: true},
+// TestHandleChat_WebSearchOverrideFalse_DeactivatesGatedServer is the
+// mirror case: web_search:false deactivates a GatedByWebSearch server even
+// though the endpoint's own default is on.
+func TestHandleChat_WebSearchOverrideFalse_DeactivatesGatedServer(t *testing.T) {
+	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
+		{ID: "s1", Name: "web", Transport: "stdio", Command: "mcp-web", Enabled: true, GatedByWebSearch: true},
 	}}
+	provider := &fakeMCPToolProvider{
+		tools:   []domain.MCPTool{mcpTool("web_search", "Search the web.")},
+		session: &fakeMCPSession{outputs: map[string]string{"web_search": "results"}},
+	}
 	svc := application.NewChatService(
 		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchEnabled: true}},
-		&fakeChatCompleter{answer: "no need to search"}, hooks, &fakeHookScriptRunner{output: "results"})
+		&fakeChatCompleter{answer: "no need to search"}, servers, provider)
 	h, cookie := chatAuthedHandler(t, svc)
 	rec := postChat(t, h, cookie, map[string]interface{}{
 		"messages":   []map[string]string{{"role": "user", "content": "tell me about cats"}},
@@ -616,26 +650,27 @@ func TestHandleChat_WebSearchOverrideFalse_DeactivatesGatedHook(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if strings.Contains(rec.Body.String(), `"hook_results"`) {
-		t.Errorf("expected web_search:false to deactivate the gated hook despite WebSearchEnabled true, got %s", rec.Body.String())
+	if strings.Contains(rec.Body.String(), `"tool_results"`) {
+		t.Errorf("expected web_search:false to deactivate the gated server despite WebSearchEnabled true, got %s", rec.Body.String())
 	}
 }
 
-// TestHandleChat_SuccessWithHookResults proves a matching chat hook's
-// result reaches the wire response as hook_results, mirroring
-// application.ChatService.Chat's own hook-running behavior end to end
+// TestHandleChat_SuccessWithToolResults proves a matching MCP tool's
+// result reaches the wire response as tool_results, mirroring
+// application.ChatService.Chat's own tool-running behavior end to end
 // through the real HTTP handler.
-func TestHandleChat_SuccessWithHookResults(t *testing.T) {
-	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
-		{ID: "h1", Name: "web_search", Description: "Search the web.", Parameters: singleStringParams("query"), Script: "search.sh", Enabled: true},
+func TestHandleChat_SuccessWithToolResults(t *testing.T) {
+	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
+		{ID: "s1", Name: "web", Transport: "stdio", Command: "mcp-web", Enabled: true},
 	}}
-	runner := &fakeHookScriptRunner{output: "cats are great"}
+	session := &fakeMCPSession{outputs: map[string]string{"web_search": "cats are great"}}
+	provider := &fakeMCPToolProvider{tools: []domain.MCPTool{mcpTool("web_search", "Search the web.")}, session: session}
 	svc := application.NewChatService(
 		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}},
 		&fakeChatCompleter{responses: []domain.ChatMessage{
 			toolCallMessage("call_1", "web_search", argsJSON("query", "cats")),
 			{Role: domain.ChatRoleAssistant, Content: "Cats are great pets."},
-		}}, hooks, runner)
+		}}, servers, provider)
 	h, cookie := chatAuthedHandler(t, svc)
 	rec := postChat(t, h, cookie, map[string]interface{}{
 		"messages": []map[string]string{{"role": "user", "content": "tell me about cats"}},
@@ -645,37 +680,38 @@ func TestHandleChat_SuccessWithHookResults(t *testing.T) {
 	}
 	var resp struct {
 		Answer      string `json:"answer"`
-		HookResults []struct {
-			HookName string `json:"hook_name"`
-			Input    string `json:"input"`
-			Output   string `json:"output"`
-			Err      string `json:"err"`
-		} `json:"hook_results"`
+		ToolResults []struct {
+			ToolName  string `json:"tool_name"`
+			Arguments string `json:"arguments"`
+			Output    string `json:"output"`
+			Err       string `json:"err"`
+		} `json:"tool_results"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decoding response: %v", err)
 	}
-	if len(resp.HookResults) != 1 {
-		t.Fatalf("expected one hook result, got %+v", resp.HookResults)
+	if len(resp.ToolResults) != 1 {
+		t.Fatalf("expected one tool result, got %+v", resp.ToolResults)
 	}
-	if resp.HookResults[0].HookName != "web_search" || resp.HookResults[0].Input != "cats" || resp.HookResults[0].Output != "cats are great" || resp.HookResults[0].Err != "" {
-		t.Errorf("unexpected hook result: %+v", resp.HookResults[0])
+	if resp.ToolResults[0].ToolName != "web_search" || resp.ToolResults[0].Arguments != argsJSON("query", "cats") || resp.ToolResults[0].Output != "cats are great" || resp.ToolResults[0].Err != "" {
+		t.Errorf("unexpected tool result: %+v", resp.ToolResults[0])
 	}
-	if len(runner.gotArgs) != 1 || runner.gotArgs[0] != "cats" {
-		t.Errorf("expected the capture group passed as the script's sole argv value, got %+v", runner.gotArgs)
+	if len(session.calls) != 1 || session.calls[0].argumentsJSON != argsJSON("query", "cats") {
+		t.Errorf("expected the model's own arguments passed through to CallTool, got %+v", session.calls)
 	}
 }
 
 // TestHandleChat_SuccessWithoutSources (further up this file) already
-// proves hook_results is omitted when nil; this proves it's omitted when
-// hooks exist but simply don't match this turn's answer either.
-func TestHandleChat_NoHookResultsWhenNothingMatches(t *testing.T) {
-	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
-		{ID: "h1", Name: "web_search", Description: "Search the web.", Parameters: singleStringParams("query"), Script: "search.sh", Enabled: true},
+// proves tool_results is omitted when nil; this proves it's omitted when
+// servers exist but the model simply doesn't call a tool this turn.
+func TestHandleChat_NoToolResultsWhenNoToolCall(t *testing.T) {
+	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
+		{ID: "s1", Name: "web", Transport: "stdio", Command: "mcp-web", Enabled: true},
 	}}
+	provider := &fakeMCPToolProvider{tools: []domain.MCPTool{mcpTool("web_search", "Search the web.")}}
 	svc := application.NewChatService(
 		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}},
-		&fakeChatCompleter{answer: "no marker here"}, hooks, &fakeHookScriptRunner{})
+		&fakeChatCompleter{answer: "no marker here"}, servers, provider)
 	h, cookie := chatAuthedHandler(t, svc)
 	rec := postChat(t, h, cookie, map[string]interface{}{
 		"messages": []map[string]string{{"role": "user", "content": "hi"}},
@@ -683,12 +719,13 @@ func TestHandleChat_NoHookResultsWhenNothingMatches(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if strings.Contains(rec.Body.String(), "hook_results") {
-		t.Errorf("expected hook_results omitted when nothing matched, got %s", rec.Body.String())
+	if strings.Contains(rec.Body.String(), "tool_results") {
+		t.Errorf("expected tool_results omitted when the model made no tool call, got %s", rec.Body.String())
 	}
 }
 
 var _ ports.ChatCompleter = (*fakeChatCompleter)(nil)
 var _ ports.ChatEndpointStore = (*fakeChatEndpointStore)(nil)
-var _ ports.ChatHookStore = (*fakeChatHookStore)(nil)
-var _ ports.HookScriptRunner = (*fakeHookScriptRunner)(nil)
+var _ ports.MCPServerStore = (*fakeMCPServerStore)(nil)
+var _ ports.MCPToolProvider = (*fakeMCPToolProvider)(nil)
+var _ ports.MCPSession = (*fakeMCPSession)(nil)

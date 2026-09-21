@@ -114,12 +114,13 @@ paths:
         Sends the given message history to the single admin-configured chat
         endpoint (see /admin/api/chat-endpoint). This endpoint never performs
         a web search or page fetch itself -- ChatRequest.web_search only
-        decides which GatedByWebSearch chat hooks (see /admin/api/chat-hooks)
-        are offered to the model, which then decides whether to invoke one.
-        A message's role must be "user" or "assistant"; "system" is
-        rejected, since that role is reserved for server-injected content
-        (the endpoint's own system prompt, active hook prompts), never
-        something a client can supply to try to override it.
+        decides which GatedByWebSearch MCP servers (see /admin/api/mcp-servers)
+        are active, offering their discovered tools to the model, which then
+        decides whether to invoke one. A message's role must be "user" or
+        "assistant"; "system" is rejected, since that role is reserved for
+        server-injected content (the endpoint's own system prompt, active
+        MCP server prompts), never something a client can supply to try to
+        override it.
       requestBody:
         required: true
         content:
@@ -799,15 +800,20 @@ paths:
         "405": { $ref: "#/components/responses/BadRequest" }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
-  /admin/api/chat-hooks:
+  /admin/api/mcp-servers:
     get:
       tags: [admin]
-      summary: List every configured chat hook
+      summary: List every configured MCP server
       description: >-
         A list of many, like the embedding endpoints, unlike the
-        single-row chat endpoint above -- an admin can define several
-        tool-calling hooks over time, each exposed to the model as a native
-        OpenAI-compatible tool-calling function (see ChatHookOptions.parameters).
+        single-row chat endpoint above -- an admin can define several MCP
+        (Model Context Protocol) server connections over time. Each active
+        server's own tools/list response is discovered fresh at the start
+        of every chat turn and offered to the model as native
+        OpenAI-compatible tool-calling functions (see
+        internal/adapters/mcpclient and ports.MCPToolProvider) -- this
+        endpoint only returns the admin-configured connection info, never
+        the discovered tools themselves.
       responses:
         "200":
           description: OK
@@ -815,36 +821,36 @@ paths:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/ChatHook" }
+                items: { $ref: "#/components/schemas/MCPServer" }
         "503": { $ref: "#/components/responses/NotConfigured" }
     post:
       tags: [admin]
-      summary: Create a chat hook
+      summary: Create an MCP server
       description: >-
-        The new hook's id is minted server-side from its name (see
-        domain.NewChatHookID), deduped against every existing hook id, so
-        it can never collide -- the response's id is the one to use for
-        every subsequent GET/PATCH/DELETE on this hook, not the submitted
-        name. parameters is validated server-side: it must be a JSON-schema
-        object with exactly one property (see ChatHookOptions.parameters).
+        The new server's id is minted server-side from its name (see
+        domain.NewMCPServerID), deduped against every existing server id,
+        so it can never collide -- the response's id is the one to use for
+        every subsequent GET/PATCH/DELETE on this server, not the submitted
+        name. transport must be "stdio" (also requires a non-empty command)
+        or "http" (also requires a non-empty base_url).
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/ChatHookRequest" }
+            schema: { $ref: "#/components/schemas/MCPServerRequest" }
       responses:
         "201":
           description: Created
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ChatHook" }
+              schema: { $ref: "#/components/schemas/MCPServer" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
-  /admin/api/chat-hooks/{id}:
+  /admin/api/mcp-servers/{id}:
     get:
       tags: [admin]
-      summary: Get one chat hook's full config
+      summary: Get one MCP server's full config
       parameters:
         - name: id
           in: path
@@ -855,16 +861,19 @@ paths:
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ChatHook" }
+              schema: { $ref: "#/components/schemas/MCPServer" }
         "404": { $ref: "#/components/responses/NotFound" }
         "503": { $ref: "#/components/responses/NotConfigured" }
     patch:
       tags: [admin]
-      summary: Replace a chat hook's editable fields
+      summary: Replace an MCP server's editable fields
       description: >-
         Full replace, not a merge, for every field except id (never
-        editable once created). parameters is validated the same way as on
-        create.
+        editable once created) and api_key: since a GET/POST/PATCH
+        response never echoes the real key (see has_api_key), leaving
+        api_key blank here preserves whatever's already stored rather than
+        clearing it -- clear_api_key is the explicit way to actually
+        remove it. transport is validated the same way as on create.
       parameters:
         - name: id
           in: path
@@ -874,19 +883,19 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/ChatHookRequest" }
+            schema: { $ref: "#/components/schemas/MCPServerRequest" }
       responses:
         "200":
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ChatHook" }
+              schema: { $ref: "#/components/schemas/MCPServer" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
         "503": { $ref: "#/components/responses/NotConfigured" }
     delete:
       tags: [admin]
-      summary: Delete a chat hook's configuration
+      summary: Delete an MCP server's configuration
       parameters:
         - name: id
           in: path
@@ -2138,7 +2147,7 @@ components:
           description: >-
             "system" is never accepted from a client -- that role is
             reserved for server-injected content (the endpoint's own
-            system prompt, active chat hook prompts).
+            system prompt, active MCP server prompts).
         content: { type: string, description: "Max 4000 characters." }
 
     ChatRequest:
@@ -2156,12 +2165,12 @@ components:
             Overrides the admin-configured chat endpoint's
             web_search_enabled default for this question only -- omit to
             use that default. Does not itself perform a search or fetch:
-            true makes every GatedByWebSearch chat hook (see
-            /admin/api/chat-hooks) available to the model this turn as a
-            native tool-calling function (its prompt injected, its
-            name/description/parameters offered as a callable tool), letting
-            the model invoke one if it chooses to; false makes none of them
-            available.
+            true makes every GatedByWebSearch MCP server (see
+            /admin/api/mcp-servers) active for this turn, offering its
+            discovered tools (name/description/input schema, plus the
+            server's own prompt injected) as native tool-calling functions,
+            letting the model invoke one if it chooses to; false makes none
+            of them available.
 
     ChatResponse:
       type: object
@@ -2177,14 +2186,15 @@ components:
             on every call (the backend keeps no session state), so this is
             the only way to know an answer was generated without seeing the
             full conversation.
-        hook_results:
+        tool_results:
           type: array
           description: >-
-            One entry per tool call the model made this turn, naming an
-            admin-configured chat hook (see /admin/api/chat-hooks), in call
-            order. Omitted entirely when no hook is configured/enabled or
-            the model never invoked one.
-          items: { $ref: "#/components/schemas/ChatHookResult" }
+            One entry per tool call the model made this turn, naming a
+            tool discovered from an admin-configured MCP server (see
+            /admin/api/mcp-servers), in call order. Omitted entirely when
+            no server is configured/enabled or the model never invoked a
+            tool.
+          items: { $ref: "#/components/schemas/ToolCallResult" }
         token_usage: { $ref: "#/components/schemas/ChatTokenUsage" }
 
     ChatTokenUsage:
@@ -2208,12 +2218,12 @@ components:
             regular-user account with one set (0 otherwise -- always 0 for
             the hardcoded admin account, which has no custom prompt of its
             own). Injected as its own leading system message, after the
-            global prompt and before any hook prompts.
-        hook_prompt_tokens:
+            global prompt and before any MCP server prompts.
+        tool_prompt_tokens:
           type: integer
           description: >-
-            Sum of the estimated size of every active chat hook's own
-            prompt this turn (a hook is active when enabled and, if
+            Sum of the estimated size of every active MCP server's own
+            prompt this turn (a server is active when enabled and, if
             gated_by_web_search, web search is also on for this turn).
         history_tokens:
           type: integer
@@ -2228,18 +2238,18 @@ components:
             as 0) when no budget is configured, meaning trimming never
             happens.
 
-    ChatHookResult:
+    ToolCallResult:
       type: object
       description: >-
-        The outcome of running one tool-called chat hook's script once. A
-        script failure or timeout is reported here, never as a failed
-        POST /chat call -- the model's own answer always reaches the
-        client regardless.
+        The outcome of running one MCP tool call once. A tool-level
+        failure or timeout is reported here, never as a failed POST /chat
+        call -- the model's own answer always reaches the client
+        regardless.
       properties:
-        hook_name: { type: string, description: "The tool-called hook's name (ChatHook.name), not its id." }
-        input: { type: string, description: "The model-supplied argument's own raw text passed to the hook's script -- a URL for a \"fetch\"-named hook, a search term for a \"search\"-named hook. Omitted if empty." }
-        output: { type: string, description: "The script's raw stdout, capped in size. Empty when err is set." }
-        err: { type: string, description: "Non-empty if the script failed or timed out, or the tool call couldn't be resolved (unknown hook, malformed arguments); output is empty then." }
+        tool_name: { type: string, description: "The called tool's own name, as declared by the MCP server that exposed it -- not necessarily unique across every configured server, but always unique among the tools actually offered this turn." }
+        arguments: { type: string, description: "The model-supplied arguments, exactly as it emitted them -- a raw JSON object string (MCP tools can take multiple structured arguments, unlike the old single-value chat-hook convention). Omitted if empty." }
+        output: { type: string, description: "The tool's raw result content, as text, capped in size. Empty when err is set." }
+        err: { type: string, description: "Non-empty if the tool call failed or timed out, or couldn't be resolved (unknown tool, no reachable server); output is empty then." }
 
     ChatEndpointOptions:
       type: object
@@ -2269,25 +2279,26 @@ components:
           type: boolean
           description: >-
             The "Web" toggle's default (overridable per question via
-            ChatRequest.web_search): when true, every chat hook (see
-            /admin/api/chat-hooks) with gated_by_web_search becomes
-            available to the model as a native tool-calling function -- its
-            prompt injected, its name/description/parameters offered as a
-            callable tool. This endpoint never performs a search or fetch
-            itself.
+            ChatRequest.web_search): when true, every MCP server (see
+            /admin/api/mcp-servers) with gated_by_web_search becomes
+            active, offering its discovered tools to the model as native
+            tool-calling functions -- its own prompt injected, each tool's
+            name/description/input schema offered as callable. This
+            endpoint never performs a search or fetch itself.
         web_search_base_url:
           type: string
           description: >-
             A self-hosted SearXNG instance's base URL, e.g.
-            http://127.0.0.1:8888 -- passed to every active chat hook's
-            script as the WEB_SEARCH_BASE_URL environment variable, so a
-            "web_search" hook script knows which instance to query.
+            http://127.0.0.1:8888 -- passed to every active "stdio"
+            MCP server's spawned process as the WEB_SEARCH_BASE_URL
+            environment variable, so a "web_search" tool knows which
+            instance to query.
         system_prompt:
           type: string
           description: >-
             When non-empty, injected as a leading system-role message ahead
             of the rest of the conversation on every turn -- before any
-            active chat hook's own prompt, if any, so an admin-authored
+            active MCP server's own prompt, if any, so an admin-authored
             persona/instruction always takes precedence. Invisible in the
             rendered chat UI. Never dropped by max_context_tokens' context
             trimming, even when the rest of the conversation is trimmed to
@@ -2317,83 +2328,89 @@ components:
               description: Whether an API key is stored for this endpoint -- its actual value is never returned.
             updated_at: { type: string, format: date-time }
 
-    ChatHookOptions:
+    MCPServerOptions:
       type: object
-      required: [name, description, parameters, script]
+      required: [name, transport]
       properties:
-        name: { type: string, description: "Human label, e.g. \"web_search\" -- also this tool's function name sent to the model, and the source domain.NewChatHookID slugifies into this hook's id on creation (POST only; ignored by PATCH)." }
-        description:
+        name: { type: string, description: "Human label, e.g. \"web tools\" -- shown in the admin UI only, never sent to the model (unlike the old ChatHook.name, which doubled as a tool's own function name). The source domain.NewMCPServerID slugifies this into the server's id on creation (POST only; ignored by PATCH)." }
+        transport:
+          type: string
+          enum: [stdio, http]
+          description: >-
+            How this server is reached: "stdio" spawns command as a local
+            process (fresh per chat turn, kept open for the turn's
+            duration) and speaks MCP over its stdin/stdout -- requires a
+            non-empty command. "http" connects to base_url over MCP's
+            Streamable HTTP transport -- requires a non-empty base_url.
+        command:
           type: string
           description: >-
-            Sent to the model as this tool's own description, as part of
-            POST /chat's request-level tools list on every turn this hook
-            is active -- together with name and parameters, this is what
-            tells the model the tool exists and when to use it. Required
-            (400 if empty).
-        parameters:
-          type: object
-          description: >-
-            A JSON-schema object describing this tool's single argument,
-            e.g. {"type":"object","properties":{"query":{"type":
-            "string"}},"required":["query"]}. MUST have exactly one
-            property -- rejected with 400 otherwise (invalid JSON, not an
-            object schema, zero properties, or more than one). Whatever
-            value the model supplies for that property when it calls the
-            tool is the only thing ever passed to script, and only as an
-            opaque argv value -- never shell-interpolated, sourced, or
-            interpreted as a path/URL/command.
-        script:
+            "stdio" only: the executable to spawn -- never through a
+            shell, args passed as real argv elements. Unlike the old
+            ChatHook.script (resolved only against a fixed script
+            directory), this may be any path.
+        args:
+          type: array
+          items: { type: string }
+          description: "\"stdio\" only: command-line arguments passed to command."
+        base_url:
           type: string
-          description: >-
-            A script FILENAME ONLY, never a path -- resolved against a
-            fixed, admin-controlled script directory by the server-side
-            runner, never influenced by the match itself.
+          description: "\"http\" only: the remote MCP server's Streamable HTTP endpoint URL."
         enabled:
           type: boolean
-          description: Whether this hook is checked against POST /chat's answers at all.
+          description: Whether this server is connected to at the start of a chat turn at all.
         prompt:
           type: string
           description: >-
-            Optional extra steering text beyond description -- name/
-            description/parameters already tell the model what the tool
-            does and when to use it (sent as part of the tools list); this
-            is for guidance beyond that, e.g. "prefer the top 3 results".
-            When non-empty and this hook is active for a turn (enabled,
+            Optional extra steering text for this server's tools
+            collectively -- each tool's own name/description/input schema
+            (sent as part of the tools list) already tell the model what
+            it does and when to use it; this is for cross-tool guidance
+            beyond that, e.g. "after searching, fetch the top 3 results".
+            When non-empty and this server is active for a turn (enabled,
             and -- if gated_by_web_search is true -- the turn's effective
             web-search toggle is also on), it is injected as its own
             leading system message, after the endpoint's persistent
-            system_prompt. Empty means no hook-specific message is added
-            even when the hook is active.
+            system_prompt. Empty means no server-specific message is added
+            even when the server is active.
         gated_by_web_search:
           type: boolean
           description: >-
-            When true, ties this hook's activation (and whether it's even
-            offered to the model as a tool at all) to the same effective
-            web-search toggle that gates the deterministic web-search
-            context injection (the endpoint's web_search_enabled,
-            overridable per-question by ChatOptions.web_search). false (the
-            default) means this hook is active whenever enabled is true,
-            unaffected by that toggle.
+            When true, ties this server's activation (and whether its
+            tools are even offered to the model at all) to the same
+            effective web-search toggle that gates the deterministic
+            web-search context injection (the endpoint's
+            web_search_enabled, overridable per-question by
+            ChatOptions.web_search). false (the default) means this server
+            is active whenever enabled is true, unaffected by that toggle.
 
-    ChatHookRequest:
+    MCPServerRequest:
       description: >-
-        The request shape for creating (POST) or replacing (PATCH) a chat
-        hook. Unlike EmbeddingHTTPEndpointRequest/ChatEndpointRequest,
-        there is no write-only secret field here to preserve across a
-        PATCH -- every field is always a full replace.
+        The request shape for creating (POST) or replacing (PATCH) an MCP
+        server. api_key is write-only -- an MCPServer response never
+        echoes it back (see its own has_api_key). Leaving it blank means
+        "keep whatever is already stored," not "clear it" -- clear_api_key
+        is the explicit way to actually remove it.
       allOf:
-        - $ref: "#/components/schemas/ChatHookOptions"
+        - $ref: "#/components/schemas/MCPServerOptions"
+        - type: object
+          properties:
+            api_key: { type: string, description: "\"http\" only: sent as an Authorization: Bearer header; optional. Blank preserves the existing value unless clear_api_key is set." }
+            clear_api_key: { type: boolean, default: false, description: "Removes the stored key instead of preserving it when api_key is left blank." }
 
-    ChatHook:
+    MCPServer:
       allOf:
-        - $ref: "#/components/schemas/ChatHookOptions"
+        - $ref: "#/components/schemas/MCPServerOptions"
         - type: object
           properties:
             id:
               type: string
               description: >-
-                Minted from name at creation (see domain.NewChatHookID)
+                Minted from name at creation (see domain.NewMCPServerID)
                 and never changed afterward, even if name is edited later.
+            has_api_key:
+              type: boolean
+              description: Whether an API key is stored for this server -- its actual value is never returned.
 
     User:
       type: object
@@ -2443,7 +2460,7 @@ components:
             Free text injected as its own leading system message on every
             chat turn this user sends (see POST /chat), in addition to
             (not instead of) the admin-configured endpoint-wide system
-            prompt and any active chat hooks' own prompts. Empty string
+            prompt and any active MCP servers' own prompts. Empty string
             when unset.
 
     UpdateAccountRequest:

@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — mcp server</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<div class="page-header">
+  <a class="mark" href="/">se.</a>
+  <button id="sign-out" class="text-button" type="button">Sign out</button>
+</div>
+<div class="admin-shell">
+<nav class="admin-rail" id="admin-rail" aria-label="Admin sections"></nav>
+<main>
+  <a class="back" href="/admin/mcp-servers">Back to MCP servers</a>
+
+  <h2 id="server-title">Add server</h2>
+  <p id="server-meta" class="panel-status"></p>
+  <p id="server-status" class="panel-status"></p>
+
+  <form id="server-form" class="stacked-form" hidden>
+    <div class="form-row">
+      <label for="server-name">Name</label>
+      <input id="server-name" class="field" type="text" required placeholder="e.g. web">
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="server-transport">Transport</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">"stdio" spawns Command as a child process and speaks MCP over its stdin/stdout -- for a locally installed server. "http" connects to Base URL over MCP's Streamable HTTP transport -- for a remote/third-party server.</span></span>
+      </div>
+      <select id="server-transport" class="field">
+        <option value="stdio">stdio</option>
+        <option value="http">http</option>
+      </select>
+    </div>
+    <div class="form-row" id="server-command-row">
+      <div class="label-row">
+        <label for="server-command">Command</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">The executable to spawn, e.g. /usr/bin/searchengine-mcp-web -- an absolute path or one resolvable on this process's own PATH.</span></span>
+      </div>
+      <input id="server-command" class="field" type="text" placeholder="/usr/bin/searchengine-mcp-web">
+    </div>
+    <div class="form-row" id="server-args-row">
+      <div class="label-row">
+        <label for="server-args">Arguments</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Command-line arguments passed to Command, one per line. Leave empty for none.</span></span>
+      </div>
+      <textarea id="server-args" class="field" rows="3"></textarea>
+    </div>
+    <div class="form-row" id="server-base-url-row">
+      <label for="server-base-url">Base URL</label>
+      <input id="server-base-url" class="field" type="text" placeholder="https://example.com/mcp">
+    </div>
+    <div class="form-row" id="server-api-key-row">
+      <label for="server-api-key">API key</label>
+      <input id="server-api-key" class="field" type="password" autocomplete="new-password">
+    </div>
+    <div class="form-row form-row-check" id="server-clear-api-key-row">
+      <label for="server-clear-api-key">
+        <input id="server-clear-api-key" type="checkbox">
+        Remove the stored API key
+      </label>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="server-prompt">Prompt (optional)</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Extra steering beyond each tool's own description, injected as a separate system message only while this server is active (see "Gated by web search" below) -- in addition to the endpoint's own persistent system prompt (Settings -> Chat), not instead of it. Leave empty if the tool descriptions already say everything the model needs.</span></span>
+      </div>
+      <textarea id="server-prompt" class="field" rows="24"></textarea>
+    </div>
+    <div class="form-row form-row-check">
+      <label for="server-enabled">
+        <input id="server-enabled" type="checkbox">
+        Enabled
+      </label>
+    </div>
+    <div class="form-row form-row-check">
+      <label for="server-gated-by-web-search">
+        <input id="server-gated-by-web-search" type="checkbox">
+        Gated by web search
+      </label>
+      <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When checked, this server (and its Prompt) is only active when the chat's Web toggle is on -- the same Search the web setting (Settings -> Chat) or its per-question override, not a separate control. When unchecked, this server is active whenever Enabled is checked, regardless of the Web toggle.</span></span>
+    </div>
+    <div class="form-row">
+      <button id="server-save-btn" type="submit">Save</button>
+      <button id="server-delete-btn" type="button" class="text-button">Delete</button>
+    </div>
+    <span id="server-form-status" class="error-text"></span>
+  </form>
+</main>
+</div>
+<script src="/admin.js"></script>
+<script src="/admin_mcp_server.js"></script>
+</body>
+</html>

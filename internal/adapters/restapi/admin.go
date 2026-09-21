@@ -95,7 +95,7 @@ func mapSlice[T, U any](in []T, f func(T) U) []U {
 }
 
 // existingIDSet builds the "already-taken IDs" set a freshly minted
-// slug ID (NewEmbeddingEndpointID, NewChatHookID) is deduped against,
+// slug ID (NewEmbeddingEndpointID, NewMCPServerID) is deduped against,
 // optionally pre-seeded with reserved IDs (e.g. the built-in hash
 // provider's own ID, which is never itself in the existing list but must
 // still never be minted for a new endpoint).
@@ -169,8 +169,12 @@ func (h *Handler) handleAdminChatSettingsPage(w http.ResponseWriter, r *http.Req
 	serveStatic(w, r, "text/html; charset=utf-8", adminChatSettingsHTML)
 }
 
-func (h *Handler) handleAdminChatHooksPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminChatHooksHTML)
+func (h *Handler) handleAdminMCPServersPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminMCPServersHTML)
+}
+
+func (h *Handler) handleAdminMCPServerPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminMCPServerHTML)
 }
 
 func (h *Handler) handleAdminUsersPage(w http.ResponseWriter, r *http.Request) {
@@ -1142,158 +1146,193 @@ func (h *Handler) handleAdminDeleteEmbeddingEndpoint(w http.ResponseWriter, r *h
 	respondOrNotFound(w, err, ports.ErrEmbeddingEndpointNotFound, "embedding endpoint not found", map[string]bool{"ok": true})
 }
 
-type chatHookRequest struct {
-	Name             string          `json:"name"`
-	Description      string          `json:"description"`
-	Parameters       json.RawMessage `json:"parameters"`
-	Script           string          `json:"script"`
-	Enabled          bool            `json:"enabled"`
-	Prompt           string          `json:"prompt"`
-	GatedByWebSearch bool            `json:"gated_by_web_search"`
+type mcpServerRequest struct {
+	Name             string   `json:"name"`
+	Transport        string   `json:"transport"`
+	Command          string   `json:"command"`
+	Args             []string `json:"args"`
+	BaseURL          string   `json:"base_url"`
+	APIKey           string   `json:"api_key"`
+	Enabled          bool     `json:"enabled"`
+	Prompt           string   `json:"prompt"`
+	GatedByWebSearch bool     `json:"gated_by_web_search"`
+	// ClearAPIKey mirrors embeddingEndpointRequest.ClearAPIKey exactly --
+	// see that field's doc comment.
+	ClearAPIKey bool `json:"clear_api_key"`
 }
 
-type chatHookResponse struct {
-	ID               string          `json:"id"`
-	Name             string          `json:"name"`
-	Description      string          `json:"description"`
-	Parameters       json.RawMessage `json:"parameters"`
-	Script           string          `json:"script"`
-	Enabled          bool            `json:"enabled"`
-	Prompt           string          `json:"prompt"`
-	GatedByWebSearch bool            `json:"gated_by_web_search"`
+type mcpServerResponse struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	Transport string   `json:"transport"`
+	Command   string   `json:"command"`
+	Args      []string `json:"args"`
+	BaseURL   string   `json:"base_url"`
+	// HasAPIKey reports only whether a key is set, never its value -- same
+	// redacted-summary treatment embeddingEndpointResponse already gives a
+	// stored credential.
+	HasAPIKey        bool   `json:"has_api_key"`
+	Enabled          bool   `json:"enabled"`
+	Prompt           string `json:"prompt"`
+	GatedByWebSearch bool   `json:"gated_by_web_search"`
 }
 
-func toChatHookResponse(hk domain.ChatHook) chatHookResponse {
-	return chatHookResponse{
-		ID: hk.ID, Name: hk.Name, Description: hk.Description, Parameters: hk.Parameters, Script: hk.Script,
-		Enabled: hk.Enabled, Prompt: hk.Prompt, GatedByWebSearch: hk.GatedByWebSearch,
+func toMCPServerResponse(s domain.MCPServer) mcpServerResponse {
+	return mcpServerResponse{
+		ID: s.ID, Name: s.Name, Transport: s.Transport, Command: s.Command, Args: s.Args,
+		BaseURL: s.BaseURL, HasAPIKey: s.APIKey != "", Enabled: s.Enabled,
+		Prompt: s.Prompt, GatedByWebSearch: s.GatedByWebSearch,
 	}
 }
 
-// validateChatHookRequest requires a non-empty Name, Description, and
-// Script, and a Parameters JSON-schema object with exactly one property --
-// see domain.ChatHook.Parameters's doc comment and runToolCalls's security
-// note (internal/application/chat_hooks.go) for why exactly one property
-// matters: it's the only thing ever passed as an argv value to Script.
-// Enforcing this at Create/Update time is what keeps runToolCalls's own
-// (best-effort, log-and-skip) version of this same check from ever
-// actually firing in practice.
-func validateChatHookRequest(w http.ResponseWriter, req chatHookRequest) bool {
+// validateMCPServerRequest requires a non-empty Name and a Transport of
+// either "stdio" (which also requires a non-empty Command) or "http" (which
+// also requires a non-empty BaseURL) -- mirroring mcpclient.connect's own
+// switch on Transport, so a row this handler accepts is always one
+// mcpclient can actually act on.
+func validateMCPServerRequest(w http.ResponseWriter, req mcpServerRequest) bool {
 	if req.Name == "" {
 		http.Error(w, "name must not be empty", http.StatusBadRequest)
 		return false
 	}
-	if req.Description == "" {
-		http.Error(w, "description must not be empty", http.StatusBadRequest)
-		return false
-	}
-	if req.Script == "" {
-		http.Error(w, "script must not be empty", http.StatusBadRequest)
-		return false
-	}
-	if _, err := (domain.ChatHook{Parameters: req.Parameters}).SingleParameterName(); err != nil {
-		http.Error(w, "parameters: "+err.Error(), http.StatusBadRequest)
+	switch req.Transport {
+	case "stdio":
+		if req.Command == "" {
+			http.Error(w, "command must not be empty for a stdio transport", http.StatusBadRequest)
+			return false
+		}
+	case "http":
+		if req.BaseURL == "" {
+			http.Error(w, "base_url must not be empty for an http transport", http.StatusBadRequest)
+			return false
+		}
+	default:
+		http.Error(w, `transport must be "stdio" or "http"`, http.StatusBadRequest)
 		return false
 	}
 	return true
 }
 
-// handleAdminChatHooks lists (GET) or creates (POST) admin-configured chat
-// hooks (native tool-calling functions), mirroring handleAdminEmbeddingEndpoints' style closely. A freshly
-// created hook's ID is minted from its name, deduped against every
-// existing ID (domain.NewChatHookID, the same convention
+// handleAdminMCPServers lists (GET) or creates (POST) admin-configured MCP
+// servers, mirroring handleAdminEmbeddingEndpoints' style closely. A
+// freshly created server's ID is minted from its name, deduped against
+// every existing ID (domain.NewMCPServerID, the same convention
 // domain.NewEmbeddingEndpointID uses).
-func (h *Handler) handleAdminChatHooks(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.chatHooks != nil, "chat hooks") {
+func (h *Handler) handleAdminMCPServers(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.mcpServers != nil, "mcp servers") {
 		return
 	}
 	switch r.Method {
 	case http.MethodGet:
-		hooks, err := h.chatHooks.ListChatHooks(r.Context())
+		servers, err := h.mcpServers.ListMCPServers(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, http.StatusOK, mapSlice(hooks, toChatHookResponse))
+		writeJSON(w, http.StatusOK, mapSlice(servers, toMCPServerResponse))
 	case http.MethodPost:
-		req, ok := decodeJSON[chatHookRequest](w, r)
+		req, ok := decodeJSON[mcpServerRequest](w, r)
 		if !ok {
 			return
 		}
-		if !validateChatHookRequest(w, req) {
+		if !validateMCPServerRequest(w, req) {
 			return
 		}
-		existing, err := h.chatHooks.ListChatHooks(r.Context())
+		existing, err := h.mcpServers.ListMCPServers(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		existingIDs := existingIDSet(existing, func(hk domain.ChatHook) string { return hk.ID })
-		hk := domain.ChatHook{
-			ID: domain.NewChatHookID(req.Name, existingIDs), Name: req.Name,
-			Description: req.Description, Parameters: req.Parameters, Script: req.Script, Enabled: req.Enabled,
+		existingIDs := existingIDSet(existing, func(s domain.MCPServer) string { return s.ID })
+		s := domain.MCPServer{
+			ID: domain.NewMCPServerID(req.Name, existingIDs), Name: req.Name,
+			Transport: req.Transport, Command: req.Command, Args: req.Args, BaseURL: req.BaseURL,
+			APIKey: h.encryptAPIKey(req.APIKey), Enabled: req.Enabled,
 			Prompt: req.Prompt, GatedByWebSearch: req.GatedByWebSearch,
 		}
-		if err := h.chatHooks.CreateChatHook(r.Context(), hk); err != nil {
+		if err := h.mcpServers.CreateMCPServer(r.Context(), s); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, http.StatusCreated, toChatHookResponse(hk))
+		writeJSON(w, http.StatusCreated, toMCPServerResponse(s))
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
-// handleAdminGetChatHook returns one hook by ID. ports.ChatHookStore has no
-// single-row get (unlike EmbeddingEndpointStore), so this scans
-// ListChatHooks -- an admin's hook list is small enough (like
-// scheduled crawls) that this is never a real cost.
-func (h *Handler) handleAdminGetChatHook(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.chatHooks != nil, "chat hooks") {
+// handleAdminGetMCPServer returns one server by ID. ports.MCPServerStore has
+// no single-row get (unlike EmbeddingEndpointStore), so this scans
+// ListMCPServers -- an admin's server list is small enough (like scheduled
+// crawls) that this is never a real cost.
+func (h *Handler) handleAdminGetMCPServer(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.mcpServers != nil, "mcp servers") {
 		return
 	}
-	hooks, err := h.chatHooks.ListChatHooks(r.Context())
+	servers, err := h.mcpServers.ListMCPServers(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	id := r.PathValue("id")
-	for _, hk := range hooks {
-		if hk.ID == id {
-			writeJSON(w, http.StatusOK, toChatHookResponse(hk))
+	for _, s := range servers {
+		if s.ID == id {
+			writeJSON(w, http.StatusOK, toMCPServerResponse(s))
 			return
 		}
 	}
-	http.Error(w, "chat hook not found", http.StatusNotFound)
+	http.Error(w, "mcp server not found", http.StatusNotFound)
 }
 
-// handleAdminUpdateChatHook replaces a hook's editable fields. ID is never
+// handleAdminUpdateMCPServer replaces a server's editable fields. APIKey is
+// the one exception to "PATCH is a full replace" -- see
+// embeddingEndpointRequest.ClearAPIKey's doc comment for why. ID is never
 // editable once created (mirrors handleAdminUpdateEmbeddingEndpoint).
-func (h *Handler) handleAdminUpdateChatHook(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.chatHooks != nil, "chat hooks") {
+func (h *Handler) handleAdminUpdateMCPServer(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.mcpServers != nil, "mcp servers") {
 		return
 	}
-	req, ok := decodeJSON[chatHookRequest](w, r)
+	req, ok := decodeJSON[mcpServerRequest](w, r)
 	if !ok {
 		return
 	}
-	if !validateChatHookRequest(w, req) {
+	if !validateMCPServerRequest(w, req) {
 		return
 	}
-	hk := domain.ChatHook{
-		ID: r.PathValue("id"), Name: req.Name, Description: req.Description, Parameters: req.Parameters,
-		Script: req.Script, Enabled: req.Enabled, Prompt: req.Prompt, GatedByWebSearch: req.GatedByWebSearch,
+	id := r.PathValue("id")
+	servers, err := h.mcpServers.ListMCPServers(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
-	err := h.chatHooks.UpdateChatHook(r.Context(), hk)
-	respondOrNotFound(w, err, ports.ErrChatHookNotFound, "chat hook not found", toChatHookResponse(hk))
+	var existingAPIKey string
+	found := false
+	for _, s := range servers {
+		if s.ID == id {
+			existingAPIKey = s.APIKey
+			found = true
+			break
+		}
+	}
+	if !found {
+		http.Error(w, "mcp server not found", http.StatusNotFound)
+		return
+	}
+	apiKey := h.resolveUpdatedAPIKey(existingAPIKey, req.APIKey, req.ClearAPIKey)
+	s := domain.MCPServer{
+		ID: id, Name: req.Name, Transport: req.Transport, Command: req.Command, Args: req.Args,
+		BaseURL: req.BaseURL, APIKey: apiKey, Enabled: req.Enabled,
+		Prompt: req.Prompt, GatedByWebSearch: req.GatedByWebSearch,
+	}
+	err = h.mcpServers.UpdateMCPServer(r.Context(), s)
+	respondOrNotFound(w, err, ports.ErrMCPServerNotFound, "mcp server not found", toMCPServerResponse(s))
 }
 
-func (h *Handler) handleAdminDeleteChatHook(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.chatHooks != nil, "chat hooks") {
+func (h *Handler) handleAdminDeleteMCPServer(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.mcpServers != nil, "mcp servers") {
 		return
 	}
-	err := h.chatHooks.DeleteChatHook(r.Context(), r.PathValue("id"))
-	respondOrNotFound(w, err, ports.ErrChatHookNotFound, "chat hook not found", map[string]bool{"ok": true})
+	err := h.mcpServers.DeleteMCPServer(r.Context(), r.PathValue("id"))
+	respondOrNotFound(w, err, ports.ErrMCPServerNotFound, "mcp server not found", map[string]bool{"ok": true})
 }
 
 func (h *Handler) handleAdminEmbeddingEndpointPage(w http.ResponseWriter, r *http.Request) {

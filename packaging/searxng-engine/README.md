@@ -14,13 +14,12 @@ already blends, so a chat answer can cite "this site's own indexed pages"
 right alongside a Bing or Brave hit, with no separate toggle or code path
 for it on the `searchengine` side at all.
 
-Like `../chat-hooks/`, this directory holds a drop-in artifact for an
-external integration -- but unlike the hook scripts (installed onto
-`searchengine`'s own host, run by `internal/adapters/hookrunner`), this file
-is installed *into a SearXNG installation*, not into anything shipped by the
-`searchengine` `.deb`. `searchengine` itself has no idea this engine exists;
-from its point of view, requests through it look like ordinary calls to the
-public `/search` API.
+Unlike `cmd/mcp-web` (installed onto `searchengine`'s own host as part of
+the `searchengine` `.deb`, spawned by `internal/adapters/mcpclient`), this
+file is installed *into a SearXNG installation*, not into anything shipped
+by the `searchengine` `.deb`. `searchengine` itself has no idea this engine
+exists; from its point of view, requests through it look like ordinary
+calls to the public `/search` API.
 
 ## Install
 

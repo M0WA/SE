@@ -52,6 +52,28 @@ type ToolDef struct {
 	Parameters  json.RawMessage
 }
 
+// ToolCallResult is the outcome of running one tool call the model made
+// this turn, against its originating MCPServer (see
+// ports.MCPToolProvider), surfaced on ChatResult so the caller can decide
+// how (or whether) to show it.
+type ToolCallResult struct {
+	// ToolName is the tool's own name, as declared by the MCP server that
+	// exposed it -- not necessarily unique across every configured server
+	// (see MCPTool's own doc comment on name collisions), but always
+	// unique among the tools actually offered this turn.
+	ToolName string
+	// ToolCallID correlates this result back to the ToolCall.ID it
+	// answers -- see application.toolResultMessages, which builds one
+	// ChatMessage{Role: ChatRoleTool, ToolCallID: ...} per result.
+	ToolCallID string
+	// Arguments is the model-supplied raw JSON arguments object, exactly
+	// as it emitted them -- surfaced here so the UI can show what was
+	// actually requested without re-parsing ToolCall.Arguments itself.
+	Arguments string
+	Output    string // the tool's raw result content, as text
+	Err       string // non-empty if the call failed or timed out, or couldn't be resolved (unknown tool, no reachable server); Output is empty then
+}
+
 // ChatEndpoint is the single admin-configured chat-completions backend --
 // unlike the embedding endpoints (a list of many blended providers), chat
 // only ever has one active configuration at a time.
@@ -74,25 +96,27 @@ type ChatEndpoint struct {
 	MaxContextTokens int
 	// WebSearchEnabled is the "Web" toggle's default: when on (as either
 	// this admin-configured default or the per-question ChatOptions.WebSearch
-	// override), every ChatHook with GatedByWebSearch=true becomes active for
-	// the turn -- its Prompt is injected and its pattern is matched against
-	// the answer, letting the model invoke it (e.g. a "web_search" or
-	// "web_fetch" hook) rather than this layer performing a search itself.
+	// override), every MCPServer with GatedByWebSearch=true becomes active
+	// for the turn -- its tools are offered to the model and its own Prompt
+	// is injected, letting the model invoke one of them (e.g. a "web_search"
+	// or "web_fetch" tool) rather than this layer performing a search itself.
 	WebSearchEnabled bool
 	// WebSearchBaseURL is the self-hosted SearXNG instance's base URL, e.g.
-	// http://127.0.0.1:8888 -- passed to every active hook's script as the
-	// WEB_SEARCH_BASE_URL environment variable (see
-	// ports.HookScriptRunner), so a "web_search" hook script knows which
-	// instance to query without the admin repeating the URL per hook.
+	// http://127.0.0.1:8888 -- passed as the WEB_SEARCH_BASE_URL
+	// environment variable to every active "stdio"-transport MCPServer
+	// process (see ports.MCPToolProvider), so the first-party mcp-web
+	// server knows which instance to query without the admin repeating
+	// the URL in its own config.
 	WebSearchBaseURL string
 	// SystemPrompt, when non-empty, is injected as a leading system-role
 	// domain.ChatMessage ahead of the rest of the conversation on every
-	// turn (see chat_service.go's Chat) -- before any active hook's own
-	// Prompt, if any, so an admin-authored persona/instruction always takes
-	// precedence. Invisible in the rendered chat UI, same as a hook's Prompt
-	// already is (the public chat UI only ever renders user/assistant
-	// roles). Always preserved by trimToBudget's context trimming, never
-	// dropped even when the conversation is trimmed to fit MaxContextTokens.
+	// turn (see chat_service.go's Chat) -- before any active MCP server's
+	// own Prompt, if any, so an admin-authored persona/instruction always
+	// takes precedence. Invisible in the rendered chat UI, same as a
+	// server's Prompt already is (the public chat UI only ever renders
+	// user/assistant roles). Always preserved by trimToBudget's context
+	// trimming, never dropped even when the conversation is trimmed to fit
+	// MaxContextTokens.
 	SystemPrompt string
 	UpdatedAt    time.Time
 }

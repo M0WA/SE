@@ -71,7 +71,7 @@ type createUserRequest struct {
 // present-but-invalid Password must be rejected (400), never silently
 // ignored. Username is never editable once created -- a User's ID is
 // minted from it at creation time (domain.NewUserID, same convention as
-// domain.NewChatHookID); changing it afterward would orphan the original
+// domain.NewMCPServerID); changing it afterward would orphan the original
 // ID a session's user_id/log lines still reference.
 type updateUserRequest struct {
 	Password     *string `json:"password"`
@@ -79,7 +79,7 @@ type updateUserRequest struct {
 }
 
 // handleAdminUsers lists (GET) or creates (POST) regular-user accounts,
-// mirroring handleAdminChatHooks' style closely.
+// mirroring handleAdminMCPServers' style closely.
 func (h *Handler) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.users != nil, "users") {
 		return

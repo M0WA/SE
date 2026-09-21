@@ -19,7 +19,7 @@ import (
 )
 
 // fakeUserStore is a minimal ports.UserStore fake, mirroring
-// fakeChatHookStore's shape (chat_test.go) closely.
+// fakeMCPServerStore's shape (chat_test.go) closely.
 type fakeUserStore struct {
 	users     []domain.User
 	listErr   error

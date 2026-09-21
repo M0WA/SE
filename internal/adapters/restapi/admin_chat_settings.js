@@ -11,31 +11,32 @@
   const saveChatSettingsBtn = document.getElementById('save-chat-settings-btn');
   const chatTokenUsageEl = document.getElementById('chat-token-usage');
 
-  // enabledHookPrompts is populated once by loadChatEndpoint (see below) --
-  // rendered every time the system prompt textarea changes, so an admin
+  // enabledServerPrompts is populated once by loadChatEndpoint (see below)
+  // -- rendered every time the system prompt textarea changes, so an admin
   // sees the split update live while editing without waiting for a save.
-  let enabledHookPrompts = [];
+  let enabledServerPrompts = [];
 
   // renderTokenUsageDonut is the static, settings-page counterpart of
   // index.js's per-turn donut: since there's no live chat turn here, it
   // estimates each piece the same way the backend's own estimateTokens
   // does (see admin.js's estimateTokensClient) from whatever's currently
   // in the form, rather than showing a real server-computed count. Global
-  // prompt + hook prompts are shown against the configured max conversation
-  // length as "remaining" budget for web-search context and history -- when
-  // no budget is configured (0), there's nothing to show as "remaining",
-  // so the chart just compares the two prompt pieces to each other.
+  // prompt + MCP server prompts are shown against the configured max
+  // conversation length as "remaining" budget for web-search context and
+  // history -- when no budget is configured (0), there's nothing to show as
+  // "remaining", so the chart just compares the two prompt pieces to each
+  // other.
   function renderTokenUsageDonut() {
     clear(chatTokenUsageEl);
     const globalTokens = estimateTokensClient(chatSystemPromptEl.value);
-    const hookTokens = enabledHookPrompts.reduce((sum, p) => sum + estimateTokensClient(p), 0);
+    const toolTokens = enabledServerPrompts.reduce((sum, p) => sum + estimateTokensClient(p), 0);
     const maxTokens = parseInt(chatMaxContextTokensEl.value, 10) || 0;
     const segments = [
       { label: 'Global prompt', value: globalTokens, color: 'var(--chart-1)' },
-      { label: 'Active hook prompts', value: hookTokens, color: 'var(--chart-2)' },
+      { label: 'Active MCP server prompts', value: toolTokens, color: 'var(--chart-2)' },
     ];
     if (maxTokens > 0) {
-      segments.push({ label: 'Remaining for context/history', value: Math.max(0, maxTokens - globalTokens - hookTokens), color: 'var(--rule)' });
+      segments.push({ label: 'Remaining for context/history', value: Math.max(0, maxTokens - globalTokens - toolTokens), color: 'var(--rule)' });
     }
     chatTokenUsageEl.appendChild(buildDonutSVG(segments));
     chatTokenUsageEl.appendChild(buildDonutLegend(segments));
@@ -63,29 +64,29 @@
     chatWebSearchBaseURLEl.value = c.web_search_base_url || '';
   }
 
-  // loadEnabledHookPrompts fetches the hooks list from its own settings
-  // page (Settings -> Chat -> Hooks) purely to feed this page's context-
-  // budget preview -- best-effort, same convention as every other
-  // best-effort fetch on this page: a failure here shouldn't block the
-  // chat endpoint's own settings from loading, so it just leaves the hook-
-  // prompt slice at 0 rather than surfacing an error.
-  async function loadEnabledHookPrompts() {
+  // loadEnabledServerPrompts fetches the MCP servers list from its own
+  // settings page (Settings -> Chat -> MCP servers) purely to feed this
+  // page's context-budget preview -- best-effort, same convention as every
+  // other best-effort fetch on this page: a failure here shouldn't block
+  // the chat endpoint's own settings from loading, so it just leaves the
+  // server-prompt slice at 0 rather than surfacing an error.
+  async function loadEnabledServerPrompts() {
     try {
-      const hooks = await getJSON('/admin/api/chat-hooks');
-      enabledHookPrompts = hooks.filter((h) => h.enabled && h.prompt).map((h) => h.prompt);
+      const servers = await getJSON('/admin/api/mcp-servers');
+      enabledServerPrompts = servers.filter((s) => s.enabled && s.prompt).map((s) => s.prompt);
     } catch (err) {
-      enabledHookPrompts = [];
+      enabledServerPrompts = [];
     }
   }
 
-  // The chat-endpoint fetch and loadEnabledHookPrompts hit disjoint
+  // The chat-endpoint fetch and loadEnabledServerPrompts hit disjoint
   // endpoints and populate disjoint state -- run them concurrently rather
   // than one after the other, so this page's load time isn't paying for
   // two round-trips back to back.
   async function loadChatEndpoint() {
     const [endpointResult] = await Promise.allSettled([
       getJSON('/admin/api/chat-endpoint'),
-      loadEnabledHookPrompts(),
+      loadEnabledServerPrompts(),
     ]);
     if (endpointResult.status === 'fulfilled') {
       applyChatEndpoint(endpointResult.value);

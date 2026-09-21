@@ -142,13 +142,7 @@ This is the ordered install flow for a fresh Debian/Ubuntu host. Steps 1–2 and
     done
     ```
 
-16. **(Optional) Install chat hook scripts.** *(Manual — `postinst` deliberately does not create `CHAT_HOOKS_DIR`.)* Two example scripts ship in the repo: `web_search.sh` (proxies to SearXNG) and `web_fetch.sh` (fetches a specific URL directly — has a documented SSRF caveat, only enable it if that residual risk is acceptable for your deployment). Each hook is exposed to the model as a native tool-calling function, which requires the chat endpoint below to actually support tool-calling (see the vLLM flags in the next step). See [packaging/chat-hooks/README.md](../packaging/chat-hooks/README.md).
-    ```
-    mkdir -p /etc/searchengine/hooks
-    cp packaging/chat-hooks/web_search.sh packaging/chat-hooks/web_fetch.sh /etc/searchengine/hooks/
-    chmod +x /etc/searchengine/hooks/web_search.sh /etc/searchengine/hooks/web_fetch.sh
-    # then configure the matching ChatHook (Name/Description/Parameters + Script=web_search.sh or web_fetch.sh) under Settings -> Chat -> Hooks in the admin UI
-    ```
+16. **(Optional) Configure the built-in `web_search`/`web_fetch` MCP server.** The `.deb` already installs `/usr/bin/searchengine-mcp-web` (built from `cmd/mcp-web`) — nothing to copy or `chmod`. It's not a systemd service: search-server spawns it on demand as a stdio subprocess (see `internal/adapters/mcpclient`) whenever an admin-configured `MCPServer` row points at it. Under Settings -> Chat -> MCP servers, add one: Transport=`stdio`, Command=`/usr/bin/searchengine-mcp-web`, Enabled=checked. Its two tools (`web_search`/`web_fetch`) are exposed to the model as native tool-calling functions, which requires the chat endpoint below to actually support tool-calling (see the vLLM flags in the next step).
 
 17. **(Optional) Configure an embedding and chat inference backend.** The admin UI's `domain.EmbeddingHTTPEndpoint` (edited on `admin_embedding_endpoint.html`) and `domain.ChatEndpoint` (edited on `admin_chat_settings.html`) each point at a plain OpenAI-compatible HTTP endpoint — `httpembed`/`httpchat` are generic clients, so any such API works, self-hosted or third-party. As a concrete reference, the `se.mo-sys.de` dev deployment points both at self-hosted [vLLM](https://github.com/vllm-project/vllm) server processes on a separate dedicated GPU host (one NVIDIA H200 NVL), each its own systemd unit gated by its own bearer API key:
     ```
@@ -156,11 +150,12 @@ This is the ordered install flow for a fresh Debian/Ubuntu host. Steps 1–2 and
     vllm serve Alibaba-NLP/gte-Qwen2-7B-instruct --runner pooling --convert embed
 
     # Chat: RedHatAI/Qwen2.5-72B-Instruct-FP8-dynamic -- --enable-auto-tool-choice
-    # and --tool-call-parser are required for chat hooks (Settings -> Chat -> Hooks)
-    # to work at all: httpchat sends a native "tools" list whenever any hook is
-    # active, and without these flags vLLM never returns tool_calls, so a hook
-    # is configured but silently never invoked. "hermes" is the parser Qwen2.5-
-    # Instruct models use; check your own model's docs if using a different one.
+    # and --tool-call-parser are required for MCP servers (Settings -> Chat ->
+    # MCP servers) to work at all: httpchat sends a native "tools" list
+    # whenever any server is active, and without these flags vLLM never
+    # returns tool_calls, so a server is configured but its tools are
+    # silently never invoked. "hermes" is the parser Qwen2.5-Instruct models
+    # use; check your own model's docs if using a different one.
     vllm serve RedHatAI/Qwen2.5-72B-Instruct-FP8-dynamic --max-model-len 32768 --enable-auto-tool-choice --tool-call-parser hermes
     ```
     Point `EmbeddingHTTPEndpoint.BaseURL`/`Model` and `ChatEndpoint.BaseURL`/`Model` at these processes' `/v1` base URLs and set each endpoint's API key to the matching bearer token.
@@ -181,8 +176,7 @@ All variables are read once at process startup (`bootstrap.GetEnv`/`os.Getenv`),
 |---|---|---|---|
 | `DB_DRIVER` | `"sqlite"` | search, admin, crawl | Selects the SQL backend driver (`sqlite`/`postgres`/`mysql`) used to open the shared database connection. |
 | `DB_DSN` | `"file:search.db?cache=shared"` | search, admin, crawl | The data-source-name/connection string for the SQL database (path for SQLite, connection URL for Postgres/MySQL). |
-| `SETTINGS_ENCRYPTION_KEY` | none — empty string; encryption disabled if unset | search, admin, crawl | Hex-encoded AES-256 key used to encrypt/decrypt sensitive stored settings (e.g. the embedding/chat endpoint API keys) at rest in the DB. Each binary opens its own key independently at startup. |
-| `CHAT_HOOKS_DIR` | `"/etc/searchengine/hooks"` | search | Directory on disk where every configured `ChatHook`'s script file must live for the hook runner to find and execute it. |
+| `SETTINGS_ENCRYPTION_KEY` | none — empty string; encryption disabled if unset | search, admin, crawl | Hex-encoded AES-256 key used to encrypt/decrypt sensitive stored settings (e.g. the embedding/chat endpoint and MCP server API keys) at rest in the DB. Each binary opens its own key independently at startup. |
 | `SEARCH_INTERNAL_API_KEY` | none — empty string; bypass disabled if unset | search | Optional pre-shared key letting a trusted local caller (a SearXNG engine plugin folding this instance's own index into SearXNG's aggregated search) call the public `/search` endpoint via an `X-Internal-API-Key` header instead of a browser session cookie. Empty by default: with no key configured, `/search` behaves exactly as it always has (session-cookie-only, `401` otherwise). |
 | `SEARCH_LISTEN_ADDR` | `"127.0.0.1:8080"` | search | The host:port the public, internet-facing search HTTP server binds and listens on. |
 | `ADMIN_USER` | none — empty string | admin | Username required for admin-server sign-in. If unset (with `ADMIN_PASSWORD`), `/crawl` and `/admin` refuse all sign-ins (logged as a warning, not fatal). |
@@ -203,8 +197,6 @@ All variables are read once at process startup (`bootstrap.GetEnv`/`os.Getenv`),
 | `packaging/debian/{control,postinst,prerm}` | n/a — become the `.deb`'s own metadata/maintainer scripts | Auto (build-time) | Package metadata, dependencies, and install/removal behavior (user/dir creation, service enable/start, stop/disable on removal). |
 | `packaging/nginx/searchengine.conf` | `/etc/nginx/sites-available/searchengine` (symlinked into `sites-enabled`) | Manual | nginx reverse-proxy routing split between search-server and admin-server. See [packaging/nginx/README.md](../packaging/nginx/README.md). |
 | `packaging/nginx/stub_status.conf` | `/etc/nginx/conf.d/stub_status.conf` | Manual | Loopback-only nginx `stub_status` page for `prometheus-nginx-exporter`. See [packaging/nginx/README.md](../packaging/nginx/README.md). |
-| `packaging/chat-hooks/web_search.sh` | `/etc/searchengine/hooks/web_search.sh` (default `CHAT_HOOKS_DIR`) | Manual | Example chat-hook script proxying to a self-hosted SearXNG instance. See [packaging/chat-hooks/README.md](../packaging/chat-hooks/README.md). |
-| `packaging/chat-hooks/web_fetch.sh` | `/etc/searchengine/hooks/web_fetch.sh` (default `CHAT_HOOKS_DIR`) | Manual | Example chat-hook script fetching a specific `http`/`https` URL directly; has a documented SSRF caveat. See [packaging/chat-hooks/README.md](../packaging/chat-hooks/README.md). |
 | `packaging/prometheus/prometheus.yml` | `/etc/prometheus/prometheus.yml` | Manual | Prometheus agent-mode scrape/`remote_write` config. See [packaging/prometheus/README.md](../packaging/prometheus/README.md). |
 | `packaging/prometheus/prometheus.default` | `/etc/default/prometheus` | Manual | `prometheus.service` ARGS (agent mode). |
 | `packaging/prometheus/prometheus-nginx-exporter.default` | `/etc/default/prometheus-nginx-exporter` | Manual | Exporter ARGS. |
@@ -333,8 +325,8 @@ Everything below lives in the shared SQL database and is edited only through `in
 | `chat-model` | none, required | — | Model name used for chat-completions requests. |
 | `chat-enabled` | `false` | boolean | Gates whether chat will call out to this endpoint at all. |
 | `chat-max-context-tokens` | `0` -- auto-detected from the model on save | — | Bounds tokens' worth of conversation sent to the model (approximated by character count); oldest messages trimmed first. Left at `0`, every save auto-detects this from the configured model's own advertised max context length (75% of it, reserving the rest for the reply) instead of leaving trimming disabled -- type a smaller number here only to set a tighter budget than that. |
-| `chat-web-search-enabled` | `false` | boolean | The "Web" toggle's default (overridable per question): when on, every chat hook with `gated_by_web_search` becomes available to the model. This setting never performs a search or fetch itself -- see "Chat hooks" below. |
-| `chat-web-search-base-url` | none | required for a `web_search` hook to work | Base URL of the SearXNG instance; passed to every active hook's script as the `WEB_SEARCH_BASE_URL` environment variable. |
+| `chat-web-search-enabled` | `false` | boolean | The "Web" toggle's default (overridable per question): when on, every MCP server with `gated_by_web_search` becomes active, offering its tools to the model. This setting never performs a search or fetch itself -- see "MCP servers" below. |
+| `chat-web-search-base-url` | none | required for the built-in `web_search` tool to work | Base URL of the SearXNG instance; passed to every active `stdio`-transport MCP server's spawned process as the `WEB_SEARCH_BASE_URL` environment variable. |
 | `chat-system-prompt` | empty (none injected) | — | Optional leading system-role message injected ahead of the rest of the conversation on every turn; never dropped by context trimming. |
 
 Chat no longer has a separate retrieval-augmented-generation (RAG) toggle
@@ -342,25 +334,33 @@ against this instance's own index. To blend this instance's own index into
 chat's web-search results instead, add it as a SearXNG engine -- see
 `packaging/searxng-engine/README.md`.
 
-### Chat hooks (`admin_chat_hooks.html`)
+### MCP servers (`admin_mcp_servers.html` list + `admin_mcp_server.html` edit subpage)
 
-Each hook is exposed to the chat model as a native OpenAI-compatible
-tool-calling function -- the model decides whether and when to call it,
-given `hook-name`/`hook-description`/the argument fields below as part of
-the request's own `tools` list. This requires the configured chat endpoint
-to actually support tool-calling (see step 17 above); otherwise a
-configured hook is simply never invoked.
+Each server is connected to at the start of a chat turn (see
+`internal/adapters/mcpclient`); every tool it exposes (its own
+`tools/list` response -- `Name`/`Description`/`InputSchema` per tool, not
+admin-configured) is offered to the chat model as a native
+OpenAI-compatible tool-calling function, and the model decides whether and
+when to call one. This requires the configured chat endpoint to actually
+support tool-calling (see step 17 above); otherwise a configured server's
+tools are simply never invoked. Mirrors the embedding-endpoints list/
+detail-subpage split (`admin_mcp_servers.html` list-only, editing on
+`admin_mcp_server.html`), not the old chat-hooks inline-form pattern. The
+backing API is `GET`/`POST /admin/api/mcp-servers` (list/create) and
+`GET`/`PATCH`/`DELETE /admin/api/mcp-servers/{id}` (one server).
 
 | Field | Default | Bounds | Description |
 |---|---|---|---|
-| `hook-id` | derived, minted once | must match `^[a-z0-9_]{1,20}$` | Hook's identifier. |
-| `hook-name` | none, required | — | Human label for the hook, also the tool's function name (e.g. `web_search`). |
-| `hook-description` | none, required | — | Sent to the model as the tool's own description -- what tells it the tool exists and when to use it. |
-| `hook-arg-name` / `hook-arg-description` | none, required (name); description optional | — | The single argument this tool takes (e.g. `query`) and an optional description of it -- together built into a one-property JSON-schema `Parameters` object server-side (`domain.ChatHook.Parameters`, constrained to exactly one property -- see its own doc comment for why). Whatever value the model supplies for it is the only thing ever passed to the script, as an opaque argv value. |
-| `hook-script` | none, required | filename only, no path | Script filename resolved against `CHAT_HOOKS_DIR` by the hook runner. |
-| `hook-prompt` | empty (none injected) | — | Optional extra steering beyond `hook-description`, injected as its own system message only while the hook is active. |
-| `hook-enabled` | `false` | boolean | Whether this hook is offered to the model as a tool. |
-| `hook-gated-by-web-search` | `false` | boolean | Whether this hook is only offered when the chat's Web toggle (`chat-web-search-enabled` or its per-question override) is on. |
+| `server-id` | derived from name, minted once | must match `^[a-z0-9_]{1,20}$` | Server's identifier; never changes after creation. |
+| `server-name` | none, required | — | Human label for the server -- shown in the admin UI only, never sent to the model. |
+| `server-transport` | `stdio` | `stdio` or `http` | `stdio` spawns `server-command` as a child process and speaks MCP over its stdin/stdout, for a locally installed server. `http` connects to `server-base-url` over MCP's Streamable HTTP transport, for a remote/third-party server. |
+| `server-command` | none, required for `stdio` | — | The executable to spawn -- never through a shell; an absolute path or one resolvable on the process's own `PATH`. The built-in web tools use `/usr/bin/searchengine-mcp-web`. |
+| `server-args` | empty | one per line | Command-line arguments passed to `server-command`. |
+| `server-base-url` | none, required for `http` | — | The remote MCP server's Streamable HTTP endpoint URL. |
+| `server-api-key` | empty | `http` only; blank on update keeps stored value | Sent as an `Authorization: Bearer` header; encrypted at rest and never echoed back to the UI. |
+| `server-prompt` | empty (none injected) | — | Optional extra steering beyond each tool's own description, injected as its own system message only while the server is active. |
+| `server-enabled` | `false` | boolean | Whether this server is connected to at the start of a chat turn at all. |
+| `server-gated-by-web-search` | `false` | boolean | Whether this server is only active when the chat's Web toggle (`chat-web-search-enabled` or its per-question override) is on. |
 
 ### Users (`admin_users.html` list + `admin_user.html` edit subpage)
 
@@ -382,13 +382,13 @@ subpage, "Delete", and an "Add user" link. Creating a new account and
 editing an existing one (password reset, and the personal chat prompt
 below) both happen on `admin_user.html` (`/admin/users/{id}`, or
 `/admin/users/new` to create) -- mirroring the embedding-endpoints list/
-detail-subpage split, not chat-hooks' inline-form pattern. The backing API
+detail-subpage split. The backing API
 is `GET`/`POST /admin/api/users` (list/create) and
 `GET`/`PATCH`/`DELETE /admin/api/users/{id}` (one account).
 
 | Field | Default | Bounds | Description |
 |---|---|---|---|
-| `user-username` | none, required | non-empty, must not match `ADMIN_USER` | Username; unique among regular-user accounts. Only set at creation -- an account's id is minted from it then (mirrors `hook-id`'s convention) and the field is locked on the edit subpage afterward. |
+| `user-username` | none, required | non-empty, must not match `ADMIN_USER` | Username; unique among regular-user accounts. Only set at creation -- an account's id is minted from it then (mirrors `server-id`'s convention) and the field is locked on the edit subpage afterward. |
 | `user-password` | none, required on create; optional on edit | 8-72 characters when present (bcrypt's own hard limit) | Hashed with bcrypt before storage; never shown again after saving. Left blank on the edit subpage, the current password is kept. |
 | `user-custom-prompt` | `""` (none) | up to 4000 characters | The admin editing a user's own personal chat prompt on their behalf -- same field and meaning as `account-custom-prompt` below; a user can also set this themselves without admin involvement. Saving an empty value clears it. |
 
@@ -406,7 +406,7 @@ migrated in alongside the rest of the
 `migrateUserColumns`), and is free text injected as its own leading system
 message on every chat turn this user sends (`POST /chat`), in addition to
 (not instead of) the endpoint-wide `chat-system-prompt` (see "Chat
-settings" above) and any active chat hooks' own prompts -- expanded
+settings" above) and any active MCP servers' own prompts -- expanded
 through the same `%c`-style placeholder mechanism those use.
 
 | Field | Default | Bounds | Description |

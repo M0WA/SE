@@ -14,7 +14,7 @@ const userColumns = "id, username, password_hash, custom_prompt, created_at, upd
 
 // ListUsers lists every DB-backed regular-user account, ordered by
 // username for a stable, human-friendly admin table order (mirrors
-// ListChatHooks ordering by name for the same reason).
+// ListMCPServers ordering by name for the same reason).
 func (r *Repository) ListUsers(ctx context.Context) ([]domain.User, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT `+userColumns+` FROM users ORDER BY username ASC`)
 	if err != nil {

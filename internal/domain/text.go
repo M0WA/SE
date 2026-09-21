@@ -19,10 +19,9 @@ func TruncateWithNote(s string, max int) string {
 }
 
 // TruncateWithEllipsis caps s at max bytes, appending a plain "..." when it
-// does -- shared by every HTTP-client adapter (httpembed, httpchat,
-// hookrunner) that bounds how much of a non-2xx response body/stderr an
-// error message carries, so a large HTML error page or a runaway script
-// doesn't blow up a log line. Distinct from
+// does -- shared by every HTTP-client adapter (httpembed, httpchat) that
+// bounds how much of a non-2xx response body carries into an error message,
+// so a large HTML error page doesn't blow up a log line. Distinct from
 // TruncateWithNote's own "... [truncated, N bytes total]" suffix -- these
 // adapters' error text predates that format and changing it would change
 // the exact error text they produce.

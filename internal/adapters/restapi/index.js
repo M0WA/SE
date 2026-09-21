@@ -117,15 +117,15 @@
 
   // tokenUsageSegments turns the backend's flat token_usage breakdown into
   // the {label, value, color} shape buildDonutSVG/buildDonutLegend expect
-  // -- a fixed 3-way split (global prompt, active hook prompts, conversation
-  // history) shared by every turn, regardless of which pieces were actually
-  // nonzero this time. Accepts a falsy u (e.g. before any turn has
-  // completed) and returns the same shape, all zeros.
+  // -- a fixed 3-way split (global prompt, active MCP server prompts,
+  // conversation history) shared by every turn, regardless of which pieces
+  // were actually nonzero this time. Accepts a falsy u (e.g. before any
+  // turn has completed) and returns the same shape, all zeros.
   function tokenUsageSegments(u) {
     u = u || {};
     return [
       { label: 'Global prompt', value: u.global_prompt_tokens || 0, color: 'var(--chart-1)' },
-      { label: 'Hook prompts', value: u.hook_prompt_tokens || 0, color: 'var(--chart-2)' },
+      { label: 'Tool prompts', value: u.tool_prompt_tokens || 0, color: 'var(--chart-2)' },
       { label: 'Your prompt', value: u.user_prompt_tokens || 0, color: 'var(--chart-3)' },
       { label: 'Conversation history', value: u.history_tokens || 0, color: 'var(--ink-muted)' },
     ];
@@ -143,7 +143,7 @@
   // (too small to hold legible text).
   function renderTokenUsage(tokenUsage) {
     const u = tokenUsage || {};
-    const total = (u.global_prompt_tokens || 0) + (u.hook_prompt_tokens || 0) +
+    const total = (u.global_prompt_tokens || 0) + (u.tool_prompt_tokens || 0) +
       (u.user_prompt_tokens || 0) + (u.history_tokens || 0);
     const segments = tokenUsageSegments(u);
     clear(chatTokenUsageMini);
@@ -365,19 +365,42 @@
     return html.join('');
   }
 
-  // buildHookResponseFold builds the nested, closed-by-default <details>
-  // that holds a hook result's raw output/error -- shared by the fetch and
+  // firstArgumentValue extracts the first string value from a tool call's
+  // raw JSON Arguments object -- MCP tools can take multiple structured
+  // arguments (unlike the old single-parameter chat-hook convention), but
+  // web_search/web_fetch and most other simple tools still take exactly
+  // one, so this best-effort heuristic is what decides whether the fetch/
+  // search two-level rendering below applies at all: a tool whose
+  // Arguments has no string value (multi-argument, or genuinely empty)
+  // falls through to the generic single-level rendering instead of
+  // guessing wrong.
+  function firstArgumentValue(argumentsJSON) {
+    try {
+      const parsed = JSON.parse(argumentsJSON || '');
+      if (parsed && typeof parsed === 'object') {
+        for (const v of Object.values(parsed)) {
+          if (typeof v === 'string') return v;
+        }
+      }
+    } catch (e) {
+      // Not valid JSON (or empty) -- fall through to the generic rendering.
+    }
+    return '';
+  }
+
+  // buildToolResponseFold builds the nested, closed-by-default <details>
+  // that holds a tool result's raw output/error -- shared by the fetch and
   // search two-level renderings in renderChatMessage below. It reuses
   // .chat-hook-result's own box/summary/pre styling by adding that class
   // alongside .chat-hook-response, rather than duplicating those rules.
-  function buildHookResponseFold(hr, summaryText) {
+  function buildToolResponseFold(tr, summaryText) {
     const nested = document.createElement('details');
-    nested.className = 'chat-hook-result chat-hook-response' + (hr.err ? ' chat-hook-result-error' : '');
+    nested.className = 'chat-hook-result chat-hook-response' + (tr.err ? ' chat-hook-result-error' : '');
     const summary = document.createElement('summary');
     summary.textContent = summaryText;
     nested.appendChild(summary);
     const pre = document.createElement('pre');
-    pre.textContent = hr.err || hr.output;
+    pre.textContent = tr.err || tr.output;
     nested.appendChild(pre);
     return nested;
   }
@@ -394,14 +417,14 @@
   // its whole chatHistory on every call and the backend silently drops the
   // oldest messages to fit the endpoint's token budget, without this note a
   // user would have no way to know this answer was generated without seeing
-  // the full conversation. hookResults (also assistant-only, never echoed
-  // back into chatHistory) is one entry per regex-triggered chat hook that
-  // matched this turn's answer -- each rendered as its own folded
-  // <details>, closed by default, so a hook's raw output/error is available
-  // on demand without cluttering the answer itself. Token usage is NOT
-  // rendered here -- see renderTokenUsage, which keeps one persistent
-  // summary next to the Web checkbox instead of repeating it per turn.
-  function renderChatMessage(role, content, contextTrimmed, hookResults) {
+  // the full conversation. toolResults (also assistant-only, never echoed
+  // back into chatHistory) is one entry per MCP tool call the model made
+  // this turn -- each rendered as its own folded <details>, closed by
+  // default, so a tool's raw output/error is available on demand without
+  // cluttering the answer itself. Token usage is NOT rendered here -- see
+  // renderTokenUsage, which keeps one persistent summary next to the Web
+  // checkbox instead of repeating it per turn.
+  function renderChatMessage(role, content, contextTrimmed, toolResults) {
     const msg = document.createElement('div');
     msg.className = role === 'user' ? 'chat-msg chat-msg-user' : 'chat-msg chat-msg-assistant';
 
@@ -421,10 +444,10 @@
       msg.appendChild(note);
     }
 
-    if (role === 'assistant' && hookResults && hookResults.length > 0) {
-      for (const hr of hookResults) {
-        const name = (hr.hook_name || '').toLowerCase();
-        const input = hr.input || '';
+    if (role === 'assistant' && toolResults && toolResults.length > 0) {
+      for (const tr of toolResults) {
+        const name = (tr.tool_name || '').toLowerCase();
+        const input = firstArgumentValue(tr.arguments);
 
         if (name.includes('fetch') && input) {
           // Two-level fold: the outer <details> (open by default) shows
@@ -433,10 +456,10 @@
           // URL is the first thing seen without the (often long) response
           // body pushing it out of view.
           const details = document.createElement('details');
-          details.className = 'chat-hook-result' + (hr.err ? ' chat-hook-result-error' : '');
+          details.className = 'chat-hook-result' + (tr.err ? ' chat-hook-result-error' : '');
           details.open = true;
           const summary = document.createElement('summary');
-          summary.textContent = hr.hook_name;
+          summary.textContent = tr.tool_name;
           details.appendChild(summary);
 
           const target = document.createElement('div');
@@ -449,7 +472,7 @@
           target.appendChild(link);
           details.appendChild(target);
 
-          details.appendChild(buildHookResponseFold(hr, hr.err ? 'Error' : 'Response'));
+          details.appendChild(buildToolResponseFold(tr, tr.err ? 'Error' : 'Response'));
           msg.appendChild(details);
         } else if (name.includes('search') && input) {
           // Same open-by-default outer fold, but the target is a query
@@ -457,10 +480,10 @@
           // list is shown directly, with the raw JSON still available in
           // the nested fold for anyone who wants it.
           const details = document.createElement('details');
-          details.className = 'chat-hook-result' + (hr.err ? ' chat-hook-result-error' : '');
+          details.className = 'chat-hook-result' + (tr.err ? ' chat-hook-result-error' : '');
           details.open = true;
           const summary = document.createElement('summary');
-          summary.textContent = hr.hook_name;
+          summary.textContent = tr.tool_name;
           details.appendChild(summary);
 
           const target = document.createElement('div');
@@ -472,7 +495,7 @@
 
           let parsed = null;
           try {
-            parsed = JSON.parse(hr.output);
+            parsed = JSON.parse(tr.output);
           } catch (e) {
             parsed = null;
           }
@@ -493,20 +516,20 @@
             details.appendChild(list);
           }
 
-          details.appendChild(buildHookResponseFold(hr, hr.err ? 'Error' : 'Raw output'));
+          details.appendChild(buildToolResponseFold(tr, tr.err ? 'Error' : 'Raw output'));
           msg.appendChild(details);
         } else {
           // Generic fallback: today's original single-level, closed-by-
-          // default rendering, unchanged -- used for any hook name that
-          // isn't fetch/search-shaped, and also when a fetch/search hook
-          // fired without a captured input to show.
+          // default rendering, unchanged -- used for any tool name that
+          // isn't fetch/search-shaped, and also when a fetch/search tool
+          // fired without a single string argument to show.
           const details = document.createElement('details');
-          details.className = 'chat-hook-result' + (hr.err ? ' chat-hook-result-error' : '');
+          details.className = 'chat-hook-result' + (tr.err ? ' chat-hook-result-error' : '');
           const summary = document.createElement('summary');
-          summary.textContent = hr.hook_name;
+          summary.textContent = tr.tool_name;
           details.appendChild(summary);
           const pre = document.createElement('pre');
-          pre.textContent = hr.err ? hr.err : hr.output;
+          pre.textContent = tr.err ? tr.err : tr.output;
           details.appendChild(pre);
           msg.appendChild(details);
         }
@@ -548,7 +571,7 @@
       }
       const data = await resp.json();
       chatHistory.push({ role: 'assistant', content: data.answer });
-      renderChatMessage('assistant', data.answer, data.context_trimmed, data.hook_results || []);
+      renderChatMessage('assistant', data.answer, data.context_trimmed, data.tool_results || []);
       renderTokenUsage(data.token_usage);
       chatStatus.textContent = '';
     } catch (err) {
