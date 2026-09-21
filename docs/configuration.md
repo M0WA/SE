@@ -327,7 +327,7 @@ Everything below lives in the shared SQL database and is edited only through `in
 | `chat-api-key` | empty | blank on update keeps stored value | API key/bearer token for the chat backend; encrypted at rest. |
 | `chat-model` | none, required | — | Model name used for chat-completions requests. |
 | `chat-enabled` | `false` | boolean | Gates whether chat will call out to this endpoint at all. |
-| `chat-max-context-tokens` | `0` (no trimming) | — | Bounds tokens' worth of conversation sent to the model (approximated by character count); oldest messages trimmed first. |
+| `chat-max-context-tokens` | `0` -- auto-detected from the model on save | — | Bounds tokens' worth of conversation sent to the model (approximated by character count); oldest messages trimmed first. Left at `0`, every save auto-detects this from the configured model's own advertised max context length (75% of it, reserving the rest for the reply) instead of leaving trimming disabled -- type a smaller number here only to set a tighter budget than that. |
 | `chat-web-search-enabled` | `false` | boolean | The "Web" toggle's default (overridable per question): when on, every chat hook with `gated_by_web_search` becomes available to the model. This setting never performs a search or fetch itself -- see "Chat hooks" below. |
 | `chat-web-search-base-url` | none | required for a `web_search` hook to work | Base URL of the SearXNG instance; passed to every active hook's script as the `WEB_SEARCH_BASE_URL` environment variable. |
 | `chat-system-prompt` | empty (none injected) | — | Optional leading system-role message injected ahead of the rest of the conversation on every turn; never dropped by context trimming. |

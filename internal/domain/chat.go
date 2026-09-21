@@ -61,3 +61,27 @@ type ChatEndpoint struct {
 	SystemPrompt string
 	UpdatedAt    time.Time
 }
+
+// ChatCompletionReserveFraction is the fraction of a model's own advertised
+// maximum context length reserved for the completion (the model's own
+// answer) when auto-detecting ChatEndpoint.MaxContextTokens from the model
+// itself (see AutoMaxContextTokens and restapi.Handler's chat-endpoint PATCH
+// handler) -- the detected max is a TOTAL budget (prompt + completion
+// combined), so using the whole thing as the prompt-only trimming budget
+// would leave the model no room to actually answer once a conversation
+// grows close to the limit.
+const ChatCompletionReserveFraction = 0.25
+
+// AutoMaxContextTokens computes the prompt-only token budget to store as
+// ChatEndpoint.MaxContextTokens from a model's own raw advertised maximum
+// context length (as returned by e.g. ports.ChatCompleter's optional
+// model-probing capability), reserving ChatCompletionReserveFraction of it
+// for the completion. Returns 0 (meaning "no budget configured, trimming
+// stays disabled") when modelMaxContextTokens isn't positive -- the caller
+// couldn't detect one, same as leaving MaxContextTokens unset today.
+func AutoMaxContextTokens(modelMaxContextTokens int) int {
+	if modelMaxContextTokens <= 0 {
+		return 0
+	}
+	return modelMaxContextTokens - int(float64(modelMaxContextTokens)*ChatCompletionReserveFraction)
+}

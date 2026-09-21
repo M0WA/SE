@@ -129,13 +129,13 @@ func TestMustParseCIDR_PanicsOnInvalidCIDR(t *testing.T) {
 }
 
 func TestDialControl_RejectsUnsplittableAddress(t *testing.T) {
-	if err := dialControl("tcp", "no-port-here", nil); err == nil {
+	if err := dialControl(AllowedIP)("tcp", "no-port-here", nil); err == nil {
 		t.Fatal("expected an address with no port to be rejected")
 	}
 }
 
 func TestDialControl_AllowsPublicIP(t *testing.T) {
-	if err := dialControl("tcp", "93.184.216.34:80", nil); err != nil {
+	if err := dialControl(AllowedIP)("tcp", "93.184.216.34:80", nil); err != nil {
 		t.Errorf("expected a public IP to be allowed, got: %v", err)
 	}
 }
@@ -145,7 +145,7 @@ func TestDialControl_RejectsNonIPHost(t *testing.T) {
 	// resolved numeric address, so this shouldn't happen in practice --
 	// but if it ever did (e.g. a future net package change), a host that
 	// isn't a literal IP must still be rejected rather than let through.
-	if err := dialControl("tcp", "example.com:80", nil); err == nil {
+	if err := dialControl(AllowedIP)("tcp", "example.com:80", nil); err == nil {
 		t.Fatal("expected a non-IP host to be rejected")
 	}
 }
@@ -190,5 +190,87 @@ func TestTransport_UsesSafeDialContext(t *testing.T) {
 	_, err := tr.DialContext(context.Background(), "tcp", "127.0.0.1:80")
 	if err == nil || !strings.Contains(err.Error(), "netguard") {
 		t.Errorf("expected Transport's DialContext to block a loopback target, got: %v", err)
+	}
+}
+
+func TestAllowedConfiguredEndpointIP(t *testing.T) {
+	cases := []struct {
+		name string
+		ip   string
+		want bool
+	}{
+		{"loopback v4 allowed -- self-hosted on the same box", "127.0.0.1", true},
+		{"private 10/8 allowed -- self-hosted vLLM on a private network", "10.0.0.5", true},
+		{"private 192.168/16 allowed", "192.168.1.1", true},
+		{"cgnat allowed", "100.64.0.1", true},
+		{"link-local metadata still blocked", "169.254.169.254", false},
+		{"link-local v4 other still blocked", "169.254.1.1", false},
+		{"unspecified v4 still blocked", "0.0.0.0", false},
+		{"multicast still blocked", "224.0.0.1", false},
+		{"public v4 allowed", "8.8.8.8", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ip := net.ParseIP(tc.ip)
+			if ip == nil {
+				t.Fatalf("test setup: %q did not parse as an IP", tc.ip)
+			}
+			if got := AllowedConfiguredEndpointIP(ip); got != tc.want {
+				t.Errorf("AllowedConfiguredEndpointIP(%s) = %v, want %v", tc.ip, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAllowedConfiguredEndpointIP_Nil(t *testing.T) {
+	if AllowedConfiguredEndpointIP(nil) {
+		t.Error("expected nil IP to be disallowed")
+	}
+}
+
+func TestConfiguredEndpointURLAllowed(t *testing.T) {
+	if !ConfiguredEndpointURLAllowed("http://127.0.0.1:8080/v1") {
+		t.Error("expected a loopback self-hosted endpoint to be allowed")
+	}
+	if !ConfiguredEndpointURLAllowed("http://10.0.0.5:8000/v1") {
+		t.Error("expected a private-network self-hosted endpoint to be allowed")
+	}
+	if ConfiguredEndpointURLAllowed("http://169.254.169.254/latest/meta-data/") {
+		t.Error("expected the cloud metadata address to be disallowed")
+	}
+	if ConfiguredEndpointURLAllowed("ftp://example.com/") {
+		t.Error("expected a non-http(s) scheme to be disallowed")
+	}
+}
+
+func TestConfiguredEndpointDialContext_AllowsPrivateTarget(t *testing.T) {
+	dial := ConfiguredEndpointDialContext()
+	ctx, cancel := context.WithTimeout(context.Background(), 0)
+	defer cancel()
+	_, err := dial(ctx, "tcp", "10.0.0.5:80")
+	if err == nil {
+		t.Fatal("expected the zero-timeout context to fail the dial")
+	}
+	if strings.Contains(err.Error(), "netguard") {
+		t.Errorf("expected a private target to pass the netguard check (fail for a different reason), got: %v", err)
+	}
+}
+
+func TestConfiguredEndpointDialContext_BlocksMetadataTarget(t *testing.T) {
+	dial := ConfiguredEndpointDialContext()
+	_, err := dial(context.Background(), "tcp", "169.254.169.254:80")
+	if err == nil || !strings.Contains(err.Error(), "netguard") {
+		t.Errorf("expected the cloud metadata address to be blocked, got: %v", err)
+	}
+}
+
+func TestConfiguredEndpointTransport_UsesConfiguredEndpointDialContext(t *testing.T) {
+	tr := ConfiguredEndpointTransport()
+	if tr.DialContext == nil {
+		t.Fatal("expected ConfiguredEndpointTransport to set DialContext")
+	}
+	_, err := tr.DialContext(context.Background(), "tcp", "169.254.169.254:80")
+	if err == nil || !strings.Contains(err.Error(), "netguard") {
+		t.Errorf("expected ConfiguredEndpointTransport's DialContext to block the metadata target, got: %v", err)
 	}
 }

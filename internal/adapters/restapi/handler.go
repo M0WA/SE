@@ -206,6 +206,15 @@ type Handler struct {
 	// production (see New), overridden by tests so testEmbeddingConnectivity
 	// never makes a real network call from the test suite.
 	newEmbedder func(domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider
+	// chatModelProber is the shared ports.ChatCompleter used to auto-detect
+	// a chat endpoint's own advertised max context length (see
+	// handleAdminChatEndpoint's PATCH branch) -- always
+	// bootstrap.NewHTTPChatCompleter() in production (see New), overridden
+	// by tests so that auto-detection never makes a real network call from
+	// the test suite. nil is valid (detection is skipped, same as any
+	// other best-effort failure) for a Handler that never sets it (e.g.
+	// crawl-server, which never serves chat-endpoint admin routes at all).
+	chatModelProber ports.ChatCompleter
 	// internalSearchAPIKey, when set, is an optional pre-shared key letting
 	// a trusted local caller (e.g. a SearXNG engine plugin querying this
 	// instance's own index as just another search engine) call /search
@@ -246,11 +255,19 @@ type Config struct {
 	// it's saved (see testEmbeddingConnectivity). Defaults to
 	// bootstrap.NewHTTPEmbedder when nil -- tests override this to avoid a
 	// real network call.
-	NewEmbedder   func(domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider
-	Settings      *domain.TuningSettings
-	OpSettings    *domain.OperationalSettings
-	Overrides     *domain.RankingOverrides
-	SettingsStore ports.SettingsStore
+	NewEmbedder func(domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider
+	// ChatModelProber, when set, is used to auto-detect a chat endpoint's
+	// own advertised max context length when it's saved with
+	// MaxContextTokens left unset (see handleAdminChatEndpoint's PATCH
+	// branch) -- defaults to bootstrap.NewHTTPChatCompleter() when nil on
+	// admin-server; left nil (skipping auto-detection entirely, same as
+	// any other best-effort failure) on crawl-server, which never serves
+	// this route.
+	ChatModelProber ports.ChatCompleter
+	Settings        *domain.TuningSettings
+	OpSettings      *domain.OperationalSettings
+	Overrides       *domain.RankingOverrides
+	SettingsStore   ports.SettingsStore
 	// ScheduledCrawls is set on admin-server only (backing the schedules
 	// admin API) -- crawl-server's own ticker talks to the same store
 	// directly, not through Handler.
@@ -313,6 +330,10 @@ func New(cfg Config) *Handler {
 	if newEmbedder == nil {
 		newEmbedder = bootstrap.NewHTTPEmbedder
 	}
+	chatModelProber := cfg.ChatModelProber
+	if chatModelProber == nil {
+		chatModelProber = bootstrap.NewHTTPChatCompleter()
+	}
 	return &Handler{
 		search:                cfg.Search,
 		crawler:               cfg.Crawler,
@@ -345,6 +366,7 @@ func New(cfg Config) *Handler {
 		crawlInternalToken:    cfg.CrawlInternalToken,
 		settingsEncryptionKey: cfg.SettingsEncryptionKey,
 		newEmbedder:           newEmbedder,
+		chatModelProber:       chatModelProber,
 		internalSearchAPIKey:  cfg.InternalSearchAPIKey,
 	}
 }
