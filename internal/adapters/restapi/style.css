@@ -131,6 +131,18 @@ form[hidden] { display: none; }
   padding: 0.2rem 0;
 }
 
+/* .field's own color: var(--ink) is correct for the select box itself, but
+   <option> inherits it too -- in dark mode --ink is a near-white value,
+   and the native dropdown POPUP's background stays light in practice on
+   enough browsers (color-scheme: light dark above is a hint, not a
+   guarantee every engine honors for this) that the unselected option text
+   ends up light-on-light and unreadable. Force a fixed dark color on every
+   option regardless of theme, since the popup background itself can't be
+   themed from here either way. */
+option {
+  color: #15202b;
+}
+
 /* #sort shares .field's dark-mode-aware colors/font, but not .field's
    flex: 1 -- growing to share the row equally with #q left it far wider
    than "Best match"/"Most recent" ever need, at the text input's expense.

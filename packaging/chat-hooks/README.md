@@ -15,10 +15,22 @@ as the turn's Answer, not the model's bare tool-call text. A user never sees
 the raw `<web_search>...</web_search>`-style syntax itself; they see the
 model's real, results-informed answer. (`ChatResult.HookResults` still
 carries the raw tool output separately, for the chat UI's own folded
-transparency panel.) This repeats up to `maxHookFollowUpRounds` (2) times if
+transparency panel.) This repeats up to `maxHookFollowUpRounds` (4) times if
 the model's own follow-up answer invokes a hook again -- e.g. a fetch came
-back blocked/empty and it reasonably tries a different URL -- rather than
-leaving that second tool call unprocessed.
+back blocked/empty and it reasonably tries a different URL, or web_search's
+own suggested Prompt below chains into fetching multiple results -- rather
+than leaving that tool call unprocessed.
+
+If the model is STILL trying to invoke one more tool once that round budget
+is spent -- its last allowed follow-up is itself nothing but a bare
+tool-call tag, per every hook's own "output only the tag, nothing else"
+instruction below -- `ChatService.Chat` doesn't just strip the tag and
+return an empty answer. It makes one last, tool-free completion call
+first, telling the model plainly that no more tool calls are available and
+to answer now with whatever it already gathered, and uses THAT answer
+instead. This is what guarantees "always answer with a result" (see the
+global system prompt below) even against a model that doesn't fully
+respect the round budget on its own.
 
 ## Suggested global system prompt (Settings -> Chat -> System prompt)
 
@@ -27,13 +39,24 @@ regardless of which hooks are active -- it's the right place for a general
 instruction that isn't tied to any one tool:
 
 ```
-The current time is %c. Assume your training data may be outdated. When
-something could have changed or you are not certain, use web search or a
-URL fetch instead of relying on memory, whenever those tools are available
-to you. Double-check anything you get from the internet before relying on
-it -- a follow-up web search or fetching the page itself -- and make sure
-the information is actually recent, not just present.
+The current date and time is %c. Your training data can be outdated --
+when something could have changed, use web search or a URL fetch instead
+of guessing, if those tools are available. Verify what you find with a
+follow-up search or fetch before trusting it, and if one doesn't give you
+what you need, try a different query or URL rather than giving up. Always
+end your turn with a real answer using the best information you have --
+never leave only a tool call with no answer.
 ```
+
+Two things beyond the date anchor: it tells the model to keep trying a
+different angle (query/URL) rather than stop at the first unhelpful
+result, and it tells the model to always produce a real answer, whatever
+happened with the tools. That second instruction has a code-level backstop
+too -- `ChatService.Chat`'s own force-final-answer fallback (see below)
+guarantees this even if a model ignores the instruction, but stating it
+plainly up front makes the model's own last answer more likely to already
+be the real thing, rather than relying on that fallback's extra
+completion call every time.
 
 "Whenever those tools are available to you" matters: the hooks themselves
 are gated by the chat's Web toggle (`ChatHook.GatedByWebSearch`), so they
@@ -65,68 +88,52 @@ explicitly rather than leaving it implied:
 web_search's Prompt:
 
 ```
-When the user asks about something that could have changed (people in
-office, current events, prices, versions, schedules, or anything
-time-sensitive), you must search with <web_search>query</web_search>
-before answering, even if you already feel confident -- your training
-data can be outdated. Output only the tag, nothing else, and wait for
-real results as a new message before answering. Never guess or answer
-from memory for time-sensitive facts.
-
-Search results only give you a title, URL, and a short excerpt -- an
-excerpt is not enough to verify a fact, and can be stale, truncated, or
-taken out of context. Once you have results, fetch the URL that looks
-most likely to answer the question with <web_fetch>https://...</web_fetch>
-and confirm the fact against the actual page content before answering.
-Only answer from the excerpts alone if fetching genuinely isn't possible.
-
-If a search returns nothing useful, or a fetch fails, is blocked, or
-doesn't answer the question, try a different search query or a different
-URL instead of giving up or answering from memory. Limit yourself to 3
-search/fetch attempts total per question -- after that, answer with the
-best information you found and say clearly what you were unable to
-verify.
+When the user asks about something that could have changed (current
+events, prices, versions, schedules, who holds a position, or anything
+time-sensitive), search with <web_search>query</web_search> before
+answering, even if you feel confident. Output only the tag, nothing else,
+and wait for results as a new message. An excerpt alone is rarely enough
+to verify a fact -- fetch the most relevant 3 results with
+<web_fetch>https://...</web_fetch>, one per fetch, and confirm the answer
+against them before responding.
 ```
 
-The added paragraphs only make sense when the web_fetch hook is also
-enabled (see below) -- they tell the model to chain the two tools rather
-than treat a search engine's own excerpt as sufficient verification, and
-to retry with a different query/URL rather than give up on the first
-failure. The "3 attempts total" cap matches ChatService.Chat's own
-maxHookFollowUpRounds (2 follow-up rounds after the initial answer, so at
-most 3 tool-invoking turns) -- telling the model about the limit up front
-gets a clean "here's my best answer, and here's what I couldn't verify"
-once it's reached, instead of it either not knowing when to stop trying or
-silently giving up after the first failure.
+This is deliberately short: the retry-with-a-different-angle and
+always-answer instructions now live once, in the global system prompt
+above (unconditional, injected every turn regardless of which hooks are
+active), instead of being restated in every hook's own Prompt. What's
+hook-specific and stays here: when to invoke it, the exact tag syntax, and
+-- for web_search specifically -- that a search result's excerpt alone
+isn't enough, so it should chain into fetching (up to) 3 of the results
+with web_fetch to actually verify the answer against real page content.
 
 web_fetch's Prompt:
 
 ```
-When the user asks about a specific URL or its content, you must fetch it
-with <web_fetch>https://...</web_fetch> before answering, even if you
-already feel confident or were given unrelated search results -- those
-are not the page itself. Output only the tag, nothing else, and wait for
-the real page content as a new message before answering. Never guess,
-recall from memory, or describe what you assume the page contains.
-
-If a fetch fails, is blocked, or returns content that doesn't answer the
-question, try a different URL (another search result, or a related page)
-instead of giving up or answering from memory. Limit yourself to 3
-search/fetch attempts total per question -- after that, answer with the
-best information you found and say clearly what you were unable to
-verify.
+When the user asks about a specific URL or its content, fetch it with
+<web_fetch>https://...</web_fetch> before answering, even if you feel
+confident or were given unrelated search results -- those are not the
+page itself. Output only the tag, nothing else, and wait for the real
+page content as a new message.
 ```
 
-The "even if you already feel confident" phrasing matters: a model with a
-strong prior about a well-known URL or fact (e.g. wikipedia.org's title, a
+The "even if you feel confident" phrasing matters: a model with a strong
+prior about a well-known URL or fact (e.g. wikipedia.org's title, a
 head-of-state's name) will otherwise just answer from memory instead of
 actually calling the tool, especially when RAG/deterministic web-search
 context is also enabled and gives it something that merely looks like
 "I already did research." Naming that failure mode explicitly and telling
 it to call the tool anyway measurably improves (though, being an LLM,
 never perfectly guarantees) actual tool use over a shorter, softer prompt.
-The retry paragraph mirrors web_search's -- see the "3 attempts total"
-note above; the two hooks share the same per-turn budget, not 3 each.
+
+`ChatService.Chat`'s own `maxHookFollowUpRounds` is 4 -- sized for
+web_search's own suggested chain (one search, then fetching 3 results:
+4 tool calls total). If a model still wants one more tool call once that
+budget is spent, its own force-final-answer fallback (see the top of this
+file) makes one last, tool-free completion call instead of ever leaving
+the user with an empty response -- this is a real backstop, not just a
+prompt-text request, so "always answer with a result" holds even against
+a model that doesn't fully comply with the prompts above.
 
 ## Install
 

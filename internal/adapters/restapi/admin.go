@@ -178,6 +178,10 @@ func (h *Handler) handleAdminUsersPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/html; charset=utf-8", adminUsersHTML)
 }
 
+func (h *Handler) handleAdminUserPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminUserHTML)
+}
+
 func (h *Handler) handleAdminJobsPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/html; charset=utf-8", adminJobsHTML)
 }

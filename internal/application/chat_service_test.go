@@ -454,10 +454,12 @@ func TestChatService_HookRetries_SecondToolCallAlsoProcessed(t *testing.T) {
 // TestChatService_HookRetries_CappedAtMaxFollowUpRounds proves the retry
 // loop is bounded: a model that keeps invoking a hook in every answer stops
 // being fed back after maxHookFollowUpRounds rounds, rather than looping
-// forever -- the last completion's own answer, once the cap is hit, is
-// still a bare, still-unsatisfied tool-call tag, which stripHookCallTags
-// then removes entirely (see its own tests), so the user sees an empty
-// answer rather than a dangling tag.
+// forever. The completer fake here always returns the same bare,
+// unsatisfied tool-call tag -- including on the force-final-answer
+// fallback call below (see TestChatService_ForceFinalAnswer_* for the case
+// where that call actually produces real prose) -- so the end result is
+// still an empty answer, just reached via one extra completion call than
+// the loop alone accounts for.
 func TestChatService_HookRetries_CappedAtMaxFollowUpRounds(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer := &fakeChatCompleter{answer: "FETCH[https://example.com/never-satisfied]"}
@@ -473,14 +475,120 @@ func TestChatService_HookRetries_CappedAtMaxFollowUpRounds(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(completer.allCalls) != maxHookFollowUpRounds+1 {
-		t.Fatalf("expected exactly maxHookFollowUpRounds+1 (%d) completion calls, got %d", maxHookFollowUpRounds+1, len(completer.allCalls))
+	// maxHookFollowUpRounds loop iterations, plus the initial completion
+	// before the loop, plus one force-final-answer call once the loop's
+	// last answer is still an unsatisfied bare tag.
+	wantCalls := maxHookFollowUpRounds + 2
+	if len(completer.allCalls) != wantCalls {
+		t.Fatalf("expected exactly %d completion calls, got %d", wantCalls, len(completer.allCalls))
 	}
 	if len(result.HookResults) != maxHookFollowUpRounds {
 		t.Fatalf("expected exactly maxHookFollowUpRounds (%d) hook results accumulated, got %d", maxHookFollowUpRounds, len(result.HookResults))
 	}
 	if result.Answer != "" {
-		t.Fatalf("expected the still-unsatisfied tool-call tag stripped once the cap is hit, got %q", result.Answer)
+		t.Fatalf("expected the still-unsatisfied tool-call tag stripped even after the force-final attempt, got %q", result.Answer)
+	}
+}
+
+// TestChatService_ForceFinalAnswer_RescuesAnEmptyAnswerAfterCapIsHit is the
+// direct regression test for a real, reported failure: a model whose last
+// permitted follow-up (round maxHookFollowUpRounds-1) is STILL nothing but
+// a bare tool-call tag -- per every hook's own "output only the tag,
+// nothing else" instruction -- used to leave the user with a literally
+// empty response, the tag stripped with nothing left behind. The
+// force-final-answer fallback must issue one more, tool-free completion
+// call and use ITS answer instead of returning nothing.
+func TestChatService_ForceFinalAnswer_RescuesAnEmptyAnswerAfterCapIsHit(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
+	// maxHookFollowUpRounds+1 bare tags -- the initial answer PLUS every
+	// round's own follow-up must all be an unsatisfied tag to actually
+	// exhaust the loop without a real answer ending it early -- then a
+	// real answer on the force-final call.
+	answers := make([]string, 0, maxHookFollowUpRounds+2)
+	for i := 0; i < maxHookFollowUpRounds+1; i++ {
+		answers = append(answers, "SEARCH[golang release notes]")
+	}
+	answers = append(answers, "Go 1.26 was released in August 2026.")
+	completer := &fakeChatCompleter{answers: answers}
+	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true},
+	}}
+	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_search.sh": "some results"}}
+	svc := NewChatService(endpoints, completer, hooks, runner)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "when was the latest Go released?"}}
+	result, err := svc.Chat(context.Background(), history, ChatOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Answer != "Go 1.26 was released in August 2026." {
+		t.Fatalf("expected the force-final call's real answer, got %q", result.Answer)
+	}
+	wantCalls := maxHookFollowUpRounds + 2
+	if len(completer.allCalls) != wantCalls {
+		t.Fatalf("expected exactly %d completion calls (initial + %d rounds + 1 force-final), got %d", wantCalls, maxHookFollowUpRounds, len(completer.allCalls))
+	}
+	lastCall := completer.allCalls[len(completer.allCalls)-1]
+	lastMsg := lastCall[len(lastCall)-1]
+	if lastMsg.Role != domain.ChatRoleSystem || !strings.Contains(lastMsg.Content, "No more tool calls are available") {
+		t.Fatalf("expected the force-final call's last message to be the no-more-tools system instruction, got %+v", lastMsg)
+	}
+}
+
+// TestChatService_ForceFinalAnswer_NotTriggeredWhenAnswerIsNonEmpty proves
+// the force-final fallback is scoped exactly to the empty-answer case --
+// a turn that ends with a real (non-tool-call) answer, whether or not it
+// used the full round budget, never makes an extra completion call.
+func TestChatService_ForceFinalAnswer_NotTriggeredWhenAnswerIsNonEmpty(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
+	completer := &fakeChatCompleter{answers: []string{
+		"SEARCH[golang release notes]",
+		"Go 1.26 was released in August 2026.",
+	}}
+	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+		{ID: "1", Name: "web_search", Pattern: `SEARCH\[(.+?)\]`, Script: "web_search.sh", Enabled: true},
+	}}
+	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_search.sh": "some results"}}
+	svc := NewChatService(endpoints, completer, hooks, runner)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "when was the latest Go released?"}}
+	result, err := svc.Chat(context.Background(), history, ChatOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Answer != "Go 1.26 was released in August 2026." {
+		t.Fatalf("expected the real second answer, got %q", result.Answer)
+	}
+	if len(completer.allCalls) != 2 {
+		t.Fatalf("expected exactly 2 completion calls (initial + 1 follow-up), no force-final call, got %d", len(completer.allCalls))
+	}
+}
+
+// TestChatService_ForceFinalAnswer_FailureLeavesAnswerEmpty proves the
+// force-final call is best-effort like every other augmentation source in
+// this method: if it errors too, the turn still succeeds (no error
+// returned), just with an empty answer -- no worse than before this
+// fallback existed.
+func TestChatService_ForceFinalAnswer_FailureLeavesAnswerEmpty(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
+	completer := &erroringAfterNCallsCompleter{
+		n:      maxHookFollowUpRounds + 1,
+		answer: "FETCH[https://example.com/never-satisfied]",
+	}
+	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+		{ID: "1", Name: "web_fetch", Pattern: `FETCH\[(.+?)\]`, Script: "web_fetch.sh", Enabled: true},
+	}}
+	runner := &fakeHookScriptRunner{outputs: map[string]string{"web_fetch.sh": "<empty/blocked page>"}}
+	svc := NewChatService(endpoints, completer, hooks, runner)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "what does example.com say?"}}
+	result, err := svc.Chat(context.Background(), history, ChatOptions{})
+	if err != nil {
+		t.Fatalf("expected the force-final completion error to be swallowed, got %v", err)
+	}
+	if result.Answer != "" {
+		t.Fatalf("expected an empty answer when the force-final call itself errors, got %q", result.Answer)
 	}
 }
 
@@ -565,6 +673,25 @@ func (f *erroringOnSecondCallCompleter) Complete(ctx context.Context, endpoint d
 	f.calls++
 	if f.calls == 1 {
 		return f.firstAnswer, nil
+	}
+	return "", errors.New("upstream unavailable")
+}
+
+// erroringAfterNCallsCompleter is a ports.ChatCompleter fake whose first n
+// calls succeed with the same bare answer (modeling a model that never
+// satisfies a hook and keeps retrying) and every call after that fails --
+// used to prove the force-final-answer fallback (see ChatService.Chat) is
+// itself best-effort: a failure there must not fail the whole turn.
+type erroringAfterNCallsCompleter struct {
+	n      int
+	answer string
+	calls  int
+}
+
+func (f *erroringAfterNCallsCompleter) Complete(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage) (string, error) {
+	f.calls++
+	if f.calls <= f.n {
+		return f.answer, nil
 	}
 	return "", errors.New("upstream unavailable")
 }

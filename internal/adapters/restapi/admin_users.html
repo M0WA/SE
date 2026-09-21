@@ -18,33 +18,11 @@
 <nav class="admin-rail" id="admin-rail" aria-label="Admin sections"></nav>
 <main>
   <h2>Users</h2>
-  <p class="lede" style="margin: 0 0 1.5rem;">Regular-user accounts that can sign in and search, but never reach this admin backend -- separate from the single admin account configured at install time.</p>
+  <p class="lede" style="margin: 0 0 1.5rem;">Regular-user accounts that can sign in and search, but never reach this admin backend -- separate from the single admin account configured at install time. Open a user to change their password or personal chat prompt.</p>
 
-  <button id="add-user-btn" class="text-button" type="button">Add user</button>
+  <a id="add-user-link" class="text-button" href="/admin/users/new">Add user</a>
   <div id="users-status" class="panel-status"></div>
   <div id="users-table"></div>
-
-  <section class="panel" id="user-form-panel" hidden>
-    <h2 id="user-form-title">Add user</h2>
-    <form id="user-form" class="stacked-form">
-      <div class="form-row">
-        <label for="user-username">Username</label>
-        <input id="user-username" class="field" type="text" required autocomplete="off">
-      </div>
-      <div class="form-row">
-        <div class="label-row">
-          <label for="user-password" id="user-password-label">Password</label>
-          <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">At least 8 characters. Stored as a bcrypt hash -- never shown again after saving.</span></span>
-        </div>
-        <input id="user-password" class="field" type="password" autocomplete="new-password" minlength="8">
-      </div>
-      <div class="form-row">
-        <button id="user-save-btn" type="submit">Save</button>
-        <button id="user-cancel-btn" type="button" class="text-button">Cancel</button>
-      </div>
-      <span id="user-form-status" class="error-text"></span>
-    </form>
-  </section>
 </main>
 </div>
 <script src="/admin.js"></script>

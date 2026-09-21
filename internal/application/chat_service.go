@@ -261,6 +261,31 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	// (and its result) is shown.
 	answer = stripHookCallTags(answer, activeHooks)
 
+	// If the loop above ran out of rounds while the model was STILL trying
+	// to invoke one more tool -- its last allowed follow-up was itself
+	// nothing but a bare tool-call tag, per every hook's own "output only
+	// the tag, nothing else" instruction (packaging/chat-hooks/README.md)
+	// -- stripping it just now left answer completely empty. Left as-is,
+	// the user would see a blank response with no explanation, even though
+	// every result gathered so far (in currentMessages/hookResults) is
+	// still right there. Force one last, tool-free completion instead of
+	// returning nothing: the model already has everything it found, it
+	// just needs telling plainly that no more tool calls are available and
+	// to answer with what it has now. Best-effort like every other
+	// augmentation here -- a failure just leaves answer empty, no worse
+	// than doing nothing.
+	if answer == "" && len(activeHooks) > 0 {
+		forceFinal := make([]domain.ChatMessage, 0, len(currentMessages)+1)
+		forceFinal = append(forceFinal, currentMessages...)
+		forceFinal = append(forceFinal, domain.ChatMessage{
+			Role:    domain.ChatRoleSystem,
+			Content: "No more tool calls are available for this turn. Answer the user's question directly now, using only the information already gathered above -- do not output a tool-call tag.",
+		})
+		if finalAnswer, err := s.completer.Complete(ctx, endpoint, forceFinal); err == nil {
+			answer = stripHookCallTags(finalAnswer, activeHooks)
+		}
+	}
+
 	return ChatResult{Answer: answer, ContextTrimmed: contextTrimmed, HookResults: hookResults, TokenUsage: tokenUsage}, nil
 }
 
@@ -359,10 +384,17 @@ func strftime(t time.Time, format string) string {
 // hook's results back to the model and ask again -- each round costs one
 // more completion call and (via maxHookMatchesPerTurn, chat_hooks.go) up to
 // maxHookMatchesPerTurn more script executions, so this is a real cost
-// bound, not just a correctness one. 2 is enough for the common
-// "one tool call, maybe one retry" pattern without letting a model stuck
-// repeatedly retrying run up an unbounded number of completions.
-const maxHookFollowUpRounds = 2
+// bound, not just a correctness one. 4 covers web_search's own suggested
+// Prompt text (packaging/chat-hooks/README.md): one search, then fetching
+// the 3 most relevant results to cross-verify -- 4 tool calls total,
+// executed by processing the search (round 0), fetch 1 (round 1), fetch 2
+// (round 2), and fetch 3 (round 3). Keep this in sync with that prompt
+// text if either changes: a smaller value here than what the prompt asks
+// for silently drops the model's last permitted call (see the post-loop
+// force-final-answer fallback below, which exists specifically to catch a
+// model that still tries ONE more call than this allows, whatever the
+// reason).
+const maxHookFollowUpRounds = 4
 
 // maxHookOutputCharsForModel bounds how much of each hook result's own
 // Output formatHookResultsForModel feeds back into the follow-up completion
