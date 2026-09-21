@@ -70,7 +70,10 @@ func newServer(searxBaseURL string, fetcher *httpfetcher.Fetcher) *mcp.Server {
 		Name: "web_search",
 		Description: "Search the web for current information on a topic. Use this when the user asks about " +
 			"something that could have changed -- current events, prices, versions, schedules, who holds a " +
-			"position, or anything time-sensitive -- even if you feel confident.",
+			"position, or anything time-sensitive -- even if you feel confident. The returned snippets are " +
+			"unverified and must never be trusted or cited on their own -- always fetch the actual page(s) " +
+			"with web_fetch before answering, and cross-check the information across multiple independent " +
+			"results when possible, since search snippets can be outdated, truncated, or simply wrong.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args searchArgs) (*mcp.CallToolResult, any, error) {
 		text, err := webSearch(ctx, searxBaseURL, args.Query)
 		if err != nil {
