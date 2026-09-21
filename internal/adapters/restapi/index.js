@@ -56,29 +56,43 @@
       bg.setAttribute('stroke', 'var(--rule)');
       bg.setAttribute('stroke-width', String(strokeWidth));
       svg.appendChild(bg);
-      return svg;
+    } else {
+      let offset = 0;
+      for (const seg of segments) {
+        const value = Math.max(0, seg.value);
+        if (value === 0) continue;
+        const dash = (value / total) * circumference;
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('cx', String(c));
+        circle.setAttribute('cy', String(c));
+        circle.setAttribute('r', String(r));
+        circle.setAttribute('fill', 'none');
+        circle.setAttribute('stroke', seg.color);
+        circle.setAttribute('stroke-width', String(strokeWidth));
+        circle.setAttribute('stroke-dasharray', dash + ' ' + (circumference - dash));
+        circle.setAttribute('stroke-dashoffset', String(-offset));
+        circle.setAttribute('transform', 'rotate(-90 ' + c + ' ' + c + ')');
+        const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+        title.textContent = seg.label + ': ' + seg.value;
+        circle.appendChild(title);
+        svg.appendChild(circle);
+        offset += dash;
+      }
     }
 
-    let offset = 0;
-    for (const seg of segments) {
-      const value = Math.max(0, seg.value);
-      if (value === 0) continue;
-      const dash = (value / total) * circumference;
-      const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-      circle.setAttribute('cx', String(c));
-      circle.setAttribute('cy', String(c));
-      circle.setAttribute('r', String(r));
-      circle.setAttribute('fill', 'none');
-      circle.setAttribute('stroke', seg.color);
-      circle.setAttribute('stroke-width', String(strokeWidth));
-      circle.setAttribute('stroke-dasharray', dash + ' ' + (circumference - dash));
-      circle.setAttribute('stroke-dashoffset', String(-offset));
-      circle.setAttribute('transform', 'rotate(-90 ' + c + ' ' + c + ')');
-      const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-      title.textContent = seg.label + ': ' + seg.value;
-      circle.appendChild(title);
-      svg.appendChild(circle);
-      offset += dash;
+    // opts.centerText (e.g. a "42%" context-usage figure) sits in the
+    // ring's own hole -- only passed by renderTokenUsage's larger hover
+    // donut, never the 14px always-visible mini one, which is too small to
+    // hold legible text.
+    if (opts.centerText) {
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      text.setAttribute('x', String(c));
+      text.setAttribute('y', String(c));
+      text.setAttribute('text-anchor', 'middle');
+      text.setAttribute('dominant-baseline', 'central');
+      text.classList.add('donut-center-label');
+      text.textContent = opts.centerText;
+      svg.appendChild(text);
     }
     return svg;
   }
@@ -105,8 +119,10 @@
   // the {label, value, color} shape buildDonutSVG/buildDonutLegend expect
   // -- a fixed 3-way split (global prompt, active hook prompts, conversation
   // history) shared by every turn, regardless of which pieces were actually
-  // nonzero this time.
+  // nonzero this time. Accepts a falsy u (e.g. before any turn has
+  // completed) and returns the same shape, all zeros.
   function tokenUsageSegments(u) {
+    u = u || {};
     return [
       { label: 'Global prompt', value: u.global_prompt_tokens || 0, color: 'var(--chart-1)' },
       { label: 'Hook prompts', value: u.hook_prompt_tokens || 0, color: 'var(--chart-2)' },
@@ -118,25 +134,28 @@
   // renderTokenUsage updates the persistent token-usage summary shown next
   // to the Web checkbox (see #chat-token-usage in index.html) -- unlike the
   // old per-turn folded donut this replaces, it stays visible and up to
-  // date for the whole chat session once a first answer sets it, rather
-  // than being buried inside each individual chat bubble. Passing a falsy
-  // tokenUsage (e.g. before any turn has completed) hides it.
+  // date for the whole chat session, not just once a first answer sets it:
+  // a falsy tokenUsage (e.g. before any turn has completed) renders an
+  // empty/zero-value donut instead of hiding the badge, so the control's
+  // position on the toolbar row is stable from page load. The larger hover
+  // donut additionally gets a centered usage-percentage label once
+  // max_context_tokens is known; the always-visible mini donut does not
+  // (too small to hold legible text).
   function renderTokenUsage(tokenUsage) {
-    if (!tokenUsage) {
-      chatTokenUsage.hidden = true;
-      return;
-    }
-    const total = (tokenUsage.global_prompt_tokens || 0) + (tokenUsage.hook_prompt_tokens || 0) +
-      (tokenUsage.user_prompt_tokens || 0) + (tokenUsage.history_tokens || 0);
-    const segments = tokenUsageSegments(tokenUsage);
+    const u = tokenUsage || {};
+    const total = (u.global_prompt_tokens || 0) + (u.hook_prompt_tokens || 0) +
+      (u.user_prompt_tokens || 0) + (u.history_tokens || 0);
+    const segments = tokenUsageSegments(u);
     clear(chatTokenUsageMini);
     chatTokenUsageMini.appendChild(buildDonutSVG(segments, { size: 14, strokeWidth: 4 }));
     chatTokenUsageSummary.textContent = total.toLocaleString() +
-      (tokenUsage.max_context_tokens ? ' / ' + tokenUsage.max_context_tokens.toLocaleString() : '');
+      (u.max_context_tokens ? ' / ' + u.max_context_tokens.toLocaleString() : '');
     clear(chatTokenUsageDonut);
-    chatTokenUsageDonut.appendChild(buildDonutSVG(segments));
+    const donutOpts = u.max_context_tokens
+      ? { centerText: Math.round((total / u.max_context_tokens) * 100) + '%' }
+      : undefined;
+    chatTokenUsageDonut.appendChild(buildDonutSVG(segments, donutOpts));
     chatTokenUsageDonut.appendChild(buildDonutLegend(segments));
-    chatTokenUsage.hidden = false;
   }
 
   // renderCorrectionNote shows a quiet, transparent note when the search
@@ -573,6 +592,7 @@
   });
 
   setMode('chat');
+  renderTokenUsage(null);
 
   chatForm.addEventListener('submit', (e) => {
     e.preventDefault();
