@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.35 - 2026-09-21
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Fix chat never answering after retries; admin user-edit subpage; select fix by @M0WA in https://github.com/M0WA/SE/pull/200
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.34...v4.13.35
+
+
 ## v4.13.34 - 2026-09-21
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
