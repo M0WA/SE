@@ -35,9 +35,9 @@ type chatResponse struct {
 	// token budget before this answer was generated -- omitted (so it reads
 	// as false) on the common case where nothing was trimmed.
 	ContextTrimmed bool `json:"context_trimmed,omitempty"`
-	// HookResults carries one entry per regex-triggered chat hook match
-	// against Answer this turn (see application.ChatResult.HookResults) --
-	// omitted entirely on the common case of no configured/matching hooks.
+	// HookResults carries one entry per tool call the model made this turn
+	// (see application.ChatResult.HookResults) -- omitted entirely on the
+	// common case of no configured hooks or no tool call made.
 	HookResults []chatHookResultResponse `json:"hook_results,omitempty"`
 	// TokenUsage is this turn's estimated context breakdown (see
 	// application.TokenUsage) -- always present, since every turn sends at
@@ -102,9 +102,13 @@ func (h *Handler) userCustomPromptFor(r *http.Request) string {
 // handleChat answers one chat turn against the search-server-only,
 // admin-configured chat endpoint (h.chat) -- see application.ChatService's
 // doc comment for the web-search-grounding behavior this delegates to. A
-// client-supplied message is never allowed to claim domain.ChatRoleSystem:
-// that role is reserved for server-injected context, never something a
-// client can inject to try to override the system prompt.
+// client-supplied message may only claim domain.ChatRoleUser or
+// domain.ChatRoleAssistant -- domain.ChatRoleSystem/ChatRoleTool are
+// reserved for server-injected context and tool results, never something a
+// client can inject to try to override the system prompt or fake a tool
+// call's outcome. A client-supplied message is also never allowed to carry
+// ToolCalls/ToolCallID -- those are populated only by ChatService itself
+// from a real model response/tool execution.
 func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
@@ -131,6 +135,10 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 		if m.Role != domain.ChatRoleUser && m.Role != domain.ChatRoleAssistant {
 			http.Error(w, "invalid role", http.StatusBadRequest)
+			return
+		}
+		if len(m.ToolCalls) > 0 || m.ToolCallID != "" {
+			http.Error(w, "tool_calls/tool_call_id are not client-settable", http.StatusBadRequest)
 			return
 		}
 	}

@@ -11,9 +11,10 @@ function baseHook(overrides) {
   return Object.assign({
     id: 'web_search',
     name: 'web_search',
-    pattern: '\\[\\[search:(.+?)\\]\\]',
+    description: 'Search the web for current information.',
+    parameters: { type: 'object', properties: { query: { type: 'string', description: 'The search query' } }, required: ['query'] },
     script: 'web_search.sh',
-    prompt: 'Use the [[search:query]] syntax to search the web.',
+    prompt: 'Prefer the top 3 results.',
     enabled: true,
     gated_by_web_search: false,
   }, overrides);
@@ -88,9 +89,11 @@ test('clicking Edit opens the form pre-filled with that hook\'s fields', async (
   assert.equal(document.getElementById('hook-form-panel').hidden, false);
   assert.equal(document.getElementById('hook-form-title').textContent, 'Edit hook');
   assert.equal(document.getElementById('hook-name').value, 'web_search');
-  assert.equal(document.getElementById('hook-pattern').value, '\\[\\[search:(.+?)\\]\\]');
+  assert.equal(document.getElementById('hook-description').value, 'Search the web for current information.');
+  assert.equal(document.getElementById('hook-arg-name').value, 'query');
+  assert.equal(document.getElementById('hook-arg-description').value, 'The search query');
   assert.equal(document.getElementById('hook-script').value, 'web_search.sh');
-  assert.equal(document.getElementById('hook-prompt').value, 'Use the [[search:query]] syntax to search the web.');
+  assert.equal(document.getElementById('hook-prompt').value, 'Prefer the top 3 results.');
   assert.equal(document.getElementById('hook-enabled').checked, true);
   assert.equal(document.getElementById('hook-gated-by-web-search').checked, true);
 });
@@ -118,7 +121,9 @@ test('submitting the form with no hook being edited POSTs a new hook, then reloa
   await flush();
   document.getElementById('add-hook-btn').dispatchEvent(new window.Event('click'));
   document.getElementById('hook-name').value = 'new_hook';
-  document.getElementById('hook-pattern').value = '\\[\\[new:(.+?)\\]\\]';
+  document.getElementById('hook-description').value = 'Do something new.';
+  document.getElementById('hook-arg-name').value = 'thing';
+  document.getElementById('hook-arg-description').value = 'The thing to do';
   document.getElementById('hook-script').value = 'new_hook.sh';
   document.getElementById('hook-prompt').value = 'Use [[new:query]] to invoke this hook.';
   document.getElementById('hook-enabled').checked = true;
@@ -139,7 +144,8 @@ test('submitting the form with no hook being edited POSTs a new hook, then reloa
   assert.equal(gotURL, '/admin/api/chat-hooks');
   const body = JSON.parse(gotOpts.body);
   assert.equal(body.name, 'new_hook');
-  assert.equal(body.pattern, '\\[\\[new:(.+?)\\]\\]');
+  assert.equal(body.description, 'Do something new.');
+  assert.deepEqual(body.parameters, { type: 'object', properties: { thing: { type: 'string', description: 'The thing to do' } }, required: ['thing'] });
   assert.equal(body.script, 'new_hook.sh');
   assert.equal(body.prompt, 'Use [[new:query]] to invoke this hook.');
   assert.equal(body.enabled, true);
@@ -203,17 +209,17 @@ test('a failed save shows an error message and re-enables the button, without cl
   await flush();
   document.getElementById('add-hook-btn').dispatchEvent(new window.Event('click'));
   document.getElementById('hook-name').value = 'x';
-  document.getElementById('hook-pattern').value = '(.+)';
+  document.getElementById('hook-arg-name').value = 'a';
   document.getElementById('hook-script').value = 'x.sh';
 
   global.fetch = async (url, opts) => {
-    if (opts && opts.method === 'POST') return { ok: false, status: 500, text: async () => 'invalid pattern' };
+    if (opts && opts.method === 'POST') return { ok: false, status: 500, text: async () => 'invalid parameters' };
     return { ok: true, json: async () => [] };
   };
   document.getElementById('hook-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
   await flush();
 
-  assert.equal(document.getElementById('hook-form-status').textContent.includes('invalid pattern'), true);
+  assert.equal(document.getElementById('hook-form-status').textContent.includes('invalid parameters'), true);
   assert.equal(document.getElementById('hook-form-panel').hidden, false);
   assert.equal(document.getElementById('hook-save-btn').disabled, false);
 });
@@ -263,4 +269,33 @@ test('clicking Delete alerts on failure', async () => {
   document.querySelectorAll('#hooks-table button.text-button')[1].dispatchEvent(new window.Event('click'));
   await flush();
   assert.equal(alertMsg, 'Could not delete: in use');
+});
+
+test('singleParamFromSchema extracts the lone property name and description', () => {
+  const { singleParamFromSchema } = loadFixture();
+  const got = singleParamFromSchema({ type: 'object', properties: { url: { type: 'string', description: 'The URL to fetch' } }, required: ['url'] });
+  assert.deepEqual(got, { name: 'url', description: 'The URL to fetch' });
+});
+
+test('singleParamFromSchema returns a blank name/description for a missing or malformed schema', () => {
+  const { singleParamFromSchema } = loadFixture();
+  assert.deepEqual(singleParamFromSchema(undefined), { name: '', description: '' });
+  assert.deepEqual(singleParamFromSchema({ type: 'object', properties: {} }), { name: '', description: '' });
+  assert.deepEqual(singleParamFromSchema({ type: 'object', properties: { a: {}, b: {} } }), { name: '', description: '' });
+});
+
+test('singleParamFromSchema defaults description to empty when the property has none', () => {
+  const { singleParamFromSchema } = loadFixture();
+  const got = singleParamFromSchema({ type: 'object', properties: { query: { type: 'string' } } });
+  assert.deepEqual(got, { name: 'query', description: '' });
+});
+
+test('buildParametersSchema includes the description only when non-empty', () => {
+  const { buildParametersSchema } = loadFixture();
+  assert.deepEqual(buildParametersSchema('query', 'The search query'), {
+    type: 'object', properties: { query: { type: 'string', description: 'The search query' } }, required: ['query'],
+  });
+  assert.deepEqual(buildParametersSchema('query', ''), {
+    type: 'object', properties: { query: { type: 'string' } }, required: ['query'],
+  });
 });

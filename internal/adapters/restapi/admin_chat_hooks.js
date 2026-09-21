@@ -5,7 +5,9 @@
   const formTitleEl = document.getElementById('hook-form-title');
   const form = document.getElementById('hook-form');
   const nameEl = document.getElementById('hook-name');
-  const patternEl = document.getElementById('hook-pattern');
+  const descriptionEl = document.getElementById('hook-description');
+  const argNameEl = document.getElementById('hook-arg-name');
+  const argDescriptionEl = document.getElementById('hook-arg-description');
   const scriptEl = document.getElementById('hook-script');
   const promptEl = document.getElementById('hook-prompt');
   const enabledEl = document.getElementById('hook-enabled');
@@ -51,11 +53,11 @@
     }
     statusEl.textContent = '';
     const table = buildTable(
-      [{ label: 'name' }, { label: 'pattern' }, { label: 'script' }, { label: 'enabled' }, { label: '' }],
+      [{ label: 'name' }, { label: 'description' }, { label: 'script' }, { label: 'enabled' }, { label: '' }],
       hooks,
       (h) => [
         textCell(h.name),
-        textCell(h.pattern),
+        textCell(h.description),
         textCell(h.script),
         hookEnabledCell(h),
         hookActionsCell(h),
@@ -82,11 +84,32 @@
     }
   }
 
+  // singleParamFromSchema/buildParametersSchema convert between the form's
+  // two plain fields (argument name + optional description) and the JSON-
+  // schema object domain.ChatHook.Parameters actually stores -- every hook
+  // is constrained to exactly one property (see that field's own doc
+  // comment), so the form never exposes raw JSON editing for it.
+  function singleParamFromSchema(parameters) {
+    const props = (parameters && parameters.properties) || {};
+    const names = Object.keys(props);
+    if (names.length !== 1) return { name: '', description: '' };
+    const name = names[0];
+    return { name, description: (props[name] && props[name].description) || '' };
+  }
+
+  function buildParametersSchema(name, description) {
+    const prop = { type: 'string' };
+    if (description) prop.description = description;
+    return { type: 'object', properties: { [name]: prop }, required: [name] };
+  }
+
   function openAddForm() {
     editingID = '';
     formTitleEl.textContent = 'Add hook';
     nameEl.value = '';
-    patternEl.value = '';
+    descriptionEl.value = '';
+    argNameEl.value = '';
+    argDescriptionEl.value = '';
     scriptEl.value = '';
     promptEl.value = '';
     enabledEl.checked = true;
@@ -99,7 +122,10 @@
     editingID = h.id;
     formTitleEl.textContent = 'Edit hook';
     nameEl.value = h.name;
-    patternEl.value = h.pattern;
+    descriptionEl.value = h.description || '';
+    const param = singleParamFromSchema(h.parameters);
+    argNameEl.value = param.name;
+    argDescriptionEl.value = param.description;
     scriptEl.value = h.script;
     promptEl.value = h.prompt || '';
     enabledEl.checked = !!h.enabled;
@@ -116,7 +142,8 @@
   function requestBody() {
     return {
       name: nameEl.value,
-      pattern: patternEl.value,
+      description: descriptionEl.value,
+      parameters: buildParametersSchema(argNameEl.value, argDescriptionEl.value),
       script: scriptEl.value,
       prompt: promptEl.value,
       enabled: enabledEl.checked,
@@ -154,5 +181,5 @@
   // a browser's <script> tag, so this is a no-op there. See
   // internal/adapters/restapi/admin_chat_hooks.test.js.
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { renderHooks, loadHooks, openAddForm, openEditForm, closeForm, requestBody };
+    module.exports = { renderHooks, loadHooks, openAddForm, openEditForm, closeForm, requestBody, singleParamFromSchema, buildParametersSchema };
   }

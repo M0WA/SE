@@ -7,7 +7,6 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -1144,62 +1143,63 @@ func (h *Handler) handleAdminDeleteEmbeddingEndpoint(w http.ResponseWriter, r *h
 }
 
 type chatHookRequest struct {
-	Name             string `json:"name"`
-	Pattern          string `json:"pattern"`
-	Script           string `json:"script"`
-	Enabled          bool   `json:"enabled"`
-	Prompt           string `json:"prompt"`
-	GatedByWebSearch bool   `json:"gated_by_web_search"`
+	Name             string          `json:"name"`
+	Description      string          `json:"description"`
+	Parameters       json.RawMessage `json:"parameters"`
+	Script           string          `json:"script"`
+	Enabled          bool            `json:"enabled"`
+	Prompt           string          `json:"prompt"`
+	GatedByWebSearch bool            `json:"gated_by_web_search"`
 }
 
 type chatHookResponse struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	Pattern          string `json:"pattern"`
-	Script           string `json:"script"`
-	Enabled          bool   `json:"enabled"`
-	Prompt           string `json:"prompt"`
-	GatedByWebSearch bool   `json:"gated_by_web_search"`
+	ID               string          `json:"id"`
+	Name             string          `json:"name"`
+	Description      string          `json:"description"`
+	Parameters       json.RawMessage `json:"parameters"`
+	Script           string          `json:"script"`
+	Enabled          bool            `json:"enabled"`
+	Prompt           string          `json:"prompt"`
+	GatedByWebSearch bool            `json:"gated_by_web_search"`
 }
 
 func toChatHookResponse(hk domain.ChatHook) chatHookResponse {
 	return chatHookResponse{
-		ID: hk.ID, Name: hk.Name, Pattern: hk.Pattern, Script: hk.Script, Enabled: hk.Enabled,
-		Prompt: hk.Prompt, GatedByWebSearch: hk.GatedByWebSearch,
+		ID: hk.ID, Name: hk.Name, Description: hk.Description, Parameters: hk.Parameters, Script: hk.Script,
+		Enabled: hk.Enabled, Prompt: hk.Prompt, GatedByWebSearch: hk.GatedByWebSearch,
 	}
 }
 
-// validateChatHookRequest requires a non-empty Name and Script, and a
-// Pattern that compiles as a Go regexp with exactly one capture group --
-// see domain.ChatHook.Pattern's doc comment and runChatHooks's security
-// note (internal/application/chat_hooks.go) for why exactly one capture
-// group matters: it's the only thing ever passed as an argv value to
-// Script. Enforcing this at Create/Update time is what keeps
-// runChatHooks's own (best-effort, log-and-skip) version of this same
-// check from ever actually firing in practice.
+// validateChatHookRequest requires a non-empty Name, Description, and
+// Script, and a Parameters JSON-schema object with exactly one property --
+// see domain.ChatHook.Parameters's doc comment and runToolCalls's security
+// note (internal/application/chat_hooks.go) for why exactly one property
+// matters: it's the only thing ever passed as an argv value to Script.
+// Enforcing this at Create/Update time is what keeps runToolCalls's own
+// (best-effort, log-and-skip) version of this same check from ever
+// actually firing in practice.
 func validateChatHookRequest(w http.ResponseWriter, req chatHookRequest) bool {
 	if req.Name == "" {
 		http.Error(w, "name must not be empty", http.StatusBadRequest)
+		return false
+	}
+	if req.Description == "" {
+		http.Error(w, "description must not be empty", http.StatusBadRequest)
 		return false
 	}
 	if req.Script == "" {
 		http.Error(w, "script must not be empty", http.StatusBadRequest)
 		return false
 	}
-	re, err := regexp.Compile(req.Pattern)
-	if err != nil {
-		http.Error(w, "pattern must be a valid regular expression: "+err.Error(), http.StatusBadRequest)
-		return false
-	}
-	if re.NumSubexp() != 1 {
-		http.Error(w, "pattern must have exactly 1 capture group", http.StatusBadRequest)
+	if _, err := (domain.ChatHook{Parameters: req.Parameters}).SingleParameterName(); err != nil {
+		http.Error(w, "parameters: "+err.Error(), http.StatusBadRequest)
 		return false
 	}
 	return true
 }
 
-// handleAdminChatHooks lists (GET) or creates (POST) regex-triggered chat
-// hooks, mirroring handleAdminEmbeddingEndpoints' style closely. A freshly
+// handleAdminChatHooks lists (GET) or creates (POST) admin-configured chat
+// hooks (native tool-calling functions), mirroring handleAdminEmbeddingEndpoints' style closely. A freshly
 // created hook's ID is minted from its name, deduped against every
 // existing ID (domain.NewChatHookID, the same convention
 // domain.NewEmbeddingEndpointID uses).
@@ -1231,7 +1231,7 @@ func (h *Handler) handleAdminChatHooks(w http.ResponseWriter, r *http.Request) {
 		existingIDs := existingIDSet(existing, func(hk domain.ChatHook) string { return hk.ID })
 		hk := domain.ChatHook{
 			ID: domain.NewChatHookID(req.Name, existingIDs), Name: req.Name,
-			Pattern: req.Pattern, Script: req.Script, Enabled: req.Enabled,
+			Description: req.Description, Parameters: req.Parameters, Script: req.Script, Enabled: req.Enabled,
 			Prompt: req.Prompt, GatedByWebSearch: req.GatedByWebSearch,
 		}
 		if err := h.chatHooks.CreateChatHook(r.Context(), hk); err != nil {
@@ -1281,8 +1281,8 @@ func (h *Handler) handleAdminUpdateChatHook(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	hk := domain.ChatHook{
-		ID: r.PathValue("id"), Name: req.Name, Pattern: req.Pattern, Script: req.Script, Enabled: req.Enabled,
-		Prompt: req.Prompt, GatedByWebSearch: req.GatedByWebSearch,
+		ID: r.PathValue("id"), Name: req.Name, Description: req.Description, Parameters: req.Parameters,
+		Script: req.Script, Enabled: req.Enabled, Prompt: req.Prompt, GatedByWebSearch: req.GatedByWebSearch,
 	}
 	err := h.chatHooks.UpdateChatHook(r.Context(), hk)
 	respondOrNotFound(w, err, ports.ErrChatHookNotFound, "chat hook not found", toChatHookResponse(hk))

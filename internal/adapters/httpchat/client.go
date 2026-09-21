@@ -65,34 +65,120 @@ func checkEndpointURL(rawURL string) error {
 	return nil
 }
 
+// wireChatMessage/wireToolCall/wireToolDef are this adapter's own wire
+// shapes for the OpenAI-compatible tool-calling convention -- kept separate
+// from domain.ChatMessage/ToolCall/ToolDef (Go-idiomatic, flat) because the
+// wire format nests a tool call's name/arguments under a "function" object
+// alongside a "type":"function" discriminator, which the domain layer has
+// no business knowing about. toWireMessages/fromWireMessage/toWireTools do
+// the translation.
+type wireToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type wireToolCall struct {
+	ID       string               `json:"id"`
+	Type     string               `json:"type"`
+	Function wireToolCallFunction `json:"function"`
+}
+
+type wireChatMessage struct {
+	Role       string         `json:"role"`
+	Content    string         `json:"content"`
+	ToolCalls  []wireToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
+}
+
+func toWireMessages(messages []domain.ChatMessage) []wireChatMessage {
+	out := make([]wireChatMessage, len(messages))
+	for i, m := range messages {
+		out[i] = wireChatMessage{Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallID}
+		for _, tc := range m.ToolCalls {
+			out[i].ToolCalls = append(out[i].ToolCalls, wireToolCall{
+				ID:   tc.ID,
+				Type: "function",
+				Function: wireToolCallFunction{
+					Name:      tc.Name,
+					Arguments: tc.Arguments,
+				},
+			})
+		}
+	}
+	return out
+}
+
+func fromWireMessage(w wireChatMessage) domain.ChatMessage {
+	m := domain.ChatMessage{Role: w.Role, Content: w.Content, ToolCallID: w.ToolCallID}
+	for _, tc := range w.ToolCalls {
+		m.ToolCalls = append(m.ToolCalls, domain.ToolCall{ID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments})
+	}
+	return m
+}
+
+type wireFunctionDef struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters"`
+}
+
+type wireToolDef struct {
+	Type     string          `json:"type"`
+	Function wireFunctionDef `json:"function"`
+}
+
+// toWireTools returns nil (not an empty slice) for an empty tools list, so
+// json.Marshal's "tools,omitempty" on chatCompletionRequest actually omits
+// the field -- sending an empty tools array (or a tool_choice with no
+// tools) is rejected by some OpenAI-compatible servers, so a turn with no
+// active hooks must send neither field at all.
+func toWireTools(tools []domain.ToolDef) []wireToolDef {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]wireToolDef, len(tools))
+	for i, t := range tools {
+		out[i] = wireToolDef{Type: "function", Function: wireFunctionDef{Name: t.Name, Description: t.Description, Parameters: t.Parameters}}
+	}
+	return out
+}
+
 type chatCompletionRequest struct {
-	Model    string               `json:"model"`
-	Messages []domain.ChatMessage `json:"messages"`
+	Model      string            `json:"model"`
+	Messages   []wireChatMessage `json:"messages"`
+	Tools      []wireToolDef     `json:"tools,omitempty"`
+	ToolChoice string            `json:"tool_choice,omitempty"`
 }
 
 type chatCompletionResponse struct {
 	Choices []struct {
-		Message domain.ChatMessage `json:"message"`
+		Message wireChatMessage `json:"message"`
 	} `json:"choices"`
 }
 
-// Complete POSTs {"model": endpoint.Model, "messages": messages} to
-// strings.TrimRight(endpoint.BaseURL, "/") + "/chat/completions", parses an
-// OpenAI-compatible response body, and returns the first choice's message
-// content. A non-2xx status or an empty choices array is an error.
-func (c *Client) Complete(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage) (string, error) {
-	reqBody, err := json.Marshal(chatCompletionRequest{Model: endpoint.Model, Messages: messages})
+// Complete POSTs {"model": endpoint.Model, "messages": messages, "tools":
+// tools (omitted when empty)} to strings.TrimRight(endpoint.BaseURL, "/") +
+// "/chat/completions", parses an OpenAI-compatible response body, and
+// returns the first choice's message (content and/or tool_calls -- see
+// ports.ChatCompleter). A non-2xx status or an empty choices array is an
+// error.
+func (c *Client) Complete(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage, tools []domain.ToolDef) (domain.ChatMessage, error) {
+	reqPayload := chatCompletionRequest{Model: endpoint.Model, Messages: toWireMessages(messages), Tools: toWireTools(tools)}
+	if len(tools) > 0 {
+		reqPayload.ToolChoice = "auto"
+	}
+	reqBody, err := json.Marshal(reqPayload)
 	if err != nil {
-		return "", fmt.Errorf("httpchat: encoding request: %w", err)
+		return domain.ChatMessage{}, fmt.Errorf("httpchat: encoding request: %w", err)
 	}
 
 	url := strings.TrimRight(endpoint.BaseURL, "/") + "/chat/completions"
 	if err := checkEndpointURL(url); err != nil {
-		return "", err
+		return domain.ChatMessage{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 	if err != nil {
-		return "", fmt.Errorf("httpchat: building request: %w", err)
+		return domain.ChatMessage{}, fmt.Errorf("httpchat: building request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if endpoint.APIKey != "" {
@@ -106,26 +192,26 @@ func (c *Client) Complete(ctx context.Context, endpoint domain.ChatEndpoint, mes
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("httpchat: calling chat completions endpoint: %w", err)
+		return domain.ChatMessage{}, fmt.Errorf("httpchat: calling chat completions endpoint: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
-		return "", fmt.Errorf("httpchat: reading response body: %w", err)
+		return domain.ChatMessage{}, fmt.Errorf("httpchat: reading response body: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("httpchat: chat completions endpoint returned status %d: %s", resp.StatusCode, domain.TruncateWithEllipsis(domain.RedactSecret(string(body), endpoint.APIKey), 500))
+		return domain.ChatMessage{}, fmt.Errorf("httpchat: chat completions endpoint returned status %d: %s", resp.StatusCode, domain.TruncateWithEllipsis(domain.RedactSecret(string(body), endpoint.APIKey), 500))
 	}
 
 	var parsed chatCompletionResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return "", fmt.Errorf("httpchat: decoding response: %w", err)
+		return domain.ChatMessage{}, fmt.Errorf("httpchat: decoding response: %w", err)
 	}
 	if len(parsed.Choices) == 0 {
-		return "", fmt.Errorf("httpchat: chat completions endpoint returned no choices")
+		return domain.ChatMessage{}, fmt.Errorf("httpchat: chat completions endpoint returned no choices")
 	}
-	return parsed.Choices[0].Message.Content, nil
+	return fromWireMessage(parsed.Choices[0].Message), nil
 }
 
 type modelInfo struct {

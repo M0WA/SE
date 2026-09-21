@@ -1,36 +1,48 @@
 # Chat hook scripts
 
 Scripts run by `internal/adapters/hookrunner.Runner` on behalf of an
-admin-configured `domain.ChatHook` (Settings -> Chat -> Hooks): whenever a
-chat turn's answer matches a hook's `Pattern`, the matched capture group is
-passed as a single argv value to that hook's `Script` -- never through a
+admin-configured `domain.ChatHook` (Settings -> Chat -> Hooks). Each hook is
+exposed to the configured chat model as a native OpenAI-compatible
+tool-calling function -- `Name` is the tool's function name, `Description`
+and `Parameters` (a JSON-schema object) are sent as part of the request's
+own `tools` list, and `Parameters` is constrained to exactly one property
+(see `domain.ChatHook.Parameters`'s doc comment). Whenever the model
+actually invokes the tool, the single value it supplied for that property is
+passed as a single argv value to the hook's `Script` -- never through a
 shell, never concatenated into a command string (see
-`application.runChatHooks`'s and `hookrunner.Runner`'s own security doc
+`application.runToolCalls`'s and `hookrunner.Runner`'s own security doc
 comments).
 
-When a hook fires, its script's output is fed straight back to the model in
-a follow-up completion call (the model's own tool-call text plus the
-results, as a new turn) -- `ChatService.Chat` returns THAT follow-up answer
-as the turn's Answer, not the model's bare tool-call text. A user never sees
-the raw `<web_search>...</web_search>`-style syntax itself; they see the
-model's real, results-informed answer. (`ChatResult.HookResults` still
-carries the raw tool output separately, for the chat UI's own folded
-transparency panel.) This repeats up to `maxHookFollowUpRounds` (4) times if
-the model's own follow-up answer invokes a hook again -- e.g. a fetch came
-back blocked/empty and it reasonably tries a different URL, or web_search's
-own suggested Prompt below chains into fetching multiple results -- rather
-than leaving that tool call unprocessed.
+This requires the configured chat endpoint to actually support native
+tool-calling (an OpenAI-compatible `tools`/`tool_calls` request/response
+convention) -- for the self-hosted vLLM reference deployment
+(`gpu.mo-sys.de`), that means it's launched with `--enable-auto-tool-choice
+--tool-call-parser hermes` (Qwen2.5-Instruct's own matching parser). An
+endpoint without tool-calling support simply never returns `tool_calls`, so
+configured hooks are silently never invoked -- not an error, just inert.
+
+When the model invokes a tool, its own tool-call message plus a
+`domain.ChatRoleTool` result message (correlated by the call's own ID) are
+fed back to it in a follow-up completion call -- `ChatService.Chat` returns
+THAT follow-up answer as the turn's `Answer`. A user never sees raw
+tool-call JSON; they see the model's real, results-informed answer.
+(`ChatResult.HookResults` still carries the raw tool output separately, for
+the chat UI's own folded transparency panel.) This repeats up to
+`maxHookFollowUpRounds` (4) times if the model's own follow-up answer
+invokes a tool again -- e.g. a fetch came back blocked/empty and it
+reasonably tries a different URL, or web_search's own suggested Prompt below
+chains into fetching multiple results -- rather than leaving that tool call
+unprocessed.
 
 If the model is STILL trying to invoke one more tool once that round budget
-is spent -- its last allowed follow-up is itself nothing but a bare
-tool-call tag, per every hook's own "output only the tag, nothing else"
-instruction below -- `ChatService.Chat` doesn't just strip the tag and
-return an empty answer. It makes one last, tool-free completion call
-first, telling the model plainly that no more tool calls are available and
-to answer now with whatever it already gathered, and uses THAT answer
-instead. This is what guarantees "always answer with a result" (see the
-global system prompt below) even against a model that doesn't fully
-respect the round budget on its own.
+is spent, `ChatService.Chat` doesn't just return an empty answer. It makes
+one last completion call with NO tools offered at all (so the model
+literally cannot request another one), telling it plainly that no more tool
+calls are available and to answer now with whatever it already gathered, and
+uses THAT answer instead. This is what guarantees "always answer with a
+result" (see the global system prompt below) even against a model that
+doesn't fully respect the round budget on its own -- a real code-level
+backstop, not just a prompt-text request.
 
 ## Suggested global system prompt (Settings -> Chat -> System prompt)
 
@@ -52,7 +64,7 @@ Two things beyond the date anchor: it tells the model to keep trying a
 different angle (query/URL) rather than stop at the first unhelpful
 result, and it tells the model to always produce a real answer, whatever
 happened with the tools. That second instruction has a code-level backstop
-too -- `ChatService.Chat`'s own force-final-answer fallback (see below)
+too -- `ChatService.Chat`'s own force-final-answer fallback (see above)
 guarantees this even if a model ignores the instruction, but stating it
 plainly up front makes the model's own last answer more likely to already
 be the real thing, rather than relying on that fallback's extra
@@ -60,8 +72,8 @@ completion call every time.
 
 "Whenever those tools are available to you" matters: the hooks themselves
 are gated by the chat's Web toggle (`ChatHook.GatedByWebSearch`), so they
-may not always be there to use -- the global prompt shouldn't imply they
-always are.
+may not always be offered to the model -- the global prompt shouldn't imply
+they always are.
 
 `%c` is replaced with the current UTC date and time, rendered via a real
 strftime(3) `%c` conversion (`application.strftime`) -- the same
@@ -74,66 +86,50 @@ System prompt and each active hook's own Prompt, so either can use it to
 give the model a concrete anchor for judging staleness instead of a vague
 "could be outdated."
 
-## Suggested per-hook prompts
+## Suggested hook Name/Description/Parameters, and per-hook prompts
 
-Each hook has its own Prompt field (Settings -> Chat -> Hooks -> edit a
-hook), injected only while that hook is active -- not the endpoint-level
-System prompt, which is unconditional and shared by everything. A hook only
-emits its invocation syntax if told to, and told firmly enough: a model
-that already has an opinion about a well-known URL or topic will otherwise
-just answer from its own (possibly wrong or outdated) memory instead of
-actually calling the tool, which defeats the point of having one. Say so
-explicitly rather than leaving it implied:
+Each hook's `Name`/`Description`/`Parameters` are what actually tell the
+model the tool exists and when to use it -- sent as part of the request's
+`tools` list on every turn the hook is active, exactly like any other
+OpenAI-compatible function definition. `Prompt` (Settings -> Chat -> Hooks
+-> edit a hook) is optional EXTRA steering beyond that -- injected only
+while the hook is active, unlike the endpoint-level System prompt, which is
+unconditional and shared by everything.
 
-web_search's Prompt:
+web_search:
 
-```
-When the user asks about something that could have changed (current
-events, prices, versions, schedules, who holds a position, or anything
-time-sensitive), search with <web_search>query</web_search> before
-answering, even if you feel confident. Output only the tag, nothing else,
-and wait for results as a new message. An excerpt alone is rarely enough
-to verify a fact -- fetch the most relevant 3 results with
-<web_fetch>https://...</web_fetch>, one per fetch, and confirm the answer
-against them before responding.
-```
+- Name: `web_search`
+- Description: `Search the web for current information on a topic. Use this when the user asks about something that could have changed -- current events, prices, versions, schedules, who holds a position, or anything time-sensitive -- even if you feel confident.`
+- Parameters: `{"type":"object","properties":{"query":{"type":"string","description":"The search query"}},"required":["query"]}`
+- Prompt: `An excerpt alone is rarely enough to verify a fact -- fetch the most relevant 3 results with the web_fetch tool, one per fetch, and confirm the answer against them before responding.`
 
-This is deliberately short: the retry-with-a-different-angle and
-always-answer instructions now live once, in the global system prompt
-above (unconditional, injected every turn regardless of which hooks are
-active), instead of being restated in every hook's own Prompt. What's
-hook-specific and stays here: when to invoke it, the exact tag syntax, and
--- for web_search specifically -- that a search result's excerpt alone
-isn't enough, so it should chain into fetching (up to) 3 of the results
-with web_fetch to actually verify the answer against real page content.
+The Prompt here carries exactly what's hook-specific and not already
+implied by Name/Description: that a search result's excerpt alone isn't
+enough, so it should chain into fetching (up to) 3 of the results with
+web_fetch to actually verify the answer against real page content.
 
-web_fetch's Prompt:
+web_fetch:
 
-```
-When the user asks about a specific URL or its content, fetch it with
-<web_fetch>https://...</web_fetch> before answering, even if you feel
-confident or were given unrelated search results -- those are not the
-page itself. Output only the tag, nothing else, and wait for the real
-page content as a new message.
-```
+- Name: `web_fetch`
+- Description: `Fetch the text content of a specific URL. Use this when the user asks about a specific URL or its content, even if you feel confident or were given unrelated search results -- those are not the page itself.`
+- Parameters: `{"type":"object","properties":{"url":{"type":"string","description":"The URL to fetch"}},"required":["url"]}`
+- Prompt: (none needed -- Description already covers it)
 
-The "even if you feel confident" phrasing matters: a model with a strong
-prior about a well-known URL or fact (e.g. wikipedia.org's title, a
-head-of-state's name) will otherwise just answer from memory instead of
-actually calling the tool, especially when RAG/deterministic web-search
-context is also enabled and gives it something that merely looks like
-"I already did research." Naming that failure mode explicitly and telling
-it to call the tool anyway measurably improves (though, being an LLM,
-never perfectly guarantees) actual tool use over a shorter, softer prompt.
+The "even if you feel confident" phrasing in both descriptions matters: a
+model with a strong prior about a well-known URL or fact (e.g.
+wikipedia.org's title, a head-of-state's name) will otherwise just answer
+from memory instead of actually calling the tool, especially when
+RAG/deterministic web-search context is also enabled and gives it something
+that merely looks like "I already did research." Naming that failure mode
+explicitly measurably improves (though, being an LLM, never perfectly
+guarantees) actual tool use over a shorter, softer description.
 
 `ChatService.Chat`'s own `maxHookFollowUpRounds` is 4 -- sized for
 web_search's own suggested chain (one search, then fetching 3 results:
 4 tool calls total). If a model still wants one more tool call once that
 budget is spent, its own force-final-answer fallback (see the top of this
 file) makes one last, tool-free completion call instead of ever leaving
-the user with an empty response -- this is a real backstop, not just a
-prompt-text request, so "always answer with a result" holds even against
-a model that doesn't fully comply with the prompts above.
+the user with an empty response.
 
 ## Install
 
@@ -164,9 +160,9 @@ themselves per the steps above.
 
 ## web_search.sh
 
-Proxies a hook's capture group straight to the self-hosted SearXNG instance
-from `../searxng/` (`GET /search?q=...&format=json` over loopback -- see
-`../searxng/README.md` for how that instance is set up and why
+Proxies a tool call's single argument straight to the self-hosted SearXNG
+instance from `../searxng/` (`GET /search?q=...&format=json` over loopback
+-- see `../searxng/README.md` for how that instance is set up and why
 `search.formats` must include `json`). Requires `curl`.
 
 Reads its SearXNG base URL from the WEB_SEARCH_BASE_URL environment
@@ -180,14 +176,14 @@ standalone rather than through a real chat turn).
 ## web_fetch.sh
 
 `web_search.sh`'s equivalent for a specific URL instead of a search query --
-fetches the capture group directly (`http`/`https` only, redirects locked to
-the same two schemes, response capped at 1MB). Requires `curl`.
-**SSRF caveat**: the URL comes from the model's own output, which can be
-indirectly attacker-influenced (see `application.runChatHooks`'s security
-note) -- this script does not block requests to internal/private addresses.
-Only enable this hook if that's an acceptable risk for your deployment, or
-add a network-level restriction (e.g. a forward proxy allowlist) in front of
-it.
+fetches the tool call's single argument directly (`http`/`https` only,
+redirects locked to the same two schemes, response capped at 1MB). Requires
+`curl`. **SSRF caveat**: the URL comes from the model's own output, which
+can be indirectly attacker-influenced (see `application.runToolCalls`'s
+security note) -- this script does not block requests to internal/private
+addresses. Only enable this hook if that's an acceptable risk for your
+deployment, or add a network-level restriction (e.g. a forward proxy
+allowlist) in front of it.
 
 ## Adding another hook script
 
@@ -195,9 +191,10 @@ it.
   is validated as a bare filename by `hookrunner.Runner` and resolved only
   against its configured directory, so a script can never live anywhere
   else or be reached via `../`.
-- Read its arguments positionally (`$1`, `$2`, ...) -- `hookrunner.Runner`
-  passes a matched pattern's capture groups as real argv elements, exactly
-  once per match, never via environment variables or stdin.
+- Give the hook a `Parameters` schema with exactly one property (any name);
+  its value, whatever the model supplies when it calls the tool, is what
+  `$1` receives -- `hookrunner.Runner` passes it as a real argv element,
+  exactly once per call, never via environment variables or stdin.
 - Keep it fast and side-effect-light: `hookrunner.Runner` enforces a 10s
   timeout and a 64KB cap on captured stdout per run, and a chat turn can
-  trigger several matches (see `runChatHooks`'s `maxHookMatchesPerTurn`).
+  trigger several tool calls (see `runToolCalls`'s `maxHookMatchesPerTurn`).

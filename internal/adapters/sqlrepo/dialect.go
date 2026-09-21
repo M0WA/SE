@@ -150,12 +150,18 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			system_prompt TEXT NOT NULL DEFAULT '',
 			updated_at TEXT NOT NULL
 		)`,
-		// chat_hooks is a list of many admin-configured regex-triggered
-		// script hooks (see domain.ChatHook) -- unlike chat_endpoint's single
-		// sentinel row, this grows the same way embedding_http_endpoints
-		// does.
+		// chat_hooks is a list of many admin-configured tool hooks, exposed
+		// to the model via native tool-calling (see domain.ChatHook) --
+		// unlike chat_endpoint's single sentinel row, this grows the same
+		// way embedding_http_endpoints does. pattern is vestigial (the old
+		// regex-based mechanism, superseded by parameters) -- kept, always
+		// written as '' by CreateChatHook, purely so a fresh install's
+		// schema matches an upgraded deployment's (see
+		// migrateChatHookColumns), which can't cheaply drop its own
+		// NOT NULL, no-default pattern column across all 3 dialects.
 		`CREATE TABLE IF NOT EXISTS chat_hooks (
 			id TEXT PRIMARY KEY, name TEXT NOT NULL, pattern TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '', parameters TEXT NOT NULL DEFAULT '{}',
 			script TEXT NOT NULL, enabled BOOLEAN NOT NULL DEFAULT true,
 			prompt TEXT NOT NULL DEFAULT '', gated_by_web_search BOOLEAN NOT NULL DEFAULT false
 		)`,
@@ -330,8 +336,9 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 		// See the sqlite dialect's chat_hooks comment.
 		`CREATE TABLE IF NOT EXISTS chat_hooks (
 			id VARCHAR(20) PRIMARY KEY, name VARCHAR(255) NOT NULL, pattern TEXT NOT NULL,
-			script VARCHAR(255) NOT NULL, enabled BOOLEAN NOT NULL DEFAULT true,
-			prompt TEXT NOT NULL, gated_by_web_search BOOLEAN NOT NULL DEFAULT false
+			description TEXT NOT NULL, parameters TEXT NOT NULL, script VARCHAR(255) NOT NULL,
+			enabled BOOLEAN NOT NULL DEFAULT true, prompt TEXT NOT NULL,
+			gated_by_web_search BOOLEAN NOT NULL DEFAULT false
 		) ENGINE=InnoDB`,
 		// See the sqlite dialect's content_dedup_lock comment.
 		`CREATE TABLE IF NOT EXISTS content_dedup_lock (
@@ -495,6 +502,7 @@ func (postgresDialect) CreateSchemaSQL() []string {
 		// See the sqlite dialect's chat_hooks comment.
 		`CREATE TABLE IF NOT EXISTS chat_hooks (
 			id TEXT PRIMARY KEY, name TEXT NOT NULL, pattern TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '', parameters TEXT NOT NULL DEFAULT '{}',
 			script TEXT NOT NULL, enabled BOOLEAN NOT NULL DEFAULT true,
 			prompt TEXT NOT NULL DEFAULT '', gated_by_web_search BOOLEAN NOT NULL DEFAULT false
 		)`,

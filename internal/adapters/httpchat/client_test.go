@@ -54,12 +54,12 @@ func TestComplete_Success(t *testing.T) {
 	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, APIKey: "secret-key", Model: "test-model"}
 	messages := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 
-	answer, err := c.Complete(context.Background(), endpoint, messages)
+	msg, err := c.Complete(context.Background(), endpoint, messages, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if answer != "hello there" {
-		t.Errorf("answer = %q, want %q", answer, "hello there")
+	if msg.Content != "hello there" {
+		t.Errorf("answer = %q, want %q", msg.Content, "hello there")
 	}
 	if gotPath != "/chat/completions" {
 		t.Errorf("path = %q, want /chat/completions", gotPath)
@@ -86,7 +86,7 @@ func TestComplete_TrimsTrailingSlashFromBaseURL(t *testing.T) {
 
 	c := httpchat.New()
 	endpoint := domain.ChatEndpoint{BaseURL: srv.URL + "/", Model: "m"}
-	if _, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}); err != nil {
+	if _, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if gotPath != "/chat/completions" {
@@ -110,7 +110,7 @@ func TestComplete_NoAuthHeaderWhenAPIKeyEmpty(t *testing.T) {
 
 	c := httpchat.New()
 	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "m"} // APIKey left empty
-	if _, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}); err != nil {
+	if _, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if sawHeader {
@@ -127,7 +127,7 @@ func TestComplete_NonSuccessStatus(t *testing.T) {
 
 	c := httpchat.New()
 	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "m", APIKey: "secret-key"}
-	_, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}})
+	_, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, nil)
 	if err == nil {
 		t.Fatal("expected error for non-2xx status")
 	}
@@ -146,7 +146,7 @@ func TestComplete_NonSuccessStatusLongBodyNoAPIKey(t *testing.T) {
 
 	c := httpchat.New()
 	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "m"} // no APIKey
-	_, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}})
+	_, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, nil)
 	if err == nil {
 		t.Fatal("expected error for non-2xx status")
 	}
@@ -164,7 +164,7 @@ func TestComplete_MalformedJSONBody(t *testing.T) {
 
 	c := httpchat.New()
 	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "m"}
-	_, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}})
+	_, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, nil)
 	if err == nil {
 		t.Fatal("expected error for malformed JSON body")
 	}
@@ -179,7 +179,7 @@ func TestComplete_EmptyChoicesArray(t *testing.T) {
 
 	c := httpchat.New()
 	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "m"}
-	_, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}})
+	_, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, nil)
 	if err == nil {
 		t.Fatal("expected error for empty choices array")
 	}
@@ -188,7 +188,7 @@ func TestComplete_EmptyChoicesArray(t *testing.T) {
 func TestComplete_RequestBuildError(t *testing.T) {
 	c := httpchat.New()
 	endpoint := domain.ChatEndpoint{BaseURL: "http://\x7f invalid", Model: "m"}
-	_, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}})
+	_, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, nil)
 	if err == nil {
 		t.Fatal("expected error for invalid base URL")
 	}
@@ -206,7 +206,7 @@ func TestComplete_ReadBodyError(t *testing.T) {
 
 	c := &httpchat.Client{HTTPClient: &http.Client{Transport: erroringBodyTransport{base: http.DefaultTransport}}}
 	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "m"}
-	_, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}})
+	_, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, nil)
 	if err == nil {
 		t.Fatal("expected error when reading the response body fails")
 	}
@@ -219,7 +219,7 @@ func TestComplete_NetworkError(t *testing.T) {
 	c := httpchat.New()
 	// Nothing listens here -- connection refused.
 	endpoint := domain.ChatEndpoint{BaseURL: "http://127.0.0.1:1", Model: "m"}
-	_, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}})
+	_, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, nil)
 	if err == nil {
 		t.Fatal("expected error for unreachable endpoint")
 	}
@@ -439,12 +439,12 @@ func TestComplete_NilHTTPClient(t *testing.T) {
 
 	c := &httpchat.Client{} // HTTPClient left nil
 	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "m"}
-	answer, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}})
+	msg, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error with nil HTTPClient: %v", err)
 	}
-	if answer != "ok" {
-		t.Errorf("answer = %q, want %q", answer, "ok")
+	if msg.Content != "ok" {
+		t.Errorf("answer = %q, want %q", msg.Content, "ok")
 	}
 }
 
@@ -460,7 +460,7 @@ func TestComplete_NilHTTPClient(t *testing.T) {
 func TestComplete_BlocksCloudMetadataEndpoint(t *testing.T) {
 	c := httpchat.New()
 	endpoint := domain.ChatEndpoint{BaseURL: "http://169.254.169.254", Model: "m"}
-	_, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}})
+	_, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, nil)
 	if err == nil {
 		t.Fatal("expected the cloud metadata endpoint to be rejected")
 	}
@@ -481,5 +481,171 @@ func TestModelMaxContextTokens_BlocksCloudMetadataEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not allowed") {
 		t.Errorf("error = %v, want it to mention the URL is not allowed", err)
+	}
+}
+
+// TestComplete_SendsToolsAndToolChoiceWhenToolsNonEmpty proves Complete
+// sends the OpenAI-compatible "tools"/"tool_choice" request fields, in the
+// {"type":"function","function":{name,description,parameters}} wire shape,
+// exactly when tools is non-empty.
+func TestComplete_SendsToolsAndToolChoiceWhenToolsNonEmpty(t *testing.T) {
+	var gotBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"message": map[string]interface{}{"role": "assistant", "content": "ok"}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := httpchat.New()
+	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "m"}
+	tools := []domain.ToolDef{{Name: "web_search", Description: "Search the web.", Parameters: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}}}`)}}
+	if _, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, tools); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if gotBody["tool_choice"] != "auto" {
+		t.Errorf("tool_choice = %v, want %q", gotBody["tool_choice"], "auto")
+	}
+	gotTools, ok := gotBody["tools"].([]interface{})
+	if !ok || len(gotTools) != 1 {
+		t.Fatalf("expected exactly 1 tool in the request body, got %v", gotBody["tools"])
+	}
+	tool, ok := gotTools[0].(map[string]interface{})
+	if !ok || tool["type"] != "function" {
+		t.Fatalf("expected tool[0].type == \"function\", got %v", gotTools[0])
+	}
+	fn, ok := tool["function"].(map[string]interface{})
+	if !ok || fn["name"] != "web_search" || fn["description"] != "Search the web." {
+		t.Fatalf("expected tool[0].function.{name,description} set, got %v", tool["function"])
+	}
+}
+
+// TestComplete_OmitsToolsAndToolChoiceWhenToolsEmpty proves Complete omits
+// both the "tools" and "tool_choice" request fields entirely for a nil/
+// empty tools list -- required for compatibility with an OpenAI-compatible
+// endpoint that isn't configured for tool-calling at all (some reject an
+// empty tools array or a tool_choice with nothing to choose from).
+func TestComplete_OmitsToolsAndToolChoiceWhenToolsEmpty(t *testing.T) {
+	var gotBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"message": map[string]interface{}{"role": "assistant", "content": "ok"}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := httpchat.New()
+	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "m"}
+	if _, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, ok := gotBody["tools"]; ok {
+		t.Errorf("expected no \"tools\" field in the request body, got %v", gotBody["tools"])
+	}
+	if _, ok := gotBody["tool_choice"]; ok {
+		t.Errorf("expected no \"tool_choice\" field in the request body, got %v", gotBody["tool_choice"])
+	}
+}
+
+// TestComplete_ParsesToolCallsFromResponse proves a response carrying
+// tool_calls (the OpenAI-compatible {id, type, function:{name, arguments}}
+// wire shape) is parsed into domain.ToolCall correctly -- arguments stays
+// the raw JSON-encoded string exactly as the endpoint sent it, not
+// re-parsed.
+func TestComplete_ParsesToolCallsFromResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"message": map[string]interface{}{
+					"role":    "assistant",
+					"content": nil,
+					"tool_calls": []map[string]interface{}{
+						{"id": "call_1", "type": "function", "function": map[string]interface{}{
+							"name": "web_search", "arguments": `{"query":"golang release notes"}`,
+						}},
+					},
+				}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := httpchat.New()
+	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "m"}
+	tools := []domain.ToolDef{{Name: "web_search", Parameters: json.RawMessage(`{}`)}}
+	msg, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, tools)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Content != "" {
+		t.Errorf("expected empty Content alongside a tool call, got %q", msg.Content)
+	}
+	if len(msg.ToolCalls) != 1 {
+		t.Fatalf("expected 1 parsed ToolCall, got %v", msg.ToolCalls)
+	}
+	tc := msg.ToolCalls[0]
+	if tc.ID != "call_1" || tc.Name != "web_search" || tc.Arguments != `{"query":"golang release notes"}` {
+		t.Errorf("unexpected parsed ToolCall: %+v", tc)
+	}
+}
+
+// TestComplete_SendsToolCallsAndToolCallIDOnFollowUpMessages proves a
+// domain.ChatMessage carrying ToolCalls (an assistant's own prior tool-call
+// turn) or ToolCallID (a tool-result turn answering one) round-trips onto
+// the wire in the nested {id,type,function:{name,arguments}} shape and the
+// flat tool_call_id field respectively -- the shape ChatService.Chat's
+// follow-up loop re-sends on the next completion call.
+func TestComplete_SendsToolCallsAndToolCallIDOnFollowUpMessages(t *testing.T) {
+	var gotBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"message": map[string]interface{}{"role": "assistant", "content": "done"}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := httpchat.New()
+	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "m"}
+	messages := []domain.ChatMessage{
+		{Role: domain.ChatRoleUser, Content: "hi"},
+		{Role: domain.ChatRoleAssistant, ToolCalls: []domain.ToolCall{{ID: "call_1", Name: "web_search", Arguments: `{"query":"x"}`}}},
+		{Role: domain.ChatRoleTool, ToolCallID: "call_1", Content: "results"},
+	}
+	if _, err := c.Complete(context.Background(), endpoint, messages, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gotMessages, ok := gotBody["messages"].([]interface{})
+	if !ok || len(gotMessages) != 3 {
+		t.Fatalf("expected 3 messages in the request body, got %v", gotBody["messages"])
+	}
+	assistantMsg := gotMessages[1].(map[string]interface{})
+	toolCalls, ok := assistantMsg["tool_calls"].([]interface{})
+	if !ok || len(toolCalls) != 1 {
+		t.Fatalf("expected 1 tool_call on the assistant message, got %v", assistantMsg["tool_calls"])
+	}
+	tc := toolCalls[0].(map[string]interface{})
+	if tc["id"] != "call_1" || tc["type"] != "function" {
+		t.Fatalf("unexpected tool_call shape: %v", tc)
+	}
+	fn := tc["function"].(map[string]interface{})
+	if fn["name"] != "web_search" || fn["arguments"] != `{"query":"x"}` {
+		t.Fatalf("unexpected tool_call.function shape: %v", fn)
+	}
+
+	toolResultMsg := gotMessages[2].(map[string]interface{})
+	if toolResultMsg["tool_call_id"] != "call_1" || toolResultMsg["role"] != "tool" {
+		t.Fatalf("expected the tool-result message to carry role=tool and tool_call_id=call_1, got %v", toolResultMsg)
 	}
 }

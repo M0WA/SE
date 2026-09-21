@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,9 +13,10 @@ import (
 )
 
 // ChatService orchestrates a chat turn: load the single admin-configured
-// domain.ChatEndpoint, activate any regex-triggered chat hooks whose
-// gating the turn's effective web-search toggle satisfies, then delegate
-// the actual completion call to a ports.ChatCompleter. Kept separate from
+// domain.ChatEndpoint, activate any admin-configured chat hooks (tools)
+// whose gating the turn's effective web-search toggle satisfies, offer them
+// to the model as native tool-calling functions, and run whichever ones the
+// model actually invokes. Kept separate from
 // hybridSearchService so chat's single-endpoint Get/Set config
 // (ports.ChatEndpointStore) never gets confused with the multi-endpoint
 // blended CRUD ports.EmbeddingEndpointStore uses.
@@ -67,10 +69,9 @@ type ChatResult struct {
 	// keeps no session state), so without this flag a user has no way to
 	// know the model answered without seeing the whole conversation.
 	ContextTrimmed bool
-	// HookResults is one entry per regex-triggered chat hook match against
-	// Answer this turn (see chat_hooks.go's runChatHooks), in no particular
-	// order beyond match order -- empty whenever s.hooks is nil or no
-	// enabled hook's pattern matched.
+	// HookResults is one entry per tool call the model made this turn (see
+	// chat_hooks.go's runToolCalls), in call order -- empty whenever s.hooks
+	// is nil or the model never invoked a tool.
 	HookResults []domain.ChatHookResult
 	// TokenUsage breaks down the estimated size of what was actually sent to
 	// the model for this turn's first completion call -- lets the chat UI
@@ -108,9 +109,9 @@ type TokenUsage struct {
 // endpoint.WebSearchEnabled otherwise -- so an admin's default can still be
 // overridden per question without changing it globally. This layer never
 // performs a web search or fetch itself: it only decides which hooks the
-// model is offered (their Prompt injected, their pattern eligible to match
-// the answer) and leaves the model to invoke them, same as any other
-// active hook.
+// model is offered as native tools (their Name/Description/Parameters sent
+// in the request's tools list, their Prompt injected) and leaves the model
+// to invoke them, same as any other active hook.
 func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, opts ChatOptions) (ChatResult, error) {
 	if len(history) == 0 {
 		return ChatResult{}, errors.New("chat: message history must not be empty")
@@ -130,12 +131,13 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	}
 
 	// List ALL hooks early, before building the messages sent to the first
-	// completion call -- a hook's own Prompt (see below) needs to reach the
-	// model before it can decide to invoke that hook at all, so this can't
-	// wait until after an answer comes back. activeHooks is reused for the
-	// runChatHooks call after the first answer, so ListChatHooks is never
-	// called twice in one turn. A ListChatHooks error is best-effort: it
-	// just leaves activeHooks empty rather than failing the turn.
+	// completion call -- a hook's own tool definition and Prompt (see below)
+	// both need to reach the model before it can decide to invoke that hook
+	// at all, so this can't wait until after an answer comes back.
+	// activeHooks is reused for every runToolCalls call this turn, so
+	// ListChatHooks is never called twice in one turn. A ListChatHooks error
+	// is best-effort: it just leaves activeHooks empty rather than failing
+	// the turn.
 	var activeHooks []domain.ChatHook
 	if s.hooks != nil {
 		if all, err := s.hooks.ListChatHooks(ctx); err == nil {
@@ -198,95 +200,128 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	// above (see trimToBudget's own doc comment).
 	tokenUsage.HistoryTokens = estimateTokens(messages[len(leading):])
 
-	answer, err := s.completer.Complete(ctx, endpoint, messages)
+	tools := toolDefsFrom(activeHooks)
+	assistantMsg, err := s.completer.Complete(ctx, endpoint, messages, tools)
 	if err != nil {
 		return ChatResult{}, fmt.Errorf("chat: %w", err)
 	}
 
-	// A tool call's own raw text (e.g. "<web_search>golang release
-	// notes</web_search>") is never the final answer a user sees: whenever a
-	// hook fires, its own tool-call turn plus the hook's results are fed
-	// back to the model in a follow-up completion, so it reads and responds
-	// to what the tool actually found rather than the caller seeing the bare
-	// invocation syntax. This repeats up to maxHookFollowUpRounds times --
+	// Whenever the model chooses to invoke one or more tools instead of
+	// answering directly (assistantMsg.ToolCalls non-empty), run them and
+	// feed the results back as domain.ChatRoleTool messages correlated by
+	// ToolCallID, then ask again -- native tool-calling's own standard
+	// multi-turn shape. This repeats up to maxHookFollowUpRounds times --
 	// not just once -- because a model that reasonably decides to retry
 	// (e.g. a fetch came back with an empty/blocked page, so it tries
 	// another URL or another search) makes ANOTHER tool call in that
-	// follow-up answer; capping this at exactly one round used to leave that
-	// second tool call completely unprocessed, landing in the user's face as
-	// a dangling, unanswered tool-call tag instead of a real answer. Every
-	// round's hookResults are accumulated into the final ChatResult, so the
-	// UI's folded transparency panel shows every attempt, not just the last.
-	// Reuses the SAME activeHooks list computed above every round --
-	// ListChatHooks is never called again mid-turn. env carries only
-	// ADMIN-CONFIGURED endpoint config (never anything derived from the
-	// model's own answer or a capture group) -- see ports.HookScriptRunner's
-	// doc comment for why this doesn't reopen runChatHooks's security
-	// surface.
+	// follow-up answer; capping this at exactly one round would leave that
+	// second tool call completely unprocessed. Every round's hookResults are
+	// accumulated into the final ChatResult, so the UI's folded transparency
+	// panel shows every attempt, not just the last. Reuses the SAME
+	// activeHooks/tools computed above every round -- ListChatHooks is never
+	// called again mid-turn. env carries only ADMIN-CONFIGURED endpoint
+	// config (never anything derived from the model's own output or a tool
+	// call's argument) -- see ports.HookScriptRunner's doc comment for why
+	// this doesn't reopen runToolCalls's security surface.
 	var hookResults []domain.ChatHookResult
 	currentMessages := messages
 	env := map[string]string{"WEB_SEARCH_BASE_URL": endpoint.WebSearchBaseURL}
-	for round := 0; round < maxHookFollowUpRounds && len(activeHooks) > 0; round++ {
-		roundResults := runChatHooks(ctx, activeHooks, s.hookRunner, answer, env)
-		if len(roundResults) == 0 {
-			break
-		}
+	for round := 0; round < maxHookFollowUpRounds && len(assistantMsg.ToolCalls) > 0; round++ {
+		roundResults := runToolCalls(ctx, activeHooks, s.hookRunner, assistantMsg.ToolCalls, env)
 		hookResults = append(hookResults, roundResults...)
 
-		followUp := make([]domain.ChatMessage, 0, len(currentMessages)+2)
+		followUp := make([]domain.ChatMessage, 0, len(currentMessages)+1+len(roundResults))
 		followUp = append(followUp, currentMessages...)
-		followUp = append(followUp, domain.ChatMessage{Role: domain.ChatRoleAssistant, Content: answer})
-		followUp = append(followUp, domain.ChatMessage{Role: domain.ChatRoleSystem, Content: formatHookResultsForModel(roundResults)})
+		followUp = append(followUp, assistantMsg)
+		followUp = append(followUp, toolResultMessages(roundResults)...)
 
-		finalAnswer, err := s.completer.Complete(ctx, endpoint, followUp)
+		nextMsg, err := s.completer.Complete(ctx, endpoint, followUp, tools)
 		if err != nil {
 			// Best-effort, same convention as every other augmentation
-			// source in this method: keep the current answer (which may
-			// still be a bare tool call) rather than failing the turn.
+			// source in this method: keep the current assistantMsg (which
+			// may still carry unresolved tool calls) rather than failing
+			// the turn.
 			break
 		}
-		answer = finalAnswer
+		assistantMsg = nextMsg
 		currentMessages = followUp
 	}
 
-	// A hook's own invocation syntax (e.g. "<web_search>query</web_search>")
-	// is meant for this layer to consume, never for the user to see -- but
-	// it can still end up in the returned answer: the model echoing/
-	// repeating it in an otherwise-real answer, or the "keep the current
-	// answer" fallback above returning a still-bare tool call when the
-	// last follow-up completion call itself failed. Strip every match of
-	// every hook active THIS turn (not every configured hook -- the model
-	// was only ever told about these) before it ever reaches the client;
-	// the structured HookResults panel is the one place that invocation
-	// (and its result) is shown.
-	answer = stripHookCallTags(answer, activeHooks)
+	answer := assistantMsg.Content
 
 	// If the loop above ran out of rounds while the model was STILL trying
-	// to invoke one more tool -- its last allowed follow-up was itself
-	// nothing but a bare tool-call tag, per every hook's own "output only
-	// the tag, nothing else" instruction (packaging/chat-hooks/README.md)
-	// -- stripping it just now left answer completely empty. Left as-is,
-	// the user would see a blank response with no explanation, even though
-	// every result gathered so far (in currentMessages/hookResults) is
-	// still right there. Force one last, tool-free completion instead of
-	// returning nothing: the model already has everything it found, it
-	// just needs telling plainly that no more tool calls are available and
-	// to answer with what it has now. Best-effort like every other
-	// augmentation here -- a failure just leaves answer empty, no worse
-	// than doing nothing.
-	if answer == "" && len(activeHooks) > 0 {
+	// to invoke one more tool (assistantMsg.ToolCalls still non-empty --
+	// per the wire convention, Content is typically empty on such a
+	// message), or the model returned a genuinely empty answer despite
+	// tools being available, answer is empty here. Left as-is, the user
+	// would see a blank response with no explanation, even though every
+	// result gathered so far (in currentMessages/hookResults) is still
+	// right there. Force one last completion call with NO tools offered
+	// (so the model can't request yet another one) instead of returning
+	// nothing: the model already has everything it found, it just needs
+	// telling plainly that no more tool calls are available and to answer
+	// with what it has now. Best-effort like every other augmentation here
+	// -- a failure just leaves answer empty, no worse than doing nothing.
+	if answer == "" && len(tools) > 0 {
 		forceFinal := make([]domain.ChatMessage, 0, len(currentMessages)+1)
 		forceFinal = append(forceFinal, currentMessages...)
 		forceFinal = append(forceFinal, domain.ChatMessage{
 			Role:    domain.ChatRoleSystem,
-			Content: "No more tool calls are available for this turn. Answer the user's question directly now, using only the information already gathered above -- do not output a tool-call tag.",
+			Content: "No more tool calls are available for this turn. Answer the user's question directly now, using only the information already gathered above.",
 		})
-		if finalAnswer, err := s.completer.Complete(ctx, endpoint, forceFinal); err == nil {
-			answer = stripHookCallTags(finalAnswer, activeHooks)
+		if finalMsg, err := s.completer.Complete(ctx, endpoint, forceFinal, nil); err == nil {
+			answer = finalMsg.Content
 		}
 	}
 
 	return ChatResult{Answer: answer, ContextTrimmed: contextTrimmed, HookResults: hookResults, TokenUsage: tokenUsage}, nil
+}
+
+// toolDefsFrom builds the tools list offered to the model from this turn's
+// active hooks. A hook whose Parameters is empty/invalid is still offered
+// as-is (Complete doesn't validate Parameters, only runToolCalls does, when
+// and if the model actually calls it) -- matching the old Pattern-based
+// mechanism's own "skip at call time, not at offer time" tolerance for a
+// pre-existing invalid row; an empty Parameters is defaulted to a bare
+// no-properties object schema so the request never sends invalid JSON.
+func toolDefsFrom(hooks []domain.ChatHook) []domain.ToolDef {
+	if len(hooks) == 0 {
+		return nil
+	}
+	out := make([]domain.ToolDef, len(hooks))
+	for i, h := range hooks {
+		params := h.Parameters
+		if len(params) == 0 {
+			params = json.RawMessage(`{"type":"object","properties":{}}`)
+		}
+		out[i] = domain.ToolDef{Name: h.Name, Description: h.Description, Parameters: params}
+	}
+	return out
+}
+
+// toolResultMessages builds one domain.ChatMessage{Role: ChatRoleTool} per
+// result, correlated to the tool call it answers via ToolCallID -- native
+// tool-calling expects exactly one such message per tool_call in the
+// preceding assistant message (see runToolCalls, which always produces
+// exactly one ChatHookResult per input ToolCall, even a skipped/failed one,
+// specifically so this invariant holds). A failed/skipped call's message
+// carries its Err text instead of Output, so the model can say it couldn't
+// complete the tool call rather than being left to guess why nothing came
+// back.
+func toolResultMessages(results []domain.ChatHookResult) []domain.ChatMessage {
+	out := make([]domain.ChatMessage, len(results))
+	for i, r := range results {
+		content := r.Output
+		if r.Err != "" {
+			content = "error: " + r.Err
+		}
+		out[i] = domain.ChatMessage{
+			Role:       domain.ChatRoleTool,
+			Content:    domain.TruncateWithNote(content, maxHookOutputCharsForModel),
+			ToolCallID: r.ToolCallID,
+		}
+	}
+	return out
 }
 
 // promptDatePlaceholder, when present in the global system prompt or a
@@ -380,49 +415,31 @@ func strftime(t time.Time, format string) string {
 	return b.String()
 }
 
-// maxHookFollowUpRounds bounds how many times ChatService.Chat will feed a
-// hook's results back to the model and ask again -- each round costs one
-// more completion call and (via maxHookMatchesPerTurn, chat_hooks.go) up to
-// maxHookMatchesPerTurn more script executions, so this is a real cost
-// bound, not just a correctness one. 4 covers web_search's own suggested
-// Prompt text (packaging/chat-hooks/README.md): one search, then fetching
-// the 3 most relevant results to cross-verify -- 4 tool calls total,
-// executed by processing the search (round 0), fetch 1 (round 1), fetch 2
-// (round 2), and fetch 3 (round 3). Keep this in sync with that prompt
-// text if either changes: a smaller value here than what the prompt asks
-// for silently drops the model's last permitted call (see the post-loop
+// maxHookFollowUpRounds bounds how many times ChatService.Chat will run a
+// round of tool calls and feed the results back to the model for another
+// completion -- each round costs one more completion call and (via
+// maxHookMatchesPerTurn, chat_hooks.go) up to maxHookMatchesPerTurn more
+// script executions, so this is a real cost bound, not just a correctness
+// one. 4 covers web_search's own suggested Prompt text
+// (packaging/chat-hooks/README.md): one search, then fetching the 3 most
+// relevant results to cross-verify -- 4 tool calls total, executed by
+// processing the search (round 0), fetch 1 (round 1), fetch 2 (round 2),
+// and fetch 3 (round 3). Keep this in sync with that prompt text if either
+// changes: a smaller value here than what the prompt asks for silently
+// drops the model's last permitted call (see the post-loop
 // force-final-answer fallback below, which exists specifically to catch a
 // model that still tries ONE more call than this allows, whatever the
 // reason).
 const maxHookFollowUpRounds = 4
 
 // maxHookOutputCharsForModel bounds how much of each hook result's own
-// Output formatHookResultsForModel feeds back into the follow-up completion
-// call -- hookrunner.Runner already caps a single script's stdout at 64KB,
-// but up to maxHookMatchesPerTurn (chat_hooks.go) of those could still add
-// up to a very large follow-up prompt; this is a second, tighter cap
+// Output toolResultMessages feeds back into the follow-up completion call
+// -- hookrunner.Runner already caps a single script's stdout at 64KB, but
+// up to maxHookMatchesPerTurn (chat_hooks.go) of those could still add up
+// to a very large follow-up prompt; this is a second, tighter cap
 // specifically on what actually reaches the model, same "cap and note"
 // convention as hookrunner's own truncation.
 const maxHookOutputCharsForModel = 8000
-
-// formatHookResultsForModel renders every hookResults entry as a labeled
-// block instructing the model to answer from them, for the follow-up
-// completion call in Chat -- a failed hook's Err is included instead of its
-// (empty) Output, so the model can say it couldn't search rather than being
-// left to guess why a tool call produced nothing.
-func formatHookResultsForModel(results []domain.ChatHookResult) string {
-	var b strings.Builder
-	b.WriteString("Tool results for the tool call you just made -- read them and answer the user's original question; do not just repeat or describe the tool call itself.\n\n")
-	for _, r := range results {
-		fmt.Fprintf(&b, "[%s]\n", r.HookName)
-		if r.Err != "" {
-			fmt.Fprintf(&b, "error: %s\n\n", r.Err)
-			continue
-		}
-		fmt.Fprintf(&b, "%s\n\n", domain.TruncateWithNote(r.Output, maxHookOutputCharsForModel))
-	}
-	return b.String()
-}
 
 // estimateTokens sums messages' character-count-based token estimate (see
 // domain.ApproxCharsPerToken) -- exact tokenization isn't worth the

@@ -1,10 +1,50 @@
 package domain_test
 
 import (
+	"encoding/json"
 	"testing"
 
 	"searchengine/internal/domain"
 )
+
+func TestChatHook_SingleParameterName_ValidSingleProperty(t *testing.T) {
+	h := domain.ChatHook{Parameters: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`)}
+	name, err := h.SingleParameterName()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if name != "query" {
+		t.Errorf("SingleParameterName() = %q, want %q", name, "query")
+	}
+}
+
+func TestChatHook_SingleParameterName_InvalidJSON(t *testing.T) {
+	h := domain.ChatHook{Parameters: json.RawMessage(`not valid json`)}
+	if _, err := h.SingleParameterName(); err == nil {
+		t.Error("expected an error for invalid JSON, got nil")
+	}
+}
+
+func TestChatHook_SingleParameterName_ZeroProperties(t *testing.T) {
+	h := domain.ChatHook{Parameters: json.RawMessage(`{"type":"object","properties":{}}`)}
+	if _, err := h.SingleParameterName(); err == nil {
+		t.Error("expected an error for zero properties, got nil")
+	}
+}
+
+func TestChatHook_SingleParameterName_TwoProperties(t *testing.T) {
+	h := domain.ChatHook{Parameters: json.RawMessage(`{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}}}`)}
+	if _, err := h.SingleParameterName(); err == nil {
+		t.Error("expected an error for two properties, got nil")
+	}
+}
+
+func TestChatHook_SingleParameterName_EmptyParameters(t *testing.T) {
+	h := domain.ChatHook{}
+	if _, err := h.SingleParameterName(); err == nil {
+		t.Error("expected an error for empty/nil Parameters, got nil")
+	}
+}
 
 func TestNewChatHookID_SlugifiesName(t *testing.T) {
 	cases := []struct {

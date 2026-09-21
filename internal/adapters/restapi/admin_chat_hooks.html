@@ -18,7 +18,7 @@
 <nav class="admin-rail" id="admin-rail" aria-label="Admin sections"></nav>
 <main>
   <h2>Chat hooks</h2>
-  <p class="lede" style="margin: 0 0 1.5rem;">A regex match against a chat answer runs a script with the matched text as its argument; the result is fed back to the model for a real answer, and shown separately as a folded aside. Needs a system prompt (Settings -> Chat) telling the model how to invoke a hook -- see <code>packaging/chat-hooks/README.md</code>.</p>
+  <p class="lede" style="margin: 0 0 1.5rem;">Each hook is offered to the chat model as a native tool-calling function -- the model decides whether and when to call it. When it does, a script runs with the model-supplied argument, and the result is fed back to the model for a real answer, shown separately as a folded aside. Requires the configured chat endpoint to support native tool-calling (e.g. vLLM launched with <code>--enable-auto-tool-choice</code>) -- see <code>packaging/chat-hooks/README.md</code>.</p>
 
   <button id="add-hook-btn" class="text-button" type="button">Add hook</button>
   <div id="hooks-status" class="panel-status"></div>
@@ -29,14 +29,26 @@
     <form id="hook-form" class="stacked-form">
       <div class="form-row">
         <label for="hook-name">Name</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Also the tool's function name the model calls -- keep it short and machine-friendly, e.g. "web_search".</span></span>
         <input id="hook-name" class="field" type="text" required placeholder="e.g. web_search">
       </div>
       <div class="form-row">
         <div class="label-row">
-          <label for="hook-pattern">Pattern</label>
-          <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">A Go regexp with exactly one capture group -- that group's matched text is the only thing ever passed to the script, as an opaque argv value.</span></span>
+          <label for="hook-description">Description</label>
+          <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Sent to the model as part of the tool definition -- this is what tells it the tool exists and when to use it. Be explicit, e.g. "...even if you feel confident", or a model with a strong prior will just answer from memory instead of calling the tool.</span></span>
         </div>
-        <input id="hook-pattern" class="field" type="text" required placeholder="e.g. \[\[search:(.+?)\]\]">
+        <textarea id="hook-description" class="field" rows="3" required placeholder="e.g. Search the web for current information on a topic. Use this when the user asks about something that could have changed, even if you feel confident."></textarea>
+      </div>
+      <div class="form-row">
+        <div class="label-row">
+          <label for="hook-arg-name">Argument name</label>
+          <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">The single argument this tool takes -- whatever value the model supplies for it is the only thing ever passed to the script, as an opaque argv value.</span></span>
+        </div>
+        <input id="hook-arg-name" class="field" type="text" required placeholder="e.g. query">
+      </div>
+      <div class="form-row">
+        <label for="hook-arg-description">Argument description</label>
+        <input id="hook-arg-description" class="field" type="text" placeholder="e.g. The search query">
       </div>
       <div class="form-row">
         <div class="label-row">
@@ -47,8 +59,8 @@
       </div>
       <div class="form-row">
         <div class="label-row">
-          <label for="hook-prompt">Prompt</label>
-          <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">This hook's own static instructions, injected as a separate system message only while the hook is active (see "Gated by web search" below) -- in addition to the endpoint's own persistent system prompt (Settings -> Chat), not instead of it.</span></span>
+          <label for="hook-prompt">Prompt (optional)</label>
+          <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Extra steering beyond the Description above, injected as a separate system message only while the hook is active (see "Gated by web search" below) -- in addition to the endpoint's own persistent system prompt (Settings -> Chat), not instead of it. Leave empty if the Description already says everything the model needs.</span></span>
         </div>
         <textarea id="hook-prompt" class="field" rows="24"></textarea>
       </div>

@@ -657,9 +657,17 @@ type ChatEndpointStore interface {
 	SetChatEndpoint(ctx context.Context, e domain.ChatEndpoint) error
 }
 
-// ChatCompleter calls an OpenAI-compatible chat-completions endpoint.
+// ChatCompleter calls an OpenAI-compatible chat-completions endpoint,
+// optionally with a native "tools" list (see domain.ToolDef) -- tools is
+// nil/empty for a turn with no active hooks, in which case the
+// implementation must omit the request's tools field entirely (never send
+// an empty array with a tool_choice), for compatibility with any
+// OpenAI-compatible endpoint that isn't configured for tool-calling at all.
+// The returned domain.ChatMessage's ToolCalls is set when (and only when)
+// the model chose to invoke one or more tools this turn instead of
+// answering directly -- Content is typically empty in that case.
 type ChatCompleter interface {
-	Complete(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage) (string, error)
+	Complete(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage, tools []domain.ToolDef) (domain.ChatMessage, error)
 }
 
 // ErrChatHookNotFound is returned by ChatHookStore's Update and Delete when
@@ -679,22 +687,21 @@ type ChatHookStore interface {
 	DeleteChatHook(ctx context.Context, id string) error
 }
 
-// HookScriptRunner executes one hook's script with capture groups as argv
-// (NEVER shell-interpolated -- see application.runChatHooks's own security
-// doc comment), returning its stdout or an error/timeout. scriptName is
-// resolved against a fixed, admin-controlled script directory by the
-// implementation -- it is never a path, and args are passed as a real argv
-// slice, never through a shell.
+// HookScriptRunner executes one hook's script with a model-supplied tool
+// argument as argv (NEVER shell-interpolated -- see
+// application.runToolCalls's own security doc comment), returning its
+// stdout or an error/timeout. scriptName is resolved against a fixed,
+// admin-controlled script directory by the implementation -- it is never a
+// path, and args are passed as a real argv slice, never through a shell.
 //
 // env carries ADMIN-CONFIGURED configuration (e.g. an endpoint's own
 // WebSearchBaseURL) as additional process environment variables for the
-// script -- never anything derived from the model's own output or a
-// pattern's capture group, so this does not reopen the injection surface
-// args guards against (see application.runChatHooks's security doc
-// comment): env is set by ChatService.Chat from domain.ChatEndpoint fields
-// the admin configured ahead of time, not from a chat turn's content. A nil
-// or empty map adds nothing beyond the implementation's own base
-// environment.
+// script -- never anything derived from the model's own output or a tool
+// call's argument, so this does not reopen the injection surface args
+// guards against (see application.runToolCalls's security doc comment):
+// env is set by ChatService.Chat from domain.ChatEndpoint fields the admin
+// configured ahead of time, not from a chat turn's content. A nil or empty
+// map adds nothing beyond the implementation's own base environment.
 type HookScriptRunner interface {
 	RunHookScript(ctx context.Context, scriptName string, args []string, env map[string]string) (string, error)
 }
