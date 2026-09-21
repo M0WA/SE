@@ -3,6 +3,7 @@ package sqlrepo_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -13,10 +14,11 @@ import (
 
 func newChatHook(id string) domain.ChatHook {
 	return domain.ChatHook{
-		ID: id, Name: "web_search",
-		Pattern: `\[\[search:(.+?)\]\]`, Script: "web_search.sh",
-		Enabled: true,
-		Prompt:  "To search the web, output SEARCH[query].", GatedByWebSearch: true,
+		ID: id, Name: "web_search", Description: "Search the web for current information.",
+		Parameters: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`),
+		Script:     "web_search.sh",
+		Enabled:    true,
+		Prompt:     "Prefer the top 3 results.", GatedByWebSearch: true,
 	}
 }
 
@@ -37,7 +39,7 @@ func TestCreateChatHook_ThenListRoundTrips(t *testing.T) {
 		t.Fatalf("expected 1 hook, got %d", len(got))
 	}
 	g := got[0]
-	if g.ID != "hook1" || g.Name != "web_search" || g.Pattern != h.Pattern || g.Script != "web_search.sh" || !g.Enabled {
+	if g.ID != "hook1" || g.Name != "web_search" || g.Description != h.Description || string(g.Parameters) != string(h.Parameters) || g.Script != "web_search.sh" || !g.Enabled {
 		t.Errorf("unexpected round trip: %+v", g)
 	}
 	if g.Prompt != h.Prompt || !g.GatedByWebSearch {
@@ -91,7 +93,8 @@ func TestUpdateChatHook_ReplacesEditableFields(t *testing.T) {
 	}
 
 	h.Name = "renamed"
-	h.Pattern = `\[\[other:(.+?)\]\]`
+	h.Description = "A renamed tool."
+	h.Parameters = json.RawMessage(`{"type":"object","properties":{"other":{"type":"string"}},"required":["other"]}`)
 	h.Script = "other.sh"
 	h.Enabled = false
 	h.Prompt = "renamed prompt"
@@ -108,7 +111,7 @@ func TestUpdateChatHook_ReplacesEditableFields(t *testing.T) {
 		t.Fatalf("expected 1 hook, got %d", len(got))
 	}
 	g := got[0]
-	if g.Name != "renamed" || g.Pattern != h.Pattern || g.Script != "other.sh" || g.Enabled {
+	if g.Name != "renamed" || g.Description != h.Description || string(g.Parameters) != string(h.Parameters) || g.Script != "other.sh" || g.Enabled {
 		t.Errorf("expected every editable field replaced, got %+v", g)
 	}
 	if g.Prompt != "renamed prompt" || g.GatedByWebSearch {
@@ -217,15 +220,19 @@ func TestMigrateChatEndpointColumns_UpgradesPreExistingTable_SystemPrompt(t *tes
 }
 
 // TestMigrateChatHookColumns_UpgradesPreExistingTable is a real-upgrade
-// regression test proving se.mo-sys.de's own live chat_hooks rows (a real
-// "web_search" and "web_fetch" hook, both pre-dating Prompt/GatedByWebSearch)
-// won't break on the next deploy: a chat_hooks table created before those
-// two columns existed, seeded by hand via a raw connection the same way
+// regression test proving se.mo-sys.de's own live chat_hooks rows (real
+// "web_search" and "web_fetch" hooks, both pre-dating the native
+// tool-calling migration's Description/Parameters columns) won't break on
+// the next deploy: a chat_hooks table already at the previous live shape
+// (id/name/pattern/script/enabled/prompt/gated_by_web_search), seeded by
+// hand via a raw connection the same way
 // TestMigrateChatEndpointColumns_UpgradesPreExistingTable_SystemPrompt seeds
-// a pre-migration chat_endpoint table, must gain both columns -- prompt
-// defaulting to "" and gated_by_web_search to false, matching a pre-existing
-// hook's previous behavior (no hook-specific message, active whenever
-// Enabled is true) -- without erroring, and the table must still work
+// a pre-migration chat_endpoint table, must gain both new columns without
+// erroring, AND the two well-known hook names must get backfilled with a
+// sane default Parameters/Description (see backfillWebToolParameters) so
+// they keep working without the admin having to hand-reconfigure them --
+// while a differently-named row (an admin's own custom hook) is left at the
+// bare default, never silently clobbered. The table must still work
 // normally (create/list/update) for a fresh write afterward too.
 func TestMigrateChatHookColumns_UpgradesPreExistingTable(t *testing.T) {
 	dsn := uniqueSQLiteDSN(t)
@@ -234,21 +241,27 @@ func TestMigrateChatHookColumns_UpgradesPreExistingTable(t *testing.T) {
 		t.Fatalf("failed to open raw db: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	// The pre-migration shape: every column up through enabled, but no
-	// prompt or gated_by_web_search.
+	// The pre-migration shape: chat_hooks as it exists on se.mo-sys.de
+	// today (pattern/prompt/gated_by_web_search already migrated in), but
+	// no parameters or description yet.
 	if _, err := db.Exec(`CREATE TABLE chat_hooks (
 		id TEXT PRIMARY KEY, name TEXT NOT NULL, pattern TEXT NOT NULL,
-		script TEXT NOT NULL, enabled BOOLEAN NOT NULL DEFAULT true
+		script TEXT NOT NULL, enabled BOOLEAN NOT NULL DEFAULT true,
+		prompt TEXT NOT NULL DEFAULT '', gated_by_web_search BOOLEAN NOT NULL DEFAULT false
 	)`); err != nil {
 		t.Fatalf("failed to create legacy-shape table: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO chat_hooks (id, name, pattern, script, enabled)
-		VALUES ('web_search', 'web_search', '\[\[search:(.+?)\]\]', 'web_search.sh', true)`); err != nil {
+	if _, err := db.Exec(`INSERT INTO chat_hooks (id, name, pattern, script, enabled, prompt, gated_by_web_search)
+		VALUES ('web_search', 'web_search', '\[\[search:(.+?)\]\]', 'web_search.sh', true, 'old prompt', true)`); err != nil {
 		t.Fatalf("failed to seed a pre-existing row: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO chat_hooks (id, name, pattern, script, enabled)
-		VALUES ('web_fetch', 'web_fetch', '\[\[fetch:(.+?)\]\]', 'web_fetch.sh', true)`); err != nil {
+	if _, err := db.Exec(`INSERT INTO chat_hooks (id, name, pattern, script, enabled, prompt, gated_by_web_search)
+		VALUES ('web_fetch', 'web_fetch', '\[\[fetch:(.+?)\]\]', 'web_fetch.sh', true, 'old prompt', true)`); err != nil {
 		t.Fatalf("failed to seed a second pre-existing row: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO chat_hooks (id, name, pattern, script, enabled, prompt, gated_by_web_search)
+		VALUES ('custom', 'my_custom_tool', '\[\[custom:(.+?)\]\]', 'custom.sh', true, '', false)`); err != nil {
+		t.Fatalf("failed to seed a third pre-existing row: %v", err)
 	}
 
 	ctx := context.Background()
@@ -258,19 +271,36 @@ func TestMigrateChatHookColumns_UpgradesPreExistingTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error listing pre-existing rows after migration: %v", err)
 	}
-	if len(pre) != 2 {
-		t.Fatalf("expected both pre-existing rows to survive migration, got %+v", pre)
+	if len(pre) != 3 {
+		t.Fatalf("expected all 3 pre-existing rows to survive migration, got %+v", pre)
 	}
+	byID := make(map[string]domain.ChatHook, len(pre))
 	for _, h := range pre {
-		if h.Prompt != "" {
-			t.Errorf("expected a pre-existing row to default to no prompt (\"\"), got %+v", h)
-		}
-		if h.GatedByWebSearch {
-			t.Errorf("expected a pre-existing row to default to ungated (false), got %+v", h)
-		}
-		if !h.Enabled || h.Script == "" {
-			t.Errorf("expected every pre-existing field otherwise untouched, got %+v", h)
-		}
+		byID[h.ID] = h
+	}
+
+	ws := byID["web_search"]
+	if name, err := ws.SingleParameterName(); err != nil || name != "query" {
+		t.Errorf("expected web_search backfilled with a single 'query' parameter, got %+v (err=%v)", ws, err)
+	}
+	if ws.Description == "" {
+		t.Errorf("expected web_search backfilled with a non-empty description, got %+v", ws)
+	}
+	if ws.Prompt != "old prompt" || !ws.GatedByWebSearch {
+		t.Errorf("expected pre-existing prompt/gated_by_web_search left untouched, got %+v", ws)
+	}
+
+	wf := byID["web_fetch"]
+	if name, err := wf.SingleParameterName(); err != nil || name != "url" {
+		t.Errorf("expected web_fetch backfilled with a single 'url' parameter, got %+v (err=%v)", wf, err)
+	}
+
+	custom := byID["custom"]
+	if string(custom.Parameters) != "{}" {
+		t.Errorf("expected a non-web_search/web_fetch row's parameters left at the bare default, got %+v", custom)
+	}
+	if custom.Description != "" {
+		t.Errorf("expected a non-web_search/web_fetch row's description left empty, got %+v", custom)
 	}
 
 	// The table must still work normally for a fresh write afterward too.
@@ -288,8 +318,8 @@ func TestMigrateChatHookColumns_UpgradesPreExistingTable(t *testing.T) {
 			found = h
 		}
 	}
-	if found.Prompt != fresh.Prompt || found.GatedByWebSearch != fresh.GatedByWebSearch {
-		t.Errorf("expected a fresh write's Prompt/GatedByWebSearch to round trip, got %+v", found)
+	if found.Description != fresh.Description || string(found.Parameters) != string(fresh.Parameters) {
+		t.Errorf("expected a fresh write's Description/Parameters to round trip, got %+v", found)
 	}
 
 	fresh.Prompt = "updated prompt"

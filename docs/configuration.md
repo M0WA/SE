@@ -142,12 +142,12 @@ This is the ordered install flow for a fresh Debian/Ubuntu host. Steps 1–2 and
     done
     ```
 
-16. **(Optional) Install chat hook scripts.** *(Manual — `postinst` deliberately does not create `CHAT_HOOKS_DIR`.)* Two example scripts ship in the repo: `web_search.sh` (proxies to SearXNG) and `web_fetch.sh` (fetches a specific URL directly — has a documented SSRF caveat, only enable it if that residual risk is acceptable for your deployment). See [packaging/chat-hooks/README.md](../packaging/chat-hooks/README.md).
+16. **(Optional) Install chat hook scripts.** *(Manual — `postinst` deliberately does not create `CHAT_HOOKS_DIR`.)* Two example scripts ship in the repo: `web_search.sh` (proxies to SearXNG) and `web_fetch.sh` (fetches a specific URL directly — has a documented SSRF caveat, only enable it if that residual risk is acceptable for your deployment). Each hook is exposed to the model as a native tool-calling function, which requires the chat endpoint below to actually support tool-calling (see the vLLM flags in the next step). See [packaging/chat-hooks/README.md](../packaging/chat-hooks/README.md).
     ```
     mkdir -p /etc/searchengine/hooks
     cp packaging/chat-hooks/web_search.sh packaging/chat-hooks/web_fetch.sh /etc/searchengine/hooks/
     chmod +x /etc/searchengine/hooks/web_search.sh /etc/searchengine/hooks/web_fetch.sh
-    # then configure the matching ChatHook (Pattern + Script=web_search.sh or web_fetch.sh) under Settings -> Chat -> Hooks in the admin UI
+    # then configure the matching ChatHook (Name/Description/Parameters + Script=web_search.sh or web_fetch.sh) under Settings -> Chat -> Hooks in the admin UI
     ```
 
 17. **(Optional) Configure an embedding and chat inference backend.** The admin UI's `domain.EmbeddingHTTPEndpoint` (edited on `admin_embedding_endpoint.html`) and `domain.ChatEndpoint` (edited on `admin_chat_settings.html`) each point at a plain OpenAI-compatible HTTP endpoint — `httpembed`/`httpchat` are generic clients, so any such API works, self-hosted or third-party. As a concrete reference, the `se.mo-sys.de` dev deployment points both at self-hosted [vLLM](https://github.com/vllm-project/vllm) server processes on a separate dedicated GPU host (one NVIDIA H200 NVL), each its own systemd unit gated by its own bearer API key:
@@ -155,8 +155,13 @@ This is the ordered install flow for a fresh Debian/Ubuntu host. Steps 1–2 and
     # Embeddings: Alibaba-NLP/gte-Qwen2-7B-instruct
     vllm serve Alibaba-NLP/gte-Qwen2-7B-instruct --runner pooling --convert embed
 
-    # Chat: RedHatAI/Qwen2.5-72B-Instruct-FP8-dynamic
-    vllm serve RedHatAI/Qwen2.5-72B-Instruct-FP8-dynamic --max-model-len 32768
+    # Chat: RedHatAI/Qwen2.5-72B-Instruct-FP8-dynamic -- --enable-auto-tool-choice
+    # and --tool-call-parser are required for chat hooks (Settings -> Chat -> Hooks)
+    # to work at all: httpchat sends a native "tools" list whenever any hook is
+    # active, and without these flags vLLM never returns tool_calls, so a hook
+    # is configured but silently never invoked. "hermes" is the parser Qwen2.5-
+    # Instruct models use; check your own model's docs if using a different one.
+    vllm serve RedHatAI/Qwen2.5-72B-Instruct-FP8-dynamic --max-model-len 32768 --enable-auto-tool-choice --tool-call-parser hermes
     ```
     Point `EmbeddingHTTPEndpoint.BaseURL`/`Model` and `ChatEndpoint.BaseURL`/`Model` at these processes' `/v1` base URLs and set each endpoint's API key to the matching bearer token.
 
@@ -339,13 +344,23 @@ chat's web-search results instead, add it as a SearXNG engine -- see
 
 ### Chat hooks (`admin_chat_hooks.html`)
 
+Each hook is exposed to the chat model as a native OpenAI-compatible
+tool-calling function -- the model decides whether and when to call it,
+given `hook-name`/`hook-description`/the argument fields below as part of
+the request's own `tools` list. This requires the configured chat endpoint
+to actually support tool-calling (see step 17 above); otherwise a
+configured hook is simply never invoked.
+
 | Field | Default | Bounds | Description |
 |---|---|---|---|
 | `hook-id` | derived, minted once | must match `^[a-z0-9_]{1,20}$` | Hook's identifier. |
-| `hook-name` | none, required | — | Human label for the hook (e.g. `web_search`). |
-| `hook-pattern` | none, required | must have exactly one capture group | Go regexp; when a chat answer matches it, the captured text is passed as an argv value to the script. |
+| `hook-name` | none, required | — | Human label for the hook, also the tool's function name (e.g. `web_search`). |
+| `hook-description` | none, required | — | Sent to the model as the tool's own description -- what tells it the tool exists and when to use it. |
+| `hook-arg-name` / `hook-arg-description` | none, required (name); description optional | — | The single argument this tool takes (e.g. `query`) and an optional description of it -- together built into a one-property JSON-schema `Parameters` object server-side (`domain.ChatHook.Parameters`, constrained to exactly one property -- see its own doc comment for why). Whatever value the model supplies for it is the only thing ever passed to the script, as an opaque argv value. |
 | `hook-script` | none, required | filename only, no path | Script filename resolved against `CHAT_HOOKS_DIR` by the hook runner. |
-| `hook-enabled` | `false` | boolean | Whether this hook is active and checked against chat answers. |
+| `hook-prompt` | empty (none injected) | — | Optional extra steering beyond `hook-description`, injected as its own system message only while the hook is active. |
+| `hook-enabled` | `false` | boolean | Whether this hook is offered to the model as a tool. |
+| `hook-gated-by-web-search` | `false` | boolean | Whether this hook is only offered when the chat's Web toggle (`chat-web-search-enabled` or its per-question override) is on. |
 
 ### Users (`admin_users.html` list + `admin_user.html` edit subpage)
 

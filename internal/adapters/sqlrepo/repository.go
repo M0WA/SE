@@ -340,15 +340,15 @@ func (r *Repository) migrateChatEndpointColumns(ctx context.Context) error {
 	return r.addColumnIfMissing(ctx, "chat_endpoint", existing, "system_prompt", "system_prompt TEXT NOT NULL DEFAULT ''")
 }
 
-// migrateChatHookColumns adds prompt (see domain.ChatHook.Prompt) and
-// gated_by_web_search (see domain.ChatHook.GatedByWebSearch) to a chat_hooks
-// table that predates them -- prompt defaults to "" (no hook-specific
-// system message injected, a pre-existing hook's previous behavior) and
-// gated_by_web_search to false (active whenever Enabled is true, unaffected
-// by the Web toggle -- also a pre-existing hook's previous, and today's
-// only, behavior). chat_hooks is NOT a brand-new table -- real deployments
-// have live rows in it already, so this can't be skipped the way
-// CreateSchemaSQL alone would for a fresh install.
+// migrateChatHookColumns adds prompt (see domain.ChatHook.Prompt),
+// gated_by_web_search (see domain.ChatHook.GatedByWebSearch), and --
+// for native tool-calling -- description and parameters (see
+// domain.ChatHook.Description/Parameters) to a chat_hooks table that
+// predates them. The old pattern column (regex-based tool invocation,
+// superseded by parameters) is left in place, unused, rather than dropped
+// -- chat_hooks is NOT a brand-new table -- real deployments have live rows
+// in it already, so none of this can be skipped the way CreateSchemaSQL
+// alone would for a fresh install.
 func (r *Repository) migrateChatHookColumns(ctx context.Context) error {
 	existing, err := r.existingColumns(ctx, "chat_hooks")
 	if err != nil {
@@ -357,7 +357,43 @@ func (r *Repository) migrateChatHookColumns(ctx context.Context) error {
 	if err := r.addColumnIfMissing(ctx, "chat_hooks", existing, "prompt", "prompt TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	return r.addColumnIfMissing(ctx, "chat_hooks", existing, "gated_by_web_search", "gated_by_web_search BOOLEAN NOT NULL DEFAULT false")
+	if err := r.addColumnIfMissing(ctx, "chat_hooks", existing, "gated_by_web_search", "gated_by_web_search BOOLEAN NOT NULL DEFAULT false"); err != nil {
+		return err
+	}
+	if err := r.addColumnIfMissing(ctx, "chat_hooks", existing, "parameters", "parameters TEXT NOT NULL DEFAULT '{}'"); err != nil {
+		return err
+	}
+	if err := r.addColumnIfMissing(ctx, "chat_hooks", existing, "description", "description TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return r.backfillWebToolParameters(ctx)
+}
+
+// backfillWebToolParameters sets a sane default parameters/description for
+// pre-existing web_search/web_fetch chat_hooks rows -- a bare '{}'/”
+// (parameters/description's own ALTER TABLE default above) isn't a usable
+// tool definition, so without this an already-configured deployment (the
+// two hook names packaging/chat-hooks ships scripts for) would silently
+// lose its working hooks the moment this migration lands, and an admin
+// would have to notice and hand-reconfigure both. The `parameters = '{}'`
+// guard makes this idempotent and never clobbers a row an admin already
+// customized (its own name match plus a still-default parameters value is
+// what marks a row as "never touched since this migration/column existed").
+func (r *Repository) backfillWebToolParameters(ctx context.Context) error {
+	updateSQL := r.ph(`UPDATE chat_hooks SET parameters = %s, description = %s WHERE name = %s AND parameters = '{}'`, 1, 2, 3)
+	if _, err := r.db.ExecContext(ctx, updateSQL,
+		`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`,
+		"Search the web for current information on a topic.",
+		"web_search"); err != nil {
+		return fmt.Errorf("backfilling web_search parameters: %w", err)
+	}
+	if _, err := r.db.ExecContext(ctx, updateSQL,
+		`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`,
+		"Fetch the text content of a specific URL.",
+		"web_fetch"); err != nil {
+		return fmt.Errorf("backfilling web_fetch parameters: %w", err)
+	}
+	return nil
 }
 
 // migrateSessionColumns adds role/user_id to a sessions table that predates
@@ -2734,7 +2770,7 @@ func scanChatEndpoint(row scanner) (domain.ChatEndpoint, error) {
 	return e, nil
 }
 
-const chatHookColumns = "id, name, pattern, script, enabled, prompt, gated_by_web_search"
+const chatHookColumns = "id, name, description, parameters, script, enabled, prompt, gated_by_web_search"
 
 // ListChatHooks lists every configured hook, ordered by name for a stable,
 // human-friendly admin table order (chat_hooks has no created_at column to
@@ -2758,10 +2794,13 @@ func (r *Repository) ListChatHooks(ctx context.Context) ([]domain.ChatHook, erro
 }
 
 // CreateChatHook inserts a new admin-configured chat hook (see
-// domain.ChatHook).
+// domain.ChatHook). pattern (the vestigial old regex column -- see
+// dialect.go's chat_hooks comment) is always written as ” here, purely to
+// satisfy its still-live NOT NULL constraint; it's never read anywhere in
+// application code.
 func (r *Repository) CreateChatHook(ctx context.Context, h domain.ChatHook) error {
-	insertSQL := r.ph(`INSERT INTO chat_hooks (`+chatHookColumns+`) VALUES (%s, %s, %s, %s, %s, %s, %s)`, 1, 2, 3, 4, 5, 6, 7)
-	if _, err := r.db.ExecContext(ctx, insertSQL, h.ID, h.Name, h.Pattern, h.Script, h.Enabled, h.Prompt, h.GatedByWebSearch); err != nil {
+	insertSQL := r.ph(`INSERT INTO chat_hooks (`+chatHookColumns+`, pattern) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)`, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	if _, err := r.db.ExecContext(ctx, insertSQL, h.ID, h.Name, h.Description, string(h.Parameters), h.Script, h.Enabled, h.Prompt, h.GatedByWebSearch, ""); err != nil {
 		return fmt.Errorf("creating chat hook: %w", err)
 	}
 	return nil
@@ -2771,8 +2810,8 @@ func (r *Repository) CreateChatHook(ctx context.Context, h domain.ChatHook) erro
 // never changes after creation), returning ports.ErrChatHookNotFound if no
 // hook with h.ID exists.
 func (r *Repository) UpdateChatHook(ctx context.Context, h domain.ChatHook) error {
-	updateSQL := r.ph(`UPDATE chat_hooks SET name = %s, pattern = %s, script = %s, enabled = %s, prompt = %s, gated_by_web_search = %s WHERE id = %s`, 1, 2, 3, 4, 5, 6, 7)
-	res, err := r.db.ExecContext(ctx, updateSQL, h.Name, h.Pattern, h.Script, h.Enabled, h.Prompt, h.GatedByWebSearch, h.ID)
+	updateSQL := r.ph(`UPDATE chat_hooks SET name = %s, description = %s, parameters = %s, script = %s, enabled = %s, prompt = %s, gated_by_web_search = %s WHERE id = %s`, 1, 2, 3, 4, 5, 6, 7, 8)
+	res, err := r.db.ExecContext(ctx, updateSQL, h.Name, h.Description, string(h.Parameters), h.Script, h.Enabled, h.Prompt, h.GatedByWebSearch, h.ID)
 	if err != nil {
 		return fmt.Errorf("updating chat hook (%s): %w", h.ID, err)
 	}
@@ -2791,9 +2830,11 @@ func (r *Repository) DeleteChatHook(ctx context.Context, id string) error {
 
 func scanChatHook(row scanner) (domain.ChatHook, error) {
 	var h domain.ChatHook
-	if err := row.Scan(&h.ID, &h.Name, &h.Pattern, &h.Script, &h.Enabled, &h.Prompt, &h.GatedByWebSearch); err != nil {
+	var parameters string
+	if err := row.Scan(&h.ID, &h.Name, &h.Description, &parameters, &h.Script, &h.Enabled, &h.Prompt, &h.GatedByWebSearch); err != nil {
 		return domain.ChatHook{}, err
 	}
+	h.Parameters = json.RawMessage(parameters)
 	return h, nil
 }
 

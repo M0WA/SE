@@ -806,7 +806,8 @@ paths:
       description: >-
         A list of many, like the embedding endpoints, unlike the
         single-row chat endpoint above -- an admin can define several
-        regex-triggered hooks over time (see ChatHookOptions.pattern).
+        tool-calling hooks over time, each exposed to the model as a native
+        OpenAI-compatible tool-calling function (see ChatHookOptions.parameters).
       responses:
         "200":
           description: OK
@@ -824,8 +825,8 @@ paths:
         domain.NewChatHookID), deduped against every existing hook id, so
         it can never collide -- the response's id is the one to use for
         every subsequent GET/PATCH/DELETE on this hook, not the submitted
-        name. pattern is validated server-side: it must compile as a Go
-        regexp with exactly one capture group.
+        name. parameters is validated server-side: it must be a JSON-schema
+        object with exactly one property (see ChatHookOptions.parameters).
       requestBody:
         required: true
         content:
@@ -862,7 +863,7 @@ paths:
       summary: Replace a chat hook's editable fields
       description: >-
         Full replace, not a merge, for every field except id (never
-        editable once created). pattern is validated the same way as on
+        editable once created). parameters is validated the same way as on
         create.
       parameters:
         - name: id
@@ -2156,10 +2157,11 @@ components:
             web_search_enabled default for this question only -- omit to
             use that default. Does not itself perform a search or fetch:
             true makes every GatedByWebSearch chat hook (see
-            /admin/api/chat-hooks) available to the model this turn (its
-            prompt injected, its pattern eligible to match the answer),
-            letting the model invoke one if it chooses to; false makes none
-            of them available.
+            /admin/api/chat-hooks) available to the model this turn as a
+            native tool-calling function (its prompt injected, its
+            name/description/parameters offered as a callable tool), letting
+            the model invoke one if it chooses to; false makes none of them
+            available.
 
     ChatResponse:
       type: object
@@ -2178,10 +2180,10 @@ components:
         hook_results:
           type: array
           description: >-
-            One entry per admin-configured chat hook (see
-            /admin/api/chat-hooks) whose pattern matched somewhere in
-            answer this turn, in match order. Omitted entirely when no
-            hook is configured/enabled or none matched.
+            One entry per tool call the model made this turn, naming an
+            admin-configured chat hook (see /admin/api/chat-hooks), in call
+            order. Omitted entirely when no hook is configured/enabled or
+            the model never invoked one.
           items: { $ref: "#/components/schemas/ChatHookResult" }
         token_usage: { $ref: "#/components/schemas/ChatTokenUsage" }
 
@@ -2229,15 +2231,15 @@ components:
     ChatHookResult:
       type: object
       description: >-
-        The outcome of running one matched chat hook's script once. A
+        The outcome of running one tool-called chat hook's script once. A
         script failure or timeout is reported here, never as a failed
         POST /chat call -- the model's own answer always reaches the
         client regardless.
       properties:
-        hook_name: { type: string, description: "The matching hook's name (ChatHook.name), not its id." }
-        input: { type: string, description: "The regex capture group's own raw text passed to the hook's script -- a URL for a \"fetch\"-named hook, a search term for a \"search\"-named hook. Omitted if the capture group was empty." }
+        hook_name: { type: string, description: "The tool-called hook's name (ChatHook.name), not its id." }
+        input: { type: string, description: "The model-supplied argument's own raw text passed to the hook's script -- a URL for a \"fetch\"-named hook, a search term for a \"search\"-named hook. Omitted if empty." }
         output: { type: string, description: "The script's raw stdout, capped in size. Empty when err is set." }
-        err: { type: string, description: "Non-empty if the script failed or timed out; output is empty then." }
+        err: { type: string, description: "Non-empty if the script failed or timed out, or the tool call couldn't be resolved (unknown hook, malformed arguments); output is empty then." }
 
     ChatEndpointOptions:
       type: object
@@ -2269,9 +2271,10 @@ components:
             The "Web" toggle's default (overridable per question via
             ChatRequest.web_search): when true, every chat hook (see
             /admin/api/chat-hooks) with gated_by_web_search becomes
-            available to the model -- its prompt injected, its pattern
-            eligible to match the answer. This endpoint never performs a
-            search or fetch itself.
+            available to the model as a native tool-calling function -- its
+            prompt injected, its name/description/parameters offered as a
+            callable tool. This endpoint never performs a search or fetch
+            itself.
         web_search_base_url:
           type: string
           description: >-
@@ -2316,20 +2319,29 @@ components:
 
     ChatHookOptions:
       type: object
-      required: [name, pattern, script]
+      required: [name, description, parameters, script]
       properties:
-        name: { type: string, description: "Human label, e.g. \"web_search\" -- also the source domain.NewChatHookID slugifies into this hook's id on creation (POST only; ignored by PATCH)." }
-        pattern:
+        name: { type: string, description: "Human label, e.g. \"web_search\" -- also this tool's function name sent to the model, and the source domain.NewChatHookID slugifies into this hook's id on creation (POST only; ignored by PATCH)." }
+        description:
           type: string
           description: >-
-            A Go regexp checked against POST /chat's answer text on every
-            turn this hook is enabled. Must have exactly one capture
-            group -- rejected with 400 otherwise (either failing to
-            compile, having no capture group, or having more than one).
-            That single captured value is the only thing ever passed to
-            script, and only as an opaque argv value -- never
-            shell-interpolated, sourced, or interpreted as a path/URL/
-            command.
+            Sent to the model as this tool's own description, as part of
+            POST /chat's request-level tools list on every turn this hook
+            is active -- together with name and parameters, this is what
+            tells the model the tool exists and when to use it. Required
+            (400 if empty).
+        parameters:
+          type: object
+          description: >-
+            A JSON-schema object describing this tool's single argument,
+            e.g. {"type":"object","properties":{"query":{"type":
+            "string"}},"required":["query"]}. MUST have exactly one
+            property -- rejected with 400 otherwise (invalid JSON, not an
+            object schema, zero properties, or more than one). Whatever
+            value the model supplies for that property when it calls the
+            tool is the only thing ever passed to script, and only as an
+            opaque argv value -- never shell-interpolated, sourced, or
+            interpreted as a path/URL/command.
         script:
           type: string
           description: >-
@@ -2342,22 +2354,26 @@ components:
         prompt:
           type: string
           description: >-
-            This hook's own static system-prompt text. When non-empty and
-            this hook is active for a turn (enabled, and -- if
-            gated_by_web_search is true -- the turn's effective web-search
-            toggle is also on), it is injected as its own leading system
-            message, after the endpoint's persistent system_prompt and
-            before any web-search context message. Empty means no
-            hook-specific message is added even when the hook is active.
+            Optional extra steering text beyond description -- name/
+            description/parameters already tell the model what the tool
+            does and when to use it (sent as part of the tools list); this
+            is for guidance beyond that, e.g. "prefer the top 3 results".
+            When non-empty and this hook is active for a turn (enabled,
+            and -- if gated_by_web_search is true -- the turn's effective
+            web-search toggle is also on), it is injected as its own
+            leading system message, after the endpoint's persistent
+            system_prompt. Empty means no hook-specific message is added
+            even when the hook is active.
         gated_by_web_search:
           type: boolean
           description: >-
-            When true, ties this hook's activation (and its prompt
-            injection) to the same effective web-search toggle that gates
-            the deterministic web-search context injection
-            (the endpoint's web_search_enabled, overridable per-question by
-            ChatOptions.web_search). false (the default) means this hook is
-            active whenever enabled is true, unaffected by that toggle.
+            When true, ties this hook's activation (and whether it's even
+            offered to the model as a tool at all) to the same effective
+            web-search toggle that gates the deterministic web-search
+            context injection (the endpoint's web_search_enabled,
+            overridable per-question by ChatOptions.web_search). false (the
+            default) means this hook is active whenever enabled is true,
+            unaffected by that toggle.
 
     ChatHookRequest:
       description: >-

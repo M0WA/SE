@@ -1,20 +1,55 @@
 package domain
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Chat roles, matching the OpenAI-compatible chat-completions message role
-// values every configured chat backend is expected to accept.
+// values every configured chat backend is expected to accept. ChatRoleTool
+// is only ever set by ChatService itself (see chat_service.go's follow-up
+// loop) -- a client-submitted message claiming this role is rejected the
+// same way one claiming ChatRoleSystem already is (see restapi.handleChat).
 const (
 	ChatRoleUser      = "user"
 	ChatRoleAssistant = "assistant"
 	ChatRoleSystem    = "system"
+	ChatRoleTool      = "tool"
 )
 
 // ChatMessage is one turn in a chat conversation, sent to/from a configured
-// domain.ChatEndpoint via ports.ChatCompleter.
+// domain.ChatEndpoint via ports.ChatCompleter. ToolCalls is set only on an
+// assistant message the model itself returned when it chose to invoke one
+// or more tools (see ports.ChatCompleter's doc comment) -- Content is
+// typically empty on such a message. ToolCallID is set only on a
+// ChatRoleTool message answering one specific ToolCall.ID from the
+// immediately preceding assistant message.
 type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+// ToolCall is one tool invocation the model requested, as returned by an
+// OpenAI-compatible chat-completions endpoint's native tool-calling support
+// -- see ports.ChatCompleter. ID is opaque, assigned by the model/backend,
+// and only ever used to correlate the ChatMessage{Role: ChatRoleTool} that
+// answers it.
+type ToolCall struct {
+	ID        string
+	Name      string
+	Arguments string // raw JSON object text, exactly as the model emitted it
+}
+
+// ToolDef describes one callable tool to a domain.ChatCompleter, mirroring
+// the OpenAI-compatible "tools" request field's function shape. Parameters
+// is a JSON-schema object (never nil when Complete is called with a
+// non-empty tools list -- see chat_service.go's toolDefsFrom).
+type ToolDef struct {
+	Name        string
+	Description string
+	Parameters  json.RawMessage
 }
 
 // ChatEndpoint is the single admin-configured chat-completions backend --

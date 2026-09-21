@@ -5165,8 +5165,8 @@ type fakeChatModelProber struct {
 	calls  int
 }
 
-func (f *fakeChatModelProber) Complete(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage) (string, error) {
-	return "", errors.New("fakeChatModelProber: Complete unexpectedly called")
+func (f *fakeChatModelProber) Complete(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage, tools []domain.ToolDef) (domain.ChatMessage, error) {
+	return domain.ChatMessage{}, errors.New("fakeChatModelProber: Complete unexpectedly called")
 }
 
 func (f *fakeChatModelProber) ModelMaxContextTokens(ctx context.Context, endpoint domain.ChatEndpoint) (int, bool, error) {
@@ -5588,13 +5588,25 @@ func TestHandleAdminChatEndpoint_PatchNoProberConfiguredFallsBackToZero(t *testi
 // chatHookResp mirrors admin.go's unexported chatHookResponse wire shape,
 // for decoding test responses.
 type chatHookResp struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	Pattern          string `json:"pattern"`
-	Script           string `json:"script"`
-	Enabled          bool   `json:"enabled"`
-	Prompt           string `json:"prompt"`
-	GatedByWebSearch bool   `json:"gated_by_web_search"`
+	ID               string          `json:"id"`
+	Name             string          `json:"name"`
+	Description      string          `json:"description"`
+	Parameters       json.RawMessage `json:"parameters"`
+	Script           string          `json:"script"`
+	Enabled          bool            `json:"enabled"`
+	Prompt           string          `json:"prompt"`
+	GatedByWebSearch bool            `json:"gated_by_web_search"`
+}
+
+// testHookParams builds a single-property JSON-schema object (the shape
+// validateChatHookRequest requires -- see domain.ChatHook.Parameters) as a
+// plain map, for JSON-marshaling directly into a test request body.
+func testHookParams(propertyName string) map[string]interface{} {
+	return map[string]interface{}{
+		"type":       "object",
+		"properties": map[string]interface{}{propertyName: map[string]interface{}{"type": "string"}},
+		"required":   []string{propertyName},
+	}
 }
 
 func adminAuthedHandlerWithChatHooks(t *testing.T, store ports.ChatHookStore) (*restapi.Handler, *http.Cookie) {
@@ -5666,10 +5678,11 @@ func TestHandleAdminChatHooks_CreateInvalidJSON(t *testing.T) {
 }
 
 // TestHandleAdminChatHooks_CreateValidation covers every
-// validateChatHookRequest rejection branch: empty name, empty script, a
-// pattern that fails to compile, and a pattern with the wrong capture
-// group count (zero or more than one) -- see runChatHooks's security
-// doc comment for why exactly one capture group is enforced here.
+// validateChatHookRequest rejection branch: empty name, empty description,
+// empty script, and a parameters value that isn't valid JSON, isn't an
+// object schema, or doesn't have exactly one property (zero or more than
+// one) -- see runToolCalls's security doc comment for why exactly one
+// property is enforced here.
 func TestHandleAdminChatHooks_CreateValidation(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
@@ -5678,11 +5691,12 @@ func TestHandleAdminChatHooks_CreateValidation(t *testing.T) {
 		name string
 		body map[string]interface{}
 	}{
-		{"missing name", map[string]interface{}{"pattern": `SEARCH\((.+)\)`, "script": "search.sh"}},
-		{"missing script", map[string]interface{}{"name": "web_search", "pattern": `SEARCH\((.+)\)`}},
-		{"invalid regex", map[string]interface{}{"name": "web_search", "pattern": `SEARCH\((.+`, "script": "search.sh"}},
-		{"no capture groups", map[string]interface{}{"name": "web_search", "pattern": `SEARCH`, "script": "search.sh"}},
-		{"two capture groups", map[string]interface{}{"name": "web_search", "pattern": `SEARCH\((.+)\)-(.+)`, "script": "search.sh"}},
+		{"missing name", map[string]interface{}{"description": "Search the web.", "parameters": testHookParams("query"), "script": "search.sh"}},
+		{"missing description", map[string]interface{}{"name": "web_search", "parameters": testHookParams("query"), "script": "search.sh"}},
+		{"missing script", map[string]interface{}{"name": "web_search", "description": "Search the web.", "parameters": testHookParams("query")}},
+		{"invalid parameters shape", map[string]interface{}{"name": "web_search", "description": "Search the web.", "parameters": "not an object schema", "script": "search.sh"}},
+		{"zero properties", map[string]interface{}{"name": "web_search", "description": "Search the web.", "parameters": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}, "script": "search.sh"}},
+		{"two properties", map[string]interface{}{"name": "web_search", "description": "Search the web.", "parameters": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"a": map[string]interface{}{"type": "string"}, "b": map[string]interface{}{"type": "string"}}}, "script": "search.sh"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -5705,8 +5719,8 @@ func TestHandleAdminChatHooks_CreateThenList(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
 
 	code, created := createTestChatHook(t, h, cookie, map[string]interface{}{
-		"name": "Web Search", "pattern": `SEARCH\((.+)\)`, "script": "search.sh", "enabled": true,
-		"prompt": "To search the web, output SEARCH(query).", "gated_by_web_search": true,
+		"name": "Web Search", "description": "Search the web.", "parameters": testHookParams("query"), "script": "search.sh", "enabled": true,
+		"prompt": "Prefer the top 3 results.", "gated_by_web_search": true,
 	})
 	if code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d", code)
@@ -5714,10 +5728,10 @@ func TestHandleAdminChatHooks_CreateThenList(t *testing.T) {
 	if created.ID != "web_search" {
 		t.Errorf("expected the ID minted from the name, got %q", created.ID)
 	}
-	if created.Pattern != `SEARCH\((.+)\)` || created.Script != "search.sh" || !created.Enabled {
+	if created.Description != "Search the web." || created.Script != "search.sh" || !created.Enabled {
 		t.Errorf("expected every field round tripped in the create response, got %+v", created)
 	}
-	if created.Prompt != "To search the web, output SEARCH(query)." || !created.GatedByWebSearch {
+	if created.Prompt != "Prefer the top 3 results." || !created.GatedByWebSearch {
 		t.Errorf("expected prompt and gated_by_web_search round tripped in the create response, got %+v", created)
 	}
 
@@ -5745,10 +5759,10 @@ func TestHandleAdminChatHooks_CreateDedupesIDOnNameCollision(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
 
 	_, first := createTestChatHook(t, h, cookie, map[string]interface{}{
-		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
 	})
 	_, second := createTestChatHook(t, h, cookie, map[string]interface{}{
-		"name": "hook", "pattern": `B\((.+)\)`, "script": "b.sh",
+		"name": "hook", "description": "B tool.", "parameters": testHookParams("b"), "script": "b.sh",
 	})
 	if first.ID == second.ID {
 		t.Errorf("expected distinct IDs for two hooks named the same, got both %q", first.ID)
@@ -5771,7 +5785,7 @@ func TestHandleAdminChatHooks_CreateListErrorPropagates(t *testing.T) {
 	store := &fakeChatHookStore{listErr: errors.New("db unavailable")}
 	h, cookie := adminAuthedHandlerWithChatHooks(t, store)
 	code, _ := createTestChatHook(t, h, cookie, map[string]interface{}{
-		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
 	})
 	if code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", code)
@@ -5782,7 +5796,7 @@ func TestHandleAdminChatHooks_CreateStoreError(t *testing.T) {
 	store := &fakeChatHookStore{createErr: errors.New("write failed")}
 	h, cookie := adminAuthedHandlerWithChatHooks(t, store)
 	code, _ := createTestChatHook(t, h, cookie, map[string]interface{}{
-		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
 	})
 	if code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", code)
@@ -5793,7 +5807,7 @@ func TestHandleAdminGetChatHook_Success(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
 	_, created := createTestChatHook(t, h, cookie, map[string]interface{}{
-		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/chat-hooks/"+created.ID, nil)
@@ -5853,12 +5867,12 @@ func TestHandleAdminUpdateChatHook_ReplacesEditableFields(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
 	_, created := createTestChatHook(t, h, cookie, map[string]interface{}{
-		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh", "enabled": true,
+		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh", "enabled": true,
 		"prompt": "original prompt", "gated_by_web_search": true,
 	})
 
 	rec := patchChatHook(t, h, cookie, created.ID, map[string]interface{}{
-		"name": "renamed", "pattern": `B\((.+)\)`, "script": "b.sh", "enabled": false,
+		"name": "renamed", "description": "B tool.", "parameters": testHookParams("b"), "script": "b.sh", "enabled": false,
 		"prompt": "renamed prompt", "gated_by_web_search": false,
 	})
 	if rec.Code != http.StatusOK {
@@ -5871,7 +5885,7 @@ func TestHandleAdminUpdateChatHook_ReplacesEditableFields(t *testing.T) {
 	if resp.ID != created.ID {
 		t.Errorf("expected ID unchanged by PATCH, got %q, was %q", resp.ID, created.ID)
 	}
-	if resp.Name != "renamed" || resp.Pattern != `B\((.+)\)` || resp.Script != "b.sh" || resp.Enabled {
+	if resp.Name != "renamed" || resp.Description != "B tool." || resp.Script != "b.sh" || resp.Enabled {
 		t.Errorf("expected every editable field replaced, got %+v", resp)
 	}
 	if resp.Prompt != "renamed prompt" || resp.GatedByWebSearch {
@@ -5889,7 +5903,7 @@ func TestHandleAdminChatHooks_PromptAndGatedByWebSearchRoundTrip(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithChatHooks(t, store)
 
 	code, created := createTestChatHook(t, h, cookie, map[string]interface{}{
-		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
 		"prompt": "hook prompt", "gated_by_web_search": true,
 	})
 	if code != http.StatusCreated {
@@ -5912,7 +5926,7 @@ func TestHandleAdminChatHooks_PromptAndGatedByWebSearchRoundTrip(t *testing.T) {
 	}
 
 	rec := patchChatHook(t, h, cookie, created.ID, map[string]interface{}{
-		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
 		"prompt": "updated prompt", "gated_by_web_search": false,
 	})
 	if rec.Code != http.StatusOK {
@@ -5939,14 +5953,14 @@ func TestHandleAdminUpdateChatHook_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestHandleAdminUpdateChatHook_InvalidPattern(t *testing.T) {
+func TestHandleAdminUpdateChatHook_InvalidParameters(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
 	_, created := createTestChatHook(t, h, cookie, map[string]interface{}{
-		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
 	})
 	rec := patchChatHook(t, h, cookie, created.ID, map[string]interface{}{
-		"name": "hook", "pattern": `no groups here`, "script": "a.sh",
+		"name": "hook", "description": "A tool.", "parameters": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}, "script": "a.sh",
 	})
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
@@ -5957,7 +5971,7 @@ func TestHandleAdminUpdateChatHook_NotFound(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
 	rec := patchChatHook(t, h, cookie, "missing", map[string]interface{}{
-		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
 	})
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("expected 404, got %d: %s", rec.Code, rec.Body.String())
@@ -5967,7 +5981,7 @@ func TestHandleAdminUpdateChatHook_NotFound(t *testing.T) {
 func TestHandleAdminUpdateChatHook_NotConfigured(t *testing.T) {
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
 	rec := patchChatHook(t, h, cookie, "anything", map[string]interface{}{
-		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
 	})
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected 503, got %d", rec.Code)
@@ -5978,7 +5992,7 @@ func TestHandleAdminUpdateChatHook_StoreError(t *testing.T) {
 	store := &fakeChatHookStore{updateErr: errors.New("write failed")}
 	h, cookie := adminAuthedHandlerWithChatHooks(t, store)
 	rec := patchChatHook(t, h, cookie, "anything", map[string]interface{}{
-		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
 	})
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d: %s", rec.Code, rec.Body.String())
@@ -5989,7 +6003,7 @@ func TestHandleAdminDeleteChatHook_Success(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
 	_, created := createTestChatHook(t, h, cookie, map[string]interface{}{
-		"name": "hook", "pattern": `A\((.+)\)`, "script": "a.sh",
+		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
 	})
 
 	req := httptest.NewRequest(http.MethodDelete, "/admin/api/chat-hooks/"+created.ID, nil)

@@ -115,33 +115,56 @@ func (f *fakeHookScriptRunner) RunHookScript(ctx context.Context, scriptName str
 }
 
 // fakeChatCompleter is a minimal ports.ChatCompleter fake.
-// answers, when non-empty, lets a test give a different answer to each
-// successive call (e.g. a tool-call answer, then a real final answer for
+// responses, when non-empty, lets a test give a different response to each
+// successive call (e.g. a tool-call response, then a real final answer for
 // the hook follow-up round) -- mirrors
 // internal/application/chat_service_test.go's own fakeChatCompleter for the
 // same reason: ChatService.Chat's hook follow-up loop calls Complete more
-// than once per turn, and a fixed answer that itself matches a hook's
-// pattern would otherwise keep matching every round.
+// than once per turn, and a fixed response that itself carries a tool call
+// would otherwise keep triggering every round. answer is a convenience for
+// the common case of a single plain-text response with no tool call.
 type fakeChatCompleter struct {
 	answer    string
-	answers   []string
+	response  domain.ChatMessage
+	responses []domain.ChatMessage
 	err       error
 	callCount int
 }
 
-func (f *fakeChatCompleter) Complete(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage) (string, error) {
+func (f *fakeChatCompleter) Complete(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage, tools []domain.ToolDef) (domain.ChatMessage, error) {
 	if f.err != nil {
-		return "", f.err
+		return domain.ChatMessage{}, f.err
 	}
 	idx := f.callCount
 	f.callCount++
-	if len(f.answers) > 0 {
-		if idx >= len(f.answers) {
-			idx = len(f.answers) - 1
+	if len(f.responses) > 0 {
+		if idx >= len(f.responses) {
+			idx = len(f.responses) - 1
 		}
-		return f.answers[idx], nil
+		return f.responses[idx], nil
 	}
-	return f.answer, nil
+	if f.response.Content != "" || len(f.response.ToolCalls) > 0 {
+		return f.response, nil
+	}
+	return domain.ChatMessage{Role: domain.ChatRoleAssistant, Content: f.answer}, nil
+}
+
+// toolCallMessage/singleStringParams/argsJSON mirror
+// internal/application/chat_service_test.go's own small helpers for
+// building a tool-call response and a matching single-property JSON-schema
+// hook, kept as a small local copy since that package's own helpers are
+// unexported in a different package.
+func toolCallMessage(id, name, argumentsJSON string) domain.ChatMessage {
+	return domain.ChatMessage{Role: domain.ChatRoleAssistant, ToolCalls: []domain.ToolCall{{ID: id, Name: name, Arguments: argumentsJSON}}}
+}
+
+func singleStringParams(propertyName string) json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{"` + propertyName + `":{"type":"string"}},"required":["` + propertyName + `"]}`)
+}
+
+func argsJSON(propertyName, value string) string {
+	b, _ := json.Marshal(map[string]string{propertyName: value})
+	return string(b)
 }
 
 // chatAuthedHandler builds a Handler wired with chat (search-server-only,
@@ -344,7 +367,7 @@ func TestHandleChat_ServiceError(t *testing.T) {
 // right piece rather than lumped into one total.
 func TestHandleChat_TokenUsageBreakdown(t *testing.T) {
 	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
-		{ID: "h1", Name: "web_search", Pattern: `SEARCH\(([^)]+)\)`, Script: "search.sh", Enabled: true, Prompt: "Use SEARCH(term) to search."},
+		{ID: "h1", Name: "web_search", Description: "Search the web.", Parameters: singleStringParams("query"), Script: "search.sh", Enabled: true, Prompt: "Use the web_search tool when helpful."},
 	}}
 	svc := application.NewChatService(
 		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{
@@ -554,11 +577,14 @@ func TestHandleChat_ContextTrimmed_SetWhenOlderMessagesDropped(t *testing.T) {
 // to the model, never performs a search itself.
 func TestHandleChat_WebSearchOverrideTrue_ActivatesGatedHook(t *testing.T) {
 	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
-		{ID: "h1", Name: "web_search", Pattern: `SEARCH\(([^)]+)\)`, Script: "search.sh", Enabled: true, GatedByWebSearch: true},
+		{ID: "h1", Name: "web_search", Description: "Search the web.", Parameters: singleStringParams("query"), Script: "search.sh", Enabled: true, GatedByWebSearch: true},
 	}}
 	svc := application.NewChatService(
 		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchEnabled: false}},
-		&fakeChatCompleter{answers: []string{"SEARCH(cats)", "done"}}, hooks, &fakeHookScriptRunner{output: "results"})
+		&fakeChatCompleter{responses: []domain.ChatMessage{
+			toolCallMessage("call_1", "web_search", argsJSON("query", "cats")),
+			{Role: domain.ChatRoleAssistant, Content: "done"},
+		}}, hooks, &fakeHookScriptRunner{output: "results"})
 	h, cookie := chatAuthedHandler(t, svc)
 	rec := postChat(t, h, cookie, map[string]interface{}{
 		"messages":   []map[string]string{{"role": "user", "content": "tell me about cats"}},
@@ -577,11 +603,11 @@ func TestHandleChat_WebSearchOverrideTrue_ActivatesGatedHook(t *testing.T) {
 // the endpoint's own default is on.
 func TestHandleChat_WebSearchOverrideFalse_DeactivatesGatedHook(t *testing.T) {
 	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
-		{ID: "h1", Name: "web_search", Pattern: `SEARCH\(([^)]+)\)`, Script: "search.sh", Enabled: true, GatedByWebSearch: true},
+		{ID: "h1", Name: "web_search", Description: "Search the web.", Parameters: singleStringParams("query"), Script: "search.sh", Enabled: true, GatedByWebSearch: true},
 	}}
 	svc := application.NewChatService(
 		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchEnabled: true}},
-		&fakeChatCompleter{answer: "SEARCH(cats)"}, hooks, &fakeHookScriptRunner{output: "results"})
+		&fakeChatCompleter{answer: "no need to search"}, hooks, &fakeHookScriptRunner{output: "results"})
 	h, cookie := chatAuthedHandler(t, svc)
 	rec := postChat(t, h, cookie, map[string]interface{}{
 		"messages":   []map[string]string{{"role": "user", "content": "tell me about cats"}},
@@ -601,12 +627,15 @@ func TestHandleChat_WebSearchOverrideFalse_DeactivatesGatedHook(t *testing.T) {
 // through the real HTTP handler.
 func TestHandleChat_SuccessWithHookResults(t *testing.T) {
 	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
-		{ID: "h1", Name: "web_search", Pattern: `SEARCH\(([^)]+)\)`, Script: "search.sh", Enabled: true},
+		{ID: "h1", Name: "web_search", Description: "Search the web.", Parameters: singleStringParams("query"), Script: "search.sh", Enabled: true},
 	}}
 	runner := &fakeHookScriptRunner{output: "cats are great"}
 	svc := application.NewChatService(
 		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}},
-		&fakeChatCompleter{answers: []string{"Let me check: SEARCH(cats)", "Cats are great pets."}}, hooks, runner)
+		&fakeChatCompleter{responses: []domain.ChatMessage{
+			toolCallMessage("call_1", "web_search", argsJSON("query", "cats")),
+			{Role: domain.ChatRoleAssistant, Content: "Cats are great pets."},
+		}}, hooks, runner)
 	h, cookie := chatAuthedHandler(t, svc)
 	rec := postChat(t, h, cookie, map[string]interface{}{
 		"messages": []map[string]string{{"role": "user", "content": "tell me about cats"}},
@@ -642,7 +671,7 @@ func TestHandleChat_SuccessWithHookResults(t *testing.T) {
 // hooks exist but simply don't match this turn's answer either.
 func TestHandleChat_NoHookResultsWhenNothingMatches(t *testing.T) {
 	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
-		{ID: "h1", Name: "web_search", Pattern: `SEARCH\(([^)]+)\)`, Script: "search.sh", Enabled: true},
+		{ID: "h1", Name: "web_search", Description: "Search the web.", Parameters: singleStringParams("query"), Script: "search.sh", Enabled: true},
 	}}
 	svc := application.NewChatService(
 		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}},
