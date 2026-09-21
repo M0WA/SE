@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"searchengine/internal/adapters/netguard"
 	"searchengine/internal/domain"
 )
 
@@ -37,7 +38,31 @@ type Client struct {
 // New returns a Client with a sane default timeout when HTTPClient is left
 // nil by the caller.
 func New() *Client {
-	return &Client{HTTPClient: &http.Client{Timeout: requestTimeout}}
+	return &Client{HTTPClient: defaultHTTPClient()}
+}
+
+// defaultHTTPClient is shared by New() and Complete/ModelMaxContextTokens'
+// own nil-HTTPClient fallback -- its Transport routes every dial through
+// netguard.ConfiguredEndpointDialContext, so even a redirect hop or a DNS
+// answer that changes between check and connect can't land the connection
+// on a blocked address (see the checkEndpointURL pre-request check below
+// for why both layers exist).
+func defaultHTTPClient() *http.Client {
+	return &http.Client{Timeout: requestTimeout, Transport: netguard.ConfiguredEndpointTransport()}
+}
+
+// checkEndpointURL rejects a BaseURL-derived request URL that resolves to
+// an address netguard.AllowedConfiguredEndpointIP blocks (link-local --
+// covering every cloud provider's metadata service -- multicast, or
+// unspecified). endpoint.BaseURL is admin-configured, trusted the same way
+// any other stored config is, but this still guards a real self-hosted
+// deployment against ever pointing it at its own cloud metadata endpoint,
+// whether by admin mistake or a compromised admin session.
+func checkEndpointURL(rawURL string) error {
+	if !netguard.ConfiguredEndpointURLAllowed(rawURL) {
+		return fmt.Errorf("httpchat: endpoint URL is not allowed: %s", rawURL)
+	}
+	return nil
 }
 
 type chatCompletionRequest struct {
@@ -62,6 +87,9 @@ func (c *Client) Complete(ctx context.Context, endpoint domain.ChatEndpoint, mes
 	}
 
 	url := strings.TrimRight(endpoint.BaseURL, "/") + "/chat/completions"
+	if err := checkEndpointURL(url); err != nil {
+		return "", err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 	if err != nil {
 		return "", fmt.Errorf("httpchat: building request: %w", err)
@@ -73,7 +101,7 @@ func (c *Client) Complete(ctx context.Context, endpoint domain.ChatEndpoint, mes
 
 	client := c.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: requestTimeout}
+		client = defaultHTTPClient()
 	}
 
 	resp, err := client.Do(req)
@@ -124,6 +152,9 @@ type modelsListResponse struct {
 // exactly one model under a different alias still gets detected).
 func (c *Client) ModelMaxContextTokens(ctx context.Context, endpoint domain.ChatEndpoint) (int, bool, error) {
 	url := strings.TrimRight(endpoint.BaseURL, "/") + "/models"
+	if err := checkEndpointURL(url); err != nil {
+		return 0, false, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return 0, false, fmt.Errorf("httpchat: building models request: %w", err)
@@ -134,7 +165,7 @@ func (c *Client) ModelMaxContextTokens(ctx context.Context, endpoint domain.Chat
 
 	client := c.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: requestTimeout}
+		client = defaultHTTPClient()
 	}
 
 	resp, err := client.Do(req)

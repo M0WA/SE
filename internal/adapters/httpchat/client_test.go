@@ -447,3 +447,39 @@ func TestComplete_NilHTTPClient(t *testing.T) {
 		t.Errorf("answer = %q, want %q", answer, "ok")
 	}
 }
+
+// TestComplete_BlocksCloudMetadataEndpoint and
+// TestModelMaxContextTokens_BlocksCloudMetadataEndpoint prove the
+// netguard.ConfiguredEndpointURLAllowed pre-request check (see
+// checkEndpointURL) rejects a BaseURL pointing at the cloud metadata
+// address before ever making the request -- the one class of admin-
+// configured endpoint with no legitimate self-hosted use case (unlike an
+// ordinary private-network address, which a self-hosted deployment
+// legitimately uses -- see TestComplete_Success and friends' use of
+// httptest.NewServer, which listens on loopback).
+func TestComplete_BlocksCloudMetadataEndpoint(t *testing.T) {
+	c := httpchat.New()
+	endpoint := domain.ChatEndpoint{BaseURL: "http://169.254.169.254", Model: "m"}
+	_, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}})
+	if err == nil {
+		t.Fatal("expected the cloud metadata endpoint to be rejected")
+	}
+	if !strings.Contains(err.Error(), "not allowed") {
+		t.Errorf("error = %v, want it to mention the URL is not allowed", err)
+	}
+}
+
+func TestModelMaxContextTokens_BlocksCloudMetadataEndpoint(t *testing.T) {
+	c := httpchat.New()
+	endpoint := domain.ChatEndpoint{BaseURL: "http://169.254.169.254", Model: "m"}
+	_, ok, err := c.ModelMaxContextTokens(context.Background(), endpoint)
+	if err == nil {
+		t.Fatal("expected the cloud metadata endpoint to be rejected")
+	}
+	if ok {
+		t.Error("expected ok=false alongside the error")
+	}
+	if !strings.Contains(err.Error(), "not allowed") {
+		t.Errorf("error = %v, want it to mention the URL is not allowed", err)
+	}
+}
