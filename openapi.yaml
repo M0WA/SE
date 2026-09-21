@@ -2323,6 +2323,15 @@ components:
             MCP server's spawned process as the WEB_SEARCH_BASE_URL
             environment variable, so a "web_search" tool knows which
             instance to query.
+        web_search_result_count:
+          type: integer
+          description: >-
+            Caps how many results the first-party mcp-web server's
+            "web_search" tool returns per call, passed to every active
+            "stdio" MCP server's spawned process as the
+            WEB_SEARCH_RESULT_COUNT environment variable. 0 (the default)
+            means no cap -- SearXNG's own full result set is returned
+            as-is. A negative value is rejected with 400.
         system_prompt:
           type: string
           description: >-

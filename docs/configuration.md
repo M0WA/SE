@@ -327,7 +327,15 @@ Everything below lives in the shared SQL database and is edited only through `in
 | `chat-max-context-tokens` | `0` -- auto-detected from the model on save | — | Bounds tokens' worth of conversation sent to the model (approximated by character count); oldest messages trimmed first. Left at `0`, every save auto-detects this from the configured model's own advertised max context length (75% of it, reserving the rest for the reply) instead of leaving trimming disabled -- type a smaller number here only to set a tighter budget than that. |
 | `chat-web-search-enabled` | `false` | boolean | The "Web" toggle's default (overridable per question): when on, every MCP server with `gated_by_web_search` becomes active, offering its tools to the model. This setting never performs a search or fetch itself -- see "MCP servers" below. |
 | `chat-web-search-base-url` | none | required for the built-in `web_search` tool to work | Base URL of the SearXNG instance; passed to every active `stdio`-transport MCP server's spawned process as the `WEB_SEARCH_BASE_URL` environment variable. |
+| `chat-web-search-result-count` | `0` (no cap) | ≥ 0 | Caps how many results the built-in `web_search` tool returns per call; passed to every active `stdio`-transport MCP server's spawned process as the `WEB_SEARCH_RESULT_COUNT` environment variable. |
 | `chat-system-prompt` | empty (none injected) | — | Optional leading system-role message injected ahead of the rest of the conversation on every turn; never dropped by context trimming. |
+
+The built-in `web_fetch` tool sends the crawler's own `user-agent` setting
+(Settings → Crawling → Crawler, see above) rather than its own hardcoded
+default -- passed per chat turn as the `WEB_FETCH_USER_AGENT` environment
+variable to every active `stdio`-transport MCP server's spawned process,
+the same delivery mechanism as `WEB_SEARCH_BASE_URL`/
+`WEB_SEARCH_RESULT_COUNT` above.
 
 Chat no longer has a separate retrieval-augmented-generation (RAG) toggle
 against this instance's own index. To blend this instance's own index into

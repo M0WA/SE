@@ -27,9 +27,9 @@ func newTestFetcher() *httpfetcher.Fetcher {
 // an in-memory transport (mcp.NewInMemoryTransports), so a test can exercise
 // the two tool handlers exactly as a real chat turn would -- through
 // CallTool, not by calling webSearch/truncate directly.
-func connectedTestServer(t *testing.T, searxBaseURL string) *mcp.ClientSession {
+func connectedTestServer(t *testing.T, searxBaseURL string, resultCount int, userAgent string) *mcp.ClientSession {
 	t.Helper()
-	server := newServer(searxBaseURL, newTestFetcher())
+	server := newServer(searxBaseURL, resultCount, userAgent, newTestFetcher())
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1"}, nil)
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 
@@ -75,7 +75,7 @@ func TestWebSearchTool_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cs := connectedTestServer(t, srv.URL)
+	cs := connectedTestServer(t, srv.URL, 0, "")
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "web_search", Arguments: map[string]any{"query": "golang release notes"},
 	})
@@ -96,7 +96,7 @@ func TestWebSearchTool_UpstreamErrorSurfacesAsToolError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cs := connectedTestServer(t, srv.URL)
+	cs := connectedTestServer(t, srv.URL, 0, "")
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "web_search", Arguments: map[string]any{"query": "x"},
 	})
@@ -117,7 +117,7 @@ func TestWebFetchTool_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cs := connectedTestServer(t, "http://unused.example")
+	cs := connectedTestServer(t, "http://unused.example", 0, "")
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "web_fetch", Arguments: map[string]any{"url": srv.URL},
 	})
@@ -132,8 +132,60 @@ func TestWebFetchTool_Success(t *testing.T) {
 	}
 }
 
+// TestWebSearchTool_ResultCountCapsResults proves a positive resultCount
+// (from domain.ChatEndpoint.WebSearchResultCount, delivered as
+// WEB_SEARCH_RESULT_COUNT -- see main's own doc comment) actually reaches
+// the tool call and truncates the returned "results" array, exercised
+// through CallTool exactly as a real chat turn would invoke it.
+func TestWebSearchTool_ResultCountCapsResults(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"results":[{"title":"a"},{"title":"b"},{"title":"c"}],"query":"x"}`))
+	}))
+	defer srv.Close()
+
+	cs := connectedTestServer(t, srv.URL, 2, "")
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "web_search", Arguments: map[string]any{"query": "x"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := textContent(t, result)
+	if !strings.Contains(got, `"title":"a"`) || !strings.Contains(got, `"title":"b"`) {
+		t.Errorf("expected the first 2 results kept, got %q", got)
+	}
+	if strings.Contains(got, `"title":"c"`) {
+		t.Errorf("expected the 3rd result dropped, got %q", got)
+	}
+	if !strings.Contains(got, `"query":"x"`) {
+		t.Errorf("expected other top-level fields preserved, got %q", got)
+	}
+}
+
+// TestWebFetchTool_UsesConfiguredUserAgent proves a non-empty userAgent
+// (from application.ChatOptions.UserAgent, delivered as
+// WEB_FETCH_USER_AGENT) actually reaches the outgoing fetch request.
+func TestWebFetchTool_UsesConfiguredUserAgent(t *testing.T) {
+	var gotUserAgent string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUserAgent = r.Header.Get("User-Agent")
+		w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	cs := connectedTestServer(t, "http://unused.example", 0, "custom-agent/9.0")
+	if _, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "web_fetch", Arguments: map[string]any{"url": srv.URL},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotUserAgent != "custom-agent/9.0" {
+		t.Errorf("expected the configured user agent, got %q", gotUserAgent)
+	}
+}
+
 func TestWebFetchTool_FetchErrorSurfacesAsToolError(t *testing.T) {
-	cs := connectedTestServer(t, "http://unused.example")
+	cs := connectedTestServer(t, "http://unused.example", 0, "")
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "web_fetch", Arguments: map[string]any{"url": "not a url"},
 	})
@@ -158,7 +210,7 @@ func TestWebSearch_NonSuccessStatusIncludesTruncatedBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := webSearch(context.Background(), srv.URL, "x")
+	_, err := webSearch(context.Background(), srv.URL, "x", 0)
 	if err == nil {
 		t.Fatal("expected an error for a non-2xx status")
 	}
@@ -173,7 +225,7 @@ func TestWebSearch_NonSuccessStatusIncludesTruncatedBody(t *testing.T) {
 // TestWebSearch_RequestBuildError proves a malformed base URL is reported
 // as a build error rather than panicking or silently no-op'ing.
 func TestWebSearch_RequestBuildError(t *testing.T) {
-	_, err := webSearch(context.Background(), "://not a url", "x")
+	_, err := webSearch(context.Background(), "://not a url", "x", 0)
 	if err == nil {
 		t.Fatal("expected an error for a malformed base URL")
 	}
@@ -182,9 +234,47 @@ func TestWebSearch_RequestBuildError(t *testing.T) {
 // TestWebSearch_ConnectionError proves a base URL nothing is listening on
 // surfaces as an error rather than hanging or panicking.
 func TestWebSearch_ConnectionError(t *testing.T) {
-	_, err := webSearch(context.Background(), "http://127.0.0.1:1", "x")
+	_, err := webSearch(context.Background(), "http://127.0.0.1:1", "x", 0)
 	if err == nil {
 		t.Fatal("expected an error when nothing is listening")
+	}
+}
+
+func TestCapResults_ZeroOrNegativeMeansNoCap(t *testing.T) {
+	body := []byte(`{"results":[1,2,3]}`)
+	if got := capResults(body, 0); got != string(body) {
+		t.Errorf("expected body unchanged for resultCount=0, got %q", got)
+	}
+	if got := capResults(body, -1); got != string(body) {
+		t.Errorf("expected body unchanged for resultCount=-1, got %q", got)
+	}
+}
+
+func TestCapResults_FewerResultsThanCapLeavesBodyUnchanged(t *testing.T) {
+	body := []byte(`{"results":[1,2]}`)
+	if got := capResults(body, 5); got != string(body) {
+		t.Errorf("expected body unchanged when under the cap, got %q", got)
+	}
+}
+
+func TestCapResults_MalformedJSONPassesThroughUnchanged(t *testing.T) {
+	body := []byte(`not json`)
+	if got := capResults(body, 1); got != string(body) {
+		t.Errorf("expected malformed body passed through, got %q", got)
+	}
+}
+
+func TestCapResults_MissingResultsKeyPassesThroughUnchanged(t *testing.T) {
+	body := []byte(`{"query":"x"}`)
+	if got := capResults(body, 1); got != string(body) {
+		t.Errorf("expected body without a results key passed through, got %q", got)
+	}
+}
+
+func TestCapResults_ResultsNotAnArrayPassesThroughUnchanged(t *testing.T) {
+	body := []byte(`{"results":"not an array"}`)
+	if got := capResults(body, 1); got != string(body) {
+		t.Errorf("expected body with a non-array results field passed through, got %q", got)
 	}
 }
 

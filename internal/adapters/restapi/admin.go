@@ -1022,6 +1022,10 @@ func validateChatEndpointRequest(w http.ResponseWriter, req chatEndpointRequest)
 		http.Error(w, "max_context_tokens must not be negative", http.StatusBadRequest)
 		return false
 	}
+	if req.WebSearchResultCount < 0 {
+		http.Error(w, "web_search_result_count must not be negative", http.StatusBadRequest)
+		return false
+	}
 	return true
 }
 
@@ -1471,6 +1475,9 @@ type chatEndpointRequest struct {
 	MaxContextTokens int    `json:"max_context_tokens"`
 	WebSearchEnabled bool   `json:"web_search_enabled"`
 	WebSearchBaseURL string `json:"web_search_base_url"`
+	// WebSearchResultCount mirrors domain.ChatEndpoint.WebSearchResultCount
+	// exactly -- see that field's doc comment. 0 is the default (no cap).
+	WebSearchResultCount int `json:"web_search_result_count"`
 	// SystemPrompt mirrors domain.ChatEndpoint.SystemPrompt exactly -- see
 	// that field's doc comment. Empty string is the default (no persistent
 	// prompt injected).
@@ -1495,6 +1502,9 @@ type chatEndpointResponse struct {
 	MaxContextTokens int    `json:"max_context_tokens"`
 	WebSearchEnabled bool   `json:"web_search_enabled"`
 	WebSearchBaseURL string `json:"web_search_base_url"`
+	// WebSearchResultCount mirrors chatEndpointRequest.WebSearchResultCount
+	// exactly -- see that field's doc comment.
+	WebSearchResultCount int `json:"web_search_result_count"`
 	// SystemPrompt mirrors domain.ChatEndpoint.SystemPrompt exactly -- see
 	// chatEndpointRequest.SystemPrompt's doc comment.
 	SystemPrompt string    `json:"system_prompt"`
@@ -1506,7 +1516,8 @@ func toChatEndpointResponse(e domain.ChatEndpoint) chatEndpointResponse {
 		BaseURL: e.BaseURL, HasAPIKey: e.APIKey != "", Model: e.Model, Enabled: e.Enabled,
 		MaxContextTokens: e.MaxContextTokens, UpdatedAt: e.UpdatedAt,
 		WebSearchEnabled: e.WebSearchEnabled, WebSearchBaseURL: e.WebSearchBaseURL,
-		SystemPrompt: e.SystemPrompt,
+		WebSearchResultCount: e.WebSearchResultCount,
+		SystemPrompt:         e.SystemPrompt,
 	}
 }
 
@@ -1601,7 +1612,8 @@ func (h *Handler) handleAdminChatEndpoint(w http.ResponseWriter, r *http.Request
 			BaseURL: req.BaseURL, APIKey: apiKey, Model: req.Model, Enabled: req.Enabled,
 			MaxContextTokens: req.MaxContextTokens,
 			WebSearchEnabled: req.WebSearchEnabled, WebSearchBaseURL: req.WebSearchBaseURL,
-			SystemPrompt: req.SystemPrompt,
+			WebSearchResultCount: req.WebSearchResultCount,
+			SystemPrompt:         req.SystemPrompt,
 		}
 		if e.MaxContextTokens <= 0 {
 			e.MaxContextTokens = h.autoDetectMaxContextTokens(r.Context(), e)

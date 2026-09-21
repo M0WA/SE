@@ -136,11 +136,13 @@ type fakeMCPToolProvider struct {
 	// what config" (openedServers) without needing its own wrapper.
 	openCount     int
 	openedServers []domain.MCPServer
+	openedEnv     map[string]string
 }
 
 func (p *fakeMCPToolProvider) Open(ctx context.Context, servers []domain.MCPServer, env map[string]string) (ports.MCPSession, []domain.MCPTool) {
 	p.openCount++
 	p.openedServers = servers
+	p.openedEnv = env
 	if p.session == nil {
 		p.session = &fakeMCPSession{}
 	}
@@ -472,6 +474,50 @@ func TestHandleChat_UserCustomPromptReachesChatOptions(t *testing.T) {
 	}
 	if resp.TokenUsage.UserPromptTokens <= 0 {
 		t.Errorf("expected a nonzero user_prompt_tokens, got %+v", resp.TokenUsage)
+	}
+}
+
+// TestHandleChat_UserAgentFromOpSettingsReachesMCPEnv proves handleChat
+// reads the live *domain.OperationalSettings' UserAgent (the same value
+// crawls use) and passes it through application.ChatOptions.UserAgent into
+// ChatService.Chat's MCP env map as WEB_FETCH_USER_AGENT -- see
+// application.ChatService.Chat and userAgentForMCPFetch.
+func TestHandleChat_UserAgentFromOpSettingsReachesMCPEnv(t *testing.T) {
+	provider := &fakeMCPToolProvider{
+		tools:   []domain.MCPTool{mcpTool("web_search", "Search the web.")},
+		session: &fakeMCPSession{outputs: map[string]string{"web_search": "top result"}},
+	}
+	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
+		{ID: "1", Name: "web", Transport: "stdio", Command: "mcp-web", Enabled: true},
+	}}
+	svc := application.NewChatService(
+		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}},
+		&fakeChatCompleter{responses: []domain.ChatMessage{
+			toolCallMessage("call_1", "web_search", argsJSON("query", "x")),
+			{Role: domain.ChatRoleAssistant, Content: "done"},
+		}}, servers, provider)
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{UserAgent: "custom-agent/9.0"})
+	h := restapi.New(restapi.Config{
+		Search: &fakeSearch{}, Chat: svc, OpSettings: opSettings,
+		AdminUser: testAdminUser, AdminPass: testAdminPass,
+	})
+	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
+	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login failed: %d %s", rec.Code, rec.Body.String())
+	}
+	cookie := rec.Result().Cookies()[0]
+
+	chatRec := postChat(t, h, cookie, map[string]interface{}{
+		"messages": []map[string]string{{"role": "user", "content": "hi"}},
+	})
+	if chatRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", chatRec.Code, chatRec.Body.String())
+	}
+	if got := provider.openedEnv["WEB_FETCH_USER_AGENT"]; got != "custom-agent/9.0" {
+		t.Fatalf("expected env[WEB_FETCH_USER_AGENT] = %q, got %q (env=%v)", "custom-agent/9.0", got, provider.openedEnv)
 	}
 }
 
