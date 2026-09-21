@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
@@ -1251,27 +1250,6 @@ func TestChatService_EmptyUserCustomPrompt_NoLeadingPromptMessage(t *testing.T) 
 	}
 }
 
-// TestChatService_UserCustomPromptDatePlaceholder_Expanded proves a literal
-// "%c" in opts.UserCustomPrompt is expanded the same way as the global
-// SystemPrompt/server Prompt.
-func TestChatService_UserCustomPromptDatePlaceholder_Expanded(t *testing.T) {
-	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
-	completer := &fakeChatCompleter{answer: "answer"}
-	svc := NewChatService(endpoints, completer, nil, nil)
-
-	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
-	if _, err := svc.Chat(context.Background(), history, ChatOptions{UserCustomPrompt: "Today is %c."}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(completer.calledWith) < 1 {
-		t.Fatalf("expected at least 1 leading message, got %v", completer.calledWith)
-	}
-	now := strftime(time.Now().UTC(), "%a %b %e %H:%M")
-	if strings.Contains(completer.calledWith[0].Content, "%c") || !strings.Contains(completer.calledWith[0].Content, now) {
-		t.Errorf("expected the user prompt's %%c expanded to contain %q, got %q", now, completer.calledWith[0].Content)
-	}
-}
-
 // TestChatService_EndpointSystemPrompt_InjectedWhenMCPServersInactiveOrNil
 // is a regression check proving the endpoint's own SystemPrompt injection
 // never depends on MCP server state -- neither when every server is
@@ -1308,114 +1286,6 @@ func TestChatService_EndpointSystemPrompt_InjectedWhenMCPServersInactiveOrNil(t 
 			t.Fatalf("expected the endpoint's SystemPrompt still injected with mcpServers/mcpTools nil, got %v", completer.calledWith)
 		}
 	})
-}
-
-// TestChatService_SystemPromptDatePlaceholder_Expanded proves a literal "%c"
-// in either the endpoint's global SystemPrompt or an active server's own
-// Prompt is replaced with the current date and time before reaching the
-// model -- lets an admin anchor "assume this may be outdated" language to a
-// concrete timestamp without re-saving the setting every day. Compared at
-// minute granularity (dropping seconds) so this doesn't flake on a rare
-// second-boundary race between the call and this assertion.
-func TestChatService_SystemPromptDatePlaceholder_Expanded(t *testing.T) {
-	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, SystemPrompt: "Today is %c."}}
-	completer := &fakeChatCompleter{answer: "done, no need to search"}
-	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
-		{ID: "1", Name: "web", Transport: "stdio", Command: "mcp-web", Enabled: true, Prompt: "Also today is %c."},
-	}}
-	svc := NewChatService(endpoints, completer, servers, &fakeMCPToolProvider{})
-
-	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
-	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(completer.calledWith) < 2 {
-		t.Fatalf("expected at least 2 leading messages, got %v", completer.calledWith)
-	}
-	now := strftime(time.Now().UTC(), "%a %b %e %H:%M")
-	if strings.Contains(completer.calledWith[0].Content, "%c") || !strings.Contains(completer.calledWith[0].Content, now) {
-		t.Errorf("expected the global prompt's %%c expanded to contain %q, got %q", now, completer.calledWith[0].Content)
-	}
-	if strings.Contains(completer.calledWith[1].Content, "%c") || !strings.Contains(completer.calledWith[1].Content, now) {
-		t.Errorf("expected the server prompt's %%c expanded to contain %q, got %q", now, completer.calledWith[1].Content)
-	}
-}
-
-// TestStrftime_C proves %c matches real strftime(3)'s own ctime-style
-// composite ("%a %b %e %H:%M:%S %Y"), not a bespoke Go-layout-derived
-// format -- September 21, 2026 is a Monday.
-func TestStrftime_C(t *testing.T) {
-	tm := time.Date(2026, time.September, 21, 4, 22, 25, 0, time.UTC)
-	if got, want := strftime(tm, "%c"), "Mon Sep 21 04:22:25 2026"; got != want {
-		t.Errorf("strftime(%%c) = %q, want %q", got, want)
-	}
-}
-
-// TestStrftime_IndividualDirectives spot-checks every directive strftime
-// supports against a fixed, known instant.
-func TestStrftime_IndividualDirectives(t *testing.T) {
-	tm := time.Date(2026, time.September, 21, 4, 5, 6, 0, time.UTC) // a Monday
-	cases := map[string]string{
-		"%Y": "2026", "%y": "26", "%m": "09", "%d": "21", "%e": "21",
-		"%H": "04", "%I": "04", "%M": "05", "%S": "06",
-		"%A": "Monday", "%a": "Mon", "%B": "September", "%b": "September"[:3], "%h": "September"[:3],
-		"%p": "AM", "%j": "264", "%Z": "UTC", "%%": "%",
-	}
-	for format, want := range cases {
-		if got := strftime(tm, format); got != want {
-			t.Errorf("strftime(%q) = %q, want %q", format, got, want)
-		}
-	}
-}
-
-// TestStrftime_SingleDigitDayPadsWithSpaceNotZero proves %e (unlike %d)
-// space-pads a single-digit day, matching POSIX strftime exactly.
-func TestStrftime_SingleDigitDayPadsWithSpaceNotZero(t *testing.T) {
-	tm := time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC)
-	if got, want := strftime(tm, "%e"), " 1"; got != want {
-		t.Errorf("strftime(%%e) = %q, want %q", got, want)
-	}
-	if got, want := strftime(tm, "%d"), "01"; got != want {
-		t.Errorf("strftime(%%d) = %q, want %q", got, want)
-	}
-}
-
-// TestStrftime_NoonAndMidnightAreTwelveHour proves %I (12-hour clock)
-// renders both midnight and noon as 12, not 0, matching POSIX strftime.
-func TestStrftime_NoonAndMidnightAreTwelveHour(t *testing.T) {
-	midnight := time.Date(2026, time.September, 21, 0, 30, 0, 0, time.UTC)
-	noon := time.Date(2026, time.September, 21, 12, 30, 0, 0, time.UTC)
-	if got := strftime(midnight, "%I %p"); got != "12 AM" {
-		t.Errorf("strftime(midnight) = %q, want %q", got, "12 AM")
-	}
-	if got := strftime(noon, "%I %p"); got != "12 PM" {
-		t.Errorf("strftime(noon) = %q, want %q", got, "12 PM")
-	}
-}
-
-// TestStrftime_UnrecognizedDirectiveLeftVerbatim proves an unsupported
-// %<letter> is kept as-is (e.g. "%q") rather than silently dropped, and a
-// trailing lone "%" at the end of the format string is kept too.
-func TestStrftime_UnrecognizedDirectiveLeftVerbatim(t *testing.T) {
-	tm := time.Date(2026, time.September, 21, 4, 5, 6, 0, time.UTC)
-	if got, want := strftime(tm, "50%q done"), "50%q done"; got != want {
-		t.Errorf("strftime with an unknown directive = %q, want %q", got, want)
-	}
-	if got, want := strftime(tm, "100%"), "100%"; got != want {
-		t.Errorf("strftime with a trailing bare %% = %q, want %q", got, want)
-	}
-}
-
-// TestStrftime_LiteralTextAndEscapesPassThrough proves plain text, %%, %n,
-// and %t all behave as POSIX strftime specifies.
-func TestStrftime_LiteralTextAndEscapesPassThrough(t *testing.T) {
-	tm := time.Date(2026, time.September, 21, 4, 5, 6, 0, time.UTC)
-	if got, want := strftime(tm, "100%% done"), "100% done"; got != want {
-		t.Errorf("strftime(%%%%) = %q, want %q", got, want)
-	}
-	if got, want := strftime(tm, "a%nb%tc"), "a\nb\tc"; got != want {
-		t.Errorf("strftime(%%n/%%t) = %q, want %q", got, want)
-	}
 }
 
 // TestChatService_TokenUsage_AttributesEachPieceCorrectly proves

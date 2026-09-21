@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
-	"time"
 
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
@@ -176,18 +174,18 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	tokenUsage := TokenUsage{MaxContextTokens: endpoint.MaxContextTokens}
 	var leading []domain.ChatMessage
 	if endpoint.SystemPrompt != "" {
-		msg := domain.ChatMessage{Role: domain.ChatRoleSystem, Content: expandPromptPlaceholders(endpoint.SystemPrompt)}
+		msg := domain.ChatMessage{Role: domain.ChatRoleSystem, Content: endpoint.SystemPrompt}
 		leading = append(leading, msg)
 		tokenUsage.GlobalPromptTokens = estimateTokens([]domain.ChatMessage{msg})
 	}
 	if opts.UserCustomPrompt != "" {
-		msg := domain.ChatMessage{Role: domain.ChatRoleSystem, Content: expandPromptPlaceholders(opts.UserCustomPrompt)}
+		msg := domain.ChatMessage{Role: domain.ChatRoleSystem, Content: opts.UserCustomPrompt}
 		leading = append(leading, msg)
 		tokenUsage.UserPromptTokens = estimateTokens([]domain.ChatMessage{msg})
 	}
 	for _, srv := range activeServers {
 		if srv.Prompt != "" {
-			msg := domain.ChatMessage{Role: domain.ChatRoleSystem, Content: expandPromptPlaceholders(srv.Prompt)}
+			msg := domain.ChatMessage{Role: domain.ChatRoleSystem, Content: srv.Prompt}
 			leading = append(leading, msg)
 			tokenUsage.ToolPromptTokens += estimateTokens([]domain.ChatMessage{msg})
 		}
@@ -281,97 +279,6 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	}
 
 	return ChatResult{Answer: answer, ContextTrimmed: contextTrimmed, ToolResults: toolResults, TokenUsage: tokenUsage}, nil
-}
-
-// promptDatePlaceholder, when present in the global system prompt or an MCP
-// server's own Prompt, is replaced with the current UTC date and time,
-// rendered via strftime's own %c conversion (see strftime below) -- lets
-// an admin write a prompt like "the current time is %c" so the model has a
-// concrete anchor for judging whether cached/trained-in information could
-// be stale, without needing to re-save the setting every day.
-const promptDatePlaceholder = "%c"
-
-func expandPromptPlaceholders(prompt string) string {
-	if !strings.Contains(prompt, promptDatePlaceholder) {
-		return prompt
-	}
-	return strings.ReplaceAll(prompt, promptDatePlaceholder, strftime(time.Now().UTC(), "%c"))
-}
-
-// strftime formats t using a subset of POSIX strftime(3)'s own conversion
-// specifiers -- not a bespoke, Go-reference-layout-derived format of our
-// own invention, so %c in a prompt means exactly what %c means anywhere
-// else (a shell script, a C program, `date +%c`). Covers the directives a
-// date-anchoring prompt placeholder plausibly needs, not the full POSIX
-// set; an unrecognized %<letter> is left in the output verbatim (e.g. "%q"
-// stays "%q") rather than silently dropped, and a lone trailing "%" is
-// kept as-is. %c itself is composed from the others, matching the C
-// locale's own conventional ctime(3)/asctime(3)-style rendering (e.g. "Sun
-// Sep 21 04:22:35 2026") -- deliberately no time zone abbreviation, same
-// as real strftime's %c; a prompt wanting one can write "%c %Z" itself.
-func strftime(t time.Time, format string) string {
-	var b strings.Builder
-	for i := 0; i < len(format); i++ {
-		if format[i] != '%' || i == len(format)-1 {
-			b.WriteByte(format[i])
-			continue
-		}
-		i++
-		switch format[i] {
-		case 'Y':
-			fmt.Fprintf(&b, "%d", t.Year())
-		case 'y':
-			fmt.Fprintf(&b, "%02d", t.Year()%100)
-		case 'm':
-			fmt.Fprintf(&b, "%02d", int(t.Month()))
-		case 'd':
-			fmt.Fprintf(&b, "%02d", t.Day())
-		case 'e':
-			fmt.Fprintf(&b, "%2d", t.Day())
-		case 'H':
-			fmt.Fprintf(&b, "%02d", t.Hour())
-		case 'I':
-			h := t.Hour() % 12
-			if h == 0 {
-				h = 12
-			}
-			fmt.Fprintf(&b, "%02d", h)
-		case 'M':
-			fmt.Fprintf(&b, "%02d", t.Minute())
-		case 'S':
-			fmt.Fprintf(&b, "%02d", t.Second())
-		case 'A':
-			b.WriteString(t.Weekday().String())
-		case 'a':
-			b.WriteString(t.Weekday().String()[:3])
-		case 'B':
-			b.WriteString(t.Month().String())
-		case 'b', 'h':
-			b.WriteString(t.Month().String()[:3])
-		case 'p':
-			if t.Hour() < 12 {
-				b.WriteString("AM")
-			} else {
-				b.WriteString("PM")
-			}
-		case 'j':
-			fmt.Fprintf(&b, "%03d", t.YearDay())
-		case 'Z':
-			b.WriteString(t.Format("MST"))
-		case 'n':
-			b.WriteByte('\n')
-		case 't':
-			b.WriteByte('\t')
-		case '%':
-			b.WriteByte('%')
-		case 'c':
-			b.WriteString(strftime(t, "%a %b %e %H:%M:%S %Y"))
-		default:
-			b.WriteByte('%')
-			b.WriteByte(format[i])
-		}
-	}
-	return b.String()
 }
 
 // maxHookFollowUpRounds bounds how many times ChatService.Chat will run a

@@ -19,10 +19,8 @@ type User struct {
 	// self-service /account page) -- injected as its own leading system
 	// message in every chat turn THEY send, in addition to (not instead of)
 	// the admin-configured endpoint-wide SystemPrompt and any active MCP
-	// server's own prompt. Expanded through the same %c-style placeholder
-	// mechanism application.expandPromptPlaceholders already applies to
-	// those (see application.ChatService.Chat). Empty means no per-user
-	// prompt is injected.
+	// server's own prompt (see application.ChatService.Chat). Empty means
+	// no per-user prompt is injected.
 	CustomPrompt string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time

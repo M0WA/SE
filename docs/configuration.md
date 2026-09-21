@@ -142,7 +142,7 @@ This is the ordered install flow for a fresh Debian/Ubuntu host. Steps 1–2 and
     done
     ```
 
-16. **(Optional) Configure the built-in MCP tool servers.** The `.deb` already installs `/usr/bin/searchengine-mcp-web` (built from `cmd/mcp-web`) and `/usr/bin/searchengine-mcp-datetime` (built from `cmd/mcp-datetime`) — nothing to copy or `chmod`. Neither is a systemd service: search-server/admin-server spawn one on demand as a stdio subprocess (see `internal/adapters/mcpclient`) whenever an admin-configured `MCPServer` row points at it. Under Settings -> Chat -> MCP servers, add one row per binary: Transport=`stdio`, Command=`/usr/bin/searchengine-mcp-web` (tools: `web_search`/`web_fetch`) or `/usr/bin/searchengine-mcp-datetime` (tool: `get_datetime`, current date/time, optionally in a given IANA timezone — this is what replaces the old `%c`/`strftime` prompt-placeholder mechanism; point the system/user prompt at "call get_datetime when you need the current date or time" instead of a literal `%c`), Enabled=checked. Each server's tools are exposed to the model as native tool-calling functions, which requires the chat endpoint below to actually support tool-calling (see the vLLM flags in the next step).
+16. **(Optional) Configure the built-in MCP tool servers.** The `.deb` already installs `/usr/bin/searchengine-mcp-web` (built from `cmd/mcp-web`) and `/usr/bin/searchengine-mcp-datetime` (built from `cmd/mcp-datetime`) — nothing to copy or `chmod`. Neither is a systemd service: search-server/admin-server spawn one on demand as a stdio subprocess (see `internal/adapters/mcpclient`) whenever an admin-configured `MCPServer` row points at it. Under Settings -> Chat -> MCP servers, add one row per binary: Transport=`stdio`, Command=`/usr/bin/searchengine-mcp-web` (tools: `web_search`/`web_fetch`) or `/usr/bin/searchengine-mcp-datetime` (tool: `get_datetime`, current date/time, optionally in a given IANA timezone — the model calls this itself whenever it needs to know "now"; write the system/user prompt as "call get_datetime when you need the current date or time" rather than hardcoding a date), Enabled=checked. Each server's tools are exposed to the model as native tool-calling functions, which requires the chat endpoint below to actually support tool-calling (see the vLLM flags in the next step).
 
 17. **(Optional) Configure an embedding and chat inference backend.** The admin UI's `domain.EmbeddingHTTPEndpoint` (edited on `admin_embedding_endpoint.html`) and `domain.ChatEndpoint` (edited on `admin_chat_settings.html`) each point at a plain OpenAI-compatible HTTP endpoint — `httpembed`/`httpchat` are generic clients, so any such API works, self-hosted or third-party. As a concrete reference, the `se.mo-sys.de` dev deployment points both at self-hosted [vLLM](https://github.com/vllm-project/vllm) server processes on a separate dedicated GPU host (one NVIDIA H200 NVL), each its own systemd unit gated by its own bearer API key:
     ```
@@ -406,8 +406,7 @@ migrated in alongside the rest of the
 `migrateUserColumns`), and is free text injected as its own leading system
 message on every chat turn this user sends (`POST /chat`), in addition to
 (not instead of) the endpoint-wide `chat-system-prompt` (see "Chat
-settings" above) and any active MCP servers' own prompts -- expanded
-through the same `%c`-style placeholder mechanism those use.
+settings" above) and any active MCP servers' own prompts.
 
 | Field | Default | Bounds | Description |
 |---|---|---|---|
