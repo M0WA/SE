@@ -507,11 +507,12 @@ test('sendChatMessage omits the max-context suffix and renders 0 for token_usage
   assert.equal(document.getElementById('chat-token-usage-summary').textContent, '7');
 });
 
-test('sendChatMessage keeps the token-usage badge hidden when token_usage is absent', async () => {
+test('sendChatMessage renders a zero-value badge, still visible, when token_usage is absent', async () => {
   global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'answer' }) });
   const { sendChatMessage } = loadFixture();
   await sendChatMessage('q');
-  assert.equal(document.getElementById('chat-token-usage').hidden, true);
+  assert.equal(document.getElementById('chat-token-usage').hidden, false);
+  assert.equal(document.getElementById('chat-token-usage-summary').textContent, '0');
 });
 
 test('buildDonutSVG renders one circle per nonzero segment, skipping zero-value ones', () => {
@@ -543,11 +544,26 @@ test('tokenUsageSegments maps the flat response shape to the four fixed chart se
   assert.deepEqual(segments.map((s) => s.label), ['Global prompt', 'Hook prompts', 'Your prompt', 'Conversation history']);
 });
 
-test('renderTokenUsage hides the badge for a falsy tokenUsage', () => {
+test('renderTokenUsage renders an all-zero donut, without a max-context suffix, for a falsy tokenUsage', () => {
   const { renderTokenUsage } = loadFixture();
-  document.getElementById('chat-token-usage').hidden = false;
   renderTokenUsage(null);
-  assert.equal(document.getElementById('chat-token-usage').hidden, true);
+  assert.equal(document.getElementById('chat-token-usage').hidden, false);
+  assert.equal(document.getElementById('chat-token-usage-summary').textContent, '0');
+  const donut = document.getElementById('chat-token-usage-donut');
+  assert.equal(donut.querySelectorAll('svg.donut-chart').length, 1);
+  assert.equal(donut.querySelector('.donut-center-label'), null);
+});
+
+test('renderTokenUsage centers a rounded usage percentage in the hover donut once max_context_tokens is known', () => {
+  const { renderTokenUsage } = loadFixture();
+  renderTokenUsage({ global_prompt_tokens: 10, hook_prompt_tokens: 0, user_prompt_tokens: 0, history_tokens: 0, max_context_tokens: 1000 });
+  const donut = document.getElementById('chat-token-usage-donut');
+  const label = donut.querySelector('.donut-center-label');
+  assert.notEqual(label, null);
+  assert.equal(label.textContent, '1%');
+  // The always-visible mini donut is too small to hold legible text.
+  const mini = document.getElementById('chat-token-usage-mini');
+  assert.equal(mini.querySelector('.donut-center-label'), null);
 });
 
 test('sendChatMessage renders the server error text on a non-ok response', async () => {
