@@ -51,29 +51,30 @@ regardless of which hooks are active -- it's the right place for a general
 instruction that isn't tied to any one tool:
 
 ```
-The current date and time is %c. Your training data can be outdated --
-when something could have changed, use web search or a URL fetch instead
-of guessing, if those tools are available. Verify what you find with a
-follow-up search or fetch before trusting it, and if one doesn't give you
-what you need, try a different query or URL rather than giving up. Always
-end your turn with a real answer using the best information you have --
-never leave only a tool call with no answer.
+The current date and time is %c. Verify what you find with a follow-up
+search or fetch before trusting it, and if one doesn't give you what you
+need, try a different query or URL rather than giving up. Always end your
+turn with a real answer using the best information you have -- never
+leave only a tool call with no answer.
 ```
 
-Two things beyond the date anchor: it tells the model to keep trying a
-different angle (query/URL) rather than stop at the first unhelpful
-result, and it tells the model to always produce a real answer, whatever
-happened with the tools. That second instruction has a code-level backstop
-too -- `ChatService.Chat`'s own force-final-answer fallback (see above)
+Deliberately doesn't say "use web search/fetch when something could be
+outdated, even if you feel confident" -- that instruction now lives once,
+per-tool, in each active hook's own `Description` (see below), which the
+model already sees every time that tool is offered; repeating it here at a
+generic level would just say the same thing twice.
+
+Two things remain beyond the date anchor: it tells the model to keep
+trying a different angle (query/URL) rather than stop at the first
+unhelpful result -- this is real, load-bearing behavior a single tool's
+own description can't express, since it spans multiple tool calls -- and
+it tells the model to always produce a real answer, whatever happened
+with the tools. That second instruction has a code-level backstop too --
+`ChatService.Chat`'s own force-final-answer fallback (see above)
 guarantees this even if a model ignores the instruction, but stating it
 plainly up front makes the model's own last answer more likely to already
 be the real thing, rather than relying on that fallback's extra
 completion call every time.
-
-"Whenever those tools are available to you" matters: the hooks themselves
-are gated by the chat's Web toggle (`ChatHook.GatedByWebSearch`), so they
-may not always be offered to the model -- the global prompt shouldn't imply
-they always are.
 
 `%c` is replaced with the current UTC date and time, rendered via a real
 strftime(3) `%c` conversion (`application.strftime`) -- the same
