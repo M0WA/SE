@@ -755,6 +755,23 @@
     }
   });
 
+  // toWireHistory strips a tab's own client-side rendering metadata
+  // (context_trimmed/tool_results, kept in tab.history purely so
+  // renderActiveTab can faithfully replay a tab's folds after switching
+  // away and back -- see sendChatMessage/deserializeTab) down to the bare
+  // {role, content} pairs the backend actually reads (see
+  // domain.ChatMessage's own json tags -- anything else is silently
+  // ignored server-side anyway). Sending the untrimmed entries directly
+  // was a real bug: tool_results carries each web_fetch call's full,
+  // UNtruncated page text (application.maxHookOutputCharsForModel only
+  // caps what's fed back to the model internally, not what the HTTP
+  // response returns), so a conversation with even a few tool calls would
+  // resend that same large payload, growing every turn, until nginx's
+  // client_max_body_size rejected the request outright (413).
+  function toWireHistory(history) {
+    return history.map((m) => ({ role: m.role, content: m.content }));
+  }
+
   // sendChatMessage appends the user's turn to the active tab's own
   // history, renders it immediately, then POSTs the full history to /chat
   // -- see runSearch above for the same ok/non-ok/network-failure pattern
@@ -779,7 +796,7 @@
       const resp = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: tab.history, web_search: chatWebSearch.checked }),
+        body: JSON.stringify({ messages: toWireHistory(tab.history), web_search: chatWebSearch.checked }),
       });
       if (!resp.ok) {
         const msg = await resp.text();
@@ -926,7 +943,7 @@
       tabs, activeTab, renderChatMessage, renderActiveTab, renderTabs,
       switchTab, newChatTab, forkActiveTab, closeTab,
       serializeTab, deserializeTab, exportActiveTab, importTabFromJSON,
-      sendChatMessage, setMode,
+      toWireHistory, sendChatMessage, setMode,
       escapeHTML, renderInline, renderMarkdown,
       buildDonutSVG, buildDonutLegend, tokenUsageSegments, renderTokenUsage,
       loadSession,

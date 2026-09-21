@@ -602,6 +602,51 @@ test('sendChatMessage on success appends both turns to history and renders the a
   assert.equal(document.getElementById('chat-status').textContent, '');
 });
 
+test('toWireHistory strips tool_results/context_trimmed down to plain {role, content}', () => {
+  const { toWireHistory } = loadFixture();
+  const history = [
+    { role: 'user', content: 'hi' },
+    { role: 'assistant', content: 'hello', context_trimmed: true, tool_results: [{ tool_name: 'web_fetch', output: 'x'.repeat(50000) }] },
+  ];
+  assert.deepEqual(toWireHistory(history), [
+    { role: 'user', content: 'hi' },
+    { role: 'assistant', content: 'hello' },
+  ]);
+});
+
+// TestBody_NeverGrowsUnboundedFromToolResults is the direct regression test
+// for a real, reported failure: a conversation with even a couple of
+// web_fetch tool calls could grow its own request body every subsequent
+// turn (each turn resending the full accumulated tool_results from every
+// prior turn, since tab.history keeps them for local tab-replay
+// rendering) until nginx's client_max_body_size rejected the request with
+// a 413 -- even though the fetched page content was never large enough on
+// its own to explain that. Sending only {role, content} (see
+// toWireHistory) keeps the request body bounded by the conversation's own
+// text, not by how many/how large the tool calls along the way were.
+test('sendChatMessage never sends tool_results in the request body, even after several tool-heavy turns', async () => {
+  const hugeOutput = 'x'.repeat(200000); // larger than nginx's typical 1MB limit would allow many of, if resent every turn
+  let lastBodyBytes = 0;
+  global.fetch = async (url, opts) => {
+    lastBodyBytes = opts.body.length;
+    return {
+      ok: true,
+      json: async () => ({
+        answer: 'short answer',
+        tool_results: [{ tool_name: 'web_fetch', output: hugeOutput }],
+      }),
+    };
+  };
+  const { sendChatMessage } = loadFixture();
+  await sendChatMessage('q1');
+  await sendChatMessage('q2');
+  await sendChatMessage('q3');
+  // If tool_results were included, three turns' worth of hugeOutput would
+  // push this well past 500000 bytes; excluding them keeps it tiny
+  // regardless of how many tool-heavy turns preceded it.
+  assert.ok(lastBodyBytes < 1000, `expected a small request body excluding tool_results, got ${lastBodyBytes} bytes`);
+});
+
 test('sendChatMessage renders a context-trimmed note when the backend flags context_trimmed', async () => {
   global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'answer', context_trimmed: true }) });
   const { sendChatMessage } = loadFixture();
