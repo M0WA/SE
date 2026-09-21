@@ -174,6 +174,10 @@ func (h *Handler) handleAdminChatHooksPage(w http.ResponseWriter, r *http.Reques
 	serveStatic(w, r, "text/html; charset=utf-8", adminChatHooksHTML)
 }
 
+func (h *Handler) handleAdminUsersPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminUsersHTML)
+}
+
 func (h *Handler) handleAdminJobsPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/html; charset=utf-8", adminJobsHTML)
 }
