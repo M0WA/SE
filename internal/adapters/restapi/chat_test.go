@@ -129,9 +129,18 @@ func (s *fakeMCPSession) Close() { s.closed = true }
 type fakeMCPToolProvider struct {
 	tools   []domain.MCPTool
 	session *fakeMCPSession
+	// openCount/openedServers record every Open call this provider has
+	// seen, in order -- openedServers holds only the LAST call's servers
+	// (every test that needs it only ever makes one relevant call), so a
+	// test can assert both "was Open even called" (openCount) and "with
+	// what config" (openedServers) without needing its own wrapper.
+	openCount     int
+	openedServers []domain.MCPServer
 }
 
 func (p *fakeMCPToolProvider) Open(ctx context.Context, servers []domain.MCPServer, env map[string]string) (ports.MCPSession, []domain.MCPTool) {
+	p.openCount++
+	p.openedServers = servers
 	if p.session == nil {
 		p.session = &fakeMCPSession{}
 	}

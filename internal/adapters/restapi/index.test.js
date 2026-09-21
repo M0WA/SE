@@ -247,6 +247,300 @@ test('switching back to search does not clear chat history or messages', async (
   assert.equal(document.getElementById('chat-messages').children.length, 2);
 });
 
+test('setMode toggles main.chat-mode for the wide-screen chat layout', () => {
+  const { setMode } = loadFixture();
+  const main = document.querySelector('main');
+  assert.equal(main.classList.contains('chat-mode'), true, 'chat is the default mode on load');
+
+  setMode('search');
+  assert.equal(main.classList.contains('chat-mode'), false);
+
+  setMode('chat');
+  assert.equal(main.classList.contains('chat-mode'), true);
+});
+
+test('chat-input placeholder no longer references "the index" (the index is only searched in Search mode)', () => {
+  loadFixture();
+  assert.equal(document.getElementById('chat-input').placeholder, 'Enter to send, Shift+Enter for a new line');
+});
+
+test('a fresh page starts with exactly one tab and no close button', () => {
+  const { tabs } = loadFixture();
+  assert.equal(tabs.length, 1);
+  assert.equal(document.querySelectorAll('.chat-tab').length, 1);
+  assert.equal(document.querySelectorAll('.chat-tab-close').length, 0);
+});
+
+test('sendChatMessage renames a fresh tab\'s title from its first message, but not its second', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'hi' }) });
+  const { sendChatMessage, activeTab } = loadFixture();
+  await sendChatMessage('short question');
+  assert.equal(activeTab().title, 'short question');
+
+  await sendChatMessage('and the second question?');
+  assert.equal(activeTab().title, 'short question');
+});
+
+test('sendChatMessage truncates a long first message into the tab title', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'hi' }) });
+  const { sendChatMessage, activeTab } = loadFixture();
+  await sendChatMessage('this is a very long first question that should be truncated for the tab title');
+  assert.equal(activeTab().title, 'this is a very long firs…');
+});
+
+test('newChatTab adds and switches to a fresh, empty tab; the tab strip gains close buttons once there are two', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'hi' }) });
+  const { sendChatMessage, newChatTab, tabs, activeTab } = loadFixture();
+  await sendChatMessage('first tab question');
+  const firstId = activeTab().id;
+
+  const created = newChatTab();
+  assert.equal(tabs.length, 2);
+  assert.equal(activeTab().id, created.id);
+  assert.notEqual(activeTab().id, firstId);
+  assert.equal(activeTab().history.length, 0);
+  assert.equal(document.getElementById('chat-messages').children.length, 0);
+  assert.equal(document.querySelectorAll('.chat-tab-close').length, 2);
+});
+
+test('switchTab re-renders #chat-messages from the target tab\'s own stored history', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'first answer' }) });
+  const { sendChatMessage, newChatTab, switchTab, tabs } = loadFixture();
+  await sendChatMessage('first tab question');
+  const firstId = tabs[0].id;
+
+  const second = newChatTab();
+  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'second answer' }) });
+  await sendChatMessage('second tab question');
+  assert.equal(document.getElementById('chat-messages').children.length, 2);
+
+  switchTab(firstId);
+  const messages = document.getElementById('chat-messages').children;
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].textContent, 'first tab question');
+  assert.equal(messages[1].textContent.includes('first answer'), true);
+
+  switchTab(second.id);
+  const messages2 = document.getElementById('chat-messages').children;
+  assert.equal(messages2[1].textContent.includes('second answer'), true);
+});
+
+test('switchTab to the already-active tab is a no-op (no re-render churn)', () => {
+  const { switchTab, activeTab, renderActiveTab } = loadFixture();
+  const id = activeTab().id;
+  // Sanity: calling switchTab with the current tab's own id must not throw
+  // and must leave the active tab unchanged.
+  switchTab(id);
+  assert.equal(activeTab().id, id);
+});
+
+test('forkActiveTab deep-copies history into a new independent tab, titled "<original> (fork)"', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'first answer', tool_results: [{ tool_name: 'web_search', output: 'x' }] }) });
+  const { sendChatMessage, forkActiveTab, tabs, activeTab } = loadFixture();
+  await sendChatMessage('original question');
+  const source = activeTab();
+
+  const forked = forkActiveTab();
+  assert.equal(tabs.length, 2);
+  assert.equal(activeTab().id, forked.id);
+  assert.equal(forked.title, source.title + ' (fork)');
+  assert.deepEqual(forked.history, source.history);
+  assert.notEqual(forked.history, source.history, 'must be a copy, not the same array reference');
+  assert.notEqual(forked.history[1], source.history[1], 'each entry must be its own copy too');
+
+  // Continuing the fork must never mutate the source tab.
+  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'fork-only answer' }) });
+  await sendChatMessage('fork-only question');
+  assert.equal(forked.history.length, 4);
+  assert.equal(source.history.length, 2);
+});
+
+test('closeTab removes a tab and falls back to its previous sibling when it was active', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'hi' }) });
+  const { sendChatMessage, newChatTab, closeTab, tabs, activeTab } = loadFixture();
+  await sendChatMessage('tab one');
+  const second = newChatTab();
+  const third = newChatTab();
+  assert.equal(tabs.length, 3);
+  assert.equal(activeTab().id, third.id);
+
+  closeTab(third.id);
+  assert.equal(tabs.length, 2);
+  assert.equal(tabs.some((t) => t.id === third.id), false, 'the closed tab must be gone');
+  assert.equal(activeTab().id, second.id, 'falls back to the immediately preceding tab');
+});
+
+test('closeTab never removes the last remaining tab', () => {
+  const { closeTab, tabs, activeTab } = loadFixture();
+  const onlyId = activeTab().id;
+  closeTab(onlyId);
+  assert.equal(tabs.length, 1);
+  assert.equal(activeTab().id, onlyId);
+});
+
+test('closeTab on a background (non-active) tab does not change which tab is active', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'hi' }) });
+  const { sendChatMessage, newChatTab, closeTab, tabs, activeTab } = loadFixture();
+  await sendChatMessage('tab one');
+  const first = activeTab();
+  const second = newChatTab();
+  assert.equal(activeTab().id, second.id);
+
+  closeTab(first.id);
+  assert.equal(tabs.length, 1);
+  assert.equal(activeTab().id, second.id);
+});
+
+test('a reply arriving after the user switched away updates the sending tab\'s own history but leaves the visible tab/DOM untouched', async () => {
+  let resolveFetch;
+  global.fetch = () => new Promise((resolve) => { resolveFetch = resolve; });
+  const { sendChatMessage, newChatTab, tabs, activeTab } = loadFixture();
+  const first = activeTab();
+  const sendPromise = sendChatMessage('slow question');
+
+  const second = newChatTab();
+  assert.equal(activeTab().id, second.id);
+
+  resolveFetch({ ok: true, json: async () => ({ answer: 'late answer' }) });
+  await sendPromise;
+
+  // The background tab's own data is still updated...
+  assert.equal(first.history.length, 2);
+  assert.equal(first.history[1].content, 'late answer');
+  // ...but the currently-visible tab (and its chat-messages DOM) is
+  // untouched by the late arrival.
+  assert.equal(activeTab().id, second.id);
+  assert.equal(document.getElementById('chat-messages').children.length, 0);
+  assert.equal(tabs.length, 2);
+});
+
+test('serializeTab/deserializeTab round trip a tab\'s title and history', () => {
+  const { serializeTab, deserializeTab } = loadFixture();
+  const tab = {
+    id: 1, title: 'My chat',
+    history: [
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'hello', context_trimmed: true, tool_results: [{ tool_name: 'web_search', output: 'x' }] },
+    ],
+    tokenUsage: null,
+  };
+  const json = serializeTab(tab);
+  const parsed = deserializeTab(json);
+  assert.equal(parsed.title, 'My chat');
+  // deserializeTab normalizes every entry with context_trimmed/tool_results
+  // defaults, even one (like the plain user turn here) that never had them
+  // in the first place.
+  assert.deepEqual(parsed.history, [
+    { role: 'user', content: 'hi', context_trimmed: false, tool_results: [] },
+    { role: 'assistant', content: 'hello', context_trimmed: true, tool_results: [{ tool_name: 'web_search', output: 'x' }] },
+  ]);
+});
+
+test('deserializeTab throws on something that is not a chat export', () => {
+  const { deserializeTab } = loadFixture();
+  assert.throws(() => deserializeTab('{"not":"a chat export"}'));
+  assert.throws(() => deserializeTab('not even json'));
+});
+
+test('deserializeTab drops malformed history entries but keeps the valid ones, and defaults a missing title', () => {
+  const { deserializeTab } = loadFixture();
+  const parsed = deserializeTab(JSON.stringify({
+    history: [
+      { role: 'user', content: 'kept' },
+      { role: 'bogus', content: 'dropped: bad role' },
+      { role: 'user', content: 42 },
+      null,
+      { role: 'assistant', content: 'kept too' },
+    ],
+  }));
+  assert.equal(parsed.title, 'Imported chat');
+  assert.equal(parsed.history.length, 2);
+  assert.equal(parsed.history[0].content, 'kept');
+  assert.equal(parsed.history[1].content, 'kept too');
+});
+
+test('importTabFromJSON creates and switches to a new tab built from the parsed export', () => {
+  const { importTabFromJSON, tabs, activeTab } = loadFixture();
+  const json = JSON.stringify({ title: 'Imported', history: [{ role: 'user', content: 'hi' }] });
+  const created = importTabFromJSON(json);
+  assert.equal(tabs.length, 2);
+  assert.equal(activeTab().id, created.id);
+  assert.equal(created.title, 'Imported');
+  assert.equal(document.getElementById('chat-messages').children.length, 1);
+});
+
+test('the import file input wires a chosen file through importTabFromJSON', async () => {
+  const { tabs } = loadFixture();
+  const input = document.getElementById('chat-tab-import-input');
+  const file = new window.File([JSON.stringify({ title: 'From file', history: [] })], 'chat.json', { type: 'application/json' });
+  Object.defineProperty(input, 'files', { value: [file], configurable: true });
+  input.dispatchEvent(new window.Event('change'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(tabs.length, 2);
+  assert.equal(tabs[1].title, 'From file');
+});
+
+test('the import file input reports an error status without adding a tab when the file is not valid JSON', async () => {
+  const { tabs } = loadFixture();
+  const input = document.getElementById('chat-tab-import-input');
+  const file = new window.File(['not json'], 'chat.json', { type: 'application/json' });
+  Object.defineProperty(input, 'files', { value: [file], configurable: true });
+  input.dispatchEvent(new window.Event('change'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(tabs.length, 1);
+  assert.equal(document.getElementById('chat-status').textContent.includes('Could not import chat'), true);
+});
+
+test('exportActiveTab builds a Blob and triggers/cleans up a download without throwing', () => {
+  const { sendChatMessage, exportActiveTab } = loadFixture();
+  let created = 0;
+  let revoked = 0;
+  // index.js runs under plain Node (via require(), not inside jsdom's own
+  // window), so the Blob it constructs is Node's own global Blob, not
+  // window.Blob -- check its shape/type instead of an instanceof that
+  // would only hold true for a real browser <script> tag.
+  global.URL.createObjectURL = (blob) => { created++; assert.equal(blob.type, 'application/json'); return 'blob:mock-url'; };
+  global.URL.revokeObjectURL = () => { revoked++; };
+  try {
+    exportActiveTab();
+  } finally {
+    delete global.URL.createObjectURL;
+    delete global.URL.revokeObjectURL;
+  }
+  assert.equal(created, 1);
+  assert.equal(revoked, 1);
+});
+
+test('clicking the tab-strip buttons wires new/fork/export/import to their own functions', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'hi' }) });
+  global.URL.createObjectURL = () => 'blob:mock-url';
+  global.URL.revokeObjectURL = () => {};
+  try {
+    const { sendChatMessage, tabs } = loadFixture();
+    await sendChatMessage('seed question');
+
+    document.getElementById('chat-tab-new').dispatchEvent(new window.Event('click'));
+    assert.equal(tabs.length, 2);
+
+    document.getElementById('chat-tab-fork').dispatchEvent(new window.Event('click'));
+    assert.equal(tabs.length, 3);
+
+    // Export must not throw when wired through the real button click.
+    document.getElementById('chat-tab-export').dispatchEvent(new window.Event('click'));
+
+    // Import opens the native file picker via the hidden input's own
+    // click() -- just prove the button is wired to trigger it, not the
+    // browser's file dialog itself (untestable in jsdom).
+    let importInputClicked = false;
+    document.getElementById('chat-tab-import-input').addEventListener('click', () => { importInputClicked = true; });
+    document.getElementById('chat-tab-import').dispatchEvent(new window.Event('click'));
+    assert.equal(importInputClicked, true);
+  } finally {
+    delete global.URL.createObjectURL;
+    delete global.URL.revokeObjectURL;
+  }
+});
+
 test('renderChatMessage scrolls #chat-messages so the new turn\'s own beginning is visible', async () => {
   global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'hi there' }) });
   const { sendChatMessage } = loadFixture();
@@ -282,20 +576,21 @@ test('sendChatMessage on success appends both turns to history and renders the a
       json: async () => ({ answer: 'The answer is 42.' }),
     };
   };
-  const { sendChatMessage, chatHistory } = loadFixture();
+  const { sendChatMessage, activeTab } = loadFixture();
   await sendChatMessage('what is the answer?');
 
   assert.equal(gotURL, '/chat');
   assert.equal(gotOpts.method, 'POST');
   assert.equal(gotOpts.headers['Content-Type'], 'application/json');
-  // At the moment the request was sent, chatHistory held only the user's
-  // just-appended turn -- the assistant's reply is pushed only afterward,
-  // once the response comes back.
+  // At the moment the request was sent, the active tab's history held only
+  // the user's just-appended turn -- the assistant's reply is pushed only
+  // afterward, once the response comes back.
   assert.deepEqual(JSON.parse(gotOpts.body), { messages: [{ role: 'user', content: 'what is the answer?' }], web_search: true });
 
-  assert.equal(chatHistory.length, 2);
-  assert.deepEqual(chatHistory[0], { role: 'user', content: 'what is the answer?' });
-  assert.deepEqual(chatHistory[1], { role: 'assistant', content: 'The answer is 42.' });
+  const history = activeTab().history;
+  assert.equal(history.length, 2);
+  assert.deepEqual(history[0], { role: 'user', content: 'what is the answer?' });
+  assert.deepEqual(history[1], { role: 'assistant', content: 'The answer is 42.', context_trimmed: undefined, tool_results: [] });
 
   const messages = document.getElementById('chat-messages').children;
   assert.equal(messages.length, 2);

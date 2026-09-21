@@ -57,7 +57,10 @@
       <input id="server-base-url" class="field" type="text" placeholder="https://example.com/mcp">
     </div>
     <div class="form-row" id="server-api-key-row">
-      <label for="server-api-key">API key</label>
+      <div class="label-row">
+        <label for="server-api-key">API key</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Optional. Sent as an "Authorization: Bearer" header on every request to Base URL -- only meaningful for an "http" server that requires auth; ignored for "stdio". Encrypted at rest and never shown again after saving.</span></span>
+      </div>
       <input id="server-api-key" class="field" type="password" autocomplete="new-password">
     </div>
     <div class="form-row form-row-check" id="server-clear-api-key-row">
@@ -65,11 +68,17 @@
         <input id="server-clear-api-key" type="checkbox">
         Remove the stored API key
       </label>
+      <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Leaving API key blank above keeps whatever key is already stored -- check this box instead to actually delete it (e.g. the remote server no longer requires auth).</span></span>
+    </div>
+    <div class="form-row">
+      <button id="server-list-tools-btn" type="button" class="text-button">⟳ Refresh tools</button>
+      <div id="server-list-tools-status" class="panel-status"></div>
+      <div id="server-list-tools-result"></div>
     </div>
     <div class="form-row">
       <div class="label-row">
         <label for="server-prompt">Prompt (optional)</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Extra steering beyond each tool's own description, injected as a separate system message only while this server is active (see "Gated by web search" below) -- in addition to the endpoint's own persistent system prompt (Settings -> Chat), not instead of it. Leave empty if the tool descriptions already say everything the model needs.</span></span>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">This is NOT where you describe what the server does -- each tool's own name/description (shown by "List tools" above) comes live from the server itself and already tells the model that. Prompt is for extra cross-tool steering beyond those descriptions, e.g. "after searching, fetch the top 3 results" -- injected as its own system message only while this server is active (see "Gated by web search" below), in addition to the endpoint's own persistent system prompt (Settings -> Chat), not instead of it. Leave empty if the tool descriptions already say everything the model needs.</span></span>
       </div>
       <textarea id="server-prompt" class="field" rows="24"></textarea>
     </div>

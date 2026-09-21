@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"searchengine/internal/adapters/crawlclient"
+	"searchengine/internal/adapters/mcpclient"
 	"searchengine/internal/adapters/restapi"
 	"searchengine/internal/adapters/settingscrypto"
 	"searchengine/internal/application"
@@ -88,6 +89,7 @@ func main() {
 		EmbeddingEndpoints:    repo,
 		ChatEndpoints:         repo,
 		MCPServers:            repo,
+		MCPTools:              mcpclient.New(),
 		Users:                 repo,
 		Health:                repo,
 		Sessions:              repo,

@@ -123,10 +123,20 @@
   <div id="results"></div>
 
   <div id="chat-panel" hidden>
+    <div id="chat-tabs" class="chat-tabs">
+      <div id="chat-tab-list" class="chat-tab-list" role="tablist" aria-label="Chat tabs"></div>
+      <div class="chat-tab-actions">
+        <button type="button" id="chat-tab-new" class="chat-tab-action" title="Start a new chat" aria-label="Start a new chat">＋</button>
+        <button type="button" id="chat-tab-fork" class="chat-tab-action" title="Fork this chat into a new tab" aria-label="Fork this chat into a new tab">⎇</button>
+        <button type="button" id="chat-tab-export" class="chat-tab-action" title="Download this chat as JSON" aria-label="Download this chat as JSON">⬇</button>
+        <button type="button" id="chat-tab-import" class="chat-tab-action" title="Load a chat from a JSON file" aria-label="Load a chat from a JSON file">⬆</button>
+        <input type="file" id="chat-tab-import-input" accept="application/json" hidden>
+      </div>
+    </div>
     <div id="chat-messages"></div>
     <div id="chat-status" class="chat-status"></div>
     <form id="chat-form" autocomplete="off">
-      <textarea id="chat-input" class="field" name="message" rows="2" placeholder="Ask about the index… (Enter to send, Shift+Enter for a new line)"></textarea>
+      <textarea id="chat-input" class="field" name="message" rows="2" placeholder="Enter to send, Shift+Enter for a new line"></textarea>
       <button id="chat-send" type="submit" title="Send" aria-label="Send">▶</button>
     </form>
   </div>

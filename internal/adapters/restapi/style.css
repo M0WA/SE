@@ -73,6 +73,15 @@ main {
   margin: 0 auto;
 }
 
+/* main.chat-mode (toggled by setMode in index.js) gets extra room on a
+   genuinely large screen -- a multi-tab conversation with tool-result
+   folds benefits from the width more than a single-column search results
+   list does, so this is scoped to chat mode only, not the plain search
+   page. */
+@media (min-width: 1400px) {
+  main.chat-mode { max-width: min(1100px, 90vw); }
+}
+
 .mark {
   font-size: 1.05rem;
   font-weight: 600;
@@ -660,19 +669,97 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
-/* Chat panel -- #chat-messages/#chat-status/#chat-form stay in that order
-   (input last, like a normal chat compose box: new answers grow the
-   conversation above it, not below), but neither carries a margin of its
-   own when empty -- with nothing rendered into #chat-messages yet and
-   #chat-status blank, only .mode-row's own margin-bottom and #chat-form's
-   margin-top below separate the toggle from the input, so a fresh
-   conversation starts with the input right where #search-form sits in
-   search mode; the panel only grows downward as messages/status actually
-   get content. #chat-form inherits the same flex/border-bottom treatment
-   as #search-form for free (both are plain <form> elements, and
-   .field/button already carry their own styling). Messages are told apart
-   by alignment and a quiet tint rather than rounded speech-bubble shapes,
-   the same restrained language .result already uses for its own rows. */
+/* Chat tab strip (index.js's renderTabs) -- one row per open conversation
+   plus a compact icon-button cluster (new/fork/export/import) trailing it.
+   Wraps rather than scrolling horizontally: a handful of short tab titles
+   is the expected case, and wrapping keeps every tab reachable without a
+   scroll gesture on a narrow/phone-width viewport. */
+.chat-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+
+.chat-tab-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 0.2rem 0.2rem 0.2rem 0.6rem;
+  background: transparent;
+}
+
+.chat-tab-active { border-color: var(--rule-strong); background: var(--accent-soft); }
+
+.chat-tab-label {
+  font-size: 0.82rem;
+  color: var(--ink-muted);
+  background: none;
+  border: none;
+  padding: 0.15rem 0;
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-tab-active .chat-tab-label { color: var(--ink); font-weight: 600; }
+
+.chat-tab-label:hover { color: var(--accent); }
+
+/* .chat-tab-close/.chat-tab-action share the same small icon-glyph
+   treatment -- a plain Unicode character (×, ＋, ⎇, ⬇, ⬆) as the button's
+   own content, same convention as #chat-send's "▶" -- with a visible
+   focus ring and hover tint since there's no text label to carry that on
+   a small viewport. */
+.chat-tab-close,
+.chat-tab-action {
+  font-size: 0.85rem;
+  line-height: 1;
+  color: var(--ink-muted);
+  background: none;
+  border: none;
+  border-radius: 3px;
+  padding: 0.2rem 0.4rem;
+  cursor: pointer;
+}
+
+.chat-tab-close:hover,
+.chat-tab-action:hover { color: var(--accent); background: var(--accent-soft); }
+
+.chat-tab-close:focus-visible,
+.chat-tab-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.chat-tab-actions { display: flex; gap: 0.15rem; flex: none; }
+
+/* Chat panel -- #chat-tabs/#chat-messages/#chat-status/#chat-form stay in
+   that order (input last, like a normal chat compose box: new answers
+   grow the conversation above it, not below), but none carries a margin
+   of its own when empty -- with nothing rendered into #chat-messages yet
+   and #chat-status blank, only .mode-row's own margin-bottom, #chat-tabs'
+   own margin-bottom, and #chat-form's margin-top below separate the
+   toggle from the input, so a fresh conversation starts with the input
+   right where #search-form sits in search mode; the panel only grows
+   downward as messages/status actually get content. #chat-form inherits
+   the same flex/border-bottom treatment as #search-form for free (both
+   are plain <form> elements, and .field/button already carry their own
+   styling). Messages are told apart by alignment and a quiet tint rather
+   than rounded speech-bubble shapes, the same restrained language
+   .result already uses for its own rows. */
 #chat-messages {
   max-height: 50vh;
   overflow-y: auto;
@@ -1176,6 +1263,18 @@ body.admin > .page-header {
 }
 
 body.admin main { max-width: 820px; margin: 0; flex: 1; min-width: 0; }
+
+/* Same "give it more room on a genuinely large screen" treatment as
+   main.chat-mode above, applied uniformly to every admin page (both the
+   two-column .admin-shell pages and the drill-down "back link" pages,
+   which share body.admin main's own cap) -- a settings form or a wide
+   data table benefits from the extra width more than the public search
+   page's narrow reading column does. */
+@media (min-width: 1400px) {
+  .admin-shell,
+  body.admin > .page-header { max-width: 1400px; }
+  body.admin main { max-width: 1160px; }
+}
 
 .admin-rail {
   flex: none;

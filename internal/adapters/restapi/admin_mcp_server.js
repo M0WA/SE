@@ -23,6 +23,9 @@
   const saveBtn = document.getElementById('server-save-btn');
   const deleteBtn = document.getElementById('server-delete-btn');
   const formStatusEl = document.getElementById('server-form-status');
+  const listToolsBtn = document.getElementById('server-list-tools-btn');
+  const listToolsStatusEl = document.getElementById('server-list-tools-status');
+  const listToolsResultEl = document.getElementById('server-list-tools-result');
 
   // updateTransportVisibility shows only the fields relevant to the
   // selected transport -- Command/Arguments for "stdio", Base URL/API key
@@ -94,10 +97,57 @@
     };
   }
 
+  // candidateBody is what a not-yet-saved (or being-edited) server looks
+  // like to the "List tools" probe -- just the fields a real connect+
+  // tools/list call needs, independent of "new" vs "edit" mode. id (blank
+  // for a brand new server) lets the server fall back to the real stored
+  // API key when api_key is left blank here -- mirrors
+  // admin_embedding_endpoint.js's own candidateBody.
+  function candidateBody() {
+    return {
+      id: isNew ? '' : id,
+      name: nameEl.value,
+      transport: transportEl.value,
+      command: commandEl.value,
+      args: argsEl.value.split('\n').map((a) => a.trim()).filter((a) => a !== ''),
+      base_url: baseURLEl.value,
+      api_key: apiKeyEl.value,
+    };
+  }
+
+  // listTools connects to the server as currently filled in and shows
+  // whatever tools it actually exposes -- run automatically right after an
+  // existing server loads (see load() below), and available on demand via
+  // the "List tools" button for a not-yet-saved server or after editing
+  // fields, so the admin never has to guess what a server does or save
+  // first to find out.
+  async function listTools() {
+    setButtonLoading(listToolsBtn, true, 'Listing…');
+    listToolsStatusEl.textContent = '';
+    clear(listToolsResultEl);
+    try {
+      const r = await postJSON('/admin/api/mcp-servers/test', candidateBody());
+      if (r.error) {
+        listToolsStatusEl.textContent = 'Could not list tools: ' + r.error;
+      } else if (!r.tools || r.tools.length === 0) {
+        listToolsStatusEl.textContent = 'No tools reported -- fill in the fields above and try again.';
+      } else {
+        listToolsStatusEl.textContent = r.tools.length + ' tool(s) exposed by this server.';
+        r.tools.forEach((t) => listItem(listToolsResultEl, t.name + (t.description ? ' — ' + t.description : '')));
+      }
+    } catch (err) {
+      listToolsStatusEl.textContent = 'Could not list tools: ' + err.message;
+    } finally {
+      setButtonLoading(listToolsBtn, false);
+    }
+  }
+  listToolsBtn.addEventListener('click', listTools);
+
   async function load() {
     if (isNew) return;
     try {
       applyServer(await getJSON('/admin/api/mcp-servers/' + encodeURIComponent(id)));
+      listTools();
     } catch (err) {
       titleEl.textContent = 'Not found';
       statusEl.textContent = 'Could not load this server: ' + err.message;
@@ -145,5 +195,5 @@
   // a browser's <script> tag, so this is a no-op there. See
   // admin_mcp_server.test.js.
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { applyServer, requestBody, load, updateTransportVisibility };
+    module.exports = { applyServer, requestBody, candidateBody, listTools, load, updateTransportVisibility };
   }
