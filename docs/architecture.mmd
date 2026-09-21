@@ -30,7 +30,7 @@ flowchart LR
     BrowserFetcher["browserfetcher<br/>Chromium/Firefox via Playwright"]
     HTMLParser["htmlparser"]
     Robots["robots"]
-    Netguard["netguard<br/>SSRF guard"]
+    Netguard["netguard<br/>SSRF guard<br/>(crawler + configured-endpoint policies)"]
     HashEmbed["hashembed"]
     HTTPEmbed["httpembed"]
     HTTPChat["httpchat"]
@@ -72,6 +72,8 @@ flowchart LR
   App --> HashEmbed
   App --> HTTPEmbed
   App --> HTTPChat
+  HTTPEmbed --> Netguard
+  HTTPChat --> Netguard
   HTTPEmbed --> EmbedAPI
   HTTPChat --> ChatAPI
   App -.->|"web_search chat hook<br/>script (hookrunner)"| SearXNG

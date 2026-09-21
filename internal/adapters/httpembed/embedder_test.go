@@ -239,6 +239,25 @@ func TestEmbedder_InvalidBaseURLReturnsError(t *testing.T) {
 	}
 }
 
+// TestEmbedder_BlocksCloudMetadataEndpoint proves checkEndpointURL's
+// pre-request netguard check rejects a BaseURL pointing at the cloud
+// metadata address before ever making the request -- mirrors httpchat's
+// identically-named regression test (see that package's
+// TestComplete_BlocksCloudMetadataEndpoint). An ordinary private-network
+// or loopback BaseURL, as every other test in this file uses via
+// httptest.NewServer, stays allowed -- only this one class of address
+// (with no legitimate self-hosted-embeddings use case) is blocked.
+func TestEmbedder_BlocksCloudMetadataEndpoint(t *testing.T) {
+	e := httpembed.New(httpembed.Config{BaseURL: "http://169.254.169.254", Dimensions: 8})
+	_, err := e.Embed(context.Background(), "x")
+	if err == nil {
+		t.Fatal("expected the cloud metadata endpoint to be rejected")
+	}
+	if !strings.Contains(err.Error(), "not allowed") {
+		t.Errorf("error = %v, want it to mention the URL is not allowed", err)
+	}
+}
+
 func TestEmbedder_BodyReadErrorReturnsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hj, ok := w.(http.Hijacker)
@@ -387,6 +406,21 @@ func TestEmbedder_ListModelsNetworkErrorReturnsError(t *testing.T) {
 	e := httpembed.New(httpembed.Config{BaseURL: "http://127.0.0.1:1"})
 	if _, err := e.ListModels(context.Background()); err == nil {
 		t.Fatal("expected an error connecting to an unreachable address")
+	}
+}
+
+// TestEmbedder_ListModelsBlocksCloudMetadataEndpoint mirrors
+// TestEmbedder_BlocksCloudMetadataEndpoint for ListModels -- proves the
+// same netguard check applies to the GET {base_url}/models path, not just
+// POST {base_url}/embeddings.
+func TestEmbedder_ListModelsBlocksCloudMetadataEndpoint(t *testing.T) {
+	e := httpembed.New(httpembed.Config{BaseURL: "http://169.254.169.254"})
+	_, err := e.ListModels(context.Background())
+	if err == nil {
+		t.Fatal("expected the cloud metadata endpoint to be rejected")
+	}
+	if !strings.Contains(err.Error(), "not allowed") {
+		t.Errorf("error = %v, want it to mention the URL is not allowed", err)
 	}
 }
 
@@ -1162,6 +1196,26 @@ func TestEmbedder_CountTokensInvalidURLReturnsError(t *testing.T) {
 	_, err := e.Embed(context.Background(), "aa bb")
 	if err == nil {
 		t.Fatal("expected an error building a request against an invalid TokenizeURL")
+	}
+}
+
+// TestEmbedder_CountTokensBlocksCloudMetadataEndpoint mirrors
+// TestEmbedder_BlocksCloudMetadataEndpoint for TokenizeURL -- proves the
+// same netguard check applies to countTokens' own request, which unlike
+// the embeddings/models paths isn't BaseURL-derived (TokenizeURL is a
+// fully separate admin-configured URL, see domain.EmbeddingHTTPEndpoint.
+// TokenizeURL).
+func TestEmbedder_CountTokensBlocksCloudMetadataEndpoint(t *testing.T) {
+	e := httpembed.New(httpembed.Config{
+		BaseURL: "http://unused.invalid", Dimensions: 1, ChunkSizeTokens: 4,
+		TokenizeURL: "http://169.254.169.254/tokenize",
+	})
+	_, err := e.Embed(context.Background(), "aa bb")
+	if err == nil {
+		t.Fatal("expected the cloud metadata TokenizeURL to be rejected")
+	}
+	if !strings.Contains(err.Error(), "not allowed") {
+		t.Errorf("error = %v, want it to mention the URL is not allowed", err)
 	}
 }
 

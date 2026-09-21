@@ -3,6 +3,14 @@
 // hosted API), so a deployment can opt into a real trained model without
 // this binary taking on an ML runtime dependency. See domain.
 // OperationalSettingsValues.EmbeddingProvider for how a deployment opts in.
+//
+// BaseURL/TokenizeURL are admin-configured, so every outbound call this
+// package makes goes through netguard's more permissive
+// AllowedConfiguredEndpointIP policy (see checkEndpointURL and New's
+// client) -- private/loopback addresses stay allowed, since a self-hosted
+// embeddings backend commonly lives on exactly those, but the cloud
+// metadata address and a few other classes with no legitimate use here
+// are still blocked. Mirrors httpchat's identical SSRF guard exactly.
 package httpembed
 
 import (
@@ -18,6 +26,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"searchengine/internal/adapters/netguard"
 	"searchengine/internal/domain"
 )
 
@@ -68,6 +77,23 @@ const (
 // rather than backing off on its own schedule. Not a named constant in
 // net/http (529 isn't part of the standard HTTP status registry).
 const statusOverloaded = 529
+
+// checkEndpointURL rejects a BaseURL/TokenizeURL-derived request URL that
+// resolves to an address netguard.AllowedConfiguredEndpointIP blocks
+// (link-local -- covering every cloud provider's metadata service --
+// multicast, or unspecified). BaseURL/TokenizeURL are admin-configured,
+// trusted the same way any other stored config is, but this still guards a
+// real self-hosted deployment against ever pointing its embeddings
+// endpoint at its own cloud metadata endpoint, whether by admin mistake or
+// a compromised admin session -- mirrors httpchat's identically-named
+// helper exactly (see that package for the full rationale and its
+// TestComplete_BlocksCloudMetadataEndpoint-style regression test).
+func checkEndpointURL(rawURL string) error {
+	if !netguard.ConfiguredEndpointURLAllowed(rawURL) {
+		return fmt.Errorf("httpembed: endpoint URL is not allowed: %s", rawURL)
+	}
+	return nil
+}
 
 // isRateLimitStatus reports whether status is one of the two codes
 // IONOS's rate-limit docs describe as retryable. Any other non-2xx status
@@ -185,10 +211,17 @@ type Config struct {
 // request body {"input": text, "model": "..."}, response body
 // {"data":[{"embedding":[...]}]}.
 type Embedder struct {
-	baseURL             string
-	apiKey              string
-	model               string
-	dims                int
+	baseURL string
+	apiKey  string
+	model   string
+	dims    int
+	// client's Transport routes every dial through
+	// netguard.ConfiguredEndpointDialContext (see New()), so even a
+	// redirect hop or a DNS answer that changes between check and connect
+	// can't land the connection on a blocked address -- checkEndpointURL's
+	// calls at each request site are the pre-request layer of the same
+	// belt-and-suspenders guard httpchat uses (see that package's
+	// defaultHTTPClient/checkEndpointURL for the full rationale).
 	client              *http.Client
 	rateLimitMaxRetries int
 	rateLimitBackoff    time.Duration
@@ -221,7 +254,7 @@ func New(cfg Config) *Embedder {
 		apiKey:              cfg.APIKey,
 		model:               cfg.Model,
 		dims:                dims,
-		client:              &http.Client{},
+		client:              &http.Client{Transport: netguard.ConfiguredEndpointTransport()},
 		rateLimitMaxRetries: maxRetries,
 		rateLimitBackoff:    backoff,
 		chunkSizeTokens:     cfg.ChunkSizeTokens,
@@ -312,7 +345,11 @@ func (e *Embedder) embedOnce(ctx context.Context, reqBody []byte) ([]float32, *h
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+"/embeddings", bytes.NewReader(reqBody))
+	url := e.baseURL + "/embeddings"
+	if err := checkEndpointURL(url); err != nil {
+		return nil, nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, nil, fmt.Errorf("httpembed: building request: %w", err)
 	}
@@ -511,6 +548,9 @@ func (e *Embedder) countTokens(ctx context.Context, text string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("httpembed: encoding tokenize request: %w", err)
 	}
+	if err := checkEndpointURL(e.tokenizeURL); err != nil {
+		return 0, err
+	}
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.tokenizeURL, bytes.NewReader(reqBody))
@@ -602,7 +642,11 @@ func (e *Embedder) listModelsOnce(ctx context.Context) ([]string, *http.Response
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.baseURL+"/models", nil)
+	url := e.baseURL + "/models"
+	if err := checkEndpointURL(url); err != nil {
+		return nil, nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("httpembed: building request: %w", err)
 	}

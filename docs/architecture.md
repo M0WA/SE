@@ -93,10 +93,10 @@ Orchestration/use-case layer; verified to import only `internal/domain` and `int
 | `browserfetcher` | Renders JS-heavy pages via a headless Chromium or Firefox browser over Playwright. |
 | `htmlparser` | Pure HTML title/text/link/canonical-URL extraction. |
 | `robots` | Fetches, caches, and evaluates robots.txt rules. |
-| `netguard` | Shared SSRF guard (custom `DialContext`) used by every outbound crawler fetch. |
+| `netguard` | Shared SSRF guard (custom `DialContext`), with two policies: a strict one (`AllowedIP`) blocking every private/reserved range, used by every outbound crawler fetch; and a more permissive one (`AllowedConfiguredEndpointIP`) for admin-configured integration endpoints (`httpembed`/`httpchat`'s `BaseURL`/`TokenizeURL`) that only blocks link-local (cloud metadata services), multicast, and unspecified addresses, since a self-hosted embeddings/chat backend legitimately lives on a private network or loopback. |
 | `hashembed` | Dependency-free fallback embedding provider via feature hashing. |
-| `httpembed` | Calls an OpenAI-compatible embeddings HTTP endpoint (e.g. IONOS AI Model Hub) with chunking and rate-limit-aware retry. |
-| `httpchat` | Calls an OpenAI-compatible chat-completions endpoint. |
+| `httpembed` | Calls an OpenAI-compatible embeddings HTTP endpoint (e.g. IONOS AI Model Hub) with chunking and rate-limit-aware retry; outbound calls routed through `netguard`'s configured-endpoint policy. |
+| `httpchat` | Calls an OpenAI-compatible chat-completions endpoint; outbound calls routed through `netguard`'s configured-endpoint policy. |
 | `crawlclient` | HTTP client `cmd/admin` uses to delegate crawl-job operations to `cmd/crawl`. |
 | `settingscrypto` | AES-256-GCM encryption of the admin-configured embedding/chat API key at rest. |
 
