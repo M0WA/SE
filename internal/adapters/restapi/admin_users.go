@@ -38,30 +38,44 @@ func validateUserPassword(w http.ResponseWriter, password string) bool {
 }
 
 // userResponse is the wire shape for a domain.User -- PasswordHash is
-// NEVER included, on create, list, or update; there is no wire
-// representation of it at all.
+// NEVER included, on create, list, get, or update; there is no wire
+// representation of it at all. CustomPrompt is included here (unlike the
+// self-service accountResponse in account.go, which this mirrors) so the
+// admin-only per-user edit subpage (/admin/users/{id}) can view and change
+// it on a user's behalf, same as the user can themselves via /account.
 type userResponse struct {
-	ID        string    `json:"id"`
-	Username  string    `json:"username"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID           string    `json:"id"`
+	Username     string    `json:"username"`
+	CustomPrompt string    `json:"custom_prompt"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func toUserResponse(u domain.User) userResponse {
-	return userResponse{ID: u.ID, Username: u.Username, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt}
+	return userResponse{ID: u.ID, Username: u.Username, CustomPrompt: u.CustomPrompt, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt}
 }
 
+// createUserRequest's CustomPrompt is optional and plain (not a pointer,
+// unlike updateUserRequest's) -- there's no "omitted vs explicitly empty"
+// ambiguity to preserve on a brand new row, an absent value is simply
+// empty either way.
 type createUserRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username     string `json:"username"`
+	Password     string `json:"password"`
+	CustomPrompt string `json:"custom_prompt"`
 }
 
-// updateUserRequest is a password reset only -- username changes aren't
-// supported (a User's ID is minted from its username at creation time,
-// same as domain.NewChatHookID; changing it afterward would orphan the
-// original ID a session's user_id/log lines still reference).
+// updateUserRequest uses pointer fields for the same reason
+// updateAccountRequest (account.go) does: "omitted" (nil) and "explicitly
+// cleared to empty string" must be distinguishable for CustomPrompt, and a
+// present-but-invalid Password must be rejected (400), never silently
+// ignored. Username is never editable once created -- a User's ID is
+// minted from it at creation time (domain.NewUserID, same convention as
+// domain.NewChatHookID); changing it afterward would orphan the original
+// ID a session's user_id/log lines still reference.
 type updateUserRequest struct {
-	Password string `json:"password"`
+	Password     *string `json:"password"`
+	CustomPrompt *string `json:"custom_prompt"`
 }
 
 // handleAdminUsers lists (GET) or creates (POST) regular-user accounts,
@@ -107,6 +121,10 @@ func (h *Handler) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	if !validateUserPassword(w, req.Password) {
 		return
 	}
+	if len(req.CustomPrompt) > maxCustomPromptLength {
+		http.Error(w, "custom prompt too long", http.StatusBadRequest)
+		return
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -121,7 +139,7 @@ func (h *Handler) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	u := domain.User{
 		ID: domain.NewUserID(username, existingIDs), Username: username,
-		PasswordHash: string(hash), CreatedAt: now, UpdatedAt: now,
+		PasswordHash: string(hash), CustomPrompt: req.CustomPrompt, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := h.users.CreateUser(r.Context(), u); err != nil {
 		if errors.Is(err, ports.ErrUsernameTaken) {
@@ -134,10 +152,30 @@ func (h *Handler) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, toUserResponse(u))
 }
 
-// handleAdminUpdateUser resets a user's password (see updateUserRequest --
-// username is not editable). Loads the existing row first so only
-// PasswordHash/UpdatedAt change; every other field (Username, CreatedAt,
-// ID) is passed through untouched.
+// handleAdminGetUser returns one user by ID (username, custom_prompt,
+// timestamps -- never the password), backing the admin-only per-user edit
+// subpage (/admin/users/{id}).
+func (h *Handler) handleAdminGetUser(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.users != nil, "users") {
+		return
+	}
+	u, err := h.users.GetUser(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, ports.ErrUserNotFound) {
+			http.Error(w, "user not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, toUserResponse(u))
+}
+
+// handleAdminUpdateUser lets the admin reset a user's password and/or
+// change their custom_prompt on their behalf (see updateUserRequest --
+// username is never editable). Loads the existing row first and only
+// changes whichever fields were actually present in the request; every
+// other field (Username, CreatedAt, ID) is passed through untouched.
 func (h *Handler) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.users != nil, "users") {
 		return
@@ -146,9 +184,23 @@ func (h *Handler) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	if !validateUserPassword(w, req.Password) {
+	if req.CustomPrompt != nil && len(*req.CustomPrompt) > maxCustomPromptLength {
+		http.Error(w, "custom prompt too long", http.StatusBadRequest)
 		return
 	}
+	var passwordHash string
+	if req.Password != nil {
+		if !validateUserPassword(w, *req.Password) {
+			return
+		}
+		hashed, err := bcrypt.GenerateFromPassword([]byte(*req.Password), bcrypt.DefaultCost)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		passwordHash = string(hashed)
+	}
+
 	id := r.PathValue("id")
 	existing, err := h.users.GetUser(r.Context(), id)
 	if err != nil {
@@ -159,12 +211,12 @@ func (h *Handler) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	if req.Password != nil {
+		existing.PasswordHash = passwordHash
 	}
-	existing.PasswordHash = string(hash)
+	if req.CustomPrompt != nil {
+		existing.CustomPrompt = *req.CustomPrompt
+	}
 	existing.UpdatedAt = time.Now().UTC()
 	err = h.users.UpdateUser(r.Context(), existing)
 	respondOrNotFound(w, err, ports.ErrUserNotFound, "user not found", toUserResponse(existing))

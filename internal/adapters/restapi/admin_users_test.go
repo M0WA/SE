@@ -683,3 +683,217 @@ func TestHandleAdminUsersPage_UserRoleRefused(t *testing.T) {
 		t.Errorf("expected 403, got %d", rec.Code)
 	}
 }
+
+// --- handleAdminGetUser: GET /admin/api/users/{id} ---
+
+func TestHandleAdminGetUser_Success(t *testing.T) {
+	u := newTestUser("user1", "alice")
+	u.CustomPrompt = "Be terse."
+	store := &fakeUserStore{users: []domain.User{u}}
+	h, cookie := adminAuthedHandlerWithUsers(t, store)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/users/user1", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if got["username"] != "alice" || got["custom_prompt"] != "Be terse." {
+		t.Errorf("unexpected response: %+v", got)
+	}
+	if _, hasHash := got["password_hash"]; hasHash {
+		t.Errorf("expected the response to never contain the password hash, got: %s", rec.Body.String())
+	}
+}
+
+func TestHandleAdminGetUser_NotFound(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithUsers(t, &fakeUserStore{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/users/missing", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminGetUser_StoreError(t *testing.T) {
+	store := &fakeUserStore{getErr: errors.New("db unavailable")}
+	h, cookie := adminAuthedHandlerWithUsers(t, store)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/users/user1", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminGetUser_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithUsers(t, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/users/user1", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminGetUser_UserRoleRefused(t *testing.T) {
+	store := &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}}
+	h, cookie := userAuthedHandler(t, store, store.users[0])
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/users/user1", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected 403, got %d", rec.Code)
+	}
+}
+
+// --- Admin-editable custom_prompt (create + update) ---
+
+func TestHandleAdminUsers_CreateWithCustomPrompt(t *testing.T) {
+	store := &fakeUserStore{}
+	h, cookie := adminAuthedHandlerWithUsers(t, store)
+	body, _ := json.Marshal(map[string]string{
+		"username": "carol", "password": "a-long-enough-password", "custom_prompt": "Answer briefly.",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/users", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(store.users) != 1 || store.users[0].CustomPrompt != "Answer briefly." {
+		t.Fatalf("expected custom_prompt stored, got %+v", store.users)
+	}
+}
+
+func TestHandleAdminUsers_CreateTooLongCustomPromptRejected(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithUsers(t, &fakeUserStore{})
+	body, _ := json.Marshal(map[string]string{
+		"username": "carol", "password": "a-long-enough-password", "custom_prompt": strings.Repeat("a", 4001),
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/users", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleAdminUpdateUser_CustomPromptOnlyLeavesPasswordUnchanged proves
+// the admin can edit just the custom prompt without resetting the
+// password -- updateUserRequest's pointer fields mean an omitted password
+// is left alone, not rejected as missing/too-short.
+func TestHandleAdminUpdateUser_CustomPromptOnlyLeavesPasswordUnchanged(t *testing.T) {
+	u := newTestUser("user1", "alice")
+	originalHash := u.PasswordHash
+	store := &fakeUserStore{users: []domain.User{u}}
+	h, cookie := adminAuthedHandlerWithUsers(t, store)
+	body, _ := json.Marshal(map[string]string{"custom_prompt": "Be terse."})
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/users/user1", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.users[0].CustomPrompt != "Be terse." {
+		t.Errorf("expected custom_prompt updated, got %q", store.users[0].CustomPrompt)
+	}
+	if store.users[0].PasswordHash != originalHash {
+		t.Errorf("expected password hash unchanged, got %q, want %q", store.users[0].PasswordHash, originalHash)
+	}
+}
+
+// TestHandleAdminUpdateUser_CustomPromptClearedToEmpty proves an explicit
+// empty string actually clears the prompt (distinct from omitting the
+// field entirely, which leaves it unchanged) -- the same pointer-field
+// distinction updateAccountRequest (account.go) relies on.
+func TestHandleAdminUpdateUser_CustomPromptClearedToEmpty(t *testing.T) {
+	u := newTestUser("user1", "alice")
+	u.CustomPrompt = "Old prompt."
+	store := &fakeUserStore{users: []domain.User{u}}
+	h, cookie := adminAuthedHandlerWithUsers(t, store)
+	body, _ := json.Marshal(map[string]string{"custom_prompt": ""})
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/users/user1", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if store.users[0].CustomPrompt != "" {
+		t.Errorf("expected custom_prompt cleared, got %q", store.users[0].CustomPrompt)
+	}
+}
+
+func TestHandleAdminUpdateUser_TooLongCustomPromptRejected(t *testing.T) {
+	store := &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}}
+	h, cookie := adminAuthedHandlerWithUsers(t, store)
+	body, _ := json.Marshal(map[string]string{"custom_prompt": strings.Repeat("a", 4001)})
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/users/user1", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleAdminUpdateUser_NoFieldsIsANoOp(t *testing.T) {
+	store := &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}}
+	h, cookie := adminAuthedHandlerWithUsers(t, store)
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/users/user1", bytes.NewReader([]byte("{}")))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// --- User subpage/JS static routes ---
+
+func TestHandleAdminUserPage_Success(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithUsers(t, &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}})
+	req := httptest.NewRequest(http.MethodGet, "/admin/users/user1", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminUserJS_Success(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithUsers(t, &fakeUserStore{})
+	req := httptest.NewRequest(http.MethodGet, "/admin_user.js", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminUserPage_UserRoleRefused(t *testing.T) {
+	store := &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}}
+	h, cookie := userAuthedHandler(t, store, store.users[0])
+	req := httptest.NewRequest(http.MethodGet, "/admin/users/user1", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected 403, got %d", rec.Code)
+	}
+}

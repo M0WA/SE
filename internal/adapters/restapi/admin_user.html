@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — user</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<main>
+  <div class="page-header">
+    <a class="mark" href="/">se.</a>
+    <button id="sign-out" class="text-button" type="button">Sign out</button>
+  </div>
+  <a class="back" href="/admin/users">Back to users</a>
+
+  <h2 id="user-title">Add user</h2>
+  <p id="user-meta" class="panel-status"></p>
+  <p id="user-status" class="panel-status"></p>
+
+  <form id="user-form" class="stacked-form" hidden>
+    <div class="form-row">
+      <label for="user-username">Username</label>
+      <input id="user-username" class="field" type="text" required autocomplete="off">
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="user-password" id="user-password-label">Password</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">At least 8 characters. Stored as a bcrypt hash -- never shown again after saving.</span></span>
+      </div>
+      <input id="user-password" class="field" type="password" autocomplete="new-password" minlength="8">
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="user-custom-prompt">Personal prompt</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Free text injected as this user's own system message on every chat turn they send, in addition to the site's own configured prompt. The user can also edit this themselves via their own Account page. Leave empty for none.</span></span>
+      </div>
+      <textarea id="user-custom-prompt" class="field" rows="24" maxlength="4000" placeholder="e.g. Always answer concisely and cite sources when possible."></textarea>
+    </div>
+    <div class="form-row">
+      <button id="user-save-btn" type="submit">Save</button>
+      <button id="user-delete-btn" type="button" class="text-button">Delete</button>
+    </div>
+    <span id="user-form-status" class="error-text"></span>
+  </form>
+</main>
+<script src="/admin.js"></script>
+<script src="/admin_user.js"></script>
+</body>
+</html>

@@ -78,6 +78,9 @@ var adminContentDedupHTML []byte
 //go:embed admin_users.html
 var adminUsersHTML []byte
 
+//go:embed admin_user.html
+var adminUserHTML []byte
+
 //go:embed account.html
 var accountHTML []byte
 
@@ -148,6 +151,9 @@ var adminCrawlJS []byte
 
 //go:embed admin_users.js
 var adminUsersJS []byte
+
+//go:embed admin_user.js
+var adminUserJS []byte
 
 //go:embed account.js
 var accountJS []byte
@@ -495,6 +501,8 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("/admin_content_dedup.js", h.handleAdminContentDedupJS)
 	mux.HandleFunc("/admin/users", h.requireAdminAuthPage(h.handleAdminUsersPage))
 	mux.HandleFunc("/admin_users.js", h.handleAdminUsersJS)
+	mux.HandleFunc("/admin/users/{id}", h.requireAdminAuthPage(h.handleAdminUserPage))
+	mux.HandleFunc("/admin_user.js", h.handleAdminUserJS)
 
 	mux.HandleFunc("/admin/api/stats", h.requireAdminAuthAPI(h.handleAdminStats))
 	mux.HandleFunc("/admin/api/vocabulary", h.requireAdminAuthAPI(h.handleAdminVocabulary))
@@ -540,6 +548,7 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("POST /admin/api/content-dedup/recompute", h.requireAdminAuthAPI(h.handleAdminContentDedupRecomputeStart))
 	mux.HandleFunc("GET /admin/api/content-dedup/alias-groups", h.requireAdminAuthAPI(h.handleAdminContentDedupAliasGroups))
 	mux.HandleFunc("/admin/api/users", h.requireAdminAuthAPI(h.handleAdminUsers))
+	mux.HandleFunc("GET /admin/api/users/{id}", h.requireAdminAuthAPI(h.handleAdminGetUser))
 	mux.HandleFunc("PATCH /admin/api/users/{id}", h.requireAdminAuthAPI(h.handleAdminUpdateUser))
 	mux.HandleFunc("DELETE /admin/api/users/{id}", h.requireAdminAuthAPI(h.handleAdminDeleteUser))
 	return withSecurityHeaders(mux)
@@ -643,6 +652,10 @@ func (h *Handler) handleAdminChatHooksJS(w http.ResponseWriter, r *http.Request)
 
 func (h *Handler) handleAdminUsersJS(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/javascript; charset=utf-8", adminUsersJS)
+}
+
+func (h *Handler) handleAdminUserJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminUserJS)
 }
 
 func (h *Handler) handleAdminVocabularyTermJS(w http.ResponseWriter, r *http.Request) {

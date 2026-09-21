@@ -948,12 +948,35 @@ paths:
         "503": { $ref: "#/components/responses/NotConfigured" }
 
   /admin/api/users/{id}:
+    get:
+      tags: [admin]
+      summary: Get one regular-user account
+      description: Backs the admin-only per-user edit subpage (/admin/users/{id}). Never includes a password or password hash.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
     patch:
       tags: [admin]
-      summary: Reset a regular-user account's password
+      summary: Reset a regular-user account's password and/or edit their custom prompt
       description: >-
-        Resets password only -- username is not editable once an account
-        is created (see UpdateUserRequest).
+        Lets the admin change a user's password and/or their personal
+        custom_prompt on their behalf (the same field the user can edit
+        themselves via /account/api) -- username is not editable once an
+        account is created (see UpdateUserRequest's pointer-field
+        semantics: an omitted field is left unchanged, an explicit empty
+        string for custom_prompt clears it).
       parameters:
         - name: id
           in: path
@@ -2372,6 +2395,14 @@ components:
           type: string
           description: Minted from username at creation (see domain.NewUserID) and never changed afterward.
         username: { type: string }
+        custom_prompt:
+          type: string
+          description: >-
+            Free text injected as this user's own leading system message
+            on every chat turn they send (see POST /chat and
+            AccountResponse.custom_prompt) -- editable here by the admin
+            on the user's behalf, or by the user themselves via
+            /account/api. Empty string when unset.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
@@ -2427,14 +2458,24 @@ components:
         password:
           type: string
           description: Plaintext, hashed with bcrypt before storage and never stored or returned as-is. 8-72 characters.
+        custom_prompt:
+          type: string
+          description: Optional. Same meaning as User.custom_prompt -- may be set at creation time instead of left for a later PATCH.
 
     UpdateUserRequest:
       type: object
-      required: [password]
+      description: >-
+        Both fields are optional pointers, independently -- omitted means
+        "leave unchanged", which for custom_prompt is distinct from an
+        explicit empty string (clears it back to empty). username is not
+        editable through this endpoint.
       properties:
         password:
           type: string
-          description: The account's new password (plaintext, hashed before storage). 8-72 characters. username is not editable through this endpoint.
+          description: The account's new password (plaintext, hashed before storage). 8-72 characters. Omit to leave the current password unchanged.
+        custom_prompt:
+          type: string
+          description: Same meaning as User.custom_prompt. Omit to leave unchanged; an explicit empty string clears it.
 
     DatabaseDiagnostics:
       type: object
