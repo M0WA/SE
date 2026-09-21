@@ -857,7 +857,12 @@ button:focus-visible {
 
 .chat-token-usage .donut-row { gap: 1rem; }
 
-.chat-token-usage .donut-chart { width: 84px; height: 84px; }
+/* Scoped to .hint-bubble, not just .chat-token-usage -- #chat-token-usage-mini
+   (the always-visible 14px donut) is also a .chat-token-usage descendant and
+   shares the .donut-chart class, so an unscoped rule here would override its
+   SVG width/height attributes too (CSS always wins over presentation
+   attributes) and render it at 84px instead of 14px. */
+.chat-token-usage .hint-bubble .donut-chart { width: 84px; height: 84px; }
 
 /* .chat-options sits in .mode-row alongside the search/chat switch, not
    above #chat-form -- a per-question override of the admin's rag_enabled
