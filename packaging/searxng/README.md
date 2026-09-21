@@ -10,7 +10,10 @@ repo's own, `searchengine` (`../searxng-engine/`), which folds this
 instance's own indexed corpus into the same blended results instead of
 querying it out of band the way the old, separate "RAG" mechanism did --
 everything else SearXNG ships with is disabled (see `settings.yml`'s
-`keep_only`).
+`keep_only`). A fifth engine, `searxng-site`, blends in results from a
+second, separately-operated SearXNG instance (`https://searxng.site/`) via
+SearXNG's own built-in generic `json_engine` -- see `settings.yml`'s own
+comment on that entry for how/why.
 
 This is independent of the `searchengine` binaries/package -- it's a separate
 Docker service on the VM, not shipped in the `searchengine` .deb, the same

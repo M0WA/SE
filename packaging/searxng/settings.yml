@@ -35,6 +35,18 @@ use_default_settings:
 # tracked file, only in the deployed copy -- see ../searxng-engine/README.md
 # for what it's for and internal_api_key: "" empty is a hard failure mode
 # (every request gets 401), not a silent no-op.
+#
+# searxng-site queries a second, separately-operated SearXNG instance
+# (https://searxng.site/) as one more upstream, via SearXNG's own built-in
+# generic json_engine -- no custom module needed (unlike searchengine
+# above), since a SearXNG instance's own /search?format=json response is
+# already a flat {"results": [{"url", "title", "content", ...}]} shape
+# json_engine understands directly. That target instance must itself have
+# `search.formats` including json (same requirement this instance has, see
+# search.formats below) and must not be blocking this box's outbound
+# requests via its own bot-detection/rate limiter -- a 403/429 here most
+# likely means the target's limiter is rejecting format=json requests from
+# an unrecognized source, not a config error on this side.
 engines:
   - name: bing
     disabled: false
@@ -45,6 +57,16 @@ engines:
     base_url: "http://127.0.0.1:8080"
     top_k: 10
     internal_api_key: "REPLACE_WITH_SEARCH_INTERNAL_API_KEY"
+  - name: searxng-site
+    engine: json_engine
+    shortcut: sx
+    disabled: false
+    categories: general
+    search_url: "https://searxng.site/search?q={query}&format=json"
+    results_query: results
+    url_query: url
+    title_query: title
+    content_query: content
 
 general:
   instance_name: "se.mo-sys.de internal search"
