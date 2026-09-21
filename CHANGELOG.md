@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.39 - 2026-09-21
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Trim redundant "use tools when outdated" line from suggested global prompt by @M0WA in https://github.com/M0WA/SE/pull/208
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.38...v4.13.39
+
+
 ## v4.13.38 - 2026-09-21
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
