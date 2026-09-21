@@ -87,7 +87,7 @@ func main() {
 		ScheduledCrawls:       repo,
 		EmbeddingEndpoints:    repo,
 		ChatEndpoints:         repo,
-		ChatHooks:             repo,
+		MCPServers:            repo,
 		Users:                 repo,
 		Health:                repo,
 		Sessions:              repo,

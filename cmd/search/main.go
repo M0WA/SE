@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"sync"
 
-	"searchengine/internal/adapters/hookrunner"
 	"searchengine/internal/adapters/httpchat"
+	"searchengine/internal/adapters/mcpclient"
 	"searchengine/internal/adapters/restapi"
 	"searchengine/internal/adapters/settingscrypto"
 	"searchengine/internal/application"
@@ -57,11 +57,6 @@ func main() {
 
 	searchSvc := application.NewHybridAsSearchService(repo, embedders, settings, opSettings, overrides, corpusStats, vocabulary)
 
-	// chatHooksDir is where every ChatHook.Script must live -- see
-	// hookrunner.Runner.Dir's doc comment. Left at its default, an admin who
-	// hasn't set CHAT_HOOKS_DIR yet can still configure hooks; scripts just
-	// won't resolve to anything until the directory exists and is populated.
-	chatHooksDir := bootstrap.GetEnv("CHAT_HOOKS_DIR", "/etc/searchengine/hooks")
 	// internalSearchAPIKey is unset (empty) by default, meaning the
 	// /search internal-key bypass doesn't exist at all -- see
 	// requireAuthAPIOrInternalKey's doc comment. An admin opts in by
@@ -77,7 +72,7 @@ func main() {
 		ChatEndpoints:        repo,
 		Users:                repo,
 		InternalSearchAPIKey: internalSearchAPIKey,
-		Chat:                 application.NewChatService(repo, httpchat.New(), repo, hookrunner.New(chatHooksDir)),
+		Chat:                 application.NewChatService(repo, httpchat.New(), repo, mcpclient.New()),
 	})
 
 	addr := bootstrap.GetEnv("SEARCH_LISTEN_ADDR", "127.0.0.1:8080")

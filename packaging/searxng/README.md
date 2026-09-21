@@ -1,9 +1,9 @@
 # SearXNG (internal web search for the chat feature)
 
 `se.mo-sys.de` runs a self-hosted [SearXNG](https://github.com/searxng/searxng)
-metasearch instance, in Docker, so the chat feature's `web_search` chat hook
-script (`packaging/chat-hooks/web_search.sh`) can search the live web
-instead of only the local index -- the model itself decides whether to
+metasearch instance, in Docker, so the chat feature's `web_search` MCP tool
+(`cmd/mcp-web`, spawned by `internal/adapters/mcpclient`) can search the live
+web instead of only the local index -- the model itself decides whether to
 invoke it, this instance never queries SearXNG on its own. Configured with
 three upstream engines -- Bing, Brave, and DuckDuckGo -- plus one of this
 repo's own, `searchengine` (`../searxng-engine/`), which folds this

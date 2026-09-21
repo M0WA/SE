@@ -5585,45 +5585,36 @@ func TestHandleAdminChatEndpoint_PatchNoProberConfiguredFallsBackToZero(t *testi
 	}
 }
 
-// chatHookResp mirrors admin.go's unexported chatHookResponse wire shape,
+// mcpServerResp mirrors admin.go's unexported mcpServerResponse wire shape,
 // for decoding test responses.
-type chatHookResp struct {
-	ID               string          `json:"id"`
-	Name             string          `json:"name"`
-	Description      string          `json:"description"`
-	Parameters       json.RawMessage `json:"parameters"`
-	Script           string          `json:"script"`
-	Enabled          bool            `json:"enabled"`
-	Prompt           string          `json:"prompt"`
-	GatedByWebSearch bool            `json:"gated_by_web_search"`
+type mcpServerResp struct {
+	ID               string   `json:"id"`
+	Name             string   `json:"name"`
+	Transport        string   `json:"transport"`
+	Command          string   `json:"command"`
+	Args             []string `json:"args"`
+	BaseURL          string   `json:"base_url"`
+	HasAPIKey        bool     `json:"has_api_key"`
+	Enabled          bool     `json:"enabled"`
+	Prompt           string   `json:"prompt"`
+	GatedByWebSearch bool     `json:"gated_by_web_search"`
 }
 
-// testHookParams builds a single-property JSON-schema object (the shape
-// validateChatHookRequest requires -- see domain.ChatHook.Parameters) as a
-// plain map, for JSON-marshaling directly into a test request body.
-func testHookParams(propertyName string) map[string]interface{} {
-	return map[string]interface{}{
-		"type":       "object",
-		"properties": map[string]interface{}{propertyName: map[string]interface{}{"type": "string"}},
-		"required":   []string{propertyName},
-	}
-}
-
-func adminAuthedHandlerWithChatHooks(t *testing.T, store ports.ChatHookStore) (*restapi.Handler, *http.Cookie) {
+func adminAuthedHandlerWithMCPServers(t *testing.T, store ports.MCPServerStore) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
 	return adminAuthedHandlerFromConfig(t, restapi.Config{
-		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, ChatHooks: store,
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, MCPServers: store,
 	})
 }
 
-func createTestChatHook(t *testing.T, h *restapi.Handler, cookie *http.Cookie, body map[string]interface{}) (int, chatHookResp) {
+func createTestMCPServer(t *testing.T, h *restapi.Handler, cookie *http.Cookie, body map[string]interface{}) (int, mcpServerResp) {
 	t.Helper()
 	data, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/chat-hooks", bytes.NewReader(data))
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/mcp-servers", bytes.NewReader(data))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
-	var resp chatHookResp
+	var resp mcpServerResp
 	if rec.Code == http.StatusCreated {
 		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 			t.Fatalf("decoding create response: %v", err)
@@ -5632,31 +5623,31 @@ func createTestChatHook(t *testing.T, h *restapi.Handler, cookie *http.Cookie, b
 	return rec.Code, resp
 }
 
-func patchChatHook(t *testing.T, h *restapi.Handler, cookie *http.Cookie, id string, body map[string]interface{}) *httptest.ResponseRecorder {
+func patchMCPServer(t *testing.T, h *restapi.Handler, cookie *http.Cookie, id string, body map[string]interface{}) *httptest.ResponseRecorder {
 	t.Helper()
 	data, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPatch, "/admin/api/chat-hooks/"+id, bytes.NewReader(data))
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/mcp-servers/"+id, bytes.NewReader(data))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
 	return rec
 }
 
-func TestHandleAdminChatHooks_NotConfigured(t *testing.T) {
+func TestHandleAdminMCPServers_NotConfigured(t *testing.T) {
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/chat-hooks", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/mcp-servers", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("expected 503 when chat hooks aren't configured, got %d", rec.Code)
+		t.Errorf("expected 503 when mcp servers aren't configured, got %d", rec.Code)
 	}
 }
 
-func TestHandleAdminChatHooks_MethodNotAllowed(t *testing.T) {
+func TestHandleAdminMCPServers_MethodNotAllowed(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
-	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
-	req := httptest.NewRequest(http.MethodDelete, "/admin/api/chat-hooks", nil)
+	h, cookie := adminAuthedHandlerWithMCPServers(t, repo)
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/mcp-servers", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -5665,10 +5656,10 @@ func TestHandleAdminChatHooks_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-func TestHandleAdminChatHooks_CreateInvalidJSON(t *testing.T) {
+func TestHandleAdminMCPServers_CreateInvalidJSON(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
-	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/chat-hooks", bytes.NewReader([]byte("{not json")))
+	h, cookie := adminAuthedHandlerWithMCPServers(t, repo)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/mcp-servers", bytes.NewReader([]byte("{not json")))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -5677,31 +5668,27 @@ func TestHandleAdminChatHooks_CreateInvalidJSON(t *testing.T) {
 	}
 }
 
-// TestHandleAdminChatHooks_CreateValidation covers every
-// validateChatHookRequest rejection branch: empty name, empty description,
-// empty script, and a parameters value that isn't valid JSON, isn't an
-// object schema, or doesn't have exactly one property (zero or more than
-// one) -- see runToolCalls's security doc comment for why exactly one
-// property is enforced here.
-func TestHandleAdminChatHooks_CreateValidation(t *testing.T) {
+// TestHandleAdminMCPServers_CreateValidation covers every
+// validateMCPServerRequest rejection branch: empty name, an unrecognized
+// transport, a stdio transport with no command, and an http transport with
+// no base_url.
+func TestHandleAdminMCPServers_CreateValidation(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
-	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
+	h, cookie := adminAuthedHandlerWithMCPServers(t, repo)
 
 	cases := []struct {
 		name string
 		body map[string]interface{}
 	}{
-		{"missing name", map[string]interface{}{"description": "Search the web.", "parameters": testHookParams("query"), "script": "search.sh"}},
-		{"missing description", map[string]interface{}{"name": "web_search", "parameters": testHookParams("query"), "script": "search.sh"}},
-		{"missing script", map[string]interface{}{"name": "web_search", "description": "Search the web.", "parameters": testHookParams("query")}},
-		{"invalid parameters shape", map[string]interface{}{"name": "web_search", "description": "Search the web.", "parameters": "not an object schema", "script": "search.sh"}},
-		{"zero properties", map[string]interface{}{"name": "web_search", "description": "Search the web.", "parameters": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}, "script": "search.sh"}},
-		{"two properties", map[string]interface{}{"name": "web_search", "description": "Search the web.", "parameters": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"a": map[string]interface{}{"type": "string"}, "b": map[string]interface{}{"type": "string"}}}, "script": "search.sh"}},
+		{"missing name", map[string]interface{}{"transport": "stdio", "command": "mcp-web"}},
+		{"unrecognized transport", map[string]interface{}{"name": "web", "transport": "carrier-pigeon"}},
+		{"stdio missing command", map[string]interface{}{"name": "web", "transport": "stdio"}},
+		{"http missing base_url", map[string]interface{}{"name": "web", "transport": "http"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			data, _ := json.Marshal(tc.body)
-			req := httptest.NewRequest(http.MethodPost, "/admin/api/chat-hooks", bytes.NewReader(data))
+			req := httptest.NewRequest(http.MethodPost, "/admin/api/mcp-servers", bytes.NewReader(data))
 			req.AddCookie(cookie)
 			rec := httptest.NewRecorder()
 			h.RoutesAdmin().ServeHTTP(rec, req)
@@ -5712,67 +5699,67 @@ func TestHandleAdminChatHooks_CreateValidation(t *testing.T) {
 	}
 }
 
-// TestHandleAdminChatHooks_CreateThenList proves a created hook's ID is
+// TestHandleAdminMCPServers_CreateThenList proves a created server's ID is
 // minted from its name and it shows up in a subsequent list.
-func TestHandleAdminChatHooks_CreateThenList(t *testing.T) {
+func TestHandleAdminMCPServers_CreateThenList(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
-	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
+	h, cookie := adminAuthedHandlerWithMCPServers(t, repo)
 
-	code, created := createTestChatHook(t, h, cookie, map[string]interface{}{
-		"name": "Web Search", "description": "Search the web.", "parameters": testHookParams("query"), "script": "search.sh", "enabled": true,
+	code, created := createTestMCPServer(t, h, cookie, map[string]interface{}{
+		"name": "Web Tools", "transport": "stdio", "command": "/usr/bin/searchengine-mcp-web", "args": []string{"--flag"}, "enabled": true,
 		"prompt": "Prefer the top 3 results.", "gated_by_web_search": true,
 	})
 	if code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d", code)
 	}
-	if created.ID != "web_search" {
+	if created.ID != "web_tools" {
 		t.Errorf("expected the ID minted from the name, got %q", created.ID)
 	}
-	if created.Description != "Search the web." || created.Script != "search.sh" || !created.Enabled {
+	if created.Command != "/usr/bin/searchengine-mcp-web" || len(created.Args) != 1 || created.Args[0] != "--flag" || !created.Enabled {
 		t.Errorf("expected every field round tripped in the create response, got %+v", created)
 	}
 	if created.Prompt != "Prefer the top 3 results." || !created.GatedByWebSearch {
 		t.Errorf("expected prompt and gated_by_web_search round tripped in the create response, got %+v", created)
 	}
 
-	listReq := httptest.NewRequest(http.MethodGet, "/admin/api/chat-hooks", nil)
+	listReq := httptest.NewRequest(http.MethodGet, "/admin/api/mcp-servers", nil)
 	listReq.AddCookie(cookie)
 	listRec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(listRec, listReq)
 	if listRec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", listRec.Code)
 	}
-	var list []chatHookResp
+	var list []mcpServerResp
 	if err := json.Unmarshal(listRec.Body.Bytes(), &list); err != nil {
 		t.Fatalf("decoding list response: %v", err)
 	}
-	if len(list) != 1 || list[0].ID != "web_search" {
-		t.Errorf("expected the created hook listed, got %+v", list)
+	if len(list) != 1 || list[0].ID != "web_tools" {
+		t.Errorf("expected the created server listed, got %+v", list)
 	}
 }
 
-// TestHandleAdminChatHooks_CreateDedupesIDOnNameCollision proves two hooks
-// created with the same name get distinct IDs, per domain.NewChatHookID's
-// dedupe rule.
-func TestHandleAdminChatHooks_CreateDedupesIDOnNameCollision(t *testing.T) {
+// TestHandleAdminMCPServers_CreateDedupesIDOnNameCollision proves two
+// servers created with the same name get distinct IDs, per
+// domain.NewMCPServerID's dedupe rule.
+func TestHandleAdminMCPServers_CreateDedupesIDOnNameCollision(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
-	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
+	h, cookie := adminAuthedHandlerWithMCPServers(t, repo)
 
-	_, first := createTestChatHook(t, h, cookie, map[string]interface{}{
-		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
+	_, first := createTestMCPServer(t, h, cookie, map[string]interface{}{
+		"name": "server", "transport": "stdio", "command": "a",
 	})
-	_, second := createTestChatHook(t, h, cookie, map[string]interface{}{
-		"name": "hook", "description": "B tool.", "parameters": testHookParams("b"), "script": "b.sh",
+	_, second := createTestMCPServer(t, h, cookie, map[string]interface{}{
+		"name": "server", "transport": "stdio", "command": "b",
 	})
 	if first.ID == second.ID {
-		t.Errorf("expected distinct IDs for two hooks named the same, got both %q", first.ID)
+		t.Errorf("expected distinct IDs for two servers named the same, got both %q", first.ID)
 	}
 }
 
-func TestHandleAdminChatHooks_ListError(t *testing.T) {
-	store := &fakeChatHookStore{listErr: errors.New("db unavailable")}
-	h, cookie := adminAuthedHandlerWithChatHooks(t, store)
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/chat-hooks", nil)
+func TestHandleAdminMCPServers_ListError(t *testing.T) {
+	store := &fakeMCPServerStore{listErr: errors.New("db unavailable")}
+	h, cookie := adminAuthedHandlerWithMCPServers(t, store)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/mcp-servers", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -5781,55 +5768,55 @@ func TestHandleAdminChatHooks_ListError(t *testing.T) {
 	}
 }
 
-func TestHandleAdminChatHooks_CreateListErrorPropagates(t *testing.T) {
-	store := &fakeChatHookStore{listErr: errors.New("db unavailable")}
-	h, cookie := adminAuthedHandlerWithChatHooks(t, store)
-	code, _ := createTestChatHook(t, h, cookie, map[string]interface{}{
-		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
+func TestHandleAdminMCPServers_CreateListErrorPropagates(t *testing.T) {
+	store := &fakeMCPServerStore{listErr: errors.New("db unavailable")}
+	h, cookie := adminAuthedHandlerWithMCPServers(t, store)
+	code, _ := createTestMCPServer(t, h, cookie, map[string]interface{}{
+		"name": "server", "transport": "stdio", "command": "a",
 	})
 	if code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", code)
 	}
 }
 
-func TestHandleAdminChatHooks_CreateStoreError(t *testing.T) {
-	store := &fakeChatHookStore{createErr: errors.New("write failed")}
-	h, cookie := adminAuthedHandlerWithChatHooks(t, store)
-	code, _ := createTestChatHook(t, h, cookie, map[string]interface{}{
-		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
+func TestHandleAdminMCPServers_CreateStoreError(t *testing.T) {
+	store := &fakeMCPServerStore{createErr: errors.New("write failed")}
+	h, cookie := adminAuthedHandlerWithMCPServers(t, store)
+	code, _ := createTestMCPServer(t, h, cookie, map[string]interface{}{
+		"name": "server", "transport": "stdio", "command": "a",
 	})
 	if code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d", code)
 	}
 }
 
-func TestHandleAdminGetChatHook_Success(t *testing.T) {
+func TestHandleAdminGetMCPServer_Success(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
-	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
-	_, created := createTestChatHook(t, h, cookie, map[string]interface{}{
-		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
+	h, cookie := adminAuthedHandlerWithMCPServers(t, repo)
+	_, created := createTestMCPServer(t, h, cookie, map[string]interface{}{
+		"name": "server", "transport": "stdio", "command": "a",
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/chat-hooks/"+created.ID, nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/mcp-servers/"+created.ID, nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	var got chatHookResp
+	var got mcpServerResp
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decoding response: %v", err)
 	}
 	if got.ID != created.ID {
-		t.Errorf("expected the created hook, got %+v", got)
+		t.Errorf("expected the created server, got %+v", got)
 	}
 }
 
-func TestHandleAdminGetChatHook_NotFound(t *testing.T) {
+func TestHandleAdminGetMCPServer_NotFound(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
-	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/chat-hooks/missing", nil)
+	h, cookie := adminAuthedHandlerWithMCPServers(t, repo)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/mcp-servers/missing", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -5838,9 +5825,9 @@ func TestHandleAdminGetChatHook_NotFound(t *testing.T) {
 	}
 }
 
-func TestHandleAdminGetChatHook_NotConfigured(t *testing.T) {
+func TestHandleAdminGetMCPServer_NotConfigured(t *testing.T) {
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/chat-hooks/anything", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/mcp-servers/anything", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -5849,10 +5836,10 @@ func TestHandleAdminGetChatHook_NotConfigured(t *testing.T) {
 	}
 }
 
-func TestHandleAdminGetChatHook_ListError(t *testing.T) {
-	store := &fakeChatHookStore{listErr: errors.New("db unavailable")}
-	h, cookie := adminAuthedHandlerWithChatHooks(t, store)
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/chat-hooks/anything", nil)
+func TestHandleAdminGetMCPServer_ListError(t *testing.T) {
+	store := &fakeMCPServerStore{listErr: errors.New("db unavailable")}
+	h, cookie := adminAuthedHandlerWithMCPServers(t, store)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/mcp-servers/anything", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -5861,31 +5848,31 @@ func TestHandleAdminGetChatHook_ListError(t *testing.T) {
 	}
 }
 
-// TestHandleAdminUpdateChatHook_ReplacesEditableFields proves a PATCH
+// TestHandleAdminUpdateMCPServer_ReplacesEditableFields proves a PATCH
 // replaces every editable field (not the ID).
-func TestHandleAdminUpdateChatHook_ReplacesEditableFields(t *testing.T) {
+func TestHandleAdminUpdateMCPServer_ReplacesEditableFields(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
-	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
-	_, created := createTestChatHook(t, h, cookie, map[string]interface{}{
-		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh", "enabled": true,
+	h, cookie := adminAuthedHandlerWithMCPServers(t, repo)
+	_, created := createTestMCPServer(t, h, cookie, map[string]interface{}{
+		"name": "server", "transport": "stdio", "command": "a", "enabled": true,
 		"prompt": "original prompt", "gated_by_web_search": true,
 	})
 
-	rec := patchChatHook(t, h, cookie, created.ID, map[string]interface{}{
-		"name": "renamed", "description": "B tool.", "parameters": testHookParams("b"), "script": "b.sh", "enabled": false,
+	rec := patchMCPServer(t, h, cookie, created.ID, map[string]interface{}{
+		"name": "renamed", "transport": "stdio", "command": "b", "enabled": false,
 		"prompt": "renamed prompt", "gated_by_web_search": false,
 	})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	var resp chatHookResp
+	var resp mcpServerResp
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decoding response: %v", err)
 	}
 	if resp.ID != created.ID {
 		t.Errorf("expected ID unchanged by PATCH, got %q, was %q", resp.ID, created.ID)
 	}
-	if resp.Name != "renamed" || resp.Description != "B tool." || resp.Script != "b.sh" || resp.Enabled {
+	if resp.Name != "renamed" || resp.Command != "b" || resp.Enabled {
 		t.Errorf("expected every editable field replaced, got %+v", resp)
 	}
 	if resp.Prompt != "renamed prompt" || resp.GatedByWebSearch {
@@ -5893,46 +5880,46 @@ func TestHandleAdminUpdateChatHook_ReplacesEditableFields(t *testing.T) {
 	}
 }
 
-// TestHandleAdminChatHooks_PromptAndGatedByWebSearchRoundTrip proves the new
+// TestHandleAdminMCPServers_PromptAndGatedByWebSearchRoundTrip proves the
 // prompt/gated_by_web_search fields flow through create, get, and update
-// unchanged -- backed by fakeChatHookStore (not the real sqlrepo-backed
+// unchanged -- backed by fakeMCPServerStore (not the real sqlrepo-backed
 // newSettingsStoreTestRepo helper) so this test does not depend on the
-// sqlrepo chat_hooks migration for these two columns landing.
-func TestHandleAdminChatHooks_PromptAndGatedByWebSearchRoundTrip(t *testing.T) {
-	store := &fakeChatHookStore{}
-	h, cookie := adminAuthedHandlerWithChatHooks(t, store)
+// sqlrepo mcp_servers table.
+func TestHandleAdminMCPServers_PromptAndGatedByWebSearchRoundTrip(t *testing.T) {
+	store := &fakeMCPServerStore{}
+	h, cookie := adminAuthedHandlerWithMCPServers(t, store)
 
-	code, created := createTestChatHook(t, h, cookie, map[string]interface{}{
-		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
-		"prompt": "hook prompt", "gated_by_web_search": true,
+	code, created := createTestMCPServer(t, h, cookie, map[string]interface{}{
+		"name": "server", "transport": "stdio", "command": "a",
+		"prompt": "server prompt", "gated_by_web_search": true,
 	})
 	if code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d", code)
 	}
-	if created.Prompt != "hook prompt" || !created.GatedByWebSearch {
+	if created.Prompt != "server prompt" || !created.GatedByWebSearch {
 		t.Errorf("expected prompt and gated_by_web_search in the create response, got %+v", created)
 	}
 
-	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/chat-hooks/"+created.ID, nil)
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/mcp-servers/"+created.ID, nil)
 	getReq.AddCookie(cookie)
 	getRec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(getRec, getReq)
-	var got chatHookResp
+	var got mcpServerResp
 	if err := json.Unmarshal(getRec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decoding get response: %v", err)
 	}
-	if got.Prompt != "hook prompt" || !got.GatedByWebSearch {
+	if got.Prompt != "server prompt" || !got.GatedByWebSearch {
 		t.Errorf("expected prompt and gated_by_web_search in the get response, got %+v", got)
 	}
 
-	rec := patchChatHook(t, h, cookie, created.ID, map[string]interface{}{
-		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
+	rec := patchMCPServer(t, h, cookie, created.ID, map[string]interface{}{
+		"name": "server", "transport": "stdio", "command": "a",
 		"prompt": "updated prompt", "gated_by_web_search": false,
 	})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	var updated chatHookResp
+	var updated mcpServerResp
 	if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
 		t.Fatalf("decoding update response: %v", err)
 	}
@@ -5941,10 +5928,59 @@ func TestHandleAdminChatHooks_PromptAndGatedByWebSearchRoundTrip(t *testing.T) {
 	}
 }
 
-func TestHandleAdminUpdateChatHook_InvalidJSON(t *testing.T) {
+// TestHandleAdminMCPServers_APIKeyWriteOnly proves the api_key/has_api_key
+// convention: a stored key is never echoed back, blank on update means
+// unchanged, and clear_api_key removes it explicitly -- mirrors
+// handleAdminUpdateEmbeddingEndpoint's own already-tested convention.
+func TestHandleAdminMCPServers_APIKeyWriteOnly(t *testing.T) {
+	store := &fakeMCPServerStore{}
+	h, cookie := adminAuthedHandlerWithMCPServers(t, store)
+
+	code, created := createTestMCPServer(t, h, cookie, map[string]interface{}{
+		"name": "remote", "transport": "http", "base_url": "https://example.com/mcp", "api_key": "sk-test",
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", code)
+	}
+	if !created.HasAPIKey {
+		t.Fatalf("expected has_api_key=true right after creating with a key, got %+v", created)
+	}
+
+	// Blank api_key on update means "keep the current key".
+	rec := patchMCPServer(t, h, cookie, created.ID, map[string]interface{}{
+		"name": "remote", "transport": "http", "base_url": "https://example.com/mcp",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var kept mcpServerResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &kept); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if !kept.HasAPIKey {
+		t.Errorf("expected the stored key preserved when api_key is left blank, got %+v", kept)
+	}
+
+	// clear_api_key removes it explicitly.
+	rec = patchMCPServer(t, h, cookie, created.ID, map[string]interface{}{
+		"name": "remote", "transport": "http", "base_url": "https://example.com/mcp", "clear_api_key": true,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var cleared mcpServerResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &cleared); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if cleared.HasAPIKey {
+		t.Errorf("expected the stored key removed by clear_api_key, got %+v", cleared)
+	}
+}
+
+func TestHandleAdminUpdateMCPServer_InvalidJSON(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
-	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
-	req := httptest.NewRequest(http.MethodPatch, "/admin/api/chat-hooks/anything", bytes.NewReader([]byte("{not json")))
+	h, cookie := adminAuthedHandlerWithMCPServers(t, repo)
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/mcp-servers/anything", bytes.NewReader([]byte("{not json")))
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -5953,60 +5989,71 @@ func TestHandleAdminUpdateChatHook_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestHandleAdminUpdateChatHook_InvalidParameters(t *testing.T) {
+func TestHandleAdminUpdateMCPServer_InvalidRequest(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
-	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
-	_, created := createTestChatHook(t, h, cookie, map[string]interface{}{
-		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
+	h, cookie := adminAuthedHandlerWithMCPServers(t, repo)
+	_, created := createTestMCPServer(t, h, cookie, map[string]interface{}{
+		"name": "server", "transport": "stdio", "command": "a",
 	})
-	rec := patchChatHook(t, h, cookie, created.ID, map[string]interface{}{
-		"name": "hook", "description": "A tool.", "parameters": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}, "script": "a.sh",
+	rec := patchMCPServer(t, h, cookie, created.ID, map[string]interface{}{
+		"name": "server", "transport": "stdio",
 	})
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
-func TestHandleAdminUpdateChatHook_NotFound(t *testing.T) {
+func TestHandleAdminUpdateMCPServer_NotFound(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
-	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
-	rec := patchChatHook(t, h, cookie, "missing", map[string]interface{}{
-		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
+	h, cookie := adminAuthedHandlerWithMCPServers(t, repo)
+	rec := patchMCPServer(t, h, cookie, "missing", map[string]interface{}{
+		"name": "server", "transport": "stdio", "command": "a",
 	})
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("expected 404, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
-func TestHandleAdminUpdateChatHook_NotConfigured(t *testing.T) {
+func TestHandleAdminUpdateMCPServer_NotConfigured(t *testing.T) {
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
-	rec := patchChatHook(t, h, cookie, "anything", map[string]interface{}{
-		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
+	rec := patchMCPServer(t, h, cookie, "anything", map[string]interface{}{
+		"name": "server", "transport": "stdio", "command": "a",
 	})
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected 503, got %d", rec.Code)
 	}
 }
 
-func TestHandleAdminUpdateChatHook_StoreError(t *testing.T) {
-	store := &fakeChatHookStore{updateErr: errors.New("write failed")}
-	h, cookie := adminAuthedHandlerWithChatHooks(t, store)
-	rec := patchChatHook(t, h, cookie, "anything", map[string]interface{}{
-		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
+func TestHandleAdminUpdateMCPServer_ListErrorLookingUpExisting(t *testing.T) {
+	store := &fakeMCPServerStore{listErr: errors.New("db unavailable")}
+	h, cookie := adminAuthedHandlerWithMCPServers(t, store)
+	rec := patchMCPServer(t, h, cookie, "anything", map[string]interface{}{
+		"name": "server", "transport": "stdio", "command": "a",
 	})
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("expected 500, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
-func TestHandleAdminDeleteChatHook_Success(t *testing.T) {
+func TestHandleAdminUpdateMCPServer_StoreError(t *testing.T) {
+	store := &fakeMCPServerStore{servers: []domain.MCPServer{{ID: "srv1", Name: "server"}}, updateErr: errors.New("write failed")}
+	h, cookie := adminAuthedHandlerWithMCPServers(t, store)
+	rec := patchMCPServer(t, h, cookie, "srv1", map[string]interface{}{
+		"name": "server", "transport": "stdio", "command": "a",
+	})
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleAdminDeleteMCPServer_Success(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
-	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
-	_, created := createTestChatHook(t, h, cookie, map[string]interface{}{
-		"name": "hook", "description": "A tool.", "parameters": testHookParams("a"), "script": "a.sh",
+	h, cookie := adminAuthedHandlerWithMCPServers(t, repo)
+	_, created := createTestMCPServer(t, h, cookie, map[string]interface{}{
+		"name": "server", "transport": "stdio", "command": "a",
 	})
 
-	req := httptest.NewRequest(http.MethodDelete, "/admin/api/chat-hooks/"+created.ID, nil)
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/mcp-servers/"+created.ID, nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -6014,19 +6061,19 @@ func TestHandleAdminDeleteChatHook_Success(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/chat-hooks/"+created.ID, nil)
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/mcp-servers/"+created.ID, nil)
 	getReq.AddCookie(cookie)
 	getRec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(getRec, getReq)
 	if getRec.Code != http.StatusNotFound {
-		t.Errorf("expected the deleted hook to 404 afterward, got %d", getRec.Code)
+		t.Errorf("expected the deleted server to 404 afterward, got %d", getRec.Code)
 	}
 }
 
-func TestHandleAdminDeleteChatHook_NotFound(t *testing.T) {
+func TestHandleAdminDeleteMCPServer_NotFound(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
-	h, cookie := adminAuthedHandlerWithChatHooks(t, repo)
-	req := httptest.NewRequest(http.MethodDelete, "/admin/api/chat-hooks/missing", nil)
+	h, cookie := adminAuthedHandlerWithMCPServers(t, repo)
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/mcp-servers/missing", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -6035,9 +6082,9 @@ func TestHandleAdminDeleteChatHook_NotFound(t *testing.T) {
 	}
 }
 
-func TestHandleAdminDeleteChatHook_NotConfigured(t *testing.T) {
+func TestHandleAdminDeleteMCPServer_NotConfigured(t *testing.T) {
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
-	req := httptest.NewRequest(http.MethodDelete, "/admin/api/chat-hooks/anything", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/mcp-servers/anything", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)

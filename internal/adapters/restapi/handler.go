@@ -45,8 +45,11 @@ var adminSettingsHTML []byte
 //go:embed admin_chat_settings.html
 var adminChatSettingsHTML []byte
 
-//go:embed admin_chat_hooks.html
-var adminChatHooksHTML []byte
+//go:embed admin_mcp_servers.html
+var adminMCPServersHTML []byte
+
+//go:embed admin_mcp_server.html
+var adminMCPServerHTML []byte
 
 //go:embed admin_search.html
 var adminSearchHTML []byte
@@ -140,8 +143,11 @@ var adminSettingsJS []byte
 //go:embed admin_chat_settings.js
 var adminChatSettingsJS []byte
 
-//go:embed admin_chat_hooks.js
-var adminChatHooksJS []byte
+//go:embed admin_mcp_servers.js
+var adminMCPServersJS []byte
+
+//go:embed admin_mcp_server.js
+var adminMCPServerJS []byte
 
 //go:embed admin_vocabulary_term.js
 var adminVocabularyTermJS []byte
@@ -198,11 +204,11 @@ type Handler struct {
 	// (GET/PATCH /admin/api/chat-endpoint) -- set on admin-server only,
 	// the same *sqlrepo.Repository embeddingEndpoints/scheduledCrawls use.
 	chatEndpoints ports.ChatEndpointStore
-	// chatHooks backs the admin API's chat hook CRUD
-	// (GET/POST /admin/api/chat-hooks, GET/PATCH/DELETE
-	// /admin/api/chat-hooks/{id}) -- set on admin-server only, the same
+	// mcpServers backs the admin API's MCP server CRUD
+	// (GET/POST /admin/api/mcp-servers, GET/PATCH/DELETE
+	// /admin/api/mcp-servers/{id}) -- set on admin-server only, the same
 	// *sqlrepo.Repository chatEndpoints/embeddingEndpoints use.
-	chatHooks ports.ChatHookStore
+	mcpServers ports.MCPServerStore
 	// users backs the admin API's regular-user-account CRUD (GET/POST
 	// /admin/api/users, PATCH/DELETE /admin/api/users/{id}) and
 	// handleLogin's DB-backed-account lookup on admin-server, PLUS (the
@@ -311,14 +317,15 @@ type Config struct {
 	// config CRUD API -- the same *sqlrepo.Repository EmbeddingEndpoints
 	// uses.
 	ChatEndpoints ports.ChatEndpointStore
-	// ChatHooks is set on admin-server only, backing the chat hook CRUD API
-	// -- the same *sqlrepo.Repository ChatEndpoints/EmbeddingEndpoints uses.
-	ChatHooks ports.ChatHookStore
+	// MCPServers is set on admin-server only, backing the MCP server CRUD
+	// API -- the same *sqlrepo.Repository ChatEndpoints/EmbeddingEndpoints
+	// uses.
+	MCPServers ports.MCPServerStore
 	// Users is set on admin-server (backing the regular-user-account CRUD
 	// API and handleLogin's DB-backed-account lookup) AND search-server
 	// (backing the self-service /account routes and handleChat's per-user
 	// custom-prompt lookup) -- the same *sqlrepo.Repository
-	// ChatEndpoints/ChatHooks uses.
+	// ChatEndpoints/MCPServers uses.
 	Users ports.UserStore
 	// Health backs GET /healthz on every process; unset always reports
 	// healthy (no DB connection to check).
@@ -389,7 +396,7 @@ func New(cfg Config) *Handler {
 		embeddingEndpoints:    cfg.EmbeddingEndpoints,
 		chat:                  cfg.Chat,
 		chatEndpoints:         cfg.ChatEndpoints,
-		chatHooks:             cfg.ChatHooks,
+		mcpServers:            cfg.MCPServers,
 		users:                 cfg.Users,
 		health:                cfg.Health,
 		onCrawlComplete:       cfg.OnCrawlComplete,
@@ -481,8 +488,10 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("/admin_settings.js", h.handleAdminSettingsJS)
 	mux.HandleFunc("/admin/chat/settings", h.requireAdminAuthPage(h.handleAdminChatSettingsPage))
 	mux.HandleFunc("/admin_chat_settings.js", h.handleAdminChatSettingsJS)
-	mux.HandleFunc("/admin/chat/hooks", h.requireAdminAuthPage(h.handleAdminChatHooksPage))
-	mux.HandleFunc("/admin_chat_hooks.js", h.handleAdminChatHooksJS)
+	mux.HandleFunc("/admin/mcp-servers", h.requireAdminAuthPage(h.handleAdminMCPServersPage))
+	mux.HandleFunc("/admin_mcp_servers.js", h.handleAdminMCPServersJS)
+	mux.HandleFunc("/admin/mcp-servers/{id}", h.requireAdminAuthPage(h.handleAdminMCPServerPage))
+	mux.HandleFunc("/admin_mcp_server.js", h.handleAdminMCPServerJS)
 	mux.HandleFunc("/admin/search", h.requireAdminAuthPage(h.handleAdminSearchPage))
 	mux.HandleFunc("/admin_search.js", h.handleAdminSearchJS)
 	mux.HandleFunc("/admin/search/result", h.requireAdminAuthPage(h.handleAdminSearchResultPage))
@@ -517,10 +526,10 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("/admin/api/search", h.requireAdminAuthAPI(h.handleAdminSearch))
 	mux.HandleFunc("/admin/api/settings", h.requireAdminAuthAPI(h.handleAdminSettings))
 	mux.HandleFunc("/admin/api/chat-endpoint", h.requireAdminAuthAPI(h.handleAdminChatEndpoint))
-	mux.HandleFunc("/admin/api/chat-hooks", h.requireAdminAuthAPI(h.handleAdminChatHooks))
-	mux.HandleFunc("GET /admin/api/chat-hooks/{id}", h.requireAdminAuthAPI(h.handleAdminGetChatHook))
-	mux.HandleFunc("PATCH /admin/api/chat-hooks/{id}", h.requireAdminAuthAPI(h.handleAdminUpdateChatHook))
-	mux.HandleFunc("DELETE /admin/api/chat-hooks/{id}", h.requireAdminAuthAPI(h.handleAdminDeleteChatHook))
+	mux.HandleFunc("/admin/api/mcp-servers", h.requireAdminAuthAPI(h.handleAdminMCPServers))
+	mux.HandleFunc("GET /admin/api/mcp-servers/{id}", h.requireAdminAuthAPI(h.handleAdminGetMCPServer))
+	mux.HandleFunc("PATCH /admin/api/mcp-servers/{id}", h.requireAdminAuthAPI(h.handleAdminUpdateMCPServer))
+	mux.HandleFunc("DELETE /admin/api/mcp-servers/{id}", h.requireAdminAuthAPI(h.handleAdminDeleteMCPServer))
 	mux.HandleFunc("POST /admin/api/embeddings/models", h.requireAdminAuthAPI(h.handleAdminEmbeddingsModels))
 	mux.HandleFunc("POST /admin/api/embeddings/test", h.requireAdminAuthAPI(h.handleAdminEmbeddingsTest))
 	mux.HandleFunc("/admin/api/embeddings/endpoints", h.requireAdminAuthAPI(h.handleAdminEmbeddingEndpoints))
@@ -646,8 +655,12 @@ func (h *Handler) handleAdminChatSettingsJS(w http.ResponseWriter, r *http.Reque
 	serveStatic(w, r, "text/javascript; charset=utf-8", adminChatSettingsJS)
 }
 
-func (h *Handler) handleAdminChatHooksJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminChatHooksJS)
+func (h *Handler) handleAdminMCPServersJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminMCPServersJS)
+}
+
+func (h *Handler) handleAdminMCPServerJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminMCPServerJS)
 }
 
 func (h *Handler) handleAdminUsersJS(w http.ResponseWriter, r *http.Request) {

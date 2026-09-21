@@ -261,7 +261,7 @@ var ErrUsernameTaken = errors.New("username already taken")
 
 // UserStore persists DB-backed regular-user accounts -- see domain.User's
 // doc comment for how these differ from the single hardcoded admin
-// account. A list of many, like ChatHookStore, CRUD over IDs.
+// account. A list of many, like MCPServerStore, CRUD over IDs.
 type UserStore interface {
 	ListUsers(ctx context.Context) ([]domain.User, error)
 	GetUser(ctx context.Context, id string) (domain.User, error)
@@ -659,7 +659,7 @@ type ChatEndpointStore interface {
 
 // ChatCompleter calls an OpenAI-compatible chat-completions endpoint,
 // optionally with a native "tools" list (see domain.ToolDef) -- tools is
-// nil/empty for a turn with no active hooks, in which case the
+// nil/empty for a turn with no active MCP servers/tools, in which case the
 // implementation must omit the request's tools field entirely (never send
 // an empty array with a tool_choice), for compatibility with any
 // OpenAI-compatible endpoint that isn't configured for tool-calling at all.
@@ -670,38 +670,58 @@ type ChatCompleter interface {
 	Complete(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage, tools []domain.ToolDef) (domain.ChatMessage, error)
 }
 
-// ErrChatHookNotFound is returned by ChatHookStore's Update and Delete when
-// no hook with the given ID exists -- ChatHookStore's sibling of
+// ErrMCPServerNotFound is returned by MCPServerStore's Update and Delete
+// when no server with the given ID exists -- MCPServerStore's sibling of
 // ErrEmbeddingEndpointNotFound above.
-var ErrChatHookNotFound = errors.New("chat hook not found")
+var ErrMCPServerNotFound = errors.New("mcp server not found")
 
-// ChatHookStore persists the admin-configured domain.ChatHook rows -- a
+// MCPServerStore persists the admin-configured domain.MCPServer rows -- a
 // list of many, like EmbeddingEndpointStore, unlike the single-row
-// ChatEndpointStore above: an admin can define several hooks over time.
-type ChatHookStore interface {
-	ListChatHooks(ctx context.Context) ([]domain.ChatHook, error)
-	CreateChatHook(ctx context.Context, h domain.ChatHook) error
-	// UpdateChatHook returns ErrChatHookNotFound if no hook with h.ID exists.
-	UpdateChatHook(ctx context.Context, h domain.ChatHook) error
-	// DeleteChatHook returns ErrChatHookNotFound if no hook with id exists.
-	DeleteChatHook(ctx context.Context, id string) error
+// ChatEndpointStore above: an admin can define several servers over time.
+type MCPServerStore interface {
+	ListMCPServers(ctx context.Context) ([]domain.MCPServer, error)
+	CreateMCPServer(ctx context.Context, s domain.MCPServer) error
+	// UpdateMCPServer returns ErrMCPServerNotFound if no server with s.ID exists.
+	UpdateMCPServer(ctx context.Context, s domain.MCPServer) error
+	// DeleteMCPServer returns ErrMCPServerNotFound if no server with id exists.
+	DeleteMCPServer(ctx context.Context, id string) error
 }
 
-// HookScriptRunner executes one hook's script with a model-supplied tool
-// argument as argv (NEVER shell-interpolated -- see
-// application.runToolCalls's own security doc comment), returning its
-// stdout or an error/timeout. scriptName is resolved against a fixed,
-// admin-controlled script directory by the implementation -- it is never a
-// path, and args are passed as a real argv slice, never through a shell.
+// MCPToolProvider opens one session per chat turn, spanning tool discovery
+// through every follow-up round's tool calls -- MCP's own session-oriented
+// usage pattern (initialize once per connection, then reuse it), not a
+// fresh spawn+handshake per call. Open is best-effort per server: one that
+// fails to connect or list its tools is skipped (logged), never fails the
+// whole turn -- same convention ChatService.Chat already applies to a
+// ListMCPServers error. A tool name collision across two different active
+// servers is resolved by skipping (logging) the later one, never silently
+// misrouting a call to the wrong server.
 //
-// env carries ADMIN-CONFIGURED configuration (e.g. an endpoint's own
-// WebSearchBaseURL) as additional process environment variables for the
-// script -- never anything derived from the model's own output or a tool
-// call's argument, so this does not reopen the injection surface args
-// guards against (see application.runToolCalls's security doc comment):
-// env is set by ChatService.Chat from domain.ChatEndpoint fields the admin
-// configured ahead of time, not from a chat turn's content. A nil or empty
-// map adds nothing beyond the implementation's own base environment.
-type HookScriptRunner interface {
-	RunHookScript(ctx context.Context, scriptName string, args []string, env map[string]string) (string, error)
+// env carries ADMIN-CONFIGURED configuration (e.g. the endpoint's own
+// WebSearchBaseURL) as additional process environment variables for every
+// spawned "stdio"-transport server -- never anything derived from the
+// model's own output or a tool call's arguments, so this does not reopen
+// the injection surface CallTool's own arguments guard against: env is set
+// by ChatService.Chat from domain.ChatEndpoint fields the admin configured
+// ahead of time, not from a chat turn's content. A nil or empty map adds
+// nothing beyond the implementation's own base environment.
+type MCPToolProvider interface {
+	Open(ctx context.Context, servers []domain.MCPServer, env map[string]string) (MCPSession, []domain.MCPTool)
+}
+
+// MCPSession is one chat turn's live connections to every active MCP
+// server, returned by MCPToolProvider.Open alongside the tools discovered
+// across all of them.
+type MCPSession interface {
+	// CallTool invokes toolName (looked up among every tool discovered by
+	// the Open call that returned this session) against its originating
+	// server, with argumentsJSON as the model supplied it (a raw JSON
+	// object, NEVER shell-interpolated or otherwise reinterpreted -- see
+	// mcpclient's own security doc comment), returning the result content
+	// as text. Returns an error for an unknown toolName, a call that fails,
+	// or one that times out.
+	CallTool(ctx context.Context, toolName string, argumentsJSON string) (string, error)
+	// Close closes every underlying server connection this session opened.
+	// Safe to call even if Open connected to zero servers.
+	Close()
 }

@@ -19,14 +19,21 @@ func newSeqID(prefix string, seq *int64) string {
 
 // slugIDRE matches every run of characters a mintSlugID-derived ID must
 // collapse away -- shared by every resource type that mints its own ID
-// from an admin-typed display name (ChatHook, EmbeddingHTTPEndpoint).
+// from an admin-typed display name (User, MCPServer, EmbeddingHTTPEndpoint).
 var slugIDRE = regexp.MustCompile(`[^a-z0-9]+`)
+
+// SlugIDPattern is every valid mintSlugID-derived ID (lowercase
+// alphanumeric/underscore, 1-20 characters) -- short enough to fit the
+// sqlrepo MySQL dialect's VARCHAR(20) id columns. Shared by every resource
+// type that mints its ID this way and has no reason for an independently
+// evolving pattern of its own (User, MCPServer).
+var SlugIDPattern = regexp.MustCompile(`^[a-z0-9_]{1,20}$`)
 
 // mintSlugID derives a <=20-character ID from name (lowercased,
 // non-alphanumeric runs collapsed to "_", trimmed), appending the shortest
 // numeric suffix that avoids colliding with a key in existing. Falls back
 // to a timestamp-derived ID using fallbackPrefix if name has no
-// alphanumeric characters at all. Shared by NewChatHookID and
+// alphanumeric characters at all. Shared by NewMCPServerID and
 // NewEmbeddingEndpointID, which were previously identical copies of this
 // same algorithm differing only in their fallback prefix.
 func mintSlugID(name string, existing map[string]bool, fallbackPrefix string) string {

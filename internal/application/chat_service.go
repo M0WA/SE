@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -13,29 +12,29 @@ import (
 )
 
 // ChatService orchestrates a chat turn: load the single admin-configured
-// domain.ChatEndpoint, activate any admin-configured chat hooks (tools)
-// whose gating the turn's effective web-search toggle satisfies, offer them
-// to the model as native tool-calling functions, and run whichever ones the
-// model actually invokes. Kept separate from
+// domain.ChatEndpoint, connect to any admin-configured MCP servers whose
+// gating the turn's effective web-search toggle satisfies, offer their
+// discovered tools to the model as native tool-calling functions, and run
+// whichever ones the model actually invokes. Kept separate from
 // hybridSearchService so chat's single-endpoint Get/Set config
 // (ports.ChatEndpointStore) never gets confused with the multi-endpoint
 // blended CRUD ports.EmbeddingEndpointStore uses.
 type ChatService struct {
 	endpoints ports.ChatEndpointStore
 	completer ports.ChatCompleter
-	// hooks and hookRunner are both nil-safe (see Chat): a deployment that
-	// hasn't wired regex-triggered chat hooks yet simply gets an empty
-	// ChatResult.HookResults every turn.
-	hooks      ports.ChatHookStore
-	hookRunner ports.HookScriptRunner
+	// mcpServers and mcpTools are both nil-safe (see Chat): a deployment
+	// that hasn't wired any MCP servers yet simply gets an empty
+	// ChatResult.ToolResults every turn.
+	mcpServers ports.MCPServerStore
+	mcpTools   ports.MCPToolProvider
 }
 
 // NewChatService wires a ChatService from its four collaborators: the
 // endpoint config store, the client that actually talks to the configured
-// OpenAI-compatible endpoint, and the store/runner pair behind
-// regex-triggered chat hooks (see chat_hooks.go).
-func NewChatService(endpoints ports.ChatEndpointStore, completer ports.ChatCompleter, hooks ports.ChatHookStore, hookRunner ports.HookScriptRunner) *ChatService {
-	return &ChatService{endpoints: endpoints, completer: completer, hooks: hooks, hookRunner: hookRunner}
+// OpenAI-compatible endpoint, and the store/provider pair behind
+// admin-configured MCP servers (see mcp_tools.go).
+func NewChatService(endpoints ports.ChatEndpointStore, completer ports.ChatCompleter, mcpServers ports.MCPServerStore, mcpTools ports.MCPToolProvider) *ChatService {
+	return &ChatService{endpoints: endpoints, completer: completer, mcpServers: mcpServers, mcpTools: mcpTools}
 }
 
 // ChatOptions carries this turn's per-question overrides for
@@ -46,10 +45,10 @@ func NewChatService(endpoints ports.ChatEndpointStore, completer ports.ChatCompl
 // WebSearch's own doc comment for what the toggle actually does.
 type ChatOptions struct {
 	// WebSearch, when non-nil, decides for this question only whether every
-	// ChatHook with GatedByWebSearch=true is active -- it does not itself
-	// perform a search or fetch anything; it only decides which hooks the
-	// model is offered, leaving the model to invoke them (e.g. a
-	// "web_search" or "web_fetch" hook) if it chooses to.
+	// domain.MCPServer with GatedByWebSearch=true is active -- it does not
+	// itself perform a search or fetch anything; it only decides which
+	// servers' tools the model is offered, leaving the model to invoke them
+	// (e.g. a "web_search" or "web_fetch" tool) if it chooses to.
 	WebSearch *bool
 	// UserCustomPrompt, when non-empty, is injected as its own leading
 	// system message for this turn -- empty means no per-user prompt is
@@ -69,14 +68,14 @@ type ChatResult struct {
 	// keeps no session state), so without this flag a user has no way to
 	// know the model answered without seeing the whole conversation.
 	ContextTrimmed bool
-	// HookResults is one entry per tool call the model made this turn (see
-	// chat_hooks.go's runToolCalls), in call order -- empty whenever s.hooks
-	// is nil or the model never invoked a tool.
-	HookResults []domain.ChatHookResult
+	// ToolResults is one entry per tool call the model made this turn (see
+	// mcp_tools.go's runToolCalls), in call order -- empty whenever
+	// s.mcpTools is nil or the model never invoked a tool.
+	ToolResults []domain.ToolCallResult
 	// TokenUsage breaks down the estimated size of what was actually sent to
 	// the model for this turn's first completion call -- lets the chat UI
 	// show where a turn's context budget went (global prompt vs. active
-	// hooks' own prompts vs. search context vs. conversation history)
+	// servers' own prompts vs. search context vs. conversation history)
 	// instead of just a single opaque total.
 	TokenUsage TokenUsage
 }
@@ -84,7 +83,7 @@ type ChatResult struct {
 // TokenUsage is one turn's leading-context token estimate, broken down by
 // where each piece came from -- see estimateTokens for the (deliberately
 // approximate, character-count-based) estimation method.
-// GlobalPromptTokens/UserPromptTokens/HookPromptTokens are computed
+// GlobalPromptTokens/UserPromptTokens/ToolPromptTokens are computed
 // directly from the same pieces ChatService.Chat assembles into `leading`,
 // so they're exact for what was actually sent (not re-derived from the
 // final message list). HistoryTokens is measured after trimToBudget, so it
@@ -98,20 +97,20 @@ type TokenUsage struct {
 	// contribution -- zero whenever UserCustomPrompt is empty (a role=admin
 	// session, or a role=user session with no custom prompt set).
 	UserPromptTokens int
-	HookPromptTokens int
+	ToolPromptTokens int
 	HistoryTokens    int
 	MaxContextTokens int
 }
 
 // Chat answers the conversation in history using the admin-configured chat
 // endpoint. opts.WebSearch, when non-nil, decides for this question only
-// whether GatedByWebSearch chat hooks are active, falling back to
+// whether GatedByWebSearch MCP servers are active, falling back to
 // endpoint.WebSearchEnabled otherwise -- so an admin's default can still be
 // overridden per question without changing it globally. This layer never
-// performs a web search or fetch itself: it only decides which hooks the
-// model is offered as native tools (their Name/Description/Parameters sent
-// in the request's tools list, their Prompt injected) and leaves the model
-// to invoke them, same as any other active hook.
+// performs a web search or fetch itself: it only decides which servers the
+// model is offered tools from (each discovered tool's Name/Description/
+// InputSchema sent in the request's tools list, each active server's own
+// Prompt injected) and leaves the model to invoke them.
 func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, opts ChatOptions) (ChatResult, error) {
 	if len(history) == 0 {
 		return ChatResult{}, errors.New("chat: message history must not be empty")
@@ -130,23 +129,34 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		useWebSearch = *opts.WebSearch
 	}
 
-	// List ALL hooks early, before building the messages sent to the first
-	// completion call -- a hook's own tool definition and Prompt (see below)
-	// both need to reach the model before it can decide to invoke that hook
-	// at all, so this can't wait until after an answer comes back.
-	// activeHooks is reused for every runToolCalls call this turn, so
-	// ListChatHooks is never called twice in one turn. A ListChatHooks error
-	// is best-effort: it just leaves activeHooks empty rather than failing
-	// the turn.
-	var activeHooks []domain.ChatHook
-	if s.hooks != nil {
-		if all, err := s.hooks.ListChatHooks(ctx); err == nil {
-			for _, h := range all {
-				if h.Enabled && (!h.GatedByWebSearch || useWebSearch) {
-					activeHooks = append(activeHooks, h)
+	// List ALL servers early, before building the messages sent to the
+	// first completion call -- a server's discovered tools and its own
+	// Prompt (see below) both need to reach the model before it can decide
+	// to invoke one of its tools at all, so this can't wait until after an
+	// answer comes back. A ListMCPServers error is best-effort: it just
+	// leaves activeServers empty rather than failing the turn.
+	var activeServers []domain.MCPServer
+	if s.mcpServers != nil {
+		if all, err := s.mcpServers.ListMCPServers(ctx); err == nil {
+			for _, srv := range all {
+				if srv.Enabled && (!srv.GatedByWebSearch || useWebSearch) {
+					activeServers = append(activeServers, srv)
 				}
 			}
 		}
+	}
+
+	// Open one MCP session spanning the whole turn -- discovery through
+	// every follow-up round's tool calls below -- rather than reconnecting
+	// per call, matching MCP's own intended session-oriented usage. Nil-safe:
+	// a deployment with no mcpTools wired gets a nil session and no
+	// discoveredTools, and every use of session below is guarded.
+	var session ports.MCPSession
+	var discoveredTools []domain.MCPTool
+	if s.mcpTools != nil && len(activeServers) > 0 {
+		env := map[string]string{"WEB_SEARCH_BASE_URL": endpoint.WebSearchBaseURL}
+		session, discoveredTools = s.mcpTools.Open(ctx, activeServers, env)
+		defer session.Close()
 	}
 
 	messages := history
@@ -155,13 +165,14 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	// system prompt, unconditional, when set; (2) the calling user's own
 	// personal custom prompt (opts.UserCustomPrompt), when set -- see
 	// ChatOptions.UserCustomPrompt's doc comment for who sets this and why;
-	// (3) each activeHooks entry's own non-empty Prompt, in list order,
+	// (3) each activeServers entry's own non-empty Prompt, in list order,
 	// each its OWN separate system message (not concatenated into one
-	// blob) -- so a hook's invocation syntax reaches the model before the
-	// first completion call, letting it decide whether to invoke that hook
-	// at all. Building this as one ordered slice (rather than prepending
-	// piecemeal) keeps that order obvious and gives trimToBudget a single
-	// well-defined run of leading system-role messages to keep intact.
+	// blob) -- so a server's invocation guidance reaches the model before
+	// the first completion call, letting it decide whether to invoke one of
+	// that server's tools at all. Building this as one ordered slice
+	// (rather than prepending piecemeal) keeps that order obvious and gives
+	// trimToBudget a single well-defined run of leading system-role
+	// messages to keep intact.
 	tokenUsage := TokenUsage{MaxContextTokens: endpoint.MaxContextTokens}
 	var leading []domain.ChatMessage
 	if endpoint.SystemPrompt != "" {
@@ -174,11 +185,11 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		leading = append(leading, msg)
 		tokenUsage.UserPromptTokens = estimateTokens([]domain.ChatMessage{msg})
 	}
-	for _, h := range activeHooks {
-		if h.Prompt != "" {
-			msg := domain.ChatMessage{Role: domain.ChatRoleSystem, Content: expandPromptPlaceholders(h.Prompt)}
+	for _, srv := range activeServers {
+		if srv.Prompt != "" {
+			msg := domain.ChatMessage{Role: domain.ChatRoleSystem, Content: expandPromptPlaceholders(srv.Prompt)}
 			leading = append(leading, msg)
-			tokenUsage.HookPromptTokens += estimateTokens([]domain.ChatMessage{msg})
+			tokenUsage.ToolPromptTokens += estimateTokens([]domain.ChatMessage{msg})
 		}
 	}
 	if len(leading) > 0 {
@@ -200,7 +211,7 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	// above (see trimToBudget's own doc comment).
 	tokenUsage.HistoryTokens = estimateTokens(messages[len(leading):])
 
-	tools := toolDefsFrom(activeHooks)
+	tools := toolDefsFrom(discoveredTools)
 	assistantMsg, err := s.completer.Complete(ctx, endpoint, messages, tools)
 	if err != nil {
 		return ChatResult{}, fmt.Errorf("chat: %w", err)
@@ -215,20 +226,15 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	// (e.g. a fetch came back with an empty/blocked page, so it tries
 	// another URL or another search) makes ANOTHER tool call in that
 	// follow-up answer; capping this at exactly one round would leave that
-	// second tool call completely unprocessed. Every round's hookResults are
+	// second tool call completely unprocessed. Every round's toolResults are
 	// accumulated into the final ChatResult, so the UI's folded transparency
-	// panel shows every attempt, not just the last. Reuses the SAME
-	// activeHooks/tools computed above every round -- ListChatHooks is never
-	// called again mid-turn. env carries only ADMIN-CONFIGURED endpoint
-	// config (never anything derived from the model's own output or a tool
-	// call's argument) -- see ports.HookScriptRunner's doc comment for why
-	// this doesn't reopen runToolCalls's security surface.
-	var hookResults []domain.ChatHookResult
+	// panel shows every attempt, not just the last. Reuses the SAME session
+	// opened above every round -- Open is never called again mid-turn.
+	var toolResults []domain.ToolCallResult
 	currentMessages := messages
-	env := map[string]string{"WEB_SEARCH_BASE_URL": endpoint.WebSearchBaseURL}
 	for round := 0; round < maxHookFollowUpRounds && len(assistantMsg.ToolCalls) > 0; round++ {
-		roundResults := runToolCalls(ctx, activeHooks, s.hookRunner, assistantMsg.ToolCalls, env)
-		hookResults = append(hookResults, roundResults...)
+		roundResults := runToolCalls(ctx, session, assistantMsg.ToolCalls)
+		toolResults = append(toolResults, roundResults...)
 
 		followUp := make([]domain.ChatMessage, 0, len(currentMessages)+1+len(roundResults))
 		followUp = append(followUp, currentMessages...)
@@ -255,7 +261,7 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	// message), or the model returned a genuinely empty answer despite
 	// tools being available, answer is empty here. Left as-is, the user
 	// would see a blank response with no explanation, even though every
-	// result gathered so far (in currentMessages/hookResults) is still
+	// result gathered so far (in currentMessages/toolResults) is still
 	// right there. Force one last completion call with NO tools offered
 	// (so the model can't request yet another one) instead of returning
 	// nothing: the model already has everything it found, it just needs
@@ -274,58 +280,11 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		}
 	}
 
-	return ChatResult{Answer: answer, ContextTrimmed: contextTrimmed, HookResults: hookResults, TokenUsage: tokenUsage}, nil
+	return ChatResult{Answer: answer, ContextTrimmed: contextTrimmed, ToolResults: toolResults, TokenUsage: tokenUsage}, nil
 }
 
-// toolDefsFrom builds the tools list offered to the model from this turn's
-// active hooks. A hook whose Parameters is empty/invalid is still offered
-// as-is (Complete doesn't validate Parameters, only runToolCalls does, when
-// and if the model actually calls it) -- matching the old Pattern-based
-// mechanism's own "skip at call time, not at offer time" tolerance for a
-// pre-existing invalid row; an empty Parameters is defaulted to a bare
-// no-properties object schema so the request never sends invalid JSON.
-func toolDefsFrom(hooks []domain.ChatHook) []domain.ToolDef {
-	if len(hooks) == 0 {
-		return nil
-	}
-	out := make([]domain.ToolDef, len(hooks))
-	for i, h := range hooks {
-		params := h.Parameters
-		if len(params) == 0 {
-			params = json.RawMessage(`{"type":"object","properties":{}}`)
-		}
-		out[i] = domain.ToolDef{Name: h.Name, Description: h.Description, Parameters: params}
-	}
-	return out
-}
-
-// toolResultMessages builds one domain.ChatMessage{Role: ChatRoleTool} per
-// result, correlated to the tool call it answers via ToolCallID -- native
-// tool-calling expects exactly one such message per tool_call in the
-// preceding assistant message (see runToolCalls, which always produces
-// exactly one ChatHookResult per input ToolCall, even a skipped/failed one,
-// specifically so this invariant holds). A failed/skipped call's message
-// carries its Err text instead of Output, so the model can say it couldn't
-// complete the tool call rather than being left to guess why nothing came
-// back.
-func toolResultMessages(results []domain.ChatHookResult) []domain.ChatMessage {
-	out := make([]domain.ChatMessage, len(results))
-	for i, r := range results {
-		content := r.Output
-		if r.Err != "" {
-			content = "error: " + r.Err
-		}
-		out[i] = domain.ChatMessage{
-			Role:       domain.ChatRoleTool,
-			Content:    domain.TruncateWithNote(content, maxHookOutputCharsForModel),
-			ToolCallID: r.ToolCallID,
-		}
-	}
-	return out
-}
-
-// promptDatePlaceholder, when present in the global system prompt or a
-// hook's own Prompt, is replaced with the current UTC date and time,
+// promptDatePlaceholder, when present in the global system prompt or an MCP
+// server's own Prompt, is replaced with the current UTC date and time,
 // rendered via strftime's own %c conversion (see strftime below) -- lets
 // an admin write a prompt like "the current time is %c" so the model has a
 // concrete anchor for judging whether cached/trained-in information could
@@ -417,12 +376,11 @@ func strftime(t time.Time, format string) string {
 
 // maxHookFollowUpRounds bounds how many times ChatService.Chat will run a
 // round of tool calls and feed the results back to the model for another
-// completion -- each round costs one more completion call and (via
-// maxHookMatchesPerTurn, chat_hooks.go) up to maxHookMatchesPerTurn more
-// script executions, so this is a real cost bound, not just a correctness
-// one. 4 covers web_search's own suggested Prompt text
-// (packaging/chat-hooks/README.md): one search, then fetching the 3 most
-// relevant results to cross-verify -- 4 tool calls total, executed by
+// completion -- each round costs one more completion call and one more
+// batch of MCP tool calls, so this is a real cost bound, not just a
+// correctness one. 4 covers web_search's own suggested Prompt text
+// (see domain.MCPServer's doc comment): one search, then fetching the 3
+// most relevant results to cross-verify -- 4 tool calls total, executed by
 // processing the search (round 0), fetch 1 (round 1), fetch 2 (round 2),
 // and fetch 3 (round 3). Keep this in sync with that prompt text if either
 // changes: a smaller value here than what the prompt asks for silently
@@ -432,13 +390,11 @@ func strftime(t time.Time, format string) string {
 // reason).
 const maxHookFollowUpRounds = 4
 
-// maxHookOutputCharsForModel bounds how much of each hook result's own
-// Output toolResultMessages feeds back into the follow-up completion call
-// -- hookrunner.Runner already caps a single script's stdout at 64KB, but
-// up to maxHookMatchesPerTurn (chat_hooks.go) of those could still add up
-// to a very large follow-up prompt; this is a second, tighter cap
-// specifically on what actually reaches the model, same "cap and note"
-// convention as hookrunner's own truncation.
+// maxHookOutputCharsForModel bounds how much of each tool result's own
+// Output toolResultMessages feeds back into the follow-up completion call --
+// a single misbehaving MCP tool returning an unbounded amount of text could
+// otherwise blow up the follow-up prompt; this is a tight cap specifically
+// on what actually reaches the model.
 const maxHookOutputCharsForModel = 8000
 
 // estimateTokens sums messages' character-count-based token estimate (see
@@ -456,7 +412,7 @@ func estimateTokens(messages []domain.ChatMessage) int {
 
 // trimToBudget drops the oldest messages in messages -- keeping every
 // leading system-role message intact (there can now be several: the
-// persistent per-endpoint SystemPrompt, then one per active chat hook's own
+// persistent per-endpoint SystemPrompt, then one per active MCP server's own
 // Prompt, then the search-context message, see ChatService.Chat), and
 // always keeping at least the single most recent message even if it
 // alone exceeds budget, since trimming it away would leave nothing left to

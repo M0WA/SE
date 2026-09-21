@@ -150,20 +150,21 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			system_prompt TEXT NOT NULL DEFAULT '',
 			updated_at TEXT NOT NULL
 		)`,
-		// chat_hooks is a list of many admin-configured tool hooks, exposed
-		// to the model via native tool-calling (see domain.ChatHook) --
-		// unlike chat_endpoint's single sentinel row, this grows the same
-		// way embedding_http_endpoints does. pattern is vestigial (the old
-		// regex-based mechanism, superseded by parameters) -- kept, always
-		// written as '' by CreateChatHook, purely so a fresh install's
-		// schema matches an upgraded deployment's (see
-		// migrateChatHookColumns), which can't cheaply drop its own
-		// NOT NULL, no-default pattern column across all 3 dialects.
-		`CREATE TABLE IF NOT EXISTS chat_hooks (
-			id TEXT PRIMARY KEY, name TEXT NOT NULL, pattern TEXT NOT NULL,
-			description TEXT NOT NULL DEFAULT '', parameters TEXT NOT NULL DEFAULT '{}',
-			script TEXT NOT NULL, enabled BOOLEAN NOT NULL DEFAULT true,
-			prompt TEXT NOT NULL DEFAULT '', gated_by_web_search BOOLEAN NOT NULL DEFAULT false
+		// mcp_servers is a list of many admin-configured MCP (Model Context
+		// Protocol) server connections (see domain.MCPServer) -- unlike
+		// chat_endpoint's single sentinel row, this grows the same way
+		// embedding_http_endpoints does. Replaces the old chat_hooks table
+		// (one-row-per-script tool hooks, removed in favor of real MCP
+		// tool-calling) -- an already-deployed instance's own chat_hooks
+		// table and any rows in it are left physically in place, untouched
+		// and unused, rather than dropped (see repository.go's migrate()
+		// doc comments for why a real DROP TABLE isn't done here).
+		`CREATE TABLE IF NOT EXISTS mcp_servers (
+			id TEXT PRIMARY KEY, name TEXT NOT NULL, transport TEXT NOT NULL,
+			command TEXT NOT NULL DEFAULT '', args TEXT NOT NULL DEFAULT '[]',
+			base_url TEXT NOT NULL DEFAULT '', api_key TEXT NOT NULL DEFAULT '',
+			enabled BOOLEAN NOT NULL DEFAULT true, prompt TEXT NOT NULL DEFAULT '',
+			gated_by_web_search BOOLEAN NOT NULL DEFAULT false
 		)`,
 		// content_dedup_lock is a single sentinel row (id = 1) whose
 		// in_progress flag TryAcquireContentDedupLock/ReleaseContentDedupLock
@@ -333,10 +334,10 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			system_prompt TEXT NOT NULL,
 			updated_at VARCHAR(64) NOT NULL
 		) ENGINE=InnoDB`,
-		// See the sqlite dialect's chat_hooks comment.
-		`CREATE TABLE IF NOT EXISTS chat_hooks (
-			id VARCHAR(20) PRIMARY KEY, name VARCHAR(255) NOT NULL, pattern TEXT NOT NULL,
-			description TEXT NOT NULL, parameters TEXT NOT NULL, script VARCHAR(255) NOT NULL,
+		// See the sqlite dialect's mcp_servers comment.
+		`CREATE TABLE IF NOT EXISTS mcp_servers (
+			id VARCHAR(20) PRIMARY KEY, name VARCHAR(255) NOT NULL, transport VARCHAR(20) NOT NULL,
+			command TEXT NOT NULL, args TEXT NOT NULL, base_url TEXT NOT NULL, api_key TEXT NOT NULL,
 			enabled BOOLEAN NOT NULL DEFAULT true, prompt TEXT NOT NULL,
 			gated_by_web_search BOOLEAN NOT NULL DEFAULT false
 		) ENGINE=InnoDB`,
@@ -499,12 +500,13 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			system_prompt TEXT NOT NULL DEFAULT '',
 			updated_at TEXT NOT NULL
 		)`,
-		// See the sqlite dialect's chat_hooks comment.
-		`CREATE TABLE IF NOT EXISTS chat_hooks (
-			id TEXT PRIMARY KEY, name TEXT NOT NULL, pattern TEXT NOT NULL,
-			description TEXT NOT NULL DEFAULT '', parameters TEXT NOT NULL DEFAULT '{}',
-			script TEXT NOT NULL, enabled BOOLEAN NOT NULL DEFAULT true,
-			prompt TEXT NOT NULL DEFAULT '', gated_by_web_search BOOLEAN NOT NULL DEFAULT false
+		// See the sqlite dialect's mcp_servers comment.
+		`CREATE TABLE IF NOT EXISTS mcp_servers (
+			id TEXT PRIMARY KEY, name TEXT NOT NULL, transport TEXT NOT NULL,
+			command TEXT NOT NULL DEFAULT '', args TEXT NOT NULL DEFAULT '[]',
+			base_url TEXT NOT NULL DEFAULT '', api_key TEXT NOT NULL DEFAULT '',
+			enabled BOOLEAN NOT NULL DEFAULT true, prompt TEXT NOT NULL DEFAULT '',
+			gated_by_web_search BOOLEAN NOT NULL DEFAULT false
 		)`,
 		// See the sqlite dialect's content_dedup_lock comment.
 		`CREATE TABLE IF NOT EXISTS content_dedup_lock (

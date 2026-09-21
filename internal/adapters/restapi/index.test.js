@@ -325,14 +325,14 @@ test('sendChatMessage renders no context-trimmed note when context_trimmed is ab
   assert.equal(assistantMsg.querySelector('.chat-context-note'), null);
 });
 
-test('sendChatMessage renders a folded, closed <details> per hook result', async () => {
+test('sendChatMessage renders a folded, closed <details> per tool result', async () => {
   global.fetch = async () => ({
     ok: true,
     json: async () => ({
       answer: 'answer',
-      hook_results: [
-        { hook_name: 'web_search', output: '{"results":[]}' },
-        { hook_name: 'broken_hook', err: 'script timed out' },
+      tool_results: [
+        { tool_name: 'web_search', output: '{"results":[]}' },
+        { tool_name: 'broken_tool', err: 'server timed out' },
       ],
     }),
   });
@@ -348,12 +348,12 @@ test('sendChatMessage renders a folded, closed <details> per hook result', async
   assert.equal(results[0].classList.contains('chat-hook-result-error'), false);
 
   assert.equal(results[1].open, false);
-  assert.equal(results[1].querySelector('summary').textContent, 'broken_hook');
-  assert.equal(results[1].querySelector('pre').textContent, 'script timed out');
+  assert.equal(results[1].querySelector('summary').textContent, 'broken_tool');
+  assert.equal(results[1].querySelector('pre').textContent, 'server timed out');
   assert.equal(results[1].classList.contains('chat-hook-result-error'), true);
 });
 
-test('sendChatMessage renders no hook-result elements when hook_results is absent', async () => {
+test('sendChatMessage renders no tool-result elements when tool_results is absent', async () => {
   global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'answer' }) });
   const { sendChatMessage } = loadFixture();
   await sendChatMessage('q');
@@ -361,13 +361,13 @@ test('sendChatMessage renders no hook-result elements when hook_results is absen
   assert.equal(assistantMsg.querySelectorAll('.chat-hook-result').length, 0);
 });
 
-test('sendChatMessage renders a fetch-named hook result as an open outer fold with a link and a closed nested response fold', async () => {
+test('sendChatMessage renders a fetch-named tool result as an open outer fold with a link and a closed nested response fold', async () => {
   global.fetch = async () => ({
     ok: true,
     json: async () => ({
       answer: 'answer',
-      hook_results: [
-        { hook_name: 'web_fetch', input: 'https://example.com/page', output: 'page contents here' },
+      tool_results: [
+        { tool_name: 'web_fetch', arguments: JSON.stringify({ url: 'https://example.com/page' }), output: 'page contents here' },
       ],
     }),
   });
@@ -391,7 +391,7 @@ test('sendChatMessage renders a fetch-named hook result as an open outer fold wi
   assert.equal(nested.querySelector('pre').textContent, 'page contents here');
 });
 
-test('sendChatMessage renders a search-named hook result\'s parsed results list, with the raw JSON still in the nested fold', async () => {
+test('sendChatMessage renders a search-named tool result\'s parsed results list, with the raw JSON still in the nested fold', async () => {
   const rawOutput = JSON.stringify({
     results: [
       { title: 'First', url: 'https://a.example' },
@@ -406,8 +406,8 @@ test('sendChatMessage renders a search-named hook result\'s parsed results list,
     ok: true,
     json: async () => ({
       answer: 'answer',
-      hook_results: [
-        { hook_name: 'web_search', input: 'golang release notes', output: rawOutput },
+      tool_results: [
+        { tool_name: 'web_search', arguments: JSON.stringify({ query: 'golang release notes' }), output: rawOutput },
       ],
     }),
   });
@@ -430,13 +430,13 @@ test('sendChatMessage renders a search-named hook result\'s parsed results list,
   assert.equal(nested.querySelector('pre').textContent, rawOutput);
 });
 
-test('sendChatMessage renders no results list for a search-named hook whose output is not valid JSON, but still shows the raw output fold', async () => {
+test('sendChatMessage renders no results list for a search-named tool whose output is not valid JSON, but still shows the raw output fold', async () => {
   global.fetch = async () => ({
     ok: true,
     json: async () => ({
       answer: 'answer',
-      hook_results: [
-        { hook_name: 'web_search', input: 'golang release notes', output: 'not json at all' },
+      tool_results: [
+        { tool_name: 'web_search', arguments: JSON.stringify({ query: 'golang release notes' }), output: 'not json at all' },
       ],
     }),
   });
@@ -452,13 +452,13 @@ test('sendChatMessage renders no results list for a search-named hook whose outp
   assert.equal(nested.querySelector('pre').textContent, 'not json at all');
 });
 
-test('sendChatMessage keeps the old single-level, closed-by-default rendering for a generic/other-named hook result', async () => {
+test('sendChatMessage keeps the old single-level, closed-by-default rendering for a generic/other-named tool result', async () => {
   global.fetch = async () => ({
     ok: true,
     json: async () => ({
       answer: 'answer',
-      hook_results: [
-        { hook_name: 'lookup_docs', input: 'ignored for generic hooks', output: 'doc contents' },
+      tool_results: [
+        { tool_name: 'lookup_docs', arguments: JSON.stringify({ q: 'ignored for generic tools' }), output: 'doc contents' },
       ],
     }),
   });
@@ -474,12 +474,32 @@ test('sendChatMessage keeps the old single-level, closed-by-default rendering fo
   assert.equal(results[0].querySelectorAll('.chat-hook-target').length, 0);
 });
 
+test('sendChatMessage falls back to the generic rendering when a fetch-named tool\'s arguments have no string value', async () => {
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      answer: 'answer',
+      tool_results: [
+        { tool_name: 'web_fetch', arguments: JSON.stringify({ count: 3 }), output: 'no url to show' },
+      ],
+    }),
+  });
+  const { sendChatMessage } = loadFixture();
+  await sendChatMessage('q');
+  const assistantMsg = document.getElementById('chat-messages').children[1];
+  const results = assistantMsg.querySelectorAll('.chat-hook-result');
+  assert.equal(results.length, 1);
+  assert.equal(results[0].hasAttribute('open'), false);
+  assert.equal(results[0].querySelectorAll('.chat-hook-target').length, 0);
+  assert.equal(results[0].querySelector('pre').textContent, 'no url to show');
+});
+
 test('sendChatMessage shows the persistent token-usage badge next to the Web checkbox, not in the chat', async () => {
   global.fetch = async () => ({
     ok: true,
     json: async () => ({
       answer: 'answer',
-      token_usage: { global_prompt_tokens: 10, hook_prompt_tokens: 5, user_prompt_tokens: 2, history_tokens: 3, max_context_tokens: 1000 },
+      token_usage: { global_prompt_tokens: 10, tool_prompt_tokens: 5, user_prompt_tokens: 2, history_tokens: 3, max_context_tokens: 1000 },
     }),
   });
   const { sendChatMessage } = loadFixture();
@@ -539,9 +559,9 @@ test('buildDonutLegend renders a swatch and label:value text per segment', () =>
 
 test('tokenUsageSegments maps the flat response shape to the four fixed chart segments', () => {
   const { tokenUsageSegments } = loadFixture();
-  const segments = tokenUsageSegments({ global_prompt_tokens: 1, hook_prompt_tokens: 2, user_prompt_tokens: 8, history_tokens: 4 });
+  const segments = tokenUsageSegments({ global_prompt_tokens: 1, tool_prompt_tokens: 2, user_prompt_tokens: 8, history_tokens: 4 });
   assert.deepEqual(segments.map((s) => s.value), [1, 2, 8, 4]);
-  assert.deepEqual(segments.map((s) => s.label), ['Global prompt', 'Hook prompts', 'Your prompt', 'Conversation history']);
+  assert.deepEqual(segments.map((s) => s.label), ['Global prompt', 'Tool prompts', 'Your prompt', 'Conversation history']);
 });
 
 test('renderTokenUsage renders an all-zero donut, without a max-context suffix, for a falsy tokenUsage', () => {
@@ -556,7 +576,7 @@ test('renderTokenUsage renders an all-zero donut, without a max-context suffix, 
 
 test('renderTokenUsage centers a rounded usage percentage in the hover donut once max_context_tokens is known', () => {
   const { renderTokenUsage } = loadFixture();
-  renderTokenUsage({ global_prompt_tokens: 10, hook_prompt_tokens: 0, user_prompt_tokens: 0, history_tokens: 0, max_context_tokens: 1000 });
+  renderTokenUsage({ global_prompt_tokens: 10, tool_prompt_tokens: 0, user_prompt_tokens: 0, history_tokens: 0, max_context_tokens: 1000 });
   const donut = document.getElementById('chat-token-usage-donut');
   const label = donut.querySelector('.donut-center-label');
   assert.notEqual(label, null);

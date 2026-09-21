@@ -35,13 +35,14 @@ Pure logic — every file imports only the Go standard library, with no SQL, HTT
 | Scheduled crawls (`scheduled_crawl.go`) | `ScheduledCrawl` model for admin-created recurring or one-off crawl definitions. |
 | PageRank (`pagerank.go`) | Iterative `PageRank` computation over the crawled link graph; persisted `PageRankStatus`. |
 | Operational & tuning settings (`settings.go`, `tuning.go`, `link_scope.go`, `renderer.go`, `url_normalize.go`) | `OperationalSettings`, `TuningSettings`, link-scope/renderer enums, `CanonicalizeURL`. |
-| Chat (`chat.go`) | `ChatMessage`, `ChatEndpoint` config -- web search/fetch is exclusively via admin-configured `ChatHook`s the model invokes (see `chat_hook.go`), not a direct search performed by this layer. |
+| Chat (`chat.go`) | `ChatMessage`, `ChatEndpoint` config, `ToolCallResult` -- web search/fetch is exclusively via tools discovered from admin-configured `MCPServer` connections (see `mcp_server.go`) that the model invokes, not a direct search performed by this layer. |
+| MCP servers (`mcp_server.go`) | `MCPServer` (an admin-configured MCP connection -- stdio or Streamable HTTP), `MCPTool` (one tool discovered from an active server's own `tools/list` response, rediscovered fresh every turn). |
 | Corpus stats cache (`corpus_stats.go`) | Concurrency-safe cached snapshot of corpus-wide totals BM25 scoring needs per request. |
 | Overview/admin metrics shapes (`overview_metrics.go`) | Pure data shapes feeding the admin Overview page's charts. |
 
 ### Ports (`internal/ports`)
 
-25 interfaces defining pure contracts between the core and adapters; the package imports `database/sql` only for the `sql.DBStats` value type, performing no I/O itself.
+26 interfaces defining pure contracts between the core and adapters; the package imports `database/sql` only for the `sql.DBStats` value type, performing no I/O itself.
 
 | Port | Responsibility | Implemented by |
 |---|---|---|
@@ -62,7 +63,9 @@ Pure logic — every file imports only the Go standard library, with no SQL, HTT
 | `SettingsStore` | Generic key/value settings persistence shared by every process. | `sqlrepo` |
 | `ScheduledCrawlStore` | CRUD + scheduling operations on `ScheduledCrawl`, shared by admin CRUD and the crawl-server ticker. | `sqlrepo` |
 | `EmbeddingEndpointStore`, `ChatEndpointStore` | CRUD/get-set for admin-configured embedding and chat endpoint config. | `sqlrepo` |
+| `MCPServerStore` | CRUD for admin-configured MCP server connections. | `sqlrepo` |
 | `ChatCompleter` | Calls an OpenAI-compatible chat-completions endpoint. | `httpchat` |
+| `MCPToolProvider` / `MCPSession` | Opens one MCP session per chat turn across every active server (tool discovery + calls), and the per-turn session it returns. | `mcpclient` |
 
 ### Application (`internal/application`)
 
@@ -80,11 +83,11 @@ Orchestration/use-case layer; verified to import only `internal/domain` and `int
 | `TriggerDueCrawls` (scheduler) | Finds and triggers due scheduled crawls, records completion/next-run state. | `ScheduledCrawlStore` |
 | `RecoverInterruptedCrawls` | Resumes or fails crawl jobs left queued/running when crawl-server last stopped. | `CrawlJobStore` |
 | `RenderAwareFetcher` | Routes fetches through a headless-browser `Renderer` when requested. | `AuthFetcher`, `Renderer` |
-| `ChatService` | Orchestrates one chat turn: loads config, optional web-search augmentation, history trimming, delegates completion. | `ChatEndpointStore`, `ChatCompleter`, `WebSearcher` |
+| `ChatService` | Orchestrates one chat turn: loads config, opens an MCP session across every active server for this turn, history trimming, delegates completion, runs any tool calls the model makes and feeds results back. | `ChatEndpointStore`, `ChatCompleter`, `MCPServerStore`, `MCPToolProvider` |
 
 ### Adapters (`internal/adapters`)
 
-12 adapter packages, plus `restapi` (13 total) as the shared HTTP handler layer for `cmd/search` and `cmd/admin`.
+13 adapter packages, plus `restapi` (14 total) as the shared HTTP handler layer for `cmd/search` and `cmd/admin`.
 
 | Adapter | Responsibility |
 |---|---|
@@ -99,13 +102,15 @@ Orchestration/use-case layer; verified to import only `internal/domain` and `int
 | `httpembed` | Calls an OpenAI-compatible embeddings HTTP endpoint (e.g. IONOS AI Model Hub) with chunking and rate-limit-aware retry; outbound calls routed through `netguard`'s configured-endpoint policy. |
 | `httpchat` | Calls an OpenAI-compatible chat-completions endpoint; outbound calls routed through `netguard`'s configured-endpoint policy. |
 | `crawlclient` | HTTP client `cmd/admin` uses to delegate crawl-job operations to `cmd/crawl`. |
-| `settingscrypto` | AES-256-GCM encryption of the admin-configured embedding/chat API key at rest. |
+| `settingscrypto` | AES-256-GCM encryption of the admin-configured embedding/chat/MCP-server API keys at rest. |
+| `mcpclient` | Real MCP (Model Context Protocol) client, built on `github.com/modelcontextprotocol/go-sdk` -- connects to every active admin-configured `MCPServer` for a chat turn (spawning a `stdio` server as a child process, e.g. `cmd/mcp-web`, or dialing an `http` server's Streamable HTTP endpoint), discovers its tools, and routes tool calls back to the right connection. |
 
 ## Binaries
 
 - **`cmd/search`** — public, internet-facing. Serves the index/search page, the `/search` JSON API, chat endpoints, `/session` (role lookup for the page's own nav), and `/account`/`/account/api` (a signed-in regular user's self-service password/personal-chat-prompt page). Per nginx routing, this is the only one of the three exposed directly to the public internet. Reads/writes the shared SQL database via `sqlrepo` but never calls the other two binaries directly.
 - **`cmd/admin`** — internal, reached only via nginx's `/admin`, `/login`, `/logout` prefixes. Hosts every `/admin/api/*` endpoint (settings, embedding endpoints, PageRank, content-dedup, sessions/auth, diagnostics, scheduled crawls, chat endpoints). It never fetches pages or touches robots.txt/documents itself — it only starts and polls crawl jobs on crawl-server over the network via `crawlclient` (default `CRAWL_SERVER_URL=http://127.0.0.1:8082`, optional shared-secret `X-Internal-Token`).
 - **`cmd/crawl`** — internal only, never exposed by nginx. Runs actual crawls (fetch, robots check, HTML parse, embed, persist), tracks crawl-job state, and exposes an internal HTTP surface (`RoutesCrawlInternal`, default `127.0.0.1:8082`) that only `cmd/admin`'s `crawlclient` calls. Also runs background schedulers (scheduled-crawl trigger poller, PageRank recompute, content-dedup recompute, crawl-job pruner) and recovers interrupted jobs on startup.
+- **`cmd/mcp-web`** — a first-party MCP server exposing `web_search` (proxies to a self-hosted SearXNG instance) and `web_fetch` (fetches a URL's text content, guarded against SSRF via `httpfetcher`/`netguard`) as native tool-calling tools. Not a systemd service and never listens on a port -- `internal/adapters/mcpclient` spawns it on demand as a `stdio` subprocess whenever an admin-configured `MCPServer` row (`Transport="stdio"`) points at its installed path (`/usr/bin/searchengine-mcp-web`). Replaces the old `packaging/chat-hooks/web_search.sh`/`web_fetch.sh` shell scripts.
 
 At runtime, the three binaries coordinate almost entirely through the shared SQL database rather than direct calls: each opens its own DB connection (a `*sql.DB` can't be shared across OS processes), and `internal/bootstrap`'s `SyncSettings` polls the settings table roughly every 10 seconds so an admin edit made through any one process propagates to the others. The one real inter-binary relationship is `cmd/admin → cmd/crawl` over HTTP via `crawlclient`.
 
@@ -115,7 +120,7 @@ The dev/test deployment (`se.mo-sys.de`) runs all three Go binaries as independe
 
 nginx is the public entrypoint on 80/443 and splits traffic by path: `/login`, `/logout`, and `/admin` (a plain string-prefix match, not path-segment-aware) route to admin-server on `127.0.0.1:8081`; everything else falls through the catch-all to search-server on `127.0.0.1:8080`. crawl-server (`127.0.0.1:8082`) is deliberately given no location block and must never be exposed publicly. A separate, non-public server block on `127.0.0.1:8090` exposes nginx's `stub_status` for scraping.
 
-Observability is host-level and independent of the searchengine package itself: a Prometheus agent (`--enable-feature=agent`, no local TSDB) on `127.0.0.1:9090` scrapes `node-exporter` (9100, host metrics), `nginx-exporter` (9113, via `stub_status`), `postgres-exporter` (9187, reusing the same `DB_DSN` from `searchengine.env`), and optionally SearXNG's own OpenMetrics endpoint, then `remote_write`-forwards everything to an external **IONOS Monitoring Service** pipeline. SearXNG itself — a self-hosted metasearch instance a "web_search" chat hook script queries when the model invokes it (see `packaging/chat-hooks/`) — runs as a separate Docker Compose deployment on `127.0.0.1:8888`, entirely outside the searchengine `.deb`. Everything on the host binds to `127.0.0.1` only, since there is no host firewall.
+Observability is host-level and independent of the searchengine package itself: a Prometheus agent (`--enable-feature=agent`, no local TSDB) on `127.0.0.1:9090` scrapes `node-exporter` (9100, host metrics), `nginx-exporter` (9113, via `stub_status`), `postgres-exporter` (9187, reusing the same `DB_DSN` from `searchengine.env`), and optionally SearXNG's own OpenMetrics endpoint, then `remote_write`-forwards everything to an external **IONOS Monitoring Service** pipeline. SearXNG itself — a self-hosted metasearch instance the `web_search` tool (`cmd/mcp-web`, spawned by `mcpclient`) queries when the model invokes it — runs as a separate Docker Compose deployment on `127.0.0.1:8888`, entirely outside the searchengine `.deb`. Everything on the host binds to `127.0.0.1` only, since there is no host firewall.
 
 The admin-configured embedding and chat endpoints (`httpembed`/`httpchat` — generic OpenAI-compatible HTTP clients at the code level) currently point at a dedicated inference host, `gpu.mo-sys.de` (a single NVIDIA H200 NVL GPU), rather than a third-party hosted API. Two independent `vLLM` server processes run there, sharing the one GPU: one serving `Alibaba-NLP/gte-Qwen2-7B-instruct` in pooling/embed mode on `:8000` (backing `httpembed`), and one serving `RedHatAI/Qwen2.5-72B-Instruct-FP8-dynamic` in normal generate mode on `:8001` (backing `httpchat`, `--max-model-len 32768`, no YaRN long-context scaling enabled). Each runs as its own systemd unit, bound to the host's private network interface only, gated by its own bearer API key. The same host also runs `node-exporter` and NVIDIA's `DCGM` GPU exporter, remote-written into the same IONOS Monitoring Service pipeline as `se.mo-sys.de`, distinguished by its own `external_labels.site` (`gpu-h200`).
 

@@ -18,8 +18,8 @@ type User struct {
 	// CustomPrompt is free text this user has set for themselves (via the
 	// self-service /account page) -- injected as its own leading system
 	// message in every chat turn THEY send, in addition to (not instead of)
-	// the admin-configured endpoint-wide SystemPrompt and any active chat
-	// hooks' own prompts. Expanded through the same %c-style placeholder
+	// the admin-configured endpoint-wide SystemPrompt and any active MCP
+	// server's own prompt. Expanded through the same %c-style placeholder
 	// mechanism application.expandPromptPlaceholders already applies to
 	// those (see application.ChatService.Chat). Empty means no per-user
 	// prompt is injected.
@@ -44,13 +44,12 @@ const (
 	RoleUser = "user"
 )
 
-// UserIDPattern mirrors ChatHookIDPattern's shape (lowercase
-// alphanumeric/underscore, 1-20 characters) -- short enough to fit the
-// sqlrepo MySQL dialect's users.id VARCHAR(20) column.
-var UserIDPattern = ChatHookIDPattern
+// UserIDPattern is SlugIDPattern -- short enough to fit the sqlrepo MySQL
+// dialect's users.id VARCHAR(20) column.
+var UserIDPattern = SlugIDPattern
 
-// NewUserID derives an ID from a username the same way NewChatHookID
-// derives one from a hook's display name (lowercased, non-alphanumeric
+// NewUserID derives an ID from a username the same way NewMCPServerID
+// derives one from an MCP server's display name (lowercased, non-alphanumeric
 // runs collapsed, trimmed to fit UserIDPattern), appending the shortest
 // numeric suffix that avoids colliding with a key in existing (every other
 // User's ID). Falls back to a timestamp-derived ID if username has no

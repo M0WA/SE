@@ -158,8 +158,8 @@ func TestSession_CreateOpportunisticallyPrunesExpiredSessions(t *testing.T) {
 // regression test proving se.mo-sys.de's own live sessions rows (pre-dating
 // role/user_id) won't break on the next deploy: a sessions table created
 // before those two columns existed, seeded by hand via a raw connection
-// the same way TestMigrateChatHookColumns_UpgradesPreExistingTable seeds a
-// pre-migration chat_hooks table, must gain both columns -- a pre-existing
+// the same way TestMigrateChatEndpointColumns_UpgradesPreExistingTable_SystemPrompt
+// seeds a pre-migration chat_endpoint table, must gain both columns -- a pre-existing
 // row defaulting to role='admin' (correct: before this migration, every
 // session that could exist WAS an admin session) and user_id=”  -- without
 // erroring, and the table must still work normally (create/valid/revoke)
