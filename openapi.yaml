@@ -2042,8 +2042,15 @@ components:
             messages plus message history) is ever sent to the model,
             approximated by character count. Older messages are dropped
             first, oldest to newest, always keeping the most recent
-            message. 0 disables trimming (the full history is sent as-is).
-            A negative value is rejected with 400.
+            message. On PATCH, 0 (or omitted) is auto-detected from the
+            configured model's own advertised max context length (a
+            best-effort GET {base_url}/models call, reserving 25% of it for
+            the completion) rather than literally disabling trimming --
+            detection failing for any reason (unreachable endpoint, an
+            OpenAI-compatible server that doesn't report one, ...) falls
+            back to 0, which DOES mean trimming stays off until a save
+            successfully detects a value. A negative value is rejected with
+            400.
         web_search_enabled:
           type: boolean
           description: >-

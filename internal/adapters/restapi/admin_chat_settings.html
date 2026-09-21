@@ -92,9 +92,9 @@
     <div class="form-row">
       <div class="label-row">
         <label for="chat-max-context-tokens">Max conversation length (tokens)</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Bounds how much conversation (web-search context plus message history, estimated by character count) is sent to the model per turn. Older messages are dropped first, oldest to newest -- the most recent message is always kept. 0 disables trimming and sends the full conversation as-is, which can eventually exceed the model's own context limit.</span></span>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Bounds how much conversation (leading system/hook prompts plus message history, estimated by character count) is sent to the model per turn. Older messages are dropped first, oldest to newest -- the most recent message is always kept. Leave at 0 to auto-detect this from the model itself (75% of its own advertised max context length, reserving the rest for its reply) every time this form is saved -- type a smaller number here only to set a tighter budget than that.</span></span>
       </div>
-      <span class="field-wrap" data-default="Disabled"><input id="chat-max-context-tokens" class="field" type="number" step="1" min="0"></span>
+      <span class="field-wrap" data-default="Auto-detected from the model"><input id="chat-max-context-tokens" class="field" type="number" step="1" min="0"></span>
     </div>
     <div id="chat-token-usage" class="donut-row"></div>
   </section>

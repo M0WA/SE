@@ -235,6 +235,198 @@ func TestNew_DefaultHTTPClient(t *testing.T) {
 	}
 }
 
+func TestModelMaxContextTokens_MatchesRequestedModel(t *testing.T) {
+	var gotPath, gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{
+				{"id": "other-model", "max_model_len": 4096},
+				{"id": "test-model", "max_model_len": 32768},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := httpchat.New()
+	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, APIKey: "secret-key", Model: "test-model"}
+	tokens, ok, err := c.ModelMaxContextTokens(context.Background(), endpoint)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok || tokens != 32768 {
+		t.Errorf("ModelMaxContextTokens = (%d, %v), want (32768, true)", tokens, ok)
+	}
+	if gotPath != "/models" {
+		t.Errorf("path = %q, want /models", gotPath)
+	}
+	if gotAuth != "Bearer secret-key" {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer secret-key")
+	}
+}
+
+func TestModelMaxContextTokens_FallsBackToFirstEntryWhenNoIDMatches(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{
+				{"id": "some-other-alias", "max_model_len": 8192},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := httpchat.New()
+	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "requested-model"}
+	tokens, ok, err := c.ModelMaxContextTokens(context.Background(), endpoint)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok || tokens != 8192 {
+		t.Errorf("ModelMaxContextTokens = (%d, %v), want (8192, true)", tokens, ok)
+	}
+}
+
+func TestModelMaxContextTokens_NoPositiveValueReportsNotOK(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"id": "m"}}, // max_model_len omitted/zero
+		})
+	}))
+	defer srv.Close()
+
+	c := httpchat.New()
+	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "m"}
+	tokens, ok, err := c.ModelMaxContextTokens(context.Background(), endpoint)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok || tokens != 0 {
+		t.Errorf("ModelMaxContextTokens = (%d, %v), want (0, false)", tokens, ok)
+	}
+}
+
+func TestModelMaxContextTokens_EmptyDataReportsNotOK(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": []map[string]interface{}{}})
+	}))
+	defer srv.Close()
+
+	c := httpchat.New()
+	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "m"}
+	tokens, ok, err := c.ModelMaxContextTokens(context.Background(), endpoint)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok || tokens != 0 {
+		t.Errorf("ModelMaxContextTokens = (%d, %v), want (0, false)", tokens, ok)
+	}
+}
+
+func TestModelMaxContextTokens_NoAuthHeaderWhenAPIKeyEmpty(t *testing.T) {
+	var sawHeader bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, sawHeader = r.Header["Authorization"]
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": []map[string]interface{}{}})
+	}))
+	defer srv.Close()
+
+	c := httpchat.New()
+	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "m"} // APIKey left empty
+	if _, _, err := c.ModelMaxContextTokens(context.Background(), endpoint); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sawHeader {
+		t.Error("expected no Authorization header")
+	}
+}
+
+func TestModelMaxContextTokens_NonSuccessStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte("invalid api key"))
+	}))
+	defer srv.Close()
+
+	c := httpchat.New()
+	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "m", APIKey: "secret-key"}
+	_, ok, err := c.ModelMaxContextTokens(context.Background(), endpoint)
+	if err == nil {
+		t.Fatal("expected error for non-2xx status")
+	}
+	if ok {
+		t.Error("expected ok=false alongside the error")
+	}
+	if strings.Contains(err.Error(), "secret-key") {
+		t.Errorf("error leaked api key: %v", err)
+	}
+}
+
+func TestModelMaxContextTokens_MalformedJSONBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("not json"))
+	}))
+	defer srv.Close()
+
+	c := httpchat.New()
+	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "m"}
+	if _, _, err := c.ModelMaxContextTokens(context.Background(), endpoint); err == nil {
+		t.Fatal("expected error for malformed JSON body")
+	}
+}
+
+func TestModelMaxContextTokens_RequestBuildError(t *testing.T) {
+	c := httpchat.New()
+	endpoint := domain.ChatEndpoint{BaseURL: "http://\x7f invalid", Model: "m"}
+	if _, _, err := c.ModelMaxContextTokens(context.Background(), endpoint); err == nil {
+		t.Fatal("expected error for invalid base URL")
+	}
+}
+
+func TestModelMaxContextTokens_NetworkError(t *testing.T) {
+	c := httpchat.New()
+	endpoint := domain.ChatEndpoint{BaseURL: "http://127.0.0.1:1", Model: "m"}
+	if _, _, err := c.ModelMaxContextTokens(context.Background(), endpoint); err == nil {
+		t.Fatal("expected error for unreachable endpoint")
+	}
+}
+
+func TestModelMaxContextTokens_ReadBodyError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": []map[string]interface{}{}})
+	}))
+	defer srv.Close()
+
+	c := &httpchat.Client{HTTPClient: &http.Client{Transport: erroringBodyTransport{base: http.DefaultTransport}}}
+	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "m"}
+	_, _, err := c.ModelMaxContextTokens(context.Background(), endpoint)
+	if err == nil {
+		t.Fatal("expected error when reading the response body fails")
+	}
+	if !strings.Contains(err.Error(), "reading models response body") {
+		t.Errorf("error = %v, want it to mention reading models response body", err)
+	}
+}
+
+func TestModelMaxContextTokens_NilHTTPClient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"id": "m", "max_model_len": 2048}},
+		})
+	}))
+	defer srv.Close()
+
+	c := &httpchat.Client{} // HTTPClient left nil
+	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "m"}
+	tokens, ok, err := c.ModelMaxContextTokens(context.Background(), endpoint)
+	if err != nil {
+		t.Fatalf("unexpected error with nil HTTPClient: %v", err)
+	}
+	if !ok || tokens != 2048 {
+		t.Errorf("ModelMaxContextTokens = (%d, %v), want (2048, true)", tokens, ok)
+	}
+}
+
 func TestComplete_NilHTTPClient(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{

@@ -787,6 +787,16 @@ type modelLister interface {
 	ListModels(ctx context.Context) ([]string, error)
 }
 
+// chatModelProber is the narrow capability httpchat.Client implements
+// beyond ports.ChatCompleter -- querying a configured chat model's own
+// advertised max context length (not every OpenAI-compatible endpoint
+// exposes this) -- same type-assertion-at-point-of-use convention as
+// modelLister above, and for the same reason: not every ports.ChatCompleter
+// implementation (a test fake, say) needs to support it.
+type chatModelProber interface {
+	ModelMaxContextTokens(ctx context.Context, endpoint domain.ChatEndpoint) (tokens int, ok bool, err error)
+}
+
 // embeddingCandidateRequest is a not-yet-saved HTTP endpoint config,
 // probed by handleAdminEmbeddingsModels/handleAdminEmbeddingsTest so the
 // "Test connection"/"List models" buttons work against the form as typed.
@@ -1357,12 +1367,52 @@ func defaultChatEndpointResponse() chatEndpointResponse {
 	return chatEndpointResponse{}
 }
 
+// chatModelContextProbeTimeout bounds the best-effort auto-detection call
+// against the configured chat model's own /models endpoint -- short enough
+// that a slow/unreachable model host doesn't stall a settings save for
+// long, generous enough for a real (if slow) network round trip to finish.
+const chatModelContextProbeTimeout = 10 * time.Second
+
+// autoDetectMaxContextTokens best-effort probes e's own configured model
+// for its advertised max context length and returns the resulting
+// prompt-only budget (domain.AutoMaxContextTokens), so a chat endpoint
+// saved with MaxContextTokens left unset gets a real, model-derived value
+// instead of silently meaning "trimming disabled" -- see
+// handleAdminChatEndpoint's PATCH branch, the fix for a live incident
+// where MaxContextTokens kept getting reset to 0 by an incomplete PATCH
+// (this admin API is a full replace, not a merge, for every field) with
+// nothing to notice or correct it.
+//
+// Returns 0 (today's existing "disabled" meaning) whenever detection isn't
+// possible or fails: e.BaseURL/Model unset, h.chatModelProber nil, the
+// wired ports.ChatCompleter doesn't implement the optional probing
+// capability, or the probe call itself errors/reports nothing -- this is
+// pure best-effort, never a reason to fail the save.
+func (h *Handler) autoDetectMaxContextTokens(ctx context.Context, e domain.ChatEndpoint) int {
+	if e.BaseURL == "" || e.Model == "" || h.chatModelProber == nil {
+		return 0
+	}
+	prober, ok := h.chatModelProber.(chatModelProber)
+	if !ok {
+		return 0
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, chatModelContextProbeTimeout)
+	defer cancel()
+	modelMax, ok, err := prober.ModelMaxContextTokens(probeCtx, e)
+	if err != nil || !ok {
+		return 0
+	}
+	return domain.AutoMaxContextTokens(modelMax)
+}
+
 // handleAdminChatEndpoint is single-row admin config CRUD for the chat
 // endpoint (GET current config, PATCH to upsert it), mirroring
 // handleAdminEmbeddingEndpoints/handleAdminUpdateEmbeddingEndpoint's style
 // closely -- see chatEndpointRequest.ClearAPIKey's doc comment for the
 // "blank api_key on update means unchanged" convention shared with that
-// endpoint.
+// endpoint. MaxContextTokens left unset (<= 0) in the request is
+// auto-detected from the model itself rather than simply stored as 0 --
+// see autoDetectMaxContextTokens.
 func (h *Handler) handleAdminChatEndpoint(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.chatEndpoints != nil, "chat endpoint") {
 		return
@@ -1401,6 +1451,9 @@ func (h *Handler) handleAdminChatEndpoint(w http.ResponseWriter, r *http.Request
 			MaxContextTokens: req.MaxContextTokens,
 			WebSearchEnabled: req.WebSearchEnabled, WebSearchBaseURL: req.WebSearchBaseURL,
 			SystemPrompt: req.SystemPrompt,
+		}
+		if e.MaxContextTokens <= 0 {
+			e.MaxContextTokens = h.autoDetectMaxContextTokens(r.Context(), e)
 		}
 		e.UpdatedAt = time.Now().UTC()
 		if err := h.chatEndpoints.SetChatEndpoint(r.Context(), e); err != nil {

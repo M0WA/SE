@@ -99,3 +99,69 @@ func (c *Client) Complete(ctx context.Context, endpoint domain.ChatEndpoint, mes
 	}
 	return parsed.Choices[0].Message.Content, nil
 }
+
+type modelInfo struct {
+	ID          string `json:"id"`
+	MaxModelLen int    `json:"max_model_len"`
+}
+
+type modelsListResponse struct {
+	Data []modelInfo `json:"data"`
+}
+
+// ModelMaxContextTokens GETs strings.TrimRight(endpoint.BaseURL, "/") +
+// "/models" (the OpenAI-compatible model-listing endpoint) and returns the
+// entry matching endpoint.Model's own advertised maximum context length,
+// as vLLM reports it via a "max_model_len" field on each entry -- used to
+// auto-fill ChatEndpoint.MaxContextTokens rather than requiring an admin to
+// hand-type (and keep in sync with the model's real limit) a number.
+//
+// ok is false, not an error, whenever the endpoint simply doesn't report
+// this (an OpenAI-compatible server that isn't vLLM, or one with no
+// matching/positive max_model_len) -- this is best-effort auto-detection,
+// never a hard requirement for chat to work. Falls back to the response's
+// first entry if none match endpoint.Model by exact ID (a server serving
+// exactly one model under a different alias still gets detected).
+func (c *Client) ModelMaxContextTokens(ctx context.Context, endpoint domain.ChatEndpoint) (int, bool, error) {
+	url := strings.TrimRight(endpoint.BaseURL, "/") + "/models"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, false, fmt.Errorf("httpchat: building models request: %w", err)
+	}
+	if endpoint.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+endpoint.APIKey)
+	}
+
+	client := c.HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: requestTimeout}
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, false, fmt.Errorf("httpchat: calling models endpoint: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	if err != nil {
+		return 0, false, fmt.Errorf("httpchat: reading models response body: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, false, fmt.Errorf("httpchat: models endpoint returned status %d: %s", resp.StatusCode, domain.TruncateWithEllipsis(domain.RedactSecret(string(body), endpoint.APIKey), 500))
+	}
+
+	var parsed modelsListResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return 0, false, fmt.Errorf("httpchat: decoding models response: %w", err)
+	}
+	for _, m := range parsed.Data {
+		if m.ID == endpoint.Model && m.MaxModelLen > 0 {
+			return m.MaxModelLen, true, nil
+		}
+	}
+	if len(parsed.Data) > 0 && parsed.Data[0].MaxModelLen > 0 {
+		return parsed.Data[0].MaxModelLen, true, nil
+	}
+	return 0, false, nil
+}

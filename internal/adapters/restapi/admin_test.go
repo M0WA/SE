@@ -5151,10 +5151,48 @@ type chatEndpointResp struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
+// fakeChatModelProber is a minimal ports.ChatCompleter fake implementing
+// only the optional ModelMaxContextTokens capability (see admin.go's
+// chatModelProber interface) -- Complete is never expected to be called by
+// anything exercised through these tests (the admin chat-endpoint PATCH
+// handler only ever probes, never completes), so it errors loudly if it
+// ever is, rather than silently returning something a test could mistake
+// for a real answer.
+type fakeChatModelProber struct {
+	tokens int
+	ok     bool
+	err    error
+	calls  int
+}
+
+func (f *fakeChatModelProber) Complete(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage) (string, error) {
+	return "", errors.New("fakeChatModelProber: Complete unexpectedly called")
+}
+
+func (f *fakeChatModelProber) ModelMaxContextTokens(ctx context.Context, endpoint domain.ChatEndpoint) (int, bool, error) {
+	f.calls++
+	return f.tokens, f.ok, f.err
+}
+
+// adminAuthedHandlerWithChatEndpoints wires a fakeChatModelProber that
+// always reports "nothing detected" (ok=false) by default -- every
+// existing test using this helper predates auto-detection and expects
+// MaxContextTokens to simply stay 0 when omitted from a PATCH; without an
+// explicit fake here, Handler would default to a REAL bootstrap.
+// NewHTTPChatCompleter() (see New), and several of those existing tests
+// PATCH a real-looking base_url+model with max_context_tokens omitted,
+// which would otherwise make an actual outbound HTTP call from the test
+// suite. See adminAuthedHandlerWithChatEndpointsAndProber for tests that
+// need auto-detection to actually succeed.
 func adminAuthedHandlerWithChatEndpoints(t *testing.T, store ports.ChatEndpointStore) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
+	return adminAuthedHandlerWithChatEndpointsAndProber(t, store, &fakeChatModelProber{})
+}
+
+func adminAuthedHandlerWithChatEndpointsAndProber(t *testing.T, store ports.ChatEndpointStore, prober ports.ChatCompleter) (*restapi.Handler, *http.Cookie) {
+	t.Helper()
 	return adminAuthedHandlerFromConfig(t, restapi.Config{
-		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, ChatEndpoints: store,
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, ChatEndpoints: store, ChatModelProber: prober,
 	})
 }
 
@@ -5434,6 +5472,116 @@ func TestHandleAdminChatEndpoint_PatchSystemPromptRoundTrips(t *testing.T) {
 	}
 	if resp.SystemPrompt != "" {
 		t.Errorf("expected a PATCH omitting system_prompt to clear it, got %q", resp.SystemPrompt)
+	}
+}
+
+// TestHandleAdminChatEndpoint_PatchAutoDetectsMaxContextTokens proves a
+// PATCH that omits (or sends 0 for) max_context_tokens self-heals it from
+// the configured model's own advertised context length, at
+// domain.AutoMaxContextTokens' reserve fraction, rather than leaving it at
+// the "disabled" zero value the old manual-only field would silently drift
+// to (see "Max conversation length has been cleared again" -- the bug this
+// feature exists to fix).
+func TestHandleAdminChatEndpoint_PatchAutoDetectsMaxContextTokens(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	prober := &fakeChatModelProber{tokens: 32768, ok: true}
+	h, cookie := adminAuthedHandlerWithChatEndpointsAndProber(t, repo, prober)
+
+	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{
+		"base_url": "https://example.com/v1", "model": "gpt-x",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp chatEndpointResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.MaxContextTokens != 24576 {
+		t.Errorf("expected max_context_tokens auto-detected to 24576 (75%% of 32768), got %d", resp.MaxContextTokens)
+	}
+	if prober.calls != 1 {
+		t.Errorf("expected the prober called exactly once, got %d", prober.calls)
+	}
+}
+
+// TestHandleAdminChatEndpoint_PatchExplicitMaxContextTokensSkipsDetection
+// proves an explicit positive value wins outright -- the prober is never
+// even consulted, matching every other admin-editable field's "explicit
+// value always wins" convention.
+func TestHandleAdminChatEndpoint_PatchExplicitMaxContextTokensSkipsDetection(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	prober := &fakeChatModelProber{tokens: 32768, ok: true}
+	h, cookie := adminAuthedHandlerWithChatEndpointsAndProber(t, repo, prober)
+
+	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{
+		"base_url": "https://example.com/v1", "model": "gpt-x", "max_context_tokens": 6000,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp chatEndpointResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.MaxContextTokens != 6000 {
+		t.Errorf("expected the explicit max_context_tokens to be kept as-is, got %d", resp.MaxContextTokens)
+	}
+	if prober.calls != 0 {
+		t.Errorf("expected the prober never called when an explicit value was given, got %d calls", prober.calls)
+	}
+}
+
+// TestHandleAdminChatEndpoint_PatchDetectionFailureFallsBackToZero proves a
+// prober error (endpoint unreachable, wrong model name, etc.) is treated as
+// best-effort/non-fatal -- the PATCH still succeeds, just without an
+// auto-detected value, rather than failing the whole save.
+func TestHandleAdminChatEndpoint_PatchDetectionFailureFallsBackToZero(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	prober := &fakeChatModelProber{err: errors.New("connection refused")}
+	h, cookie := adminAuthedHandlerWithChatEndpointsAndProber(t, repo, prober)
+
+	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{
+		"base_url": "https://example.com/v1", "model": "gpt-x",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp chatEndpointResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.MaxContextTokens != 0 {
+		t.Errorf("expected max_context_tokens to stay 0 when detection fails, got %d", resp.MaxContextTokens)
+	}
+}
+
+// TestHandleAdminChatEndpoint_PatchNoProberConfiguredFallsBackToZero proves
+// a Handler wired with a ports.ChatCompleter that doesn't implement the
+// optional chatModelProber probing capability (the same
+// narrow-capability-interface pattern as modelLister -- see admin.go's
+// autoDetectMaxContextTokens type assertion) degrades to the pre-auto-detect
+// behavior instead of panicking. This deliberately does NOT pass a bare nil
+// prober: Handler.New() defaults a nil Config.ChatModelProber to a REAL
+// bootstrap.NewHTTPChatCompleter(), which would make this test issue an
+// actual outbound HTTP call -- exactly the risk this whole test file's fake
+// default prober exists to avoid.
+func TestHandleAdminChatEndpoint_PatchNoProberConfiguredFallsBackToZero(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatEndpointsAndProber(t, repo, &fakeChatCompleter{answer: "unused"})
+
+	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{
+		"base_url": "https://example.com/v1", "model": "gpt-x",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp chatEndpointResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.MaxContextTokens != 0 {
+		t.Errorf("expected max_context_tokens to stay 0 with no prober configured, got %d", resp.MaxContextTokens)
 	}
 }
 
