@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.42 - 2026-09-21
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Warn web_search tool against trusting snippets unverified by @M0WA in https://github.com/M0WA/SE/pull/215
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.41...v4.13.42
+
+
 ## v4.13.41 - 2026-09-21
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
