@@ -6092,3 +6092,223 @@ func TestHandleAdminDeleteMCPServer_NotConfigured(t *testing.T) {
 		t.Errorf("expected 503, got %d", rec.Code)
 	}
 }
+
+// mcpServerTestResp mirrors admin.go's unexported adminMCPServerTestResponse
+// wire shape, for decoding test responses.
+type mcpServerTestResp struct {
+	Tools []struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	} `json:"tools"`
+	Error string `json:"error"`
+}
+
+func postMCPServerTest(t *testing.T, h *restapi.Handler, cookie *http.Cookie, body map[string]interface{}) (int, mcpServerTestResp) {
+	t.Helper()
+	data, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/mcp-servers/test", bytes.NewReader(data))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	var resp mcpServerTestResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	return rec.Code, resp
+}
+
+// TestHandleAdminMCPServersTest_GETRoutesToGetByIDNotTheTestHandler proves
+// the routing quirk of registering "POST /admin/api/mcp-servers/test"
+// alongside "GET|PATCH|DELETE /admin/api/mcp-servers/{id}": since only
+// POST is registered for the literal "test" path, a GET on that same path
+// is served by the {id} pattern instead, treating "test" as an ordinary
+// (here, nonexistent) server id -- 404, not 405, and never reaches
+// handleAdminMCPServersTest at all. A real server whose minted id happens
+// to be "test" remains fully reachable by GET/PATCH/DELETE; only the
+// literal POST is reserved, the same "one reserved word" tradeoff
+// existingIDSet's "hash" reservation already makes for embedding
+// endpoints.
+func TestHandleAdminMCPServersTest_GETRoutesToGetByIDNotTheTestHandler(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, MCPServers: repo, MCPTools: &fakeMCPToolProvider{},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/mcp-servers/test", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404 (no server with id \"test\"), got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleAdminMCPServersTest_InvalidJSON(t *testing.T) {
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, MCPTools: &fakeMCPToolProvider{},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/mcp-servers/test", bytes.NewReader([]byte("{not json")))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminMCPServersTest_InvalidTransport(t *testing.T) {
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, MCPTools: &fakeMCPToolProvider{},
+	})
+	code, resp := postMCPServerTest(t, h, cookie, map[string]interface{}{"name": "x", "transport": "carrier-pigeon"})
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if resp.Error == "" {
+		t.Error("expected an error for an unrecognized transport")
+	}
+}
+
+// TestHandleAdminMCPServersTest_BlankCommandOrBaseURLReturnsEmptyWithoutCalling
+// proves a still-being-filled-in form (transport chosen, but the
+// transport-specific field not typed yet) returns a plain empty result
+// rather than an error or a real connection attempt -- mirrors
+// handleAdminEmbeddingsModels' own blank-base_url short circuit.
+func TestHandleAdminMCPServersTest_BlankCommandOrBaseURLReturnsEmptyWithoutCalling(t *testing.T) {
+	provider := &fakeMCPToolProvider{tools: []domain.MCPTool{mcpTool("should_not_appear", "")}}
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, MCPTools: provider,
+	})
+	code, resp := postMCPServerTest(t, h, cookie, map[string]interface{}{"name": "x", "transport": "stdio"})
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if resp.Error != "" || len(resp.Tools) != 0 {
+		t.Errorf("expected an empty result with no connection attempt, got %+v", resp)
+	}
+	if provider.openCount != 0 {
+		t.Errorf("expected no Open call for a blank command, got %d", provider.openCount)
+	}
+}
+
+func TestHandleAdminMCPServersTest_ToolProviderNotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	code, resp := postMCPServerTest(t, h, cookie, map[string]interface{}{"name": "x", "transport": "stdio", "command": "mcp-web"})
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if resp.Error == "" {
+		t.Error("expected an error when no MCP tool provider is configured")
+	}
+}
+
+func TestHandleAdminMCPServersTest_Success(t *testing.T) {
+	provider := &fakeMCPToolProvider{tools: []domain.MCPTool{
+		mcpTool("web_search", "Search the web."),
+		mcpTool("web_fetch", "Fetch a URL."),
+	}}
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, MCPTools: provider,
+	})
+	code, resp := postMCPServerTest(t, h, cookie, map[string]interface{}{"name": "web", "transport": "stdio", "command": "mcp-web"})
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if resp.Error != "" {
+		t.Fatalf("expected no error, got %q", resp.Error)
+	}
+	if len(resp.Tools) != 2 || resp.Tools[0].Name != "web_search" || resp.Tools[0].Description != "Search the web." {
+		t.Errorf("expected the discovered tools' real name/description, got %+v", resp.Tools)
+	}
+}
+
+// TestHandleAdminMCPServersTest_NoToolsIsSoftFailure proves a connection
+// that yields zero tools (a real connect failure OR a server that
+// legitimately exposes nothing -- mcpclient.Provider.Open can't tell the
+// two apart, see its own doc comment) is reported as a soft Error, not a
+// hard HTTP error, same convention as handleAdminEmbeddingsModels' own
+// ListModels failure.
+func TestHandleAdminMCPServersTest_NoToolsIsSoftFailure(t *testing.T) {
+	provider := &fakeMCPToolProvider{}
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, MCPTools: provider,
+	})
+	code, resp := postMCPServerTest(t, h, cookie, map[string]interface{}{"name": "x", "transport": "stdio", "command": "/no/such/binary"})
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if resp.Error == "" {
+		t.Error("expected a soft error when no tools were discovered")
+	}
+}
+
+// TestHandleAdminMCPServersTest_FallsBackToStoredAPIKeyByID mirrors
+// TestHandleAdminEmbeddingsTest_FallsBackToStoredAPIKeyByID: testing an
+// already-saved server without retyping its key must still probe with the
+// real stored key, not an empty one.
+func TestHandleAdminMCPServersTest_FallsBackToStoredAPIKeyByID(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	if err := repo.CreateMCPServer(context.Background(), domain.MCPServer{
+		ID: "remote", Name: "remote", Transport: "http", BaseURL: "https://example.com/mcp", APIKey: "real-stored-key", Enabled: true,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	provider := &fakeMCPToolProvider{tools: []domain.MCPTool{mcpTool("ping", "")}}
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, MCPServers: repo, MCPTools: provider,
+	})
+	code, resp := postMCPServerTest(t, h, cookie, map[string]interface{}{
+		"id": "remote", "name": "remote", "transport": "http", "base_url": "https://example.com/mcp", "api_key": "",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if resp.Error != "" {
+		t.Fatalf("expected no error, got %q", resp.Error)
+	}
+	if len(provider.openedServers) != 1 || provider.openedServers[0].APIKey != "real-stored-key" {
+		t.Errorf("expected the probe to use the real stored API key, got %+v", provider.openedServers)
+	}
+}
+
+// TestHandleAdminMCPServersTest_TypedAPIKeyOverridesStored mirrors
+// TestHandleAdminEmbeddingsTest_TypedAPIKeyOverridesStored.
+func TestHandleAdminMCPServersTest_TypedAPIKeyOverridesStored(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	if err := repo.CreateMCPServer(context.Background(), domain.MCPServer{
+		ID: "remote", Name: "remote", Transport: "http", BaseURL: "https://example.com/mcp", APIKey: "old-key", Enabled: true,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	provider := &fakeMCPToolProvider{tools: []domain.MCPTool{mcpTool("ping", "")}}
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, MCPServers: repo, MCPTools: provider,
+	})
+	postMCPServerTest(t, h, cookie, map[string]interface{}{
+		"id": "remote", "name": "remote", "transport": "http", "base_url": "https://example.com/mcp", "api_key": "newly-typed-key",
+	})
+	if len(provider.openedServers) != 1 || provider.openedServers[0].APIKey != "newly-typed-key" {
+		t.Errorf("expected the newly typed key to win over the stored one, got %+v", provider.openedServers)
+	}
+}
+
+// TestHandleAdminMCPServersTest_UnknownIDFallsBackToBlankAPIKey mirrors
+// TestHandleAdminEmbeddingsTest_UnknownIDFallsBackToBlankAPIKey.
+func TestHandleAdminMCPServersTest_UnknownIDFallsBackToBlankAPIKey(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	provider := &fakeMCPToolProvider{tools: []domain.MCPTool{mcpTool("ping", "")}}
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, MCPServers: repo, MCPTools: provider,
+	})
+	code, resp := postMCPServerTest(t, h, cookie, map[string]interface{}{
+		"id": "no-such-id", "name": "remote", "transport": "http", "base_url": "https://example.com/mcp", "api_key": "",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if resp.Error != "" {
+		t.Fatalf("expected no error, got %q", resp.Error)
+	}
+	if len(provider.openedServers) != 1 || provider.openedServers[0].APIKey != "" {
+		t.Errorf("expected a blank API key when the id doesn't resolve to a stored server, got %+v", provider.openedServers)
+	}
+}

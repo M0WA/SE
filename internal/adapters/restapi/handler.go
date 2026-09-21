@@ -209,6 +209,12 @@ type Handler struct {
 	// /admin/api/mcp-servers/{id}) -- set on admin-server only, the same
 	// *sqlrepo.Repository chatEndpoints/embeddingEndpoints use.
 	mcpServers ports.MCPServerStore
+	// mcpTools backs the admin API's "list tools" connectivity test
+	// (POST /admin/api/mcp-servers/test) -- set on admin-server only, the
+	// same mcpclient.Provider search-server's ChatService uses for real
+	// chat turns, just invoked here against a not-yet-saved candidate
+	// config instead.
+	mcpTools ports.MCPToolProvider
 	// users backs the admin API's regular-user-account CRUD (GET/POST
 	// /admin/api/users, PATCH/DELETE /admin/api/users/{id}) and
 	// handleLogin's DB-backed-account lookup on admin-server, PLUS (the
@@ -321,6 +327,11 @@ type Config struct {
 	// API -- the same *sqlrepo.Repository ChatEndpoints/EmbeddingEndpoints
 	// uses.
 	MCPServers ports.MCPServerStore
+	// MCPTools is set on admin-server only, backing the "list tools"
+	// connectivity test (POST /admin/api/mcp-servers/test) -- the same
+	// mcpclient.Provider search-server's ChatService uses for real chat
+	// turns.
+	MCPTools ports.MCPToolProvider
 	// Users is set on admin-server (backing the regular-user-account CRUD
 	// API and handleLogin's DB-backed-account lookup) AND search-server
 	// (backing the self-service /account routes and handleChat's per-user
@@ -397,6 +408,7 @@ func New(cfg Config) *Handler {
 		chat:                  cfg.Chat,
 		chatEndpoints:         cfg.ChatEndpoints,
 		mcpServers:            cfg.MCPServers,
+		mcpTools:              cfg.MCPTools,
 		users:                 cfg.Users,
 		health:                cfg.Health,
 		onCrawlComplete:       cfg.OnCrawlComplete,
@@ -527,6 +539,7 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("/admin/api/settings", h.requireAdminAuthAPI(h.handleAdminSettings))
 	mux.HandleFunc("/admin/api/chat-endpoint", h.requireAdminAuthAPI(h.handleAdminChatEndpoint))
 	mux.HandleFunc("/admin/api/mcp-servers", h.requireAdminAuthAPI(h.handleAdminMCPServers))
+	mux.HandleFunc("POST /admin/api/mcp-servers/test", h.requireAdminAuthAPI(h.handleAdminMCPServersTest))
 	mux.HandleFunc("GET /admin/api/mcp-servers/{id}", h.requireAdminAuthAPI(h.handleAdminGetMCPServer))
 	mux.HandleFunc("PATCH /admin/api/mcp-servers/{id}", h.requireAdminAuthAPI(h.handleAdminUpdateMCPServer))
 	mux.HandleFunc("DELETE /admin/api/mcp-servers/{id}", h.requireAdminAuthAPI(h.handleAdminDeleteMCPServer))

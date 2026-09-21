@@ -1335,6 +1335,110 @@ func (h *Handler) handleAdminDeleteMCPServer(w http.ResponseWriter, r *http.Requ
 	respondOrNotFound(w, err, ports.ErrMCPServerNotFound, "mcp server not found", map[string]bool{"ok": true})
 }
 
+// mcpServerCandidateRequest is a not-yet-saved MCP server config, probed by
+// handleAdminMCPServersTest so the "List tools" button works against the
+// form as typed -- mirrors embeddingCandidateRequest's own shape/reasoning.
+// ID, when set, names the already-saved server being edited -- see
+// resolveCandidateMCPServerAPIKey for how a blank APIKey resolves from it.
+type mcpServerCandidateRequest struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	Transport string   `json:"transport"`
+	Command   string   `json:"command"`
+	Args      []string `json:"args"`
+	BaseURL   string   `json:"base_url"`
+	APIKey    string   `json:"api_key"`
+}
+
+func (req mcpServerCandidateRequest) toServer() domain.MCPServer {
+	return domain.MCPServer{
+		ID: req.ID, Name: req.Name, Transport: req.Transport, Command: req.Command,
+		Args: req.Args, BaseURL: req.BaseURL, APIKey: req.APIKey, Enabled: true,
+	}
+}
+
+// resolveCandidateMCPServerAPIKey mirrors resolveCandidateAPIKey for MCP
+// servers -- ports.MCPServerStore has no single-row get (like
+// EmbeddingEndpointStore does), so this scans ListMCPServers, same
+// tolerance as handleAdminGetMCPServer.
+func (h *Handler) resolveCandidateMCPServerAPIKey(ctx context.Context, s domain.MCPServer, id string) domain.MCPServer {
+	if s.APIKey != "" || id == "" || h.mcpServers == nil {
+		return s
+	}
+	servers, err := h.mcpServers.ListMCPServers(ctx)
+	if err != nil {
+		return s
+	}
+	for _, existing := range servers {
+		if existing.ID == id {
+			s.APIKey = h.decryptAPIKey(existing.APIKey)
+			return s
+		}
+	}
+	return s
+}
+
+type mcpServerToolResponse struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type adminMCPServerTestResponse struct {
+	Tools []mcpServerToolResponse `json:"tools"`
+	// Error is set when connecting produced no tools at all -- mcpclient.
+	// Provider.Open is deliberately best-effort/silent per server (a
+	// connect or tools/list failure is only logged, see its own doc
+	// comment), so a genuine connection failure and a server that legitimately
+	// exposes zero tools are indistinguishable here; the message says so
+	// rather than guessing which one happened.
+	Error string `json:"error,omitempty"`
+}
+
+// mcpServerTestTimeout bounds a single "list tools" probe -- mirrors
+// embeddingConnectivityTestTimeout's own reasoning.
+const mcpServerTestTimeout = 10 * time.Second
+
+// handleAdminMCPServersTest connects to a candidate (not-yet-saved) MCP
+// server config and lists whatever tools it actually exposes, so the
+// add/edit subpage can show each tool's real name/description straight
+// from the server's own live tools/list response -- never admin-typed
+// (unlike the old ChatHook.Description) -- before the admin saves
+// anything. No "not configured" gate on h.mcpServers: this only needs
+// h.mcpTools, which is independent of whether any server is saved yet.
+func (h *Handler) handleAdminMCPServersTest(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	req, ok := decodeJSON[mcpServerCandidateRequest](w, r)
+	if !ok {
+		return
+	}
+	if req.Transport != "stdio" && req.Transport != "http" {
+		writeJSON(w, http.StatusOK, adminMCPServerTestResponse{Error: `transport must be "stdio" or "http"`})
+		return
+	}
+	if (req.Transport == "stdio" && req.Command == "") || (req.Transport == "http" && req.BaseURL == "") {
+		writeJSON(w, http.StatusOK, adminMCPServerTestResponse{})
+		return
+	}
+	if h.mcpTools == nil {
+		writeJSON(w, http.StatusOK, adminMCPServerTestResponse{Error: "mcp tool discovery is not available on this server"})
+		return
+	}
+	server := h.resolveCandidateMCPServerAPIKey(r.Context(), req.toServer(), req.ID)
+	ctx, cancel := context.WithTimeout(r.Context(), mcpServerTestTimeout)
+	defer cancel()
+	session, tools := h.mcpTools.Open(ctx, []domain.MCPServer{server}, nil)
+	defer session.Close()
+	if len(tools) == 0 {
+		writeJSON(w, http.StatusOK, adminMCPServerTestResponse{Error: "could not connect, or this server exposes no tools -- check the server's own log for details"})
+		return
+	}
+	writeJSON(w, http.StatusOK, adminMCPServerTestResponse{Tools: mapSlice(tools, func(t domain.MCPTool) mcpServerToolResponse {
+		return mcpServerToolResponse{Name: t.Name, Description: t.Description}
+	})})
+}
+
 func (h *Handler) handleAdminEmbeddingEndpointPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/html; charset=utf-8", adminEmbeddingEndpointHTML)
 }

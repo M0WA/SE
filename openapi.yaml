@@ -910,6 +910,36 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
+  /admin/api/mcp-servers/test:
+    post:
+      tags: [admin]
+      summary: Connect to a candidate MCP server config and list its tools
+      description: >-
+        Connects to a not-yet-saved candidate server config (in the request
+        body) and lists whatever tools it actually exposes, sourced live
+        from the server's own tools/list response -- never admin-typed
+        (unlike the old ChatHook.description) -- so the add/edit subpage
+        can show real tool names/descriptions before (or without) saving.
+        Always 200: an empty result (no error) when the transport-specific
+        field (command for "stdio", base_url for "http") is still blank --
+        there's nothing to connect to yet -- and a populated `error`
+        string (tools still empty) when connecting produced no tools at
+        all, which covers both a real connection failure and a server that
+        legitimately exposes zero tools (mcpclient.Provider.Open can't
+        tell the two apart -- see its own doc comment).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MCPServerCandidateRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MCPServerToolsList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
   /admin/api/users:
     get:
       tags: [admin]
@@ -2411,6 +2441,56 @@ components:
             has_api_key:
               type: boolean
               description: Whether an API key is stored for this server -- its actual value is never returned.
+
+    MCPServerCandidateRequest:
+      type: object
+      description: >-
+        A not-yet-saved (or being-edited) MCP server config, as probed by
+        POST .../mcp-servers/test -- just the fields a real connect+
+        tools/list call needs, independent of whether this candidate is
+        ultimately saved as a new server or an edit to an existing one.
+      properties:
+        id:
+          type: string
+          description: >-
+            The already-saved server this candidate is editing, if any --
+            blank for a brand new server. Used only to resolve a blank
+            api_key below back to the real stored key (a GET/POST/PATCH
+            response never echoes it, see MCPServer.has_api_key).
+        name: { type: string }
+        transport: { type: string, enum: [stdio, http] }
+        command: { type: string, description: "\"stdio\" only." }
+        args:
+          type: array
+          items: { type: string }
+          description: "\"stdio\" only."
+        base_url: { type: string, description: "\"http\" only." }
+        api_key:
+          type: string
+          description: >-
+            "http" only. Blank resolves to the real stored key via id
+            above, same convention as EmbeddingCandidateRequest.api_key.
+
+    MCPServerToolsList:
+      type: object
+      properties:
+        tools:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              description: { type: string }
+          description: >-
+            One entry per tool the candidate server's own live tools/list
+            response reported, in the order it reported them.
+        error:
+          type: string
+          description: >-
+            Set when connecting produced no tools at all -- covers both a
+            real connection failure and a server that legitimately exposes
+            zero tools (indistinguishable here, see the path's own
+            description). Never set alongside a populated tools array.
 
     User:
       type: object

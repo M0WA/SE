@@ -255,3 +255,85 @@ test('clicking Delete re-enables the button and alerts on failure', async () => 
   assert.equal(document.getElementById('server-delete-btn').disabled, false);
   assert.equal(alertMsg, 'Could not delete: in use');
 });
+
+// urlSplitFetch routes GET (load) and POST (list tools) calls to their own
+// implementations, so a test can control each response independently --
+// loadFixture's own default fetchImpl answers every URL identically, which
+// isn't enough once a test cares about the /test probe's own response.
+function urlSplitFetch(loadImpl, testImpl) {
+  return async (url, opts) => {
+    if (url.includes('/admin/api/mcp-servers/test')) return testImpl();
+    return loadImpl();
+  };
+}
+
+test('load() automatically lists tools for an existing server, without a button click', async () => {
+  let testCalls = 0;
+  loadFixture('mcp_web', urlSplitFetch(
+    () => ({ ok: true, json: async () => baseServer() }),
+    () => { testCalls++; return { ok: true, json: async () => ({ tools: [{ name: 'web_search', description: 'Search the web.' }] }) }; },
+  ));
+  await flush();
+  assert.equal(testCalls, 1);
+  assert.equal(document.getElementById('server-list-tools-status').textContent, '1 tool(s) exposed by this server.');
+  assert.equal(document.getElementById('server-list-tools-result').textContent, 'web_search — Search the web.');
+});
+
+test('listTools reports the server-provided error message', async () => {
+  loadFixture('mcp_web', urlSplitFetch(
+    () => ({ ok: true, json: async () => baseServer() }),
+    () => ({ ok: true, json: async () => ({ error: 'could not connect' }) }),
+  ));
+  await flush();
+  assert.equal(document.getElementById('server-list-tools-status').textContent, 'Could not list tools: could not connect');
+  assert.equal(document.getElementById('server-list-tools-result').children.length, 0);
+});
+
+test('clicking "Refresh tools" re-runs the probe and replaces the previous result', async () => {
+  let testCalls = 0;
+  loadFixture('mcp_web', urlSplitFetch(
+    () => ({ ok: true, json: async () => baseServer() }),
+    () => {
+      testCalls++;
+      return { ok: true, json: async () => ({ tools: [{ name: 'tool_v' + testCalls, description: '' }] }) };
+    },
+  ));
+  await flush();
+  assert.equal(testCalls, 1);
+  assert.equal(document.getElementById('server-list-tools-result').textContent, 'tool_v1');
+
+  document.getElementById('server-list-tools-btn').dispatchEvent(new window.Event('click'));
+  await flush();
+  assert.equal(testCalls, 2);
+  // Replaced, not appended -- exactly one result row after the refresh.
+  assert.equal(document.getElementById('server-list-tools-result').children.length, 1);
+  assert.equal(document.getElementById('server-list-tools-result').textContent, 'tool_v2');
+});
+
+test('listTools shows a plain status message when the server reports zero tools without an error', async () => {
+  loadFixture('mcp_web', urlSplitFetch(
+    () => ({ ok: true, json: async () => baseServer() }),
+    () => ({ ok: true, json: async () => ({ tools: [] }) }),
+  ));
+  await flush();
+  assert.match(document.getElementById('server-list-tools-status').textContent, /No tools reported/);
+});
+
+test('candidateBody sends the id (for API-key fallback) plus every field the probe needs', async () => {
+  loadFixture('mcp_web', async () => ({ ok: true, json: async () => baseServer({ has_api_key: true }) }));
+  await flush();
+  document.getElementById('server-args').value = 'a\nb';
+  const { candidateBody } = require('./admin_mcp_server.js');
+  assert.deepEqual(candidateBody(), {
+    id: 'mcp_web', name: 'web', transport: 'stdio',
+    command: '/usr/bin/searchengine-mcp-web', args: ['a', 'b'],
+    base_url: '', api_key: '',
+  });
+});
+
+test('candidateBody sends an empty id in "new" mode', async () => {
+  loadFixture('new');
+  await flush();
+  const { candidateBody } = require('./admin_mcp_server.js');
+  assert.equal(candidateBody().id, '');
+});

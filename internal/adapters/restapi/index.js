@@ -5,9 +5,16 @@
   const results = document.getElementById('results');
   const syntaxNote = document.getElementById('syntax-note');
 
+  const mainEl = document.querySelector('main');
   const modeSwitch = document.getElementById('mode-switch');
   const chatOptions = document.getElementById('chat-options');
   const chatPanel = document.getElementById('chat-panel');
+  const chatTabList = document.getElementById('chat-tab-list');
+  const chatTabNewBtn = document.getElementById('chat-tab-new');
+  const chatTabForkBtn = document.getElementById('chat-tab-fork');
+  const chatTabExportBtn = document.getElementById('chat-tab-export');
+  const chatTabImportBtn = document.getElementById('chat-tab-import');
+  const chatTabImportInput = document.getElementById('chat-tab-import-input');
   const chatMessages = document.getElementById('chat-messages');
   const chatStatus = document.getElementById('chat-status');
   const chatForm = document.getElementById('chat-form');
@@ -20,10 +27,34 @@
   const adminLink = document.getElementById('admin-link');
   const accountLink = document.getElementById('account-link');
 
-  // chatHistory is the full running conversation, sent in full on every
-  // /chat call -- the backend is stateless and has no server-side session,
-  // so the client is the only place this state lives.
-  const chatHistory = [];
+  // tabs holds every open conversation this session -- forking a tab deep-
+  // copies its history into a new independent one, so answering in one
+  // never affects another. Session-only (in-memory): nothing here survives
+  // a reload, by design (Export/Import below is the deliberate escape
+  // hatch for anything worth keeping). activeTabId names which one is
+  // currently rendered into #chat-messages; nextTabId is a plain
+  // incrementing counter (not a timestamp), so tab ids stay small,
+  // readable, and deterministic in tests.
+  let nextTabId = 1;
+  function makeTab(overrides) {
+    const id = nextTabId++;
+    return Object.assign({ id: id, title: 'Chat ' + id, history: [], tokenUsage: null }, overrides);
+  }
+  const tabs = [makeTab()];
+  let activeTabId = tabs[0].id;
+
+  function activeTab() {
+    return tabs.find((t) => t.id === activeTabId);
+  }
+
+  // deriveTabTitle shortens a tab's first user message into a readable tab
+  // label -- only applied the moment a brand-new tab gets its first turn
+  // (see sendChatMessage), so a forked or imported tab's own inherited
+  // title is never overwritten.
+  function deriveTabTitle(content) {
+    const trimmed = content.trim().replace(/\s+/g, ' ');
+    return trimmed.length > 24 ? trimmed.slice(0, 24) + '…' : trimmed;
+  }
 
   // buildDonutSVG/buildDonutLegend render a per-turn token-usage chart from
   // {label, value, color} segments -- a small, local duplicate of
@@ -414,12 +445,12 @@
   // text is shown as plain text -- markdown syntax they typed is not
   // something they'd expect reinterpreted. contextTrimmed (assistant-only)
   // surfaces the backend's context_trimmed flag: since the client resends
-  // its whole chatHistory on every call and the backend silently drops the
+  // a tab's whole history on every call and the backend silently drops the
   // oldest messages to fit the endpoint's token budget, without this note a
   // user would have no way to know this answer was generated without seeing
-  // the full conversation. toolResults (also assistant-only, never echoed
-  // back into chatHistory) is one entry per MCP tool call the model made
-  // this turn -- each rendered as its own folded <details>, closed by
+  // the full conversation. toolResults (also assistant-only) is one entry
+  // per MCP tool call the model made this turn -- each rendered as its own
+  // folded <details>, closed by
   // default, so a tool's raw output/error is available on demand without
   // cluttering the answer itself. Token usage is NOT rendered here -- see
   // renderTokenUsage, which keeps one persistent summary next to the Web
@@ -548,34 +579,226 @@
     return msg;
   }
 
-  // sendChatMessage appends the user's turn to chatHistory, renders it
-  // immediately, then POSTs the full history to /chat -- see runSearch
-  // above for the same ok/non-ok/network-failure pattern this mirrors.
-  // web_search is read fresh from its checkbox on every call, so switching
-  // it mid-conversation only ever affects the question being asked right
-  // now, not history already answered under other settings.
+  // renderActiveTab fully re-renders #chat-messages from the active tab's
+  // own stored history -- unlike renderChatMessage (which only ever
+  // appends the newest turn during a live send), this replays every past
+  // turn, needed whenever the visible tab changes (switch/fork/new/import)
+  // since #chat-messages itself holds no state of its own between
+  // switches. Each stored assistant entry keeps its own context_trimmed/
+  // tool_results (see sendChatMessage), so switching back to a tab shows
+  // exactly what it showed before, tool-result folds included.
+  function renderActiveTab() {
+    clear(chatMessages);
+    const tab = activeTab();
+    for (const m of tab.history) {
+      if (m.role === 'user') {
+        renderChatMessage('user', m.content);
+      } else if (m.role === 'assistant') {
+        renderChatMessage('assistant', m.content, m.context_trimmed, m.tool_results);
+      }
+    }
+    chatStatus.textContent = '';
+    renderTokenUsage(tab.tokenUsage);
+  }
+
+  // renderTabs rebuilds the tab strip from `tabs` -- called after any
+  // change to the list itself or to which one is active. The close button
+  // is omitted entirely while only one tab remains, so there's always at
+  // least one conversation open; closing never needs a confirmation
+  // dialog since a closed tab's history was already exportable beforehand
+  // if it mattered.
+  function renderTabs() {
+    clear(chatTabList);
+    for (const tab of tabs) {
+      const item = document.createElement('div');
+      item.className = 'chat-tab' + (tab.id === activeTabId ? ' chat-tab-active' : '');
+      item.setAttribute('role', 'tab');
+      item.setAttribute('aria-selected', String(tab.id === activeTabId));
+
+      const switchBtn = document.createElement('button');
+      switchBtn.type = 'button';
+      switchBtn.className = 'chat-tab-label';
+      switchBtn.textContent = tab.title;
+      switchBtn.title = tab.title;
+      switchBtn.addEventListener('click', () => switchTab(tab.id));
+      item.appendChild(switchBtn);
+
+      if (tabs.length > 1) {
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'chat-tab-close';
+        closeBtn.textContent = '×';
+        closeBtn.title = 'Close ' + tab.title;
+        closeBtn.setAttribute('aria-label', 'Close ' + tab.title);
+        closeBtn.addEventListener('click', () => closeTab(tab.id));
+        item.appendChild(closeBtn);
+      }
+      chatTabList.appendChild(item);
+    }
+  }
+
+  function switchTab(id) {
+    if (id === activeTabId) return;
+    activeTabId = id;
+    renderTabs();
+    renderActiveTab();
+  }
+
+  function newChatTab() {
+    const tab = makeTab();
+    tabs.push(tab);
+    activeTabId = tab.id;
+    renderTabs();
+    renderActiveTab();
+    return tab;
+  }
+
+  // forkActiveTab deep-copies the active tab's history (each message
+  // object shallow-copied, so editing the fork's own tool_results array
+  // later can't ever mutate the source tab's) into a new, independent tab
+  // and switches to it -- the source conversation keeps going exactly as
+  // it was.
+  function forkActiveTab() {
+    const source = activeTab();
+    const tab = makeTab({
+      title: source.title + ' (fork)',
+      history: source.history.map((m) => Object.assign({}, m)),
+      tokenUsage: source.tokenUsage,
+    });
+    tabs.push(tab);
+    activeTabId = tab.id;
+    renderTabs();
+    renderActiveTab();
+    return tab;
+  }
+
+  function closeTab(id) {
+    if (tabs.length <= 1) return;
+    const idx = tabs.findIndex((t) => t.id === id);
+    if (idx === -1) return;
+    tabs.splice(idx, 1);
+    if (activeTabId === id) {
+      activeTabId = tabs[Math.max(0, idx - 1)].id;
+      renderActiveTab();
+    }
+    renderTabs();
+  }
+
+  // serializeTab/deserializeTab are the pure JSON shape Export/Import
+  // trade in -- kept separate from the DOM-triggering
+  // exportActiveTab/importTabFromJSON below so the format itself is
+  // testable without a real file download/upload round trip.
+  function serializeTab(tab) {
+    return JSON.stringify({ title: tab.title, history: tab.history }, null, 2);
+  }
+
+  // deserializeTab validates and normalizes an imported chat export --
+  // tolerant of a hand-edited or partial file (drops any history entry
+  // that isn't a recognizable {role, content} turn, rather than rejecting
+  // the whole import over one bad entry) but throws on something that
+  // isn't a chat export at all (no history array).
+  function deserializeTab(jsonText) {
+    const parsed = JSON.parse(jsonText);
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.history)) {
+      throw new Error('not a valid chat export');
+    }
+    const history = parsed.history
+      .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+      .map((m) => ({
+        role: m.role,
+        content: m.content,
+        context_trimmed: !!m.context_trimmed,
+        tool_results: Array.isArray(m.tool_results) ? m.tool_results : [],
+      }));
+    const title = typeof parsed.title === 'string' && parsed.title ? parsed.title : 'Imported chat';
+    return { title: title, history: history };
+  }
+
+  // exportActiveTab downloads the active tab as a JSON file via a
+  // throwaway <a download> link -- the standard no-server-round-trip way
+  // to save browser-side data to disk.
+  function exportActiveTab() {
+    const tab = activeTab();
+    const blob = new Blob([serializeTab(tab)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = (tab.title || 'chat').replace(/[^a-z0-9-_]+/gi, '_') + '.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function importTabFromJSON(jsonText) {
+    const parsedTab = deserializeTab(jsonText);
+    const tab = makeTab({ title: parsedTab.title, history: parsedTab.history, tokenUsage: null });
+    tabs.push(tab);
+    activeTabId = tab.id;
+    renderTabs();
+    renderActiveTab();
+    return tab;
+  }
+
+  chatTabNewBtn.addEventListener('click', newChatTab);
+  chatTabForkBtn.addEventListener('click', forkActiveTab);
+  chatTabExportBtn.addEventListener('click', exportActiveTab);
+  chatTabImportBtn.addEventListener('click', () => chatTabImportInput.click());
+  chatTabImportInput.addEventListener('change', async () => {
+    const file = chatTabImportInput.files[0];
+    chatTabImportInput.value = '';
+    if (!file) return;
+    try {
+      importTabFromJSON(await file.text());
+    } catch (err) {
+      chatStatus.textContent = 'Could not import chat: ' + err.message;
+    }
+  });
+
+  // sendChatMessage appends the user's turn to the active tab's own
+  // history, renders it immediately, then POSTs the full history to /chat
+  // -- see runSearch above for the same ok/non-ok/network-failure pattern
+  // this mirrors. web_search is read fresh from its checkbox on every
+  // call, so switching it mid-conversation only ever affects the question
+  // being asked right now, not history already answered under other
+  // settings. tab is captured once at the start (not re-read as
+  // activeTab() after the await) so a reply that arrives after the user
+  // has switched to a different tab still updates the RIGHT tab's stored
+  // history -- but only touches the visible DOM (chatMessages/chatStatus/
+  // the donut) when that tab is still the one on screen, so a slow
+  // background answer can never clobber whatever tab the user is looking
+  // at by then.
   async function sendChatMessage(content) {
-    chatHistory.push({ role: 'user', content });
+    const tab = activeTab();
+    tab.history.push({ role: 'user', content });
+    if (tab.history.length === 1) tab.title = deriveTabTitle(content);
     renderChatMessage('user', content);
+    renderTabs();
     chatStatus.textContent = 'Thinking…';
     try {
       const resp = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: chatHistory, web_search: chatWebSearch.checked }),
+        body: JSON.stringify({ messages: tab.history, web_search: chatWebSearch.checked }),
       });
       if (!resp.ok) {
         const msg = await resp.text();
-        chatStatus.textContent = 'Chat failed: ' + msg.trim();
+        if (tab.id === activeTabId) chatStatus.textContent = 'Chat failed: ' + msg.trim();
         return;
       }
       const data = await resp.json();
-      chatHistory.push({ role: 'assistant', content: data.answer });
-      renderChatMessage('assistant', data.answer, data.context_trimmed, data.tool_results || []);
-      renderTokenUsage(data.token_usage);
-      chatStatus.textContent = '';
+      tab.history.push({
+        role: 'assistant', content: data.answer,
+        context_trimmed: data.context_trimmed, tool_results: data.tool_results || [],
+      });
+      tab.tokenUsage = data.token_usage;
+      if (tab.id === activeTabId) {
+        renderChatMessage('assistant', data.answer, data.context_trimmed, data.tool_results || []);
+        renderTokenUsage(tab.tokenUsage);
+        chatStatus.textContent = '';
+      }
     } catch (err) {
-      chatStatus.textContent = 'Chat failed: could not reach the server.';
+      if (tab.id === activeTabId) chatStatus.textContent = 'Chat failed: could not reach the server.';
     }
   }
 
@@ -589,6 +812,7 @@
   function setMode(mode) {
     const isChat = mode === 'chat';
     modeSwitch.setAttribute('aria-checked', String(isChat));
+    if (mainEl) mainEl.classList.toggle('chat-mode', isChat);
     if (isChat) {
       correctionNoteHiddenBeforeChat = correctionNote.hidden;
       form.hidden = true;
@@ -614,8 +838,9 @@
     setMode(isChat ? 'search' : 'chat');
   });
 
+  renderTabs();
+  renderActiveTab();
   setMode('chat');
-  renderTokenUsage(null);
 
   chatForm.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -698,7 +923,10 @@
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       renderCorrectionNote, clear, scoreRow, renderResults, runSearch,
-      chatHistory, renderChatMessage, sendChatMessage, setMode,
+      tabs, activeTab, renderChatMessage, renderActiveTab, renderTabs,
+      switchTab, newChatTab, forkActiveTab, closeTab,
+      serializeTab, deserializeTab, exportActiveTab, importTabFromJSON,
+      sendChatMessage, setMode,
       escapeHTML, renderInline, renderMarkdown,
       buildDonutSVG, buildDonutLegend, tokenUsageSegments, renderTokenUsage,
       loadSession,
