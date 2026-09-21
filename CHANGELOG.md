@@ -1,5 +1,19 @@
 # Changelog
 
+## v4.13.30 - 2026-09-21
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Dependencies
+* Bump jsdom from 30.0.1 to 30.1.0 in the npm-minor-and-patch group by @dependabot[bot] in https://github.com/M0WA/SE/pull/186
+### Other Changes
+* Make the %c prompt placeholder use real strftime, not a Go layout by @M0WA in https://github.com/M0WA/SE/pull/187
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.29...v4.13.30
+
+
 ## v4.13.29 - 2026-09-20
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
