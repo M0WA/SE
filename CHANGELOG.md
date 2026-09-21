@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.33 - 2026-09-21
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Tell web_search/web_fetch's suggested prompts to retry, capped at 3 tries by @M0WA in https://github.com/M0WA/SE/pull/194
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.32...v4.13.33
+
+
 ## v4.13.32 - 2026-09-21
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
