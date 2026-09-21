@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"log"
 	"net/http"
 	"net/url"
@@ -12,6 +13,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
+
+	"searchengine/internal/domain"
+	"searchengine/internal/ports"
 )
 
 const sessionCookieName = "se_session"
@@ -22,32 +28,41 @@ const sessionCookieName = "se_session"
 // production where search-server and admin-server must share a login.
 type sessionStore struct {
 	mu       sync.Mutex
-	sessions map[string]time.Time
+	sessions map[string]sessionRecord
+}
+
+// sessionRecord mirrors what the SQL-backed sessions table stores per
+// token -- see ports.SessionStore's doc comment for why role/userID live
+// here rather than in the cookie itself.
+type sessionRecord struct {
+	expiresAt time.Time
+	role      string
+	userID    string
 }
 
 func newSessionStore() *sessionStore {
-	return &sessionStore{sessions: make(map[string]time.Time)}
+	return &sessionStore{sessions: make(map[string]sessionRecord)}
 }
 
-func (s *sessionStore) CreateSession(_ context.Context, token string, expiresAt time.Time) error {
+func (s *sessionStore) CreateSession(_ context.Context, token string, expiresAt time.Time, role string, userID string) error {
 	s.mu.Lock()
-	s.sessions[token] = expiresAt
+	s.sessions[token] = sessionRecord{expiresAt: expiresAt, role: role, userID: userID}
 	s.mu.Unlock()
 	return nil
 }
 
-func (s *sessionStore) ValidSession(_ context.Context, token string) (bool, error) {
+func (s *sessionStore) ValidSession(_ context.Context, token string) (bool, string, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	exp, ok := s.sessions[token]
+	rec, ok := s.sessions[token]
 	if !ok {
-		return false, nil
+		return false, "", "", nil
 	}
-	if time.Now().After(exp) {
+	if time.Now().After(rec.expiresAt) {
 		delete(s.sessions, token)
-		return false, nil
+		return false, "", "", nil
 	}
-	return true, nil
+	return true, rec.role, rec.userID, nil
 }
 
 func (s *sessionStore) RevokeSession(_ context.Context, token string) error {
@@ -81,17 +96,33 @@ func (h *Handler) checkCredentials(user, pass string) bool {
 	return userOK && passOK
 }
 
-func (h *Handler) isAuthenticated(r *http.Request) bool {
+// sessionRoleFor resolves the caller's role from the se_session cookie by
+// looking up the SERVER-SIDE session record -- the cookie itself is always
+// just an opaque random token, so this is the only place a role is ever
+// determined; nothing the client sends can influence it. ok is false for
+// no cookie, an unknown token, or an expired one; role is domain.RoleAdmin
+// or domain.RoleUser when ok is true.
+func (h *Handler) sessionRoleFor(r *http.Request) (role string, ok bool) {
 	c, err := r.Cookie(sessionCookieName)
 	if err != nil {
-		return false
+		return "", false
 	}
-	valid, err := h.sessions.ValidSession(r.Context(), c.Value)
-	return err == nil && valid
+	valid, role, _, err := h.sessions.ValidSession(r.Context(), c.Value)
+	if err != nil || !valid {
+		return "", false
+	}
+	return role, true
+}
+
+func (h *Handler) isAuthenticated(r *http.Request) bool {
+	_, ok := h.sessionRoleFor(r)
+	return ok
 }
 
 // requireAuthPage gates an HTML page: unauthenticated visitors are sent to
 // the login page, carrying the original path so they land back on it.
+// Either role passes -- used by RoutesSearch (and RoutesAdmin's own
+// unauthenticated-vs-authenticated pages that aren't admin-only, if any).
 func (h *Handler) requireAuthPage(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !h.isAuthenticated(r) {
@@ -103,11 +134,52 @@ func (h *Handler) requireAuthPage(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // requireAuthAPI gates a JSON endpoint: unauthenticated callers get a plain
-// 401, since there's no page to redirect an API client to.
+// 401, since there's no page to redirect an API client to. Either role
+// passes.
 func (h *Handler) requireAuthAPI(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !h.isAuthenticated(r) {
 			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// requireAdminAuthPage is requireAuthPage's admin-only counterpart, gating
+// every RoutesAdmin page. Unauthenticated -> redirect to /login exactly
+// like requireAuthPage (nothing to distinguish yet). Authenticated but
+// role != domain.RoleAdmin (a regular user) -> a plain 403, NOT a redirect
+// to /login -- a logged-in regular user can't "log in harder", so bouncing
+// them back to the login page would just be a dead end dressed up as a
+// login prompt.
+func (h *Handler) requireAdminAuthPage(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		role, ok := h.sessionRoleFor(r)
+		if !ok {
+			http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.Path), http.StatusSeeOther)
+			return
+		}
+		if role != domain.RoleAdmin {
+			http.Error(w, "admin access required", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// requireAdminAuthAPI is requireAuthAPI's admin-only counterpart, gating
+// every /admin/api/* endpoint. Unauthenticated -> 401. Authenticated but
+// not domain.RoleAdmin -> 403.
+func (h *Handler) requireAdminAuthAPI(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		role, ok := h.sessionRoleFor(r)
+		if !ok {
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		if role != domain.RoleAdmin {
+			http.Error(w, "admin access required", http.StatusForbidden)
 			return
 		}
 		next(w, r)
@@ -286,6 +358,45 @@ func clientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
+// dummyPasswordHash is compared against (via bcrypt.CompareHashAndPassword)
+// whenever a login's username doesn't match any domain.User row, so that
+// path takes roughly the same time as a real user with a wrong password --
+// without it, a login attempt for a nonexistent username would return
+// faster than one for a real username, letting an attacker enumerate valid
+// usernames by response timing alone. The actual password compared against
+// it is never checked for a match (there's no way it legitimately could
+// be); only the constant-time work matters here.
+var dummyPasswordHash, _ = bcrypt.GenerateFromPassword([]byte("dummy-password-for-timing-safety"), bcrypt.DefaultCost)
+
+// authenticatedRole checks user/pass against the hardcoded admin account
+// first, then (if that fails and h.users is configured) against
+// domain.User rows -- returns the resulting session role and, for a
+// domain.RoleUser match, that user's ID (empty otherwise), or ok=false if
+// neither matched. Every failure path -- wrong admin password, unknown
+// username, wrong user password -- does the same amount of constant-time/
+// bcrypt work and returns the identical ok=false, so none of the three is
+// distinguishable from the others by response timing or shape.
+func (h *Handler) authenticatedRole(ctx context.Context, user, pass string) (role string, userID string, ok bool) {
+	if h.checkCredentials(user, pass) {
+		return domain.RoleAdmin, "", true
+	}
+	if h.users == nil {
+		return "", "", false
+	}
+	u, err := h.users.GetUserByUsername(ctx, user)
+	if err != nil {
+		if !errors.Is(err, ports.ErrUserNotFound) {
+			log.Printf("auth: looking up user %q: %v", user, err)
+		}
+		_ = bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte(pass))
+		return "", "", false
+	}
+	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(pass)) != nil {
+		return "", "", false
+	}
+	return domain.RoleUser, u.ID, true
+}
+
 // handleLogin is only ever reached via handleLoginRoute, which already
 // guarantees the method is POST -- no method check needed here.
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -301,7 +412,8 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.checkCredentials(req.Username, req.Password) {
+	role, userID, matched := h.authenticatedRole(r.Context(), req.Username, req.Password)
+	if !matched {
 		h.loginLimiter.recordFailure(ip, now)
 		log.Printf("failed login attempt for user %q from %q", req.Username, ip)
 		http.Error(w, "incorrect username or password", http.StatusUnauthorized)
@@ -311,7 +423,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	sessionTTL := h.opSettings.Get().SessionTTL
 	token := randomToken()
-	if err := h.sessions.CreateSession(r.Context(), token, time.Now().Add(sessionTTL)); err != nil {
+	if err := h.sessions.CreateSession(r.Context(), token, time.Now().Add(sessionTTL), role, userID); err != nil {
 		http.Error(w, "could not create session", http.StatusInternalServerError)
 		return
 	}

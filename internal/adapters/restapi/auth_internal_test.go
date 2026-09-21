@@ -5,31 +5,62 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"searchengine/internal/domain"
 )
 
 func TestSessionStore_CreateThenValidSucceeds(t *testing.T) {
 	s := newSessionStore()
 	ctx := context.Background()
-	if err := s.CreateSession(ctx, "tok-1", time.Now().Add(time.Hour)); err != nil {
+	if err := s.CreateSession(ctx, "tok-1", time.Now().Add(time.Hour), domain.RoleAdmin, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	valid, err := s.ValidSession(ctx, "tok-1")
+	valid, role, userID, err := s.ValidSession(ctx, "tok-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !valid {
 		t.Error("expected a freshly created session to be valid")
 	}
+	if role != domain.RoleAdmin || userID != "" {
+		t.Errorf("expected role=%q userID=\"\", got role=%q userID=%q", domain.RoleAdmin, role, userID)
+	}
+}
+
+// TestSessionStore_CreateThenValidSucceeds_UserRole mirrors the admin-role
+// case above for a regular-user session, proving role and userID both
+// round trip through the in-memory fallback store too (see sqlrepo's
+// identical TestSession_CreateThenValidSucceeds_UserRole for the SQL-backed
+// store).
+func TestSessionStore_CreateThenValidSucceeds_UserRole(t *testing.T) {
+	s := newSessionStore()
+	ctx := context.Background()
+	if err := s.CreateSession(ctx, "tok-user", time.Now().Add(time.Hour), domain.RoleUser, "user_alice"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	valid, role, userID, err := s.ValidSession(ctx, "tok-user")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !valid {
+		t.Error("expected a freshly created session to be valid")
+	}
+	if role != domain.RoleUser || userID != "user_alice" {
+		t.Errorf("expected role=%q userID=%q, got role=%q userID=%q", domain.RoleUser, "user_alice", role, userID)
+	}
 }
 
 func TestSessionStore_ValidUnknownTokenReportsFalse(t *testing.T) {
 	s := newSessionStore()
-	valid, err := s.ValidSession(context.Background(), "never-issued")
+	valid, role, userID, err := s.ValidSession(context.Background(), "never-issued")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if valid {
 		t.Error("expected an unknown token to be invalid")
+	}
+	if role != "" || userID != "" {
+		t.Errorf("expected empty role/userID for an unknown token, got role=%q userID=%q", role, userID)
 	}
 }
 
@@ -41,11 +72,11 @@ func TestSessionStore_ExpiredSessionReportsInvalidAndIsForgotten(t *testing.T) {
 	s := newSessionStore()
 	ctx := context.Background()
 	token := "tok-expired"
-	if err := s.CreateSession(ctx, token, time.Now().Add(-time.Second)); err != nil { // already expired
+	if err := s.CreateSession(ctx, token, time.Now().Add(-time.Second), domain.RoleAdmin, ""); err != nil { // already expired
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	valid, err := s.ValidSession(ctx, token)
+	valid, _, _, err := s.ValidSession(ctx, token)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -64,13 +95,13 @@ func TestSessionStore_RevokeInvalidatesSession(t *testing.T) {
 	s := newSessionStore()
 	ctx := context.Background()
 	token := "tok-revoke"
-	if err := s.CreateSession(ctx, token, time.Now().Add(time.Hour)); err != nil {
+	if err := s.CreateSession(ctx, token, time.Now().Add(time.Hour), domain.RoleAdmin, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if err := s.RevokeSession(ctx, token); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	valid, err := s.ValidSession(ctx, token)
+	valid, _, _, err := s.ValidSession(ctx, token)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

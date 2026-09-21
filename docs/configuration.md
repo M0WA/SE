@@ -347,6 +347,27 @@ chat's web-search results instead, add it as a SearXNG engine -- see
 | `hook-script` | none, required | filename only, no path | Script filename resolved against `CHAT_HOOKS_DIR` by the hook runner. |
 | `hook-enabled` | `false` | boolean | Whether this hook is active and checked against chat answers. |
 
+### Users (`admin_users.html`)
+
+DB-backed regular-user accounts -- entirely distinct from the single
+hardcoded admin account configured via `ADMIN_USER`/`ADMIN_PASSWORD`
+(see Environment variables below), which is never stored as a row here and
+is unaffected by anything on this page. A regular-user account can sign in
+and use the public search site (index page, `/search`, `/chat`) but is
+refused (403) on every `/admin/*` route -- see `internal/domain/user.go`'s
+`RoleAdmin`/`RoleUser` and `internal/adapters/restapi/auth.go`'s
+`requireAdminAuthPage`/`requireAdminAuthAPI` for the enforcement mechanism.
+There is no environment variable or config file for this feature -- an
+admin creates/deletes accounts and resets passwords entirely through this
+page (`GET`/`POST`/`PATCH`/`DELETE /admin/api/users...`), stored in the
+`users` table with a bcrypt-hashed password (never a plaintext value, on
+this table or in any API response).
+
+| Field | Default | Bounds | Description |
+|---|---|---|---|
+| `user-username` | none, required | non-empty, must not match `ADMIN_USER` | Username; unique among regular-user accounts. Not editable after creation -- an account's id is minted from it at creation time (mirrors `hook-id`'s convention). |
+| `user-password` | none, required on create/reset | 8-72 characters (bcrypt's own hard limit) | Hashed with bcrypt before storage; never shown again after saving. A password reset only changes this field -- username is locked. |
+
 ## Keeping this document current
 
 Per the root `CLAUDE.md`, this file (and `docs/` more broadly) must be kept in sync in the same change as the config it describes: any change to an environment variable, a config file under `packaging/`, an install/deployment step, or an admin-configurable runtime setting should update this document alongside the code — the same way `openapi.yaml` and `packaging/nginx/searchengine.conf` are treated as hard requirements rather than nice-to-haves.

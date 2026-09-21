@@ -47,7 +47,7 @@ func TestCreateSession_StoresHashedTokenNotPlaintext(t *testing.T) {
 	repo := newSessionInternalTestRepo(t)
 	ctx := context.Background()
 	const token = "super-secret-session-token"
-	if err := repo.CreateSession(ctx, token, time.Now().Add(time.Hour)); err != nil {
+	if err := repo.CreateSession(ctx, token, time.Now().Add(time.Hour), "admin", ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 

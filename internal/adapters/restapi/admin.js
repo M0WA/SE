@@ -264,6 +264,7 @@ const ADMIN_NAV_GROUPS = [
     items: [
       { label: 'Settings', href: '/admin/settings' },
       { label: 'Database', href: '/admin/database' },
+      { label: 'Users', href: '/admin/users' },
     ],
   },
 ];

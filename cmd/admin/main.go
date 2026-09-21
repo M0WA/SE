@@ -88,6 +88,7 @@ func main() {
 		EmbeddingEndpoints:    repo,
 		ChatEndpoints:         repo,
 		ChatHooks:             repo,
+		Users:                 repo,
 		Health:                repo,
 		Sessions:              repo,
 		DBDriver:              driver,

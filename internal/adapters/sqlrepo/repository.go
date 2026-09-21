@@ -171,6 +171,9 @@ func (r *Repository) migrate(ctx context.Context) error {
 	if err := r.migrateChatHookColumns(ctx); err != nil {
 		return err
 	}
+	if err := r.migrateSessionColumns(ctx); err != nil {
+		return err
+	}
 	if err := r.migrateLegacyHTTPEmbeddingConfig(ctx); err != nil {
 		return err
 	}
@@ -352,6 +355,23 @@ func (r *Repository) migrateChatHookColumns(ctx context.Context) error {
 		return err
 	}
 	return r.addColumnIfMissing(ctx, "chat_hooks", existing, "gated_by_web_search", "gated_by_web_search BOOLEAN NOT NULL DEFAULT false")
+}
+
+// migrateSessionColumns adds role/user_id to a sessions table that predates
+// the regular-user-accounts feature. Defaulting every pre-existing (or
+// concurrently in-flight) session row to role='admin' is correct, not just
+// convenient: before this migration ships, every session that could
+// possibly exist WAS an admin session, since domain.User rows didn't exist
+// yet to create any other kind.
+func (r *Repository) migrateSessionColumns(ctx context.Context) error {
+	existing, err := r.existingColumns(ctx, "sessions")
+	if err != nil {
+		return err
+	}
+	if err := r.addColumnIfMissing(ctx, "sessions", existing, "role", "role TEXT NOT NULL DEFAULT 'admin'"); err != nil {
+		return err
+	}
+	return r.addColumnIfMissing(ctx, "sessions", existing, "user_id", "user_id TEXT NOT NULL DEFAULT ''")
 }
 
 // legacyHTTPEmbeddingSettings decodes just the fields this migration cares
