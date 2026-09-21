@@ -67,6 +67,18 @@ test('load() applies the fetched user to the form and reveals it', async () => {
   assert.equal(meta.includes('user_alice'), true);
 });
 
+// The user-edit subpage must show the same admin nav rail as every other
+// admin page (unlike a plain "back link only" drill-down page) -- a
+// reported UX gap: the rail was originally omitted here, mirroring
+// admin_embedding_endpoint.html's own no-rail convention, but this page
+// needs it.
+test('renders the admin nav rail on load', async () => {
+  loadFixture('user_alice', async () => ({ ok: true, json: async () => baseUser() }));
+  await flush();
+  const rail = document.getElementById('admin-rail');
+  assert.notEqual(rail.querySelector('a'), null);
+});
+
 test('load() shows "Not found" and the error message on failure', async () => {
   loadFixture('user_alice', async () => ({ ok: false, status: 404, text: async () => 'no such user' }));
   await flush();

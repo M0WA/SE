@@ -10,11 +10,13 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
 </head>
 <body class="admin">
+<div class="page-header">
+  <a class="mark" href="/">se.</a>
+  <button id="sign-out" class="text-button" type="button">Sign out</button>
+</div>
+<div class="admin-shell">
+<nav class="admin-rail" id="admin-rail" aria-label="Admin sections"></nav>
 <main>
-  <div class="page-header">
-    <a class="mark" href="/">se.</a>
-    <button id="sign-out" class="text-button" type="button">Sign out</button>
-  </div>
   <a class="back" href="/admin/users">Back to users</a>
 
   <h2 id="user-title">Add user</h2>
@@ -47,6 +49,7 @@
     <span id="user-form-status" class="error-text"></span>
   </form>
 </main>
+</div>
 <script src="/admin.js"></script>
 <script src="/admin_user.js"></script>
 </body>

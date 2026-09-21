@@ -100,6 +100,7 @@
     }
   });
 
+  renderAdminNav();
   wireSignOut();
   load();
 
