@@ -79,11 +79,25 @@ taken out of context. Once you have results, fetch the URL that looks
 most likely to answer the question with <web_fetch>https://...</web_fetch>
 and confirm the fact against the actual page content before answering.
 Only answer from the excerpts alone if fetching genuinely isn't possible.
+
+If a search returns nothing useful, or a fetch fails, is blocked, or
+doesn't answer the question, try a different search query or a different
+URL instead of giving up or answering from memory. Limit yourself to 3
+search/fetch attempts total per question -- after that, answer with the
+best information you found and say clearly what you were unable to
+verify.
 ```
 
-The added paragraph only makes sense when the web_fetch hook is also
-enabled (see below) -- it tells the model to chain the two tools rather
-than treat a search engine's own excerpt as sufficient verification.
+The added paragraphs only make sense when the web_fetch hook is also
+enabled (see below) -- they tell the model to chain the two tools rather
+than treat a search engine's own excerpt as sufficient verification, and
+to retry with a different query/URL rather than give up on the first
+failure. The "3 attempts total" cap matches ChatService.Chat's own
+maxHookFollowUpRounds (2 follow-up rounds after the initial answer, so at
+most 3 tool-invoking turns) -- telling the model about the limit up front
+gets a clean "here's my best answer, and here's what I couldn't verify"
+once it's reached, instead of it either not knowing when to stop trying or
+silently giving up after the first failure.
 
 web_fetch's Prompt:
 
@@ -94,6 +108,13 @@ already feel confident or were given unrelated search results -- those
 are not the page itself. Output only the tag, nothing else, and wait for
 the real page content as a new message before answering. Never guess,
 recall from memory, or describe what you assume the page contains.
+
+If a fetch fails, is blocked, or returns content that doesn't answer the
+question, try a different URL (another search result, or a related page)
+instead of giving up or answering from memory. Limit yourself to 3
+search/fetch attempts total per question -- after that, answer with the
+best information you found and say clearly what you were unable to
+verify.
 ```
 
 The "even if you already feel confident" phrasing matters: a model with a
@@ -104,6 +125,8 @@ context is also enabled and gives it something that merely looks like
 "I already did research." Naming that failure mode explicitly and telling
 it to call the tool anyway measurably improves (though, being an LLM,
 never perfectly guarantees) actual tool use over a shorter, softer prompt.
+The retry paragraph mirrors web_search's -- see the "3 attempts total"
+note above; the two hooks share the same per-turn budget, not 3 each.
 
 ## Install
 
