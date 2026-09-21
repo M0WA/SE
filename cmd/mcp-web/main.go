@@ -10,11 +10,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +25,7 @@ import (
 	"searchengine/internal/adapters/httpfetcher"
 	"searchengine/internal/bootstrap"
 	"searchengine/internal/domain"
+	"searchengine/internal/ports"
 )
 
 // searchTimeout bounds a single SearXNG proxy call.
@@ -51,8 +54,17 @@ func main() {
 	// Falls back to 127.0.0.1:8888 if somehow unset (e.g. invoked
 	// standalone for local testing), matching web_search.sh's own default.
 	searxBaseURL := bootstrap.GetEnv("WEB_SEARCH_BASE_URL", "http://127.0.0.1:8888")
+	// WEB_SEARCH_RESULT_COUNT/WEB_FETCH_USER_AGENT are set the same
+	// admin-configured-value-at-spawn-time way as WEB_SEARCH_BASE_URL
+	// above -- see domain.ChatEndpoint.WebSearchResultCount and
+	// application.ChatOptions.UserAgent for where each is sourced from.
+	// Both are optional: an unset/unparseable result count means "no cap"
+	// (0), and an unset user agent leaves fetcher's own configured default
+	// (domain.DefaultOperationalSettings().UserAgent) in place.
+	resultCount, _ := strconv.Atoi(bootstrap.GetEnv("WEB_SEARCH_RESULT_COUNT", "0"))
+	userAgent := bootstrap.GetEnv("WEB_FETCH_USER_AGENT", "")
 	fetcher := httpfetcher.New(domain.DefaultOperationalSettings())
-	server := newServer(searxBaseURL, fetcher)
+	server := newServer(searxBaseURL, resultCount, userAgent, fetcher)
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatal(err)
@@ -63,7 +75,7 @@ func main() {
 // factored out of main so a test can connect to it directly over an
 // in-memory transport (mcp.NewInMemoryTransports) instead of exercising it
 // only via a real stdio subprocess.
-func newServer(searxBaseURL string, fetcher *httpfetcher.Fetcher) *mcp.Server {
+func newServer(searxBaseURL string, resultCount int, userAgent string, fetcher *httpfetcher.Fetcher) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "mcp-web", Version: "1"}, nil)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -75,7 +87,7 @@ func newServer(searxBaseURL string, fetcher *httpfetcher.Fetcher) *mcp.Server {
 			"with web_fetch before answering, and cross-check the information across multiple independent " +
 			"results when possible, since search snippets can be outdated, truncated, or simply wrong.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args searchArgs) (*mcp.CallToolResult, any, error) {
-		text, err := webSearch(ctx, searxBaseURL, args.Query)
+		text, err := webSearch(ctx, searxBaseURL, args.Query, resultCount)
 		if err != nil {
 			return &mcp.CallToolResult{
 				IsError: true,
@@ -91,7 +103,7 @@ func newServer(searxBaseURL string, fetcher *httpfetcher.Fetcher) *mcp.Server {
 			"URL or its content, even if you feel confident or were given unrelated search results -- those " +
 			"are not the page itself.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args fetchArgs) (*mcp.CallToolResult, any, error) {
-		text, err := fetcher.Fetch(ctx, args.URL)
+		text, err := fetcher.FetchWithOptions(ctx, args.URL, ports.FetchOptions{UserAgent: userAgent})
 		if err != nil {
 			return &mcp.CallToolResult{
 				IsError: true,
@@ -107,10 +119,13 @@ func newServer(searxBaseURL string, fetcher *httpfetcher.Fetcher) *mcp.Server {
 // webSearch proxies query to the configured SearXNG instance's JSON search
 // API (GET {base}/search?q=...&format=json over loopback -- see
 // packaging/searxng/README.md for how that instance is set up and why
-// search.formats must include json), returning the raw JSON response body
-// as text -- the model reads it directly, same as web_search.sh's raw
-// stdout did.
-func webSearch(ctx context.Context, baseURL, query string) (string, error) {
+// search.formats must include json), returning the response body as text --
+// the model reads it directly, same as web_search.sh's raw stdout did. When
+// resultCount is positive, the response's own "results" array is truncated
+// to that many entries first (see capResults) -- SearXNG's JSON API has no
+// query parameter of its own for this, so it's done here rather than
+// requested of SearXNG itself.
+func webSearch(ctx context.Context, baseURL, query string, resultCount int) (string, error) {
 	u := strings.TrimRight(baseURL, "/") + "/search?" + url.Values{
 		"q":      {query},
 		"format": {"json"},
@@ -134,7 +149,43 @@ func webSearch(ctx context.Context, baseURL, query string) (string, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("SearXNG returned status %d: %s", resp.StatusCode, truncate(string(body), 500))
 	}
-	return string(body), nil
+	return capResults(body, resultCount), nil
+}
+
+// capResults truncates body's top-level "results" array to at most
+// resultCount entries, returning body unmodified (as a string) when
+// resultCount isn't positive or body doesn't parse as the expected
+// SearXNG response shape -- malformed/unexpected JSON is passed through
+// as-is rather than failing the whole search over a cosmetic cap.
+func capResults(body []byte, resultCount int) string {
+	if resultCount <= 0 {
+		return string(body)
+	}
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return string(body)
+	}
+	rawResults, ok := parsed["results"]
+	if !ok {
+		return string(body)
+	}
+	var results []json.RawMessage
+	if err := json.Unmarshal(rawResults, &results); err != nil {
+		return string(body)
+	}
+	if len(results) <= resultCount {
+		return string(body)
+	}
+	capped, err := json.Marshal(results[:resultCount])
+	if err != nil {
+		return string(body)
+	}
+	parsed["results"] = capped
+	out, err := json.Marshal(parsed)
+	if err != nil {
+		return string(body)
+	}
+	return string(out)
 }
 
 func truncate(s string, n int) string {

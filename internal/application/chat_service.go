@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
@@ -55,6 +56,17 @@ type ChatOptions struct {
 	// session is role=user; a role=admin session has no associated
 	// domain.User row to draw this from, so it's always empty for one.
 	UserCustomPrompt string
+	// UserAgent, when non-empty, is passed as the WEB_FETCH_USER_AGENT
+	// environment variable to every active "stdio"-transport MCPServer
+	// process (same delivery mechanism as WEB_SEARCH_BASE_URL/
+	// WEB_SEARCH_RESULT_COUNT below), so the first-party mcp-web server's
+	// "web_fetch" tool sends the admin-configured
+	// domain.OperationalSettingsValues.UserAgent instead of its own
+	// hardcoded default -- set by the HTTP handler layer (restapi.
+	// handleChat) from the live-synced *domain.OperationalSettings it
+	// already holds, the same source crawls use. Empty means mcp-web keeps
+	// its own built-in default.
+	UserAgent string
 }
 
 // ChatResult is one completed chat turn's answer.
@@ -153,6 +165,12 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	var discoveredTools []domain.MCPTool
 	if s.mcpTools != nil && len(activeServers) > 0 {
 		env := map[string]string{"WEB_SEARCH_BASE_URL": endpoint.WebSearchBaseURL}
+		if endpoint.WebSearchResultCount > 0 {
+			env["WEB_SEARCH_RESULT_COUNT"] = strconv.Itoa(endpoint.WebSearchResultCount)
+		}
+		if opts.UserAgent != "" {
+			env["WEB_FETCH_USER_AGENT"] = opts.UserAgent
+		}
 		session, discoveredTools = s.mcpTools.Open(ctx, activeServers, env)
 		defer session.Close()
 	}

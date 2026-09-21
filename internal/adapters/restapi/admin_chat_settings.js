@@ -7,6 +7,7 @@
   const chatMaxContextTokensEl = document.getElementById('chat-max-context-tokens');
   const chatWebSearchEnabledEl = document.getElementById('chat-web-search-enabled');
   const chatWebSearchBaseURLEl = document.getElementById('chat-web-search-base-url');
+  const chatWebSearchResultCountEl = document.getElementById('chat-web-search-result-count');
   const chatSettingsStatusEl = document.getElementById('chat-settings-status');
   const saveChatSettingsBtn = document.getElementById('save-chat-settings-btn');
   const chatTokenUsageEl = document.getElementById('chat-token-usage');
@@ -62,6 +63,7 @@
     chatMaxContextTokensEl.value = c.max_context_tokens || 0;
     chatWebSearchEnabledEl.checked = !!c.web_search_enabled;
     chatWebSearchBaseURLEl.value = c.web_search_base_url || '';
+    chatWebSearchResultCountEl.value = c.web_search_result_count || 0;
   }
 
   // loadEnabledServerPrompts fetches the MCP servers list from its own
@@ -111,6 +113,7 @@
         max_context_tokens: parseInt(chatMaxContextTokensEl.value, 10) || 0,
         web_search_enabled: chatWebSearchEnabledEl.checked,
         web_search_base_url: chatWebSearchBaseURLEl.value,
+        web_search_result_count: parseInt(chatWebSearchResultCountEl.value, 10) || 0,
       });
       chatSettingsStatusEl.style.color = 'var(--ink-muted)';
       chatSettingsStatusEl.textContent = 'Saved.';

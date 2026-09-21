@@ -5397,6 +5397,44 @@ func TestHandleAdminChatEndpoint_PatchNegativeMaxContextTokensRejected(t *testin
 	}
 }
 
+// TestHandleAdminChatEndpoint_PatchNegativeWebSearchResultCountRejected
+// mirrors TestHandleAdminChatEndpoint_PatchNegativeMaxContextTokensRejected
+// for domain.ChatEndpoint.WebSearchResultCount, which shares the same "0
+// disables, negative is invalid" convention.
+func TestHandleAdminChatEndpoint_PatchNegativeWebSearchResultCountRejected(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
+	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{
+		"base_url": "https://example.com/v1", "model": "gpt-x", "web_search_result_count": -1,
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleAdminChatEndpoint_PatchWebSearchResultCountRoundTrips proves a
+// positive web_search_result_count is stored and echoed back as-is,
+// mirroring every other plain-passthrough field's own round-trip test.
+func TestHandleAdminChatEndpoint_PatchWebSearchResultCountRoundTrips(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
+	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{
+		"base_url": "https://example.com/v1", "model": "gpt-x", "web_search_result_count": 5,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		WebSearchResultCount int `json:"web_search_result_count"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.WebSearchResultCount != 5 {
+		t.Errorf("expected web_search_result_count 5 echoed back, got %d", resp.WebSearchResultCount)
+	}
+}
+
 func TestHandleAdminChatEndpoint_PatchInvalidJSON(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)

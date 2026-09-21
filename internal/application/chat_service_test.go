@@ -1413,6 +1413,94 @@ func TestChatService_MCPEnv_CarriesEndpointWebSearchBaseURL(t *testing.T) {
 	}
 }
 
+// mcpEnvTestServers/mcpEnvTestCompleter/mcpEnvTestServerStore/
+// mcpEnvTestProvider factor out the fixture shared by the four
+// WEB_SEARCH_RESULT_COUNT/WEB_FETCH_USER_AGENT env tests below, mirroring
+// TestChatService_MCPEnv_CarriesEndpointWebSearchBaseURL's own setup.
+func mcpEnvTestFixtures() (*fakeChatCompleter, *fakeMCPServerStore, *fakeMCPToolProvider) {
+	completer := &fakeChatCompleter{responses: []domain.ChatMessage{
+		toolCallMessage("call_1", "web_search", argsJSON("query", "golang release notes")),
+		plainMessage("done"),
+	}}
+	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
+		{ID: "1", Name: "web", Transport: "stdio", Command: "mcp-web", Enabled: true},
+	}}
+	provider := &fakeMCPToolProvider{
+		tools:   []domain.MCPTool{mcpTool("web_search", "Search the web.")},
+		session: &fakeMCPSession{outputs: map[string]string{"web_search": "top result"}},
+	}
+	return completer, servers, provider
+}
+
+// TestChatService_MCPEnv_CarriesWebSearchResultCountWhenPositive proves a
+// positive domain.ChatEndpoint.WebSearchResultCount reaches Open's env map
+// as WEB_SEARCH_RESULT_COUNT.
+func TestChatService_MCPEnv_CarriesWebSearchResultCountWhenPositive(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchResultCount: 5}}
+	completer, servers, provider := mcpEnvTestFixtures()
+	svc := NewChatService(endpoints, completer, servers, provider)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := provider.openedEnv["WEB_SEARCH_RESULT_COUNT"]; got != "5" {
+		t.Fatalf("expected env[WEB_SEARCH_RESULT_COUNT] = %q, got %q (env=%v)", "5", got, provider.openedEnv)
+	}
+}
+
+// TestChatService_MCPEnv_OmitsWebSearchResultCountWhenZero proves the
+// "no cap" default (0) leaves WEB_SEARCH_RESULT_COUNT out of the env map
+// entirely, rather than sending a literal "0" a spawned server would have
+// to know how to interpret.
+func TestChatService_MCPEnv_OmitsWebSearchResultCountWhenZero(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchResultCount: 0}}
+	completer, servers, provider := mcpEnvTestFixtures()
+	svc := NewChatService(endpoints, completer, servers, provider)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := provider.openedEnv["WEB_SEARCH_RESULT_COUNT"]; ok {
+		t.Fatalf("expected WEB_SEARCH_RESULT_COUNT omitted for 0, got env=%v", provider.openedEnv)
+	}
+}
+
+// TestChatService_MCPEnv_CarriesUserAgentWhenSet proves a non-empty
+// ChatOptions.UserAgent reaches Open's env map as WEB_FETCH_USER_AGENT.
+func TestChatService_MCPEnv_CarriesUserAgentWhenSet(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
+	completer, servers, provider := mcpEnvTestFixtures()
+	svc := NewChatService(endpoints, completer, servers, provider)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	if _, err := svc.Chat(context.Background(), history, ChatOptions{UserAgent: "custom-agent/1.0"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := provider.openedEnv["WEB_FETCH_USER_AGENT"]; got != "custom-agent/1.0" {
+		t.Fatalf("expected env[WEB_FETCH_USER_AGENT] = %q, got %q (env=%v)", "custom-agent/1.0", got, provider.openedEnv)
+	}
+}
+
+// TestChatService_MCPEnv_OmitsUserAgentWhenEmpty proves an empty
+// ChatOptions.UserAgent (the zero value, e.g. h.opSettings unwired) leaves
+// WEB_FETCH_USER_AGENT out of the env map entirely, so mcp-web falls back
+// to its own built-in default rather than receiving an empty override.
+func TestChatService_MCPEnv_OmitsUserAgentWhenEmpty(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
+	completer, servers, provider := mcpEnvTestFixtures()
+	svc := NewChatService(endpoints, completer, servers, provider)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := provider.openedEnv["WEB_FETCH_USER_AGENT"]; ok {
+		t.Fatalf("expected WEB_FETCH_USER_AGENT omitted when empty, got env=%v", provider.openedEnv)
+	}
+}
+
 // TestTrimToBudget_ThreeLeadingSystemMessages_KeepsAllIntact extends the
 // two-message case above to three -- endpoint prompt + 2 server prompts --
 // proving trimToBudget's generic "walk every leading system-role message"

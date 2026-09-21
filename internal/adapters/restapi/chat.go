@@ -99,6 +99,19 @@ func (h *Handler) userCustomPromptFor(r *http.Request) string {
 	return u.CustomPrompt
 }
 
+// userAgentForMCPFetch reads the live-synced, admin-configured User-Agent
+// (the same *domain.OperationalSettings crawls already use) so the
+// first-party mcp-web server's "web_fetch" tool sends it instead of its own
+// hardcoded default -- see application.ChatOptions.UserAgent. Nil-safe:
+// h.opSettings is always wired by cmd/search's main, but this stays
+// defensive the same way every other h.<dependency> use in this file is.
+func (h *Handler) userAgentForMCPFetch() string {
+	if h.opSettings == nil {
+		return ""
+	}
+	return h.opSettings.Get().UserAgent
+}
+
 // handleChat answers one chat turn against the search-server-only,
 // admin-configured chat endpoint (h.chat) -- see application.ChatService's
 // doc comment for the web-search-grounding behavior this delegates to. A
@@ -145,6 +158,7 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.chat.Chat(r.Context(), req.Messages, application.ChatOptions{
 		WebSearch: req.WebSearch, UserCustomPrompt: h.userCustomPromptFor(r),
+		UserAgent: h.userAgentForMCPFetch(),
 	})
 	if errors.Is(err, ports.ErrChatEndpointNotConfigured) {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)

@@ -17,6 +17,7 @@ function baseChatEndpoint(overrides) {
     max_context_tokens: 6000,
     web_search_enabled: true,
     web_search_base_url: 'http://127.0.0.1:8888',
+    web_search_result_count: 5,
     updated_at: '2026-01-02T03:04:05Z',
   }, overrides);
 }
@@ -52,13 +53,15 @@ test('loadChatEndpoint populates every chat field from the GET response', async 
   assert.equal(document.getElementById('chat-max-context-tokens').value, '6000');
   assert.equal(document.getElementById('chat-web-search-enabled').checked, true);
   assert.equal(document.getElementById('chat-web-search-base-url').value, 'http://127.0.0.1:8888');
+  assert.equal(document.getElementById('chat-web-search-result-count').value, '5');
 });
 
 test('loadChatEndpoint defaults web search off when nothing is stored', async () => {
-  loadFixture(baseChatEndpoint({ web_search_enabled: false, web_search_base_url: '' }));
+  loadFixture(baseChatEndpoint({ web_search_enabled: false, web_search_base_url: '', web_search_result_count: 0 }));
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(document.getElementById('chat-web-search-enabled').checked, false);
   assert.equal(document.getElementById('chat-web-search-base-url').value, '');
+  assert.equal(document.getElementById('chat-web-search-result-count').value, '0');
 });
 
 test('loadChatEndpoint never populates the API key field, even when one is stored', async () => {
@@ -105,6 +108,7 @@ test('saveChatEndpoint PATCHes every field, including max_context_tokens', async
   document.getElementById('chat-max-context-tokens').value = '8000';
   document.getElementById('chat-web-search-enabled').checked = true;
   document.getElementById('chat-web-search-base-url').value = 'http://127.0.0.1:8888';
+  document.getElementById('chat-web-search-result-count').value = '3';
 
   let gotURL, gotBody;
   global.fetch = async (url, opts) => {
@@ -127,6 +131,7 @@ test('saveChatEndpoint PATCHes every field, including max_context_tokens', async
   assert.equal(gotBody.max_context_tokens, 8000);
   assert.equal(gotBody.web_search_enabled, true);
   assert.equal(gotBody.web_search_base_url, 'http://127.0.0.1:8888');
+  assert.equal(gotBody.web_search_result_count, 3);
   assert.equal(document.getElementById('chat-settings-status').textContent, 'Saved.');
 });
 

@@ -308,15 +308,15 @@ func (r *Repository) migrateEmbeddingEndpointColumns(ctx context.Context) error 
 
 // migrateChatEndpointColumns adds max_context_tokens (see
 // domain.ChatEndpoint.MaxContextTokens), the three web_search_* columns
-// (see domain.ChatEndpoint.WebSearchEnabled/WebSearchBaseURL --
-// web_search_result_count is now an orphaned column, see scanChatEndpoint),
-// and system_prompt (see domain.ChatEndpoint.SystemPrompt) to a
-// chat_endpoint table that predates them -- max_context_tokens defaults to
-// 0 ("disabled"), web_search_enabled to false and web_search_base_url to ”
-// (both leave web search off, a pre-existing endpoint's previous
-// behavior), web_search_result_count to 0 (unused, same convention as
-// rag_result_count's own 0 default), and system_prompt to ” (no persistent
-// prompt injected, a pre-existing endpoint's previous behavior).
+// (see domain.ChatEndpoint.WebSearchEnabled/WebSearchBaseURL/
+// WebSearchResultCount), and system_prompt (see domain.ChatEndpoint.
+// SystemPrompt) to a chat_endpoint table that predates them --
+// max_context_tokens defaults to 0 ("disabled"), web_search_enabled to
+// false and web_search_base_url to ” (both leave web search off, a
+// pre-existing endpoint's previous behavior), web_search_result_count to 0
+// ("no cap," same convention as MaxContextTokens' own 0-disables meaning),
+// and system_prompt to ” (no persistent prompt injected, a pre-existing
+// endpoint's previous behavior).
 func (r *Repository) migrateChatEndpointColumns(ctx context.Context) error {
 	existing, err := r.existingColumns(ctx, "chat_endpoint")
 	if err != nil {
@@ -2674,14 +2674,14 @@ func (r *Repository) GetChatEndpoint(ctx context.Context) (domain.ChatEndpoint, 
 // in-place replace on every call after.
 func (r *Repository) SetChatEndpoint(ctx context.Context, e domain.ChatEndpoint) error {
 	_, err := r.db.ExecContext(ctx, r.dialect.UpsertChatEndpointSQL(),
-		// false, 0, 0: rag_enabled/rag_result_count/web_search_result_count
-		// are orphaned columns -- domain.ChatEndpoint no longer has a RAG
-		// concept or a direct-search result-count knob (web search is now
-		// exclusively a model-invoked chat hook, see application.ChatService.
-		// Chat), but the columns stay (no schema migration needed) so the
-		// statement's column/placeholder count is unchanged.
+		// false, 0: rag_enabled/rag_result_count are orphaned columns --
+		// domain.ChatEndpoint no longer has a RAG concept, but the columns
+		// stay (no schema migration needed) so the statement's
+		// column/placeholder count is unchanged. web_search_result_count,
+		// by contrast, is live again -- see domain.ChatEndpoint.
+		// WebSearchResultCount.
 		chatEndpointRowID, e.BaseURL, e.APIKey, e.Model, e.Enabled, false, 0,
-		e.MaxContextTokens, e.WebSearchEnabled, e.WebSearchBaseURL, 0,
+		e.MaxContextTokens, e.WebSearchEnabled, e.WebSearchBaseURL, e.WebSearchResultCount,
 		e.SystemPrompt, e.UpdatedAt.UTC().Format(crawledAtLayout),
 	)
 	if err != nil {
@@ -2693,18 +2693,15 @@ func (r *Repository) SetChatEndpoint(ctx context.Context, e domain.ChatEndpoint)
 func scanChatEndpoint(row scanner) (domain.ChatEndpoint, error) {
 	var e domain.ChatEndpoint
 	var updatedAt string
-	// ragEnabledUnused/ragResultCountUnused/webSearchResultCountUnused:
-	// rag_enabled/rag_result_count/web_search_result_count are orphaned
-	// columns -- domain.ChatEndpoint has neither a RAG concept nor a
-	// direct-search result-count knob anymore, but the columns stay (no
-	// schema migration needed), so these throwaway locals just absorb the
-	// Scan positionally.
+	// ragEnabledUnused/ragResultCountUnused: rag_enabled/rag_result_count
+	// are orphaned columns -- domain.ChatEndpoint has no RAG concept
+	// anymore, but the columns stay (no schema migration needed), so
+	// these throwaway locals just absorb the Scan positionally.
 	var ragEnabledUnused bool
 	var ragResultCountUnused int
-	var webSearchResultCountUnused int
 	if err := row.Scan(&e.BaseURL, &e.APIKey, &e.Model, &e.Enabled, &ragEnabledUnused,
 		&ragResultCountUnused, &e.MaxContextTokens, &e.WebSearchEnabled, &e.WebSearchBaseURL,
-		&webSearchResultCountUnused, &e.SystemPrompt, &updatedAt); err != nil {
+		&e.WebSearchResultCount, &e.SystemPrompt, &updatedAt); err != nil {
 		return domain.ChatEndpoint{}, err
 	}
 	e.UpdatedAt = parseCrawledAt(updatedAt)

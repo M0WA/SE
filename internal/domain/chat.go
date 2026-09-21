@@ -108,6 +108,14 @@ type ChatEndpoint struct {
 	// server knows which instance to query without the admin repeating
 	// the URL in its own config.
 	WebSearchBaseURL string
+	// WebSearchResultCount, when positive, caps how many results the
+	// first-party mcp-web server's "web_search" tool returns per call --
+	// passed as the WEB_SEARCH_RESULT_COUNT environment variable to every
+	// active "stdio"-transport MCPServer process, the same delivery
+	// mechanism WebSearchBaseURL already uses. Zero (the default) means
+	// "no cap," leaving SearXNG's own full result set as-is, same as this
+	// field's previous, dormant existence as an orphaned DB column.
+	WebSearchResultCount int
 	// SystemPrompt, when non-empty, is injected as a leading system-role
 	// domain.ChatMessage ahead of the rest of the conversation on every
 	// turn (see chat_service.go's Chat) -- before any active MCP server's

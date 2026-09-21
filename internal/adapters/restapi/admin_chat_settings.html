@@ -84,6 +84,13 @@
       </div>
       <span class="field-wrap" data-default="(none)"><input id="chat-web-search-base-url" class="field" type="text" placeholder="http://127.0.0.1:8888"></span>
     </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="chat-web-search-result-count">Result count</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Caps how many results the "web_search" tool returns per call, passed to every active "stdio" MCP server as the WEB_SEARCH_RESULT_COUNT environment variable. 0 means no cap -- SearXNG's own full result set is returned as-is.</span></span>
+      </div>
+      <span class="field-wrap" data-default="0 (no cap)"><input id="chat-web-search-result-count" class="field" type="number" step="1" min="0"></span>
+    </div>
   </section>
 
   <section class="panel">
