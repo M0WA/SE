@@ -1,5 +1,18 @@
 # Changelog
 
+## v4.13.43 - 2026-09-21
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Remove the %c/strftime prompt-placeholder mechanism by @M0WA in https://github.com/M0WA/SE/pull/216
+* Fix 413 from unbounded chat request bodies (chat forking regression) by @M0WA in https://github.com/M0WA/SE/pull/218
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.42...v4.13.43
+
+
 ## v4.13.42 - 2026-09-21
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
