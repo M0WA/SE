@@ -40,12 +40,16 @@ are gated by the chat's Web toggle (`ChatHook.GatedByWebSearch`), so they
 may not always be there to use -- the global prompt shouldn't imply they
 always are.
 
-`%c` is replaced with the current UTC date and time (e.g. "Friday,
-September 20, 2026 18:42:07 UTC") every time a prompt is assembled for a
-turn -- `application.expandPromptPlaceholders` runs it against both the
-global System prompt and each active hook's own Prompt, so either can use
-it to give the model a concrete anchor for judging staleness instead of a
-vague "could be outdated."
+`%c` is replaced with the current UTC date and time, rendered via a real
+strftime(3) `%c` conversion (`application.strftime`) -- the same
+`ctime(3)`-style rendering `date +%c` gives you (e.g. "Mon Sep 21
+04:22:35 2026"; deliberately no time zone abbreviation, same as real
+strftime's `%c` -- append `%Z` yourself in the prompt if you want one) --
+every time a prompt is assembled for a turn.
+`application.expandPromptPlaceholders` runs it against both the global
+System prompt and each active hook's own Prompt, so either can use it to
+give the model a concrete anchor for judging staleness instead of a vague
+"could be outdated."
 
 ## Suggested per-hook prompts
 
