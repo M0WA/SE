@@ -2,7 +2,7 @@ BINARY      := searchengine
 PKG_VERSION := 1.0.0
 BUILD_DIR   := build
 DEB_DIR     := $(BUILD_DIR)/deb
-BINARIES    := search admin crawl mcp-web
+BINARIES    := search admin crawl mcp-web mcp-datetime
 
 .PHONY: all build test test-race cover coverage-check lint clean deb run docker
 
@@ -13,6 +13,7 @@ build:
 	go build -o $(BUILD_DIR)/$(BINARY)-admin ./cmd/admin
 	go build -o $(BUILD_DIR)/$(BINARY)-crawl ./cmd/crawl
 	go build -o $(BUILD_DIR)/$(BINARY)-mcp-web ./cmd/mcp-web
+	go build -o $(BUILD_DIR)/$(BINARY)-mcp-datetime ./cmd/mcp-datetime
 
 run: build
 	./$(BUILD_DIR)/$(BINARY)-search
