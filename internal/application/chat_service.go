@@ -49,6 +49,13 @@ type ChatOptions struct {
 	// model is offered, leaving the model to invoke them (e.g. a
 	// "web_search" or "web_fetch" hook) if it chooses to.
 	WebSearch *bool
+	// UserCustomPrompt, when non-empty, is injected as its own leading
+	// system message for this turn -- empty means no per-user prompt is
+	// injected. Set by the HTTP handler layer (restapi.handleChat) from the
+	// current session's associated domain.User.CustomPrompt, only when the
+	// session is role=user; a role=admin session has no associated
+	// domain.User row to draw this from, so it's always empty for one.
+	UserCustomPrompt string
 }
 
 // ChatResult is one completed chat turn's answer.
@@ -75,19 +82,24 @@ type ChatResult struct {
 
 // TokenUsage is one turn's leading-context token estimate, broken down by
 // where each piece came from -- see estimateTokens for the (deliberately
-// approximate, character-count-based) estimation method. GlobalPromptTokens/
-// HookPromptTokens are computed directly from the same pieces
-// ChatService.Chat assembles into `leading`, so they're exact for what was
-// actually sent (not re-derived from the final message list). HistoryTokens
-// is measured after trimToBudget, so it reflects what actually made it into
-// the request, not the client's full untrimmed history. MaxContextTokens
-// echoes endpoint.MaxContextTokens (0 means unbounded) so the UI can render
-// usage against the configured budget, not just relative proportions.
+// approximate, character-count-based) estimation method.
+// GlobalPromptTokens/UserPromptTokens/HookPromptTokens are computed
+// directly from the same pieces ChatService.Chat assembles into `leading`,
+// so they're exact for what was actually sent (not re-derived from the
+// final message list). HistoryTokens is measured after trimToBudget, so it
+// reflects what actually made it into the request, not the client's full
+// untrimmed history. MaxContextTokens echoes endpoint.MaxContextTokens (0
+// means unbounded) so the UI can render usage against the configured
+// budget, not just relative proportions.
 type TokenUsage struct {
 	GlobalPromptTokens int
-	HookPromptTokens   int
-	HistoryTokens      int
-	MaxContextTokens   int
+	// UserPromptTokens is this turn's ChatOptions.UserCustomPrompt
+	// contribution -- zero whenever UserCustomPrompt is empty (a role=admin
+	// session, or a role=user session with no custom prompt set).
+	UserPromptTokens int
+	HookPromptTokens int
+	HistoryTokens    int
+	MaxContextTokens int
 }
 
 // Chat answers the conversation in history using the admin-configured chat
@@ -138,20 +150,27 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	messages := history
 
 	// Leading system messages, in order: (1) the persistent per-endpoint
-	// system prompt, unconditional, when set; (2) each activeHooks entry's
-	// own non-empty Prompt, in list order, each its OWN separate system
-	// message (not concatenated into one blob) -- so a hook's invocation
-	// syntax reaches the model before the first completion call, letting it
-	// decide whether to invoke that hook at all. Building this as one
-	// ordered slice (rather than prepending piecemeal) keeps that order
-	// obvious and gives trimToBudget a single well-defined run of leading
-	// system-role messages to keep intact.
+	// system prompt, unconditional, when set; (2) the calling user's own
+	// personal custom prompt (opts.UserCustomPrompt), when set -- see
+	// ChatOptions.UserCustomPrompt's doc comment for who sets this and why;
+	// (3) each activeHooks entry's own non-empty Prompt, in list order,
+	// each its OWN separate system message (not concatenated into one
+	// blob) -- so a hook's invocation syntax reaches the model before the
+	// first completion call, letting it decide whether to invoke that hook
+	// at all. Building this as one ordered slice (rather than prepending
+	// piecemeal) keeps that order obvious and gives trimToBudget a single
+	// well-defined run of leading system-role messages to keep intact.
 	tokenUsage := TokenUsage{MaxContextTokens: endpoint.MaxContextTokens}
 	var leading []domain.ChatMessage
 	if endpoint.SystemPrompt != "" {
 		msg := domain.ChatMessage{Role: domain.ChatRoleSystem, Content: expandPromptPlaceholders(endpoint.SystemPrompt)}
 		leading = append(leading, msg)
 		tokenUsage.GlobalPromptTokens = estimateTokens([]domain.ChatMessage{msg})
+	}
+	if opts.UserCustomPrompt != "" {
+		msg := domain.ChatMessage{Role: domain.ChatRoleSystem, Content: expandPromptPlaceholders(opts.UserCustomPrompt)}
+		leading = append(leading, msg)
+		tokenUsage.UserPromptTokens = estimateTokens([]domain.ChatMessage{msg})
 	}
 	for _, h := range activeHooks {
 		if h.Prompt != "" {

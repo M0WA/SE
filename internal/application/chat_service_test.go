@@ -792,6 +792,90 @@ func TestChatService_TwoActiveHooksWithPrompts_TwoSeparateLeadingSystemMessages(
 	}
 }
 
+// TestChatService_UserCustomPrompt_InjectedBetweenGlobalPromptAndHookPrompts
+// proves opts.UserCustomPrompt is injected as its own leading system
+// message, positioned after the endpoint's own SystemPrompt and before any
+// active hook's own Prompt -- order: global endpoint prompt -> personal
+// user prompt -> hook/tool-usage prompts.
+func TestChatService_UserCustomPrompt_InjectedBetweenGlobalPromptAndHookPrompts(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{
+		Enabled: true, SystemPrompt: "You are a pirate.",
+	}}
+	completer := &fakeChatCompleter{answer: "answer"}
+	hooks := &fakeChatHookStore{hooks: []domain.ChatHook{
+		{ID: "1", Name: "first", Pattern: `A\((.+?)\)`, Script: "a.sh", Enabled: true, Prompt: "First hook prompt."},
+	}}
+	svc := NewChatService(endpoints, completer, hooks, &fakeHookScriptRunner{})
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	result, err := svc.Chat(context.Background(), history, ChatOptions{UserCustomPrompt: "Always answer in haiku."})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(completer.calledWith) != 4 {
+		t.Fatalf("expected endpoint prompt + user prompt + hook prompt + 1 history message, got %d: %v", len(completer.calledWith), completer.calledWith)
+	}
+	if completer.calledWith[0].Role != domain.ChatRoleSystem || completer.calledWith[0].Content != "You are a pirate." {
+		t.Fatalf("expected the endpoint's own SystemPrompt first, got %+v", completer.calledWith[0])
+	}
+	if completer.calledWith[1].Role != domain.ChatRoleSystem || completer.calledWith[1].Content != "Always answer in haiku." {
+		t.Fatalf("expected the user's own custom prompt second (after global, before hooks), got %+v", completer.calledWith[1])
+	}
+	if completer.calledWith[2].Role != domain.ChatRoleSystem || completer.calledWith[2].Content != "First hook prompt." {
+		t.Fatalf("expected the hook's own prompt third, got %+v", completer.calledWith[2])
+	}
+	if completer.calledWith[3] != history[0] {
+		t.Fatalf("expected original history preserved last, got %v", completer.calledWith[3])
+	}
+	if result.TokenUsage.UserPromptTokens <= 0 {
+		t.Errorf("expected a nonzero UserPromptTokens, got %+v", result.TokenUsage)
+	}
+}
+
+// TestChatService_EmptyUserCustomPrompt_NoLeadingPromptMessage proves an
+// empty opts.UserCustomPrompt (the common case: a role=admin session, or a
+// role=user session with no custom prompt set) contributes no extra
+// leading system message and no UserPromptTokens -- same empty-skip
+// convention as SystemPrompt/hook prompts.
+func TestChatService_EmptyUserCustomPrompt_NoLeadingPromptMessage(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, SystemPrompt: "You are a pirate."}}
+	completer := &fakeChatCompleter{answer: "answer"}
+	svc := NewChatService(endpoints, completer, nil, nil)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	result, err := svc.Chat(context.Background(), history, ChatOptions{UserCustomPrompt: ""})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(completer.calledWith) != 2 {
+		t.Fatalf("expected only the global prompt + history message, got %v", completer.calledWith)
+	}
+	if result.TokenUsage.UserPromptTokens != 0 {
+		t.Errorf("expected zero UserPromptTokens when UserCustomPrompt is empty, got %+v", result.TokenUsage)
+	}
+}
+
+// TestChatService_UserCustomPromptDatePlaceholder_Expanded proves a literal
+// "%c" in opts.UserCustomPrompt is expanded the same way as the global
+// SystemPrompt/hook Prompt.
+func TestChatService_UserCustomPromptDatePlaceholder_Expanded(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
+	completer := &fakeChatCompleter{answer: "answer"}
+	svc := NewChatService(endpoints, completer, nil, nil)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	if _, err := svc.Chat(context.Background(), history, ChatOptions{UserCustomPrompt: "Today is %c."}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(completer.calledWith) < 1 {
+		t.Fatalf("expected at least 1 leading message, got %v", completer.calledWith)
+	}
+	now := strftime(time.Now().UTC(), "%a %b %e %H:%M")
+	if strings.Contains(completer.calledWith[0].Content, "%c") || !strings.Contains(completer.calledWith[0].Content, now) {
+		t.Errorf("expected the user prompt's %%c expanded to contain %q, got %q", now, completer.calledWith[0].Content)
+	}
+}
+
 // TestChatService_EndpointSystemPrompt_InjectedWhenHooksInactiveOrNil is a
 // regression check proving the endpoint's own SystemPrompt injection never
 // depends on hook state -- neither when every hook is inactive (gated hook,

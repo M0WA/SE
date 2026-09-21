@@ -358,15 +358,39 @@ refused (403) on every `/admin/*` route -- see `internal/domain/user.go`'s
 `RoleAdmin`/`RoleUser` and `internal/adapters/restapi/auth.go`'s
 `requireAdminAuthPage`/`requireAdminAuthAPI` for the enforcement mechanism.
 There is no environment variable or config file for this feature -- an
-admin creates/deletes accounts and resets passwords entirely through this
-page (`GET`/`POST`/`PATCH`/`DELETE /admin/api/users...`), stored in the
-`users` table with a bcrypt-hashed password (never a plaintext value, on
-this table or in any API response).
+admin creates/deletes accounts and can reset a forgotten password through
+this page (`GET`/`POST`/`PATCH`/`DELETE /admin/api/users...`), stored in
+the `users` table with a bcrypt-hashed password (never a plaintext value,
+on this table or in any API response). A signed-in regular user can also
+change their own password and personal chat prompt themselves -- see
+"Account (`account.html`)" below -- without needing an admin to do it for
+them.
 
 | Field | Default | Bounds | Description |
 |---|---|---|---|
 | `user-username` | none, required | non-empty, must not match `ADMIN_USER` | Username; unique among regular-user accounts. Not editable after creation -- an account's id is minted from it at creation time (mirrors `hook-id`'s convention). |
 | `user-password` | none, required on create/reset | 8-72 characters (bcrypt's own hard limit) | Hashed with bcrypt before storage; never shown again after saving. A password reset only changes this field -- username is locked. |
+
+### Account (`account.html`)
+
+Self-service page on search-server (`GET /account`, `GET`/`PATCH
+/account/api`) a signed-in regular-user (role=user) session uses to change
+their own password and personal chat prompt -- no admin involvement
+needed for either. Refused with 403 ("this feature is not available for
+the admin account") for the hardcoded admin, which has no `users` row to
+act on. `custom_prompt` is stored on the same `users` row `admin_users.html`
+manages (the `custom_prompt` column, migrated in alongside the rest of the
+`users` table -- see `internal/adapters/sqlrepo/repository.go`'s
+`migrateUserColumns`), and is free text injected as its own leading system
+message on every chat turn this user sends (`POST /chat`), in addition to
+(not instead of) the endpoint-wide `chat-system-prompt` (see "Chat
+settings" above) and any active chat hooks' own prompts -- expanded
+through the same `%c`-style placeholder mechanism those use.
+
+| Field | Default | Bounds | Description |
+|---|---|---|---|
+| `account-password` | none, optional | 8-72 characters when present (same as `user-password`) | Leave blank to keep the current password; a present-but-invalid value is rejected (400), never silently ignored. |
+| `account-custom-prompt` | `""` (none) | up to 4000 characters | Injected as this user's own leading chat system message, after the endpoint's global prompt and before any hook prompts. Saving an empty value clears it. |
 
 ## Keeping this document current
 

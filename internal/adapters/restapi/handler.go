@@ -78,6 +78,9 @@ var adminContentDedupHTML []byte
 //go:embed admin_users.html
 var adminUsersHTML []byte
 
+//go:embed account.html
+var accountHTML []byte
+
 //go:embed style.css
 var styleCSS []byte
 
@@ -146,6 +149,9 @@ var adminCrawlJS []byte
 //go:embed admin_users.js
 var adminUsersJS []byte
 
+//go:embed account.js
+var accountJS []byte
+
 //go:embed index.js
 var indexJS []byte
 
@@ -193,10 +199,13 @@ type Handler struct {
 	chatHooks ports.ChatHookStore
 	// users backs the admin API's regular-user-account CRUD (GET/POST
 	// /admin/api/users, PATCH/DELETE /admin/api/users/{id}) and
-	// handleLogin's DB-backed-account lookup -- set on admin-server only,
-	// the same *sqlrepo.Repository chatEndpoints/chatHooks use. nil is
-	// valid (no regular-user accounts exist; login checks only the
-	// hardcoded admin) for a Handler that never sets it, e.g. crawl-server.
+	// handleLogin's DB-backed-account lookup on admin-server, PLUS (the
+	// same *sqlrepo.Repository) search-server's own self-service /account
+	// routes and handleChat's per-user custom-prompt lookup -- see
+	// account.go/chat.go's userCustomPromptFor. nil is valid (no
+	// regular-user accounts exist; login checks only the hardcoded admin,
+	// /account reports itself unavailable) for a Handler that never sets
+	// it, e.g. crawl-server.
 	users           ports.UserStore
 	health          ports.HealthChecker
 	onCrawlComplete func()
@@ -299,9 +308,11 @@ type Config struct {
 	// ChatHooks is set on admin-server only, backing the chat hook CRUD API
 	// -- the same *sqlrepo.Repository ChatEndpoints/EmbeddingEndpoints uses.
 	ChatHooks ports.ChatHookStore
-	// Users is set on admin-server only, backing the regular-user-account
-	// CRUD API and handleLogin's DB-backed-account lookup -- the same
-	// *sqlrepo.Repository ChatEndpoints/ChatHooks uses.
+	// Users is set on admin-server (backing the regular-user-account CRUD
+	// API and handleLogin's DB-backed-account lookup) AND search-server
+	// (backing the self-service /account routes and handleChat's per-user
+	// custom-prompt lookup) -- the same *sqlrepo.Repository
+	// ChatEndpoints/ChatHooks uses.
 	Users ports.UserStore
 	// Health backs GET /healthz on every process; unset always reports
 	// healthy (no DB connection to check).
@@ -417,6 +428,9 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 // stylesheet, search API) -- the mux the internet-facing search-server
 // binary listens with. Index and search both require the same signed-in
 // session /admin and /login use; style.css and healthz stay open.
+// /session, /account, /account.js and /account/api back the self-service
+// account page a role=user session uses to change their password and set
+// their personal chat prompt -- see account.go.
 func (h *Handler) RoutesSearch() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.requireAuthPage(h.handleIndex))
@@ -424,6 +438,10 @@ func (h *Handler) RoutesSearch() http.Handler {
 	mux.HandleFunc("/index.js", h.handleIndexJS)
 	mux.HandleFunc("/search", h.requireAuthAPIOrInternalKey(h.handleSearch))
 	mux.HandleFunc("POST /chat", h.requireAuthAPI(h.handleChat))
+	mux.HandleFunc("/session", h.requireAuthAPI(h.handleSession))
+	mux.HandleFunc("/account", h.requireRegularUserAuthPage(h.handleAccountPage))
+	mux.HandleFunc("/account.js", h.handleAccountJS)
+	mux.HandleFunc("/account/api", h.requireRegularUserAuthAPI(h.handleAccount))
 	mux.HandleFunc("/healthz", h.handleHealthz)
 	return withSecurityHeaders(mux)
 }

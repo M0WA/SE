@@ -16,7 +16,8 @@ control, no rate limiting outside of nginx).
 
 nginx must split traffic between search-server and admin-server by path:
 
-- `/`, `/style.css`, `/search`, `/index.js` -> search-server, `http://127.0.0.1:8080`
+- `/`, `/style.css`, `/search`, `/index.js`, `/session`, `/account`,
+  `/account.js`, `/account/api` -> search-server, `http://127.0.0.1:8080`
 - `/login`, `/logout`, `/admin` and its subpaths (`/admin.js`,
   `/admin/documents`, `/admin/crawl`, `/admin/jobs`, `/admin/settings`,
   `/admin/search`, `/admin/api/...`, and every per-page script the admin UI

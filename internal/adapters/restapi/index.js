@@ -17,6 +17,8 @@
   const chatTokenUsageMini = document.getElementById('chat-token-usage-mini');
   const chatTokenUsageSummary = document.getElementById('chat-token-usage-summary');
   const chatTokenUsageDonut = document.getElementById('chat-token-usage-donut');
+  const adminLink = document.getElementById('admin-link');
+  const accountLink = document.getElementById('account-link');
 
   // chatHistory is the full running conversation, sent in full on every
   // /chat call -- the backend is stateless and has no server-side session,
@@ -108,6 +110,7 @@
     return [
       { label: 'Global prompt', value: u.global_prompt_tokens || 0, color: 'var(--chart-1)' },
       { label: 'Hook prompts', value: u.hook_prompt_tokens || 0, color: 'var(--chart-2)' },
+      { label: 'Your prompt', value: u.user_prompt_tokens || 0, color: 'var(--chart-3)' },
       { label: 'Conversation history', value: u.history_tokens || 0, color: 'var(--ink-muted)' },
     ];
   }
@@ -123,7 +126,8 @@
       chatTokenUsage.hidden = true;
       return;
     }
-    const total = (tokenUsage.global_prompt_tokens || 0) + (tokenUsage.hook_prompt_tokens || 0) + (tokenUsage.history_tokens || 0);
+    const total = (tokenUsage.global_prompt_tokens || 0) + (tokenUsage.hook_prompt_tokens || 0) +
+      (tokenUsage.user_prompt_tokens || 0) + (tokenUsage.history_tokens || 0);
     const segments = tokenUsageSegments(tokenUsage);
     clear(chatTokenUsageMini);
     chatTokenUsageMini.appendChild(buildDonutSVG(segments, { size: 14, strokeWidth: 4 }));
@@ -606,6 +610,34 @@
     runSearch(query, sortSelect.value);
   });
 
+  // loadSession asks the backend which role the current session has (an
+  // admin-only session vs. a regular self-service user) and shows exactly
+  // one of the two footer links accordingly -- #admin-link and
+  // #account-link both start hidden in index.html, so any failure path
+  // here (network error, non-ok status) just leaves both hidden rather
+  // than risking showing the admin backend link to a non-admin session.
+  // This is a non-critical UI enhancement fetch (worst case: no footer
+  // link at all), so failures are swallowed silently, matching this file's
+  // existing tone for that kind of call (cf. runSearch/sendChatMessage,
+  // which surface errors because they're the user's actual action, vs. this
+  // one which isn't triggered by anything the user did).
+  async function loadSession() {
+    try {
+      const resp = await fetch('/session');
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data.role === 'admin') {
+        adminLink.hidden = false;
+      } else if (data.role === 'user') {
+        accountLink.hidden = false;
+      }
+    } catch (err) {
+      // Non-critical: both links simply stay hidden.
+    }
+  }
+
+  loadSession();
+
   // Mirrors admin.js's wireSignOut -- this page doesn't load admin.js (it's
   // the public site, not the admin backend), so the same few lines are
   // inlined here rather than pulling in the whole admin script for one
@@ -626,5 +658,6 @@
       chatHistory, renderChatMessage, sendChatMessage, setMode,
       escapeHTML, renderInline, renderMarkdown,
       buildDonutSVG, buildDonutLegend, tokenUsageSegments, renderTokenUsage,
+      loadSession,
     };
   }

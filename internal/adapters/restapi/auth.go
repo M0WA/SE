@@ -96,26 +96,32 @@ func (h *Handler) checkCredentials(user, pass string) bool {
 	return userOK && passOK
 }
 
-// sessionRoleFor resolves the caller's role from the se_session cookie by
-// looking up the SERVER-SIDE session record -- the cookie itself is always
-// just an opaque random token, so this is the only place a role is ever
-// determined; nothing the client sends can influence it. ok is false for
-// no cookie, an unknown token, or an expired one; role is domain.RoleAdmin
-// or domain.RoleUser when ok is true.
-func (h *Handler) sessionRoleFor(r *http.Request) (role string, ok bool) {
+// sessionRoleFor resolves the caller's role AND userID from the se_session
+// cookie by looking up the SERVER-SIDE session record -- the cookie itself
+// is always just an opaque random token, so this is the only place a role
+// is ever determined; nothing the client sends can influence it. ok is
+// false for no cookie, an unknown token, or an expired one; role is
+// domain.RoleAdmin or domain.RoleUser when ok is true. userID is only ever
+// non-empty for a domain.RoleUser session (a domain.RoleAdmin session --
+// the single hardcoded admin account -- has no associated domain.User row
+// to attach one to). Every caller needing either value goes through this
+// one function so a single request never looks up its session more than
+// once: requireAdminAuthPage/requireAdminAuthAPI below (role only),
+// isAuthenticated (neither), and handleChat/handleAccount (both).
+func (h *Handler) sessionRoleFor(r *http.Request) (role string, userID string, ok bool) {
 	c, err := r.Cookie(sessionCookieName)
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
-	valid, role, _, err := h.sessions.ValidSession(r.Context(), c.Value)
+	valid, role, userID, err := h.sessions.ValidSession(r.Context(), c.Value)
 	if err != nil || !valid {
-		return "", false
+		return "", "", false
 	}
-	return role, true
+	return role, userID, true
 }
 
 func (h *Handler) isAuthenticated(r *http.Request) bool {
-	_, ok := h.sessionRoleFor(r)
+	_, _, ok := h.sessionRoleFor(r)
 	return ok
 }
 
@@ -155,7 +161,7 @@ func (h *Handler) requireAuthAPI(next http.HandlerFunc) http.HandlerFunc {
 // login prompt.
 func (h *Handler) requireAdminAuthPage(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		role, ok := h.sessionRoleFor(r)
+		role, _, ok := h.sessionRoleFor(r)
 		if !ok {
 			http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.Path), http.StatusSeeOther)
 			return
@@ -173,13 +179,55 @@ func (h *Handler) requireAdminAuthPage(next http.HandlerFunc) http.HandlerFunc {
 // not domain.RoleAdmin -> 403.
 func (h *Handler) requireAdminAuthAPI(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		role, ok := h.sessionRoleFor(r)
+		role, _, ok := h.sessionRoleFor(r)
 		if !ok {
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 			return
 		}
 		if role != domain.RoleAdmin {
 			http.Error(w, "admin access required", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// requireRegularUserAuthPage is requireAdminAuthPage's mirror image, gating
+// a page that only a DB-backed regular-user account (domain.RoleUser)
+// should reach -- e.g. /account, the self-service page a role=admin
+// session can never use since there's no domain.User row for the hardcoded
+// admin to attach a password/custom-prompt change to. Unauthenticated ->
+// redirect to /login exactly like requireAuthPage/requireAdminAuthPage.
+// Authenticated but role == domain.RoleAdmin -> a plain 403 explaining why,
+// not a redirect (an admin can't "log in harder" into having a User row).
+func (h *Handler) requireRegularUserAuthPage(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		role, _, ok := h.sessionRoleFor(r)
+		if !ok {
+			http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.Path), http.StatusSeeOther)
+			return
+		}
+		if role == domain.RoleAdmin {
+			http.Error(w, "this feature is not available for the admin account", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// requireRegularUserAuthAPI is requireRegularUserAuthPage's JSON-endpoint
+// counterpart, gating /account/api -- same status-code convention as
+// requireAdminAuthAPI: unauthenticated -> 401. Authenticated but
+// role == domain.RoleAdmin -> 403.
+func (h *Handler) requireRegularUserAuthAPI(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		role, _, ok := h.sessionRoleFor(r)
+		if !ok {
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		if role == domain.RoleAdmin {
+			http.Error(w, "this feature is not available for the admin account", http.StatusForbidden)
 			return
 		}
 		next(w, r)
