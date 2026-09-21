@@ -75,6 +75,9 @@ var adminDatabaseHTML []byte
 //go:embed admin_content_dedup.html
 var adminContentDedupHTML []byte
 
+//go:embed admin_users.html
+var adminUsersHTML []byte
+
 //go:embed style.css
 var styleCSS []byte
 
@@ -140,6 +143,9 @@ var adminVocabularyTermJS []byte
 //go:embed admin_crawl.js
 var adminCrawlJS []byte
 
+//go:embed admin_users.js
+var adminUsersJS []byte
+
 //go:embed index.js
 var indexJS []byte
 
@@ -184,7 +190,14 @@ type Handler struct {
 	// (GET/POST /admin/api/chat-hooks, GET/PATCH/DELETE
 	// /admin/api/chat-hooks/{id}) -- set on admin-server only, the same
 	// *sqlrepo.Repository chatEndpoints/embeddingEndpoints use.
-	chatHooks       ports.ChatHookStore
+	chatHooks ports.ChatHookStore
+	// users backs the admin API's regular-user-account CRUD (GET/POST
+	// /admin/api/users, PATCH/DELETE /admin/api/users/{id}) and
+	// handleLogin's DB-backed-account lookup -- set on admin-server only,
+	// the same *sqlrepo.Repository chatEndpoints/chatHooks use. nil is
+	// valid (no regular-user accounts exist; login checks only the
+	// hardcoded admin) for a Handler that never sets it, e.g. crawl-server.
+	users           ports.UserStore
 	health          ports.HealthChecker
 	onCrawlComplete func()
 	dbDriver        string
@@ -286,6 +299,10 @@ type Config struct {
 	// ChatHooks is set on admin-server only, backing the chat hook CRUD API
 	// -- the same *sqlrepo.Repository ChatEndpoints/EmbeddingEndpoints uses.
 	ChatHooks ports.ChatHookStore
+	// Users is set on admin-server only, backing the regular-user-account
+	// CRUD API and handleLogin's DB-backed-account lookup -- the same
+	// *sqlrepo.Repository ChatEndpoints/ChatHooks uses.
+	Users ports.UserStore
 	// Health backs GET /healthz on every process; unset always reports
 	// healthy (no DB connection to check).
 	Health ports.HealthChecker
@@ -356,6 +373,7 @@ func New(cfg Config) *Handler {
 		chat:                  cfg.Chat,
 		chatEndpoints:         cfg.ChatEndpoints,
 		chatHooks:             cfg.ChatHooks,
+		users:                 cfg.Users,
 		health:                cfg.Health,
 		onCrawlComplete:       cfg.OnCrawlComplete,
 		dbDriver:              cfg.DBDriver,
@@ -421,86 +439,91 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("/logout", h.handleLogout)
 	mux.HandleFunc("/healthz", h.handleHealthz)
 
-	mux.HandleFunc("/admin", h.requireAuthPage(h.handleAdminPage))
+	mux.HandleFunc("/admin", h.requireAdminAuthPage(h.handleAdminPage))
 	mux.HandleFunc("/admin_page.js", h.handleAdminPageJS)
-	mux.HandleFunc("/admin/documents", h.requireAuthPage(h.handleAdminDocumentsPage))
+	mux.HandleFunc("/admin/documents", h.requireAdminAuthPage(h.handleAdminDocumentsPage))
 	mux.HandleFunc("/admin_documents.js", h.handleAdminDocumentsJS)
-	mux.HandleFunc("/admin/documents/{host}", h.requireAuthPage(h.handleAdminDomainPage))
+	mux.HandleFunc("/admin/documents/{host}", h.requireAdminAuthPage(h.handleAdminDomainPage))
 	mux.HandleFunc("/admin_domain.js", h.handleAdminDomainJS)
-	mux.HandleFunc("/admin/vocabulary/term", h.requireAuthPage(h.handleAdminVocabularyTermPage))
+	mux.HandleFunc("/admin/vocabulary/term", h.requireAdminAuthPage(h.handleAdminVocabularyTermPage))
 	mux.HandleFunc("/admin_vocabulary_term.js", h.handleAdminVocabularyTermJS)
-	mux.HandleFunc("/admin/crawl", h.requireAuthPage(h.handleAdminCrawlPage))
+	mux.HandleFunc("/admin/crawl", h.requireAdminAuthPage(h.handleAdminCrawlPage))
 	mux.HandleFunc("/admin_crawl.js", h.handleAdminCrawlJS)
-	mux.HandleFunc("/admin/schedule/{id}", h.requireAuthPage(h.handleAdminSchedulePage))
+	mux.HandleFunc("/admin/schedule/{id}", h.requireAdminAuthPage(h.handleAdminSchedulePage))
 	mux.HandleFunc("/admin_schedule.js", h.handleAdminScheduleJS)
-	mux.HandleFunc("/admin/jobs", h.requireAuthPage(h.handleAdminJobsPage))
+	mux.HandleFunc("/admin/jobs", h.requireAdminAuthPage(h.handleAdminJobsPage))
 	mux.HandleFunc("/admin_jobs.js", h.handleAdminJobsJS)
-	mux.HandleFunc("/admin/settings", h.requireAuthPage(h.handleAdminSettingsPage))
+	mux.HandleFunc("/admin/settings", h.requireAdminAuthPage(h.handleAdminSettingsPage))
 	mux.HandleFunc("/admin_settings.js", h.handleAdminSettingsJS)
-	mux.HandleFunc("/admin/chat/settings", h.requireAuthPage(h.handleAdminChatSettingsPage))
+	mux.HandleFunc("/admin/chat/settings", h.requireAdminAuthPage(h.handleAdminChatSettingsPage))
 	mux.HandleFunc("/admin_chat_settings.js", h.handleAdminChatSettingsJS)
-	mux.HandleFunc("/admin/chat/hooks", h.requireAuthPage(h.handleAdminChatHooksPage))
+	mux.HandleFunc("/admin/chat/hooks", h.requireAdminAuthPage(h.handleAdminChatHooksPage))
 	mux.HandleFunc("/admin_chat_hooks.js", h.handleAdminChatHooksJS)
-	mux.HandleFunc("/admin/search", h.requireAuthPage(h.handleAdminSearchPage))
+	mux.HandleFunc("/admin/search", h.requireAdminAuthPage(h.handleAdminSearchPage))
 	mux.HandleFunc("/admin_search.js", h.handleAdminSearchJS)
-	mux.HandleFunc("/admin/search/result", h.requireAuthPage(h.handleAdminSearchResultPage))
+	mux.HandleFunc("/admin/search/result", h.requireAdminAuthPage(h.handleAdminSearchResultPage))
 	mux.HandleFunc("/admin_search_result.js", h.handleAdminSearchResultJS)
-	mux.HandleFunc("/admin/pagerank", h.requireAuthPage(h.handleAdminPageRankPage))
+	mux.HandleFunc("/admin/pagerank", h.requireAdminAuthPage(h.handleAdminPageRankPage))
 	mux.HandleFunc("/admin_pagerank.js", h.handleAdminPageRankJS)
-	mux.HandleFunc("/admin/embeddings", h.requireAuthPage(h.handleAdminEmbeddingsPage))
+	mux.HandleFunc("/admin/embeddings", h.requireAdminAuthPage(h.handleAdminEmbeddingsPage))
 	mux.HandleFunc("/admin_embeddings.js", h.handleAdminEmbeddingsJS)
-	mux.HandleFunc("/admin/embeddings/endpoints", h.requireAuthPage(h.handleAdminEmbeddingEndpointsPage))
+	mux.HandleFunc("/admin/embeddings/endpoints", h.requireAdminAuthPage(h.handleAdminEmbeddingEndpointsPage))
 	mux.HandleFunc("/admin_embedding_endpoints.js", h.handleAdminEmbeddingEndpointsJS)
-	mux.HandleFunc("/admin/embeddings/endpoint/{id}", h.requireAuthPage(h.handleAdminEmbeddingEndpointPage))
+	mux.HandleFunc("/admin/embeddings/endpoint/{id}", h.requireAdminAuthPage(h.handleAdminEmbeddingEndpointPage))
 	mux.HandleFunc("/admin_embedding_endpoint.js", h.handleAdminEmbeddingEndpointJS)
-	mux.HandleFunc("/admin/database", h.requireAuthPage(h.handleAdminDatabasePage))
+	mux.HandleFunc("/admin/database", h.requireAdminAuthPage(h.handleAdminDatabasePage))
 	mux.HandleFunc("/admin_database.js", h.handleAdminDatabaseJS)
-	mux.HandleFunc("/admin/content_dedup", h.requireAuthPage(h.handleAdminContentDedupPage))
+	mux.HandleFunc("/admin/content_dedup", h.requireAdminAuthPage(h.handleAdminContentDedupPage))
 	mux.HandleFunc("/admin_content_dedup.js", h.handleAdminContentDedupJS)
+	mux.HandleFunc("/admin/users", h.requireAdminAuthPage(h.handleAdminUsersPage))
+	mux.HandleFunc("/admin_users.js", h.handleAdminUsersJS)
 
-	mux.HandleFunc("/admin/api/stats", h.requireAuthAPI(h.handleAdminStats))
-	mux.HandleFunc("/admin/api/vocabulary", h.requireAuthAPI(h.handleAdminVocabulary))
-	mux.HandleFunc("/admin/api/documents", h.requireAuthAPI(h.handleAdminDocuments))
-	mux.HandleFunc("DELETE /admin/api/documents", h.requireAuthAPI(h.handleAdminDeleteDomainDocuments))
-	mux.HandleFunc("GET /admin/api/documents/overview", h.requireAuthAPI(h.handleAdminDocumentsOverview))
-	mux.HandleFunc("GET /admin/api/overview/metrics", h.requireAuthAPI(h.handleAdminOverviewMetrics))
-	mux.HandleFunc("DELETE /admin/api/documents/{id}", h.requireAuthAPI(h.handleAdminDeleteDocument))
-	mux.HandleFunc("GET /admin/api/documents/{id}/versions", h.requireAuthAPI(h.handleAdminDocumentVersions))
-	mux.HandleFunc("/admin/api/domains", h.requireAuthAPI(h.handleAdminSearchDomains))
-	mux.HandleFunc("/admin/api/postings", h.requireAuthAPI(h.handleAdminPostings))
-	mux.HandleFunc("/admin/api/search", h.requireAuthAPI(h.handleAdminSearch))
-	mux.HandleFunc("/admin/api/settings", h.requireAuthAPI(h.handleAdminSettings))
-	mux.HandleFunc("/admin/api/chat-endpoint", h.requireAuthAPI(h.handleAdminChatEndpoint))
-	mux.HandleFunc("/admin/api/chat-hooks", h.requireAuthAPI(h.handleAdminChatHooks))
-	mux.HandleFunc("GET /admin/api/chat-hooks/{id}", h.requireAuthAPI(h.handleAdminGetChatHook))
-	mux.HandleFunc("PATCH /admin/api/chat-hooks/{id}", h.requireAuthAPI(h.handleAdminUpdateChatHook))
-	mux.HandleFunc("DELETE /admin/api/chat-hooks/{id}", h.requireAuthAPI(h.handleAdminDeleteChatHook))
-	mux.HandleFunc("POST /admin/api/embeddings/models", h.requireAuthAPI(h.handleAdminEmbeddingsModels))
-	mux.HandleFunc("POST /admin/api/embeddings/test", h.requireAuthAPI(h.handleAdminEmbeddingsTest))
-	mux.HandleFunc("/admin/api/embeddings/endpoints", h.requireAuthAPI(h.handleAdminEmbeddingEndpoints))
-	mux.HandleFunc("GET /admin/api/embeddings/endpoints/{id}", h.requireAuthAPI(h.handleAdminGetEmbeddingEndpoint))
-	mux.HandleFunc("PATCH /admin/api/embeddings/endpoints/{id}", h.requireAuthAPI(h.handleAdminUpdateEmbeddingEndpoint))
-	mux.HandleFunc("DELETE /admin/api/embeddings/endpoints/{id}", h.requireAuthAPI(h.handleAdminDeleteEmbeddingEndpoint))
-	mux.HandleFunc("/admin/api/overrides", h.requireAuthAPI(h.handleAdminOverrides))
-	mux.HandleFunc("/admin/api/crawl/jobs", h.requireAuthAPI(h.handleAdminCrawlJobs))
-	mux.HandleFunc("GET /admin/api/crawl/jobs/{id}", h.requireAuthAPI(h.handleAdminCrawlJob))
-	mux.HandleFunc("POST /admin/api/crawl/jobs/{id}/cancel", h.requireAuthAPI(h.handleAdminCancelCrawlJob))
-	mux.HandleFunc("/admin/api/schedules", h.requireAuthAPI(h.handleAdminSchedules))
-	mux.HandleFunc("GET /admin/api/schedules/{id}", h.requireAuthAPI(h.handleAdminGetSchedule))
-	mux.HandleFunc("DELETE /admin/api/schedules/{id}", h.requireAuthAPI(h.handleAdminDeleteSchedule))
-	mux.HandleFunc("PATCH /admin/api/schedules/{id}", h.requireAuthAPI(h.handleAdminUpdateSchedule))
-	mux.HandleFunc("POST /admin/api/schedules/{id}/run", h.requireAuthAPI(h.handleAdminRunScheduleNow))
-	mux.HandleFunc("POST /admin/api/schedules/{id}/toggle", h.requireAuthAPI(h.handleAdminToggleSchedule))
-	mux.HandleFunc("GET /admin/api/pagerank", h.requireAuthAPI(h.handleAdminPageRank))
-	mux.HandleFunc("POST /admin/api/pagerank/recompute", h.requireAuthAPI(h.handleAdminPageRankRecompute))
-	mux.HandleFunc("GET /admin/api/embeddings/recompute", h.requireAuthAPI(h.handleAdminEmbeddingsRecomputeStatus))
-	mux.HandleFunc("POST /admin/api/embeddings/recompute", h.requireAuthAPI(h.handleAdminEmbeddingsRecomputeStart))
-	mux.HandleFunc("GET /admin/api/database", h.requireAuthAPI(h.handleAdminDatabase))
-	mux.HandleFunc("POST /admin/api/database/clear-content", h.requireAuthAPI(h.handleAdminClearContent))
-	mux.HandleFunc("POST /admin/api/database/clear-settings", h.requireAuthAPI(h.handleAdminClearSettings))
-	mux.HandleFunc("GET /admin/api/content-dedup", h.requireAuthAPI(h.handleAdminContentDedupStatus))
-	mux.HandleFunc("POST /admin/api/content-dedup/recompute", h.requireAuthAPI(h.handleAdminContentDedupRecomputeStart))
-	mux.HandleFunc("GET /admin/api/content-dedup/alias-groups", h.requireAuthAPI(h.handleAdminContentDedupAliasGroups))
+	mux.HandleFunc("/admin/api/stats", h.requireAdminAuthAPI(h.handleAdminStats))
+	mux.HandleFunc("/admin/api/vocabulary", h.requireAdminAuthAPI(h.handleAdminVocabulary))
+	mux.HandleFunc("/admin/api/documents", h.requireAdminAuthAPI(h.handleAdminDocuments))
+	mux.HandleFunc("DELETE /admin/api/documents", h.requireAdminAuthAPI(h.handleAdminDeleteDomainDocuments))
+	mux.HandleFunc("GET /admin/api/documents/overview", h.requireAdminAuthAPI(h.handleAdminDocumentsOverview))
+	mux.HandleFunc("GET /admin/api/overview/metrics", h.requireAdminAuthAPI(h.handleAdminOverviewMetrics))
+	mux.HandleFunc("DELETE /admin/api/documents/{id}", h.requireAdminAuthAPI(h.handleAdminDeleteDocument))
+	mux.HandleFunc("GET /admin/api/documents/{id}/versions", h.requireAdminAuthAPI(h.handleAdminDocumentVersions))
+	mux.HandleFunc("/admin/api/domains", h.requireAdminAuthAPI(h.handleAdminSearchDomains))
+	mux.HandleFunc("/admin/api/postings", h.requireAdminAuthAPI(h.handleAdminPostings))
+	mux.HandleFunc("/admin/api/search", h.requireAdminAuthAPI(h.handleAdminSearch))
+	mux.HandleFunc("/admin/api/settings", h.requireAdminAuthAPI(h.handleAdminSettings))
+	mux.HandleFunc("/admin/api/chat-endpoint", h.requireAdminAuthAPI(h.handleAdminChatEndpoint))
+	mux.HandleFunc("/admin/api/chat-hooks", h.requireAdminAuthAPI(h.handleAdminChatHooks))
+	mux.HandleFunc("GET /admin/api/chat-hooks/{id}", h.requireAdminAuthAPI(h.handleAdminGetChatHook))
+	mux.HandleFunc("PATCH /admin/api/chat-hooks/{id}", h.requireAdminAuthAPI(h.handleAdminUpdateChatHook))
+	mux.HandleFunc("DELETE /admin/api/chat-hooks/{id}", h.requireAdminAuthAPI(h.handleAdminDeleteChatHook))
+	mux.HandleFunc("POST /admin/api/embeddings/models", h.requireAdminAuthAPI(h.handleAdminEmbeddingsModels))
+	mux.HandleFunc("POST /admin/api/embeddings/test", h.requireAdminAuthAPI(h.handleAdminEmbeddingsTest))
+	mux.HandleFunc("/admin/api/embeddings/endpoints", h.requireAdminAuthAPI(h.handleAdminEmbeddingEndpoints))
+	mux.HandleFunc("GET /admin/api/embeddings/endpoints/{id}", h.requireAdminAuthAPI(h.handleAdminGetEmbeddingEndpoint))
+	mux.HandleFunc("PATCH /admin/api/embeddings/endpoints/{id}", h.requireAdminAuthAPI(h.handleAdminUpdateEmbeddingEndpoint))
+	mux.HandleFunc("DELETE /admin/api/embeddings/endpoints/{id}", h.requireAdminAuthAPI(h.handleAdminDeleteEmbeddingEndpoint))
+	mux.HandleFunc("/admin/api/overrides", h.requireAdminAuthAPI(h.handleAdminOverrides))
+	mux.HandleFunc("/admin/api/crawl/jobs", h.requireAdminAuthAPI(h.handleAdminCrawlJobs))
+	mux.HandleFunc("GET /admin/api/crawl/jobs/{id}", h.requireAdminAuthAPI(h.handleAdminCrawlJob))
+	mux.HandleFunc("POST /admin/api/crawl/jobs/{id}/cancel", h.requireAdminAuthAPI(h.handleAdminCancelCrawlJob))
+	mux.HandleFunc("/admin/api/schedules", h.requireAdminAuthAPI(h.handleAdminSchedules))
+	mux.HandleFunc("GET /admin/api/schedules/{id}", h.requireAdminAuthAPI(h.handleAdminGetSchedule))
+	mux.HandleFunc("DELETE /admin/api/schedules/{id}", h.requireAdminAuthAPI(h.handleAdminDeleteSchedule))
+	mux.HandleFunc("PATCH /admin/api/schedules/{id}", h.requireAdminAuthAPI(h.handleAdminUpdateSchedule))
+	mux.HandleFunc("POST /admin/api/schedules/{id}/run", h.requireAdminAuthAPI(h.handleAdminRunScheduleNow))
+	mux.HandleFunc("POST /admin/api/schedules/{id}/toggle", h.requireAdminAuthAPI(h.handleAdminToggleSchedule))
+	mux.HandleFunc("GET /admin/api/pagerank", h.requireAdminAuthAPI(h.handleAdminPageRank))
+	mux.HandleFunc("POST /admin/api/pagerank/recompute", h.requireAdminAuthAPI(h.handleAdminPageRankRecompute))
+	mux.HandleFunc("GET /admin/api/embeddings/recompute", h.requireAdminAuthAPI(h.handleAdminEmbeddingsRecomputeStatus))
+	mux.HandleFunc("POST /admin/api/embeddings/recompute", h.requireAdminAuthAPI(h.handleAdminEmbeddingsRecomputeStart))
+	mux.HandleFunc("GET /admin/api/database", h.requireAdminAuthAPI(h.handleAdminDatabase))
+	mux.HandleFunc("POST /admin/api/database/clear-content", h.requireAdminAuthAPI(h.handleAdminClearContent))
+	mux.HandleFunc("POST /admin/api/database/clear-settings", h.requireAdminAuthAPI(h.handleAdminClearSettings))
+	mux.HandleFunc("GET /admin/api/content-dedup", h.requireAdminAuthAPI(h.handleAdminContentDedupStatus))
+	mux.HandleFunc("POST /admin/api/content-dedup/recompute", h.requireAdminAuthAPI(h.handleAdminContentDedupRecomputeStart))
+	mux.HandleFunc("GET /admin/api/content-dedup/alias-groups", h.requireAdminAuthAPI(h.handleAdminContentDedupAliasGroups))
+	mux.HandleFunc("/admin/api/users", h.requireAdminAuthAPI(h.handleAdminUsers))
+	mux.HandleFunc("PATCH /admin/api/users/{id}", h.requireAdminAuthAPI(h.handleAdminUpdateUser))
+	mux.HandleFunc("DELETE /admin/api/users/{id}", h.requireAdminAuthAPI(h.handleAdminDeleteUser))
 	return withSecurityHeaders(mux)
 }
 
@@ -598,6 +621,10 @@ func (h *Handler) handleAdminChatSettingsJS(w http.ResponseWriter, r *http.Reque
 
 func (h *Handler) handleAdminChatHooksJS(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/javascript; charset=utf-8", adminChatHooksJS)
+}
+
+func (h *Handler) handleAdminUsersJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/javascript; charset=utf-8", adminUsersJS)
 }
 
 func (h *Handler) handleAdminVocabularyTermJS(w http.ResponseWriter, r *http.Request) {

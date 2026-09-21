@@ -41,7 +41,7 @@ Pure logic — every file imports only the Go standard library, with no SQL, HTT
 
 ### Ports (`internal/ports`)
 
-23 interfaces defining pure contracts between the core and adapters; the package imports `database/sql` only for the `sql.DBStats` value type, performing no I/O itself.
+25 interfaces defining pure contracts between the core and adapters; the package imports `database/sql` only for the `sql.DBStats` value type, performing no I/O itself.
 
 | Port | Responsibility | Implemented by |
 |---|---|---|
@@ -50,7 +50,8 @@ Pure logic — every file imports only the Go standard library, with no SQL, HTT
 | `EmbeddingProvider` | Text-to-vector conversion. | `hashembed`, `httpembed` |
 | `SQLRepository` | Broad relational-DB port: document save/versioning/embeddings, postings/corpus-stats/vocabulary lookups, alias resolution, ANN semantic search. | `sqlrepo` |
 | `PageRankRepository`, `ContentDedupRepository`, `EmbeddingRepository` | Narrow slices of `SQLRepository`, scoped to exactly what each background job needs. | `sqlrepo` |
-| `SessionStore` | Shared-DB login session tokens. | `sqlrepo` |
+| `SessionStore` | Shared-DB login session tokens, each carrying a role (admin vs. regular user) and, for a regular user, which `User` it belongs to. | `sqlrepo` |
+| `UserStore` | CRUD for DB-backed regular-user accounts (distinct from the single hardcoded admin account) -- search-only access, managed entirely through the admin backend. | `sqlrepo` |
 | `HealthChecker` | Cheap DB liveness check backing `/healthz`. | `sqlrepo` |
 | `AdminRepository` | Read-mostly admin diagnostics port (stats, listings, time series, pool stats). | `sqlrepo` |
 | `SearchService` | Primary driving port for public search. | `internal/application` (hybrid search use case) |
@@ -87,7 +88,7 @@ Orchestration/use-case layer; verified to import only `internal/domain` and `int
 
 | Adapter | Responsibility |
 |---|---|
-| `sqlrepo` | SQL persistence layer shared by all three binaries (SQLite locally/CI, Postgres in the dev deployment); implements `SQLRepository`, `PageRankRepository`, `ContentDedupRepository`, `EmbeddingRepository`, `SessionStore`, `AdminRepository`, `CrawlJobStore`, `SettingsStore`, `ScheduledCrawlStore`, `EmbeddingEndpointStore`, `ChatEndpointStore`, and more. |
+| `sqlrepo` | SQL persistence layer shared by all three binaries (SQLite locally/CI, Postgres in the dev deployment); implements `SQLRepository`, `PageRankRepository`, `ContentDedupRepository`, `EmbeddingRepository`, `SessionStore`, `AdminRepository`, `CrawlJobStore`, `SettingsStore`, `ScheduledCrawlStore`, `EmbeddingEndpointStore`, `ChatEndpointStore`, `UserStore`, and more. |
 | `restapi` | HTTP handler layer for both the public search UI/API and the admin UI/API — routing, JSON REST endpoints, embedded static assets, auth/session and crawl-internal-token checks. |
 | `httpfetcher` | Default plain-HTTP page fetcher with timeout/UA/cookie/basic-auth support, routed through `netguard`. |
 | `browserfetcher` | Renders JS-heavy pages via a headless Chromium or Firefox browser over Playwright. |

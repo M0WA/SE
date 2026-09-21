@@ -232,16 +232,49 @@ type EmbeddingRepository interface {
 // SessionStore backs the admin/search login system's session tokens, via a
 // shared "sessions" table so a login on one process (e.g. admin-server's
 // /login) is recognized by every process serving the site -- something an
-// in-memory store could never do across separate OS processes.
+// in-memory store could never do across separate OS processes. A session
+// carries a role (domain.RoleAdmin or domain.RoleUser) and, for a
+// domain.RoleUser session, the domain.User.ID it belongs to (empty for
+// domain.RoleAdmin) -- set once at CreateSession time and resolved fresh by
+// ValidSession on every request, never derived from anything the client
+// sends (the se_session cookie itself stays an opaque random token).
 type SessionStore interface {
-	// CreateSession persists a freshly issued token, valid until expiresAt.
-	CreateSession(ctx context.Context, token string, expiresAt time.Time) error
+	// CreateSession persists a freshly issued token, valid until expiresAt,
+	// with the given role and userID (userID is "" for a domain.RoleAdmin
+	// session).
+	CreateSession(ctx context.Context, token string, expiresAt time.Time, role string, userID string) error
 	// ValidSession reports whether token names a session that hasn't
-	// expired yet.
-	ValidSession(ctx context.Context, token string) (bool, error)
+	// expired yet and, if so, the role and userID it was created with.
+	ValidSession(ctx context.Context, token string) (valid bool, role string, userID string, err error)
 	// RevokeSession deletes a session outright (a sign-out). Revoking an
 	// unknown or already-expired token is not an error.
 	RevokeSession(ctx context.Context, token string) error
+}
+
+// ErrUserNotFound is returned by UserStore's GetUser/GetUserByUsername/
+// UpdateUser/DeleteUser when no matching row exists.
+var ErrUserNotFound = errors.New("user not found")
+
+// ErrUsernameTaken is returned by UserStore.CreateUser when username is
+// already used by a different row (case-sensitive, unique).
+var ErrUsernameTaken = errors.New("username already taken")
+
+// UserStore persists DB-backed regular-user accounts -- see domain.User's
+// doc comment for how these differ from the single hardcoded admin
+// account. A list of many, like ChatHookStore, CRUD over IDs.
+type UserStore interface {
+	ListUsers(ctx context.Context) ([]domain.User, error)
+	GetUser(ctx context.Context, id string) (domain.User, error)
+	// GetUserByUsername returns ErrUserNotFound if no row has that username.
+	GetUserByUsername(ctx context.Context, username string) (domain.User, error)
+	// CreateUser returns ErrUsernameTaken if u.Username is already in use.
+	CreateUser(ctx context.Context, u domain.User) error
+	// UpdateUser replaces u's stored fields wholesale (used for a password
+	// reset -- see restapi.handleAdminUpdateUser). Returns ErrUserNotFound
+	// if no row with u.ID exists.
+	UpdateUser(ctx context.Context, u domain.User) error
+	// DeleteUser returns ErrUserNotFound if no row with id exists.
+	DeleteUser(ctx context.Context, id string) error
 }
 
 // HealthChecker is a cheap liveness check for the shared database

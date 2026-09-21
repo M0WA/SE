@@ -187,9 +187,19 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_crawl_job_pages_job_id ON crawl_job_pages(job_id)`,
 		`CREATE TABLE IF NOT EXISTS sessions (
-			token TEXT PRIMARY KEY, expires_at TEXT NOT NULL
+			token TEXT PRIMARY KEY, expires_at TEXT NOT NULL,
+			role TEXT NOT NULL DEFAULT 'admin', user_id TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
+		// users is a list of many DB-backed regular-user accounts (see
+		// domain.User) -- distinct from the single hardcoded admin account,
+		// which is never a row here. Unlike chat_hooks, username must be
+		// unique (enforced at the DB layer, not just checked-then-inserted
+		// at the application layer, to close the race between the two).
+		`CREATE TABLE IF NOT EXISTS users (
+			id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE,
+			password_hash TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+		)`,
 	}
 }
 
@@ -342,9 +352,15 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 		) ENGINE=InnoDB`,
 		`CREATE INDEX idx_crawl_job_pages_job_id ON crawl_job_pages(job_id)`,
 		`CREATE TABLE IF NOT EXISTS sessions (
-			token VARCHAR(64) PRIMARY KEY, expires_at VARCHAR(64) NOT NULL
+			token VARCHAR(64) PRIMARY KEY, expires_at VARCHAR(64) NOT NULL,
+			role VARCHAR(16) NOT NULL DEFAULT 'admin', user_id VARCHAR(20) NOT NULL DEFAULT ''
 		) ENGINE=InnoDB`,
 		`CREATE INDEX idx_sessions_expires_at ON sessions(expires_at)`,
+		// See the sqlite dialect's users comment.
+		`CREATE TABLE IF NOT EXISTS users (
+			id VARCHAR(20) PRIMARY KEY, username VARCHAR(255) NOT NULL UNIQUE,
+			password_hash VARCHAR(255) NOT NULL, created_at VARCHAR(64) NOT NULL, updated_at VARCHAR(64) NOT NULL
+		) ENGINE=InnoDB`,
 	}
 }
 
@@ -500,9 +516,15 @@ func (postgresDialect) CreateSchemaSQL() []string {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_crawl_job_pages_job_id ON crawl_job_pages(job_id)`,
 		`CREATE TABLE IF NOT EXISTS sessions (
-			token TEXT PRIMARY KEY, expires_at TEXT NOT NULL
+			token TEXT PRIMARY KEY, expires_at TEXT NOT NULL,
+			role TEXT NOT NULL DEFAULT 'admin', user_id TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
+		// See the sqlite dialect's users comment.
+		`CREATE TABLE IF NOT EXISTS users (
+			id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE,
+			password_hash TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+		)`,
 	}
 }
 

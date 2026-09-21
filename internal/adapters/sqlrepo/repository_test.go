@@ -1856,17 +1856,47 @@ func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 		}
 	})
 	t.Run("CreateSession", func(t *testing.T) {
-		if err := closedRepo(t).CreateSession(ctx, "tok", time.Now().Add(time.Hour)); err == nil {
+		if err := closedRepo(t).CreateSession(ctx, "tok", time.Now().Add(time.Hour), "admin", ""); err == nil {
 			t.Error("expected an error")
 		}
 	})
 	t.Run("ValidSession", func(t *testing.T) {
-		if _, err := closedRepo(t).ValidSession(ctx, "tok"); err == nil {
+		if _, _, _, err := closedRepo(t).ValidSession(ctx, "tok"); err == nil {
 			t.Error("expected an error")
 		}
 	})
 	t.Run("RevokeSession", func(t *testing.T) {
 		if err := closedRepo(t).RevokeSession(ctx, "tok"); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("ListUsers", func(t *testing.T) {
+		if _, err := closedRepo(t).ListUsers(ctx); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("GetUser", func(t *testing.T) {
+		if _, err := closedRepo(t).GetUser(ctx, "id"); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("GetUserByUsername", func(t *testing.T) {
+		if _, err := closedRepo(t).GetUserByUsername(ctx, "name"); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("CreateUser", func(t *testing.T) {
+		if err := closedRepo(t).CreateUser(ctx, domain.User{ID: "id", Username: "name"}); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("UpdateUser", func(t *testing.T) {
+		if err := closedRepo(t).UpdateUser(ctx, domain.User{ID: "id", Username: "name"}); err == nil {
+			t.Error("expected an error")
+		}
+	})
+	t.Run("DeleteUser", func(t *testing.T) {
+		if err := closedRepo(t).DeleteUser(ctx, "id"); err == nil {
 			t.Error("expected an error")
 		}
 	})

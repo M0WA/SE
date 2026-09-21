@@ -825,6 +825,101 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
+  /admin/api/users:
+    get:
+      tags: [admin]
+      summary: List every regular-user account
+      description: >-
+        DB-backed regular-user accounts, entirely distinct from the single
+        hardcoded admin account (ADMIN_USER/ADMIN_PASSWORD env vars) --
+        see the User schema. Never includes a password or password hash in
+        the response, on this or any other endpoint here.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    post:
+      tags: [admin]
+      summary: Create a regular-user account
+      description: >-
+        The new account's id is minted server-side from username (see
+        domain.NewUserID), deduped against every existing user id -- the
+        response's id is the one to use for every subsequent PATCH/DELETE.
+        password is hashed with bcrypt before storage and never echoed
+        back. username must not match the hardcoded admin's own username
+        (400) or an existing regular-user account's (409).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateUserRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/users/{id}:
+    patch:
+      tags: [admin]
+      summary: Reset a regular-user account's password
+      description: >-
+        Resets password only -- username is not editable once an account
+        is created (see UpdateUserRequest).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateUserRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    delete:
+      tags: [admin]
+      summary: Delete a regular-user account
+      description: The account can no longer sign in once deleted; its session, if any, still expires on its own TTL.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
   /admin/api/embeddings/models:
     post:
       tags: [admin]
@@ -1421,6 +1516,16 @@ components:
         text/plain: { schema: { type: string } }
     NotConfigured:
       description: This process wasn't wired up with the dependency this endpoint needs
+      content:
+        text/plain: { schema: { type: string } }
+    Forbidden:
+      description: >-
+        A valid session exists, but its role does not permit this route --
+        e.g. a regular-user session (see UserRole) on an admin-only endpoint.
+      content:
+        text/plain: { schema: { type: string, example: "admin access required" } }
+    Conflict:
+      description: The request conflicts with an existing resource
       content:
         text/plain: { schema: { type: string } }
     BadGateway:
@@ -2166,6 +2271,42 @@ components:
               description: >-
                 Minted from name at creation (see domain.NewChatHookID)
                 and never changed afterward, even if name is edited later.
+
+    User:
+      type: object
+      description: >-
+        A DB-backed regular-user account -- distinct from the single
+        hardcoded admin account (ADMIN_USER/ADMIN_PASSWORD), which is
+        never a User row. Its session role (admin vs. user), resolved
+        server-side from the se_session cookie's own session record on
+        every request and never client-settable, is what every /admin/*
+        route's 401/403 distinction is based on: a User's session can sign
+        in and use the public search site (index page, /search, /chat) but
+        is refused (403) on every /admin/* route.
+      properties:
+        id:
+          type: string
+          description: Minted from username at creation (see domain.NewUserID) and never changed afterward.
+        username: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CreateUserRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password:
+          type: string
+          description: Plaintext, hashed with bcrypt before storage and never stored or returned as-is. 8-72 characters.
+
+    UpdateUserRequest:
+      type: object
+      required: [password]
+      properties:
+        password:
+          type: string
+          description: The account's new password (plaintext, hashed before storage). 8-72 characters. username is not editable through this endpoint.
 
     DatabaseDiagnostics:
       type: object
