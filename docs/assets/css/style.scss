@@ -4,52 +4,95 @@
 @import "{{ site.theme }}";
 
 /* Color overrides only -- layout/structure stay jekyll-theme-minimal's own.
-   Values are sourced directly from the real admin UI (see
-   docs/manual/images/*.png), not an invented palette: the app's own
-   background is #eceff1, body/heading text is a warm near-black, and its
-   link color is a quiet slate-blue -- this keeps the docs site from
-   reading like an unrelated generic theme bolted onto app documentation. */
+   Values are copied directly from the real app's own palette
+   (internal/adapters/restapi/style.css's :root and its
+   @media (prefers-color-scheme: dark) block), not invented, so this docs
+   site reads as the same product rather than an unrelated generic theme
+   bolted on. Respects the visitor's own light/dark preference the same
+   way the app itself does, via prefers-color-scheme -- not a separate
+   toggle. */
 body {
-  background-color: #eceff1;
-  color: #1c2126;
+  background-color: #edf0f1;
+  color: #15202b;
 }
 
 .wrapper {
-  background-color: #eceff1;
+  background-color: #edf0f1;
 }
 
 h1, h2, h3, h4, h5, h6 {
-  color: #1c2126;
+  color: #15202b;
   font-family: "Source Serif 4", Georgia, serif;
 }
 
 a {
-  color: #2f5d73;
+  color: #7a2035;
 }
 
 a:hover {
-  color: #1c2126;
+  color: #15202b;
 }
 
 header {
-  background-color: #1c2126;
+  background-color: #15202b;
 }
 
 header h1, header p {
-  color: #eceff1;
+  color: #edf0f1;
 }
 
 code, pre {
   font-family: "IBM Plex Mono", Menlo, monospace;
-  background-color: #dfe6e8;
-  color: #1c2126;
+  background-color: #dfe3e5;
+  color: #15202b;
 }
 
 blockquote {
-  border-left: 3px solid #2f5d73;
-  color: #55636b;
+  border-left: 3px solid #7a2035;
+  color: #55636f;
 }
 
 img {
-  border: 1px solid #c7d0d3;
+  border: 1px solid #c7cdd1;
+}
+
+@media (prefers-color-scheme: dark) {
+  body, .wrapper {
+    background-color: #10151c;
+    color: #e7ecef;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    color: #e7ecef;
+  }
+
+  a {
+    color: #d98a9b;
+  }
+
+  a:hover {
+    color: #e7ecef;
+  }
+
+  header {
+    background-color: #000;
+  }
+
+  header h1, header p {
+    color: #e7ecef;
+  }
+
+  code, pre {
+    background-color: #1a2028;
+    color: #e7ecef;
+  }
+
+  blockquote {
+    border-left-color: #d98a9b;
+    color: #8b99a6;
+  }
+
+  img {
+    border-color: #29323c;
+  }
 }

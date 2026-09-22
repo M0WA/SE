@@ -138,6 +138,24 @@ against a small local reverse proxy that mirrors that same
 `/admin`|`/login`|`/logout` string-prefix split, or the pages will render
 unstyled.
 
+**Screenshots use dark mode.** The app has no in-app theme toggle -- both
+palettes live behind one `@media (prefers-color-scheme: dark)` block in
+`internal/adapters/restapi/style.css` -- so getting the dark palette means
+emulating it at the CDP layer before navigating:
+`Emulation.setEmulatedMedia({features: [{name: 'prefers-color-scheme',
+value: 'dark'}]})`. Two more gotchas hit while building this pipeline,
+worth not re-discovering the hard way:
+- Screenshot the **login page before logging in**, and call
+  `Network.clearBrowserCookies` right before it even if the Chromium
+  profile is reused across runs -- a stale session cookie makes `/login`
+  silently redirect to `/admin` and screenshot the wrong page entirely.
+- Reset `Emulation.setDeviceMetricsOverride` to the target width/height at
+  the *start* of every capture, not just for full-page ones -- it persists
+  across navigations, so a fixed-height capture (e.g. the public chat page,
+  deliberately not full-page since its background is mostly decorative)
+  right after a full-page one otherwise inherits that previous page's tall
+  viewport instead of the height actually requested.
+
 ## Keep the root README in sync
 
 `README.md` (repo root) is a map of the documentation, not documentation
