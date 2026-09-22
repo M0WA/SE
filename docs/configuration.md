@@ -419,6 +419,35 @@ as separate, later work.
 | MCP servers checkbox list | every box unchecked (no global tools) | — | Restricts which of the globally configured MCP servers (above) this agent may use tools from. There is no "unscoped" state: every box unchecked means this agent gets no global tools at all, not every one -- check every box to allow every server. Only applied while this agent is active; a turn with no agent selected still gets every globally active server. Never affects a user's own per-user MCP servers. |
 | `agent-enabled` | `true` (on create) | boolean | Whether this agent can be selected/addressed at all. |
 
+#### Seeded default agents
+
+`cmd/admin`'s own `main()` calls `sqlrepo.Repository.SeedDefaultAgents` once
+at startup (see `internal/adapters/sqlrepo/default_agents.go`), which
+inserts five ready-to-use starter agents **the first time the `agents`
+table is completely empty** -- a fresh install, or an existing one that
+predates this feature. It never fires again once any agent (seeded or
+admin-created) exists, so deleting one of these five and restarting leaves
+it deleted rather than resurrecting it; the one caveat is deleting *all
+five* back down to zero rows, which is indistinguishable from "fresh
+database" and does re-seed on the next restart.
+
+Every seeded agent starts with an **empty MCP-servers scope** (no global
+tools) deliberately, not as an oversight: a real MCP server's own row ID is
+admin-configured, deployment-specific data this package has no safe way to
+guess. To actually let Researcher/Current events/Deep research/This index
+use web search, open each on its own `admin_agent.html` edit page and check
+the box for whatever server row this deployment's own web-search MCP
+server is configured as (see "MCP servers" above) -- same as scoping any
+agent you created yourself.
+
+| Agent | Purpose | Needs an MCP server scoped to work as intended? |
+|---|---|---|
+| Researcher | Fact-checking generalist -- searches for and cites a primary source before answering anything it isn't certain of. | Yes (web search/fetch) |
+| Quick answer | Short, direct answers; only searches when the question genuinely needs current information. A good `chat-default-agent` pick. | No (works fine with zero tools; searches opportunistically if scoped) |
+| This index | Prioritizes this deployment's own indexed documents (blended into web results via the SearXNG engine, see "Chat settings" above) over the open web. | Yes (web search/fetch) |
+| Current events | For "what's happening now" questions -- calls `get_datetime` first, then always searches rather than trusting training knowledge. | Yes (web search/fetch, plus the `get_datetime` MCP server if configured) |
+| Deep research | Slower and more thorough -- fetches and reads the top few results before answering, not just search snippets. | Yes (web search/fetch) |
+
 ### Users (`admin_users.html` list + `admin_user.html` edit subpage)
 
 DB-backed regular-user accounts -- entirely distinct from the single
