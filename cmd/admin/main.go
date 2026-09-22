@@ -64,6 +64,15 @@ func main() {
 		log.Print("reset a stale embedding recompute status left in-progress from a previous restart")
 	}
 
+	// Best-effort, non-fatal: a fresh deployment gets a small set of
+	// ready-to-use starter Agent rows (see
+	// sqlrepo.SeedDefaultAgents/default_agents.go); an existing one with
+	// any agents already configured (including an admin who deleted every
+	// seeded default down to zero) is left untouched.
+	if err := repo.SeedDefaultAgents(ctx); err != nil {
+		log.Printf("seeding default agents: %v", err)
+	}
+
 	adminUser := bootstrap.GetEnv("ADMIN_USER", "")
 	adminPass := bootstrap.GetEnv("ADMIN_PASSWORD", "")
 	if adminUser == "" || adminPass == "" {
