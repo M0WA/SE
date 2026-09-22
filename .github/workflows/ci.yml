@@ -102,6 +102,12 @@ jobs:
           # first run" cost that gate exists to spare a plain local
           # `go test ./...` from paying by default.
           SE_BROWSER_TESTS: "1"
+          # internal/adapters/dockersandbox's real-Docker tests (see
+          # requireDockerTests' own doc comment) -- GitHub-hosted
+          # ubuntu-latest runners ship Docker pre-installed with the job
+          # user already in the docker group, unlike the Playwright
+          # sandbox dance above, so this needs no extra setup step.
+          SE_DOCKER_TESTS: "1"
       - name: npm ci
         run: npm ci
       - name: JS unit tests (with coverage)
