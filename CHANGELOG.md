@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.52 - 2026-09-22
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Seed a starter set of global agents on first run by @M0WA in https://github.com/M0WA/SE/pull/242
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.51...v4.13.52
+
+
 ## v4.13.51 - 2026-09-22
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
