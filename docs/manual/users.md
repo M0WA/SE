@@ -14,7 +14,7 @@ A User row lets someone sign in to the public-facing search page and chat withou
 
 ## The user list
 
-Each row shows a username and when the account was created. "Edit" opens the account's own subpage to change its password or personal prompt; "Delete" removes the account immediately after a confirmation prompt — the person can no longer sign in afterward, and this cannot be undone (there's no way to recover a deleted account or its custom prompt). If no accounts exist yet, the page just tells you to click "Add user" to create the first one. The list itself isn't paginated or searchable — with typical account counts for a self-hosted deployment that hasn't been a problem.
+Each row shows a username and when the account was created. The Edit icon (✎) opens the account's own subpage to change its password or personal prompt; the Delete (trash) icon removes the account immediately after a confirmation prompt — the person can no longer sign in afterward, and this cannot be undone (there's no way to recover a deleted account or its custom prompt). If no accounts exist yet, the page just tells you to click "Add user" to create the first one. The list itself isn't paginated or searchable — with typical account counts for a self-hosted deployment that hasn't been a problem.
 
 ## Adding a user
 

@@ -14,7 +14,7 @@ An agent is a named specialization: a fixed system prompt bundled with a scoped 
 
 ## The list and its columns
 
-Each row shows the agent's name, its description, and whether it's enabled. Name and description are exactly what a person picking an agent from the chat page's dropdown sees, so keep the description short and about the agent's purpose rather than about how it's built -- it's read by a human (or, eventually, a multi-agent planner) deciding whether this agent fits the question at hand, and it is never sent to the model as part of that agent's own conversation. Click a row's Edit link to open its full detail page, or Delete to remove it immediately after a confirmation -- there's no undo, so a mistaken delete means re-entering the system prompt from scratch.
+Each row shows the agent's name, its description, and whether it's enabled. Name and description are exactly what a person picking an agent from the chat page's dropdown sees, so keep the description short and about the agent's purpose rather than about how it's built -- it's read by a human (or, eventually, a multi-agent planner) deciding whether this agent fits the question at hand, and it is never sent to the model as part of that agent's own conversation. Click a row's Edit icon (✎) to open its full detail page, or the Delete (trash) icon to remove it immediately after a confirmation -- there's no undo, so a mistaken delete means re-entering the system prompt from scratch.
 
 ## Adding an agent
 

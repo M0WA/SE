@@ -2,20 +2,7 @@
   const tableEl = document.getElementById('users-table');
 
   function userActionsCell(u) {
-    const td = document.createElement('td');
-    td.className = 'actions';
-    const editLink = document.createElement('a');
-    editLink.className = 'text-button';
-    editLink.href = '/admin/users/' + encodeURIComponent(u.id);
-    editLink.textContent = 'Edit';
-    td.appendChild(editLink);
-    const delBtn = document.createElement('button');
-    delBtn.type = 'button';
-    delBtn.className = 'text-button';
-    delBtn.textContent = 'Delete';
-    delBtn.addEventListener('click', () => deleteUser(u));
-    td.appendChild(delBtn);
-    return td;
+    return actionsCell('/admin/users/' + encodeURIComponent(u.id), 'Delete', () => deleteUser(u));
   }
 
   function renderUsers(users) {

@@ -18,7 +18,7 @@ Configuring servers here does nothing unless the chat endpoint itself supports n
 
 ## The server list
 
-Each row shows the server's name, its transport (stdio or http), and whether it's enabled, plus Edit and Delete actions. An empty list shows a prompt to click "Add server" rather than a bare empty table. Deleting a server asks for confirmation first and warns that its tools will stop being offered to the model immediately — there's no undo, so if you're not sure, uncheck "Enabled" on the detail page instead of deleting.
+Each row shows the server's name, its transport (stdio or http), and whether it's enabled, plus Edit (✎) and Delete (trash icon) actions -- hover either for its name as a tooltip. An empty list shows a prompt to click "Add server" rather than a bare empty table. Deleting a server asks for confirmation first and warns that its tools will stop being offered to the model immediately — there's no undo, so if you're not sure, uncheck "Enabled" on the detail page instead of deleting.
 
 ## The four built-in servers
 

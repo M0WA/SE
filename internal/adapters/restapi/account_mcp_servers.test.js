@@ -69,8 +69,17 @@ test('renderServers shows base url and enabled columns', () => {
   const { renderServers } = loadFixture();
   renderServers([baseServer({ enabled: false })]);
   const cells = Array.from(document.querySelectorAll('#servers-table td')).map((td) => td.textContent);
-  assert.equal(cells.includes('https://example.com/mcp'), true);
-  assert.equal(cells.includes('no'), true);
+  // Array.prototype.some with strict equality, not Array.prototype.includes
+  // -- CodeQL's js/incomplete-url-substring-sanitization rule flagged the
+  // equivalent .includes() call here as if it were a String.prototype.includes
+  // substring-based URL/origin check (the real bypass pattern that rule
+  // exists to catch, e.g. "evil.com/https://example.com".includes("https://
+  // example.com")); this is an exact-match check against an array of
+  // rendered cell strings, not that pattern at all, but re-expressed this
+  // way so the false positive doesn't need re-litigating on every future
+  // scan.
+  assert.equal(cells.some((c) => c === 'https://example.com/mcp'), true);
+  assert.equal(cells.some((c) => c === 'no'), true);
 });
 
 test('loadServers reports the error message on a failed fetch', async () => {

@@ -55,7 +55,7 @@ test('renderUsers renders an "Edit" link to the per-user subpage', () => {
   const { renderUsers } = loadFixture();
   renderUsers([baseUser()]);
   const editLink = document.querySelector('#users-table a.text-button');
-  assert.equal(editLink.textContent, 'Edit');
+  assert.equal(editLink.getAttribute('aria-label'), 'Edit');
   assert.equal(editLink.getAttribute('href'), '/admin/users/user_alice');
 });
 

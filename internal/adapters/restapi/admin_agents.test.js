@@ -56,7 +56,7 @@ test('renderAgents renders an "Edit" link to the per-agent subpage', () => {
   const { renderAgents } = loadFixture();
   renderAgents([baseAgent()]);
   const editLink = document.querySelector('#agents-table a.text-button');
-  assert.equal(editLink.textContent, 'Edit');
+  assert.equal(editLink.getAttribute('aria-label'), 'Edit');
   assert.equal(editLink.getAttribute('href'), '/admin/agents/fact_checker');
 });
 

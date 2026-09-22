@@ -53,24 +53,6 @@
     return s.charAt(0).toUpperCase() + s.slice(1);
   }
 
-  // ACTION_ICONS: this page's action buttons/links (View/Cancel on a job
-  // row, Run now/Edit/Delete on a schedule row) show a single icon glyph
-  // instead of a text label, to keep these dense tables narrow -- the
-  // action's name moves to title (native hover tooltip) and aria-label
-  // (so it's still announced, not just shown), rather than being lost.
-  const ACTION_ICONS = { view: '\u{1F50D}', cancel: '✕', run: '▶', edit: '✎', delete: '\u{1F5D1}' };
-
-  // setIconLabel gives el (a <button> or <a>) an icon glyph as its only
-  // visible content plus a hover title and an aria-label carrying the real
-  // action name -- shared by every action button/link built below so the
-  // icon/tooltip/accessible-name wiring can't drift between them.
-  function setIconLabel(el, iconKey, label) {
-    el.classList.add('icon-button');
-    el.textContent = ACTION_ICONS[iconKey];
-    el.title = label;
-    el.setAttribute('aria-label', label);
-  }
-
   function formatDuration(startedAt, finishedAt) {
     if (!startedAt) return '—';
     const start = new Date(startedAt).getTime();
@@ -147,7 +129,7 @@
       const cancelBtn = document.createElement('button');
       cancelBtn.type = 'button';
       cancelBtn.className = 'text-button';
-      setIconLabel(cancelBtn, 'cancel', 'Cancel');
+      setIconLabel(cancelBtn, 'delete', 'Cancel');
       cancelBtn.addEventListener('click', () => cancelJob(job.id, cancelBtn));
       td.appendChild(cancelBtn);
     }
@@ -433,17 +415,6 @@
     return regexFilter(crawls, pattern, crawlsFilterErrorEl, (re, s) => re.test(seedSummary(s.seed_urls)));
   }
 
-  function crawlRecurrenceCell(s) {
-    if (!s.recurring) return textCell('once');
-    let label = s.interval_minutes + ' min';
-    if (s.max_runs > 0) label += ' (' + s.run_count + '/' + s.max_runs + ' runs)';
-    return textCell(label);
-  }
-
-  function crawlLinkScopeCell(s) {
-    return textCell(LINK_SCOPE_LABELS[s.link_scope || ''] || s.link_scope);
-  }
-
   function crawlEnabledCell(s) {
     const td = document.createElement('td');
     const label = document.createElement('label');
@@ -509,15 +480,13 @@
     }
     crawlsStatusEl.textContent = '';
     const table = buildTable(
-      [{ label: 'seed' }, { label: 'repeats' }, { label: 'links' }, { label: 'next run' }, { label: 'last run' }, { label: 'enabled' }, { label: '' }],
+      [{ label: 'enabled' }, { label: 'seed' }, { label: 'next run' }, { label: 'last run' }, { label: '' }],
       filtered,
       (s) => [
+        crawlEnabledCell(s),
         urlCell(seedSummary(s.seed_urls)),
-        crawlRecurrenceCell(s),
-        crawlLinkScopeCell(s),
         textCell(formatTimestamp(s.next_run_at)),
         textCell(formatTimestamp(s.last_run_at)),
-        crawlEnabledCell(s),
         crawlActionsCell(s),
       ],
     );
@@ -570,9 +539,9 @@
     module.exports = {
       capitalize, formatDuration, formatSpeed, updateJobSpeeds, formatMs,
       clearEndedJobs,
-      ACTION_ICONS, setIconLabel, viewButtonCell, crawlActionsCell,
+      viewButtonCell, crawlActionsCell, renderCrawls,
       filterJobs, filterPages, filterCrawls,
-      crawlRecurrenceCell, crawlLinkScopeCell, toggleCrawlEnabled,
+      toggleCrawlEnabled,
       LINK_SCOPE_LABELS, RENDERER_LABELS,
       JOB_DETAIL_COLUMNS, jobDetailDefaultDir, jobDetailSortValue,
       sortJobDetailPages, buildJobDetailTable, renderJobDetailTable,

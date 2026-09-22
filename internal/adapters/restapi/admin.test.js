@@ -737,3 +737,44 @@ test('the pager is hidden when everything fits on one page', async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(document.getElementById('vocab-pager').hidden, true);
 });
+
+test('setIconLabel sets an SVG icon, title, and aria-label for a view/delete key', () => {
+  const { setIconLabel, ICON_SVGS } = load();
+  const btn = document.createElement('button');
+  setIconLabel(btn, 'delete', 'Delete');
+  assert.equal(btn.classList.contains('icon-button'), true);
+  assert.equal(btn.innerHTML, ICON_SVGS.delete);
+  assert.equal(btn.title, 'Delete');
+  assert.equal(btn.getAttribute('aria-label'), 'Delete');
+});
+
+test('setIconLabel reuses the delete icon under a different label (job list\'s Cancel button)', () => {
+  const { setIconLabel, ICON_SVGS } = load();
+  const btn = document.createElement('button');
+  setIconLabel(btn, 'delete', 'Cancel');
+  assert.equal(btn.innerHTML, ICON_SVGS.delete);
+  assert.equal(btn.title, 'Cancel');
+  assert.equal(btn.getAttribute('aria-label'), 'Cancel');
+});
+
+test('setIconLabel sets a plain glyph as text content for a run/edit key', () => {
+  const { setIconLabel, ACTION_GLYPHS } = load();
+  const link = document.createElement('a');
+  setIconLabel(link, 'edit', 'Edit');
+  assert.equal(link.textContent, ACTION_GLYPHS.edit);
+  assert.equal(link.getAttribute('aria-label'), 'Edit');
+});
+
+test('actionsCell builds an Edit link and a Delete button wired to the given handler', () => {
+  const { actionsCell } = load();
+  let deleted = false;
+  const td = actionsCell('/admin/users/bob', 'Delete', () => { deleted = true; });
+  assert.equal(td.className, 'actions');
+  const editLink = td.querySelector('a.text-button');
+  assert.equal(editLink.getAttribute('href'), '/admin/users/bob');
+  assert.equal(editLink.getAttribute('aria-label'), 'Edit');
+  const delBtn = td.querySelector('button.text-button');
+  assert.equal(delBtn.getAttribute('aria-label'), 'Delete');
+  delBtn.dispatchEvent(new window.Event('click'));
+  assert.equal(deleted, true);
+});

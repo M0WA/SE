@@ -55,6 +55,20 @@ type MCPServer struct {
 	// means this server is active whenever Enabled is true, unaffected by
 	// the Web toggle.
 	GatedByWebSearch bool
+	// SelfService is true for a row sourced from ports.UserMCPServerStore
+	// (a regular user's own personal server, see ChatService.Chat), false
+	// for one sourced from the admin-configured ports.MCPServerStore
+	// catalog -- set by the caller building a turn's active server list,
+	// never persisted (each store's own CRUD already knows unambiguously
+	// which one it is; this field only exists to travel WITH the value
+	// once the two catalogs are merged into one slice for
+	// ports.MCPToolProvider.Open). mcpclient refuses "stdio" transport
+	// outright when this is true, as its own defense-in-depth against a
+	// personal row ever reaching real local command execution -- see its
+	// own doc comment -- independent of (not a replacement for) the
+	// filtering ChatService.Chat already does before a personal server
+	// ever reaches Open at all.
+	SelfService bool
 }
 
 // MCPTool is one tool discovered from an active MCPServer's own tools/list

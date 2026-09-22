@@ -60,7 +60,7 @@ test('renderServers renders an "Edit" link to the per-server subpage', () => {
   const { renderServers } = loadFixture();
   renderServers([baseServer()]);
   const editLink = document.querySelector('#servers-table a.text-button');
-  assert.equal(editLink.textContent, 'Edit');
+  assert.equal(editLink.getAttribute('aria-label'), 'Edit');
   assert.equal(editLink.getAttribute('href'), '/admin/mcp-servers/mcp_web');
 });
 
