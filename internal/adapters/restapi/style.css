@@ -702,7 +702,7 @@ button:focus-visible {
   transition: transform 0.18s ease;
 }
 
-.mode-switch[aria-checked="true"] .mode-switch-indicator {
+.mode-switch[aria-checked="false"] .mode-switch-indicator {
   transform: translateX(100%);
 }
 
