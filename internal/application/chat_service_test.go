@@ -1304,7 +1304,7 @@ func TestChatService_Agent_InjectsSystemPromptBetweenUserPromptAndServerPrompts(
 		{ID: "1", Name: "first", Transport: "stdio", Command: "a", Enabled: true, Prompt: "First server prompt."},
 	}}
 	agents := &fakeAgentStore{agents: []domain.Agent{
-		{ID: "researcher", Name: "Researcher", SystemPrompt: "Dig up sources.", Enabled: true},
+		{ID: "researcher", Name: "Researcher", SystemPrompt: "Dig up sources.", MCPServerIDs: []string{"1"}, Enabled: true},
 	}}
 	svc := NewChatService(endpoints, completer, servers, &fakeMCPToolProvider{}, agents, nil)
 
@@ -1444,10 +1444,14 @@ func TestChatService_Agent_ScopesActiveMCPServersToAllowedList(t *testing.T) {
 	}
 }
 
-// TestChatService_Agent_EmptyScopeAllowsEveryGlobalServer proves an agent
-// with no MCPServerIDs (the default) doesn't narrow the global catalog at
-// all -- same as no agent being active.
-func TestChatService_Agent_EmptyScopeAllowsEveryGlobalServer(t *testing.T) {
+// TestChatService_Agent_EmptyScopeOnActiveAgentAllowsNoGlobalServers proves
+// there is no "unscoped" state: an ACTIVE agent with no MCPServerIDs set
+// gets zero global servers, not every one -- see domain.Agent.MCPServerIDs'
+// own doc comment. Contrast with
+// TestChatService_NoAgentActive_AllowsEveryGlobalServer below, which proves
+// the *different* case of no agent being selected at all still allows
+// everything.
+func TestChatService_Agent_EmptyScopeOnActiveAgentAllowsNoGlobalServers(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, DefaultAgentID: "researcher"}}
 	completer := &fakeChatCompleter{answer: "answer"}
 	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
@@ -1462,8 +1466,34 @@ func TestChatService_Agent_EmptyScopeAllowsEveryGlobalServer(t *testing.T) {
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if len(provider.openedServers) != 0 {
+		t.Fatalf("expected no global servers active for an agent with an empty (unset) scope, got %+v", provider.openedServers)
+	}
+}
+
+// TestChatService_NoAgentActive_AllowsEveryGlobalServer is the essential
+// non-regression check for the "no unscoped state" change above: a turn
+// with NO agent selected at all (opts.AgentID empty AND
+// endpoint.DefaultAgentID empty) must still see every enabled global
+// server, exactly as before -- domain.Agent.AllowsServer's own
+// empty-means-block semantics must never apply when there's no agent in
+// the picture to begin with.
+func TestChatService_NoAgentActive_AllowsEveryGlobalServer(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
+	completer := &fakeChatCompleter{answer: "answer"}
+	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
+		{ID: "web", Name: "web", Transport: "stdio", Command: "a", Enabled: true},
+		{ID: "datetime", Name: "datetime", Transport: "stdio", Command: "b", Enabled: true},
+	}}
+	provider := &fakeMCPToolProvider{}
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(provider.openedServers) != 2 {
-		t.Fatalf("expected both global servers active with an unscoped agent, got %+v", provider.openedServers)
+		t.Fatalf("expected both global servers active with no agent selected at all, got %+v", provider.openedServers)
 	}
 }
 

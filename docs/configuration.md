@@ -416,7 +416,7 @@ as separate, later work.
 | `agent-name` | none, required | — | Human label for the agent -- shown in the admin UI and any agent picker. |
 | `agent-description` | empty | — | Never sent to the model as part of this agent's own conversation -- read by a multi-agent planner deciding which agent fits a sub-question, and shown to a person picking an agent. Describes what the agent is good for, not how it's built. |
 | `agent-system-prompt` | empty (none injected) | — | This IS what the agent sees -- injected as its own leading system message on every turn it's active for, after the endpoint's persistent system prompt and any per-user custom prompt. |
-| MCP servers checkbox list | every box unchecked (no scope) | — | Restricts which of the globally configured MCP servers (above) this agent may use tools from; every box unchecked means every globally active server is available. Never affects a user's own per-user MCP servers. |
+| MCP servers checkbox list | every box unchecked (no global tools) | — | Restricts which of the globally configured MCP servers (above) this agent may use tools from. There is no "unscoped" state: every box unchecked means this agent gets no global tools at all, not every one -- check every box to allow every server. Only applied while this agent is active; a turn with no agent selected still gets every globally active server. Never affects a user's own per-user MCP servers. |
 | `agent-enabled` | `true` (on create) | boolean | Whether this agent can be selected/addressed at all. |
 
 ### Users (`admin_users.html` list + `admin_user.html` edit subpage)
