@@ -2788,6 +2788,70 @@ func scanMCPServer(row scanner) (domain.MCPServer, error) {
 	return s, nil
 }
 
+const userMCPServerColumns = "id, name, transport, command, args, base_url, api_key, enabled, prompt, gated_by_web_search"
+
+// ListUserMCPServers lists userID's own configured servers, ordered by name
+// -- same convention as ListMCPServers.
+func (r *Repository) ListUserMCPServers(ctx context.Context, userID string) ([]domain.MCPServer, error) {
+	query := r.ph(`SELECT `+userMCPServerColumns+` FROM user_mcp_servers WHERE user_id = %s ORDER BY name ASC`, 1)
+	rows, err := r.db.QueryContext(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("querying user mcp servers: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.MCPServer
+	for rows.Next() {
+		s, err := scanMCPServer(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning user mcp server: %w", err)
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// CreateUserMCPServer inserts a new self-service server owned by userID.
+func (r *Repository) CreateUserMCPServer(ctx context.Context, userID string, s domain.MCPServer) error {
+	args, err := json.Marshal(s.Args)
+	if err != nil {
+		return fmt.Errorf("encoding args: %w", err)
+	}
+	insertSQL := r.ph(`INSERT INTO user_mcp_servers (user_id, `+userMCPServerColumns+`) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+	if _, err := r.db.ExecContext(ctx, insertSQL, userID, s.ID, s.Name, s.Transport, s.Command, string(args), s.BaseURL, s.APIKey, s.Enabled, s.Prompt, s.GatedByWebSearch); err != nil {
+		return fmt.Errorf("creating user mcp server: %w", err)
+	}
+	return nil
+}
+
+// UpdateUserMCPServer replaces s's editable fields for the server (userID,
+// s.ID), returning ports.ErrUserMCPServerNotFound if no such row exists --
+// scoping every write by user_id, not just id, is what keeps one user from
+// ever editing another's row even if they somehow guessed its ID.
+func (r *Repository) UpdateUserMCPServer(ctx context.Context, userID string, s domain.MCPServer) error {
+	args, err := json.Marshal(s.Args)
+	if err != nil {
+		return fmt.Errorf("encoding args: %w", err)
+	}
+	updateSQL := r.ph(`UPDATE user_mcp_servers SET name = %s, transport = %s, command = %s, args = %s, base_url = %s, api_key = %s, enabled = %s, prompt = %s, gated_by_web_search = %s WHERE user_id = %s AND id = %s`, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+	res, err := r.db.ExecContext(ctx, updateSQL, s.Name, s.Transport, s.Command, string(args), s.BaseURL, s.APIKey, s.Enabled, s.Prompt, s.GatedByWebSearch, userID, s.ID)
+	if err != nil {
+		return fmt.Errorf("updating user mcp server (%s): %w", s.ID, err)
+	}
+	return requireRowsAffected(res, s.ID, ports.ErrUserMCPServerNotFound)
+}
+
+// DeleteUserMCPServer removes the server (userID, id), returning
+// ports.ErrUserMCPServerNotFound if no such row exists.
+func (r *Repository) DeleteUserMCPServer(ctx context.Context, userID string, id string) error {
+	deleteSQL := r.ph(`DELETE FROM user_mcp_servers WHERE user_id = %s AND id = %s`, 1, 2)
+	res, err := r.db.ExecContext(ctx, deleteSQL, userID, id)
+	if err != nil {
+		return fmt.Errorf("deleting user mcp server (%s): %w", id, err)
+	}
+	return requireRowsAffected(res, id, ports.ErrUserMCPServerNotFound)
+}
+
 const agentColumns = "id, name, description, system_prompt, mcp_server_ids, enabled"
 
 // ListAgents lists every configured agent, ordered by name for a stable,

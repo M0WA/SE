@@ -687,6 +687,33 @@ type MCPServerStore interface {
 	DeleteMCPServer(ctx context.Context, id string) error
 }
 
+// ErrUserMCPServerNotFound is returned by UserMCPServerStore's Update and
+// Delete when no server with the given (userID, id) pair exists --
+// MCPServerStore's per-user sibling.
+var ErrUserMCPServerNotFound = errors.New("user mcp server not found")
+
+// UserMCPServerStore persists per-user, self-service domain.MCPServer rows
+// -- same shape as MCPServerStore, but every row is owned by (scoped to,
+// and only ever visible/editable by) one userID, and IDs only need to be
+// unique within that owner's own rows, not globally (two different users
+// may each have a server they both happen to call "web-tools"). Unlike the
+// admin-configured global catalog, these are NEVER restricted by an
+// Agent's own MCPServerIDs scope -- see domain.Agent.AllowsServer's doc
+// comment -- and ChatService.Chat enforces "http" transport only for these
+// (see its own doc comment) since a "stdio" server grants arbitrary local
+// command execution on the server host, a trust tier this store's callers
+// (any authenticated user, not just admins) must never be handed.
+type UserMCPServerStore interface {
+	ListUserMCPServers(ctx context.Context, userID string) ([]domain.MCPServer, error)
+	CreateUserMCPServer(ctx context.Context, userID string, s domain.MCPServer) error
+	// UpdateUserMCPServer returns ErrUserMCPServerNotFound if no server with
+	// (userID, s.ID) exists.
+	UpdateUserMCPServer(ctx context.Context, userID string, s domain.MCPServer) error
+	// DeleteUserMCPServer returns ErrUserMCPServerNotFound if no server with
+	// (userID, id) exists.
+	DeleteUserMCPServer(ctx context.Context, userID string, id string) error
+}
+
 // ErrAgentNotFound is returned by AgentStore's Update and Delete when no
 // agent with the given ID exists -- AgentStore's sibling of
 // ErrMCPServerNotFound above.
