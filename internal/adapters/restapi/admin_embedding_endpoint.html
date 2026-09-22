@@ -54,21 +54,21 @@
     <div class="form-row">
       <div class="label-row">
         <label for="endpoint-rate-limit">Rate limit</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Requests per second (0 = unlimited).</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Requests per second (0 = unlimited).</span></button>
       </div>
       <span class="field-wrap" data-default="Unlimited"><input id="endpoint-rate-limit" class="field" type="number" min="0" step="any"></span>
     </div>
     <div class="form-row">
       <div class="label-row">
         <label for="endpoint-chunk-size">Chunk size</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Tokens per Embed call before splitting long text into multiple chunks and combining them (0 = never split).</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Tokens per Embed call before splitting long text into multiple chunks and combining them (0 = never split).</span></button>
       </div>
       <span class="field-wrap" data-default="Never split"><input id="endpoint-chunk-size" class="field" type="number" min="0" step="1"></span>
     </div>
     <div class="form-row">
       <div class="label-row">
         <label for="endpoint-tokenize-url">Tokenize URL</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">An exact-token-count endpoint (e.g. vLLM's own <code>/tokenize</code>) for precise chunk sizing; left blank, chunk size is estimated from character count instead.</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">An exact-token-count endpoint (e.g. vLLM's own <code>/tokenize</code>) for precise chunk sizing; left blank, chunk size is estimated from character count instead.</span></button>
       </div>
       <input id="endpoint-tokenize-url" class="field" type="text" placeholder="http://localhost:8000/tokenize">
     </div>

@@ -90,7 +90,7 @@
   function requestBody() {
     return {
       seed_urls: parseLines(seedURLsEl.value),
-      max_pages: parseInt(maxPagesEl.value, 10) || 20,
+      max_pages: Number.parseInt(maxPagesEl.value, 10) || 20,
       respect_robots: respectRobotsEl.checked,
       user_agent: userAgentEl.value,
       cookie: cookieEl.value,
@@ -104,12 +104,12 @@
       follow_indexed_domains: followIndexedEl.checked,
       use_sitemap: useSitemapEl.checked,
       prioritize_unindexed: prioritizeUnindexedEl.checked,
-      fetch_timeout_seconds: parseInt(fetchTimeoutEl.value, 10) || 0,
-      min_text_length: parseInt(minTextLengthEl.value, 10) || 0,
-      crawl_delay_ms: parseInt(delayEl.value, 10) || 0,
-      max_response_kb: parseInt(maxResponseEl.value, 10) || 0,
-      interval_minutes: parseInt(intervalEl.value, 10) || 0,
-      max_runs: parseInt(maxRunsEl.value, 10) || 0,
+      fetch_timeout_seconds: Number.parseInt(fetchTimeoutEl.value, 10) || 0,
+      min_text_length: Number.parseInt(minTextLengthEl.value, 10) || 0,
+      crawl_delay_ms: Number.parseInt(delayEl.value, 10) || 0,
+      max_response_kb: Number.parseInt(maxResponseEl.value, 10) || 0,
+      interval_minutes: Number.parseInt(intervalEl.value, 10) || 0,
+      max_runs: Number.parseInt(maxRunsEl.value, 10) || 0,
       renderer: rendererEl.value,
       enabled: enabledEl.checked,
     };

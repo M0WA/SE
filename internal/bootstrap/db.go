@@ -10,9 +10,9 @@ import (
 	"fmt"
 	"os"
 
-	_ "github.com/go-sql-driver/mysql"
-	_ "github.com/jackc/pgx/v5/stdlib"
-	_ "modernc.org/sqlite"
+	_ "github.com/go-sql-driver/mysql" // registers the "mysql" database/sql driver
+	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver, used for DB_DRIVER=postgres
+	_ "modernc.org/sqlite"             // registers the "sqlite" database/sql driver, the local/CI default
 
 	"searchengine/internal/adapters/sqlrepo"
 )

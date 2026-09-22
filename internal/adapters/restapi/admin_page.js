@@ -261,7 +261,7 @@
       // gets a segment and the segments' flex sizes always sum to the
       // day's real total.
       const statusesToday = FETCH_OUTCOME_ORDER.concat(
-        Object.keys(outcomes).filter((s) => !FETCH_OUTCOME_ORDER.includes(s)).sort()
+        Object.keys(outcomes).filter((s) => !FETCH_OUTCOME_ORDER.includes(s)).sort((a, b) => a.localeCompare(b))
       );
       for (const status of statusesToday) {
         const count = outcomes[status] || 0;
@@ -270,7 +270,7 @@
         seg.className = 'stack-seg';
         seg.style.flex = String(count);
         seg.style.opacity = String(
-          Object.prototype.hasOwnProperty.call(FETCH_OUTCOME_OPACITY, status)
+          Object.hasOwn(FETCH_OUTCOME_OPACITY, status)
             ? FETCH_OUTCOME_OPACITY[status]
             : FETCH_OUTCOME_FALLBACK_OPACITY
         );

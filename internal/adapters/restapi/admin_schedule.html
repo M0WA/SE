@@ -25,7 +25,7 @@
     <div class="form-row">
       <div class="label-row">
         <label for="schedule-seed-urls">Seed URLs</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One per line.</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One per line.</span></button>
       </div>
       <textarea id="schedule-seed-urls" class="field" rows="3" required></textarea>
     </div>
@@ -42,14 +42,14 @@
           <div class="form-row">
             <div class="label-row">
               <label for="schedule-interval">Interval</label>
-              <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Minutes between runs (0 = run once).</span></span>
+              <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Minutes between runs (0 = run once).</span></button>
             </div>
             <input id="schedule-interval" class="field" type="number" min="0">
           </div>
           <div class="form-row">
             <div class="label-row">
               <label for="schedule-max-runs">Max runs</label>
-              <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">0 = unlimited.</span></span>
+              <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">0 = unlimited.</span></button>
             </div>
             <input id="schedule-max-runs" class="field" type="number" min="0">
           </div>
@@ -94,14 +94,14 @@
           <div class="form-row">
             <div class="label-row">
               <label for="schedule-allowed-domains">Allowed domains</label>
-              <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One domain per line. Always followed, even where link scope above would otherwise reject them.</span></span>
+              <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One domain per line. Always followed, even where link scope above would otherwise reject them.</span></button>
             </div>
             <textarea id="schedule-allowed-domains" class="field" rows="3"></textarea>
           </div>
           <div class="form-row">
             <div class="label-row">
               <label for="schedule-blocked-domains">Blocked domains</label>
-              <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One domain per line. Never followed, even where link scope or allowed domains above would otherwise allow them.</span></span>
+              <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One domain per line. Never followed, even where link scope or allowed domains above would otherwise allow them.</span></button>
             </div>
             <textarea id="schedule-blocked-domains" class="field" rows="3"></textarea>
           </div>

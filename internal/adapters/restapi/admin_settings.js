@@ -152,7 +152,7 @@
     const weights = {};
     embeddingSearchWeightsEl.querySelectorAll('input[data-provider]').forEach((input) => {
       if (input.disabled) return;
-      const w = parseFloat(input.value);
+      const w = Number.parseFloat(input.value);
       if (!Number.isNaN(w) && w > 0) {
         weights[input.dataset.provider] = w;
       }
@@ -221,42 +221,42 @@
   async function saveSettings() {
     const s = await postJSON('/admin/api/settings', {
       tuning: {
-        alpha: parseFloat(alphaEl.value),
-        k1: parseFloat(k1El.value),
-        b: parseFloat(bEl.value),
-        pagerank_weight: parseFloat(pageRankWeightEl.value),
+        alpha: Number.parseFloat(alphaEl.value),
+        k1: Number.parseFloat(k1El.value),
+        b: Number.parseFloat(bEl.value),
+        pagerank_weight: Number.parseFloat(pageRankWeightEl.value),
       },
       operational: {
-        title_weight: parseInt(titleWeightEl.value, 10),
-        fetch_timeout_seconds: parseInt(fetchTimeoutEl.value, 10),
+        title_weight: Number.parseInt(titleWeightEl.value, 10),
+        fetch_timeout_seconds: Number.parseInt(fetchTimeoutEl.value, 10),
         user_agent: userAgentEl.value,
-        default_max_pages: parseInt(defaultMaxPagesEl.value, 10),
-        min_text_length: parseInt(minTextLengthEl.value, 10),
-        crawl_delay_ms: parseInt(crawlDelayEl.value, 10),
-        max_response_kb: parseInt(maxResponseKBEl.value, 10),
-        max_retained_crawl_jobs: parseInt(maxRetainedCrawlJobsEl.value, 10),
-        max_concurrent_crawls: parseInt(maxConcurrentCrawlsEl.value, 10),
+        default_max_pages: Number.parseInt(defaultMaxPagesEl.value, 10),
+        min_text_length: Number.parseInt(minTextLengthEl.value, 10),
+        crawl_delay_ms: Number.parseInt(crawlDelayEl.value, 10),
+        max_response_kb: Number.parseInt(maxResponseKBEl.value, 10),
+        max_retained_crawl_jobs: Number.parseInt(maxRetainedCrawlJobsEl.value, 10),
+        max_concurrent_crawls: Number.parseInt(maxConcurrentCrawlsEl.value, 10),
         default_renderer: defaultRendererEl.value,
         link_scope: defaultLinkScopeEl.value,
         url_alias_www_enabled: urlAliasWWWEnabledEl.checked,
         content_dedup_enabled: contentDedupEnabledEl.checked,
         content_dedup_method: contentDedupMethodEl.value,
-        content_dedup_simhash_max_distance: parseInt(contentDedupSimHashMaxDistanceEl.value, 10),
-        content_dedup_interval_minutes: parseInt(contentDedupIntervalEl.value, 10),
-        default_top_k: parseInt(defaultTopKEl.value, 10),
-        semantic_candidate_pool_size: parseInt(semanticPoolSizeEl.value, 10),
+        content_dedup_simhash_max_distance: Number.parseInt(contentDedupSimHashMaxDistanceEl.value, 10),
+        content_dedup_interval_minutes: Number.parseInt(contentDedupIntervalEl.value, 10),
+        default_top_k: Number.parseInt(defaultTopKEl.value, 10),
+        semantic_candidate_pool_size: Number.parseInt(semanticPoolSizeEl.value, 10),
         ann_search_enabled: annSearchEnabledEl.checked,
         embedding_hash_enabled: embeddingHashEnabledEl.checked,
         embedding_search_weights: collectEmbeddingSearchWeights(),
-        embedding_title_weight: parseFloat(embeddingTitleWeightEl.value) || 0,
-        max_document_versions: parseInt(maxDocumentVersionsEl.value, 10),
-        db_max_open_conns: parseInt(dbMaxOpenConnsEl.value, 10),
-        db_max_idle_conns: parseInt(dbMaxIdleConnsEl.value, 10),
-        db_conn_max_lifetime_minutes: parseInt(dbConnMaxLifetimeEl.value, 10),
+        embedding_title_weight: Number.parseFloat(embeddingTitleWeightEl.value) || 0,
+        max_document_versions: Number.parseInt(maxDocumentVersionsEl.value, 10),
+        db_max_open_conns: Number.parseInt(dbMaxOpenConnsEl.value, 10),
+        db_max_idle_conns: Number.parseInt(dbMaxIdleConnsEl.value, 10),
+        db_conn_max_lifetime_minutes: Number.parseInt(dbConnMaxLifetimeEl.value, 10),
         fuzzy_match_enabled: fuzzyEnabledEl.checked,
-        fuzzy_max_edit_distance: parseInt(fuzzyMaxEditDistanceEl.value, 10),
-        pagerank_recompute_interval_minutes: parseInt(pageRankIntervalEl.value, 10),
-        session_ttl_hours: parseInt(sessionTTLEl.value, 10),
+        fuzzy_max_edit_distance: Number.parseInt(fuzzyMaxEditDistanceEl.value, 10),
+        pagerank_recompute_interval_minutes: Number.parseInt(pageRankIntervalEl.value, 10),
+        session_ttl_hours: Number.parseInt(sessionTTLEl.value, 10),
       },
     });
     applySettings(s);
@@ -304,7 +304,7 @@
     for (const line of parseLines(text)) {
       const parts = line.split(/\s+/);
       if (parts.length < 2) continue;
-      const factor = parseFloat(parts[parts.length - 1]);
+      const factor = Number.parseFloat(parts[parts.length - 1]);
       if (Number.isNaN(factor)) continue;
       out[parts.slice(0, -1).join(' ')] = factor;
     }

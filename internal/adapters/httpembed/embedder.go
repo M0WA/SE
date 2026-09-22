@@ -36,6 +36,10 @@ import (
 // short fixed-size call, so one built-in value covers every deployment.
 const requestTimeout = 30 * time.Second
 
+// bearerPrefix is the HTTP Authorization header scheme this client sends
+// e.apiKey under, on every request that carries one.
+const bearerPrefix = "Bearer "
+
 // maxResponseBytes caps how much of the HTTP response body is ever read --
 // an embedding response is normally a few KB even for a few-thousand-
 // dimensional vector, so this is purely a safety bound against a
@@ -355,7 +359,7 @@ func (e *Embedder) embedOnce(ctx context.Context, reqBody []byte) ([]float32, *h
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if e.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+e.apiKey)
+		req.Header.Set("Authorization", bearerPrefix+e.apiKey)
 	}
 
 	resp, err := e.client.Do(req)
@@ -559,7 +563,7 @@ func (e *Embedder) countTokens(ctx context.Context, text string) (int, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if e.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+e.apiKey)
+		req.Header.Set("Authorization", bearerPrefix+e.apiKey)
 	}
 
 	resp, err := e.client.Do(req)
@@ -651,7 +655,7 @@ func (e *Embedder) listModelsOnce(ctx context.Context) ([]string, *http.Response
 		return nil, nil, fmt.Errorf("httpembed: building request: %w", err)
 	}
 	if e.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+e.apiKey)
+		req.Header.Set("Authorization", bearerPrefix+e.apiKey)
 	}
 
 	resp, err := e.client.Do(req)

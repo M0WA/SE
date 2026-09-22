@@ -6,7 +6,7 @@
   // small local duplicates of the handful of helpers it needs, same
   // convention account.js already established for getJSON/patchJSON.
   function clear(el) {
-    while (el.firstChild) el.removeChild(el.firstChild);
+    while (el.firstChild) el.firstChild.remove();
   }
 
   async function getJSON(url) {

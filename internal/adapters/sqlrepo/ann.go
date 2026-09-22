@@ -247,11 +247,11 @@ func vectorColumnType(ctx context.Context, q queryRower, provider string) (dims 
 	// and the integer out from around the parens rather than assuming any
 	// particular prefix, so this doesn't silently misparse if a future
 	// pgvector version changes format_type's exact spelling.
-	open, close := strings.IndexByte(formatted, '('), strings.LastIndexByte(formatted, ')')
-	if open < 0 || close <= open {
+	open, closeParen := strings.IndexByte(formatted, '('), strings.LastIndexByte(formatted, ')')
+	if open < 0 || closeParen <= open {
 		return 0, "", false, fmt.Errorf("unexpected pgvector column type format %q", formatted)
 	}
-	dims, err = strconv.Atoi(formatted[open+1 : close])
+	dims, err = strconv.Atoi(formatted[open+1 : closeParen])
 	if err != nil {
 		return 0, "", false, fmt.Errorf("parsing pgvector column dimensions from %q: %w", formatted, err)
 	}

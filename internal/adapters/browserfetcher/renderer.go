@@ -101,17 +101,7 @@ func (r *Renderer) Render(ctx context.Context, url string, opts ports.FetchOptio
 		return "", err
 	}
 
-	contextOpts := playwright.BrowserNewContextOptions{}
-	if opts.UserAgent != "" {
-		contextOpts.UserAgent = playwright.String(opts.UserAgent)
-	}
-	if opts.BasicAuthUser != "" || opts.BasicAuthPass != "" {
-		contextOpts.HttpCredentials = &playwright.HttpCredentials{
-			Username: opts.BasicAuthUser,
-			Password: opts.BasicAuthPass,
-		}
-	}
-	bctx, err := browser.NewContext(contextOpts)
+	bctx, err := browser.NewContext(buildContextOptions(opts))
 	if err != nil {
 		return "", fmt.Errorf("creating browser context: %w", err)
 	}
@@ -127,14 +117,7 @@ func (r *Renderer) Render(ctx context.Context, url string, opts ports.FetchOptio
 	if allowURL == nil {
 		allowURL = netguard.URLAllowed
 	}
-	if err := bctx.Route("**/*", func(route playwright.Route) {
-		reqURL := route.Request().URL()
-		if strings.HasPrefix(reqURL, "data:") || allowURL(reqURL) {
-			_ = route.Continue()
-			return
-		}
-		_ = route.Abort("blockedbyclient")
-	}); err != nil {
+	if err := bctx.Route("**/*", ssrfRouteHandler(allowURL)); err != nil {
 		return "", fmt.Errorf("installing SSRF request guard: %w", err)
 	}
 
@@ -197,6 +180,40 @@ func (r *Renderer) Render(ctx context.Context, url string, opts ports.FetchOptio
 			html = html[:opts.MaxResponseBytes]
 		}
 		return html, nil
+	}
+}
+
+// buildContextOptions maps FetchOptions' identity knobs (user agent, basic
+// auth) onto a fresh browser context's options -- pulled out of Render so
+// this straightforward field mapping doesn't add to Render's own cognitive
+// complexity.
+func buildContextOptions(opts ports.FetchOptions) playwright.BrowserNewContextOptions {
+	contextOpts := playwright.BrowserNewContextOptions{}
+	if opts.UserAgent != "" {
+		contextOpts.UserAgent = playwright.String(opts.UserAgent)
+	}
+	if opts.BasicAuthUser != "" || opts.BasicAuthPass != "" {
+		contextOpts.HttpCredentials = &playwright.HttpCredentials{
+			Username: opts.BasicAuthUser,
+			Password: opts.BasicAuthPass,
+		}
+	}
+	return contextOpts
+}
+
+// ssrfRouteHandler returns the playwright.Route callback Render installs on
+// every browser context: blocks any request (navigation or subresource)
+// allowURL rejects, same SSRF guard described on Render's own Route call --
+// pulled out as its own function so the closure's branching doesn't add to
+// Render's cognitive complexity.
+func ssrfRouteHandler(allowURL func(string) bool) func(playwright.Route) {
+	return func(route playwright.Route) {
+		reqURL := route.Request().URL()
+		if strings.HasPrefix(reqURL, "data:") || allowURL(reqURL) {
+			_ = route.Continue()
+			return
+		}
+		_ = route.Abort("blockedbyclient")
 	}
 }
 

@@ -21,7 +21,7 @@
     <h2>Schedules</h2>
     <p class="lede" style="margin: 0 0 1rem;">Every crawl set up on this instance, one-off or repeating, with its options saved for reuse. Uncheck one to pause it; check a finished one-off crawl again to re-run it once more.</p>
     <div id="crawls-status" class="panel-status"></div>
-    <input id="crawls-filter" class="field" type="text" placeholder="Filter schedules (regex) — matches seed" hidden>
+    <input id="crawls-filter" class="field" type="text" placeholder="Filter schedules (regex) — matches seed" aria-label="Filter schedules" hidden>
     <div id="crawls-filter-error" class="error-text"></div>
     <div id="crawls-table"></div>
   </section>
@@ -33,7 +33,7 @@
     </div>
     <p class="lede" style="margin: 0 0 1rem;">Every crawl triggered on this instance, most recent first. Only so many run at once (see Settings); the rest wait their turn.</p>
     <div id="jobs-status" class="panel-status"></div>
-    <input id="jobs-filter" class="field" type="text" placeholder="Filter jobs (regex) — matches seed or status" hidden>
+    <input id="jobs-filter" class="field" type="text" placeholder="Filter jobs (regex) — matches seed or status" aria-label="Filter jobs" hidden>
     <div id="jobs-filter-error" class="error-text"></div>
     <div id="jobs-table"></div>
   </section>
@@ -42,7 +42,7 @@
     <h2 id="job-detail-heading" hidden>Job detail</h2>
     <div id="job-detail-summary"></div>
     <div id="job-detail-options"></div>
-    <input id="job-detail-filter" class="field" type="text" placeholder="Filter pages (regex) — matches URL, status, or title" hidden>
+    <input id="job-detail-filter" class="field" type="text" placeholder="Filter pages (regex) — matches URL, status, or title" aria-label="Filter pages" hidden>
     <div id="job-detail-filter-error" class="error-text"></div>
     <div id="job-detail-table" class="table-scroll"></div>
     <div id="job-detail-pager" class="pager" hidden>

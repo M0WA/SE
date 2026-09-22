@@ -21,7 +21,7 @@
   const jobDetailNextBtn = document.getElementById('job-detail-next');
   const jobDetailPageInfoEl = document.getElementById('job-detail-page-info');
 
-  const ACTIVE_STATUSES = ['queued', 'running'];
+  const ACTIVE_STATUSES = new Set(['queued', 'running']);
   const JOB_DETAIL_PAGE_SIZE = 50;
   let selectedJobID = null;
   let pollTimer = null;
@@ -125,7 +125,7 @@
     setIconLabel(viewBtn, 'view', 'View');
     viewBtn.addEventListener('click', () => loadJobDetail(job.id));
     td.appendChild(viewBtn);
-    if (ACTIVE_STATUSES.includes(job.status)) {
+    if (ACTIVE_STATUSES.has(job.status)) {
       const cancelBtn = document.createElement('button');
       cancelBtn.type = 'button';
       cancelBtn.className = 'text-button';
@@ -192,10 +192,10 @@
       updateJobSpeeds(jobs);
       allJobs = jobs;
       renderJobs(jobs);
-      if (selectedJobID && jobs.some((j) => j.id === selectedJobID && ACTIVE_STATUSES.includes(j.status))) {
+      if (selectedJobID && jobs.some((j) => j.id === selectedJobID && ACTIVE_STATUSES.has(j.status))) {
         loadJobDetail(selectedJobID);
       }
-      if (jobs.some((j) => ACTIVE_STATUSES.includes(j.status)) || Date.now() < awaitingNewJobUntil) {
+      if (jobs.some((j) => ACTIVE_STATUSES.has(j.status)) || Date.now() < awaitingNewJobUntil) {
         scheduleNextPoll();
       }
     } catch (err) {
@@ -298,7 +298,11 @@
       th.classList.add('sortable-th');
       th.tabIndex = 0;
       const active = jobDetailSortBy === col.key;
-      th.textContent = col.label + (active ? (jobDetailSortDir === 'asc' ? ' ▲' : ' ▼') : '');
+      let sortSuffix = '';
+      if (active) {
+        sortSuffix = jobDetailSortDir === 'asc' ? ' ▲' : ' ▼';
+      }
+      th.textContent = col.label + sortSuffix;
       const activate = () => {
         if (jobDetailSortBy === col.key) {
           jobDetailSortDir = jobDetailSortDir === 'asc' ? 'desc' : 'asc';
@@ -322,7 +326,7 @@
     for (const p of pages) {
       const tr = document.createElement('tr');
       tr.appendChild(urlCell(p.url));
-      tr.appendChild(textCell(capitalize(p.status).replace(/_/g, ' ')));
+      tr.appendChild(textCell(capitalize(p.status).replaceAll('_', ' ')));
       tr.appendChild(textCell(p.title || ''));
       tr.appendChild(textCell(p.doc_length ? String(p.doc_length) : '—', { num: true }));
       tr.appendChild(textCell(p.links_found ? String(p.links_found) : '—', { num: true }));

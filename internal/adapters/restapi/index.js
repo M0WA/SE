@@ -42,7 +42,7 @@
   let nextTabId = 1;
   function makeTab(overrides) {
     const id = nextTabId++;
-    return Object.assign({ id: id, title: 'Chat ' + id, history: [], tokenUsage: null, agentId: '' }, overrides);
+    return { id: id, title: 'Chat ' + id, history: [], tokenUsage: null, agentId: '', ...overrides };
   }
   const tabs = [makeTab()];
   let activeTabId = tabs[0].id;
@@ -232,7 +232,7 @@
   // each result) -- the displayed query itself is never silently rewritten,
   // this just says which term(s) were substituted for scoring.
   function renderCorrectionNote(list) {
-    const corrected = (list[0] && list[0].corrected_terms) || [];
+    const corrected = list[0]?.corrected_terms || [];
     if (corrected.length === 0) {
       correctionNote.hidden = true;
       correctionNote.textContent = '';
@@ -245,7 +245,7 @@
   }
 
   function clear(el) {
-    while (el.firstChild) el.removeChild(el.firstChild);
+    while (el.firstChild) el.firstChild.remove();
   }
 
   function scoreRow(label, value) {
@@ -334,6 +334,10 @@
       const data = await resp.json();
       renderResults(query, data.results || []);
     } catch (err) {
+      // Ignored: any failure here (network error, refused connection,
+      // malformed JSON) is reported to the user the same way regardless of
+      // what err actually is -- there's no more specific message worth
+      // showing than "could not reach the server."
       status.textContent = 'Search failed: could not reach the server.';
     }
   }
@@ -345,7 +349,7 @@
   // with already-inert text and the specific tags this function itself
   // introduces.
   function escapeHTML(text) {
-    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
   }
 
   // renderInline applies span-level markdown -- code spans first (each
@@ -359,7 +363,7 @@
       codeSpans.push(code);
       return 'SPAN' + (codeSpans.length - 1) + 'END';
     });
-    text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    text = text.replace(/\[([^\][]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
     text = text.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
     text = text.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
     text = text.replace(/SPAN(\d+)END/g, (_, i) => '<code>' + codeSpans[Number(i)] + '</code>');
@@ -377,7 +381,16 @@
   // instead of a code block.
   function renderMarkdown(raw) {
     const codeBlocks = [];
-    const text = escapeHTML(raw).replace(/```[a-zA-Z0-9]*\n?([\s\S]*?)```/g, (_, code) => {
+    // `(?=([a-zA-Z0-9]*))\1` matches the same thing a bare `[a-zA-Z0-9]*`
+    // would (JS lacks atomic groups/possessive quantifiers), but pins its
+    // length instead of leaving it free for the engine to re-try shorter --
+    // on unterminated input (no closing fence anywhere) a plain
+    // `[a-zA-Z0-9]*` immediately followed by `[\s\S]*?` lets the two
+    // overlap, and re-trying every split between them against every ``` in
+    // the string is quadratic in the model's own answer length. Since the
+    // language tag can never itself contain a backtick, pinning it changes
+    // no match this regex would otherwise have found.
+    const text = escapeHTML(raw).replace(/```(?=([a-zA-Z0-9]*))\1\n?([\s\S]*?)```/g, (_, _tag, code) => {
       codeBlocks.push(code.replace(/\n$/, ''));
       return '\nBLOCKFENCE' + (codeBlocks.length - 1) + '\n';
     });
@@ -388,7 +401,7 @@
 
     function flushPara() {
       if (para.length === 0) return;
-      html.push('<p>' + renderInline(para.join('\n')).replace(/\n/g, '<br>') + '</p>');
+      html.push('<p>' + renderInline(para.join('\n')).replaceAll('\n', '<br>') + '</p>');
       para = [];
     }
     function flushList() {
@@ -418,11 +431,11 @@
         html.push('<h' + level + '>' + renderInline(headingMatch[2]) + '</h' + level + '>');
       } else if (ulMatch) {
         flushPara();
-        if (!list || list.tag !== 'ul') { flushList(); list = { tag: 'ul', items: [] }; }
+        if (list?.tag !== 'ul') { flushList(); list = { tag: 'ul', items: [] }; }
         list.items.push(ulMatch[1]);
       } else if (olMatch) {
         flushPara();
-        if (!list || list.tag !== 'ol') { flushList(); list = { tag: 'ol', items: [] }; }
+        if (list?.tag !== 'ol') { flushList(); list = { tag: 'ol', items: [] }; }
         list.items.push(olMatch[1]);
       } else {
         flushList();
@@ -535,7 +548,7 @@
           const summary = document.createElement('summary');
           summary.textContent = tr.tool_name;
           details.appendChild(summary);
-          if (parsed && parsed.id && parsed.filename) {
+          if (parsed?.id && parsed?.filename) {
             const target = document.createElement('div');
             target.className = 'chat-hook-target';
             const link = document.createElement('a');
@@ -733,7 +746,7 @@
     const source = activeTab();
     const tab = makeTab({
       title: source.title + ' (fork)',
-      history: source.history.map((m) => Object.assign({}, m)),
+      history: source.history.map((m) => ({ ...m })),
       tokenUsage: source.tokenUsage,
       agentId: source.agentId,
     });
@@ -799,7 +812,7 @@
     a.download = (tab.title || 'chat').replace(/[^a-z0-9-_]+/gi, '_') + '.json';
     document.body.appendChild(a);
     a.click();
-    document.body.removeChild(a);
+    a.remove();
     URL.revokeObjectURL(url);
   }
 
@@ -984,6 +997,10 @@
         chatStatus.textContent = '';
       }
     } catch (err) {
+      // err isn't inspected: this is a network-level failure (fetch itself
+      // rejected, e.g. offline), so there's no server response text to
+      // include the way the !resp.ok branch above does -- a generic message
+      // is all there is to show.
       if (tab.id === activeTabId) chatStatus.textContent = 'Chat failed: could not reach the server.';
     }
   }

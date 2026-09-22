@@ -20,7 +20,7 @@
   <section class="panel">
     <h2>Domain/URL Search</h2>
     <form id="domain-search-form" class="crawl-form" style="margin-bottom: 0.5rem;">
-      <input id="domain-q" class="field" type="text" placeholder="Search domains or URLs (regex)…" autofocus autocomplete="off">
+      <input id="domain-q" class="field" type="text" placeholder="Search domains or URLs (regex)…" aria-label="Search domains or URLs" autocomplete="off">
     </form>
     <div id="domain-search-error" class="panel-status"></div>
     <div id="domain-results"></div>
@@ -30,7 +30,7 @@
   <section class="panel">
     <h2>Vocabulary</h2>
     <form id="vocab-search-form" class="vocab-controls">
-      <input id="vocab-q" class="field" type="text" placeholder="Filter vocabulary (substring)…" autocomplete="off">
+      <input id="vocab-q" class="field" type="text" placeholder="Filter vocabulary (substring)…" aria-label="Filter vocabulary" autocomplete="off">
       <label for="vocab-page-size" class="vocab-page-size-label">Per page
         <input id="vocab-page-size" class="field vocab-page-size" type="number" min="1" step="1" value="20">
       </label>

@@ -109,7 +109,7 @@ jobs:
           # sandbox dance above, so this needs no extra setup step.
           SE_DOCKER_TESTS: "1"
       - name: npm ci
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: JS unit tests (with coverage)
         run: npm run test:coverage
 

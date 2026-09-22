@@ -1103,12 +1103,12 @@ func (r *Repository) CorpusStats(ctx context.Context) (int, float64, error) {
 // value across the whole corpus, for the admin PageRank debug page. All
 // three are 0 for an empty corpus (MIN/MAX/AVG over zero rows are all
 // NULL, which the COALESCE turns into 0).
-func (r *Repository) PageRankDistribution(ctx context.Context) (min, max, avg float64, err error) {
+func (r *Repository) PageRankDistribution(ctx context.Context) (minRank, maxRank, avg float64, err error) {
 	query := `SELECT COALESCE(MIN(pagerank), 0), COALESCE(MAX(pagerank), 0), COALESCE(AVG(pagerank), 0) FROM documents`
-	if err := r.db.QueryRowContext(ctx, query).Scan(&min, &max, &avg); err != nil {
+	if err := r.db.QueryRowContext(ctx, query).Scan(&minRank, &maxRank, &avg); err != nil {
 		return 0, 0, 0, fmt.Errorf("querying pagerank distribution: %w", err)
 	}
-	return min, max, avg, nil
+	return minRank, maxRank, avg, nil
 }
 
 // diagnosticsTables lists every table the schema creates (see each

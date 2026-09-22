@@ -32,7 +32,7 @@
     clear(chatTokenUsageEl);
     const globalTokens = estimateTokensClient(chatSystemPromptEl.value);
     const toolTokens = enabledServerPrompts.reduce((sum, p) => sum + estimateTokensClient(p), 0);
-    const maxTokens = parseInt(chatMaxContextTokensEl.value, 10) || 0;
+    const maxTokens = Number.parseInt(chatMaxContextTokensEl.value, 10) || 0;
     const segments = [
       { label: 'Global prompt', value: globalTokens, color: 'var(--chart-1)' },
       { label: 'Active MCP server prompts', value: toolTokens, color: 'var(--chart-2)' },
@@ -100,6 +100,8 @@
       const servers = await getJSON('/admin/api/mcp-servers');
       enabledServerPrompts = servers.filter((s) => s.enabled && s.prompt).map((s) => s.prompt);
     } catch (err) {
+      // Best-effort, per this function's doc comment above -- leave the
+      // server-prompt slice at 0 rather than surfacing the error.
       enabledServerPrompts = [];
     }
   }
@@ -136,10 +138,10 @@
         model: chatModelEl.value,
         enabled: chatEnabledEl.checked,
         system_prompt: chatSystemPromptEl.value,
-        max_context_tokens: parseInt(chatMaxContextTokensEl.value, 10) || 0,
+        max_context_tokens: Number.parseInt(chatMaxContextTokensEl.value, 10) || 0,
         web_search_enabled: chatWebSearchEnabledEl.checked,
         web_search_base_url: chatWebSearchBaseURLEl.value,
-        web_search_result_count: parseInt(chatWebSearchResultCountEl.value, 10) || 0,
+        web_search_result_count: Number.parseInt(chatWebSearchResultCountEl.value, 10) || 0,
         default_agent_id: chatDefaultAgentEl.value,
       });
       chatSettingsStatusEl.style.color = 'var(--ink-muted)';

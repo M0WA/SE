@@ -31,23 +31,23 @@
     <div class="form-row">
       <div class="label-row">
         <label for="agent-description">Description</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Never sent to the model as part of this agent's own conversation -- it's what a multi-agent planner reads to decide when to use this agent, and what a person sees when picking an agent to talk to. Describe what this agent is good for, not how it's built.</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Never sent to the model as part of this agent's own conversation -- it's what a multi-agent planner reads to decide when to use this agent, and what a person sees when picking an agent to talk to. Describe what this agent is good for, not how it's built.</span></button>
       </div>
       <textarea id="agent-description" class="field" rows="3" placeholder="Verifies claims against sources before including them"></textarea>
     </div>
     <div class="form-row">
       <div class="label-row">
         <label for="agent-system-prompt">System prompt</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">This IS what the agent sees -- injected as its own leading system message on every turn it's active for, after the endpoint's persistent system prompt (Settings -> Chat) and any per-user custom prompt. This is where the specialization actually lives.</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">This IS what the agent sees -- injected as its own leading system message on every turn it's active for, after the endpoint's persistent system prompt (Settings -> Chat) and any per-user custom prompt. This is where the specialization actually lives.</span></button>
       </div>
       <textarea id="agent-system-prompt" class="field" rows="16"></textarea>
     </div>
     <div class="form-row">
       <div class="label-row">
-        <label>MCP servers</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Restricts which of the globally configured MCP servers (Settings -> Chat -> MCP servers) this agent may use tools from. There is no "unscoped" option: leaving every box unchecked gives this agent NO global tools at all -- check every box to allow every one instead. This never affects a user's own personal MCP servers, which stay available to every agent regardless.</span></span>
+        <span id="agent-mcp-servers-label" style="display:block; margin:0; font-size:0.92rem; font-weight:400; color:var(--ink);">MCP servers</span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Restricts which of the globally configured MCP servers (Settings -> Chat -> MCP servers) this agent may use tools from. There is no "unscoped" option: leaving every box unchecked gives this agent NO global tools at all -- check every box to allow every one instead. This never affects a user's own personal MCP servers, which stay available to every agent regardless.</span></button>
       </div>
-      <div id="agent-mcp-servers-list"></div>
+      <div id="agent-mcp-servers-list" role="group" aria-labelledby="agent-mcp-servers-label"></div>
     </div>
     <div class="form-row form-row-check">
       <label for="agent-enabled">

@@ -19,11 +19,31 @@ import (
 
 const defaultDocumentListLimit = 100
 
+// Response-body literals repeated across many independent handlers --
+// pulled out to named constants (rather than left as inline string
+// literals) purely to satisfy the "don't duplicate this literal N times"
+// lint rule; each handler's meaning is unchanged.
+const (
+	msgMethodNotAllowed          = "method not allowed"
+	contentTypeHTML              = "text/html; charset=utf-8"
+	msgNameMustNotBeEmpty        = "name must not be empty"
+	msgAgentNotFound             = "agent not found"
+	configNameMCPServers         = "mcp servers"
+	msgMCPServerNotFound         = "mcp server not found"
+	configNameAdminDiagnostics   = "admin diagnostics"
+	configNameScheduledCrawls    = "scheduled crawls"
+	msgScheduledCrawlNotFound    = "scheduled crawl not found"
+	configNameCrawlJobs          = "crawl jobs"
+	configNameContentDedup       = "content dedup"
+	configNameEmbeddingEndpoints = "embedding endpoints"
+	msgEmbeddingEndpointNotFound = "embedding endpoint not found"
+)
+
 // requireMethod writes 405 and reports false if the request method isn't
 // the one this endpoint accepts.
 func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 	if r.Method != method {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, msgMethodNotAllowed, http.StatusMethodNotAllowed)
 		return false
 	}
 	return true
@@ -34,7 +54,7 @@ func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 // single-method API endpoint.
 func requireGetOrHead(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, msgMethodNotAllowed, http.StatusMethodNotAllowed)
 		return false
 	}
 	return true
@@ -72,11 +92,11 @@ func respondOrNotFound(w http.ResponseWriter, err, notFound error, notFoundMsg s
 // non-empty newVal is encrypted and used, an empty newVal with clear set
 // removes the stored key, and an empty newVal with clear unset leaves
 // existing untouched.
-func (h *Handler) resolveUpdatedAPIKey(existing, newVal string, clear bool) string {
+func (h *Handler) resolveUpdatedAPIKey(existing, newVal string, clearFlag bool) string {
 	if newVal != "" {
 		return h.encryptAPIKey(newVal)
 	}
-	if clear {
+	if clearFlag {
 		return ""
 	}
 	return existing
@@ -139,18 +159,18 @@ func intQueryParam(r *http.Request, name string, def int, positiveOnly bool) int
 }
 
 func (h *Handler) handleAdminPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminHTML)
+	serveStatic(w, r, contentTypeHTML, adminHTML)
 }
 
 func (h *Handler) handleAdminDocumentsPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminDocumentsHTML)
+	serveStatic(w, r, contentTypeHTML, adminDocumentsHTML)
 }
 
 // handleAdminDomainPage serves the per-domain subpage template; the
 // domain name in the path is read client-side (JS) to fetch that
 // domain's documents, so the same static page works for every host.
 func (h *Handler) handleAdminDomainPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminDomainHTML)
+	serveStatic(w, r, contentTypeHTML, adminDomainHTML)
 }
 
 // handleAdminVocabularyTermPage serves the vocabulary term-detail subpage
@@ -158,47 +178,47 @@ func (h *Handler) handleAdminDomainPage(w http.ResponseWriter, r *http.Request) 
 // from the page's own URL querystring, so the same static page works for
 // every term.
 func (h *Handler) handleAdminVocabularyTermPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminVocabularyTermHTML)
+	serveStatic(w, r, contentTypeHTML, adminVocabularyTermHTML)
 }
 
 func (h *Handler) handleAdminSettingsPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminSettingsHTML)
+	serveStatic(w, r, contentTypeHTML, adminSettingsHTML)
 }
 
 func (h *Handler) handleAdminChatSettingsPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminChatSettingsHTML)
+	serveStatic(w, r, contentTypeHTML, adminChatSettingsHTML)
 }
 
 func (h *Handler) handleAdminMCPServersPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminMCPServersHTML)
+	serveStatic(w, r, contentTypeHTML, adminMCPServersHTML)
 }
 
 func (h *Handler) handleAdminMCPServerPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminMCPServerHTML)
+	serveStatic(w, r, contentTypeHTML, adminMCPServerHTML)
 }
 
 func (h *Handler) handleAdminAgentsPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminAgentsHTML)
+	serveStatic(w, r, contentTypeHTML, adminAgentsHTML)
 }
 
 func (h *Handler) handleAdminAgentPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminAgentHTML)
+	serveStatic(w, r, contentTypeHTML, adminAgentHTML)
 }
 
 func (h *Handler) handleAdminUsersPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminUsersHTML)
+	serveStatic(w, r, contentTypeHTML, adminUsersHTML)
 }
 
 func (h *Handler) handleAdminUserPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminUserHTML)
+	serveStatic(w, r, contentTypeHTML, adminUserHTML)
 }
 
 func (h *Handler) handleAdminJobsPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminJobsHTML)
+	serveStatic(w, r, contentTypeHTML, adminJobsHTML)
 }
 
 func (h *Handler) handleAdminSearchPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminSearchHTML)
+	serveStatic(w, r, contentTypeHTML, adminSearchHTML)
 }
 
 // handleAdminSearchResultPage serves the per-result score-breakdown
@@ -207,11 +227,11 @@ func (h *Handler) handleAdminSearchPage(w http.ResponseWriter, r *http.Request) 
 // against that search's own candidate batch -- there's no way to
 // reproduce it except by recomputing that batch.
 func (h *Handler) handleAdminSearchResultPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminSearchResultHTML)
+	serveStatic(w, r, contentTypeHTML, adminSearchResultHTML)
 }
 
 func (h *Handler) handleAdminCrawlPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", crawlHTML)
+	serveStatic(w, r, contentTypeHTML, crawlHTML)
 }
 
 type adminStatsResponse struct {
@@ -221,7 +241,7 @@ type adminStatsResponse struct {
 }
 
 func (h *Handler) handleAdminStats(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
 	}
 	totalDocs, avgDocLen, err := h.admin.CorpusStats(r.Context())
@@ -272,7 +292,7 @@ func vocabularySortParam(r *http.Request, name, def string, valid ...string) str
 }
 
 func (h *Handler) handleAdminVocabulary(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
 	}
 	limit := intQueryParam(r, "limit", defaultVocabularyPageSize, true)
@@ -312,7 +332,7 @@ type adminDocument struct {
 // domain via ?domain= (used by the per-domain admin subpage) -- without
 // that filter it's the whole corpus, still capped at limit.
 func (h *Handler) handleAdminDocuments(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
 	}
 	limit := intQueryParam(r, "limit", defaultDocumentListLimit, true)
@@ -346,7 +366,7 @@ type adminDeleteDomainResponse struct {
 // background goroutine (context.Background(), surviving the admin
 // navigating away) and returns 202 immediately.
 func (h *Handler) handleAdminDeleteDomainDocuments(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+	if !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
 	}
 	domainName := r.URL.Query().Get("domain")
@@ -393,7 +413,7 @@ func toAdminDomainSummary(d domain.DomainSummary) adminDomainSummary {
 // empty or missing q returns an empty list on purpose, so domains are
 // discoverable by name rather than dumped in full by default.
 func (h *Handler) handleAdminSearchDomains(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
 	}
 	limit := intQueryParam(r, "limit", defaultDomainSearchLimit, true)
@@ -435,7 +455,7 @@ type adminDocumentsOverview struct {
 // panels. Registered as "GET /admin/api/documents/overview", so the
 // method is already guaranteed -- no separate check needed here.
 func (h *Handler) handleAdminDocumentsOverview(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+	if !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
 	}
 	overview, err := h.admin.DocumentsOverview(r.Context(), defaultOverviewTopDomains)
@@ -471,7 +491,7 @@ type adminDocumentVersion struct {
 // versions (an empty list just means it's never been re-crawled with
 // different content, not an error).
 func (h *Handler) handleAdminDocumentVersions(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+	if !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
 	}
 	versions, err := h.admin.DocumentVersions(r.Context(), r.PathValue("id"))
@@ -491,7 +511,7 @@ func (h *Handler) handleAdminDocumentVersions(w http.ResponseWriter, r *http.Req
 // handler with an empty {id} (a bare or double-slash path either 404s or
 // redirects before reaching here), so no separate empty-id check is needed.
 func (h *Handler) handleAdminDeleteDocument(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+	if !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
 	}
 	err := h.admin.DeleteDocument(r.Context(), r.PathValue("id"))
@@ -525,7 +545,7 @@ const postingsSnippetMaxLen = 200
 const defaultPostingsLimit = 500
 
 func (h *Handler) handleAdminPostings(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
 	}
 	term := r.URL.Query().Get("term")
@@ -1000,7 +1020,7 @@ func toEmbeddingEndpointResponse(e domain.EmbeddingHTTPEndpoint) embeddingEndpoi
 
 func validateEmbeddingEndpointRequest(w http.ResponseWriter, req embeddingEndpointRequest) bool {
 	if req.Name == "" {
-		http.Error(w, "name must not be empty", http.StatusBadRequest)
+		http.Error(w, msgNameMustNotBeEmpty, http.StatusBadRequest)
 		return false
 	}
 	if req.BaseURL == "" {
@@ -1067,7 +1087,7 @@ func (h *Handler) decryptAPIKey(apiKey string) string {
 // from its name, deduped against every existing ID plus the reserved
 // "hash" (the built-in provider's own ID).
 func (h *Handler) handleAdminEmbeddingEndpoints(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.embeddingEndpoints != nil, "embedding endpoints") {
+	if !requireConfigured(w, h.embeddingEndpoints != nil, configNameEmbeddingEndpoints) {
 		return
 	}
 	switch r.Method {
@@ -1105,16 +1125,16 @@ func (h *Handler) handleAdminEmbeddingEndpoints(w http.ResponseWriter, r *http.R
 		}
 		writeJSON(w, http.StatusCreated, toEmbeddingEndpointResponse(e))
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, msgMethodNotAllowed, http.StatusMethodNotAllowed)
 	}
 }
 
 func (h *Handler) handleAdminGetEmbeddingEndpoint(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.embeddingEndpoints != nil, "embedding endpoints") {
+	if !requireConfigured(w, h.embeddingEndpoints != nil, configNameEmbeddingEndpoints) {
 		return
 	}
 	e, err := h.embeddingEndpoints.GetEmbeddingEndpoint(r.Context(), r.PathValue("id"))
-	respondOrNotFound(w, err, ports.ErrEmbeddingEndpointNotFound, "embedding endpoint not found", toEmbeddingEndpointResponse(e))
+	respondOrNotFound(w, err, ports.ErrEmbeddingEndpointNotFound, msgEmbeddingEndpointNotFound, toEmbeddingEndpointResponse(e))
 }
 
 // handleAdminUpdateEmbeddingEndpoint replaces an endpoint's editable
@@ -1123,7 +1143,7 @@ func (h *Handler) handleAdminGetEmbeddingEndpoint(w http.ResponseWriter, r *http
 // it" -- req.ClearAPIKey removes it explicitly. ID is never editable
 // once created (it's baked into document_embeddings.provider and ANN names).
 func (h *Handler) handleAdminUpdateEmbeddingEndpoint(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.embeddingEndpoints != nil, "embedding endpoints") {
+	if !requireConfigured(w, h.embeddingEndpoints != nil, configNameEmbeddingEndpoints) {
 		return
 	}
 	req, ok := decodeJSON[embeddingEndpointRequest](w, r)
@@ -1136,7 +1156,7 @@ func (h *Handler) handleAdminUpdateEmbeddingEndpoint(w http.ResponseWriter, r *h
 	id := r.PathValue("id")
 	existing, err := h.embeddingEndpoints.GetEmbeddingEndpoint(r.Context(), id)
 	if err != nil {
-		respondOrNotFound(w, err, ports.ErrEmbeddingEndpointNotFound, "embedding endpoint not found", nil)
+		respondOrNotFound(w, err, ports.ErrEmbeddingEndpointNotFound, msgEmbeddingEndpointNotFound, nil)
 		return
 	}
 	apiKey := h.resolveUpdatedAPIKey(existing.APIKey, req.APIKey, req.ClearAPIKey)
@@ -1147,15 +1167,15 @@ func (h *Handler) handleAdminUpdateEmbeddingEndpoint(w http.ResponseWriter, r *h
 		CreatedAt: existing.CreatedAt,
 	}
 	err = h.embeddingEndpoints.UpdateEmbeddingEndpoint(r.Context(), e)
-	respondOrNotFound(w, err, ports.ErrEmbeddingEndpointNotFound, "embedding endpoint not found", toEmbeddingEndpointResponse(e))
+	respondOrNotFound(w, err, ports.ErrEmbeddingEndpointNotFound, msgEmbeddingEndpointNotFound, toEmbeddingEndpointResponse(e))
 }
 
 func (h *Handler) handleAdminDeleteEmbeddingEndpoint(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.embeddingEndpoints != nil, "embedding endpoints") {
+	if !requireConfigured(w, h.embeddingEndpoints != nil, configNameEmbeddingEndpoints) {
 		return
 	}
 	err := h.embeddingEndpoints.DeleteEmbeddingEndpoint(r.Context(), r.PathValue("id"))
-	respondOrNotFound(w, err, ports.ErrEmbeddingEndpointNotFound, "embedding endpoint not found", map[string]bool{"ok": true})
+	respondOrNotFound(w, err, ports.ErrEmbeddingEndpointNotFound, msgEmbeddingEndpointNotFound, map[string]bool{"ok": true})
 }
 
 type mcpServerRequest struct {
@@ -1204,7 +1224,7 @@ func toMCPServerResponse(s domain.MCPServer) mcpServerResponse {
 // mcpclient can actually act on.
 func validateMCPServerRequest(w http.ResponseWriter, req mcpServerRequest) bool {
 	if req.Name == "" {
-		http.Error(w, "name must not be empty", http.StatusBadRequest)
+		http.Error(w, msgNameMustNotBeEmpty, http.StatusBadRequest)
 		return false
 	}
 	switch req.Transport {
@@ -1231,7 +1251,7 @@ func validateMCPServerRequest(w http.ResponseWriter, req mcpServerRequest) bool 
 // every existing ID (domain.NewMCPServerID, the same convention
 // domain.NewEmbeddingEndpointID uses).
 func (h *Handler) handleAdminMCPServers(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.mcpServers != nil, "mcp servers") {
+	if !requireConfigured(w, h.mcpServers != nil, configNameMCPServers) {
 		return
 	}
 	switch r.Method {
@@ -1268,7 +1288,7 @@ func (h *Handler) handleAdminMCPServers(w http.ResponseWriter, r *http.Request) 
 		}
 		writeJSON(w, http.StatusCreated, toMCPServerResponse(s))
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, msgMethodNotAllowed, http.StatusMethodNotAllowed)
 	}
 }
 
@@ -1277,7 +1297,7 @@ func (h *Handler) handleAdminMCPServers(w http.ResponseWriter, r *http.Request) 
 // ListMCPServers -- an admin's server list is small enough (like scheduled
 // crawls) that this is never a real cost.
 func (h *Handler) handleAdminGetMCPServer(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.mcpServers != nil, "mcp servers") {
+	if !requireConfigured(w, h.mcpServers != nil, configNameMCPServers) {
 		return
 	}
 	servers, err := h.mcpServers.ListMCPServers(r.Context())
@@ -1292,7 +1312,7 @@ func (h *Handler) handleAdminGetMCPServer(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
-	http.Error(w, "mcp server not found", http.StatusNotFound)
+	http.Error(w, msgMCPServerNotFound, http.StatusNotFound)
 }
 
 // handleAdminUpdateMCPServer replaces a server's editable fields. APIKey is
@@ -1300,7 +1320,7 @@ func (h *Handler) handleAdminGetMCPServer(w http.ResponseWriter, r *http.Request
 // embeddingEndpointRequest.ClearAPIKey's doc comment for why. ID is never
 // editable once created (mirrors handleAdminUpdateEmbeddingEndpoint).
 func (h *Handler) handleAdminUpdateMCPServer(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.mcpServers != nil, "mcp servers") {
+	if !requireConfigured(w, h.mcpServers != nil, configNameMCPServers) {
 		return
 	}
 	req, ok := decodeJSON[mcpServerRequest](w, r)
@@ -1326,7 +1346,7 @@ func (h *Handler) handleAdminUpdateMCPServer(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	if !found {
-		http.Error(w, "mcp server not found", http.StatusNotFound)
+		http.Error(w, msgMCPServerNotFound, http.StatusNotFound)
 		return
 	}
 	apiKey := h.resolveUpdatedAPIKey(existingAPIKey, req.APIKey, req.ClearAPIKey)
@@ -1336,15 +1356,15 @@ func (h *Handler) handleAdminUpdateMCPServer(w http.ResponseWriter, r *http.Requ
 		Prompt: req.Prompt, GatedByWebSearch: req.GatedByWebSearch,
 	}
 	err = h.mcpServers.UpdateMCPServer(r.Context(), s)
-	respondOrNotFound(w, err, ports.ErrMCPServerNotFound, "mcp server not found", toMCPServerResponse(s))
+	respondOrNotFound(w, err, ports.ErrMCPServerNotFound, msgMCPServerNotFound, toMCPServerResponse(s))
 }
 
 func (h *Handler) handleAdminDeleteMCPServer(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.mcpServers != nil, "mcp servers") {
+	if !requireConfigured(w, h.mcpServers != nil, configNameMCPServers) {
 		return
 	}
 	err := h.mcpServers.DeleteMCPServer(r.Context(), r.PathValue("id"))
-	respondOrNotFound(w, err, ports.ErrMCPServerNotFound, "mcp server not found", map[string]bool{"ok": true})
+	respondOrNotFound(w, err, ports.ErrMCPServerNotFound, msgMCPServerNotFound, map[string]bool{"ok": true})
 }
 
 type agentRequest struct {
@@ -1379,7 +1399,7 @@ func toAgentResponse(a domain.Agent) agentResponse {
 // when ChatService.Chat filters the global catalog by it.
 func validateAgentRequest(w http.ResponseWriter, req agentRequest) bool {
 	if req.Name == "" {
-		http.Error(w, "name must not be empty", http.StatusBadRequest)
+		http.Error(w, msgNameMustNotBeEmpty, http.StatusBadRequest)
 		return false
 	}
 	return true
@@ -1426,7 +1446,7 @@ func (h *Handler) handleAdminAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusCreated, toAgentResponse(a))
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, msgMethodNotAllowed, http.StatusMethodNotAllowed)
 	}
 }
 
@@ -1449,7 +1469,7 @@ func (h *Handler) handleAdminGetAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	http.Error(w, "agent not found", http.StatusNotFound)
+	http.Error(w, msgAgentNotFound, http.StatusNotFound)
 }
 
 // handleAdminUpdateAgent replaces an agent's editable fields. ID is never
@@ -1471,7 +1491,7 @@ func (h *Handler) handleAdminUpdateAgent(w http.ResponseWriter, r *http.Request)
 		MCPServerIDs: req.MCPServerIDs, Enabled: req.Enabled,
 	}
 	err := h.agents.UpdateAgent(r.Context(), a)
-	respondOrNotFound(w, err, ports.ErrAgentNotFound, "agent not found", toAgentResponse(a))
+	respondOrNotFound(w, err, ports.ErrAgentNotFound, msgAgentNotFound, toAgentResponse(a))
 }
 
 func (h *Handler) handleAdminDeleteAgent(w http.ResponseWriter, r *http.Request) {
@@ -1479,7 +1499,7 @@ func (h *Handler) handleAdminDeleteAgent(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	err := h.agents.DeleteAgent(r.Context(), r.PathValue("id"))
-	respondOrNotFound(w, err, ports.ErrAgentNotFound, "agent not found", map[string]bool{"ok": true})
+	respondOrNotFound(w, err, ports.ErrAgentNotFound, msgAgentNotFound, map[string]bool{"ok": true})
 }
 
 // mcpServerCandidateRequest is a not-yet-saved MCP server config, probed by
@@ -1587,11 +1607,11 @@ func (h *Handler) handleAdminMCPServersTest(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *Handler) handleAdminEmbeddingEndpointPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminEmbeddingEndpointHTML)
+	serveStatic(w, r, contentTypeHTML, adminEmbeddingEndpointHTML)
 }
 
 func (h *Handler) handleAdminEmbeddingEndpointsPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminEmbeddingEndpointsHTML)
+	serveStatic(w, r, contentTypeHTML, adminEmbeddingEndpointsHTML)
 }
 
 // currentEmbeddingEndpoints lists every configured HTTP embedding endpoint,
@@ -1779,7 +1799,7 @@ func (h *Handler) handleAdminChatEndpoint(w http.ResponseWriter, r *http.Request
 		}
 		writeJSON(w, http.StatusOK, toChatEndpointResponse(e))
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, msgMethodNotAllowed, http.StatusMethodNotAllowed)
 	}
 }
 
@@ -1812,7 +1832,7 @@ func (h *Handler) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		h.persistSetting(r.Context(), ports.SettingsKeyOperational, h.opSettings.Get())
 		writeJSON(w, http.StatusOK, h.currentSettings())
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, msgMethodNotAllowed, http.StatusMethodNotAllowed)
 	}
 }
 
@@ -1864,7 +1884,7 @@ func (h *Handler) handleAdminOverrides(w http.ResponseWriter, r *http.Request) {
 		h.persistSetting(r.Context(), ports.SettingsKeyOverrides, h.overrides.Get())
 		writeJSON(w, http.StatusOK, h.currentOverrides())
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, msgMethodNotAllowed, http.StatusMethodNotAllowed)
 	}
 }
 
@@ -1873,7 +1893,7 @@ func (h *Handler) handleAdminOverrides(w http.ResponseWriter, r *http.Request) {
 // live on this path rather than a separate "/clear-ended" sub-path, to
 // avoid colliding with the "{id}" wildcard route below.
 func (h *Handler) handleAdminCrawlJobs(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.jobs != nil, "crawl jobs") {
+	if !requireConfigured(w, h.jobs != nil, configNameCrawlJobs) {
 		return
 	}
 	switch r.Method {
@@ -1892,12 +1912,12 @@ func (h *Handler) handleAdminCrawlJobs(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]int{"removed": n})
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, msgMethodNotAllowed, http.StatusMethodNotAllowed)
 	}
 }
 
 func (h *Handler) handleAdminCrawlJob(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.jobs != nil, "crawl jobs") {
+	if !requireConfigured(w, h.jobs != nil, configNameCrawlJobs) {
 		return
 	}
 	job, err := h.jobs.GetCrawlJob(r.Context(), r.PathValue("id"))
@@ -1905,7 +1925,7 @@ func (h *Handler) handleAdminCrawlJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleAdminCancelCrawlJob(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.jobs != nil, "crawl jobs") {
+	if !requireConfigured(w, h.jobs != nil, configNameCrawlJobs) {
 		return
 	}
 	err := h.jobs.CancelCrawlJob(r.Context(), r.PathValue("id"))
@@ -2087,7 +2107,7 @@ func validateScheduledCrawlRequest(w http.ResponseWriter, req scheduledCrawlRequ
 // domain: a submission matching an existing schedule's seed host replaces
 // its options in place instead of inserting a second row.
 func (h *Handler) handleAdminSchedules(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.scheduledCrawls != nil, "scheduled crawls") {
+	if !requireConfigured(w, h.scheduledCrawls != nil, configNameScheduledCrawls) {
 		return
 	}
 	switch r.Method {
@@ -2127,7 +2147,7 @@ func (h *Handler) handleAdminSchedules(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusCreated, toScheduledCrawlResponse(s))
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		http.Error(w, msgMethodNotAllowed, http.StatusMethodNotAllowed)
 	}
 }
 
@@ -2160,7 +2180,7 @@ func (h *Handler) scheduledCrawlIDForSameDomain(ctx context.Context, seedURLs []
 // BasicAuthUser/BasicAuthPass are the exception to "PATCH is a full
 // replace" -- GET never echoes them, so blank means "unchanged."
 func (h *Handler) handleAdminUpdateSchedule(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.scheduledCrawls != nil, "scheduled crawls") {
+	if !requireConfigured(w, h.scheduledCrawls != nil, configNameScheduledCrawls) {
 		return
 	}
 	req, ok := decodeJSON[scheduledCrawlRequest](w, r)
@@ -2173,7 +2193,7 @@ func (h *Handler) handleAdminUpdateSchedule(w http.ResponseWriter, r *http.Reque
 	id := r.PathValue("id")
 	existing, err := h.scheduledCrawls.GetScheduledCrawl(r.Context(), id)
 	if err != nil {
-		respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, "scheduled crawl not found", nil)
+		respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, msgScheduledCrawlNotFound, nil)
 		return
 	}
 	s := req.toScheduledCrawl(id, req.Enabled, time.Now().UTC())
@@ -2185,26 +2205,26 @@ func (h *Handler) handleAdminUpdateSchedule(w http.ResponseWriter, r *http.Reque
 		s.BasicAuthPass = existing.BasicAuthPass
 	}
 	err = h.scheduledCrawls.UpdateScheduledCrawl(r.Context(), s)
-	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, "scheduled crawl not found", map[string]bool{"ok": true})
+	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, msgScheduledCrawlNotFound, map[string]bool{"ok": true})
 }
 
 func (h *Handler) handleAdminDeleteSchedule(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.scheduledCrawls != nil, "scheduled crawls") {
+	if !requireConfigured(w, h.scheduledCrawls != nil, configNameScheduledCrawls) {
 		return
 	}
 	err := h.scheduledCrawls.DeleteScheduledCrawl(r.Context(), r.PathValue("id"))
-	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, "scheduled crawl not found", map[string]bool{"ok": true})
+	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, msgScheduledCrawlNotFound, map[string]bool{"ok": true})
 }
 
 // handleAdminGetSchedule backs the schedule-detail/edit subpage's initial
 // load -- a single schedule's full options, the same shape ListScheduledCrawls'
 // entries already have.
 func (h *Handler) handleAdminGetSchedule(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.scheduledCrawls != nil, "scheduled crawls") {
+	if !requireConfigured(w, h.scheduledCrawls != nil, configNameScheduledCrawls) {
 		return
 	}
 	s, err := h.scheduledCrawls.GetScheduledCrawl(r.Context(), r.PathValue("id"))
-	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, "scheduled crawl not found", toScheduledCrawlResponse(s))
+	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, msgScheduledCrawlNotFound, toScheduledCrawlResponse(s))
 }
 
 // handleAdminRunScheduleNow marks a schedule due immediately -- crawl-server's
@@ -2212,7 +2232,7 @@ func (h *Handler) handleAdminGetSchedule(w http.ResponseWriter, r *http.Request)
 // CrawlJob, the same path a freshly created one-off crawl already goes
 // through -- so this handler itself never talks to crawl-server directly.
 func (h *Handler) handleAdminRunScheduleNow(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.scheduledCrawls != nil, "scheduled crawls") {
+	if !requireConfigured(w, h.scheduledCrawls != nil, configNameScheduledCrawls) {
 		return
 	}
 	err := h.scheduledCrawls.RunScheduledCrawlNow(r.Context(), r.PathValue("id"), time.Now().UTC())
@@ -2220,7 +2240,7 @@ func (h *Handler) handleAdminRunScheduleNow(w http.ResponseWriter, r *http.Reque
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, "scheduled crawl not found", map[string]bool{"ok": true})
+	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, msgScheduledCrawlNotFound, map[string]bool{"ok": true})
 }
 
 // handleAdminToggleSchedule flips only Enabled -- unlike PATCHing the
@@ -2228,7 +2248,7 @@ func (h *Handler) handleAdminRunScheduleNow(w http.ResponseWriter, r *http.Reque
 // pausing/resuming from the Jobs list's checkbox doesn't reschedule the
 // crawl or reorder that list (sorted by NextRunAt).
 func (h *Handler) handleAdminToggleSchedule(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.scheduledCrawls != nil, "scheduled crawls") {
+	if !requireConfigured(w, h.scheduledCrawls != nil, configNameScheduledCrawls) {
 		return
 	}
 	var req struct {
@@ -2239,19 +2259,19 @@ func (h *Handler) handleAdminToggleSchedule(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	err := h.scheduledCrawls.SetScheduledCrawlEnabled(r.Context(), r.PathValue("id"), req.Enabled)
-	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, "scheduled crawl not found", map[string]bool{"ok": true})
+	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, msgScheduledCrawlNotFound, map[string]bool{"ok": true})
 }
 
 func (h *Handler) handleAdminSchedulePage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminScheduleHTML)
+	serveStatic(w, r, contentTypeHTML, adminScheduleHTML)
 }
 
 func (h *Handler) handleAdminPageRankPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminPageRankHTML)
+	serveStatic(w, r, contentTypeHTML, adminPageRankHTML)
 }
 
 func (h *Handler) handleAdminEmbeddingsPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminEmbeddingsHTML)
+	serveStatic(w, r, contentTypeHTML, adminEmbeddingsHTML)
 }
 
 type adminPageRankResponse struct {
@@ -2288,7 +2308,7 @@ type adminPageRankResponse struct {
 }
 
 func (h *Handler) handleAdminPageRank(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
 	}
 	totalDocs, _, err := h.admin.CorpusStats(r.Context())
@@ -2296,15 +2316,15 @@ func (h *Handler) handleAdminPageRank(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	min, max, avg, err := h.admin.PageRankDistribution(r.Context())
+	minPR, maxPR, avg, err := h.admin.PageRankDistribution(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	resp := adminPageRankResponse{
 		TotalDocs:                totalDocs,
-		MinPageRank:              min,
-		MaxPageRank:              max,
+		MinPageRank:              minPR,
+		MaxPageRank:              maxPR,
 		AvgPageRank:              avg,
 		Damping:                  domain.PageRankDamping,
 		MaxIterations:            domain.PageRankMaxIterations,
@@ -2357,8 +2377,8 @@ func (h *Handler) handleAdminPageRankRecompute(w http.ResponseWriter, r *http.Re
 		DurationMS: result.DurationMs,
 	}
 	if h.admin != nil {
-		if min, max, avg, err := h.admin.PageRankDistribution(r.Context()); err == nil {
-			resp.MinPageRank, resp.MaxPageRank, resp.AvgPageRank = min, max, avg
+		if minPR, maxPR, avg, err := h.admin.PageRankDistribution(r.Context()); err == nil {
+			resp.MinPageRank, resp.MaxPageRank, resp.AvgPageRank = minPR, maxPR, avg
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -2433,7 +2453,7 @@ type adminContentDedupStatusResponse struct {
 }
 
 func (h *Handler) handleAdminContentDedupStatus(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.contentDedupRepo != nil, "content dedup") {
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.contentDedupRepo != nil, configNameContentDedup) {
 		return
 	}
 	resp := adminContentDedupStatusResponse{}
@@ -2455,7 +2475,7 @@ func (h *Handler) handleAdminContentDedupStatus(w http.ResponseWriter, r *http.R
 // corpus-wide scan (plus simhash banding) can take real time. Rejects a
 // second trigger while one is running (409): real DB contention otherwise.
 func (h *Handler) handleAdminContentDedupRecomputeStart(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.contentDedupRepo != nil, "content dedup") {
+	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.contentDedupRepo != nil, configNameContentDedup) {
 		return
 	}
 	if application.LoadContentDedupStatus(r.Context(), h.settingsStore).InProgress {
@@ -2513,7 +2533,7 @@ type adminAliasGroupsResponse struct {
 // admin verify a dedup pass did what they expect before trusting it
 // further.
 func (h *Handler) handleAdminContentDedupAliasGroups(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "content dedup") {
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, configNameContentDedup) {
 		return
 	}
 	limit := intQueryParam(r, "limit", defaultAliasGroupsPageSize, true)
@@ -2533,11 +2553,11 @@ func (h *Handler) handleAdminContentDedupAliasGroups(w http.ResponseWriter, r *h
 }
 
 func (h *Handler) handleAdminContentDedupPage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminContentDedupHTML)
+	serveStatic(w, r, contentTypeHTML, adminContentDedupHTML)
 }
 
 func (h *Handler) handleAdminDatabasePage(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/html; charset=utf-8", adminDatabaseHTML)
+	serveStatic(w, r, contentTypeHTML, adminDatabaseHTML)
 }
 
 // adminDBPoolStats is sql.DBStats' wire shape, with its one time.Duration
@@ -2579,7 +2599,7 @@ func toAdminDBPoolStats(stats sql.DBStats) adminDBPoolStats {
 }
 
 func (h *Handler) handleAdminDatabase(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
 	}
 	counts, err := h.admin.TableRowCounts(r.Context())
@@ -2599,7 +2619,7 @@ func (h *Handler) handleAdminDatabase(w http.ResponseWriter, r *http.Request) {
 // see ports.AdminRepository.ClearContent's own doc comment. Every settings
 // table is left untouched.
 func (h *Handler) handleAdminClearContent(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
 	}
 	if err := h.admin.ClearContent(r.Context()); err != nil {
@@ -2623,7 +2643,7 @@ const defaultTuningAlpha = 0.5
 // bootstrap.SyncSettings can't tell "cleared on purpose" apart from a
 // transient DB read error.
 func (h *Handler) handleAdminClearSettings(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
 	}
 	if err := h.admin.ClearSettings(r.Context()); err != nil {
@@ -2717,7 +2737,7 @@ type adminOverviewMetrics struct {
 // health, DB pool stats, and tier-2 trend charts. Only h.admin is
 // required; h.jobs/h.scheduledCrawls degrade to zero-valued fields if unset.
 func (h *Handler) handleAdminOverviewMetrics(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.admin != nil, "admin diagnostics") {
+	if !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
 	}
 	ctx := r.Context()
@@ -2729,17 +2749,7 @@ func (h *Handler) handleAdminOverviewMetrics(w http.ResponseWriter, r *http.Requ
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		for _, j := range jobs {
-			switch j.Status {
-			case domain.CrawlJobRunning:
-				resp.RunningCrawlJobs++
-				resp.RunningJobs = append(resp.RunningJobs, adminOverviewRunningJob{
-					ID: j.ID, SeedURLs: j.Request.SeedURLs, PagesCrawled: j.PagesCrawled,
-				})
-			case domain.CrawlJobQueued:
-				resp.QueuedCrawlJobs++
-			}
-		}
+		resp.RunningCrawlJobs, resp.QueuedCrawlJobs, resp.RunningJobs = summarizeOverviewCrawlJobs(jobs)
 	}
 
 	if h.scheduledCrawls != nil {
@@ -2748,20 +2758,8 @@ func (h *Handler) handleAdminOverviewMetrics(w http.ResponseWriter, r *http.Requ
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		now := time.Now().UTC()
-		for _, s := range schedules {
-			if s.Enabled {
-				resp.SchedulesEnabled++
-			} else {
-				resp.SchedulesDisabled++
-			}
-			if s.InProgress {
-				resp.SchedulesInProgress++
-			}
-			if s.Enabled && s.NextRunAt.Before(now) {
-				resp.SchedulesOverdue++
-			}
-		}
+		resp.SchedulesEnabled, resp.SchedulesDisabled, resp.SchedulesInProgress, resp.SchedulesOverdue =
+			summarizeOverviewSchedules(schedules, time.Now().UTC())
 	}
 
 	resp.Pool = toAdminDBPoolStats(h.admin.PoolStats())
@@ -2816,6 +2814,47 @@ func (h *Handler) handleAdminOverviewMetrics(w http.ResponseWriter, r *http.Requ
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// summarizeOverviewCrawlJobs computes the Overview page's running/queued
+// crawl-job counts and the detail list of currently running jobs from a
+// full job list -- split out of handleAdminOverviewMetrics purely to keep
+// that handler's own branching (and therefore its cognitive complexity)
+// down; behavior is unchanged.
+func summarizeOverviewCrawlJobs(jobs []domain.CrawlJobSummary) (running, queued int, runningJobs []adminOverviewRunningJob) {
+	for _, j := range jobs {
+		switch j.Status {
+		case domain.CrawlJobRunning:
+			running++
+			runningJobs = append(runningJobs, adminOverviewRunningJob{
+				ID: j.ID, SeedURLs: j.Request.SeedURLs, PagesCrawled: j.PagesCrawled,
+			})
+		case domain.CrawlJobQueued:
+			queued++
+		}
+	}
+	return running, queued, runningJobs
+}
+
+// summarizeOverviewSchedules computes the Overview page's enabled/disabled/
+// in-progress/overdue schedule counts from a full schedule list -- split
+// out of handleAdminOverviewMetrics for the same reason as
+// summarizeOverviewCrawlJobs.
+func summarizeOverviewSchedules(schedules []domain.ScheduledCrawl, now time.Time) (enabled, disabled, inProgress, overdue int) {
+	for _, s := range schedules {
+		if s.Enabled {
+			enabled++
+		} else {
+			disabled++
+		}
+		if s.InProgress {
+			inProgress++
+		}
+		if s.Enabled && s.NextRunAt.Before(now) {
+			overdue++
+		}
+	}
+	return enabled, disabled, inProgress, overdue
 }
 
 // groupDailyFetchOutcomes regroups sqlrepo's flat (day, status, count)

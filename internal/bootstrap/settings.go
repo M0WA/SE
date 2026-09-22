@@ -40,48 +40,55 @@ func applySettingsOnce(ctx context.Context, store ports.SettingsStore, tuning *d
 		}
 	}
 	if op != nil {
-		// Seeded with the built-in defaults (not a zero-valued struct)
-		// before unmarshaling: json.Unmarshal only overwrites fields present
-		// in the stored blob, so a field added to OperationalSettingsValues
-		// after this instance's blob was last saved -- most importantly a
-		// bool like ContentDedupEnabled/URLAliasWWWEnabled, which
-		// OperationalSettings.Set() deliberately never self-heals, since a
-		// real `false` is indistinguishable from "omitted" -- keeps its
-		// sensible default instead of silently regressing to Go's zero
-		// value (false) forever, until an admin happens to re-save the full
-		// settings form.
-		v := domain.DefaultOperationalSettings().Get()
-		// EmbeddingSearchWeights is excluded from the defaults seed above:
-		// the legacy-migration check just below needs to tell "the stored
-		// blob never had this key" (nil/empty) apart from "explicitly set,"
-		// which the seeded default map would otherwise mask.
-		v.EmbeddingSearchWeights = nil
-		if loadSetting(ctx, store, ports.SettingsKeyOperational, &v) {
-			// Upgrade migration: a blob saved before EmbeddingSearchWeights
-			// existed still decodes the deprecated EmbeddingProvider field --
-			// seed the new map from it once, so it carries over as weight 1.
-			if len(v.EmbeddingSearchWeights) == 0 && v.EmbeddingProvider != "" {
-				v.EmbeddingSearchWeights = map[string]float64{v.EmbeddingProvider: 1}
-			}
-			if embeddingEndpoints != nil {
-				if endpoints, err := embeddingEndpoints.ListEmbeddingEndpoints(ctx); err == nil {
-					v.EmbeddingSearchWeights = domain.ReconcileSearchWeights(v.EmbeddingSearchWeights, v.EmbeddingHashEnabled, endpoints)
-				} else {
-					log.Printf("listing embedding endpoints: %v", err)
-				}
-			}
-			op.Set(v)
-		}
-		if pool != nil {
-			cur := op.Get()
-			pool.ConfigurePool(cur.DBMaxOpenConns, cur.DBMaxIdleConns, cur.DBConnMaxLifetime)
-		}
+		applyOperationalSettingsOnce(ctx, store, op, pool, embeddingEndpoints)
 	}
 	if overrides != nil {
 		var v domain.RankingOverridesValues
 		if loadSetting(ctx, store, ports.SettingsKeyOverrides, &v) {
 			overrides.Set(v)
 		}
+	}
+}
+
+// applyOperationalSettingsOnce is applySettingsOnce's op != nil branch,
+// pulled out as its own function purely to keep applySettingsOnce's
+// cognitive complexity down -- same behavior, same call site, just named.
+func applyOperationalSettingsOnce(ctx context.Context, store ports.SettingsStore, op *domain.OperationalSettings, pool PoolConfigurer, embeddingEndpoints ports.EmbeddingEndpointStore) {
+	// Seeded with the built-in defaults (not a zero-valued struct)
+	// before unmarshaling: json.Unmarshal only overwrites fields present
+	// in the stored blob, so a field added to OperationalSettingsValues
+	// after this instance's blob was last saved -- most importantly a
+	// bool like ContentDedupEnabled/URLAliasWWWEnabled, which
+	// OperationalSettings.Set() deliberately never self-heals, since a
+	// real `false` is indistinguishable from "omitted" -- keeps its
+	// sensible default instead of silently regressing to Go's zero
+	// value (false) forever, until an admin happens to re-save the full
+	// settings form.
+	v := domain.DefaultOperationalSettings().Get()
+	// EmbeddingSearchWeights is excluded from the defaults seed above:
+	// the legacy-migration check just below needs to tell "the stored
+	// blob never had this key" (nil/empty) apart from "explicitly set,"
+	// which the seeded default map would otherwise mask.
+	v.EmbeddingSearchWeights = nil
+	if loadSetting(ctx, store, ports.SettingsKeyOperational, &v) {
+		// Upgrade migration: a blob saved before EmbeddingSearchWeights
+		// existed still decodes the deprecated EmbeddingProvider field --
+		// seed the new map from it once, so it carries over as weight 1.
+		if len(v.EmbeddingSearchWeights) == 0 && v.EmbeddingProvider != "" {
+			v.EmbeddingSearchWeights = map[string]float64{v.EmbeddingProvider: 1}
+		}
+		if embeddingEndpoints != nil {
+			if endpoints, err := embeddingEndpoints.ListEmbeddingEndpoints(ctx); err == nil {
+				v.EmbeddingSearchWeights = domain.ReconcileSearchWeights(v.EmbeddingSearchWeights, v.EmbeddingHashEnabled, endpoints)
+			} else {
+				log.Printf("listing embedding endpoints: %v", err)
+			}
+		}
+		op.Set(v)
+	}
+	if pool != nil {
+		cur := op.Get()
+		pool.ConfigurePool(cur.DBMaxOpenConns, cur.DBMaxIdleConns, cur.DBConnMaxLifetime)
 	}
 }
 

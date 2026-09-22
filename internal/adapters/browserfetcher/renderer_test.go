@@ -218,6 +218,7 @@ func TestRenderer_ContextCancellationInterruptsRender(t *testing.T) {
 	defer r.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	go func() {
 		time.Sleep(200 * time.Millisecond)
 		cancel()

@@ -23,6 +23,11 @@ const minUserPasswordLength = 8
 // failure, rather than bcrypt's own error surfacing as an opaque 500.
 const maxUserPasswordLength = 72
 
+// msgUserNotFound is the shared 404 body for every user-lookup path
+// (get/update/delete), mirroring msgAgentNotFound/msgMCPServerNotFound in
+// admin.go.
+const msgUserNotFound = "user not found"
+
 // validateUserPassword enforces min/max length, shared by account
 // creation and a password reset.
 func validateUserPassword(w http.ResponseWriter, password string) bool {
@@ -162,7 +167,7 @@ func (h *Handler) handleAdminGetUser(w http.ResponseWriter, r *http.Request) {
 	u, err := h.users.GetUser(r.Context(), r.PathValue("id"))
 	if err != nil {
 		if errors.Is(err, ports.ErrUserNotFound) {
-			http.Error(w, "user not found", http.StatusNotFound)
+			http.Error(w, msgUserNotFound, http.StatusNotFound)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -205,7 +210,7 @@ func (h *Handler) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) 
 	existing, err := h.users.GetUser(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, ports.ErrUserNotFound) {
-			http.Error(w, "user not found", http.StatusNotFound)
+			http.Error(w, msgUserNotFound, http.StatusNotFound)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -219,7 +224,7 @@ func (h *Handler) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) 
 	}
 	existing.UpdatedAt = time.Now().UTC()
 	err = h.users.UpdateUser(r.Context(), existing)
-	respondOrNotFound(w, err, ports.ErrUserNotFound, "user not found", toUserResponse(existing))
+	respondOrNotFound(w, err, ports.ErrUserNotFound, msgUserNotFound, toUserResponse(existing))
 }
 
 func (h *Handler) handleAdminDeleteUser(w http.ResponseWriter, r *http.Request) {
@@ -227,5 +232,5 @@ func (h *Handler) handleAdminDeleteUser(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	err := h.users.DeleteUser(r.Context(), r.PathValue("id"))
-	respondOrNotFound(w, err, ports.ErrUserNotFound, "user not found", map[string]bool{"ok": true})
+	respondOrNotFound(w, err, ports.ErrUserNotFound, msgUserNotFound, map[string]bool{"ok": true})
 }

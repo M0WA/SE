@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // registers the "sqlite" database/sql driver used by newTestRepo
 
 	"searchengine/internal/adapters/sqlrepo"
 	"searchengine/internal/bootstrap"
