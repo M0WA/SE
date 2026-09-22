@@ -1235,6 +1235,22 @@ button:focus-visible {
   accent-color: var(--accent);
 }
 
+/* .checkbox-list-row is .form-row-check's own label styling, reused for
+   each row of an arbitrary-length checkbox list (e.g. admin_agent.js's MCP
+   server scope) rather than one fixed field per form-row. */
+.checkbox-list-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0 0 0.3rem;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.checkbox-list-row input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
 /* The admin shell is a persistent two-column layout: .admin-rail (grouped
    navigation, filled in by admin.js's renderAdminNav -- see ADMIN_NAV_GROUPS
    there for the single source of truth on grouping/order) beside the page's

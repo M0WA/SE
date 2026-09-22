@@ -177,6 +177,14 @@ func (h *Handler) handleAdminMCPServerPage(w http.ResponseWriter, r *http.Reques
 	serveStatic(w, r, "text/html; charset=utf-8", adminMCPServerHTML)
 }
 
+func (h *Handler) handleAdminAgentsPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminAgentsHTML)
+}
+
+func (h *Handler) handleAdminAgentPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, "text/html; charset=utf-8", adminAgentHTML)
+}
+
 func (h *Handler) handleAdminUsersPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, "text/html; charset=utf-8", adminUsersHTML)
 }
@@ -1337,6 +1345,141 @@ func (h *Handler) handleAdminDeleteMCPServer(w http.ResponseWriter, r *http.Requ
 	}
 	err := h.mcpServers.DeleteMCPServer(r.Context(), r.PathValue("id"))
 	respondOrNotFound(w, err, ports.ErrMCPServerNotFound, "mcp server not found", map[string]bool{"ok": true})
+}
+
+type agentRequest struct {
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	SystemPrompt string   `json:"system_prompt"`
+	MCPServerIDs []string `json:"mcp_server_ids"`
+	Enabled      bool     `json:"enabled"`
+}
+
+type agentResponse struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	SystemPrompt string   `json:"system_prompt"`
+	MCPServerIDs []string `json:"mcp_server_ids"`
+	Enabled      bool     `json:"enabled"`
+}
+
+func toAgentResponse(a domain.Agent) agentResponse {
+	return agentResponse{
+		ID: a.ID, Name: a.Name, Description: a.Description,
+		SystemPrompt: a.SystemPrompt, MCPServerIDs: a.MCPServerIDs, Enabled: a.Enabled,
+	}
+}
+
+// validateAgentRequest requires a non-empty Name -- MCPServerIDs is not
+// cross-checked against the actual mcp_servers table (same "no
+// foreign-key-like validation at this layer" convention as every other
+// admin CRUD handler in this file, e.g. gated_by_web_search referencing no
+// enforced set of values either); a stale ID just never matches anything
+// when ChatService.Chat filters the global catalog by it.
+func validateAgentRequest(w http.ResponseWriter, req agentRequest) bool {
+	if req.Name == "" {
+		http.Error(w, "name must not be empty", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// handleAdminAgents lists (GET) or creates (POST) admin-configured agents,
+// mirroring handleAdminMCPServers' style closely. A freshly created agent's
+// ID is minted from its name, deduped against every existing ID
+// (domain.NewAgentID, the same convention domain.NewMCPServerID uses).
+func (h *Handler) handleAdminAgents(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.agents != nil, "agents") {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		agents, err := h.agents.ListAgents(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, mapSlice(agents, toAgentResponse))
+	case http.MethodPost:
+		req, ok := decodeJSON[agentRequest](w, r)
+		if !ok {
+			return
+		}
+		if !validateAgentRequest(w, req) {
+			return
+		}
+		existing, err := h.agents.ListAgents(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		existingIDs := existingIDSet(existing, func(a domain.Agent) string { return a.ID })
+		a := domain.Agent{
+			ID: domain.NewAgentID(req.Name, existingIDs), Name: req.Name,
+			Description: req.Description, SystemPrompt: req.SystemPrompt,
+			MCPServerIDs: req.MCPServerIDs, Enabled: req.Enabled,
+		}
+		if err := h.agents.CreateAgent(r.Context(), a); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusCreated, toAgentResponse(a))
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleAdminGetAgent returns one agent by ID -- scans ListAgents, same
+// tolerance as handleAdminGetMCPServer (ports.AgentStore has no single-row
+// get either, and an admin's agent list is never large enough to matter).
+func (h *Handler) handleAdminGetAgent(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.agents != nil, "agents") {
+		return
+	}
+	agents, err := h.agents.ListAgents(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	id := r.PathValue("id")
+	for _, a := range agents {
+		if a.ID == id {
+			writeJSON(w, http.StatusOK, toAgentResponse(a))
+			return
+		}
+	}
+	http.Error(w, "agent not found", http.StatusNotFound)
+}
+
+// handleAdminUpdateAgent replaces an agent's editable fields. ID is never
+// editable once created (mirrors handleAdminUpdateMCPServer).
+func (h *Handler) handleAdminUpdateAgent(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.agents != nil, "agents") {
+		return
+	}
+	req, ok := decodeJSON[agentRequest](w, r)
+	if !ok {
+		return
+	}
+	if !validateAgentRequest(w, req) {
+		return
+	}
+	id := r.PathValue("id")
+	a := domain.Agent{
+		ID: id, Name: req.Name, Description: req.Description, SystemPrompt: req.SystemPrompt,
+		MCPServerIDs: req.MCPServerIDs, Enabled: req.Enabled,
+	}
+	err := h.agents.UpdateAgent(r.Context(), a)
+	respondOrNotFound(w, err, ports.ErrAgentNotFound, "agent not found", toAgentResponse(a))
+}
+
+func (h *Handler) handleAdminDeleteAgent(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.agents != nil, "agents") {
+		return
+	}
+	err := h.agents.DeleteAgent(r.Context(), r.PathValue("id"))
+	respondOrNotFound(w, err, ports.ErrAgentNotFound, "agent not found", map[string]bool{"ok": true})
 }
 
 // mcpServerCandidateRequest is a not-yet-saved MCP server config, probed by

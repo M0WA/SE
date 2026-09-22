@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — agent</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<div class="page-header">
+  <a class="mark" href="/">se.</a>
+  <button id="sign-out" class="text-button" type="button">Sign out</button>
+</div>
+<div class="admin-shell">
+<nav class="admin-rail" id="admin-rail" aria-label="Admin sections"></nav>
+<main>
+  <a class="back" href="/admin/agents">Back to agents</a>
+
+  <h2 id="agent-title">Add agent</h2>
+  <p id="agent-meta" class="panel-status"></p>
+  <p id="agent-status" class="panel-status"></p>
+
+  <form id="agent-form" class="stacked-form" hidden>
+    <div class="form-row">
+      <label for="agent-name">Name</label>
+      <input id="agent-name" class="field" type="text" required placeholder="e.g. fact-checker">
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="agent-description">Description</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Never sent to the model as part of this agent's own conversation -- it's what a multi-agent planner reads to decide when to use this agent, and what a person sees when picking an agent to talk to. Describe what this agent is good for, not how it's built.</span></span>
+      </div>
+      <textarea id="agent-description" class="field" rows="3" placeholder="Verifies claims against sources before including them"></textarea>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="agent-system-prompt">System prompt</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">This IS what the agent sees -- injected as its own leading system message on every turn it's active for, after the endpoint's persistent system prompt (Settings -> Chat) and any per-user custom prompt. This is where the specialization actually lives.</span></span>
+      </div>
+      <textarea id="agent-system-prompt" class="field" rows="16"></textarea>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label>MCP servers</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Restricts which of the globally configured MCP servers (Settings -> Chat -> MCP servers) this agent may use tools from. Leave every box unchecked to allow every globally active server -- the same as not scoping at all. This never affects a user's own personal MCP servers, which stay available to every agent regardless.</span></span>
+      </div>
+      <div id="agent-mcp-servers-list"></div>
+    </div>
+    <div class="form-row form-row-check">
+      <label for="agent-enabled">
+        <input id="agent-enabled" type="checkbox">
+        Enabled
+      </label>
+    </div>
+    <div class="form-row">
+      <button id="agent-save-btn" type="submit">Save</button>
+      <button id="agent-delete-btn" type="button" class="text-button">Delete</button>
+    </div>
+    <span id="agent-form-status" class="error-text"></span>
+  </form>
+</main>
+</div>
+<script src="/admin.js"></script>
+<script src="/admin_agent.js"></script>
+</body>
+</html>

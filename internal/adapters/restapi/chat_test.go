@@ -97,6 +97,58 @@ func (f *fakeMCPServerStore) DeleteMCPServer(ctx context.Context, id string) err
 	return ports.ErrMCPServerNotFound
 }
 
+// fakeAgentStore is a minimal ports.AgentStore fake -- a small local copy,
+// same reasoning as fakeMCPServerStore's own doc comment above. Used by
+// admin_test.go's agent CRUD handler tests.
+type fakeAgentStore struct {
+	agents    []domain.Agent
+	listErr   error
+	createErr error
+	updateErr error
+	deleteErr error
+}
+
+func (f *fakeAgentStore) ListAgents(ctx context.Context) ([]domain.Agent, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.agents, nil
+}
+
+func (f *fakeAgentStore) CreateAgent(ctx context.Context, a domain.Agent) error {
+	if f.createErr != nil {
+		return f.createErr
+	}
+	f.agents = append(f.agents, a)
+	return nil
+}
+
+func (f *fakeAgentStore) UpdateAgent(ctx context.Context, a domain.Agent) error {
+	if f.updateErr != nil {
+		return f.updateErr
+	}
+	for i, existing := range f.agents {
+		if existing.ID == a.ID {
+			f.agents[i] = a
+			return nil
+		}
+	}
+	return ports.ErrAgentNotFound
+}
+
+func (f *fakeAgentStore) DeleteAgent(ctx context.Context, id string) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	for i, existing := range f.agents {
+		if existing.ID == id {
+			f.agents = append(f.agents[:i], f.agents[i+1:]...)
+			return nil
+		}
+	}
+	return ports.ErrAgentNotFound
+}
+
 // mcpCall records one CallTool invocation against a fakeMCPSession -- mirrors
 // internal/application/chat_service_test.go's own small helper.
 type mcpCall struct {
@@ -782,5 +834,6 @@ func TestHandleChat_NoToolResultsWhenNoToolCall(t *testing.T) {
 var _ ports.ChatCompleter = (*fakeChatCompleter)(nil)
 var _ ports.ChatEndpointStore = (*fakeChatEndpointStore)(nil)
 var _ ports.MCPServerStore = (*fakeMCPServerStore)(nil)
+var _ ports.AgentStore = (*fakeAgentStore)(nil)
 var _ ports.MCPToolProvider = (*fakeMCPToolProvider)(nil)
 var _ ports.MCPSession = (*fakeMCPSession)(nil)

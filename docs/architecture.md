@@ -37,12 +37,13 @@ Pure logic — every file imports only the Go standard library, with no SQL, HTT
 | Operational & tuning settings (`settings.go`, `tuning.go`, `link_scope.go`, `renderer.go`, `url_normalize.go`) | `OperationalSettings`, `TuningSettings`, link-scope/renderer enums, `CanonicalizeURL`. |
 | Chat (`chat.go`) | `ChatMessage`, `ChatEndpoint` config, `ToolCallResult` -- web search/fetch is exclusively via tools discovered from admin-configured `MCPServer` connections (see `mcp_server.go`) that the model invokes, not a direct search performed by this layer. |
 | MCP servers (`mcp_server.go`) | `MCPServer` (an admin-configured MCP connection -- stdio or Streamable HTTP), `MCPTool` (one tool discovered from an active server's own `tools/list` response, rediscovered fresh every turn). |
+| Agents (`agent.go`) | `Agent` -- an admin-defined specialization (a static system prompt plus an optional scope over the `MCPServer` catalog); not yet read by `application.ChatService.Chat` as of this writing. |
 | Corpus stats cache (`corpus_stats.go`) | Concurrency-safe cached snapshot of corpus-wide totals BM25 scoring needs per request. |
 | Overview/admin metrics shapes (`overview_metrics.go`) | Pure data shapes feeding the admin Overview page's charts. |
 
 ### Ports (`internal/ports`)
 
-26 interfaces defining pure contracts between the core and adapters; the package imports `database/sql` only for the `sql.DBStats` value type, performing no I/O itself.
+27 interfaces defining pure contracts between the core and adapters; the package imports `database/sql` only for the `sql.DBStats` value type, performing no I/O itself.
 
 | Port | Responsibility | Implemented by |
 |---|---|---|
@@ -64,6 +65,7 @@ Pure logic — every file imports only the Go standard library, with no SQL, HTT
 | `ScheduledCrawlStore` | CRUD + scheduling operations on `ScheduledCrawl`, shared by admin CRUD and the crawl-server ticker. | `sqlrepo` |
 | `EmbeddingEndpointStore`, `ChatEndpointStore` | CRUD/get-set for admin-configured embedding and chat endpoint config. | `sqlrepo` |
 | `MCPServerStore` | CRUD for admin-configured MCP server connections. | `sqlrepo` |
+| `AgentStore` | CRUD for admin-defined agents -- a named specialization (static system prompt + an optional scope over the MCP server catalog); not yet read by `ChatService` as of this writing. | `sqlrepo` |
 | `ChatCompleter` | Calls an OpenAI-compatible chat-completions endpoint. | `httpchat` |
 | `MCPToolProvider` / `MCPSession` | Opens one MCP session per chat turn across every active server (tool discovery + calls), and the per-turn session it returns. | `mcpclient` |
 

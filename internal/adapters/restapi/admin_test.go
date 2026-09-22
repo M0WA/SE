@@ -6131,6 +6131,343 @@ func TestHandleAdminDeleteMCPServer_NotConfigured(t *testing.T) {
 	}
 }
 
+type agentResp struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	SystemPrompt string   `json:"system_prompt"`
+	MCPServerIDs []string `json:"mcp_server_ids"`
+	Enabled      bool     `json:"enabled"`
+}
+
+func adminAuthedHandlerWithAgents(t *testing.T, store ports.AgentStore) (*restapi.Handler, *http.Cookie) {
+	t.Helper()
+	return adminAuthedHandlerFromConfig(t, restapi.Config{
+		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, Agents: store,
+	})
+}
+
+func createTestAgent(t *testing.T, h *restapi.Handler, cookie *http.Cookie, body map[string]interface{}) (int, agentResp) {
+	t.Helper()
+	data, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/agents", bytes.NewReader(data))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	var resp agentResp
+	if rec.Code == http.StatusCreated {
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decoding create response: %v", err)
+		}
+	}
+	return rec.Code, resp
+}
+
+func patchAgent(t *testing.T, h *restapi.Handler, cookie *http.Cookie, id string, body map[string]interface{}) *httptest.ResponseRecorder {
+	t.Helper()
+	data, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/agents/"+id, bytes.NewReader(data))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	return rec
+}
+
+func TestHandleAdminAgents_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/agents", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when agents aren't configured, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminAgents_MethodNotAllowed(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithAgents(t, &fakeAgentStore{})
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/agents", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminAgents_CreateInvalidJSON(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithAgents(t, &fakeAgentStore{})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/agents", bytes.NewReader([]byte("{not json")))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminAgents_CreateValidation_EmptyName(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithAgents(t, &fakeAgentStore{})
+	code, _ := createTestAgent(t, h, cookie, map[string]interface{}{"description": "no name"})
+	if code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", code)
+	}
+}
+
+// TestHandleAdminAgents_CreateThenList proves a created agent's ID is
+// minted from its name and it shows up in a subsequent list.
+func TestHandleAdminAgents_CreateThenList(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithAgents(t, &fakeAgentStore{})
+
+	code, created := createTestAgent(t, h, cookie, map[string]interface{}{
+		"name": "Fact Checker", "description": "Verifies claims.", "system_prompt": "Be skeptical.",
+		"mcp_server_ids": []string{"mcp1"}, "enabled": true,
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", code)
+	}
+	if created.ID != "fact_checker" {
+		t.Errorf("expected the ID minted from the name, got %q", created.ID)
+	}
+	if created.Description != "Verifies claims." || created.SystemPrompt != "Be skeptical." || !created.Enabled {
+		t.Errorf("expected every field round tripped in the create response, got %+v", created)
+	}
+	if len(created.MCPServerIDs) != 1 || created.MCPServerIDs[0] != "mcp1" {
+		t.Errorf("expected mcp_server_ids round tripped, got %+v", created.MCPServerIDs)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/admin/api/agents", nil)
+	listReq.AddCookie(cookie)
+	listRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", listRec.Code)
+	}
+	var list []agentResp
+	if err := json.Unmarshal(listRec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decoding list response: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != "fact_checker" {
+		t.Errorf("expected the created agent listed, got %+v", list)
+	}
+}
+
+// TestHandleAdminAgents_CreateDedupesIDOnNameCollision proves two agents
+// created with the same name get distinct IDs, per domain.NewAgentID's
+// dedupe rule.
+func TestHandleAdminAgents_CreateDedupesIDOnNameCollision(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithAgents(t, &fakeAgentStore{})
+
+	_, first := createTestAgent(t, h, cookie, map[string]interface{}{"name": "agent"})
+	_, second := createTestAgent(t, h, cookie, map[string]interface{}{"name": "agent"})
+	if first.ID == second.ID {
+		t.Errorf("expected distinct IDs for two agents named the same, got both %q", first.ID)
+	}
+}
+
+func TestHandleAdminAgents_ListError(t *testing.T) {
+	store := &fakeAgentStore{listErr: errors.New("db unavailable")}
+	h, cookie := adminAuthedHandlerWithAgents(t, store)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/agents", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminAgents_CreateListErrorPropagates(t *testing.T) {
+	store := &fakeAgentStore{listErr: errors.New("db unavailable")}
+	h, cookie := adminAuthedHandlerWithAgents(t, store)
+	code, _ := createTestAgent(t, h, cookie, map[string]interface{}{"name": "agent"})
+	if code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", code)
+	}
+}
+
+func TestHandleAdminAgents_CreateStoreError(t *testing.T) {
+	store := &fakeAgentStore{createErr: errors.New("write failed")}
+	h, cookie := adminAuthedHandlerWithAgents(t, store)
+	code, _ := createTestAgent(t, h, cookie, map[string]interface{}{"name": "agent"})
+	if code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", code)
+	}
+}
+
+func TestHandleAdminGetAgent_Success(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithAgents(t, &fakeAgentStore{})
+	_, created := createTestAgent(t, h, cookie, map[string]interface{}{"name": "agent"})
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/agents/"+created.ID, nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got agentResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if got.ID != created.ID {
+		t.Errorf("expected the created agent, got %+v", got)
+	}
+}
+
+func TestHandleAdminGetAgent_NotFound(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithAgents(t, &fakeAgentStore{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/agents/missing", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminGetAgent_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/agents/anything", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminGetAgent_ListError(t *testing.T) {
+	store := &fakeAgentStore{listErr: errors.New("db unavailable")}
+	h, cookie := adminAuthedHandlerWithAgents(t, store)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/agents/anything", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", rec.Code)
+	}
+}
+
+// TestHandleAdminUpdateAgent_ReplacesEditableFields proves a PATCH replaces
+// every editable field (not the ID).
+func TestHandleAdminUpdateAgent_ReplacesEditableFields(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithAgents(t, &fakeAgentStore{})
+	_, created := createTestAgent(t, h, cookie, map[string]interface{}{
+		"name": "agent", "description": "original", "system_prompt": "original prompt",
+		"mcp_server_ids": []string{"mcp1"}, "enabled": true,
+	})
+
+	rec := patchAgent(t, h, cookie, created.ID, map[string]interface{}{
+		"name": "renamed", "description": "renamed description", "system_prompt": "renamed prompt",
+		"mcp_server_ids": []string{"mcp2"}, "enabled": false,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp agentResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.ID != created.ID {
+		t.Errorf("expected ID unchanged by PATCH, got %q, was %q", resp.ID, created.ID)
+	}
+	if resp.Name != "renamed" || resp.Description != "renamed description" || resp.SystemPrompt != "renamed prompt" || resp.Enabled {
+		t.Errorf("expected every editable field replaced, got %+v", resp)
+	}
+	if len(resp.MCPServerIDs) != 1 || resp.MCPServerIDs[0] != "mcp2" {
+		t.Errorf("expected mcp_server_ids replaced too, got %+v", resp.MCPServerIDs)
+	}
+}
+
+func TestHandleAdminUpdateAgent_InvalidJSON(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithAgents(t, &fakeAgentStore{})
+	req := httptest.NewRequest(http.MethodPatch, "/admin/api/agents/anything", bytes.NewReader([]byte("{not json")))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminUpdateAgent_InvalidRequest(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithAgents(t, &fakeAgentStore{})
+	_, created := createTestAgent(t, h, cookie, map[string]interface{}{"name": "agent"})
+	rec := patchAgent(t, h, cookie, created.ID, map[string]interface{}{"name": ""})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleAdminUpdateAgent_NotFound(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithAgents(t, &fakeAgentStore{})
+	rec := patchAgent(t, h, cookie, "missing", map[string]interface{}{"name": "agent"})
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleAdminUpdateAgent_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	rec := patchAgent(t, h, cookie, "anything", map[string]interface{}{"name": "agent"})
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminUpdateAgent_StoreError(t *testing.T) {
+	store := &fakeAgentStore{agents: []domain.Agent{{ID: "agent1", Name: "agent"}}, updateErr: errors.New("write failed")}
+	h, cookie := adminAuthedHandlerWithAgents(t, store)
+	rec := patchAgent(t, h, cookie, "agent1", map[string]interface{}{"name": "agent"})
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleAdminDeleteAgent_Success(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithAgents(t, &fakeAgentStore{})
+	_, created := createTestAgent(t, h, cookie, map[string]interface{}{"name": "agent"})
+
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/agents/"+created.ID, nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/agents/"+created.ID, nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusNotFound {
+		t.Errorf("expected the deleted agent to 404 afterward, got %d", getRec.Code)
+	}
+}
+
+func TestHandleAdminDeleteAgent_NotFound(t *testing.T) {
+	h, cookie := adminAuthedHandlerWithAgents(t, &fakeAgentStore{})
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/agents/missing", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleAdminDeleteAgent_NotConfigured(t *testing.T) {
+	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/agents/anything", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
 // mcpServerTestResp mirrors admin.go's unexported adminMCPServerTestResponse
 // wire shape, for decoding test responses.
 type mcpServerTestResp struct {
