@@ -149,6 +149,14 @@ update `README.md`'s tables in the same change.** Treat a new doc or
 package that isn't linked from here as incomplete work, same as every other
 rule in this section.
 
+`docs/index.md` is this same map's GitHub Pages landing page (the Pages
+build serves from `docs/`, so the repo-root `README.md` itself is outside
+its reach -- see `docs/_config.yml`) -- a small, deliberately shorter
+version of the same "Start here" list, with paths relative to `docs/`
+instead of the repo root. Update it alongside `README.md` for the same
+triggers; it doesn't need the Binaries/Development sections `README.md`
+has, just the links.
+
 ## Before committing
 
 - `go build ./...`, `go vet ./...`, `gofmt -l .` must be clean.
