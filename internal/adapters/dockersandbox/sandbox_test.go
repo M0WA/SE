@@ -135,6 +135,27 @@ func TestRun_NetworkAllowedWhenRequested(t *testing.T) {
 	}
 }
 
+// TestRun_CustomDNSServerAppliedToContainer proves Limits.DNS actually
+// reaches the container as a real --dns flag, not just plumbed-through-
+// but-unused -- read back via /etc/resolv.conf from inside the sandbox
+// itself, the same "prove it with real Docker behavior" bar
+// TestRun_CustomMemoryLimitEnforced/TestRun_CustomPidsLimitEnforced use for
+// their own Limits fields.
+func TestRun_CustomDNSServerAppliedToContainer(t *testing.T) {
+	requireDockerTests(t)
+	r := New(Limits{DNS: []string{"8.8.8.8", "1.1.1.1"}})
+	res, err := r.Run(context.Background(), RunOptions{
+		Language: Python, Network: true,
+		Code: "print(open('/etc/resolv.conf').read())",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(res.Stdout, "8.8.8.8") || !strings.Contains(res.Stdout, "1.1.1.1") {
+		t.Errorf("expected both configured DNS servers in /etc/resolv.conf, got %+v", res)
+	}
+}
+
 func TestRun_ReadOnlyRootFilesystem(t *testing.T) {
 	requireDockerTests(t)
 	r := New(Limits{})

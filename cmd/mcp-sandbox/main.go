@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"flag"
 	"log"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -31,19 +32,46 @@ func main() {
 	cpus := flag.String("cpus", dockersandbox.DefaultCPUs, "Docker --cpus value for each sandboxed container, e.g. 1 or 0.5")
 	pidsLimit := flag.String("pids-limit", dockersandbox.DefaultPidsLimit, "Docker --pids-limit value for each sandboxed container")
 	timeout := flag.Duration("timeout", dockersandbox.DefaultTimeout, "wall-clock time limit for a single run_python/run_go call")
+	dns := flag.String("dns", "", "comma-separated DNS server IP(s) for a network-enabled sandbox (Docker --dns); only meaningful with -network")
+	hostDNS := flag.Bool("host-dns", false, "use this host's own real upstream DNS servers inside a network-enabled sandbox, instead of Docker's default embedded DNS -- merged with -dns if both are set; only meaningful with -network")
 	flag.Parse()
+
+	dnsServers := splitNonEmpty(*dns)
+	if *hostDNS {
+		detected, err := dockersandbox.DetectHostDNS()
+		if err != nil {
+			log.Fatalf("-host-dns: %v", err)
+		}
+		dnsServers = append(dnsServers, detected...)
+	}
 
 	runner := dockersandbox.New(dockersandbox.Limits{
 		Memory:    *memory,
 		CPUs:      *cpus,
 		PidsLimit: *pidsLimit,
 		Timeout:   *timeout,
+		DNS:       dnsServers,
 	})
 	server := newServer(runner, *network)
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// splitNonEmpty splits a comma-separated flag value into its trimmed,
+// non-empty parts -- "" and "1.2.3.4, , 8.8.8.8" both handled sanely,
+// unlike a bare strings.Split which would produce a [""] or an empty-string
+// element for either.
+func splitNonEmpty(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 type runArgs struct {
