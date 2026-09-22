@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.55 - 2026-09-22
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* feature file upload download v2 by @M0WA in https://github.com/M0WA/SE/pull/249
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.54...v4.13.55
+
+
 ## v4.13.54 - 2026-09-22
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
