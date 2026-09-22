@@ -9,11 +9,12 @@ import (
 
 // defaultAgents is a small, ready-to-use starter set covering the common
 // chat personas this deployment's own tooling (web_search/web_fetch,
-// get_datetime) supports -- see docs/manual/agents.md's "Suggested global
-// agents" section for the rationale behind each one. Every ID here is a
-// fixed literal, not domain.NewAgentID-minted, since seedDefaultAgents only
-// ever runs once (see its own doc comment) -- there is no existing-ID set
-// to dedupe against.
+// get_datetime, run_python/run_go, read_file_base64) supports -- see
+// docs/manual/agents.md's "Suggested global agents" section for the
+// rationale behind each one. Every ID here is a fixed literal, not
+// domain.NewAgentID-minted, since seedDefaultAgents only ever runs once
+// (see its own doc comment) -- there is no existing-ID set to dedupe
+// against.
 //
 // Each one starts with an empty MCPServerIDs -- which now means NO global
 // tools at all, not "every tool" (see domain.Agent.MCPServerIDs' own doc
@@ -21,8 +22,9 @@ import (
 // is admin-configured, deployment-specific data (e.g. "web_tools" here,
 // "mcp_web_1" there) that this package has no safe way to guess or
 // hardcode. An admin wanting Researcher/Current events/Deep research/This
-// index to actually use web tools scopes them to whichever server row
-// actually exists on THIS deployment via the agent's own edit page, same as
+// index to actually use web tools (or Image analyst to use the sandbox/
+// files tools) scopes them to whichever server row actually exists on
+// THIS deployment via the agent's own edit page, same as
 // they would for any agent they created themselves.
 var defaultAgents = []domain.Agent{
 	{
@@ -71,6 +73,33 @@ var defaultAgents = []domain.Agent{
 			"when they matter. Cite what you actually read.",
 		Enabled: true,
 	},
+	{
+		ID:          "image_analyst",
+		Name:        "Image analyst",
+		Description: "Analyzes an uploaded image's content and extracts any text in it (OCR).",
+		// The sandbox's container root is read-only (see
+		// dockersandbox's own package doc comment), which rules out
+		// "apt-get install tesseract-ocr" -- pytesseract's usual system
+		// dependency -- entirely, at any privilege level. easyocr is
+		// used instead specifically because it's pure pip (bundles its
+		// own models, no system package needed), at the real cost of a
+		// large, slow, uncached download every single call (nothing
+		// persists between sandbox runs) -- this agent only works
+		// well with a generously long -timeout (several minutes) and
+		// -memory on its sandbox MCP server row.
+		SystemPrompt: "When asked to analyze an image or read text out of one, first call " +
+			"read_file_base64 to get its base64 content (list_files first if you don't already " +
+			"have the file id). Then call run_python with packages [\"Pillow\", \"easyocr\"] and code " +
+			"that: decodes the base64 into bytes, loads it with PIL.Image to report its size/format " +
+			"and describe what you can determine visually from pixel data (dominant colors, " +
+			"aspect ratio), and separately runs easyocr.Reader(['en']).readtext(...) on it to extract " +
+			"any text present, printing everything as plain text. This first call will be slow " +
+			"(easyocr downloads its models fresh every time, nothing persists between sandbox " +
+			"calls) -- warn the user this may take a while rather than assuming it failed. If the " +
+			"call times out, say so plainly and suggest the admin raise this sandbox server's " +
+			"-timeout.",
+		Enabled: true,
+	},
 }
 
 // SeedDefaultAgents inserts defaultAgents the FIRST time this database's
@@ -83,7 +112,7 @@ var defaultAgents = []domain.Agent{
 // restarts, since the table is never empty again. The one caveat: deleting
 // EVERY agent back down to zero rows is indistinguishable from "a
 // genuinely fresh database" by this check, so the next restart re-seeds
-// all five -- accepted as an edge case too narrow (a deliberate full
+// all six -- accepted as an edge case too narrow (a deliberate full
 // reset) to design a persisted "already seeded" flag around.
 //
 // Deliberately NOT wired into migrate() -- migrate() runs for every

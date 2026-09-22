@@ -30,7 +30,7 @@ The agents feature depends on an agent store being wired into the admin server; 
 
 ## Suggested global agents
 
-A fresh install seeds five ready-to-use starter agents automatically, the first time the agents table is completely empty -- delete one and it stays deleted; delete all five back down to zero and the next restart re-seeds them, since that's indistinguishable from a genuinely fresh database. Each one starts with an **empty MCP-server scope** deliberately, not as an oversight: a real MCP server's row ID is deployment-specific data nothing can safely guess. To actually let one use web search, open it and check the box for whatever server row this deployment's web-search MCP server is configured as.
+A fresh install seeds six ready-to-use starter agents automatically, the first time the agents table is completely empty -- delete one and it stays deleted; delete all six back down to zero and the next restart re-seeds them, since that's indistinguishable from a genuinely fresh database. Each one starts with an **empty MCP-server scope** deliberately, not as an oversight: a real MCP server's row ID is deployment-specific data nothing can safely guess. To actually let one use web search (or the sandbox/files tools), open it and check the box for whichever server row this deployment's own MCP server is configured as.
 
 | Agent | Purpose | Needs an MCP server scoped to work as intended? |
 |---|---|---|
@@ -39,10 +39,12 @@ A fresh install seeds five ready-to-use starter agents automatically, the first 
 | This index | Prioritizes this deployment's own indexed documents over the open web. | Yes (web search/fetch) |
 | Current events | For "what's happening now" questions -- calls get_datetime first, then always searches rather than trusting training knowledge. | Yes (web search/fetch, plus the get_datetime MCP server if configured) |
 | Deep research | Slower and more thorough -- fetches and reads the top few results before answering, not just search snippets. | Yes (web search/fetch) |
+| Image analyst | Analyzes an uploaded image's content and extracts any text in it (OCR), via a sandboxed Python script using Pillow/easyocr. | Yes (a network-enabled sandbox MCP server, plus the files MCP server to read the uploaded image) |
 
 > **Worth knowing:**
 > - An agent with an empty MCP-server scope isn't "unrestricted" -- it gets no global MCP tools at all. See the agent-detail page's MCP-servers section for the full explanation.
 > - Deleting an agent that's currently set as a chat endpoint's default agent (Settings -> Chat -> Settings) doesn't clear that setting for you -- the stored default_agent_id just stops matching anything, and turns fall back to running with no agent specialization.
+> - Image analyst needs its sandbox MCP server configured with `-network` (so run_python can `pip install` Pillow/easyocr) and a generous `-timeout`/`-memory` -- easyocr bundles its own models but downloads them fresh on every single call (nothing persists between sandbox runs), which is slow. See [MCP server detail](mcp-server-detail.md)'s Command/Arguments section.
 
 ---
 ← [MCP Server detail](mcp-server-detail.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Agent detail](agent-detail.md) →
