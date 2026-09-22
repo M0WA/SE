@@ -714,6 +714,40 @@ type UserMCPServerStore interface {
 	DeleteUserMCPServer(ctx context.Context, userID string, id string) error
 }
 
+// ErrFileNotFound is returned by FileStore's GetFile and DeleteFile when no
+// file with the given (ownerUserID, id) pair exists -- UserMCPServerStore's
+// sibling for uploaded files.
+var ErrFileNotFound = errors.New("file not found")
+
+// FileStore persists domain.UploadedFile rows -- every operation scoped by
+// ownerUserID, the same discipline UserMCPServerStore applies to personal
+// MCP servers, so one user can never list, read, or delete another's file
+// even if they somehow guessed its ID. Backs both the self-service
+// /account/api/files HTTP endpoints (restapi) and, through those same
+// endpoints over a short-lived per-turn bearer token, cmd/mcp-files'
+// list_files/read_file/write_file tools -- see
+// application.ChatOptions.FileAccessToken's doc comment for why
+// cmd/mcp-files calls back over HTTP rather than holding its own DB
+// connection (it would otherwise need the shared database's own
+// credentials handed to it, a much broader grant than "this one user's own
+// files").
+type FileStore interface {
+	// ListFiles lists ownerUserID's own files, ordered by created_at
+	// descending (most recent upload first) -- metadata only, never the
+	// file content itself.
+	ListFiles(ctx context.Context, ownerUserID string) ([]domain.UploadedFile, error)
+	// SaveFile stores a new file owned by ownerUserID and returns its
+	// fully-populated domain.UploadedFile (ID/Size/CreatedAt included) --
+	// the caller never picks the ID.
+	SaveFile(ctx context.Context, ownerUserID, filename, contentType string, data []byte) (domain.UploadedFile, error)
+	// GetFile returns one of ownerUserID's own files, metadata and content
+	// together -- ErrFileNotFound if no file with (ownerUserID, id) exists.
+	GetFile(ctx context.Context, ownerUserID, id string) (domain.UploadedFile, []byte, error)
+	// DeleteFile removes one of ownerUserID's own files -- ErrFileNotFound
+	// if no file with (ownerUserID, id) exists.
+	DeleteFile(ctx context.Context, ownerUserID, id string) error
+}
+
 // ErrAgentNotFound is returned by AgentStore's Update and Delete when no
 // agent with the given ID exists -- AgentStore's sibling of
 // ErrMCPServerNotFound above.

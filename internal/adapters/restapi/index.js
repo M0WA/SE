@@ -19,6 +19,8 @@
   const chatStatus = document.getElementById('chat-status');
   const chatForm = document.getElementById('chat-form');
   const chatInput = document.getElementById('chat-input');
+  const chatAttachBtn = document.getElementById('chat-attach');
+  const chatAttachInput = document.getElementById('chat-attach-input');
   const chatWebSearch = document.getElementById('chat-web-search');
   const chatAgentSelect = document.getElementById('chat-agent-select');
   const chatTokenUsage = document.getElementById('chat-token-usage');
@@ -515,7 +517,35 @@
         const name = (tr.tool_name || '').toLowerCase();
         const input = firstArgumentValue(tr.arguments);
 
-        if (name.includes('fetch') && input) {
+        if (name === 'write_file' && !tr.err) {
+          // cmd/mcp-files' write_file tool returns {id, filename, size} as
+          // its JSON output -- render a real download link (pointing at
+          // /account/api/files/{id}, the same endpoint the Your files page
+          // itself links to) rather than only the raw JSON, so a produced
+          // artifact is immediately clickable in the transcript.
+          let parsed = null;
+          try {
+            parsed = JSON.parse(tr.output);
+          } catch (e) {
+            parsed = null;
+          }
+          const details = document.createElement('details');
+          details.className = 'chat-hook-result';
+          const summary = document.createElement('summary');
+          summary.textContent = tr.tool_name;
+          details.appendChild(summary);
+          if (parsed && parsed.id && parsed.filename) {
+            const target = document.createElement('div');
+            target.className = 'chat-hook-target';
+            const link = document.createElement('a');
+            link.href = '/account/api/files/' + encodeURIComponent(parsed.id);
+            link.textContent = 'Download ' + parsed.filename;
+            target.appendChild(link);
+            details.appendChild(target);
+          }
+          details.appendChild(buildToolResponseFold(tr, 'Raw output'));
+          msg.appendChild(details);
+        } else if (name.includes('fetch') && input) {
           // Two-level fold: the outer <details> is closed by default, same
           // as every other tool result -- expanding it shows what was
           // fetched via a real link, with the raw response/error tucked
@@ -794,6 +824,36 @@
     }
   });
 
+  // uploadAttachedFile posts the chosen file to /account/api/files (the
+  // same self-service endpoint the Your files page uses) -- the file
+  // becomes available for the model to discover and read via the
+  // file-operations MCP server's own tools (list_files/read_file), the
+  // next time the model chooses to look, not injected into the outgoing
+  // message text itself. 404/503 here most likely means no signed-in
+  // regular-user account (an admin session has no files of its own -- see
+  // domain.UploadedFile's own doc comment) or the feature isn't
+  // configured on this deployment.
+  async function uploadAttachedFile(file) {
+    const body = new FormData();
+    body.append('file', file);
+    const resp = await fetch('/account/api/files', { method: 'POST', body });
+    if (!resp.ok) throw new Error(await resp.text() || resp.statusText);
+    return resp.json();
+  }
+
+  chatAttachBtn.addEventListener('click', () => chatAttachInput.click());
+  chatAttachInput.addEventListener('change', async () => {
+    const file = chatAttachInput.files[0];
+    chatAttachInput.value = '';
+    if (!file) return;
+    try {
+      const uploaded = await uploadAttachedFile(file);
+      chatStatus.textContent = 'Attached "' + uploaded.filename + '" -- ask about it and the model will read it.';
+    } catch (err) {
+      chatStatus.textContent = 'Could not attach file: ' + err.message;
+    }
+  });
+
   // toWireHistory strips a tab's own client-side rendering metadata
   // (context_trimmed/tool_results, kept in tab.history purely so
   // renderActiveTab can faithfully replay a tab's folds after switching
@@ -987,5 +1047,6 @@
       escapeHTML, renderInline, renderMarkdown,
       buildDonutSVG, buildDonutLegend, tokenUsageSegments, renderTokenUsage,
       loadSession, renderAgentSelectOptions, loadAgentOptions,
+      uploadAttachedFile,
     };
   }

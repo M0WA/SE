@@ -99,6 +99,9 @@ var accountMCPServersHTML []byte
 //go:embed account_mcp_server.html
 var accountMCPServerHTML []byte
 
+//go:embed account_files.html
+var accountFilesHTML []byte
+
 //go:embed style.css
 var styleCSS []byte
 
@@ -188,6 +191,9 @@ var accountMCPServersJS []byte
 //go:embed account_mcp_server.js
 var accountMCPServerJS []byte
 
+//go:embed account_files.js
+var accountFilesJS []byte
+
 //go:embed index.js
 var indexJS []byte
 
@@ -257,7 +263,16 @@ type Handler struct {
 	// *sqlrepo.Repository users uses. ChatService gets its own separate
 	// reference to the same store (wired directly in cmd/search's main, not
 	// through Handler) for merging a caller's own servers into a chat turn.
-	userMCPServers  ports.UserMCPServerStore
+	userMCPServers ports.UserMCPServerStore
+	// files backs the self-service file upload/list/download/delete API
+	// (/account/api/files...) -- set on search-server only, the same
+	// *sqlrepo.Repository userMCPServers uses. fileTokens is always
+	// non-nil once New runs (unlike files, which is nil-safe/optional):
+	// minting a token costs nothing when files itself isn't configured,
+	// since requireConfigured on the /account/api/files handlers refuses
+	// the request before a token would ever be validated.
+	files           ports.FileStore
+	fileTokens      *fileTokenStore
 	users           ports.UserStore
 	health          ports.HealthChecker
 	onCrawlComplete func()
@@ -379,6 +394,10 @@ type Config struct {
 	// MCP server CRUD API (/account/api/mcp-servers...) -- the same
 	// *sqlrepo.Repository Users uses.
 	UserMCPServers ports.UserMCPServerStore
+	// Files is set on search-server only, backing the self-service file
+	// upload/list/download/delete API (/account/api/files...) -- the same
+	// *sqlrepo.Repository UserMCPServers uses.
+	Files ports.FileStore
 	// Health backs GET /healthz on every process; unset always reports
 	// healthy (no DB connection to check).
 	Health ports.HealthChecker
@@ -453,6 +472,8 @@ func New(cfg Config) *Handler {
 		agents:                cfg.Agents,
 		users:                 cfg.Users,
 		userMCPServers:        cfg.UserMCPServers,
+		files:                 cfg.Files,
+		fileTokens:            newFileTokenStore(),
 		health:                cfg.Health,
 		onCrawlComplete:       cfg.OnCrawlComplete,
 		dbDriver:              cfg.DBDriver,
@@ -521,6 +542,14 @@ func (h *Handler) RoutesSearch() http.Handler {
 	mux.HandleFunc("GET /account/api/mcp-servers/{id}", h.requireRegularUserAuthAPI(h.handleAccountGetMCPServer))
 	mux.HandleFunc("PATCH /account/api/mcp-servers/{id}", h.requireRegularUserAuthAPI(h.handleAccountUpdateMCPServer))
 	mux.HandleFunc("DELETE /account/api/mcp-servers/{id}", h.requireRegularUserAuthAPI(h.handleAccountDeleteMCPServer))
+	mux.HandleFunc("/account/files", h.requireRegularUserAuthPage(h.handleAccountFilesPage))
+	mux.HandleFunc("/account_files.js", h.handleAccountFilesJS)
+	// /account/api/files is deliberately NOT wrapped in
+	// requireRegularUserAuthAPI: cmd/mcp-files calls it with a bearer
+	// token, not a session cookie, so handleAccountFiles/handleAccountFile
+	// resolve and gate the caller themselves -- see fileAccessUserID.
+	mux.HandleFunc("/account/api/files", h.handleAccountFiles)
+	mux.HandleFunc("/account/api/files/{id}", h.handleAccountFile)
 	mux.HandleFunc("/healthz", h.handleHealthz)
 	return withSecurityHeaders(mux)
 }

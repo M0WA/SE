@@ -94,6 +94,17 @@ type ChatOptions struct {
 	// userID, only when the session is role=user -- same source/condition
 	// as UserCustomPrompt above.
 	UserID string
+	// FileAccessToken, when non-empty, is passed as the SE_FILES_API_TOKEN
+	// environment variable to every active "stdio"-transport MCPServer
+	// process (same delivery mechanism as WEB_SEARCH_BASE_URL/UserAgent
+	// above), letting the first-party mcp-files server's list_files/
+	// read_file/write_file tools call back into /account/api/files as this
+	// turn's own signed-in user -- see restapi.fileTokenStore's doc
+	// comment for why a short-lived bearer token, minted per turn, rather
+	// than a real session cookie or DB credentials. Set by the HTTP
+	// handler layer (restapi.handleChat), same condition as UserID (empty
+	// whenever UserID is).
+	FileAccessToken string
 }
 
 // ChatResult is one completed chat turn's answer.
@@ -242,6 +253,9 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		}
 		if opts.UserAgent != "" {
 			env["WEB_FETCH_USER_AGENT"] = opts.UserAgent
+		}
+		if opts.FileAccessToken != "" {
+			env["SE_FILES_API_TOKEN"] = opts.FileAccessToken
 		}
 		session, discoveredTools = s.mcpTools.Open(ctx, activeServers, env)
 		defer session.Close()

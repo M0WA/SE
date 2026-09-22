@@ -73,6 +73,7 @@ func main() {
 		Agents:               repo,
 		Users:                repo,
 		UserMCPServers:       repo,
+		Files:                repo,
 		InternalSearchAPIKey: internalSearchAPIKey,
 		Chat:                 application.NewChatService(repo, httpchat.New(), repo, mcpclient.New(), repo, repo),
 	})
