@@ -781,9 +781,18 @@ button:focus-visible {
    treatment -- a plain Unicode character (×, ＋, ⎇, ⬇, ⬆) as the button's
    own content, same convention as #chat-send's "▶" -- with a visible
    focus ring and hover tint since there's no text label to carry that on
-   a small viewport. */
+   a small viewport. #chat-attach is the one exception, an inline SVG
+   instead of a character -- same reasoning as .header-icon-button's own
+   Account/Sign out icons: the closest Unicode codepoint for "attach a
+   file" (the paperclip emoji) renders as a full-color pictogram in most
+   fonts, breaking this row's otherwise monochrome icon language; stroke:
+   currentColor (below) is what keeps it matching color/hover/focus like
+   every character-content button here despite being markup. */
 .chat-tab-close,
 .chat-tab-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 0.85rem;
   line-height: 1;
   color: var(--ink-muted);
@@ -792,6 +801,12 @@ button:focus-visible {
   border-radius: 3px;
   padding: 0.2rem 0.4rem;
   cursor: pointer;
+}
+
+.chat-tab-action svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  stroke: currentColor;
 }
 
 .chat-tab-close:hover,
@@ -1185,20 +1200,6 @@ button:focus-visible {
    keeps it a small square regardless of glyph metrics, and line-height: 1
    plus flex centering keeps the glyph vertically centered in it. */
 #chat-send {
-  flex: none;
-  width: 2.6rem;
-  height: 2.6rem;
-  padding: 0;
-  font-size: 1.1rem;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* #chat-attach: same fixed-square treatment as #chat-send, placed before
-   #chat-input rather than after it. */
-#chat-attach {
   flex: none;
   width: 2.6rem;
   height: 2.6rem;
