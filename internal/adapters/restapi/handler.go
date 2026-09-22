@@ -276,8 +276,14 @@ type Handler struct {
 	// minting a token costs nothing when files itself isn't configured,
 	// since requireConfigured on the /account/api/files handlers refuses
 	// the request before a token would ever be validated.
-	files           ports.FileStore
-	fileTokens      *fileTokenStore
+	files      ports.FileStore
+	fileTokens *fileTokenStore
+	// chats backs the self-service pinned-chat CRUD (/account/api/chats...)
+	// -- set on search-server only, the same *sqlrepo.Repository files
+	// uses. Also consulted by handleUploadFile/fileAccessTokenFor to
+	// verify a client-supplied chat_id is actually one of the calling
+	// user's own pinned chats before trusting it.
+	chats           ports.ChatStore
 	users           ports.UserStore
 	health          ports.HealthChecker
 	onCrawlComplete func()
@@ -403,6 +409,10 @@ type Config struct {
 	// upload/list/download/delete API (/account/api/files...) -- the same
 	// *sqlrepo.Repository UserMCPServers uses.
 	Files ports.FileStore
+	// Chats is set on search-server only, backing the self-service pinned-
+	// chat CRUD API (/account/api/chats...) -- the same *sqlrepo.Repository
+	// Files uses.
+	Chats ports.ChatStore
 	// Health backs GET /healthz on every process; unset always reports
 	// healthy (no DB connection to check).
 	Health ports.HealthChecker
@@ -479,6 +489,7 @@ func New(cfg Config) *Handler {
 		userMCPServers:        cfg.UserMCPServers,
 		files:                 cfg.Files,
 		fileTokens:            newFileTokenStore(),
+		chats:                 cfg.Chats,
 		health:                cfg.Health,
 		onCrawlComplete:       cfg.OnCrawlComplete,
 		dbDriver:              cfg.DBDriver,
@@ -555,6 +566,9 @@ func (h *Handler) RoutesSearch() http.Handler {
 	// resolve and gate the caller themselves -- see fileAccessUserID.
 	mux.HandleFunc("/account/api/files", h.handleAccountFiles)
 	mux.HandleFunc("/account/api/files/{id}", h.handleAccountFile)
+	mux.HandleFunc("/account/api/chats", h.requireRegularUserAuthAPI(h.handleAccountChats))
+	mux.HandleFunc("PATCH /account/api/chats/{id}", h.requireRegularUserAuthAPI(h.handleAccountUpdateChat))
+	mux.HandleFunc("DELETE /account/api/chats/{id}", h.requireRegularUserAuthAPI(h.handleAccountDeleteChat))
 	mux.HandleFunc("/healthz", h.handleHealthz)
 	return withSecurityHeaders(mux)
 }

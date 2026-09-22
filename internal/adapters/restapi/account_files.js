@@ -1,9 +1,5 @@
   const statusEl = document.getElementById('files-status');
   const tableEl = document.getElementById('files-table');
-  const uploadForm = document.getElementById('upload-form');
-  const uploadInput = document.getElementById('upload-input');
-  const uploadBtn = document.getElementById('upload-btn');
-  const uploadStatusEl = document.getElementById('upload-status');
 
   // This page intentionally does NOT load admin.js (see account.js's own
   // comment on why self-service pages stay decoupled from it) -- same
@@ -56,7 +52,7 @@
   function renderFiles(files) {
     clear(tableEl);
     if (files.length === 0) {
-      statusEl.textContent = 'No files uploaded yet -- use the form above to add one.';
+      statusEl.textContent = 'No files yet -- pin a chat on the chat page and use its attach button to add one.';
       return;
     }
     statusEl.textContent = '';
@@ -101,38 +97,6 @@
     }
   }
 
-  function setUploading(uploading) {
-    uploadBtn.disabled = uploading;
-    uploadBtn.textContent = uploading ? 'Uploading…' : 'Upload';
-  }
-
-  async function uploadSelectedFile() {
-    const selected = uploadInput.files?.[0];
-    if (!selected) {
-      uploadStatusEl.textContent = 'Choose a file first.';
-      return;
-    }
-    setUploading(true);
-    uploadStatusEl.textContent = '';
-    try {
-      const body = new FormData();
-      body.append('file', selected);
-      const resp = await fetch('/account/api/files', { method: 'POST', body });
-      if (!resp.ok) throw new Error(await resp.text() || resp.statusText);
-      uploadForm.reset();
-      await loadFiles();
-    } catch (err) {
-      uploadStatusEl.textContent = 'Could not upload: ' + err.message;
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  uploadForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    uploadSelectedFile();
-  });
-
   // Mirrors account.js's own inline sign-out (see its comment) -- this page
   // doesn't load admin.js either.
   document.getElementById('sign-out').addEventListener('click', async () => {
@@ -149,5 +113,5 @@
   // a browser's <script> tag, so this is a no-op there. See
   // internal/adapters/restapi/account_files.test.js.
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { renderFiles, loadFiles, deleteFile, formatSize, uploadSelectedFile };
+    module.exports = { renderFiles, loadFiles, deleteFile, formatSize };
   }

@@ -455,6 +455,26 @@ test('sendChatMessage includes the active tab\'s own agent_id in the request bod
   assert.equal(gotBody.agent_id, 'researcher');
 });
 
+test('sendChatMessage includes the active tab\'s chat_id only when it is persisted, and resyncs it afterward', async () => {
+  let gotBody;
+  const patched = [];
+  global.fetch = async (url, opts) => {
+    if (url === '/chat') { gotBody = JSON.parse(opts.body); return { ok: true, json: async () => ({ answer: 'a' }) }; }
+    patched.push(url);
+    return { ok: true, json: async () => ({}) };
+  };
+  const { sendChatMessage, activeTab } = loadFixture();
+  const tab = activeTab();
+  tab.persisted = true;
+  tab.chatId = 'c1';
+
+  await sendChatMessage('q');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(gotBody.chat_id, 'c1');
+  assert.equal(patched.includes('/account/api/chats/c1'), true, 'expected the turn to resync to the server');
+});
+
 test('serializeTab/deserializeTab round trip a tab\'s own agent_id', () => {
   const { serializeTab, deserializeTab } = loadFixture();
   const tab = { title: 'Chat 1', history: [{ role: 'user', content: 'hi' }], agentId: 'researcher' };
@@ -509,6 +529,264 @@ test('closeTab on a background (non-active) tab does not change which tab is act
   closeTab(first.id);
   assert.equal(tabs.length, 1);
   assert.equal(activeTab().id, second.id);
+});
+
+test('clicking the active tab\'s own label renames it via window.prompt; clicking a background tab\'s label switches instead', async () => {
+  const { newChatTab, renderTabs, activeTab, tabs } = loadFixture();
+  const first = activeTab();
+  newChatTab();
+  renderTabs();
+
+  // The now-active (second) tab's own label click renames it.
+  window.prompt = () => 'Renamed';
+  const labels = document.querySelectorAll('.chat-tab-label');
+  labels[1].dispatchEvent(new window.Event('click'));
+  assert.equal(activeTab().title, 'Renamed');
+
+  // The background (first) tab's label click switches to it instead of
+  // renaming -- renaming only ever applies to the tab already active.
+  labels[0].dispatchEvent(new window.Event('click'));
+  assert.equal(activeTab().id, first.id);
+  assert.notEqual(first.title, 'Renamed');
+});
+
+test('renameTab leaves the title unchanged when window.prompt is cancelled or the input is blank', () => {
+  const { renameTab, activeTab } = loadFixture();
+  const tab = activeTab();
+  const original = tab.title;
+
+  window.prompt = () => null;
+  renameTab(tab.id);
+  assert.equal(tab.title, original);
+
+  window.prompt = () => '   ';
+  renameTab(tab.id);
+  assert.equal(tab.title, original);
+});
+
+test('renameTab on a persisted tab resyncs the new title to the server', async () => {
+  let gotURL, gotBody;
+  global.fetch = async (url, opts) => {
+    gotURL = url;
+    gotBody = JSON.parse(opts.body);
+    return { ok: true, json: async () => ({}) };
+  };
+  const { renameTab, activeTab } = loadFixture();
+  const tab = activeTab();
+  tab.persisted = true;
+  tab.chatId = 'c1';
+  window.prompt = () => 'New title';
+  renameTab(tab.id);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(tab.title, 'New title');
+  assert.equal(gotURL, '/account/api/chats/c1');
+  assert.equal(gotBody.title, 'New title');
+});
+
+test('resyncPersistedChat silently swallows a network failure', async () => {
+  global.fetch = async () => { throw new Error('network down'); };
+  const { resyncPersistedChat, activeTab } = loadFixture();
+  const tab = activeTab();
+  tab.persisted = true;
+  tab.chatId = 'c1';
+  await assert.doesNotReject(resyncPersistedChat(tab));
+});
+
+test('pinTab POSTs the tab\'s current state and marks it persisted with the server-assigned id', async () => {
+  let gotBody;
+  global.fetch = async (url, opts) => {
+    gotBody = JSON.parse(opts.body);
+    return { ok: true, json: async () => ({ id: 'new-chat-id' }) };
+  };
+  const { pinTab, activeTab } = loadFixture();
+  const tab = activeTab();
+  tab.title = 'My chat';
+  await pinTab(tab);
+
+  assert.equal(tab.persisted, true);
+  assert.equal(tab.chatId, 'new-chat-id');
+  assert.equal(gotBody.title, 'My chat');
+  assert.equal(document.getElementById('chat-attach').disabled, false, 'attach becomes available once pinned');
+});
+
+test('pinTab reports an error and leaves the tab unpersisted on a non-ok response', async () => {
+  global.fetch = async () => ({ ok: false, status: 500, text: async () => 'db down' });
+  const { pinTab, activeTab } = loadFixture();
+  const tab = activeTab();
+  await pinTab(tab);
+
+  assert.equal(tab.persisted, false);
+  assert.equal(document.getElementById('chat-status').textContent.includes('db down'), true);
+});
+
+test('unpinTab DELETEs the chat and marks the tab unpersisted again', async () => {
+  let gotURL, gotMethod;
+  global.fetch = async (url, opts) => {
+    gotURL = url;
+    gotMethod = opts.method;
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  const { unpinTab, activeTab } = loadFixture();
+  const tab = activeTab();
+  tab.persisted = true;
+  tab.chatId = 'c1';
+  await unpinTab(tab);
+
+  assert.equal(gotURL, '/account/api/chats/c1');
+  assert.equal(gotMethod, 'DELETE');
+  assert.equal(tab.persisted, false);
+  assert.equal(tab.chatId, null);
+  assert.equal(document.getElementById('chat-attach').disabled, true, 'attach becomes unavailable once unpinned');
+});
+
+test('unpinTab reports an error and leaves the tab persisted on a non-ok response', async () => {
+  global.fetch = async () => ({ ok: false, status: 500, text: async () => 'db down' });
+  const { unpinTab, activeTab } = loadFixture();
+  const tab = activeTab();
+  tab.persisted = true;
+  tab.chatId = 'c1';
+  await unpinTab(tab);
+
+  assert.equal(tab.persisted, true);
+  assert.equal(document.getElementById('chat-status').textContent.includes('db down'), true);
+});
+
+test('togglePinTab pins an unpersisted tab and unpins a persisted one', async () => {
+  global.fetch = async (url, opts) => {
+    if (opts.method === 'DELETE') return { ok: true, json: async () => ({ ok: true }) };
+    return { ok: true, json: async () => ({ id: 'c1' }) };
+  };
+  const { togglePinTab, activeTab } = loadFixture();
+  const tab = activeTab();
+
+  togglePinTab(tab.id);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(tab.persisted, true);
+
+  togglePinTab(tab.id);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(tab.persisted, false);
+});
+
+test('togglePinTab on an unknown tab id is a no-op', () => {
+  const { togglePinTab, tabs } = loadFixture();
+  togglePinTab(999999);
+  assert.equal(tabs.length, 1);
+});
+
+test('clicking a tab\'s pin button wires to togglePinTab', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ id: 'c1' }) });
+  const { activeTab } = loadFixture();
+  document.querySelector('.chat-tab-pin').dispatchEvent(new window.Event('click'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(activeTab().persisted, true);
+});
+
+test('closeTab on a persisted tab DELETEs its server-side chat before removing it locally', async () => {
+  let gotURL;
+  global.fetch = async (url) => {
+    gotURL = url;
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  const { newChatTab, closeTab, tabs, activeTab } = loadFixture();
+  const first = activeTab();
+  first.persisted = true;
+  first.chatId = 'c1';
+  const second = newChatTab();
+
+  await closeTab(first.id);
+  assert.equal(gotURL, '/account/api/chats/c1');
+  assert.equal(tabs.length, 1);
+  assert.equal(activeTab().id, second.id);
+});
+
+test('closeTab on a persisted tab leaves it open and shows an error if the server delete fails', async () => {
+  global.fetch = async () => ({ ok: false, status: 500, text: async () => 'db down' });
+  const { newChatTab, closeTab, tabs, activeTab } = loadFixture();
+  const first = activeTab();
+  first.persisted = true;
+  first.chatId = 'c1';
+  newChatTab();
+
+  await closeTab(first.id);
+  assert.equal(tabs.length, 2, 'the tab survives a failed server delete');
+  assert.equal(document.getElementById('chat-status').textContent.includes('db down'), true);
+});
+
+test('loadPersistedChats replaces the default tab with every pinned chat, most recent first as returned', async () => {
+  global.fetch = async (url) => {
+    if (url === '/account/api/chats') {
+      return {
+        ok: true,
+        json: async () => [
+          { id: 'c1', title: 'First saved', agent_id: 'researcher', history: [{ role: 'user', content: 'hi' }], created_at: '', updated_at: '' },
+          { id: 'c2', title: 'Second saved', agent_id: '', history: [], created_at: '', updated_at: '' },
+        ],
+      };
+    }
+    return { ok: true, json: async () => [] };
+  };
+  const { loadPersistedChats, tabs, activeTab } = loadFixture();
+  await loadPersistedChats();
+
+  assert.equal(tabs.length, 2);
+  assert.equal(tabs[0].title, 'First saved');
+  assert.equal(tabs[0].persisted, true);
+  assert.equal(tabs[0].chatId, 'c1');
+  assert.equal(tabs[0].agentId, 'researcher');
+  assert.equal(tabs[0].history[0].content, 'hi');
+  assert.equal(activeTab().id, tabs[0].id);
+});
+
+test('loadPersistedChats leaves the default tab alone when the account has no pinned chats', async () => {
+  global.fetch = async (url) => {
+    if (url === '/account/api/chats') return { ok: true, json: async () => [] };
+    return { ok: true, json: async () => [] };
+  };
+  const { loadPersistedChats, tabs } = loadFixture();
+  const onlyId = tabs[0].id;
+  await loadPersistedChats();
+  assert.equal(tabs.length, 1);
+  assert.equal(tabs[0].id, onlyId);
+});
+
+test('loadPersistedChats is silent and leaves the default tab alone on a non-ok or failed response', async () => {
+  const { loadPersistedChats, tabs } = loadFixture();
+  const onlyId = tabs[0].id;
+
+  global.fetch = async () => ({ ok: false, status: 500, text: async () => 'db down' });
+  await loadPersistedChats();
+  assert.equal(tabs.length, 1);
+  assert.equal(tabs[0].id, onlyId);
+
+  global.fetch = async () => { throw new Error('network down'); };
+  await loadPersistedChats();
+  assert.equal(tabs.length, 1);
+  assert.equal(tabs[0].id, onlyId);
+});
+
+test('updateAttachAvailability disables the attach button for an unpersisted tab and enables it for a persisted one', () => {
+  const { updateAttachAvailability, activeTab } = loadFixture();
+  updateAttachAvailability();
+  assert.equal(document.getElementById('chat-attach').disabled, true);
+
+  activeTab().persisted = true;
+  updateAttachAvailability();
+  assert.equal(document.getElementById('chat-attach').disabled, false);
+});
+
+test('uploadAttachedFile includes the active tab\'s chat_id when it is persisted', async () => {
+  let gotBody;
+  global.fetch = async (url, opts) => {
+    gotBody = opts.body;
+    return { ok: true, json: async () => baseChatFile() };
+  };
+  const { uploadAttachedFile, activeTab } = loadFixture();
+  activeTab().persisted = true;
+  activeTab().chatId = 'c1';
+  await uploadAttachedFile(new window.File(['hi'], 'notes.txt', { type: 'text/plain' }));
+  assert.equal(gotBody.get('chat_id'), 'c1');
 });
 
 test('a reply arriving after the user switched away updates the sending tab\'s own history but leaves the visible tab/DOM untouched', async () => {
@@ -705,7 +983,7 @@ test('sendChatMessage on success appends both turns to history and renders the a
   // At the moment the request was sent, the active tab's history held only
   // the user's just-appended turn -- the assistant's reply is pushed only
   // afterward, once the response comes back.
-  assert.deepEqual(JSON.parse(gotOpts.body), { messages: [{ role: 'user', content: 'what is the answer?' }], web_search: true, agent_id: '' });
+  assert.deepEqual(JSON.parse(gotOpts.body), { messages: [{ role: 'user', content: 'what is the answer?' }], web_search: true, agent_id: '', chat_id: '' });
 
   const history = activeTab().history;
   assert.equal(history.length, 2);
@@ -945,10 +1223,13 @@ test('a failed file delete shows a status message and leaves the box in place', 
   assert.notEqual(chatFiles.querySelector('.chat-file-box'), null);
 });
 
-test('loadChatFiles populates #chat-files from GET /account/api/files', async () => {
-  const { loadChatFiles } = loadFixture();
+test('loadChatFiles populates #chat-files from GET /account/api/files scoped to the active tab\'s chat_id', async () => {
+  const { loadChatFiles, activeTab } = loadFixture();
+  const tab = activeTab();
+  tab.persisted = true;
+  tab.chatId = 'c1';
   global.fetch = async (url) => {
-    assert.equal(url, '/account/api/files');
+    assert.equal(url, '/account/api/files?chat_id=c1');
     return { ok: true, json: async () => [baseChatFile()] };
   };
   await loadChatFiles();
@@ -956,18 +1237,35 @@ test('loadChatFiles populates #chat-files from GET /account/api/files', async ()
   assert.equal(document.querySelector('.chat-file-box a').textContent, 'notes.txt');
 });
 
-test('loadChatFiles is silent and leaves #chat-files empty on a non-ok response', async () => {
+test('loadChatFiles renders nothing for an unpersisted tab, without fetching', async () => {
   const { loadChatFiles } = loadFixture();
+  global.fetch = async () => {
+    throw new Error('should never be called for an unpersisted tab');
+  };
+  await loadChatFiles();
+  assert.equal(document.getElementById('chat-files').hidden, true);
+});
+
+test('loadChatFiles is silent and leaves #chat-files empty on a non-ok response', async () => {
+  const { loadChatFiles, activeTab } = loadFixture();
+  activeTab().persisted = true;
+  activeTab().chatId = 'c1';
   global.fetch = async () => ({ ok: false, status: 503, text: async () => 'not configured' });
   await loadChatFiles();
   assert.equal(document.getElementById('chat-files').hidden, true);
   assert.equal(document.getElementById('chat-status').textContent, '');
 });
 
-test('loadSession for a user-role session also loads that user\'s files into #chat-files', async () => {
+test('loadSession for a user-role session reloads pinned chats, whose files then populate #chat-files', async () => {
   global.fetch = async (url) => {
     if (url === '/session') return { ok: true, json: async () => ({ role: 'user' }) };
-    if (url === '/account/api/files') return { ok: true, json: async () => [baseChatFile()] };
+    if (url === '/account/api/chats') {
+      return {
+        ok: true,
+        json: async () => [{ id: 'c1', title: 'Saved chat', agent_id: '', history: [], created_at: '', updated_at: '' }],
+      };
+    }
+    if (url === '/account/api/files?chat_id=c1') return { ok: true, json: async () => [baseChatFile()] };
     return { ok: false, status: 404, text: async () => 'not found' };
   };
   const { loadSession } = loadFixture();
@@ -978,7 +1276,9 @@ test('loadSession for a user-role session also loads that user\'s files into #ch
 });
 
 test('a successful attach-upload reloads #chat-files so the new file box appears', async () => {
-  loadFixture();
+  const { activeTab } = loadFixture();
+  activeTab().persisted = true;
+  activeTab().chatId = 'c1';
   const input = document.getElementById('chat-attach-input');
   const file = new window.File(['hi'], 'notes.txt', { type: 'text/plain' });
   Object.defineProperty(input, 'files', { value: [file], configurable: true });
@@ -1005,7 +1305,9 @@ test('a successful write_file tool result reloads #chat-files so the new file\'s
     }
     return { ok: true, json: async () => [baseChatFile({ id: 'f2', filename: 'report.txt' })] };
   };
-  const { sendChatMessage } = loadFixture();
+  const { sendChatMessage, activeTab } = loadFixture();
+  activeTab().persisted = true;
+  activeTab().chatId = 'c1';
   await sendChatMessage('q');
   await new Promise((resolve) => setTimeout(resolve, 0));
   const box = document.querySelector('.chat-file-box');

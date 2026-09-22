@@ -12,7 +12,7 @@ import (
 	"searchengine/internal/ports"
 )
 
-const uploadedFileColumns = "id, user_id, filename, content_type, size, created_at"
+const uploadedFileColumns = "id, user_id, chat_id, filename, content_type, size, created_at"
 
 // ListFiles lists ownerUserID's own files, most recently uploaded first --
 // metadata only (no data column), so listing stays cheap regardless of how
@@ -36,15 +36,37 @@ func (r *Repository) ListFiles(ctx context.Context, ownerUserID string) ([]domai
 	return out, rows.Err()
 }
 
-// SaveFile inserts a new file owned by ownerUserID, minting its ID (see
-// randomFileID) and CreatedAt itself -- the caller never picks either.
-func (r *Repository) SaveFile(ctx context.Context, ownerUserID, filename, contentType string, data []byte) (domain.UploadedFile, error) {
+// ListFilesForChat is ListFiles narrowed to one chat -- see
+// ports.FileStore.ListFilesForChat's own doc comment.
+func (r *Repository) ListFilesForChat(ctx context.Context, ownerUserID, chatID string) ([]domain.UploadedFile, error) {
+	query := r.ph(`SELECT `+uploadedFileColumns+` FROM uploaded_files WHERE user_id = %s AND chat_id = %s ORDER BY created_at DESC`, 1, 2)
+	rows, err := r.db.QueryContext(ctx, query, ownerUserID, chatID)
+	if err != nil {
+		return nil, fmt.Errorf("querying uploaded files for chat: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.UploadedFile
+	for rows.Next() {
+		f, err := scanUploadedFile(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning uploaded file: %w", err)
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// SaveFile inserts a new file owned by ownerUserID and attached to chatID,
+// minting its ID (see randomFileID) and CreatedAt itself -- the caller
+// never picks either.
+func (r *Repository) SaveFile(ctx context.Context, ownerUserID, chatID, filename, contentType string, data []byte) (domain.UploadedFile, error) {
 	f := domain.UploadedFile{
-		ID: randomFileID(), OwnerUserID: ownerUserID, Filename: filename,
+		ID: randomFileID(), OwnerUserID: ownerUserID, ChatID: chatID, Filename: filename,
 		ContentType: contentType, Size: int64(len(data)), CreatedAt: time.Now(),
 	}
-	insertSQL := r.ph(`INSERT INTO uploaded_files (id, user_id, filename, content_type, size, data, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s)`, 1, 2, 3, 4, 5, 6, 7)
-	if _, err := r.db.ExecContext(ctx, insertSQL, f.ID, f.OwnerUserID, f.Filename, f.ContentType, f.Size, data, f.CreatedAt.UTC().Format(crawledAtLayout)); err != nil {
+	insertSQL := r.ph(`INSERT INTO uploaded_files (id, user_id, chat_id, filename, content_type, size, data, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)`, 1, 2, 3, 4, 5, 6, 7, 8)
+	if _, err := r.db.ExecContext(ctx, insertSQL, f.ID, f.OwnerUserID, nullableString(f.ChatID), f.Filename, f.ContentType, f.Size, data, f.CreatedAt.UTC().Format(crawledAtLayout)); err != nil {
 		return domain.UploadedFile{}, fmt.Errorf("saving uploaded file: %w", err)
 	}
 	return f, nil
@@ -58,15 +80,17 @@ func (r *Repository) GetFile(ctx context.Context, ownerUserID, id string) (domai
 	query := r.ph(`SELECT `+uploadedFileColumns+`, data FROM uploaded_files WHERE user_id = %s AND id = %s`, 1, 2)
 	row := r.db.QueryRowContext(ctx, query, ownerUserID, id)
 	var f domain.UploadedFile
+	var chatID sql.NullString
 	var createdAt string
 	var data []byte
-	err := row.Scan(&f.ID, &f.OwnerUserID, &f.Filename, &f.ContentType, &f.Size, &createdAt, &data)
+	err := row.Scan(&f.ID, &f.OwnerUserID, &chatID, &f.Filename, &f.ContentType, &f.Size, &createdAt, &data)
 	if err == sql.ErrNoRows {
 		return domain.UploadedFile{}, nil, ports.ErrFileNotFound
 	}
 	if err != nil {
 		return domain.UploadedFile{}, nil, fmt.Errorf("loading uploaded file (%s): %w", id, err)
 	}
+	f.ChatID = chatID.String
 	f.CreatedAt = parseCrawledAt(createdAt)
 	return f, data, nil
 }
@@ -84,12 +108,26 @@ func (r *Repository) DeleteFile(ctx context.Context, ownerUserID, id string) err
 
 func scanUploadedFile(row scanner) (domain.UploadedFile, error) {
 	var f domain.UploadedFile
+	var chatID sql.NullString
 	var createdAt string
-	if err := row.Scan(&f.ID, &f.OwnerUserID, &f.Filename, &f.ContentType, &f.Size, &createdAt); err != nil {
+	if err := row.Scan(&f.ID, &f.OwnerUserID, &chatID, &f.Filename, &f.ContentType, &f.Size, &createdAt); err != nil {
 		return domain.UploadedFile{}, err
 	}
+	f.ChatID = chatID.String
 	f.CreatedAt = parseCrawledAt(createdAt)
 	return f, nil
+}
+
+// nullableString returns a sql.NullString that's actually NULL for an
+// empty s -- used for uploaded_files.chat_id, whose foreign key must see
+// SQL NULL (never the empty string, which no chats.id will ever match) for
+// a file with no chat association. Mirrors nullableTimeString's own
+// empty/zero-means-NULL convention for a different type.
+func nullableString(s string) sql.NullString {
+	if s == "" {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: s, Valid: true}
 }
 
 // randomFileID returns a 16-byte random token, hex-encoded (32 characters,

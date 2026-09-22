@@ -177,6 +177,9 @@ func (r *Repository) migrate(ctx context.Context) error {
 	if err := r.migrateLegacyHTTPEmbeddingConfig(ctx); err != nil {
 		return err
 	}
+	if err := r.migrateUploadedFileColumns(ctx); err != nil {
+		return err
+	}
 	if err := r.ensureHostIndex(ctx); err != nil {
 		return err
 	}
@@ -372,6 +375,22 @@ func (r *Repository) migrateUserColumns(ctx context.Context) error {
 		return err
 	}
 	return r.addColumnIfMissing(ctx, "users", existing, "custom_prompt", "custom_prompt TEXT NOT NULL DEFAULT ''")
+}
+
+// migrateUploadedFileColumns adds chat_id (see domain.UploadedFile.ChatID)
+// to an uploaded_files table that predates persisted chats -- this table
+// is already live in production without this column, so this needs the
+// same non-destructive ALTER TABLE pattern, not a fresh CREATE TABLE.
+// NULLable, no DEFAULT: a pre-existing file has no chat to point at (see
+// the sqlite dialect's own uploaded_files comment for why NULL, not ”).
+// Runs after CreateSchemaSQL, so the chats table this column references
+// already exists by the time this ALTER TABLE runs.
+func (r *Repository) migrateUploadedFileColumns(ctx context.Context) error {
+	existing, err := r.existingColumns(ctx, "uploaded_files")
+	if err != nil {
+		return err
+	}
+	return r.addColumnIfMissing(ctx, "uploaded_files", existing, "chat_id", "chat_id TEXT REFERENCES chats(id) ON DELETE CASCADE")
 }
 
 // legacyHTTPEmbeddingSettings decodes just the fields this migration cares

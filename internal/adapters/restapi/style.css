@@ -839,6 +839,12 @@ button:focus-visible {
   outline-offset: 1px;
 }
 
+/* .chat-tab-pin-active: a pinned (persisted) tab's pin button gets the
+   filled variant of the icon (see pinIconSVG in index.js) plus the same
+   accent tint .chat-tab-active gives the whole tab, so "this chat is
+   saved" reads at a glance without needing to hover for the tooltip. */
+.chat-tab-pin-active { color: var(--accent); }
+
 .chat-tab-actions { display: flex; gap: 0.15rem; flex: none; }
 
 /* .chat-files: the strip of uploaded/model-created file boxes below

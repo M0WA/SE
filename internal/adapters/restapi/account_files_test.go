@@ -21,6 +21,7 @@ import (
 // external _test package can't reference an unexported type directly.
 type fileResponse struct {
 	ID          string `json:"id"`
+	ChatID      string `json:"chat_id,omitempty"`
 	Filename    string `json:"filename"`
 	ContentType string `json:"content_type"`
 	Size        int64  `json:"size"`
@@ -57,7 +58,20 @@ func (f *fakeFileStore) ListFiles(ctx context.Context, ownerUserID string) ([]do
 	return out, nil
 }
 
-func (f *fakeFileStore) SaveFile(ctx context.Context, ownerUserID, filename, contentType string, data []byte) (domain.UploadedFile, error) {
+func (f *fakeFileStore) ListFilesForChat(ctx context.Context, ownerUserID, chatID string) ([]domain.UploadedFile, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	var out []domain.UploadedFile
+	for _, ff := range f.byOwner[ownerUserID] {
+		if ff.meta.ChatID == chatID {
+			out = append(out, ff.meta)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeFileStore) SaveFile(ctx context.Context, ownerUserID, chatID, filename, contentType string, data []byte) (domain.UploadedFile, error) {
 	if f.saveErr != nil {
 		return domain.UploadedFile{}, f.saveErr
 	}
@@ -66,7 +80,7 @@ func (f *fakeFileStore) SaveFile(ctx context.Context, ownerUserID, filename, con
 	}
 	f.nextID++
 	meta := domain.UploadedFile{
-		ID: "file" + string(rune('0'+f.nextID)), OwnerUserID: ownerUserID,
+		ID: "file" + string(rune('0'+f.nextID)), OwnerUserID: ownerUserID, ChatID: chatID,
 		Filename: filename, ContentType: contentType, Size: int64(len(data)),
 	}
 	f.byOwner[ownerUserID] = append(f.byOwner[ownerUserID], fakeFile{meta: meta, data: data})
@@ -99,9 +113,77 @@ func (f *fakeFileStore) DeleteFile(ctx context.Context, ownerUserID, id string) 
 	return ports.ErrFileNotFound
 }
 
+// testChatID is the pinned-chat id filesAuthedHandler always seeds (owned
+// by whichever user it logs in as) and uploadTestFile always attaches an
+// upload to -- since only a pinned chat may ever have files, every
+// existing upload test needs one real, owned chat_id to keep working
+// unchanged; a test specifically about chat_id validation uses
+// uploadTestFileWithChatID directly instead.
+const testChatID = "chat-1"
+
+// fakeChatStore is a minimal ports.ChatStore fake, mirroring
+// fakeFileStore's own ownerUserID-keyed shape.
+type fakeChatStore struct {
+	byOwner   map[string][]domain.PersistedChat
+	listErr   error
+	createErr error
+	updateErr error
+	deleteErr error
+}
+
+func (c *fakeChatStore) ListChats(ctx context.Context, ownerUserID string) ([]domain.PersistedChat, error) {
+	if c.listErr != nil {
+		return nil, c.listErr
+	}
+	return c.byOwner[ownerUserID], nil
+}
+
+func (c *fakeChatStore) CreateChat(ctx context.Context, chat domain.PersistedChat) (domain.PersistedChat, error) {
+	if c.createErr != nil {
+		return domain.PersistedChat{}, c.createErr
+	}
+	if c.byOwner == nil {
+		c.byOwner = map[string][]domain.PersistedChat{}
+	}
+	if chat.ID == "" {
+		chat.ID = testChatID
+	}
+	c.byOwner[chat.OwnerUserID] = append(c.byOwner[chat.OwnerUserID], chat)
+	return chat, nil
+}
+
+func (c *fakeChatStore) UpdateChat(ctx context.Context, chat domain.PersistedChat) error {
+	if c.updateErr != nil {
+		return c.updateErr
+	}
+	chats := c.byOwner[chat.OwnerUserID]
+	for i, existing := range chats {
+		if existing.ID == chat.ID {
+			chats[i] = chat
+			return nil
+		}
+	}
+	return ports.ErrChatNotFound
+}
+
+func (c *fakeChatStore) DeleteChat(ctx context.Context, ownerUserID, id string) error {
+	if c.deleteErr != nil {
+		return c.deleteErr
+	}
+	chats := c.byOwner[ownerUserID]
+	for i, existing := range chats {
+		if existing.ID == id {
+			c.byOwner[ownerUserID] = append(chats[:i], chats[i+1:]...)
+			return nil
+		}
+	}
+	return ports.ErrChatNotFound
+}
+
 // filesAuthedHandler logs in as u (role=user, via a real POST /login
 // through fakeUserStore) with Users and Files wired, mirroring
-// accountMCPServersAuthedHandler.
+// accountMCPServersAuthedHandler. Also seeds one pinned chat (testChatID)
+// owned by u, since every upload now requires a real, owned chat_id.
 func filesAuthedHandler(t *testing.T, userStore *fakeUserStore, fileStore *fakeFileStore, u domain.User) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
 	cfg := restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass, Users: userStore}
@@ -114,6 +196,9 @@ func filesAuthedHandler(t *testing.T, userStore *fakeUserStore, fileStore *fakeF
 	// genuinely nil h.files.
 	if fileStore != nil {
 		cfg.Files = fileStore
+		cfg.Chats = &fakeChatStore{byOwner: map[string][]domain.PersistedChat{
+			u.ID: {{ID: testChatID, OwnerUserID: u.ID, Title: "test chat"}},
+		}}
 	}
 	h := restapi.New(cfg)
 	body, _ := json.Marshal(map[string]string{"username": u.Username, "password": testUserPassword})
@@ -128,8 +213,18 @@ func filesAuthedHandler(t *testing.T, userStore *fakeUserStore, fileStore *fakeF
 
 func uploadTestFile(t *testing.T, h *restapi.Handler, auth func(*http.Request), filename string, content []byte) *httptest.ResponseRecorder {
 	t.Helper()
+	return uploadTestFileWithChatID(t, h, auth, filename, content, testChatID)
+}
+
+func uploadTestFileWithChatID(t *testing.T, h *restapi.Handler, auth func(*http.Request), filename string, content []byte, chatID string) *httptest.ResponseRecorder {
+	t.Helper()
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
+	if chatID != "" {
+		if err := mw.WriteField("chat_id", chatID); err != nil {
+			t.Fatalf("building multipart request: %v", err)
+		}
+	}
 	part, err := mw.CreateFormFile("file", filename)
 	if err != nil {
 		t.Fatalf("building multipart request: %v", err)
@@ -209,7 +304,7 @@ func TestHandleAccountFiles_UploadThenList(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decoding response: %v", err)
 	}
-	if created.Filename != "notes.txt" || created.Size != 5 {
+	if created.Filename != "notes.txt" || created.Size != 5 || created.ChatID != testChatID {
 		t.Errorf("unexpected created file: %+v", created)
 	}
 
@@ -223,6 +318,72 @@ func TestHandleAccountFiles_UploadThenList(t *testing.T) {
 	}
 	if len(list) != 1 || list[0].ID != created.ID {
 		t.Errorf("expected the uploaded file in the list, got %+v", list)
+	}
+}
+
+// TestHandleAccountFiles_UploadWithoutChatIDRejected proves an upload with
+// no chat_id at all is rejected -- only a pinned chat may have files.
+func TestHandleAccountFiles_UploadWithoutChatIDRejected(t *testing.T) {
+	userStore := &fakeUserStore{users: []domain.User{{ID: "u1", Username: "alice", PasswordHash: testUserPasswordHash}}}
+	fileStore := &fakeFileStore{}
+	h, cookie := filesAuthedHandler(t, userStore, fileStore, userStore.users[0])
+
+	rec := uploadTestFileWithChatID(t, h, func(r *http.Request) { r.AddCookie(cookie) }, "notes.txt", []byte("hello"), "")
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 with no chat_id, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleAccountFiles_UploadWithForeignChatIDRejected proves a chat_id
+// that isn't one of the caller's own pinned chats is rejected the same
+// way, not silently accepted.
+func TestHandleAccountFiles_UploadWithForeignChatIDRejected(t *testing.T) {
+	userStore := &fakeUserStore{users: []domain.User{{ID: "u1", Username: "alice", PasswordHash: testUserPasswordHash}}}
+	fileStore := &fakeFileStore{}
+	h, cookie := filesAuthedHandler(t, userStore, fileStore, userStore.users[0])
+
+	rec := uploadTestFileWithChatID(t, h, func(r *http.Request) { r.AddCookie(cookie) }, "notes.txt", []byte("hello"), "someone-elses-chat")
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 with a foreign chat_id, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleAccountFiles_ListScopedToChat proves a "chat_id" query param
+// narrows the list to just that chat's files, unlike the unscoped Your
+// files view.
+func TestHandleAccountFiles_ListScopedToChat(t *testing.T) {
+	userStore := &fakeUserStore{users: []domain.User{{ID: "u1", Username: "alice", PasswordHash: testUserPasswordHash}}}
+	fileStore := &fakeFileStore{}
+	h, cookie := filesAuthedHandler(t, userStore, fileStore, userStore.users[0])
+	uploaded := uploadTestFile(t, h, func(r *http.Request) { r.AddCookie(cookie) }, "in-chat.txt", []byte("hi"))
+	var created fileResponse
+	_ = json.Unmarshal(uploaded.Body.Bytes(), &created)
+
+	// A second chat, with no files of its own.
+	otherChatID := "chat-2"
+
+	req := httptest.NewRequest(http.MethodGet, "/account/api/files?chat_id="+created.ChatID, nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+	var list []fileResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decoding list response: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != created.ID {
+		t.Errorf("expected the chat-scoped file, got %+v", list)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/account/api/files?chat_id="+otherChatID, nil)
+	req.AddCookie(cookie)
+	rec = httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+	list = nil
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decoding list response: %v", err)
+	}
+	if len(list) != 0 {
+		t.Errorf("expected no files for an unrelated chat_id, got %+v", list)
 	}
 }
 
@@ -448,6 +609,9 @@ func TestHandleAccountFiles_BearerTokenAuth(t *testing.T) {
 	h := restapi.New(restapi.Config{
 		AdminUser: testAdminUser, AdminPass: testAdminPass,
 		Users: userStore, Files: fileStore,
+		Chats: &fakeChatStore{byOwner: map[string][]domain.PersistedChat{
+			"u1": {{ID: testChatID, OwnerUserID: "u1", Title: "test chat"}},
+		}},
 		Chat: application.NewChatService(
 			&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}},
 			&fakeChatCompleter{answer: "hi"},

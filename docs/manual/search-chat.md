@@ -38,11 +38,19 @@ The dropdown labeled "Default agent" next to the Web checkbox lets you choose a 
 
 ## Chat tabs: new, fork, export, import
 
-The strip above the transcript holds one tab per open conversation -- the + button starts a brand-new, empty chat; the fork icon (⎇) deep-copies the current tab's entire history into a new, independent tab, so you can branch a conversation without disturbing the original. Conversations are session-only: closing the page or reloading it discards them. The download icon (⬇) saves the active tab as a JSON file, and the upload icon (⬆) loads one back in as a new tab -- this is the only way to keep a conversation past a page reload, so export anything worth keeping. Closing a tab (× on its label) has no confirmation prompt -- export first if you might want it later -- and the last remaining tab can't be closed.
+The strip above the transcript holds one tab per open conversation -- the + button starts a brand-new, empty chat; the fork icon (⎇) deep-copies the current tab's entire history into a new, independent tab, so you can branch a conversation without disturbing the original (a fork always starts unpinned, even when forking a pinned chat -- see "Pinning, renaming, and closing" below). The download icon (⬇) saves the active tab as a JSON file, and the upload icon (⬆) loads one back in as a new tab, still the only way to bring a conversation in from outside this account.
+
+## Pinning, renaming, and closing chats
+
+Each tab has its own pin button. An unpinned tab is session-only, exactly like before pinning existed: closing the page or reloading it discards it, and it can't attach files (see "Attaching files" below). Clicking the pin turns the tab into a persistent chat, saved to your account from that point on -- it reloads automatically the next time you open this page (most recently updated first), and it can now attach files. Clicking the pin again unpins it, deleting the saved chat and every file attached to it, though the tab itself stays open as a plain, unpinned conversation. This requires a regular signed-in user account with the files feature configured on the deployment; an admin session never sees a working pin.
+
+Click a tab's own name to rename it, but only while that tab is already the active one -- clicking a background tab's name switches to it instead, the same click a rename would otherwise be. A pinned tab's rename is saved immediately; an unpinned tab's title is session-only, same as its history.
+
+The × on a tab closes it. For an unpinned tab this simply discards it, no confirmation prompt, same as before pinning existed -- export first if you might want it later. For a pinned tab, closing it deletes the saved chat and every file attached to it, same as unpinning followed by removing the tab; the last remaining tab can't be closed either way.
 
 ## Attaching files
 
-The paperclip button next to the message box uploads a file for the model to read during this conversation -- it doesn't inject the file's contents into your message directly; instead the model discovers and reads it on its own the next time it looks, via its file-access tools. Attached files (and any file the model itself produces, e.g. via a write_file tool call) show up as small boxes below the transcript with a download link and a × to delete them immediately, no confirmation needed. This requires a regular signed-in user account with the files feature configured on the deployment -- an admin session, or a deployment without it configured, simply won't show any file boxes.
+The paperclip button next to the message box uploads a file for the model to read during this conversation -- it doesn't inject the file's contents into your message directly; instead the model discovers and reads it on its own the next time it looks, via its file-access tools. Attached files (and any file the model itself produces, e.g. via a write_file tool call) show up as small boxes below the transcript with a download link and a × to delete them immediately, no confirmation needed. Only a pinned tab can attach files at all -- the paperclip button is disabled (with a tooltip explaining why) until you pin the current tab. This requires a regular signed-in user account with the files feature configured on the deployment -- an admin session, or a deployment without it configured, simply won't show any file boxes.
 
 ## Citations and tool results
 
@@ -58,7 +66,7 @@ The header's top-right icons adapt to who's signed in: an admin session sees a g
 
 > **Worth knowing:**
 > - Combine search operators freely in one query, e.g. cats +shelter -kitten site:example.com -- there's no separate advanced-search form, it's all in the one box.
-> - Export a chat tab before closing it or navigating away -- nothing here persists across a page reload except what you explicitly download.
+> - Pin a chat tab (the pin button in its own strip position) to keep it past a page reload and to attach files to it -- an unpinned tab is discarded on reload or close, so export it first if you might want it later.
 > - If a search result's ranking looks off, open its Details fold to see whether keyword (bm25) or meaning-based (semantic) matching drove the score.
 
 ---

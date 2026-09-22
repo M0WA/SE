@@ -414,6 +414,97 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
+  /account/api/chats:
+    get:
+      tags: [account]
+      summary: List the current session's own pinned (persistent) chats
+      description: >-
+        Most recently updated first. A pinned chat is what makes a chat
+        tab survive a page reload and lets it attach files (see
+        /account/api/files); the public chat page's tab strip reloads
+        this list on page load.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PersistedChat" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    post:
+      tags: [account]
+      summary: Pin a new chat
+      description: >-
+        Creates a PersistedChat row from a chat tab's current in-memory
+        state (title/agent/history), from which point on it survives a
+        reload and may attach files.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PersistedChatRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PersistedChat" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /account/api/chats/{id}:
+    patch:
+      tags: [account]
+      summary: Replace one of the current session's own pinned chat's editable fields
+      description: >-
+        Full replace of title/agent_id/history -- used both for a plain
+        rename (title changed, history unchanged) and for resyncing
+        history after every turn of a pinned conversation.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PersistedChatRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PersistedChat" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    delete:
+      tags: [account]
+      summary: Unpin (delete) one of the current session's own chats
+      description: >-
+        Cascades to delete every file attached to it too (see
+        UploadedFile.chat_id) -- the tab itself may stay open in the UI,
+        now back to a plain session-only conversation.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
   /account/api/files:
     get:
       tags: [account]
@@ -428,7 +519,20 @@ paths:
         application.ChatOptions.FileAccessToken). The 403 admin-account
         response below applies only to the session-cookie path; an invalid
         or expired bearer token gets a plain 401 instead, indistinguishable
-        from no credential at all.
+        from no credential at all. Scoped to one pinned chat's own files
+        when a chat_id applies (a bearer token's own, for the mcp-files
+        callback path, else the chat_id query param below); unscoped
+        (every one of this user's files, across every chat) otherwise --
+        the Your files account page's own view.
+      parameters:
+        - name: chat_id
+          in: query
+          required: false
+          schema: { type: string }
+          description: >-
+            Scopes the list to one pinned chat's own files -- ignored for
+            a bearer-token caller, whose token already names its own
+            chat_id.
       responses:
         "200":
           description: OK
@@ -447,11 +551,16 @@ paths:
       tags: [account]
       summary: Upload a new file
       description: >-
-        multipart/form-data with a single "file" field -- the same
-        encoding a plain HTML file input produces, and what cmd/mcp-files'
-        write_file tool also constructs server-side. Capped at 5 MiB
+        multipart/form-data with a "file" field -- the same encoding a
+        plain HTML file input produces, and what cmd/mcp-files' write_file
+        tool also constructs server-side. Capped at 5 MiB
         (maxUploadedFileBytes) and 100 files per owner (maxFilesPerUser),
-        neither admin-configurable.
+        neither admin-configurable. Only a pinned chat may ever have a
+        file attached: a bearer-token caller's chat_id is fixed to that
+        turn's own token, already scoped to the right owner; a
+        session-cookie caller must supply a "chat_id" form field naming
+        one of its own pinned chats (see /account/api/chats), rejected
+        (400) if missing or if it names a chat this session does not own.
       requestBody:
         required: true
         content:
@@ -460,6 +569,12 @@ paths:
               type: object
               properties:
                 file: { type: string, format: binary }
+                chat_id:
+                  type: string
+                  description: >-
+                    Required for a session-cookie caller (ignored for a
+                    bearer-token caller, whose token already names its own
+                    chat_id) -- one of this session's own pinned chats.
               required: [file]
       responses:
         "201":
@@ -2571,6 +2686,16 @@ components:
             question only -- omit (or send empty) to use that default. See
             GET /agents for the list of agents a signed-in session may
             pick from.
+        chat_id:
+          type: string
+          description: >-
+            The id of one of the calling session's own pinned chats (see
+            /account/api/chats), when this turn belongs to one -- omit (or
+            send empty) for an unpinned conversation. Scopes this turn's
+            file-access token so cmd/mcp-files' tools only ever see that
+            chat's own attached files; ignored (treated as unscoped)
+            unless it actually names one of this session's own pinned
+            chats.
 
     ChatResponse:
       type: object
@@ -2849,10 +2974,49 @@ components:
         separately via GET /account/api/files/{id}.
       properties:
         id: { type: string, description: "A random opaque token (never a name-derived slug) -- see sqlrepo.randomFileID." }
+        chat_id:
+          type: string
+          description: >-
+            The id of the pinned chat (see /account/api/chats) this file is
+            attached to -- omitted for a file predating persistent chats.
+            Only a pinned chat may ever have a file attached; deleting that
+            chat deletes every file attached to it too.
         filename: { type: string }
         content_type: { type: string }
         size: { type: integer, format: int64 }
         created_at: { type: string, format: date-time }
+
+    PersistedChatRequest:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string, description: "Must not be empty." }
+        agent_id: { type: string }
+        history:
+          type: array
+          items: { $ref: "#/components/schemas/ChatMessage" }
+          description: >-
+            Reuses ChatMessage's own JSON shape directly -- the exact
+            array a chat tab already holds in memory, sent back verbatim
+            on every pin/rename/resync.
+
+    PersistedChat:
+      type: object
+      description: >-
+        A pinned chat tab -- created via POST /account/api/chats, kept in
+        sync via PATCH, and reloaded on every page load so a pinned
+        conversation survives a reload. Only a PersistedChat may have
+        files attached (see UploadedFile.chat_id); deleting it deletes
+        those files too.
+      properties:
+        id: { type: string, description: "A random opaque token -- see sqlrepo.randomChatID." }
+        title: { type: string }
+        agent_id: { type: string }
+        history:
+          type: array
+          items: { $ref: "#/components/schemas/ChatMessage" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
 
     MCPServerCandidateRequest:
       type: object

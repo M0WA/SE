@@ -19,21 +19,7 @@
   <a class="back" href="/account">Back to your account</a>
 
   <h2>Your files</h2>
-  <p class="lede" style="margin: 0 0 1.5rem;">Files only you can upload for the chat model to inspect (via the file tools, when a file-operations MCP server is configured) and download again -- never visible to any other user.</p>
-
-  <form id="upload-form" class="stacked-form">
-    <div class="form-row">
-      <div class="label-row">
-        <label for="upload-input">Upload a file</label>
-        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Up to 5 MB per file, 100 files total. The chat model can inspect a file's content as text once a file-operations MCP server is configured -- binary files (images, PDFs) can be stored and downloaded again but not read as text.</span></button>
-      </div>
-      <input id="upload-input" class="field" type="file" required>
-    </div>
-    <div class="form-row">
-      <button id="upload-btn" type="submit">Upload</button>
-    </div>
-    <span id="upload-status" class="error-text"></span>
-  </form>
+  <p class="lede" style="margin: 0 0 1.5rem;">Files attached to your pinned chats, for the chat model to inspect (via the file tools, when a file-operations MCP server is configured) and download again -- never visible to any other user. Only a pinned chat can attach a file, via its own attach button on the chat page; unpinning or closing that chat deletes its files too.</p>
 
   <div id="files-status" class="panel-status"></div>
   <div id="files-table"></div>

@@ -1,6 +1,7 @@
 package restapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -30,6 +31,13 @@ type chatRequest struct {
 	// for this question only -- see application.ChatOptions.AgentID's doc
 	// comment. Empty (the default) means "use the endpoint's own default."
 	AgentID string `json:"agent_id,omitempty"`
+	// ChatID, when non-empty, names the PersistedChat this turn belongs to
+	// (the active tab is pinned) -- see fileAccessTokenFor, which scopes
+	// this turn's file-access token to it so cmd/mcp-files' list_files/
+	// read_file/write_file only ever see this one chat's files. Ignored
+	// (treated as unscoped) unless it's actually one of this user's own
+	// pinned chats.
+	ChatID string `json:"chat_id,omitempty"`
 }
 
 type chatResponse struct {
@@ -121,12 +129,20 @@ func (h *Handler) userAgentForMCPFetch() string {
 // fileTokenStore) for userID, letting cmd/mcp-files call back into
 // /account/api/files as this turn's own user -- empty whenever userID is
 // empty (an admin session, or h.files/h.fileTokens not configured), same
-// tolerance as userCustomPromptFor.
-func (h *Handler) fileAccessTokenFor(userID string) string {
+// tolerance as userCustomPromptFor. chatID is baked into the token (see
+// fileTokenStore.issue) only once verified as one of userID's own pinned
+// chats (userOwnsChat) -- an unowned or nonexistent chatID is silently
+// dropped (an unscoped token, same as no chat pinned at all) rather than
+// trusted from the client as-is, since cmd/mcp-files' own file access
+// later trusts the token's chatID unconditionally.
+func (h *Handler) fileAccessTokenFor(ctx context.Context, userID, chatID string) string {
 	if userID == "" || h.fileTokens == nil {
 		return ""
 	}
-	return h.fileTokens.issue(userID)
+	if chatID != "" && !h.userOwnsChat(ctx, userID, chatID) {
+		chatID = ""
+	}
+	return h.fileTokens.issue(userID, chatID)
 }
 
 // validateChatMessages checks that every client-supplied message obeys the
@@ -189,7 +205,7 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 	result, err := h.chat.Chat(r.Context(), req.Messages, application.ChatOptions{
 		WebSearch: req.WebSearch, UserCustomPrompt: h.userCustomPromptFor(r),
 		UserAgent: h.userAgentForMCPFetch(), AgentID: req.AgentID,
-		UserID: userID, FileAccessToken: h.fileAccessTokenFor(userID),
+		UserID: userID, FileAccessToken: h.fileAccessTokenFor(r.Context(), userID, req.ChatID),
 	})
 	if errors.Is(err, ports.ErrChatEndpointNotConfigured) {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
