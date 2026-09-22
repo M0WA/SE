@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — your mcp servers</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<div class="page-header">
+  <a class="mark" href="/">se.</a>
+  <button id="sign-out" class="header-icon-button" type="button" title="Sign out" aria-label="Sign out"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
+</div>
+<div class="admin-shell">
+<main>
+  <a class="back" href="/account">Back to your account</a>
+
+  <h2>Your MCP servers</h2>
+  <p class="lede" style="margin: 0 0 1.5rem;">Remote (http) MCP tool servers only you can use -- their tools are offered to the chat model on every turn you send, in addition to whatever the site's own admin-configured servers offer. Unlike those, an agent's own server scope never narrows these away.</p>
+
+  <a id="add-server-link" class="text-button" href="/account/mcp-servers/new">Add server</a>
+  <div id="servers-status" class="panel-status"></div>
+  <div id="servers-table"></div>
+</main>
+</div>
+<script src="/account_mcp_servers.js"></script>
+</body>
+</html>

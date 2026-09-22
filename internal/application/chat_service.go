@@ -21,22 +21,30 @@ import (
 type ChatService struct {
 	endpoints ports.ChatEndpointStore
 	completer ports.ChatCompleter
-	// mcpServers, mcpTools, and agents are all nil-safe (see Chat and
-	// resolveAgent): a deployment that hasn't wired MCP servers/agents yet
-	// simply gets an empty ChatResult.ToolResults/no agent specialization
+	// mcpServers, mcpTools, agents, and userMCPServers are all nil-safe (see
+	// Chat and resolveAgent): a deployment that hasn't wired MCP servers/
+	// agents/per-user servers yet simply gets an empty
+	// ChatResult.ToolResults/no agent specialization/no personal servers
 	// every turn.
 	mcpServers ports.MCPServerStore
 	mcpTools   ports.MCPToolProvider
 	agents     ports.AgentStore
+	// userMCPServers backs each caller's own self-service MCP servers (see
+	// ChatOptions.UserID) -- kept as a separate store/field from mcpServers
+	// rather than folding into it, since these rows are never subject to an
+	// Agent's own MCPServerIDs scope (see domain.Agent.AllowsServer's doc
+	// comment) and are merged in unconditionally for their owner.
+	userMCPServers ports.UserMCPServerStore
 }
 
-// NewChatService wires a ChatService from its five collaborators: the
+// NewChatService wires a ChatService from its six collaborators: the
 // endpoint config store, the client that actually talks to the configured
 // OpenAI-compatible endpoint, the store/provider pair behind
-// admin-configured MCP servers (see mcp_tools.go), and the store behind
-// admin-defined agents (see resolveAgent).
-func NewChatService(endpoints ports.ChatEndpointStore, completer ports.ChatCompleter, mcpServers ports.MCPServerStore, mcpTools ports.MCPToolProvider, agents ports.AgentStore) *ChatService {
-	return &ChatService{endpoints: endpoints, completer: completer, mcpServers: mcpServers, mcpTools: mcpTools, agents: agents}
+// admin-configured MCP servers (see mcp_tools.go), the store behind
+// admin-defined agents (see resolveAgent), and the store behind each
+// caller's own self-service MCP servers.
+func NewChatService(endpoints ports.ChatEndpointStore, completer ports.ChatCompleter, mcpServers ports.MCPServerStore, mcpTools ports.MCPToolProvider, agents ports.AgentStore, userMCPServers ports.UserMCPServerStore) *ChatService {
+	return &ChatService{endpoints: endpoints, completer: completer, mcpServers: mcpServers, mcpTools: mcpTools, agents: agents, userMCPServers: userMCPServers}
 }
 
 // ChatOptions carries this turn's per-question overrides for
@@ -77,6 +85,15 @@ type ChatOptions struct {
 	// rather than WebSearch's nil-pointer one, since there's no meaningful
 	// difference here between "not specified" and "specified as empty."
 	AgentID string
+	// UserID, when non-empty, is whose own self-service MCP servers (see
+	// ports.UserMCPServerStore) get merged into this turn's active server
+	// list, unconditionally (never narrowed by an active Agent's own
+	// MCPServerIDs scope -- see domain.Agent.AllowsServer's doc comment).
+	// Empty means no personal servers are added at all. Set by the HTTP
+	// handler layer (restapi.handleChat) from the current session's own
+	// userID, only when the session is role=user -- same source/condition
+	// as UserCustomPrompt above.
+	UserID string
 }
 
 // ChatResult is one completed chat turn's answer.
@@ -175,6 +192,29 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		if all, err := s.mcpServers.ListMCPServers(ctx); err == nil {
 			for _, srv := range all {
 				if srv.Enabled && (!srv.GatedByWebSearch || useWebSearch) && agent.AllowsServer(srv.ID) {
+					activeServers = append(activeServers, srv)
+				}
+			}
+		}
+	}
+
+	// The caller's own self-service MCP servers (ChatOptions.UserID) are
+	// appended AFTER the global catalog, unconditionally -- never filtered
+	// by agent.AllowsServer, since a personal server is never subject to an
+	// Agent's own scope (see domain.Agent.AllowsServer's doc comment). Global
+	// servers listed first means a tool-name collision (see
+	// ports.MCPToolProvider's own doc comment on how Open resolves one)
+	// favors the admin-configured server over a same-named personal one, the
+	// safer default. Transport is force-checked here, not just trusted from
+	// storage/restapi validation, as a last line of defense: a "stdio"
+	// server grants real local command execution on the server host, a
+	// trust tier that must never reach a regular (non-admin) user's own
+	// configuration, however it ended up in this store's rows. Best-effort,
+	// same tolerance as the global ListMCPServers call above.
+	if opts.UserID != "" && s.userMCPServers != nil {
+		if own, err := s.userMCPServers.ListUserMCPServers(ctx, opts.UserID); err == nil {
+			for _, srv := range own {
+				if srv.Enabled && srv.Transport == "http" && (!srv.GatedByWebSearch || useWebSearch) {
 					activeServers = append(activeServers, srv)
 				}
 			}

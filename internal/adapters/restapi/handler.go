@@ -93,6 +93,12 @@ var adminUserHTML []byte
 //go:embed account.html
 var accountHTML []byte
 
+//go:embed account_mcp_servers.html
+var accountMCPServersHTML []byte
+
+//go:embed account_mcp_server.html
+var accountMCPServerHTML []byte
+
 //go:embed style.css
 var styleCSS []byte
 
@@ -176,6 +182,12 @@ var adminUserJS []byte
 //go:embed account.js
 var accountJS []byte
 
+//go:embed account_mcp_servers.js
+var accountMCPServersJS []byte
+
+//go:embed account_mcp_server.js
+var accountMCPServerJS []byte
+
 //go:embed index.js
 var indexJS []byte
 
@@ -240,6 +252,12 @@ type Handler struct {
 	// regular-user accounts exist; login checks only the hardcoded admin,
 	// /account reports itself unavailable) for a Handler that never sets
 	// it, e.g. crawl-server.
+	// userMCPServers backs the self-service MCP server CRUD
+	// (/account/api/mcp-servers...) -- set on search-server only, the same
+	// *sqlrepo.Repository users uses. ChatService gets its own separate
+	// reference to the same store (wired directly in cmd/search's main, not
+	// through Handler) for merging a caller's own servers into a chat turn.
+	userMCPServers  ports.UserMCPServerStore
 	users           ports.UserStore
 	health          ports.HealthChecker
 	onCrawlComplete func()
@@ -357,6 +375,10 @@ type Config struct {
 	// custom-prompt lookup) -- the same *sqlrepo.Repository
 	// ChatEndpoints/MCPServers uses.
 	Users ports.UserStore
+	// UserMCPServers is set on search-server only, backing the self-service
+	// MCP server CRUD API (/account/api/mcp-servers...) -- the same
+	// *sqlrepo.Repository Users uses.
+	UserMCPServers ports.UserMCPServerStore
 	// Health backs GET /healthz on every process; unset always reports
 	// healthy (no DB connection to check).
 	Health ports.HealthChecker
@@ -430,6 +452,7 @@ func New(cfg Config) *Handler {
 		mcpTools:              cfg.MCPTools,
 		agents:                cfg.Agents,
 		users:                 cfg.Users,
+		userMCPServers:        cfg.UserMCPServers,
 		health:                cfg.Health,
 		onCrawlComplete:       cfg.OnCrawlComplete,
 		dbDriver:              cfg.DBDriver,
@@ -490,6 +513,14 @@ func (h *Handler) RoutesSearch() http.Handler {
 	mux.HandleFunc("/account", h.requireRegularUserAuthPage(h.handleAccountPage))
 	mux.HandleFunc("/account.js", h.handleAccountJS)
 	mux.HandleFunc("/account/api", h.requireRegularUserAuthAPI(h.handleAccount))
+	mux.HandleFunc("/account/mcp-servers", h.requireRegularUserAuthPage(h.handleAccountMCPServersPage))
+	mux.HandleFunc("/account_mcp_servers.js", h.handleAccountMCPServersJS)
+	mux.HandleFunc("/account/mcp-servers/{id}", h.requireRegularUserAuthPage(h.handleAccountMCPServerPage))
+	mux.HandleFunc("/account_mcp_server.js", h.handleAccountMCPServerJS)
+	mux.HandleFunc("/account/api/mcp-servers", h.requireRegularUserAuthAPI(h.handleAccountMCPServers))
+	mux.HandleFunc("GET /account/api/mcp-servers/{id}", h.requireRegularUserAuthAPI(h.handleAccountGetMCPServer))
+	mux.HandleFunc("PATCH /account/api/mcp-servers/{id}", h.requireRegularUserAuthAPI(h.handleAccountUpdateMCPServer))
+	mux.HandleFunc("DELETE /account/api/mcp-servers/{id}", h.requireRegularUserAuthAPI(h.handleAccountDeleteMCPServer))
 	mux.HandleFunc("/healthz", h.handleHealthz)
 	return withSecurityHeaders(mux)
 }

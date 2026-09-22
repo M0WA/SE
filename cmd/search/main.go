@@ -72,8 +72,9 @@ func main() {
 		ChatEndpoints:        repo,
 		Agents:               repo,
 		Users:                repo,
+		UserMCPServers:       repo,
 		InternalSearchAPIKey: internalSearchAPIKey,
-		Chat:                 application.NewChatService(repo, httpchat.New(), repo, mcpclient.New(), repo),
+		Chat:                 application.NewChatService(repo, httpchat.New(), repo, mcpclient.New(), repo, repo),
 	})
 
 	addr := bootstrap.GetEnv("SEARCH_LISTEN_ADDR", "127.0.0.1:8080")

@@ -289,6 +289,128 @@ paths:
             text/plain: { schema: { type: string } }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
+  /account/api/mcp-servers:
+    get:
+      tags: [account]
+      summary: List the current session's own MCP servers
+      description: >-
+        Self-service sibling of /admin/api/mcp-servers -- same MCPServer
+        shape, but every row is owned by (and only ever visible to) the
+        calling session's own userID, resolved server-side the same way
+        /account/api is, never from an id in the request. Never narrowed
+        by an active Agent's own MCPServerIDs scope (see the Agent
+        schema's own description) -- a personal server is always available
+        to every agent.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/MCPServer" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: The signed-in session is the hardcoded admin account, which has no User row to own MCP servers under.
+          content:
+            text/plain: { schema: { type: string } }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    post:
+      tags: [account]
+      summary: Create one of the current session's own MCP servers
+      description: >-
+        Same id-minting/dedup behavior as POST /admin/api/mcp-servers
+        (deduped only against this owner's own existing rows, not every
+        server in the system), but transport MUST be "http" -- a "stdio"
+        server runs a real local command on this site's own server, a
+        trust tier only an admin-configured row may ever use; any other
+        value is rejected (400), same as an empty name or base_url.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MCPServerRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MCPServer" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: The signed-in session is the hardcoded admin account, which has no User row to own MCP servers under.
+          content:
+            text/plain: { schema: { type: string } }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /account/api/mcp-servers/{id}:
+    get:
+      tags: [account]
+      summary: Get one of the current session's own MCP servers
+      description: >-
+        404s the same way for an unknown id and for another user's id --
+        ownership scoping IS the access control, not a separate check on
+        top of it (see handleAccountGetMCPServer).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MCPServer" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    patch:
+      tags: [account]
+      summary: Replace one of the current session's own MCP server's editable fields
+      description: >-
+        Same full-replace/api_key-write-only semantics as PATCH
+        /admin/api/mcp-servers/{id}; transport is re-validated as "http"
+        on every update, same as on create.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MCPServerRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MCPServer" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    delete:
+      tags: [account]
+      summary: Delete one of the current session's own MCP server's configuration
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
   # ----------------------------------------------------------------- admin
   /admin/api/stats:
     get:

@@ -221,6 +221,28 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			password_hash TEXT NOT NULL, custom_prompt TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 		)`,
+		// user_mcp_servers is mcp_servers' self-service, per-user sibling --
+		// same domain.MCPServer field set, but every row is owned by one
+		// user_id (cascade-deleted with its owner) and (user_id, id) is the
+		// primary key rather than id alone, since two different users may
+		// each independently mint a server they call "web-tools" (see
+		// domain.NewMCPServerID -- ports.UserMCPServerStore only checks
+		// uniqueness within one owner's own rows). transport defaults to,
+		// and restapi's validation enforces, "http" only -- see
+		// ports.UserMCPServerStore's own doc comment for why "stdio" (real
+		// local command execution) can never be handed to a regular,
+		// non-admin user. Created after users (not alongside mcp_servers
+		// above) since its FK needs that table to already exist -- SQLite
+		// doesn't check at CREATE TABLE time, but Postgres/MySQL do.
+		`CREATE TABLE IF NOT EXISTS user_mcp_servers (
+			user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			id TEXT NOT NULL, name TEXT NOT NULL, transport TEXT NOT NULL DEFAULT 'http',
+			command TEXT NOT NULL DEFAULT '', args TEXT NOT NULL DEFAULT '[]',
+			base_url TEXT NOT NULL DEFAULT '', api_key TEXT NOT NULL DEFAULT '',
+			enabled BOOLEAN NOT NULL DEFAULT true, prompt TEXT NOT NULL DEFAULT '',
+			gated_by_web_search BOOLEAN NOT NULL DEFAULT false,
+			PRIMARY KEY (user_id, id)
+		)`,
 	}
 }
 
@@ -391,6 +413,16 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			id VARCHAR(20) PRIMARY KEY, username VARCHAR(255) NOT NULL UNIQUE,
 			password_hash VARCHAR(255) NOT NULL, custom_prompt TEXT NOT NULL DEFAULT '',
 			created_at VARCHAR(64) NOT NULL, updated_at VARCHAR(64) NOT NULL
+		) ENGINE=InnoDB`,
+		// See the sqlite dialect's user_mcp_servers comment.
+		`CREATE TABLE IF NOT EXISTS user_mcp_servers (
+			user_id VARCHAR(20) NOT NULL, id VARCHAR(20) NOT NULL, name VARCHAR(255) NOT NULL,
+			transport VARCHAR(20) NOT NULL DEFAULT 'http',
+			command TEXT NOT NULL, args TEXT NOT NULL, base_url TEXT NOT NULL, api_key TEXT NOT NULL,
+			enabled BOOLEAN NOT NULL DEFAULT true, prompt TEXT NOT NULL,
+			gated_by_web_search BOOLEAN NOT NULL DEFAULT false,
+			PRIMARY KEY (user_id, id),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		) ENGINE=InnoDB`,
 	}
 }
@@ -566,6 +598,16 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE,
 			password_hash TEXT NOT NULL, custom_prompt TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+		)`,
+		// See the sqlite dialect's user_mcp_servers comment.
+		`CREATE TABLE IF NOT EXISTS user_mcp_servers (
+			user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			id TEXT NOT NULL, name TEXT NOT NULL, transport TEXT NOT NULL DEFAULT 'http',
+			command TEXT NOT NULL DEFAULT '', args TEXT NOT NULL DEFAULT '[]',
+			base_url TEXT NOT NULL DEFAULT '', api_key TEXT NOT NULL DEFAULT '',
+			enabled BOOLEAN NOT NULL DEFAULT true, prompt TEXT NOT NULL DEFAULT '',
+			gated_by_web_search BOOLEAN NOT NULL DEFAULT false,
+			PRIMARY KEY (user_id, id)
 		)`,
 	}
 }

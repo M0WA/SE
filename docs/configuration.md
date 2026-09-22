@@ -371,6 +371,32 @@ backing API is `GET`/`POST /admin/api/mcp-servers` (list/create) and
 | `server-enabled` | `false` | boolean | Whether this server is connected to at the start of a chat turn at all. |
 | `server-gated-by-web-search` | `false` | boolean | Whether this server is only active when the chat's Web toggle (`chat-web-search-enabled` or its per-question override) is on. |
 
+### Personal MCP servers (self-service; `account_mcp_servers.html` list + `account_mcp_server.html` edit subpage)
+
+Same underlying `MCPServer` shape as the admin-configured catalog above,
+but self-service: any signed-in regular-user (`role=user`) session manages
+their own rows at `/account/mcp-servers`, reachable via a link on
+`/account`. Every row is owned by (and only ever visible/editable by) that
+one user -- scoped server-side by session, never by an id a client could
+guess or override, the same discipline `/account/api` itself already
+applies to the account row. `server-transport` is **always** `http` here
+-- there is no transport choice on this page, and the backing API rejects
+any other value (400) -- a `stdio` server runs a real local command on
+this site's own server, a trust tier only an admin-configured row may
+ever use (see `internal/adapters/mcpclient`'s own HTTP client, which
+routes every request through `netguard.ConfiguredEndpointTransport()` the
+same way the admin-configured catalog's `http` servers do, closing off
+cloud-metadata/link-local addresses regardless of who configured the
+`server-base-url`). A personal server is merged into a chat turn's active
+server list unconditionally -- unlike the global catalog, it is **never**
+narrowed by an active Agent's own MCP-servers scope (see "Agents" below).
+The backing API is `GET`/`POST /account/api/mcp-servers` (list/create) and
+`GET`/`PATCH`/`DELETE /account/api/mcp-servers/{id}` (one server) --
+otherwise identical field-for-field to the admin table above (`server-name`,
+`server-base-url`, `server-api-key`, `server-prompt`,
+`server-gated-by-web-search`, `server-enabled`; no `server-command`/
+`server-args`, since those only apply to `stdio`).
+
 ### Agents (`admin_agents.html` list + `admin_agent.html` edit subpage)
 
 A named specialization: a static system prompt injected into a
