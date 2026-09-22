@@ -7,6 +7,17 @@ const { setupDOM, teardownDOM, requireFresh } = require('./dom_helper.test_util'
 
 const JOBS_HTML = fs.readFileSync(path.join(__dirname, 'admin_jobs.html'), 'utf8');
 
+// normalizedSVG round-trips raw through a detached element's innerHTML, so
+// it's compared against actual DOM output serialized the same way (jsdom,
+// like a real browser, re-serializes a self-closing SVG tag like
+// "<circle .../>" as an explicit "<circle ...></circle>" once parsed) --
+// comparing raw source strings directly would spuriously fail.
+function normalizedSVG(raw) {
+  const el = document.createElement('div');
+  el.innerHTML = raw;
+  return el.innerHTML;
+}
+
 function loadFixture() {
   setupDOM(JOBS_HTML);
   const adminHelpers = requireFresh('./admin.js');
@@ -321,7 +332,7 @@ test('viewButtonCell shows a View icon button always, and a Cancel icon button (
   const done = viewButtonCell({ id: 'j1', status: 'done' });
   const doneButtons = done.querySelectorAll('button');
   assert.equal(doneButtons.length, 1);
-  assert.equal(doneButtons[0].innerHTML, ICON_SVGS.view);
+  assert.equal(doneButtons[0].innerHTML, normalizedSVG(ICON_SVGS.view));
   assert.equal(doneButtons[0].title, 'View');
 
   const running = viewButtonCell({ id: 'j2', status: 'running' });
@@ -329,7 +340,7 @@ test('viewButtonCell shows a View icon button always, and a Cancel icon button (
   assert.equal(runningButtons.length, 2);
   // Cancel reuses the same trash icon as a schedule row's Delete button --
   // only the title/aria-label ("Cancel") differ, not the glyph.
-  assert.equal(runningButtons[1].innerHTML, ICON_SVGS.delete);
+  assert.equal(runningButtons[1].innerHTML, normalizedSVG(ICON_SVGS.delete));
   assert.equal(runningButtons[1].title, 'Cancel');
   assert.notEqual(ACTION_GLYPHS.edit, undefined); // sanity: glyph table still has non-SVG entries
 });
@@ -345,7 +356,7 @@ test('crawlActionsCell shows Run now/Edit as glyph icons and Delete as the share
   assert.equal(link.textContent, ACTION_GLYPHS.edit);
   assert.equal(link.title, 'Edit');
   assert.equal(link.getAttribute('href'), '/admin/schedule/s1');
-  assert.equal(buttons[1].innerHTML, ICON_SVGS.delete);
+  assert.equal(buttons[1].innerHTML, normalizedSVG(ICON_SVGS.delete));
   assert.equal(buttons[1].title, 'Delete');
 });
 
