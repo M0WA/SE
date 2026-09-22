@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.50 - 2026-09-22
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Add per-user MCP servers (self-service, http-only); fix admin form field widths by @M0WA in https://github.com/M0WA/SE/pull/236
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.49...v4.13.50
+
+
 ## v4.13.49 - 2026-09-22
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
