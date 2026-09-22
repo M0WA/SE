@@ -940,6 +940,106 @@ paths:
               schema: { $ref: "#/components/schemas/MCPServerToolsList" }
         "400": { $ref: "#/components/responses/BadRequest" }
 
+  /admin/api/agents:
+    get:
+      tags: [admin]
+      summary: List every configured agent
+      description: >-
+        A list of many, like the MCP servers -- an admin can define several
+        named specializations over time. Each is a static system prompt
+        (injected into a conversation the agent is active for, after the
+        endpoint's own persistent system prompt) plus an optional scope
+        over which of the global MCP servers it may use tools from.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Agent" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    post:
+      tags: [admin]
+      summary: Create an agent
+      description: >-
+        The new agent's id is minted server-side from its name (see
+        domain.NewAgentID), deduped against every existing agent id, so it
+        can never collide -- the response's id is the one to use for every
+        subsequent GET/PATCH/DELETE on this agent, not the submitted name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgentRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Agent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/agents/{id}:
+    get:
+      tags: [admin]
+      summary: Get one agent's full config
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Agent" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    patch:
+      tags: [admin]
+      summary: Replace an agent's editable fields
+      description: >-
+        Full replace, not a merge, for every field except id (never
+        editable once created).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgentRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Agent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    delete:
+      tags: [admin]
+      summary: Delete an agent's configuration
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
   /admin/api/users:
     get:
       tags: [admin]
@@ -2500,6 +2600,56 @@ components:
             real connection failure and a server that legitimately exposes
             zero tools (indistinguishable here, see the path's own
             description). Never set alongside a populated tools array.
+
+    AgentOptions:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, description: "Human label, e.g. \"fact-checker\" -- shown in the admin UI and any agent picker. domain.NewAgentID slugifies this into the agent's id on creation (POST only; ignored by PATCH)." }
+        description:
+          type: string
+          description: >-
+            Never injected into this agent's own conversation -- it exists
+            purely for something ELSE to reason about this agent: a
+            multi-agent planner deciding which agent fits a sub-question,
+            or a person picking an agent from a dropdown. Describes what
+            the agent is good for, not how it's built.
+        system_prompt:
+          type: string
+          description: >-
+            This agent's specialization -- injected as its own leading
+            system-role message in every turn it's active for, after the
+            endpoint's persistent system_prompt and any per-user custom
+            prompt. Empty means this agent adds no message of its own
+            beyond what every conversation already gets.
+        mcp_server_ids:
+          type: array
+          items: { type: string }
+          description: >-
+            Restricts which rows of the global MCP server catalog
+            (/admin/api/mcp-servers) this agent may use tools from. Empty
+            means every globally active server is available -- the same as
+            not scoping at all. This never affects a user's own per-user
+            MCP servers, which stay available to every agent regardless.
+        enabled:
+          type: boolean
+          description: Whether this agent can be selected/addressed at all.
+
+    AgentRequest:
+      description: The request shape for creating (POST) or replacing (PATCH) an agent.
+      allOf:
+        - $ref: "#/components/schemas/AgentOptions"
+
+    Agent:
+      allOf:
+        - $ref: "#/components/schemas/AgentOptions"
+        - type: object
+          properties:
+            id:
+              type: string
+              description: >-
+                Minted from name at creation (see domain.NewAgentID) and
+                never changed afterward, even if name is edited later.
 
     User:
       type: object

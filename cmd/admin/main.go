@@ -90,6 +90,7 @@ func main() {
 		ChatEndpoints:         repo,
 		MCPServers:            repo,
 		MCPTools:              mcpclient.New(),
+		Agents:                repo,
 		Users:                 repo,
 		Health:                repo,
 		Sessions:              repo,

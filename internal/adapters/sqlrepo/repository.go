@@ -2783,6 +2783,80 @@ func scanMCPServer(row scanner) (domain.MCPServer, error) {
 	return s, nil
 }
 
+const agentColumns = "id, name, description, system_prompt, mcp_server_ids, enabled"
+
+// ListAgents lists every configured agent, ordered by name for a stable,
+// human-friendly admin table order -- mirrors ListMCPServers' own
+// convention.
+func (r *Repository) ListAgents(ctx context.Context) ([]domain.Agent, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+agentColumns+` FROM agents ORDER BY name ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("querying agents: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.Agent
+	for rows.Next() {
+		a, err := scanAgent(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning agent: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// CreateAgent inserts a new admin-configured agent (see domain.Agent).
+func (r *Repository) CreateAgent(ctx context.Context, a domain.Agent) error {
+	ids, err := json.Marshal(a.MCPServerIDs)
+	if err != nil {
+		return fmt.Errorf("encoding mcp_server_ids: %w", err)
+	}
+	insertSQL := r.ph(`INSERT INTO agents (`+agentColumns+`) VALUES (%s, %s, %s, %s, %s, %s)`, 1, 2, 3, 4, 5, 6)
+	if _, err := r.db.ExecContext(ctx, insertSQL, a.ID, a.Name, a.Description, a.SystemPrompt, string(ids), a.Enabled); err != nil {
+		return fmt.Errorf("creating agent: %w", err)
+	}
+	return nil
+}
+
+// UpdateAgent replaces a's editable fields (everything but ID, which never
+// changes after creation), returning ports.ErrAgentNotFound if no agent
+// with a.ID exists.
+func (r *Repository) UpdateAgent(ctx context.Context, a domain.Agent) error {
+	ids, err := json.Marshal(a.MCPServerIDs)
+	if err != nil {
+		return fmt.Errorf("encoding mcp_server_ids: %w", err)
+	}
+	updateSQL := r.ph(`UPDATE agents SET name = %s, description = %s, system_prompt = %s, mcp_server_ids = %s, enabled = %s WHERE id = %s`, 1, 2, 3, 4, 5, 6)
+	res, err := r.db.ExecContext(ctx, updateSQL, a.Name, a.Description, a.SystemPrompt, string(ids), a.Enabled, a.ID)
+	if err != nil {
+		return fmt.Errorf("updating agent (%s): %w", a.ID, err)
+	}
+	return requireRowsAffected(res, a.ID, ports.ErrAgentNotFound)
+}
+
+// DeleteAgent removes an agent's config, returning ports.ErrAgentNotFound
+// if no agent with id exists.
+func (r *Repository) DeleteAgent(ctx context.Context, id string) error {
+	res, err := r.db.ExecContext(ctx, r.ph(`DELETE FROM agents WHERE id = %s`, 1), id)
+	if err != nil {
+		return fmt.Errorf("deleting agent (%s): %w", id, err)
+	}
+	return requireRowsAffected(res, id, ports.ErrAgentNotFound)
+}
+
+func scanAgent(row scanner) (domain.Agent, error) {
+	var a domain.Agent
+	var ids string
+	if err := row.Scan(&a.ID, &a.Name, &a.Description, &a.SystemPrompt, &ids, &a.Enabled); err != nil {
+		return domain.Agent{}, err
+	}
+	if err := json.Unmarshal([]byte(ids), &a.MCPServerIDs); err != nil {
+		return domain.Agent{}, fmt.Errorf("decoding mcp_server_ids: %w", err)
+	}
+	return a, nil
+}
+
 func nullableTimeString(t *time.Time) sql.NullString {
 	if t == nil {
 		return sql.NullString{}

@@ -257,6 +257,7 @@ const ADMIN_NAV_GROUPS = [
     items: [
       { label: 'Settings', href: '/admin/chat/settings' },
       { label: 'MCP servers', href: '/admin/mcp-servers' },
+      { label: 'Agents', href: '/admin/agents' },
     ],
   },
   {

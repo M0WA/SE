@@ -166,6 +166,17 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			enabled BOOLEAN NOT NULL DEFAULT true, prompt TEXT NOT NULL DEFAULT '',
 			gated_by_web_search BOOLEAN NOT NULL DEFAULT false
 		)`,
+		// agents holds admin-defined domain.Agent rows -- a named
+		// specialization (Description for a planner/picker to reason
+		// about, SystemPrompt actually injected into the agent's own
+		// conversation) plus an optional MCPServerIDs allow-list scoping
+		// which of the global mcp_servers rows it may use (JSON-encoded
+		// []string, same convention as mcp_servers.args).
+		`CREATE TABLE IF NOT EXISTS agents (
+			id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+			system_prompt TEXT NOT NULL DEFAULT '', mcp_server_ids TEXT NOT NULL DEFAULT '[]',
+			enabled BOOLEAN NOT NULL DEFAULT true
+		)`,
 		// content_dedup_lock is a single sentinel row (id = 1) whose
 		// in_progress flag TryAcquireContentDedupLock/ReleaseContentDedupLock
 		// claim/clear via a conditional UPDATE -- see ports.
@@ -341,6 +352,12 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			enabled BOOLEAN NOT NULL DEFAULT true, prompt TEXT NOT NULL,
 			gated_by_web_search BOOLEAN NOT NULL DEFAULT false
 		) ENGINE=InnoDB`,
+		// See the sqlite dialect's own agents table comment.
+		`CREATE TABLE IF NOT EXISTS agents (
+			id VARCHAR(20) PRIMARY KEY, name VARCHAR(255) NOT NULL, description TEXT NOT NULL,
+			system_prompt TEXT NOT NULL, mcp_server_ids TEXT NOT NULL,
+			enabled BOOLEAN NOT NULL DEFAULT true
+		) ENGINE=InnoDB`,
 		// See the sqlite dialect's content_dedup_lock comment.
 		`CREATE TABLE IF NOT EXISTS content_dedup_lock (
 			id INT PRIMARY KEY, in_progress BOOLEAN NOT NULL DEFAULT false
@@ -507,6 +524,12 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			base_url TEXT NOT NULL DEFAULT '', api_key TEXT NOT NULL DEFAULT '',
 			enabled BOOLEAN NOT NULL DEFAULT true, prompt TEXT NOT NULL DEFAULT '',
 			gated_by_web_search BOOLEAN NOT NULL DEFAULT false
+		)`,
+		// See the sqlite dialect's own agents table comment.
+		`CREATE TABLE IF NOT EXISTS agents (
+			id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+			system_prompt TEXT NOT NULL DEFAULT '', mcp_server_ids TEXT NOT NULL DEFAULT '[]',
+			enabled BOOLEAN NOT NULL DEFAULT true
 		)`,
 		// See the sqlite dialect's content_dedup_lock comment.
 		`CREATE TABLE IF NOT EXISTS content_dedup_lock (

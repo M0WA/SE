@@ -687,6 +687,22 @@ type MCPServerStore interface {
 	DeleteMCPServer(ctx context.Context, id string) error
 }
 
+// ErrAgentNotFound is returned by AgentStore's Update and Delete when no
+// agent with the given ID exists -- AgentStore's sibling of
+// ErrMCPServerNotFound above.
+var ErrAgentNotFound = errors.New("agent not found")
+
+// AgentStore persists the admin-configured domain.Agent rows -- a list of
+// many, like MCPServerStore: an admin can define several agents over time.
+type AgentStore interface {
+	ListAgents(ctx context.Context) ([]domain.Agent, error)
+	CreateAgent(ctx context.Context, a domain.Agent) error
+	// UpdateAgent returns ErrAgentNotFound if no agent with a.ID exists.
+	UpdateAgent(ctx context.Context, a domain.Agent) error
+	// DeleteAgent returns ErrAgentNotFound if no agent with id exists.
+	DeleteAgent(ctx context.Context, id string) error
+}
+
 // MCPToolProvider opens one session per chat turn, spanning tool discovery
 // through every follow-up round's tool calls -- MCP's own session-oriented
 // usage pattern (initialize once per connection, then reuse it), not a
