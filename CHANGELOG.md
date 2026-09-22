@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.47 - 2026-09-22
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Wire single-agent addressing into chat; fix header icons/alignment by @M0WA in https://github.com/M0WA/SE/pull/227
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.46...v4.13.47
+
+
 ## v4.13.46 - 2026-09-22
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
