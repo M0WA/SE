@@ -240,5 +240,19 @@ func TestProvider_Open_HTTPTransport_BearerHeaderSent(t *testing.T) {
 	}
 }
 
+func TestProvider_Open_HTTPTransport_BlockedURL_SkippedNotFatal(t *testing.T) {
+	mcpServer := domain.MCPServer{ID: "s1", Name: "metadata", Transport: "http", BaseURL: "http://169.254.169.254/", Enabled: true}
+	p := mcpclient.New()
+	session, tools := p.Open(context.Background(), []domain.MCPServer{mcpServer}, nil)
+	t.Cleanup(session.Close)
+
+	if len(tools) != 0 {
+		t.Fatalf("expected no tools discovered from a blocked (link-local/metadata) endpoint, got %+v", tools)
+	}
+	if _, err := session.CallTool(context.Background(), "anything", "{}"); err == nil {
+		t.Error("expected an error calling a tool that was never registered")
+	}
+}
+
 var _ ports.MCPToolProvider = (*mcpclient.Provider)(nil)
 var _ ports.MCPSession = (*mcpclient.Session)(nil)
