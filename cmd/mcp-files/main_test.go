@@ -130,16 +130,22 @@ func TestReadFileTool_Success(t *testing.T) {
 	}
 }
 
-func TestReadFileTool_EmptyFileIDIsToolError(t *testing.T) {
-	cs := connectedTestServer(t, testClient("http://127.0.0.1:0", "tok-123"))
-	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "read_file", Arguments: map[string]any{"file_id": ""},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !result.IsError {
-		t.Fatal("expected an error result for an empty file_id")
+// TestReadFileTools_EmptyFileIDIsToolError covers read_file and
+// read_file_base64 together -- both reject an empty file_id the same way.
+func TestReadFileTools_EmptyFileIDIsToolError(t *testing.T) {
+	for _, tool := range []string{"read_file", "read_file_base64"} {
+		t.Run(tool, func(t *testing.T) {
+			cs := connectedTestServer(t, testClient("http://127.0.0.1:0", "tok-123"))
+			result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+				Name: tool, Arguments: map[string]any{"file_id": ""},
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !result.IsError {
+				t.Fatal("expected an error result for an empty file_id")
+			}
+		})
 	}
 }
 
@@ -225,52 +231,27 @@ func TestReadFileBase64Tool_TooLargeIsToolError(t *testing.T) {
 	}
 }
 
-func TestReadFileBase64Tool_EmptyFileIDIsToolError(t *testing.T) {
-	cs := connectedTestServer(t, testClient("http://127.0.0.1:0", "tok-123"))
-	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "read_file_base64", Arguments: map[string]any{"file_id": ""},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !result.IsError {
-		t.Fatal("expected an error result for an empty file_id")
-	}
-}
-
-func TestReadFileBase64Tool_NotFoundIsToolError(t *testing.T) {
+// TestReadFileTools_NotFoundIsToolError covers read_file and
+// read_file_base64 together -- both surface a 404 as a tool error.
+func TestReadFileTools_NotFoundIsToolError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "file not found", http.StatusNotFound)
 	}))
 	defer srv.Close()
 
-	cs := connectedTestServer(t, testClient(srv.URL, "tok-123"))
-	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "read_file_base64", Arguments: map[string]any{"file_id": "missing"},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !result.IsError {
-		t.Fatal("expected an error result for a 404")
-	}
-}
-
-func TestReadFileTool_NotFoundIsToolError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "file not found", http.StatusNotFound)
-	}))
-	defer srv.Close()
-
-	cs := connectedTestServer(t, testClient(srv.URL, "tok-123"))
-	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "read_file", Arguments: map[string]any{"file_id": "missing"},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !result.IsError {
-		t.Fatal("expected an error result for a 404")
+	for _, tool := range []string{"read_file", "read_file_base64"} {
+		t.Run(tool, func(t *testing.T) {
+			cs := connectedTestServer(t, testClient(srv.URL, "tok-123"))
+			result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+				Name: tool, Arguments: map[string]any{"file_id": "missing"},
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !result.IsError {
+				t.Fatal("expected an error result for a 404")
+			}
+		})
 	}
 }
 
