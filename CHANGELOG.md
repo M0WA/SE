@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.59 - 2026-09-22
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* chat: move attach-file icon into the tab-actions row, fix its color by @M0WA in https://github.com/M0WA/SE/pull/257
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.58...v4.13.59
+
+
 ## v4.13.58 - 2026-09-22
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
