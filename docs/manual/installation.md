@@ -1,0 +1,216 @@
+# Installation
+
+[← Manual home](README.md)
+
+This is the ordered install flow for a fresh Debian/Ubuntu host, for whoever is standing up a new deployment rather than using an existing one. Steps 1-2 and the underlying package/service setup are handled automatically by the `.deb`; everything from nginx onward is a manual step the package deliberately does not perform.
+
+## 1. Install prerequisite OS packages
+
+The `.deb`'s `Depends` is just `libc6`; its `Recommends` pulls in the GTK/Cairo/NSS shared libraries Playwright's Chromium/Firefox rendering needs.
+
+```
+apt-get update && apt-get install ./searchengine_<version>_amd64.deb
+# or, to skip the Playwright/GTK stack entirely:
+apt-get install --no-install-recommends ./searchengine_<version>_amd64.deb
+```
+
+Skip them with `--no-install-recommends` if crawls will only ever use the default plain-HTTP fetch (no JS rendering).
+
+## 2. Install the .deb package
+
+Handled automatically by the package. `dpkg` installs the three binaries (`/usr/bin/searchengine-{search,admin,crawl}`), the three systemd units, and a template `/etc/searchengine/searchengine.env`.
+
+```
+dpkg -i searchengine_<version>_amd64.deb
+# postinst prints: "searchengine installed. Services: searchengine-search, searchengine-admin, searchengine-crawl"
+```
+
+`postinst` creates a system user `searchengine` (no login shell, no home dir), chowns/chmods (`640`) `searchengine.env` to that user, creates `/var/lib/searchengine` and its `tmp` subdirectory (Playwright's `TMPDIR`), and enables/starts all three services.
+
+## 3. Expect the services to come up unconfigured
+
+Expected, not a packaging bug. The shipped `searchengine.env` points at a local SQLite file and has blank admin credentials, so admin sign-in fails closed until they're set.
+
+```
+systemctl status searchengine-search searchengine-admin searchengine-crawl
+journalctl -u searchengine-admin -n 50
+```
+
+## 4. Set the database driver and connection string
+
+Edit `/etc/searchengine/searchengine.env` (mode `640`, already owned by `searchengine:searchengine`). All three binaries share one database and ping it as part of `/healthz`.
+
+```
+# SQLite (default, already works out of the box):
+DB_DRIVER=sqlite
+DB_DSN=file:/var/lib/searchengine/search.db?cache=shared
+
+# Postgres (dev-deployment style):
+DB_DRIVER=postgres
+DB_DSN=postgres://user:pass@dbhost:5432/searchengine?sslmode=require
+```
+
+## 5. Set the admin username and password
+
+Until both are non-empty, sign-in to `/admin` always refuses -- the single most common reason a fresh install "looks broken."
+
+```
+ADMIN_USER=admin
+ADMIN_PASSWORD=<strong random password>
+```
+
+## 6. Set the optional hardening secrets
+
+Recommended. Both default to blank/disabled if skipped.
+
+```
+CRAWL_INTERNAL_TOKEN=$(openssl rand -hex 32)
+SETTINGS_ENCRYPTION_KEY=$(openssl rand -hex 32)
+```
+
+## 7. Restart and verify
+
+`EnvironmentFile` changes need a restart -- systemd doesn't hot-reload them.
+
+```
+systemctl restart searchengine-search searchengine-admin searchengine-crawl
+systemctl is-active searchengine-search searchengine-admin searchengine-crawl
+curl -s http://127.0.0.1:8080/healthz
+curl -s http://127.0.0.1:8081/healthz
+curl -s http://127.0.0.1:8082/healthz
+```
+
+## 8. Install and configure nginx
+
+The `.deb` never touches nginx. All three services bind loopback-only by design; nginx is the only intended entry point. `packaging/nginx/searchengine.conf` is the tracked source of truth for the routing split -- see [packaging/nginx/README.md](https://github.com/M0WA/SE/blob/main/packaging/nginx/README.md) for the gotcha about `/admin` being a plain string-prefix match.
+
+```
+apt-get install nginx certbot python3-certbot-nginx
+sed 's/<DOMAIN>/your.domain.example/' packaging/nginx/searchengine.conf > /etc/nginx/sites-available/searchengine
+rm -f /etc/nginx/sites-enabled/default
+ln -sf /etc/nginx/sites-available/searchengine /etc/nginx/sites-enabled/searchengine
+nginx -t && systemctl reload nginx
+systemctl enable --now nginx
+```
+
+## 9. Issue the TLS certificate
+
+Requires DNS for the domain to already resolve here.
+
+```
+certbot --nginx -d your.domain.example --non-interactive --agree-tos --register-unsafely-without-email --redirect
+systemctl status certbot.timer
+certbot certificates
+```
+
+## 10. Verify the public site end-to-end
+
+```
+curl -sk https://your.domain.example/healthz
+curl -sk https://your.domain.example/admin/    # should hit admin-server's login page
+```
+
+## 11. (Optional) Host/nginx/Postgres monitoring
+
+Independent of the package -- forwards to an IONOS monitoring pipeline. See [packaging/prometheus/README.md](https://github.com/M0WA/SE/blob/main/packaging/prometheus/README.md).
+
+```
+apt-get install prometheus prometheus-node-exporter prometheus-nginx-exporter prometheus-postgres-exporter
+cp packaging/prometheus/prometheus.default /etc/default/prometheus
+cp packaging/prometheus/prometheus-node-exporter.default /etc/default/prometheus-node-exporter
+cp packaging/prometheus/prometheus-nginx-exporter.default /etc/default/prometheus-nginx-exporter
+cp packaging/nginx/stub_status.conf /etc/nginx/conf.d/stub_status.conf && nginx -t && systemctl reload nginx
+cp packaging/prometheus/postgres-exporter-datasource.sh /usr/local/bin/ && chmod 755 /usr/local/bin/postgres-exporter-datasource.sh
+mkdir -p /etc/systemd/system/prometheus-postgres-exporter.service.d
+cp packaging/prometheus/prometheus-postgres-exporter.override.conf /etc/systemd/system/prometheus-postgres-exporter.service.d/override.conf
+psql "$DB_DSN" -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"   # Postgres only
+systemctl daemon-reload
+systemctl enable --now prometheus-node-exporter prometheus-nginx-exporter prometheus-postgres-exporter prometheus
+promtool check config /etc/prometheus/prometheus.yml
+```
+
+## 12. (Optional) Stand up SearXNG
+
+Docker-based, for the chat feature's live web search. See [packaging/searxng/README.md](https://github.com/M0WA/SE/blob/main/packaging/searxng/README.md). Includes `searchengine`, a custom SearXNG engine ([packaging/searxng-engine/README.md](https://github.com/M0WA/SE/blob/main/packaging/searxng-engine/README.md)) that folds this deployment's own indexed corpus into the blended results.
+
+```
+apt-get install docker.io docker-compose
+mkdir -p /opt/searxng
+cp packaging/searxng/docker-compose.yml packaging/searxng/settings.yml /opt/searxng/
+cp packaging/searxng-engine/searchengine_index.py /opt/searxng/
+cd /opt/searxng
+sed -i "s/REPLACE_WITH_OPENSSL_RAND_HEX_32/$(openssl rand -hex 32)/" settings.yml
+sed -i "s/REPLACE_WITH_SEARCH_INTERNAL_API_KEY/$(openssl rand -hex 32)/" settings.yml
+cp packaging/searxng/searxng.service /etc/systemd/system/searxng.service
+systemctl daemon-reload
+systemctl enable --now searxng
+# set SEARCH_INTERNAL_API_KEY in /etc/searchengine/searchengine.env to the same value as internal_api_key above, then:
+systemctl restart searchengine-search
+curl -s 'http://127.0.0.1:8888/search?q=test&format=json' | head -c 300
+```
+
+## 13. (Optional) Wire SearXNG metrics into Prometheus
+
+Only relevant if both steps 11 and 12 were done.
+
+```
+# settings.yml: general.open_metrics: <password>
+# prometheus.yml: sed 's/<SEARXNG_METRICS_PASSWORD>/<same password>/'
+docker compose restart searxng
+```
+
+## 14. (Optional) GPU host monitoring
+
+On the separate GPU host running vLLM (step 17). Same IONOS pipeline as step 11, a second independent Prometheus agent. See [packaging/prometheus-gpu/README.md](https://github.com/M0WA/SE/blob/main/packaging/prometheus-gpu/README.md).
+
+```
+apt-get install prometheus prometheus-node-exporter
+cp packaging/prometheus/prometheus.default /etc/default/prometheus
+cp packaging/prometheus/prometheus-node-exporter.default /etc/default/prometheus-node-exporter
+docker run -d --name dcgm-exporter --restart unless-stopped --gpus all --cap-add SYS_ADMIN -p 127.0.0.1:9400:9400 nvcr.io/nvidia/k8s/dcgm-exporter:latest
+systemctl daemon-reload
+systemctl enable --now prometheus-node-exporter prometheus
+promtool check config /etc/prometheus/prometheus.yml
+```
+
+## 15. (Optional) Import the Grafana dashboards
+
+Only relevant if some/all of steps 11, 13, and 14 were done. See [packaging/grafana/README.md](https://github.com/M0WA/SE/blob/main/packaging/grafana/README.md).
+
+```
+for f in packaging/grafana/dashboards/*.json; do
+  curl -s -X POST -H "Authorization: Bearer <GRAFANA_API_TOKEN>" -H "Content-Type: application/json" \
+    -d "{\"dashboard\": $(cat "$f"), \"overwrite\": true}" \
+    "https://<your-grafana-instance>/api/dashboards/db"
+done
+```
+
+## 16. (Optional) Configure the built-in MCP tool servers
+
+The `.deb` already installs `/usr/bin/searchengine-mcp-{web,datetime,sandbox,files}` -- nothing to copy or chmod. None is a systemd service: search-server/admin-server spawn one on demand as a stdio subprocess whenever an MCP server row on the [MCP servers](mcp-servers.md) page points at it. `mcp-sandbox` additionally needs the `searchengine` service user in the host's `docker` group (`usermod -aG docker searchengine` then restart the services) -- a real, deliberate privilege elevation the package never grants automatically. See the [MCP servers](mcp-servers.md) page for what each built-in server does and how to add a row for it.
+
+## 17. (Optional) Configure an embedding and chat inference backend
+
+The [Embedding endpoints](embedding-endpoint-detail.md) and [Chat settings](chat-settings.md) pages each point at a plain OpenAI-compatible HTTP endpoint -- any such API works, self-hosted or third-party. As a concrete reference, the project's own dev deployment points both at self-hosted [vLLM](https://github.com/vllm-project/vllm) processes on a separate GPU host:
+
+```
+# Embeddings: Alibaba-NLP/gte-Qwen2-7B-instruct
+vllm serve Alibaba-NLP/gte-Qwen2-7B-instruct --runner pooling --convert embed
+
+# Chat -- --enable-auto-tool-choice and --tool-call-parser are required for
+# MCP servers to work at all: without them the model is never offered tool
+# calls and every configured server sits unused.
+vllm serve RedHatAI/Qwen2.5-72B-Instruct-FP8-dynamic --max-model-len 32768 --enable-auto-tool-choice --tool-call-parser hermes
+```
+
+## 18. Final smoke test of the whole stack
+
+```
+systemctl is-active searchengine-search searchengine-admin searchengine-crawl nginx
+curl -sk https://your.domain.example/
+curl -sk https://your.domain.example/admin/
+curl -sk https://your.domain.example/healthz
+```
+
+---
+← [Infrastructure options (IONOS)](infrastructure.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Environment variables](environment-variables.md) →

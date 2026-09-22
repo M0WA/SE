@@ -1,10 +1,11 @@
 # GitHub Pages config for this repo's docs/ directory -- served at
 # https://m0wa.github.io/SE/ once Pages is enabled (Settings -> Pages ->
-# Deploy from a branch -> main -> /docs). Renders docs/manual/README.md,
-# docs/configuration.md, and docs/architecture/README.md as a real site,
-# on top of a built-in supported theme (no Gemfile/plugin install needed --
-# GitHub's Pages build handles this theme name directly) so they're
-# genuinely readable as pages, not just raw markdown in the repo browser.
+# Deploy from a branch -> main -> /docs). Renders docs/manual/ (one page
+# per file -- installation/config, then one per admin/search page) and
+# docs/architecture/README.md as a real site, on top of a built-in
+# supported theme (no Gemfile/plugin install needed -- GitHub's Pages
+# build handles this theme name directly) so they're genuinely readable
+# as pages, not just raw markdown in the repo browser.
 #
 # jekyll-theme-minimal is the base; docs/assets/css/style.scss layers a
 # handful of color overrides on top of it to match the actual app's own
@@ -12,5 +13,5 @@
 # theme colors as an unrelated skin.
 theme: jekyll-theme-minimal
 title: searchengine docs
-description: Configuration reference, architecture, and user manual for searchengine
+description: User manual, architecture, and installation reference for searchengine
 show_downloads: false

@@ -9,7 +9,7 @@ import (
 
 // defaultAgents is a small, ready-to-use starter set covering the common
 // chat personas this deployment's own tooling (web_search/web_fetch,
-// get_datetime) supports -- see docs/configuration.md's "Suggested global
+// get_datetime) supports -- see docs/manual/agents.md's "Suggested global
 // agents" section for the rationale behind each one. Every ID here is a
 // fixed literal, not domain.NewAgentID-minted, since seedDefaultAgents only
 // ever runs once (see its own doc comment) -- there is no existing-ID set
