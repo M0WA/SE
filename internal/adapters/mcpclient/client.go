@@ -17,6 +17,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"searchengine/internal/adapters/netguard"
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
 )
@@ -121,9 +122,21 @@ func connect(ctx context.Context, s domain.MCPServer, env map[string]string) (*s
 		}
 		transport = &mcp.CommandTransport{Command: cmd}
 	case "http":
-		httpClient := &http.Client{Timeout: connectTimeout}
+		// Same belt-and-suspenders guard as httpchat/httpembed's own
+		// admin-configured BaseURL (see netguard.ConfiguredEndpointURLAllowed's
+		// doc comment): a pre-flight check here, plus routing every dial
+		// (including a redirect hop) through ConfiguredEndpointTransport below,
+		// which is what actually closes the DNS-rebinding TOCTOU gap a
+		// pre-flight check alone can't. This server config is admin-trusted
+		// today, but per-user MCP servers (self-service, http-only) will reuse
+		// this same connect path, so the guard belongs here rather than at
+		// each caller.
+		if !netguard.ConfiguredEndpointURLAllowed(s.BaseURL) {
+			return nil, fmt.Errorf("mcpclient: endpoint URL is not allowed: %s", s.BaseURL)
+		}
+		httpClient := &http.Client{Timeout: connectTimeout, Transport: netguard.ConfiguredEndpointTransport()}
 		if s.APIKey != "" {
-			httpClient.Transport = &bearerTransport{apiKey: s.APIKey, base: http.DefaultTransport}
+			httpClient.Transport = &bearerTransport{apiKey: s.APIKey, base: netguard.ConfiguredEndpointTransport()}
 		}
 		transport = &mcp.StreamableClientTransport{Endpoint: s.BaseURL, HTTPClient: httpClient}
 	default:
