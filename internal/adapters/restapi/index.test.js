@@ -854,11 +854,19 @@ test('the attach file input uploads the chosen file and shows a confirmation sta
   const file = new window.File(['col1,col2\n1,2'], 'data.csv', { type: 'text/csv' });
   Object.defineProperty(input, 'files', { value: [file], configurable: true });
 
+  // A successful upload also triggers loadChatFiles' own follow-up GET to
+  // the SAME /account/api/files URL -- distinguish by method (opts.method
+  // is only set on the POST) rather than capturing whichever call runs
+  // last, same pattern the dedicated
+  // "a successful attach-upload reloads #chat-files" test below uses.
   let gotURL, gotBody;
   global.fetch = async (url, opts) => {
-    gotURL = url;
-    gotBody = opts && opts.body;
-    return { ok: true, json: async () => ({ id: 'f1', filename: 'data.csv', size: 13 }) };
+    if (opts && opts.method === 'POST') {
+      gotURL = url;
+      gotBody = opts.body;
+      return { ok: true, json: async () => ({ id: 'f1', filename: 'data.csv', size: 13 }) };
+    }
+    return { ok: true, json: async () => [] };
   };
   input.dispatchEvent(new window.Event('change'));
   await new Promise((resolve) => setTimeout(resolve, 0));
