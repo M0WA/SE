@@ -701,7 +701,7 @@ test('sendChatMessage renders no tool-result elements when tool_results is absen
   assert.equal(assistantMsg.querySelectorAll('.chat-hook-result').length, 0);
 });
 
-test('sendChatMessage renders a fetch-named tool result as an open outer fold with a link and a closed nested response fold', async () => {
+test('sendChatMessage renders a fetch-named tool result as a closed outer fold with a link and a closed nested response fold', async () => {
   global.fetch = async () => ({
     ok: true,
     json: async () => ({
@@ -716,7 +716,7 @@ test('sendChatMessage renders a fetch-named tool result as an open outer fold wi
   const assistantMsg = document.getElementById('chat-messages').children[1];
   const outer = assistantMsg.querySelector('.chat-hook-result');
   assert.notEqual(outer, null);
-  assert.equal(outer.hasAttribute('open'), true);
+  assert.equal(outer.hasAttribute('open'), false);
   assert.equal(outer.querySelector('summary').textContent, 'web_fetch');
 
   const link = outer.querySelector('.chat-hook-target a');
@@ -755,7 +755,7 @@ test('sendChatMessage renders a search-named tool result\'s parsed results list,
   await sendChatMessage('q');
   const assistantMsg = document.getElementById('chat-messages').children[1];
   const outer = assistantMsg.querySelector('.chat-hook-result');
-  assert.equal(outer.hasAttribute('open'), true);
+  assert.equal(outer.hasAttribute('open'), false);
   assert.equal(outer.querySelector('.chat-hook-target code').textContent, 'golang release notes');
 
   const items = outer.querySelectorAll('.chat-hook-results-list li');

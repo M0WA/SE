@@ -481,14 +481,12 @@
         const input = firstArgumentValue(tr.arguments);
 
         if (name.includes('fetch') && input) {
-          // Two-level fold: the outer <details> (open by default) shows
-          // what was fetched via a real link; the raw response/error is
-          // tucked away in a nested, closed-by-default fold so the target
-          // URL is the first thing seen without the (often long) response
-          // body pushing it out of view.
+          // Two-level fold: the outer <details> is closed by default, same
+          // as every other tool result -- expanding it shows what was
+          // fetched via a real link, with the raw response/error tucked
+          // away in a further-nested, closed-by-default fold.
           const details = document.createElement('details');
           details.className = 'chat-hook-result' + (tr.err ? ' chat-hook-result-error' : '');
-          details.open = true;
           const summary = document.createElement('summary');
           summary.textContent = tr.tool_name;
           details.appendChild(summary);
@@ -506,13 +504,12 @@
           details.appendChild(buildToolResponseFold(tr, tr.err ? 'Error' : 'Response'));
           msg.appendChild(details);
         } else if (name.includes('search') && input) {
-          // Same open-by-default outer fold, but the target is a query
+          // Same closed-by-default outer fold, but the target is a query
           // string (not a link), and -- best effort -- a parsed result
-          // list is shown directly, with the raw JSON still available in
-          // the nested fold for anyone who wants it.
+          // list is shown directly once expanded, with the raw JSON still
+          // available in the nested fold for anyone who wants it.
           const details = document.createElement('details');
           details.className = 'chat-hook-result' + (tr.err ? ' chat-hook-result-error' : '');
-          details.open = true;
           const summary = document.createElement('summary');
           summary.textContent = tr.tool_name;
           details.appendChild(summary);
