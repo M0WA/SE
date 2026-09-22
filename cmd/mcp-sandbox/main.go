@@ -101,7 +101,7 @@ func newServer(runner *dockersandbox.Runner, network bool) *mcp.Server {
 
 	networkNote := "This sandbox has NO network access -- any attempt to reach the network will fail."
 	if network {
-		networkNote = "This sandbox DOES have network access, enabled by the admin who configured this server."
+		networkNote = "This sandbox DOES have network access."
 	}
 
 	mcp.AddTool(server, &mcp.Tool{
