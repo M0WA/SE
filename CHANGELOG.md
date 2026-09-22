@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.54 - 2026-09-22
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* mcpclient: raise callTimeout 10s -> 60s; run_go needs real headroom by @M0WA in https://github.com/M0WA/SE/pull/246
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.53...v4.13.54
+
+
 ## v4.13.53 - 2026-09-22
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
