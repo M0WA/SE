@@ -17,8 +17,8 @@ func TestSeedDefaultAgents_PopulatesAFreshEmptyDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(got) != 5 {
-		t.Fatalf("expected 5 seeded default agents, got %d: %+v", len(got), got)
+	if len(got) != 6 {
+		t.Fatalf("expected 6 seeded default agents, got %d: %+v", len(got), got)
 	}
 	for _, a := range got {
 		if a.ID == "" || a.Name == "" || a.SystemPrompt == "" {
@@ -82,7 +82,7 @@ func TestSeedDefaultAgents_DeletingOneDefaultThenReseedingLeavesItDeleted(t *tes
 	}
 
 	// A second SeedDefaultAgents call (as a restart would trigger) must be a
-	// no-op: the table isn't empty (4 defaults remain), so nothing reseeds.
+	// no-op: the table isn't empty (5 defaults remain), so nothing reseeds.
 	if err := repo.SeedDefaultAgents(ctx); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -91,8 +91,8 @@ func TestSeedDefaultAgents_DeletingOneDefaultThenReseedingLeavesItDeleted(t *tes
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(got) != 4 {
-		t.Fatalf("expected the deleted default to stay deleted (4 remaining), got %d: %+v", len(got), got)
+	if len(got) != 5 {
+		t.Fatalf("expected the deleted default to stay deleted (5 remaining), got %d: %+v", len(got), got)
 	}
 	for _, a := range got {
 		if a.ID == "quick_answer" {

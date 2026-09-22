@@ -80,6 +80,20 @@ type runArgs struct {
 	Code string `json:"code" jsonschema:"the complete, runnable source code to execute"`
 }
 
+// runArgsWithPackages is runArgs plus an optional Packages field -- used
+// in place of runArgs (see newServer) only when this server was started
+// with -network, so the model can even discover the parameter exists
+// exclusively when it's actually usable (installing needs a real network
+// call). Never exposed at all otherwise, rather than exposed-but-silently-
+// ignored, so "why didn't my packages install" can't come up.
+type runArgsWithPackages struct {
+	Code string `json:"code" jsonschema:"the complete, runnable source code to execute"`
+	// Packages is model-supplied, like Code -- passed to pip/go as real
+	// argv elements (see dockersandbox.RunOptions.Packages), never
+	// through a shell string.
+	Packages []string `json:"packages,omitempty" jsonschema:"optional package names to install before running the code -- pip package names for run_python, Go module import paths (optionally with an @version) for run_go"`
+}
+
 // runResult is the tool's own wire shape -- the same "small,
 // self-describing JSON object" convention cmd/mcp-datetime's get_datetime
 // uses, so the model can read exit_code/timed_out programmatically rather
@@ -104,30 +118,44 @@ func newServer(runner *dockersandbox.Runner, network bool) *mcp.Server {
 		networkNote = "This sandbox DOES have network access."
 	}
 
-	mcp.AddTool(server, &mcp.Tool{
-		Name: "run_python",
-		Description: "Execute a Python script in a fresh, isolated sandbox and return its exit code, stdout, " +
-			"and stderr. Use this to actually run code -- to check that it works, to compute something " +
-			"precisely, or to verify your own reasoning -- rather than simulating execution in your head. " +
-			"Only the Python standard library is guaranteed available (no pip install). Nothing persists " +
-			"between calls -- each call gets a brand new sandbox with no files or state from any previous " +
-			"call. " + networkNote,
-	}, func(ctx context.Context, req *mcp.CallToolRequest, args runArgs) (*mcp.CallToolResult, any, error) {
-		return runInSandbox(ctx, runner, dockersandbox.Python, args.Code, network)
-	})
+	pythonDesc := "Execute a Python script in a fresh, isolated sandbox and return its exit code, stdout, " +
+		"and stderr. Use this to actually run code -- to check that it works, to compute something " +
+		"precisely, or to verify your own reasoning -- rather than simulating execution in your head. " +
+		"Only the Python standard library is guaranteed available (no pip install). Nothing persists " +
+		"between calls -- each call gets a brand new sandbox with no files or state from any previous " +
+		"call. " + networkNote
+	goDesc := "Execute a Go program in a fresh, isolated sandbox and return its exit code, stdout, " +
+		"and stderr. Use this to actually run code -- to check that it works, to compute something " +
+		"precisely, or to verify your own reasoning -- rather than simulating execution in your head. " +
+		"The code must be a complete, runnable 'package main' file with a main() function. Only the " +
+		"Go standard library is guaranteed available -- there is no go.mod, so an import beyond stdlib " +
+		"will fail to resolve even if network access is enabled. Nothing persists between calls -- each " +
+		"call gets a brand new sandbox with no files or state from any previous call. " + networkNote
 
-	mcp.AddTool(server, &mcp.Tool{
-		Name: "run_go",
-		Description: "Execute a Go program in a fresh, isolated sandbox and return its exit code, stdout, " +
-			"and stderr. Use this to actually run code -- to check that it works, to compute something " +
-			"precisely, or to verify your own reasoning -- rather than simulating execution in your head. " +
-			"The code must be a complete, runnable 'package main' file with a main() function. Only the " +
-			"Go standard library is guaranteed available -- there is no go.mod, so an import beyond stdlib " +
-			"will fail to resolve even if network access is enabled. Nothing persists between calls -- each " +
-			"call gets a brand new sandbox with no files or state from any previous call. " + networkNote,
-	}, func(ctx context.Context, req *mcp.CallToolRequest, args runArgs) (*mcp.CallToolResult, any, error) {
-		return runInSandbox(ctx, runner, dockersandbox.Go, args.Code, network)
-	})
+	if network {
+		pythonDesc += " Pass \"packages\" to install extra pip packages before the script runs, if the standard " +
+			"library alone isn't enough."
+		goDesc += " Pass \"packages\" (Go module import paths, optionally \"@version\") to \"go get\" them into a " +
+			"throwaway module before running, if the standard library alone isn't enough."
+		mcp.AddTool(server, &mcp.Tool{Name: "run_python", Description: pythonDesc},
+			func(ctx context.Context, req *mcp.CallToolRequest, args runArgsWithPackages) (*mcp.CallToolResult, any, error) {
+				return runInSandbox(ctx, runner, dockersandbox.Python, args.Code, args.Packages, network)
+			})
+		mcp.AddTool(server, &mcp.Tool{Name: "run_go", Description: goDesc},
+			func(ctx context.Context, req *mcp.CallToolRequest, args runArgsWithPackages) (*mcp.CallToolResult, any, error) {
+				return runInSandbox(ctx, runner, dockersandbox.Go, args.Code, args.Packages, network)
+			})
+		return server
+	}
+
+	mcp.AddTool(server, &mcp.Tool{Name: "run_python", Description: pythonDesc},
+		func(ctx context.Context, req *mcp.CallToolRequest, args runArgs) (*mcp.CallToolResult, any, error) {
+			return runInSandbox(ctx, runner, dockersandbox.Python, args.Code, nil, network)
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "run_go", Description: goDesc},
+		func(ctx context.Context, req *mcp.CallToolRequest, args runArgs) (*mcp.CallToolResult, any, error) {
+			return runInSandbox(ctx, runner, dockersandbox.Go, args.Code, nil, network)
+		})
 
 	return server
 }
@@ -138,8 +166,8 @@ func newServer(runner *dockersandbox.Runner, network bool) *mcp.Server {
 // workdir): the sandboxed code itself exiting non-zero, panicking, or
 // timing out is ordinary, useful information the model should see and can
 // act on, not a tool-call failure.
-func runInSandbox(ctx context.Context, runner *dockersandbox.Runner, lang dockersandbox.Language, code string, network bool) (*mcp.CallToolResult, any, error) {
-	res, err := runner.Run(ctx, dockersandbox.RunOptions{Language: lang, Code: code, Network: network})
+func runInSandbox(ctx context.Context, runner *dockersandbox.Runner, lang dockersandbox.Language, code string, packages []string, network bool) (*mcp.CallToolResult, any, error) {
+	res, err := runner.Run(ctx, dockersandbox.RunOptions{Language: lang, Code: code, Packages: packages, Network: network})
 	if err != nil {
 		return &mcp.CallToolResult{
 			IsError: true,

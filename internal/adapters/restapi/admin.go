@@ -1217,6 +1217,20 @@ func toMCPServerResponse(s domain.MCPServer) mcpServerResponse {
 	}
 }
 
+// normalizeMCPServerName lowercases req.Name for a "stdio" ("local" -- a
+// process spawned on this host, as opposed to a remote "http" server)
+// server -- Name is a purely cosmetic admin-UI display label (see
+// MCPServer.Name's own doc comment), so this just keeps every local
+// server's label consistent rather than dependent on how an admin
+// happened to type it, matching the lowercase convention its own doc
+// comment example ("web tools") already follows.
+func normalizeMCPServerName(req mcpServerRequest) mcpServerRequest {
+	if req.Transport == "stdio" {
+		req.Name = strings.ToLower(req.Name)
+	}
+	return req
+}
+
 // validateMCPServerRequest requires a non-empty Name and a Transport of
 // either "stdio" (which also requires a non-empty Command) or "http" (which
 // also requires a non-empty BaseURL) -- mirroring mcpclient.connect's own
@@ -1267,6 +1281,7 @@ func (h *Handler) handleAdminMCPServers(w http.ResponseWriter, r *http.Request) 
 		if !ok {
 			return
 		}
+		req = normalizeMCPServerName(req)
 		if !validateMCPServerRequest(w, req) {
 			return
 		}
@@ -1327,6 +1342,7 @@ func (h *Handler) handleAdminUpdateMCPServer(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
+	req = normalizeMCPServerName(req)
 	if !validateMCPServerRequest(w, req) {
 		return
 	}

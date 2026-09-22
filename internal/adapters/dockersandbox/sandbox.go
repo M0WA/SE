@@ -135,7 +135,18 @@ type languageConfig struct {
 	image    string
 	filename string
 	argv     func(path string) []string
-	env      []string
+	// installArgv builds the argv for a run that also installs packages
+	// before executing the code -- only ever called when both
+	// RunOptions.Network and len(RunOptions.Packages) are non-zero (see
+	// Run). packages become trailing positional arguments to a fixed `sh
+	// -c '<script>' sh` invocation, referenced inside the script only via
+	// "$@" -- never string-concatenated into the script text itself -- so
+	// a model-supplied package name can never break out of its own
+	// argument, however it's spelled (the same argv-safety property
+	// exec.Command already gives Code's own file, just extended to these
+	// dynamic trailing arguments too).
+	installArgv func(path string, packages []string) []string
+	env         []string
 }
 
 var languageConfigs = map[Language]languageConfig{
@@ -143,6 +154,16 @@ var languageConfigs = map[Language]languageConfig{
 		image:    "python:3-slim",
 		filename: "script.py",
 		argv:     func(path string) []string { return []string{"python3", path} },
+		// --target puts installed packages under the writable /tmp tmpfs
+		// (site-packages itself is under the read-only root); PYTHONPATH
+		// tells the interpreter where to find them. python:3-slim ships
+		// pip already, so no separate install step is needed for pip
+		// itself.
+		installArgv: func(path string, packages []string) []string {
+			script := `set -e; mkdir -p /tmp/pip-packages; pip install --quiet --no-cache-dir --target=/tmp/pip-packages "$@"; ` +
+				`PYTHONPATH=/tmp/pip-packages exec python3 ` + path
+			return append([]string{"sh", "-c", script, "sh"}, packages...)
+		},
 		// PYTHONDONTWRITEBYTECODE avoids Python even attempting a .pyc
 		// write under the read-only root (harmless either way -- it just
 		// silently skips caching -- but this makes the intent explicit).
@@ -158,10 +179,27 @@ var languageConfigs = map[Language]languageConfig{
 		// single standalone file with no go.mod required, as long as it
 		// imports only the standard library -- there is no module
 		// resolution step to need one for. An import beyond stdlib fails
-		// the same way it would with no network at all: this is a
-		// documented scope limit (see cmd/mcp-sandbox's own tool
-		// description), not something Network=true alone fixes.
+		// the same way it would with no network at all, UNLESS Packages
+		// is used too (see installArgv below): this is a documented scope
+		// limit (see cmd/mcp-sandbox's own tool description) that
+		// Packages, not Network alone, lifts.
 		argv: func(path string) []string { return []string{"go", "run", path} },
+		// The code file lives under the read-only /sandbox mount, which
+		// can't hold a go.mod -- copy it into a subdirectory of the
+		// writable /tmp (already GOCACHE/GOPATH/GOMODCACHE's own home, see
+		// env below) and init a throwaway module there instead of at
+		// /tmp's own top level: the Go toolchain deliberately refuses "go
+		// mod init"/"go get" directly in a bare system temp root (a real,
+		// observed "ignoring go.mod in system temp root /tmp" warning,
+		// followed by "go.mod file not found" -- ostensibly to stop a
+		// stray module accumulating there across unrelated runs, though
+		// this Runner's own workdir is already fresh and removed per
+		// call). Then "go get" each requested module and run from that
+		// subdirectory.
+		installArgv: func(path string, packages []string) []string {
+			script := `set -e; mkdir -p /tmp/sandbox-mod; cp ` + path + ` /tmp/sandbox-mod/main.go; cd /tmp/sandbox-mod; go mod init sandbox >/dev/null 2>&1; go get "$@"; exec go run main.go`
+			return append([]string{"sh", "-c", script, "sh"}, packages...)
+		},
 		// GOCACHE/GOPATH/GOMODCACHE/HOME all need to point at the
 		// writable tmpfs /tmp -- go's own build/module caches try to
 		// write under $HOME by default, which fails outright under
@@ -179,6 +217,16 @@ type RunOptions struct {
 	// --network none -- the sandboxed code can't reach anything, on the
 	// host or the internet, at all.
 	Network bool
+	// Packages is zero or more package/module names to install before
+	// running Code -- pip package names for Python, Go module import
+	// paths (optionally "@version") for Go. Only takes effect when
+	// Network is also true (installing needs a real network call);
+	// otherwise it's silently ignored, same as DNS/HostNetwork being
+	// meaningless without Network. Model-supplied, like Code itself --
+	// passed to pip/go as real argv elements (see languageConfig.
+	// installArgv), never through a shell string, so a package name can
+	// never inject an extra shell command.
+	Packages []string
 }
 
 // Result is one sandboxed execution's outcome. A non-zero ExitCode or a
@@ -254,6 +302,19 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 		defer cancel()
 	}
 
+	// tmpfsSize is bumped well past the plain-code-path default (64m) when
+	// installing packages -- confirmed by a real "no space left on
+	// device" failure partway through compiling stdlib packages
+	// (reflect/bytes/sort/...) for a Go run pulling in just 3 small
+	// dependencies: GOCACHE's own compile-artifact footprint plus real
+	// downloaded module source together outgrow 64m fast, on top of
+	// whatever pip installs into /tmp/pip-packages for Python. Left at
+	// its established default otherwise, since every plain-code (no
+	// Packages) test already passes at 64m.
+	tmpfsSize := "64m"
+	if opts.Network && len(opts.Packages) > 0 {
+		tmpfsSize = "256m"
+	}
 	name := "se-sandbox-" + randomHex(8)
 	args := []string{
 		"run", "--name", name, "--rm",
@@ -269,7 +330,7 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 		// Python never needs this, but the same mount serves both
 		// languages, so the option is always present rather than
 		// language-conditional.
-		"--tmpfs", "/tmp:rw,exec,size=64m,mode=1777",
+		"--tmpfs", "/tmp:rw,exec,size=" + tmpfsSize + ",mode=1777",
 		"-v", dir + ":/sandbox:ro",
 		"-w", "/sandbox",
 	}
@@ -287,7 +348,12 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 		args = append(args, "-e", e)
 	}
 	args = append(args, cfg.image)
-	args = append(args, cfg.argv("/sandbox/"+cfg.filename)...)
+	codeInContainer := "/sandbox/" + cfg.filename
+	if opts.Network && len(opts.Packages) > 0 {
+		args = append(args, cfg.installArgv(codeInContainer, opts.Packages)...)
+	} else {
+		args = append(args, cfg.argv(codeInContainer)...)
+	}
 
 	cmd := exec.CommandContext(runCtx, "docker", args...)
 	var stdout, stderr limitedBuffer

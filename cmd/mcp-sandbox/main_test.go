@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -182,6 +183,71 @@ func TestRunPythonTool_NetworkAllowedWhenServerConfiguredWithIt(t *testing.T) {
 	}
 	if got.ExitCode != 0 {
 		t.Errorf("expected a successful network fetch when this server is configured with -network, got %+v", got)
+	}
+}
+
+// TestListTools_PackagesParamOnlyPresentWhenNetworkEnabled proves the
+// "packages" input-schema property (and the "Pass \"packages\"..."
+// description sentence) exist only for a network-enabled server -- never
+// exposed-but-silently-ignored (see runArgsWithPackages' own doc comment).
+func TestListTools_PackagesParamOnlyPresentWhenNetworkEnabled(t *testing.T) {
+	requireDockerTests(t)
+
+	withoutNetwork := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false)
+	listWithout, err := withoutNetwork.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("listing tools (no network): %v", err)
+	}
+	for _, tool := range listWithout.Tools {
+		if strings.Contains(tool.Description, "packages") {
+			t.Errorf("expected no mention of packages in %q's description without -network, got %q", tool.Name, tool.Description)
+		}
+		schema, _ := tool.InputSchema.(map[string]any)
+		props, _ := schema["properties"].(map[string]any)
+		if _, ok := props["packages"]; ok {
+			t.Errorf("expected no \"packages\" input property on %q without -network, got schema %+v", tool.Name, tool.InputSchema)
+		}
+	}
+
+	withNetwork := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), true)
+	listWith, err := withNetwork.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("listing tools (with network): %v", err)
+	}
+	for _, tool := range listWith.Tools {
+		schema, _ := tool.InputSchema.(map[string]any)
+		props, _ := schema["properties"].(map[string]any)
+		if _, ok := props["packages"]; !ok {
+			t.Errorf("expected a \"packages\" input property on %q with -network, got schema %+v", tool.Name, tool.InputSchema)
+		}
+	}
+}
+
+// TestRunPythonTool_PackagesInstalledEndToEnd proves the "packages"
+// argument actually reaches dockersandbox and gets installed -- "six" is
+// tiny/pure-Python, chosen only to keep this test fast (mirrors
+// dockersandbox's own TestRun_PythonPackagesInstalledWhenNetworkEnabled,
+// one layer up through the real MCP tool-call path instead of calling
+// Runner.Run directly).
+func TestRunPythonTool_PackagesInstalledEndToEnd(t *testing.T) {
+	requireDockerTests(t)
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{Timeout: 30 * time.Second}), true)
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "run_python",
+		Arguments: map[string]any{
+			"code":     "import six\nprint('six version', six.__version__)\n",
+			"packages": []string{"six"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got runResult
+	if err := json.Unmarshal([]byte(textContent(t, result)), &got); err != nil {
+		t.Fatalf("decoding tool result: %v", err)
+	}
+	if got.ExitCode != 0 || !strings.Contains(got.Stdout, "six version") {
+		t.Errorf("expected six installed and importable via the packages argument, got %+v", got)
 	}
 }
 

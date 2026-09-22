@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -127,16 +130,22 @@ func TestReadFileTool_Success(t *testing.T) {
 	}
 }
 
-func TestReadFileTool_EmptyFileIDIsToolError(t *testing.T) {
-	cs := connectedTestServer(t, testClient("http://127.0.0.1:0", "tok-123"))
-	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "read_file", Arguments: map[string]any{"file_id": ""},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !result.IsError {
-		t.Fatal("expected an error result for an empty file_id")
+// TestReadFileTools_EmptyFileIDIsToolError covers read_file and
+// read_file_base64 together -- both reject an empty file_id the same way.
+func TestReadFileTools_EmptyFileIDIsToolError(t *testing.T) {
+	for _, tool := range []string{"read_file", "read_file_base64"} {
+		t.Run(tool, func(t *testing.T) {
+			cs := connectedTestServer(t, testClient("http://127.0.0.1:0", "tok-123"))
+			result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+				Name: tool, Arguments: map[string]any{"file_id": ""},
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !result.IsError {
+				t.Fatal("expected an error result for an empty file_id")
+			}
+		})
 	}
 }
 
@@ -158,21 +167,91 @@ func TestReadFileTool_BinaryContentIsToolError(t *testing.T) {
 	}
 }
 
-func TestReadFileTool_NotFoundIsToolError(t *testing.T) {
+// TestReadFileBase64Tool_Success proves read_file_base64 returns binary
+// content read_file itself would refuse, base64-encoded, along with the
+// filename/content type from the server's own response headers.
+func TestReadFileBase64Tool_Success(t *testing.T) {
+	raw := []byte{0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "file not found", http.StatusNotFound)
+		if r.URL.Path != "/account/api/files/f1" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Header().Set("Content-Disposition", `attachment; filename="photo.jpg"`)
+		w.Write(raw)
 	}))
 	defer srv.Close()
 
 	cs := connectedTestServer(t, testClient(srv.URL, "tok-123"))
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "read_file", Arguments: map[string]any{"file_id": "missing"},
+		Name: "read_file_base64", Arguments: map[string]any{"file_id": "f1"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success, got error result: %s", textContent(t, result))
+	}
+	var got readFileBase64Result
+	if err := json.Unmarshal([]byte(textContent(t, result)), &got); err != nil {
+		t.Fatalf("decoding tool result: %v", err)
+	}
+	if got.Filename != "photo.jpg" || got.ContentType != "image/jpeg" || got.Size != len(raw) {
+		t.Errorf("unexpected metadata: %+v", got)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(got.Base64)
+	if err != nil {
+		t.Fatalf("decoding base64: %v", err)
+	}
+	if !bytes.Equal(decoded, raw) {
+		t.Errorf("expected decoded base64 to round-trip the raw bytes, got %v, want %v", decoded, raw)
+	}
+}
+
+// TestReadFileBase64Tool_TooLargeIsToolError proves a file over
+// maxBase64ReadableBytes is refused with a clear error rather than
+// silently truncated (unlike read_file's own truncate-then-check-utf8
+// behavior -- truncating base64-meaningful binary mid-stream would just
+// produce corrupt, useless data).
+func TestReadFileBase64Tool_TooLargeIsToolError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(make([]byte, maxBase64ReadableBytes+1))
+	}))
+	defer srv.Close()
+
+	cs := connectedTestServer(t, testClient(srv.URL, "tok-123"))
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "read_file_base64", Arguments: map[string]any{"file_id": "f1"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !result.IsError {
-		t.Fatal("expected an error result for a 404")
+		t.Fatal("expected an error result for a too-large file")
+	}
+}
+
+// TestReadFileTools_NotFoundIsToolError covers read_file and
+// read_file_base64 together -- both surface a 404 as a tool error.
+func TestReadFileTools_NotFoundIsToolError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "file not found", http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	for _, tool := range []string{"read_file", "read_file_base64"} {
+		t.Run(tool, func(t *testing.T) {
+			cs := connectedTestServer(t, testClient(srv.URL, "tok-123"))
+			result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+				Name: tool, Arguments: map[string]any{"file_id": "missing"},
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !result.IsError {
+				t.Fatal("expected an error result for a 404")
+			}
+		})
 	}
 }
 

@@ -1,7 +1,8 @@
 // Command mcp-files is a first-party MCP (Model Context Protocol) server
-// exposing "list_files"/"read_file"/"write_file" -- letting the chat model
-// inspect files a signed-in regular-user account has uploaded (see
-// restapi's /account/files page) and produce new ones for that user to
+// exposing "list_files"/"read_file"/"read_file_base64"/"write_file" --
+// letting the chat model inspect files a signed-in regular-user account
+// has uploaded (see restapi's /account/files page) and produce new ones
+// for that user to
 // download again. Spawned as a stdio subprocess by
 // internal/adapters/mcpclient (see domain.MCPServer's Transport="stdio"
 // configuration), same operational model as cmd/mcp-web/cmd/mcp-datetime/
@@ -21,10 +22,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"strings"
@@ -48,8 +52,29 @@ const callTimeout = 20 * time.Second
 // dockersandbox.maxOutputBytes' own reasoning.
 const maxReadableBytes = 256 * 1024
 
+// maxBase64ReadableBytes caps a binary file's raw size for
+// read_file_base64 -- deliberately far smaller than maxReadableBytes: this
+// content is meant to be embedded directly in a run_python/run_go tool
+// call's own code argument (see docs/manual/agents.md's "Image analyst"
+// row), where base64 encoding alone already inflates it by a third, and
+// every byte of that becomes real tokens in the chat completion request.
+// 300KB raw (~400KB base64) comfortably covers a compressed screenshot or
+// small photo without blowing an ordinary context budget -- a larger file
+// genuinely needs a smaller/resized copy uploaded instead.
+const maxBase64ReadableBytes = 300 * 1024
+
 type readFileArgs struct {
 	FileID string `json:"file_id" jsonschema:"the id of the file to read, from list_files"`
+}
+
+// readFileBase64Result is read_file_base64's own wire shape -- mirrors
+// cmd/mcp-sandbox's runResult convention (a small, self-describing JSON
+// object) so the model can read content_type/size programmatically.
+type readFileBase64Result struct {
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	Size        int    `json:"size"`
+	Base64      string `json:"base64"`
 }
 
 type writeFileArgs struct {
@@ -101,6 +126,20 @@ func newServer(c *client) *mcp.Server {
 			"PDF, a compiled binary) is reported as unreadable rather than returned as raw bytes.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args readFileArgs) (*mcp.CallToolResult, any, error) {
 		return toolResult(c.readFile(ctx, args.FileID))
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "read_file_base64",
+		Description: "Read one of the current user's files (by id, from list_files) as base64-encoded raw " +
+			"bytes -- the way to actually get at a BINARY file's content (an image, a PDF), unlike read_file " +
+			"which refuses one. Returns the filename, content type, size, and the base64 data itself. Meant " +
+			"to be decoded inside a run_python/run_go sandbox call (e.g. base64.b64decode(...) in Python) for " +
+			"further processing -- there is no other way for sandboxed code to see a file's bytes, since the " +
+			"sandbox has no access to this account's files on its own. Limited to smaller files (see the " +
+			"error if one is too large) since every byte becomes real tokens once base64-encoded into this " +
+			"result.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args readFileArgs) (*mcp.CallToolResult, any, error) {
+		return toolResult(c.readFileBase64(ctx, args.FileID))
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -201,6 +240,48 @@ func (c *client) readFile(ctx context.Context, fileID string) (string, error) {
 		return "", fmt.Errorf("this file is not text (binary content) -- read_file can only return text-like files")
 	}
 	return string(body), nil
+}
+
+func (c *client) readFileBase64(ctx context.Context, fileID string) (string, error) {
+	if fileID == "" {
+		return "", fmt.Errorf("file_id must not be empty")
+	}
+	resp, err := c.do(ctx, http.MethodGet, "/account/api/files/"+fileID, nil, "")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBase64ReadableBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("reading response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("reading file: server returned %d: %s", resp.StatusCode, body)
+	}
+	if len(body) > maxBase64ReadableBytes {
+		return "", fmt.Errorf("file is larger than %d bytes -- too large to return as base64 (every byte becomes real tokens once encoded); upload a smaller/resized copy instead", maxBase64ReadableBytes)
+	}
+	filename := fileID
+	if _, params, err := mime.ParseMediaType(resp.Header.Get("Content-Disposition")); err == nil {
+		if fn, ok := params["filename"]; ok {
+			filename = fn
+		}
+	}
+	out, err := json.Marshal(readFileBase64Result{
+		Filename:    filename,
+		ContentType: resp.Header.Get("Content-Type"),
+		Size:        len(body),
+		Base64:      base64.StdEncoding.EncodeToString(body),
+	})
+	if err != nil {
+		// json.Marshal on this plain, all-string/int struct cannot
+		// actually fail -- this exists only so the (never-reached) error
+		// path is handled rather than silently swallowed, mirrors
+		// cmd/mcp-sandbox's own runInSandbox doc comment for the same
+		// reasoning.
+		return "", fmt.Errorf("encoding result: %w", err)
+	}
+	return string(out), nil
 }
 
 func (c *client) writeFile(ctx context.Context, filename, content string) (string, error) {
