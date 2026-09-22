@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.49 - 2026-09-22
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Widen prompt textareas on admin/account pages by @M0WA in https://github.com/M0WA/SE/pull/233
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.48...v4.13.49
+
+
 ## v4.13.48 - 2026-09-22
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
