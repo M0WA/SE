@@ -203,3 +203,31 @@ func TestRunPythonTool_TimeoutReported(t *testing.T) {
 		t.Errorf("expected timed_out=true, got %+v", got)
 	}
 }
+
+func TestSplitNonEmpty(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{"empty string", "", nil},
+		{"single value", "8.8.8.8", []string{"8.8.8.8"}},
+		{"multiple values", "8.8.8.8,1.1.1.1", []string{"8.8.8.8", "1.1.1.1"}},
+		{"trims whitespace around each value", " 8.8.8.8 , 1.1.1.1 ", []string{"8.8.8.8", "1.1.1.1"}},
+		{"drops empty entries from stray/trailing commas", "8.8.8.8,,1.1.1.1,", []string{"8.8.8.8", "1.1.1.1"}},
+		{"only commas and whitespace yields nil", " , , ", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := splitNonEmpty(tc.in)
+			if len(got) != len(tc.want) {
+				t.Fatalf("splitNonEmpty(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("splitNonEmpty(%q) = %v, want %v", tc.in, got, tc.want)
+				}
+			}
+		})
+	}
+}

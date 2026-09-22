@@ -80,6 +80,15 @@ type Limits struct {
 	// Timeout bounds a single Run call's wall-clock time when ctx itself
 	// carries no deadline of its own. Zero means DefaultTimeout.
 	Timeout time.Duration
+	// DNS is zero or more Docker --dns values (nameserver IPs) applied to
+	// every container this Runner creates -- only meaningful when a call's
+	// RunOptions.Network is true (a --network none container does no DNS
+	// resolution at all, so this is harmlessly unused otherwise). Empty
+	// (the default) leaves Docker's own embedded DNS server (127.0.0.11,
+	// forwarding to whatever the Docker daemon itself is configured to
+	// use) in place -- see cmd/mcp-sandbox's -dns/-host-dns flags and
+	// DetectHostDNS for how an admin populates this.
+	DNS []string
 }
 
 // withDefaults returns l with every zero-valued field resolved to its
@@ -248,6 +257,9 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 	}
 	if !opts.Network {
 		args = append(args, "--network", "none")
+	}
+	for _, d := range r.limits.DNS {
+		args = append(args, "--dns", d)
 	}
 	for _, e := range cfg.env {
 		args = append(args, "-e", e)
