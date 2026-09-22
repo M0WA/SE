@@ -21,19 +21,22 @@ import (
 type ChatService struct {
 	endpoints ports.ChatEndpointStore
 	completer ports.ChatCompleter
-	// mcpServers and mcpTools are both nil-safe (see Chat): a deployment
-	// that hasn't wired any MCP servers yet simply gets an empty
-	// ChatResult.ToolResults every turn.
+	// mcpServers, mcpTools, and agents are all nil-safe (see Chat and
+	// resolveAgent): a deployment that hasn't wired MCP servers/agents yet
+	// simply gets an empty ChatResult.ToolResults/no agent specialization
+	// every turn.
 	mcpServers ports.MCPServerStore
 	mcpTools   ports.MCPToolProvider
+	agents     ports.AgentStore
 }
 
-// NewChatService wires a ChatService from its four collaborators: the
+// NewChatService wires a ChatService from its five collaborators: the
 // endpoint config store, the client that actually talks to the configured
-// OpenAI-compatible endpoint, and the store/provider pair behind
-// admin-configured MCP servers (see mcp_tools.go).
-func NewChatService(endpoints ports.ChatEndpointStore, completer ports.ChatCompleter, mcpServers ports.MCPServerStore, mcpTools ports.MCPToolProvider) *ChatService {
-	return &ChatService{endpoints: endpoints, completer: completer, mcpServers: mcpServers, mcpTools: mcpTools}
+// OpenAI-compatible endpoint, the store/provider pair behind
+// admin-configured MCP servers (see mcp_tools.go), and the store behind
+// admin-defined agents (see resolveAgent).
+func NewChatService(endpoints ports.ChatEndpointStore, completer ports.ChatCompleter, mcpServers ports.MCPServerStore, mcpTools ports.MCPToolProvider, agents ports.AgentStore) *ChatService {
+	return &ChatService{endpoints: endpoints, completer: completer, mcpServers: mcpServers, mcpTools: mcpTools, agents: agents}
 }
 
 // ChatOptions carries this turn's per-question overrides for
@@ -67,6 +70,13 @@ type ChatOptions struct {
 	// already holds, the same source crawls use. Empty means mcp-web keeps
 	// its own built-in default.
 	UserAgent string
+	// AgentID, when non-empty, decides for this question only which Agent
+	// (see domain.Agent) is active, overriding
+	// domain.ChatEndpoint.DefaultAgentID -- same "empty means use the
+	// admin-configured default" convention as UserCustomPrompt above,
+	// rather than WebSearch's nil-pointer one, since there's no meaningful
+	// difference here between "not specified" and "specified as empty."
+	AgentID string
 }
 
 // ChatResult is one completed chat turn's answer.
@@ -107,9 +117,12 @@ type TokenUsage struct {
 	// contribution -- zero whenever UserCustomPrompt is empty (a role=admin
 	// session, or a role=user session with no custom prompt set).
 	UserPromptTokens int
-	ToolPromptTokens int
-	HistoryTokens    int
-	MaxContextTokens int
+	// AgentPromptTokens is the active Agent's own SystemPrompt contribution
+	// (see resolveAgent) -- zero whenever no agent is active for this turn.
+	AgentPromptTokens int
+	ToolPromptTokens  int
+	HistoryTokens     int
+	MaxContextTokens  int
 }
 
 // Chat answers the conversation in history using the admin-configured chat
@@ -139,17 +152,29 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		useWebSearch = *opts.WebSearch
 	}
 
+	// resolveAgent is best-effort, same tolerance as the ListMCPServers
+	// call below: a lookup error or an unknown/disabled id just means no
+	// agent is active this turn, never a failed turn.
+	agentID := endpoint.DefaultAgentID
+	if opts.AgentID != "" {
+		agentID = opts.AgentID
+	}
+	agent := s.resolveAgent(ctx, agentID)
+
 	// List ALL servers early, before building the messages sent to the
 	// first completion call -- a server's discovered tools and its own
 	// Prompt (see below) both need to reach the model before it can decide
 	// to invoke one of its tools at all, so this can't wait until after an
 	// answer comes back. A ListMCPServers error is best-effort: it just
-	// leaves activeServers empty rather than failing the turn.
+	// leaves activeServers empty rather than failing the turn. When an
+	// agent is active AND itself scopes MCPServerIDs, the global catalog is
+	// further narrowed to just that scope -- see domain.Agent.MCPServerIDs'
+	// own doc comment (an empty scope means no narrowing, not "none").
 	var activeServers []domain.MCPServer
 	if s.mcpServers != nil {
 		if all, err := s.mcpServers.ListMCPServers(ctx); err == nil {
 			for _, srv := range all {
-				if srv.Enabled && (!srv.GatedByWebSearch || useWebSearch) {
+				if srv.Enabled && (!srv.GatedByWebSearch || useWebSearch) && agent.AllowsServer(srv.ID) {
 					activeServers = append(activeServers, srv)
 				}
 			}
@@ -181,14 +206,17 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	// system prompt, unconditional, when set; (2) the calling user's own
 	// personal custom prompt (opts.UserCustomPrompt), when set -- see
 	// ChatOptions.UserCustomPrompt's doc comment for who sets this and why;
-	// (3) each activeServers entry's own non-empty Prompt, in list order,
-	// each its OWN separate system message (not concatenated into one
-	// blob) -- so a server's invocation guidance reaches the model before
-	// the first completion call, letting it decide whether to invoke one of
-	// that server's tools at all. Building this as one ordered slice
-	// (rather than prepending piecemeal) keeps that order obvious and gives
-	// trimToBudget a single well-defined run of leading system-role
-	// messages to keep intact.
+	// (3) the active agent's own SystemPrompt (see resolveAgent), when one
+	// is active and non-empty -- this is the agent's actual specialization,
+	// as opposed to its Description, which is never sent to the model at
+	// all; (4) each activeServers entry's own non-empty Prompt, in list
+	// order, each its OWN separate system message (not concatenated into
+	// one blob) -- so a server's invocation guidance reaches the model
+	// before the first completion call, letting it decide whether to
+	// invoke one of that server's tools at all. Building this as one
+	// ordered slice (rather than prepending piecemeal) keeps that order
+	// obvious and gives trimToBudget a single well-defined run of leading
+	// system-role messages to keep intact.
 	tokenUsage := TokenUsage{MaxContextTokens: endpoint.MaxContextTokens}
 	var leading []domain.ChatMessage
 	if endpoint.SystemPrompt != "" {
@@ -200,6 +228,11 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		msg := domain.ChatMessage{Role: domain.ChatRoleSystem, Content: opts.UserCustomPrompt}
 		leading = append(leading, msg)
 		tokenUsage.UserPromptTokens = estimateTokens([]domain.ChatMessage{msg})
+	}
+	if agent.SystemPrompt != "" {
+		msg := domain.ChatMessage{Role: domain.ChatRoleSystem, Content: agent.SystemPrompt}
+		leading = append(leading, msg)
+		tokenUsage.AgentPromptTokens = estimateTokens([]domain.ChatMessage{msg})
 	}
 	for _, srv := range activeServers {
 		if srv.Prompt != "" {
@@ -297,6 +330,30 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	}
 
 	return ChatResult{Answer: answer, ContextTrimmed: contextTrimmed, ToolResults: toolResults, TokenUsage: tokenUsage}, nil
+}
+
+// resolveAgent looks up id (opts.AgentID or endpoint.DefaultAgentID, see
+// Chat) among every configured agent, returning it only when found AND
+// Enabled -- a blank id, a nil s.agents, a lookup error, an unknown id, or
+// a disabled one all resolve to the zero domain.Agent, which Chat's own use
+// of it (empty SystemPrompt, allowsServer always true since MCPServerIDs is
+// nil) is equivalent to no agent being active at all. ports.AgentStore has
+// no single-row get (like MCPServerStore), so this scans ListAgents, same
+// tolerance as MCP server lookups elsewhere in this file.
+func (s *ChatService) resolveAgent(ctx context.Context, id string) domain.Agent {
+	if id == "" || s.agents == nil {
+		return domain.Agent{}
+	}
+	agents, err := s.agents.ListAgents(ctx)
+	if err != nil {
+		return domain.Agent{}
+	}
+	for _, a := range agents {
+		if a.ID == id && a.Enabled {
+			return a
+		}
+	}
+	return domain.Agent{}
 }
 
 // maxHookFollowUpRounds bounds how many times ChatService.Chat will run a

@@ -5435,6 +5435,26 @@ func TestHandleAdminChatEndpoint_PatchWebSearchResultCountRoundTrips(t *testing.
 	}
 }
 
+func TestHandleAdminChatEndpoint_PatchDefaultAgentIDRoundTrips(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
+	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{
+		"base_url": "https://example.com/v1", "model": "gpt-x", "default_agent_id": "researcher",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		DefaultAgentID string `json:"default_agent_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.DefaultAgentID != "researcher" {
+		t.Errorf("expected default_agent_id \"researcher\" echoed back, got %q", resp.DefaultAgentID)
+	}
+}
+
 func TestHandleAdminChatEndpoint_PatchInvalidJSON(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)

@@ -33,6 +33,22 @@ type Agent struct {
 	Enabled      bool
 }
 
+// AllowsServer reports whether serverID is usable under this agent's own
+// MCPServerIDs scope -- true whenever the scope is empty (no narrowing,
+// including for the zero Agent{} value returned when no agent is active at
+// all) or serverID is explicitly listed.
+func (a Agent) AllowsServer(serverID string) bool {
+	if len(a.MCPServerIDs) == 0 {
+		return true
+	}
+	for _, id := range a.MCPServerIDs {
+		if id == serverID {
+			return true
+		}
+	}
+	return false
+}
+
 // NewAgentID derives an ID from a display name the same way NewMCPServerID
 // does (lowercased, non-alphanumeric runs collapsed, trimmed to fit
 // SlugIDPattern), appending the shortest numeric suffix that avoids

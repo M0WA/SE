@@ -65,7 +65,11 @@
 <main>
   <div class="page-header">
     <a class="mark" href="/">se.</a>
-    <button id="sign-out" class="text-button" type="button">Sign out</button>
+    <div class="header-actions">
+      <a id="admin-link" class="header-icon-button" href="/admin" hidden title="Admin" aria-label="Admin">⚙</a>
+      <a id="account-link" class="header-icon-button" href="/account" hidden title="Account" aria-label="Account">👤</a>
+      <button id="sign-out" class="header-icon-button" type="button" title="Sign out" aria-label="Sign out">⏻</button>
+    </div>
   </div>
   <div class="mode-row">
     <div id="chat-options" class="chat-options" hidden>
@@ -73,6 +77,7 @@
         <input id="chat-web-search" type="checkbox" checked> Web
       </label>
       <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Lets the model use web search and page fetch tools to answer this question.</span></span>
+      <select id="chat-agent-select" class="field chat-agent-select" aria-label="Agent"><option value="">Default agent</option></select>
       <span id="chat-token-usage" class="hint chat-token-usage" tabindex="0">
         <span id="chat-token-usage-mini" class="chat-token-usage-mini"></span>
         <span id="chat-token-usage-summary"></span>
@@ -139,11 +144,6 @@
       <textarea id="chat-input" class="field" name="message" rows="2" placeholder="Enter to send, Shift+Enter for a new line"></textarea>
       <button id="chat-send" type="submit" title="Send" aria-label="Send">▶</button>
     </form>
-  </div>
-
-  <div class="footer-link">
-    <a id="admin-link" href="/admin" hidden>Admin</a>
-    <a id="account-link" href="/account" hidden>Account</a>
   </div>
 </main>
 <script src="/index.js"></script>

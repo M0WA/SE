@@ -17,8 +17,9 @@ func newChatEndpoint() domain.ChatEndpoint {
 		APIKey:  "sk-test", Model: "meta-llama/Llama-3.3-70B-Instruct",
 		Enabled: true, MaxContextTokens: 6000,
 		WebSearchEnabled: true, WebSearchBaseURL: "http://127.0.0.1:8888",
-		SystemPrompt: "You are a helpful assistant.",
-		UpdatedAt:    time.Now().UTC(),
+		SystemPrompt:   "You are a helpful assistant.",
+		DefaultAgentID: "researcher",
+		UpdatedAt:      time.Now().UTC(),
 	}
 }
 
@@ -57,6 +58,9 @@ func TestSetChatEndpoint_ThenGetRoundTrips(t *testing.T) {
 	}
 	if got.SystemPrompt != "You are a helpful assistant." {
 		t.Errorf("expected SystemPrompt to round trip, got %+v", got)
+	}
+	if got.DefaultAgentID != "researcher" {
+		t.Errorf("expected DefaultAgentID to round trip, got %+v", got)
 	}
 	if got.UpdatedAt.IsZero() {
 		t.Errorf("expected UpdatedAt to round trip, got %+v", got)
@@ -234,5 +238,64 @@ func TestMigrateChatEndpointColumns_UpgradesPreExistingTable_SystemPrompt(t *tes
 	}
 	if got.SystemPrompt != fresh.SystemPrompt {
 		t.Errorf("expected a fresh write's SystemPrompt to round trip, got %+v", got)
+	}
+}
+
+func TestMigrateChatEndpointColumns_UpgradesPreExistingTable_DefaultAgentID(t *testing.T) {
+	dsn := uniqueSQLiteDSN(t)
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open raw db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	// The pre-migration shape: every column up through system_prompt, but
+	// no default_agent_id.
+	if _, err := db.Exec(`CREATE TABLE chat_endpoint (
+		id TEXT PRIMARY KEY, base_url TEXT NOT NULL,
+		api_key TEXT NOT NULL DEFAULT '', model TEXT NOT NULL,
+		enabled BOOLEAN NOT NULL DEFAULT false, rag_enabled BOOLEAN NOT NULL DEFAULT false,
+		rag_result_count INTEGER NOT NULL DEFAULT 0,
+		max_context_tokens INTEGER NOT NULL DEFAULT 0,
+		web_search_enabled BOOLEAN NOT NULL DEFAULT false,
+		web_search_base_url TEXT NOT NULL DEFAULT '',
+		web_search_result_count INTEGER NOT NULL DEFAULT 0,
+		system_prompt TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("failed to create legacy-shape table: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO chat_endpoint
+		(id, base_url, api_key, model, enabled, rag_enabled, rag_result_count, max_context_tokens, web_search_enabled, web_search_base_url, web_search_result_count, system_prompt, updated_at)
+		VALUES ('default', 'https://example.com/v1', 'sk-test', 'llama-3', true, true, 5, 6000, true, 'http://127.0.0.1:8888', 5, 'be helpful', ?)`,
+		time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("failed to seed a pre-existing row: %v", err)
+	}
+
+	ctx := context.Background()
+	repo := reopenSQLiteTestRepo(t, dsn) // migrate() runs here, including migrateChatEndpointColumns
+
+	pre, err := repo.GetChatEndpoint(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error reading the pre-existing row after migration: %v", err)
+	}
+	if pre.DefaultAgentID != "" {
+		t.Errorf("expected a pre-existing row to default to no default agent (\"\"), got %+v", pre)
+	}
+	if pre.SystemPrompt != "be helpful" || pre.Model != "llama-3" {
+		t.Errorf("expected every pre-existing field otherwise untouched, got %+v", pre)
+	}
+
+	// The table must still work normally for a fresh write afterward too.
+	fresh := newChatEndpoint()
+	fresh.DefaultAgentID = "fact_checker"
+	if err := repo.SetChatEndpoint(ctx, fresh); err != nil {
+		t.Fatalf("unexpected error writing after migration: %v", err)
+	}
+	got, err := repo.GetChatEndpoint(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.DefaultAgentID != fresh.DefaultAgentID {
+		t.Errorf("expected a fresh write's DefaultAgentID to round trip, got %+v", got)
 	}
 }

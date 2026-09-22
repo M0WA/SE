@@ -126,7 +126,14 @@ type ChatEndpoint struct {
 	// trimming, never dropped even when the conversation is trimmed to fit
 	// MaxContextTokens.
 	SystemPrompt string
-	UpdatedAt    time.Time
+	// DefaultAgentID, when non-empty, names the Agent (see agent.go)
+	// selected for a conversation by default -- overridable per question by
+	// application.ChatOptions.AgentID, the same nil-falls-back-to-default
+	// convention WebSearchEnabled/ChatOptions.WebSearch already uses. Empty
+	// means no default agent: a turn with no per-question override runs
+	// with no agent specialization at all, today's existing behavior.
+	DefaultAgentID string
+	UpdatedAt      time.Time
 }
 
 // ChatCompletionReserveFraction is the fraction of a model's own advertised

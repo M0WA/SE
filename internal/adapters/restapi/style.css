@@ -23,12 +23,13 @@
   --danger: #a3341f;
   --danger-soft: rgba(163, 52, 31, 0.12);
   /* --chart-* (donut-chart segment colors, see admin.js's buildDonutSVG):
-     three additional hues distinct from --accent/--danger, since a chart
+     four additional hues distinct from --accent/--danger, since a chart
      segment isn't an accent or an error state -- just one category among
      several needing its own identifiable color. */
   --chart-1: #2f6690;
   --chart-2: #b06a1f;
   --chart-3: #3d7a4c;
+  --chart-4: #6a4c93;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -45,6 +46,7 @@
     --chart-1: #7fb2d9;
     --chart-2: #e0a457;
     --chart-3: #8fd19e;
+    --chart-4: #b39ddb;
   }
 }
 
@@ -110,6 +112,50 @@ main {
 }
 
 .page-header .back { margin: 0; }
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+/* .header-icon-button is the public search page's own header-row icon
+   treatment (Admin/Account/Sign out) -- same plain-Unicode-glyph-as-
+   content convention as .chat-tab-close/.chat-tab-action (see style.css's
+   own comment there), sized up slightly since these sit in the page
+   header rather than a dense tab strip. Works for both <a> and <button>
+   so Admin/Account (real links) and Sign out (a button) look identical. */
+.header-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  font-size: 1.05rem;
+  line-height: 1;
+  color: var(--ink-muted);
+  background: none;
+  border: none;
+  border-radius: 6px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.header-icon-button:hover { color: var(--accent); background: var(--accent-soft); }
+
+.header-icon-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Same fix as form[hidden]/.chat-options[hidden] elsewhere in this file,
+   same reason: .header-icon-button's own display: inline-flex is an
+   author rule at equal specificity to the UA stylesheet's own
+   "[hidden] { display: none }", so source order (this rule comes later)
+   would otherwise leave a hidden #admin-link/#account-link visibly
+   rendered -- both would show at once instead of just the one matching
+   the session's role. */
+.header-icon-button[hidden] { display: none; }
 
 form {
   display: flex;
@@ -1006,10 +1052,17 @@ button:focus-visible {
    browsers) that inflates .chat-rag-toggle's own box off-center around it
    -- align-items: center on the *row* centers each item's margin box, not
    its visual content, so that stray margin reads as the checkbox sitting
-   a couple pixels higher than its siblings. Zeroing it keeps the checkbox,
-   the (i) hint icon and the token-usage donut on one visual line. */
+   a couple pixels off from its siblings. Zeroing the margin alone wasn't
+   enough (confirmed by measuring rendered pixel positions): a native
+   checkbox's own intrinsic box size varies from .hint-icon's fixed 1rem
+   circle, so its centered box still lands a few pixels away from the
+   other icons' visual centers -- pinning it to the exact same 1rem
+   dimensions makes every row icon's own box (and therefore its centered
+   position) consistent. */
 .chat-rag-toggle input[type="checkbox"] {
   margin: 0;
+  width: 1rem;
+  height: 1rem;
   accent-color: var(--accent);
 }
 
@@ -1018,9 +1071,34 @@ button:focus-visible {
   align-items: center;
   gap: 0.35rem;
   font-size: 0.82rem;
+  /* Without this, the "Web" text's inherited (from body) line-height: 1.5
+     makes .chat-rag-toggle's own box taller than its sibling row items
+     (.hint, .chat-token-usage, .chat-agent-select). */
+  line-height: 1;
+  /* The real culprit behind the checkbox visibly sitting off-line from
+     its siblings (confirmed by measuring getBoundingClientRect): .chat-
+     rag-toggle IS a <label>, so it inherits the global label rule's own
+     margin: 0 0 0.35rem (meant for stacked admin form labels) -- an
+     asymmetric bottom-only margin makes .chat-options' align-items:
+     center visually shift the checkbox up relative to the row's other,
+     unmargined icons, since centering happens on the margin box, not the
+     content box. Same fix .form-row-check label already applies below. */
+  margin: 0;
   color: var(--ink-muted);
   white-space: nowrap;
   cursor: pointer;
+}
+
+/* .chat-agent-select sits on the same .chat-options row as the Web toggle
+   -- kept compact (own width, not the full .field width other forms on
+   this page use) and at the row's own smaller font size so it reads as
+   part of the toolbar, not a full form field. */
+.chat-agent-select {
+  width: auto;
+  max-width: 11rem;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.82rem;
+  color: var(--ink-muted);
 }
 
 .chat-status {
@@ -1053,22 +1131,6 @@ button:focus-visible {
   align-items: center;
   justify-content: center;
 }
-
-.footer-link {
-  margin-top: 3.5rem;
-  padding-top: 1.5rem;
-  border-top: 1px solid var(--rule);
-  display: flex;
-  gap: 1.5rem;
-}
-
-.footer-link a {
-  color: var(--ink-muted);
-  font-size: 0.9rem;
-  text-decoration: none;
-}
-
-.footer-link a:hover { color: var(--accent); }
 
 .lede {
   color: var(--ink-muted);

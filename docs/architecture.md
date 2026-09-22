@@ -37,7 +37,7 @@ Pure logic — every file imports only the Go standard library, with no SQL, HTT
 | Operational & tuning settings (`settings.go`, `tuning.go`, `link_scope.go`, `renderer.go`, `url_normalize.go`) | `OperationalSettings`, `TuningSettings`, link-scope/renderer enums, `CanonicalizeURL`. |
 | Chat (`chat.go`) | `ChatMessage`, `ChatEndpoint` config, `ToolCallResult` -- web search/fetch is exclusively via tools discovered from admin-configured `MCPServer` connections (see `mcp_server.go`) that the model invokes, not a direct search performed by this layer. |
 | MCP servers (`mcp_server.go`) | `MCPServer` (an admin-configured MCP connection -- stdio or Streamable HTTP), `MCPTool` (one tool discovered from an active server's own `tools/list` response, rediscovered fresh every turn). |
-| Agents (`agent.go`) | `Agent` -- an admin-defined specialization (a static system prompt plus an optional scope over the `MCPServer` catalog); not yet read by `application.ChatService.Chat` as of this writing. |
+| Agents (`agent.go`) | `Agent` -- an admin-defined specialization (a static system prompt plus an optional scope over the `MCPServer` catalog), addressed by `ChatEndpoint.DefaultAgentID`/a per-question override in `application.ChatService.Chat`. |
 | Corpus stats cache (`corpus_stats.go`) | Concurrency-safe cached snapshot of corpus-wide totals BM25 scoring needs per request. |
 | Overview/admin metrics shapes (`overview_metrics.go`) | Pure data shapes feeding the admin Overview page's charts. |
 
@@ -65,7 +65,7 @@ Pure logic — every file imports only the Go standard library, with no SQL, HTT
 | `ScheduledCrawlStore` | CRUD + scheduling operations on `ScheduledCrawl`, shared by admin CRUD and the crawl-server ticker. | `sqlrepo` |
 | `EmbeddingEndpointStore`, `ChatEndpointStore` | CRUD/get-set for admin-configured embedding and chat endpoint config. | `sqlrepo` |
 | `MCPServerStore` | CRUD for admin-configured MCP server connections. | `sqlrepo` |
-| `AgentStore` | CRUD for admin-defined agents -- a named specialization (static system prompt + an optional scope over the MCP server catalog); not yet read by `ChatService` as of this writing. | `sqlrepo` |
+| `AgentStore` | CRUD for admin-defined agents -- a named specialization (static system prompt + an optional scope over the MCP server catalog), resolved by `ChatService.Chat` each turn. | `sqlrepo` |
 | `ChatCompleter` | Calls an OpenAI-compatible chat-completions endpoint. | `httpchat` |
 | `MCPToolProvider` / `MCPSession` | Opens one MCP session per chat turn across every active server (tool discovery + calls), and the per-turn session it returns. | `mcpclient` |
 
@@ -85,7 +85,7 @@ Orchestration/use-case layer; verified to import only `internal/domain` and `int
 | `TriggerDueCrawls` (scheduler) | Finds and triggers due scheduled crawls, records completion/next-run state. | `ScheduledCrawlStore` |
 | `RecoverInterruptedCrawls` | Resumes or fails crawl jobs left queued/running when crawl-server last stopped. | `CrawlJobStore` |
 | `RenderAwareFetcher` | Routes fetches through a headless-browser `Renderer` when requested. | `AuthFetcher`, `Renderer` |
-| `ChatService` | Orchestrates one chat turn: loads config, opens an MCP session across every active server for this turn, history trimming, delegates completion, runs any tool calls the model makes and feeds results back. | `ChatEndpointStore`, `ChatCompleter`, `MCPServerStore`, `MCPToolProvider` |
+| `ChatService` | Orchestrates one chat turn: loads config, resolves the active agent (endpoint default or a per-question override) and scopes/injects it, opens an MCP session across every active server for this turn, history trimming, delegates completion, runs any tool calls the model makes and feeds results back. | `ChatEndpointStore`, `ChatCompleter`, `MCPServerStore`, `MCPToolProvider`, `AgentStore` |
 
 ### Adapters (`internal/adapters`)
 
@@ -109,7 +109,7 @@ Orchestration/use-case layer; verified to import only `internal/domain` and `int
 
 ## Binaries
 
-- **`cmd/search`** — public, internet-facing. Serves the index/search page, the `/search` JSON API, chat endpoints, `/session` (role lookup for the page's own nav), and `/account`/`/account/api` (a signed-in regular user's self-service password/personal-chat-prompt page). Per nginx routing, this is the only one of the three exposed directly to the public internet. Reads/writes the shared SQL database via `sqlrepo` but never calls the other two binaries directly.
+- **`cmd/search`** — public, internet-facing. Serves the index/search page, the `/search` JSON API, chat endpoints (`POST /chat`, `GET /agents` listing every enabled agent for the chat page's own picker), `/session` (role lookup for the page's own nav), and `/account`/`/account/api` (a signed-in regular user's self-service password/personal-chat-prompt page). Per nginx routing, this is the only one of the three exposed directly to the public internet. Reads/writes the shared SQL database via `sqlrepo` but never calls the other two binaries directly.
 - **`cmd/admin`** — internal, reached only via nginx's `/admin`, `/login`, `/logout` prefixes. Hosts every `/admin/api/*` endpoint (settings, embedding endpoints, PageRank, content-dedup, sessions/auth, diagnostics, scheduled crawls, chat endpoints). It never fetches pages or touches robots.txt/documents itself — it only starts and polls crawl jobs on crawl-server over the network via `crawlclient` (default `CRAWL_SERVER_URL=http://127.0.0.1:8082`, optional shared-secret `X-Internal-Token`).
 - **`cmd/crawl`** — internal only, never exposed by nginx. Runs actual crawls (fetch, robots check, HTML parse, embed, persist), tracks crawl-job state, and exposes an internal HTTP surface (`RoutesCrawlInternal`, default `127.0.0.1:8082`) that only `cmd/admin`'s `crawlclient` calls. Also runs background schedulers (scheduled-crawl trigger poller, PageRank recompute, content-dedup recompute, crawl-job pruner) and recovers interrupted jobs on startup.
 - **`cmd/mcp-web`** — a first-party MCP server exposing `web_search` (proxies to a self-hosted SearXNG instance) and `web_fetch` (fetches a URL's text content, guarded against SSRF via `httpfetcher`/`netguard`) as native tool-calling tools. Not a systemd service and never listens on a port -- `internal/adapters/mcpclient` spawns it on demand as a `stdio` subprocess whenever an admin-configured `MCPServer` row (`Transport="stdio"`) points at its installed path (`/usr/bin/searchengine-mcp-web`). Replaces the old `packaging/chat-hooks/web_search.sh`/`web_fetch.sh` shell scripts.

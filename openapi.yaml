@@ -138,6 +138,34 @@ paths:
         "502": { $ref: "#/components/responses/BadGateway" }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
+  /agents:
+    get:
+      tags: [search]
+      summary: List every enabled agent for the chat page's own picker
+      description: >-
+        Unlike /admin/api/agents, reachable by any signed-in session
+        (role=admin or role=user), not just an admin one -- picking an
+        agent to talk to is a chat-page action. Only ENABLED agents are
+        listed, and only their id/name/description -- never
+        mcp_server_ids/enabled/system_prompt, which stay admin-only. An
+        agent picked here (or ChatRequest.agent_id more generally)
+        overrides the endpoint's own default_agent_id for that question.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string }
+                    name: { type: string }
+                    description: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "405": { $ref: "#/components/responses/BadRequest" }
+
   # ------------------------------------------------------------------ auth
   /login:
     post:
@@ -2301,6 +2329,13 @@ components:
             server's own prompt injected) as native tool-calling functions,
             letting the model invoke one if it chooses to; false makes none
             of them available.
+        agent_id:
+          type: string
+          description: >-
+            Overrides ChatEndpointOptions.default_agent_id for this
+            question only -- omit (or send empty) to use that default. See
+            GET /agents for the list of agents a signed-in session may
+            pick from.
 
     ChatResponse:
       type: object
@@ -2349,6 +2384,15 @@ components:
             the hardcoded admin account, which has no custom prompt of its
             own). Injected as its own leading system message, after the
             global prompt and before any MCP server prompts.
+        agent_prompt_tokens:
+          type: integer
+          description: >-
+            Estimated size of the active agent's own system_prompt (see
+            GET /agents, ChatRequest.agent_id/ChatEndpointOptions.
+            default_agent_id), when one was active and enabled this turn
+            (0 otherwise). Injected as its own leading system message,
+            after the user's own custom prompt and before any MCP server
+            prompts.
         tool_prompt_tokens:
           type: integer
           description: >-
@@ -2442,6 +2486,16 @@ components:
             rendered chat UI. Never dropped by max_context_tokens' context
             trimming, even when the rest of the conversation is trimmed to
             fit. Empty string (the default) injects nothing.
+        default_agent_id:
+          type: string
+          description: >-
+            Names the Agent (see /admin/api/agents) selected for a
+            conversation by default -- overridable per question via
+            ChatRequest.agent_id. Empty string (the default) means no
+            default agent: a turn with no per-question override runs with
+            no agent specialization at all. Not cross-checked against the
+            actual agents table -- a stale id just never resolves to
+            anything at chat time.
 
     ChatEndpointRequest:
       description: >-
