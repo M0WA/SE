@@ -1,7 +1,7 @@
 # Prometheus agent (GPU host metrics -> IONOS monitoring)
 
 `gpu.mo-sys.de` -- the H200 NVL box running both self-hosted vLLM instances
-(see [docs/architecture.md](../../docs/architecture.md)'s Deployment
+(see [docs/architecture/README.md](../../docs/architecture/README.md)'s Deployment
 section) -- pushes into the **same** IONOS Monitoring Service pipeline as
 `se.mo-sys.de` (`../prometheus/`), via its own independent Prometheus agent
 scraping four local sources:
@@ -18,7 +18,7 @@ scraping four local sources:
   a container image only) and not shipped in the `searchengine` .deb -- this
   is host-level observability infrastructure, same as `../prometheus/`.
 - The two vLLM services themselves (`vllm-embed.service`/`vllm-chat.service`,
-  outside this repo, see `docs/architecture.md`) each expose an
+  outside this repo, see `docs/architecture/README.md`) each expose an
   OpenAI-compatible `/metrics` endpoint that `prometheus.yml`'s `vllm`/
   `vllm-chat` jobs scrape directly -- request counts, latency, running/
   waiting request queues, KV-cache usage.

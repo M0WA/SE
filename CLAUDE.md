@@ -54,7 +54,7 @@ or add a real `location` block for it in `packaging/nginx/searchengine.conf`.
 
 ## Keep the architecture documentation in sync
 
-`docs/architecture.md` documents every component in the hexagonal
+`docs/architecture/README.md` documents every component in the hexagonal
 architecture -- `internal/domain`, `internal/ports`, `internal/application`,
 every `internal/adapters/*` package, the three binaries, and how they connect
 to external systems (Postgres/SQLite, nginx, the crawl-server network call,
@@ -62,20 +62,22 @@ HTTP embedding/chat endpoints -- including the self-hosted vLLM instances on
 gpu.mo-sys.de, IONOS monitoring). **Whenever a component is added, removed,
 or its relationships change -- a new adapter package, a new port/use-case, a
 binary's responsibilities shifting, a new external dependency -- update
-`docs/architecture.md` in the same change.** Treat an architectural change
-without a matching doc update as incomplete work, same as `openapi.yaml`/the
-nginx config above.
+`docs/architecture/README.md` in the same change.** Treat an architectural
+change without a matching doc update as incomplete work, same as
+`openapi.yaml`/the nginx config above.
 
 The diagram is **not** embedded as a Mermaid code block in the markdown --
 GitHub's markdown renderer doesn't reliably render Mermaid diagrams (a real,
 observed failure, not a hypothetical one), so it silently shows the raw code
-instead. The diagram lives as its own source file, `docs/architecture.mmd`,
-rendered to a real picture, `docs/architecture.svg`, which the markdown
-embeds as a plain image. **Editing the architecture means editing
-`docs/architecture.mmd` and regenerating `docs/architecture.svg` in the same
-change** (see `docs/architecture.md`'s own top section for the exact
-`mmdc` command) -- an `.mmd` edit with a stale `.svg` is incomplete work,
-same as any other change here.
+instead. The diagram lives as its own source file,
+`docs/architecture/architecture.mmd`, rendered to a real picture,
+`docs/architecture/architecture.svg`, which the markdown embeds as a plain
+image. **Editing the architecture means editing
+`docs/architecture/architecture.mmd` and regenerating
+`docs/architecture/architecture.svg` in the same change** (see
+`docs/architecture/README.md`'s own top section for the exact `mmdc`
+command) -- an `.mmd` edit with a stale `.svg` is incomplete work, same as
+any other change here.
 
 ## Keep the configuration documentation in sync
 
@@ -107,6 +109,45 @@ template variable, a new dashboard entirely -- re-export it into
 `packaging/grafana/dashboards/` in the same change** (see that directory's
 README for the exact export command). Treat a live-only dashboard edit as
 incomplete work, same as every other rule in this section.
+
+## Keep the user manual in sync
+
+`docs/manual/README.md` is the end-user manual for the admin web UI: every
+admin settings page, screenshotted (`docs/manual/images/*.png`) and
+explained field by field, plus the public search/chat page. Plain markdown,
+deliberately -- GitHub renders it natively in the repo browser, and it's
+also served as a real page via GitHub Pages (`docs/_config.yml`, enabled in
+repo Settings -> Pages -> Deploy from a branch -> main -> /docs); a single
+source avoids the drift risk a separate hand-maintained HTML copy would
+carry. **Whenever an admin page changes -- a field added/removed/renamed, a
+new admin page, a changed default or validation rule, a UI redesign that
+changes what the page looks like -- update the matching section of
+`docs/manual/README.md` in the same change**, including retaking that
+page's screenshot if its layout changed enough to make the old one
+misleading. Treat a UI change without a matching manual update as
+incomplete work, same as every other rule in this section.
+
+To retake a screenshot: run `cmd/search`/`cmd/admin`/`cmd/crawl` locally
+against a scratch SQLite DB, log in, and drive a headless Chromium instance
+over the Chrome DevTools Protocol (`Page.navigate` + `Page.captureScreenshot`
+via a raw CDP WebSocket connection -- the `websocket-client` PyPI package
+works well for this, no browser-automation framework needed). Admin pages
+load `/style.css` and `/admin_*.js` from the *search-server's* mux in
+production (see `packaging/nginx/README.md`'s routing split) -- screenshot
+against a small local reverse proxy that mirrors that same
+`/admin`|`/login`|`/logout` string-prefix split, or the pages will render
+unstyled.
+
+## Keep the root README in sync
+
+`README.md` (repo root) is a map of the documentation, not documentation
+itself -- it links to `docs/manual/`, `docs/configuration.md`,
+`docs/architecture/README.md`, and every `packaging/*/README.md`, and lists
+the current binaries. **Whenever a new top-level doc or `packaging/`
+subdirectory with its own README is added, or a binary is added/removed,
+update `README.md`'s tables in the same change.** Treat a new doc or
+package that isn't linked from here as incomplete work, same as every other
+rule in this section.
 
 ## Before committing
 

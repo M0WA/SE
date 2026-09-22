@@ -52,7 +52,7 @@ way the `searxng` dashboard's `engine_name` template variable was added --
 there's no mechanism that pushes a live edit back into this repo
 automatically. **After editing a dashboard live, re-export it here in the
 same change** (or as an immediate follow-up), the same way
-`docs/architecture.md`/`docs/configuration.md` must be kept in sync with the
+`docs/architecture/README.md`/`docs/configuration.md` must be kept in sync with the
 code changes that motivate them -- see the root `CLAUDE.md`'s "Keep the
 Grafana dashboards in sync" section.
 
