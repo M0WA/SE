@@ -76,7 +76,7 @@
     try {
       const results = await getJSON('/admin/api/search?q=' + encodeURIComponent(q) +
         '&sort=' + encodeURIComponent(sort) + '&top_k=' + DEBUG_TOP_K);
-      const corrected = (results[0] && results[0].corrected_terms) || [];
+      const corrected = results[0]?.corrected_terms || [];
       const correctionSuffix = corrected.length === 0 ? '' :
         ' (corrected ' + corrected.map((c) => '"' + c.original + '"→"' + c.corrected + '"').join(', ') + ')';
       if (results.length === 0) {

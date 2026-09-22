@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
-	_ "modernc.org/sqlite"
+	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" driver used when testPostgresDSNEnv is set
+	_ "modernc.org/sqlite"             // registers the "sqlite" driver used for the default in-memory test DB
 
 	"searchengine/internal/adapters/sqlrepo"
 	"searchengine/internal/domain"
@@ -268,6 +268,15 @@ func TestSaveDocument_ThenRetrieveEverywhere(t *testing.T) {
 		t.Fatalf("unexpected error saving document: %v", err)
 	}
 
+	assertDocumentFetchable(t, repo, ctx, doc)
+	assertEmbeddingsRoundTrip(t, repo, ctx, embedding)
+	assertDocumentListingAndSearch(t, repo, ctx, doc)
+}
+
+// assertDocumentFetchable checks that a just-saved document comes back
+// unchanged from DocumentsByIDs, including a populated CrawledAt.
+func assertDocumentFetchable(t *testing.T, repo *sqlrepo.Repository, ctx context.Context, doc domain.Document) {
+	t.Helper()
 	fetchedDocs, err := repo.DocumentsByIDs(ctx, []string{"doc-1"})
 	if err != nil {
 		t.Fatalf("unexpected error loading document: %v", err)
@@ -282,7 +291,13 @@ func TestSaveDocument_ThenRetrieveEverywhere(t *testing.T) {
 	if got.CrawledAt.IsZero() || time.Since(got.CrawledAt) > time.Minute {
 		t.Errorf("expected CrawledAt to be populated with a recent timestamp, got %v", got.CrawledAt)
 	}
+}
 
+// assertEmbeddingsRoundTrip checks that a just-saved embedding, and its
+// precomputed norm, come back the same from both EmbeddingsForDocs and
+// SampleEmbeddings.
+func assertEmbeddingsRoundTrip(t *testing.T, repo *sqlrepo.Repository, ctx context.Context, embedding []float32) {
+	t.Helper()
 	embeddings, err := repo.EmbeddingsForDocs(ctx, []string{"doc-1"}, domain.EmbeddingProviderHash)
 	if err != nil {
 		t.Fatalf("unexpected error loading embeddings: %v", err)
@@ -305,7 +320,12 @@ func TestSaveDocument_ThenRetrieveEverywhere(t *testing.T) {
 	if got := sampled["doc-1"].Norm; got < wantNorm-1e-9 || got > wantNorm+1e-9 {
 		t.Errorf("expected precomputed norm %v from sample, got %v", wantNorm, got)
 	}
+}
 
+// assertDocumentListingAndSearch checks that a just-saved document shows up
+// correctly in batch lookup, listing, BM25 postings, and corpus stats.
+func assertDocumentListingAndSearch(t *testing.T, repo *sqlrepo.Repository, ctx context.Context, doc domain.Document) {
+	t.Helper()
 	docsByID, err := repo.DocumentsByIDs(ctx, []string{"doc-1", "does-not-exist"})
 	if err != nil {
 		t.Fatalf("unexpected error batch-loading documents: %v", err)
@@ -3520,12 +3540,12 @@ func TestRepository_UpdatePageRanks_SpansMultipleBatches(t *testing.T) {
 
 func TestPageRankDistribution_EmptyCorpus(t *testing.T) {
 	repo := newTestRepo(t)
-	min, max, avg, err := repo.PageRankDistribution(context.Background())
+	minRank, maxRank, avg, err := repo.PageRankDistribution(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if min != 0 || max != 0 || avg != 0 {
-		t.Errorf("expected min=max=avg=0 for an empty corpus, got min=%v max=%v avg=%v", min, max, avg)
+	if minRank != 0 || maxRank != 0 || avg != 0 {
+		t.Errorf("expected min=max=avg=0 for an empty corpus, got min=%v max=%v avg=%v", minRank, maxRank, avg)
 	}
 }
 
@@ -3542,15 +3562,15 @@ func TestPageRankDistribution_ReflectsUpdatedScores(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	min, max, avg, err := repo.PageRankDistribution(ctx)
+	minRank, maxRank, avg, err := repo.PageRankDistribution(ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if min != 0.1 {
-		t.Errorf("expected min=0.1, got %v", min)
+	if minRank != 0.1 {
+		t.Errorf("expected min=0.1, got %v", minRank)
 	}
-	if max != 0.9 {
-		t.Errorf("expected max=0.9, got %v", max)
+	if maxRank != 0.9 {
+		t.Errorf("expected max=0.9, got %v", maxRank)
 	}
 	wantAvg := (0.1 + 0.5 + 0.9) / 3
 	if diff := avg - wantAvg; diff > 1e-9 || diff < -1e-9 {

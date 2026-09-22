@@ -57,6 +57,15 @@ func TestCreateScheduledCrawl_ThenListRoundTrips(t *testing.T) {
 		t.Fatalf("expected 1 schedule, got %d", len(got))
 	}
 	g := got[0]
+	assertScheduledCrawlOptionsRoundTrip(t, g, s)
+	assertScheduledCrawlStateRoundTrip(t, g)
+}
+
+// assertScheduledCrawlOptionsRoundTrip checks that every crawl-option field
+// (seed URLs, domain scoping, credentials, per-crawl overrides) came back
+// out of the repository unchanged from what was saved.
+func assertScheduledCrawlOptionsRoundTrip(t *testing.T, g, s domain.ScheduledCrawl) {
+	t.Helper()
 	if g.ID != s.ID || len(g.SeedURLs) != 2 || g.SeedURLs[0] != "http://a.example" {
 		t.Errorf("unexpected seed urls round trip: %+v", g)
 	}
@@ -74,6 +83,14 @@ func TestCreateScheduledCrawl_ThenListRoundTrips(t *testing.T) {
 		g.MaxResponseKB != 2048 || !g.PrioritizeUnindexed {
 		t.Errorf("unexpected per-crawl override round trip: %+v", g)
 	}
+}
+
+// assertScheduledCrawlStateRoundTrip checks that every scheduling-state
+// field (interval/enabled/recurring, run bookkeeping, timestamps) came back
+// out of the repository unchanged from what a freshly created schedule
+// should hold.
+func assertScheduledCrawlStateRoundTrip(t *testing.T, g domain.ScheduledCrawl) {
+	t.Helper()
 	if g.IntervalMinutes != 30 || !g.Enabled || !g.Recurring {
 		t.Errorf("unexpected interval/enabled/recurring round trip: %+v", g)
 	}

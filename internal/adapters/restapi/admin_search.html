@@ -21,7 +21,7 @@
     <h2>Debug a query</h2>
     <p class="lede" style="margin: 0 0 1rem;">Shows the BM25 and semantic scores behind a search's ranking, unblended. Supports +required, -excluded, "exact phrase", and site:host terms.</p>
     <form id="debug-form" class="panel-form">
-      <input id="debug-q" class="field" type="text" placeholder='cats +required -excluded "exact phrase" site:example.com' required>
+      <input id="debug-q" class="field" type="text" placeholder='cats +required -excluded "exact phrase" site:example.com' aria-label="Query" required>
       <select id="debug-sort" class="field" aria-label="Sort order">
         <option value="relevance" selected>Best match</option>
         <option value="recency">Most recent</option>
@@ -40,7 +40,7 @@
   <section class="panel">
     <h2>Look up a term</h2>
     <form id="postings-form" class="panel-form">
-      <input id="postings-term" class="field" type="text" placeholder="a single token, e.g. cats" required>
+      <input id="postings-term" class="field" type="text" placeholder="a single token, e.g. cats" aria-label="Term" required>
       <button type="submit">Look up</button>
     </form>
     <div id="postings-status" class="panel-status"></div>

@@ -7,6 +7,12 @@ import (
 	"searchengine/internal/ports"
 )
 
+const (
+	accountMCPServersFeatureName  = "mcp servers"
+	accountMCPServersAuthRequired = "authentication required"
+	accountMCPServerNotFound      = "mcp server not found"
+)
+
 // validateUserMCPServerRequest is validateMCPServerRequest's self-service
 // counterpart -- a regular user may only ever configure "http" transport
 // (never "stdio", which grants real local command execution on the server
@@ -37,12 +43,12 @@ func validateUserMCPServerRequest(w http.ResponseWriter, req mcpServerRequest) b
 // handleAccount already applies to the account itself. Mirrors
 // handleAdminMCPServers' shape closely.
 func (h *Handler) handleAccountMCPServers(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.userMCPServers != nil, "mcp servers") {
+	if !requireConfigured(w, h.userMCPServers != nil, accountMCPServersFeatureName) {
 		return
 	}
 	_, userID, ok := h.sessionRoleFor(r)
 	if !ok || userID == "" {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
+		http.Error(w, accountMCPServersAuthRequired, http.StatusUnauthorized)
 		return
 	}
 	switch r.Method {
@@ -89,12 +95,12 @@ func (h *Handler) handleAccountMCPServers(w http.ResponseWriter, r *http.Request
 // handleAdminGetMCPServer (a self-service user's own server list is at
 // least as small as an admin's global one).
 func (h *Handler) handleAccountGetMCPServer(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.userMCPServers != nil, "mcp servers") {
+	if !requireConfigured(w, h.userMCPServers != nil, accountMCPServersFeatureName) {
 		return
 	}
 	_, userID, ok := h.sessionRoleFor(r)
 	if !ok || userID == "" {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
+		http.Error(w, accountMCPServersAuthRequired, http.StatusUnauthorized)
 		return
 	}
 	servers, err := h.userMCPServers.ListUserMCPServers(r.Context(), userID)
@@ -109,7 +115,7 @@ func (h *Handler) handleAccountGetMCPServer(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
-	http.Error(w, "mcp server not found", http.StatusNotFound)
+	http.Error(w, accountMCPServerNotFound, http.StatusNotFound)
 }
 
 // handleAccountUpdateMCPServer replaces the caller's own server's editable
@@ -118,12 +124,12 @@ func (h *Handler) handleAccountGetMCPServer(w http.ResponseWriter, r *http.Reque
 // Transport are never editable once created (Transport is always "http" for
 // a self-service row, enforced at creation).
 func (h *Handler) handleAccountUpdateMCPServer(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.userMCPServers != nil, "mcp servers") {
+	if !requireConfigured(w, h.userMCPServers != nil, accountMCPServersFeatureName) {
 		return
 	}
 	_, userID, ok := h.sessionRoleFor(r)
 	if !ok || userID == "" {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
+		http.Error(w, accountMCPServersAuthRequired, http.StatusUnauthorized)
 		return
 	}
 	req, ok := decodeJSON[mcpServerRequest](w, r)
@@ -149,7 +155,7 @@ func (h *Handler) handleAccountUpdateMCPServer(w http.ResponseWriter, r *http.Re
 		}
 	}
 	if !found {
-		http.Error(w, "mcp server not found", http.StatusNotFound)
+		http.Error(w, accountMCPServerNotFound, http.StatusNotFound)
 		return
 	}
 	apiKey := h.resolveUpdatedAPIKey(existingAPIKey, req.APIKey, req.ClearAPIKey)
@@ -159,20 +165,20 @@ func (h *Handler) handleAccountUpdateMCPServer(w http.ResponseWriter, r *http.Re
 		Prompt: req.Prompt, GatedByWebSearch: req.GatedByWebSearch,
 	}
 	err = h.userMCPServers.UpdateUserMCPServer(r.Context(), userID, s)
-	respondOrNotFound(w, err, ports.ErrUserMCPServerNotFound, "mcp server not found", toMCPServerResponse(s))
+	respondOrNotFound(w, err, ports.ErrUserMCPServerNotFound, accountMCPServerNotFound, toMCPServerResponse(s))
 }
 
 func (h *Handler) handleAccountDeleteMCPServer(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.userMCPServers != nil, "mcp servers") {
+	if !requireConfigured(w, h.userMCPServers != nil, accountMCPServersFeatureName) {
 		return
 	}
 	_, userID, ok := h.sessionRoleFor(r)
 	if !ok || userID == "" {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
+		http.Error(w, accountMCPServersAuthRequired, http.StatusUnauthorized)
 		return
 	}
 	err := h.userMCPServers.DeleteUserMCPServer(r.Context(), userID, r.PathValue("id"))
-	respondOrNotFound(w, err, ports.ErrUserMCPServerNotFound, "mcp server not found", map[string]bool{"ok": true})
+	respondOrNotFound(w, err, ports.ErrUserMCPServerNotFound, accountMCPServerNotFound, map[string]bool{"ok": true})
 }
 
 func (h *Handler) handleAccountMCPServersPage(w http.ResponseWriter, r *http.Request) {

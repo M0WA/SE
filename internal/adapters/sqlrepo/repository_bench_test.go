@@ -195,6 +195,7 @@ func seedBenchDocumentsWithCrawledAt(b *testing.B, dsn string, repo *sqlrepo.Rep
 	if err != nil {
 		b.Fatalf("failed to begin backdate transaction: %v", err)
 	}
+	defer func() { _ = tx.Rollback() }()
 	stmt, err := tx.Prepare(`UPDATE documents SET crawled_at = ? WHERE id = ?`)
 	if err != nil {
 		b.Fatalf("failed to prepare backdate statement: %v", err)

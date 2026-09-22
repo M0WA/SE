@@ -32,14 +32,14 @@ func levenshtein(a, b string) int {
 			del := prev[j] + 1
 			ins := cur[j-1] + 1
 			sub := prev[j-1] + cost
-			min := del
-			if ins < min {
-				min = ins
+			best := del
+			if ins < best {
+				best = ins
 			}
-			if sub < min {
-				min = sub
+			if sub < best {
+				best = sub
 			}
-			cur[j] = min
+			cur[j] = best
 		}
 		prev, cur = cur, prev
 	}

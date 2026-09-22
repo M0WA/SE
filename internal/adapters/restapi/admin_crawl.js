@@ -44,7 +44,7 @@
   // one-off crawl (interval left blank/0) reads "Crawl", a repeating one
   // (positive interval) reads "Schedule".
   function updateSubmitLabel() {
-    crawlSubmitBtn.textContent = (parseInt(crawlInterval.value, 10) || 0) > 0 ? 'Schedule' : 'Crawl';
+    crawlSubmitBtn.textContent = (Number.parseInt(crawlInterval.value, 10) || 0) > 0 ? 'Schedule' : 'Crawl';
   }
   crawlInterval.addEventListener('input', updateSubmitLabel);
   updateSubmitLabel();
@@ -61,10 +61,10 @@
       crawlStatus.textContent = 'Enter a URL to crawl.';
       return;
     }
-    const pages = parseInt(maxPages.value, 10) || 20;
-    const interval = parseInt(crawlInterval.value, 10) || 0;
+    const pages = Number.parseInt(maxPages.value, 10) || 20;
+    const interval = Number.parseInt(crawlInterval.value, 10) || 0;
     const recurring = interval > 0;
-    const maxRuns = parseInt(crawlMaxRuns.value, 10) || 0;
+    const maxRuns = Number.parseInt(crawlMaxRuns.value, 10) || 0;
     const startingLabel = recurring ? 'Scheduling…' : 'Starting…';
     crawlStatus.textContent = startingLabel;
     setButtonLoading(crawlSubmitBtn, true, startingLabel);
@@ -83,17 +83,20 @@
         follow_indexed_domains: crawlFollowIndexed.checked,
         use_sitemap: crawlUseSitemap.checked,
         prioritize_unindexed: crawlPrioritizeUnindexed.checked,
-        fetch_timeout_seconds: parseInt(crawlFetchTimeout.value, 10) || 0,
-        min_text_length: parseInt(crawlMinTextLength.value, 10) || 0,
-        crawl_delay_ms: parseInt(crawlDelay.value, 10) || 0,
-        max_response_kb: parseInt(crawlMaxResponse.value, 10) || 0,
+        fetch_timeout_seconds: Number.parseInt(crawlFetchTimeout.value, 10) || 0,
+        min_text_length: Number.parseInt(crawlMinTextLength.value, 10) || 0,
+        crawl_delay_ms: Number.parseInt(crawlDelay.value, 10) || 0,
+        max_response_kb: Number.parseInt(crawlMaxResponse.value, 10) || 0,
         interval_minutes: interval,
         max_runs: maxRuns,
         renderer: crawlRenderer.value,
       });
-      crawlStatus.textContent = recurring
-        ? 'Scheduled — repeats every ' + interval + ' minutes' + (maxRuns > 0 ? ' (up to ' + maxRuns + ' times)' : '') + '. See it under Schedules on the Jobs page.'
-        : 'Queued — starting within a few seconds. See it on the Jobs page.';
+      if (recurring) {
+        const runsSuffix = maxRuns > 0 ? ' (up to ' + maxRuns + ' times)' : '';
+        crawlStatus.textContent = 'Scheduled — repeats every ' + interval + ' minutes' + runsSuffix + '. See it under Schedules on the Jobs page.';
+      } else {
+        crawlStatus.textContent = 'Queued — starting within a few seconds. See it on the Jobs page.';
+      }
     } catch (err) {
       crawlStatus.textContent = 'Could not start: ' + err.message;
     } finally {

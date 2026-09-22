@@ -45,6 +45,29 @@ import (
 //     pgvector ANN timing can only come from benchmarking against an actual
 //     Postgres+pgvector server, which ann_test.go already does
 //     (TEST_POSTGRES_DSN-gated, skipped here).
+//
+// seedANNBenchEmbeddings saves n documents, each with a random dims-length
+// embedding, and returns the in-memory embeddings map BenchmarkSemanticCandidateLookup
+// needs for its brute-force stand-in. Factored out of that benchmark to keep
+// its own control flow flat.
+func seedANNBenchEmbeddings(ctx context.Context, b *testing.B, repo *sqlrepo.Repository, n, dims int, rng *rand.Rand) map[string]domain.EmbeddedVector {
+	b.Helper()
+	embeddings := make(map[string]domain.EmbeddedVector, n)
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("doc-%d", i)
+		vec := make([]float32, dims)
+		for j := range vec {
+			vec[j] = rng.Float32()
+		}
+		doc := domain.Document{ID: id, URL: "https://example.com/" + id, Title: "T", Text: "benchmark content"}
+		if err := repo.SaveDocument(ctx, doc, map[string][]float32{domain.EmbeddingProviderHash: vec}, 100, 2); err != nil {
+			b.Fatalf("seeding document %s: %v", id, err)
+		}
+		embeddings[id] = domain.EmbeddedVector{Vector: vec, Norm: domain.VectorNorm(vec)}
+	}
+	return embeddings
+}
+
 func benchmarkBruteForceANN(queryVec []float32, embeddings map[string]domain.EmbeddedVector, k int) map[string]domain.EmbeddedVector {
 	type scored struct {
 		id  string
@@ -88,19 +111,7 @@ func BenchmarkSemanticCandidateLookup(b *testing.B) {
 		}
 
 		rng := rand.New(rand.NewSource(3))
-		embeddings := make(map[string]domain.EmbeddedVector, n)
-		for i := 0; i < n; i++ {
-			id := fmt.Sprintf("doc-%d", i)
-			vec := make([]float32, dims)
-			for j := range vec {
-				vec[j] = rng.Float32()
-			}
-			doc := domain.Document{ID: id, URL: "https://example.com/" + id, Title: "T", Text: "benchmark content"}
-			if err := repo.SaveDocument(ctx, doc, map[string][]float32{domain.EmbeddingProviderHash: vec}, 100, 2); err != nil {
-				b.Fatalf("seeding document %s: %v", id, err)
-			}
-			embeddings[id] = domain.EmbeddedVector{Vector: vec, Norm: domain.VectorNorm(vec)}
-		}
+		embeddings := seedANNBenchEmbeddings(ctx, b, repo, n, dims, rng)
 		queryVec := make([]float32, dims)
 		for j := range queryVec {
 			queryVec[j] = rng.Float32()

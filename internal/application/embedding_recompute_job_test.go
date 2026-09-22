@@ -427,7 +427,7 @@ func TestResetStaleEmbeddingRecomputeStatus_ClearsStuckInProgress(t *testing.T) 
 	data, _ := json.Marshal(stuck)
 	settings.values[ports.SettingsKeyEmbeddingRecomputeStatus] = string(data)
 
-	if reset := application.ResetStaleEmbeddingRecomputeStatus(context.Background(), settings); !reset {
+	if !application.ResetStaleEmbeddingRecomputeStatus(context.Background(), settings) {
 		t.Error("expected reset=true for a stuck in-progress status")
 	}
 
@@ -447,7 +447,7 @@ func TestResetStaleEmbeddingRecomputeStatus_NotInProgressIsANoop(t *testing.T) {
 	settings.values[ports.SettingsKeyEmbeddingRecomputeStatus] = string(data)
 	settings.saveCalls = nil
 
-	if reset := application.ResetStaleEmbeddingRecomputeStatus(context.Background(), settings); reset {
+	if application.ResetStaleEmbeddingRecomputeStatus(context.Background(), settings) {
 		t.Error("expected reset=false when nothing is in progress")
 	}
 	if len(settings.saveCalls) != 0 {
@@ -457,13 +457,13 @@ func TestResetStaleEmbeddingRecomputeStatus_NotInProgressIsANoop(t *testing.T) {
 
 func TestResetStaleEmbeddingRecomputeStatus_NoStatusYetIsANoop(t *testing.T) {
 	settings := newFakeSettingsStore()
-	if reset := application.ResetStaleEmbeddingRecomputeStatus(context.Background(), settings); reset {
+	if application.ResetStaleEmbeddingRecomputeStatus(context.Background(), settings) {
 		t.Error("expected reset=false when no status has ever been saved")
 	}
 }
 
 func TestResetStaleEmbeddingRecomputeStatus_NilSettingsStoreIsANoop(t *testing.T) {
-	if reset := application.ResetStaleEmbeddingRecomputeStatus(context.Background(), nil); reset {
+	if application.ResetStaleEmbeddingRecomputeStatus(context.Background(), nil) {
 		t.Error("expected reset=false for a nil settings store")
 	}
 }

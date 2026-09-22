@@ -289,7 +289,7 @@ func TestHandleAccountFile_Download(t *testing.T) {
 	if rec.Body.String() != "hello world" {
 		t.Errorf("expected downloaded content %q, got %q", "hello world", rec.Body.String())
 	}
-	if disp := rec.Header().Get("Content-Disposition"); disp == "" {
+	if rec.Header().Get("Content-Disposition") == "" {
 		t.Error("expected a Content-Disposition header on download")
 	}
 }

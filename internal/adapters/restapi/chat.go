@@ -129,6 +129,32 @@ func (h *Handler) fileAccessTokenFor(userID string) string {
 	return h.fileTokens.issue(userID)
 }
 
+// validateChatMessages checks that every client-supplied message obeys the
+// constraints documented on handleChat: a bounded message count, a bounded
+// per-message content length, only domain.ChatRoleUser/ChatRoleAssistant
+// roles, and no client-settable tool-call fields. Returns the same error
+// text handleChat previously reported inline for each violation.
+func validateChatMessages(messages []domain.ChatMessage) error {
+	if len(messages) == 0 {
+		return errors.New("messages must not be empty")
+	}
+	if len(messages) > maxChatMessages {
+		return errors.New("too many messages")
+	}
+	for _, m := range messages {
+		if len(m.Content) > maxChatMessageContentLength {
+			return errors.New("message too long")
+		}
+		if m.Role != domain.ChatRoleUser && m.Role != domain.ChatRoleAssistant {
+			return errors.New("invalid role")
+		}
+		if len(m.ToolCalls) > 0 || m.ToolCallID != "" {
+			return errors.New("tool_calls/tool_call_id are not client-settable")
+		}
+	}
+	return nil
+}
+
 // handleChat answers one chat turn against the search-server-only,
 // admin-configured chat endpoint (h.chat) -- see application.ChatService's
 // doc comment for the web-search-grounding behavior this delegates to. A
@@ -138,7 +164,8 @@ func (h *Handler) fileAccessTokenFor(userID string) string {
 // client can inject to try to override the system prompt or fake a tool
 // call's outcome. A client-supplied message is also never allowed to carry
 // ToolCalls/ToolCallID -- those are populated only by ChatService itself
-// from a real model response/tool execution.
+// from a real model response/tool execution. See validateChatMessages for
+// the actual per-message checks.
 func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
@@ -150,27 +177,9 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if len(req.Messages) == 0 {
-		http.Error(w, "messages must not be empty", http.StatusBadRequest)
+	if err := validateChatMessages(req.Messages); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
-	}
-	if len(req.Messages) > maxChatMessages {
-		http.Error(w, "too many messages", http.StatusBadRequest)
-		return
-	}
-	for _, m := range req.Messages {
-		if len(m.Content) > maxChatMessageContentLength {
-			http.Error(w, "message too long", http.StatusBadRequest)
-			return
-		}
-		if m.Role != domain.ChatRoleUser && m.Role != domain.ChatRoleAssistant {
-			http.Error(w, "invalid role", http.StatusBadRequest)
-			return
-		}
-		if len(m.ToolCalls) > 0 || m.ToolCallID != "" {
-			http.Error(w, "tool_calls/tool_call_id are not client-settable", http.StatusBadRequest)
-			return
-		}
 	}
 
 	role, userID, _ := h.sessionRoleFor(r)

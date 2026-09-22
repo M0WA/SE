@@ -11,11 +11,11 @@ import (
 // a hook result fed back to a chat model) it keeps, while still telling
 // whoever reads the truncated result how much was cut, rather than letting
 // it look complete when it isn't.
-func TruncateWithNote(s string, max int) string {
-	if len(s) <= max {
+func TruncateWithNote(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
 		return s
 	}
-	return s[:max] + fmt.Sprintf("... [truncated, %d bytes total]", len(s))
+	return s[:maxBytes] + fmt.Sprintf("... [truncated, %d bytes total]", len(s))
 }
 
 // TruncateWithEllipsis caps s at max bytes, appending a plain "..." when it
@@ -25,11 +25,11 @@ func TruncateWithNote(s string, max int) string {
 // TruncateWithNote's own "... [truncated, N bytes total]" suffix -- these
 // adapters' error text predates that format and changing it would change
 // the exact error text they produce.
-func TruncateWithEllipsis(s string, max int) string {
-	if len(s) <= max {
+func TruncateWithEllipsis(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
 		return s
 	}
-	return s[:max] + "..."
+	return s[:maxBytes] + "..."
 }
 
 // RedactSecret replaces every occurrence of secret in s with "[REDACTED]",

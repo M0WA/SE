@@ -645,7 +645,7 @@ func TestHandleChat_FileAccessTokenReachesMCPEnv(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if got := provider.openedEnv["SE_FILES_API_TOKEN"]; got == "" {
+	if provider.openedEnv["SE_FILES_API_TOKEN"] == "" {
 		t.Errorf("expected a non-empty SE_FILES_API_TOKEN in the MCP env, got env=%v", provider.openedEnv)
 	}
 }

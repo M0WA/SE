@@ -78,7 +78,7 @@
       base_url: baseURLEl.value,
       api_key: apiKeyEl.value,
       model: modelEl.value,
-      dimensions: parseInt(dimensionsEl.value, 10) || 0,
+      dimensions: Number.parseInt(dimensionsEl.value, 10) || 0,
     };
   }
 
@@ -89,9 +89,9 @@
       api_key: apiKeyEl.value,
       clear_api_key: clearAPIKeyEl.checked,
       model: modelEl.value,
-      dimensions: parseInt(dimensionsEl.value, 10) || 0,
-      rate_limit_per_second: parseFloat(rateLimitEl.value) || 0,
-      chunk_size_tokens: parseInt(chunkSizeEl.value, 10) || 0,
+      dimensions: Number.parseInt(dimensionsEl.value, 10) || 0,
+      rate_limit_per_second: Number.parseFloat(rateLimitEl.value) || 0,
+      chunk_size_tokens: Number.parseInt(chunkSizeEl.value, 10) || 0,
       tokenize_url: tokenizeURLEl.value,
       enabled: enabledEl.checked,
     };

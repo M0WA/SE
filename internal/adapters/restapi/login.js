@@ -30,6 +30,7 @@
       const data = await resp.json();
       window.location = data.redirect || '/admin';
     } catch (err) {
+      console.error('login request failed:', err);
       error.textContent = 'Sign-in failed: could not reach the server.';
     }
   });

@@ -14,9 +14,9 @@
 // has-flag/supports-color, for terminal color detection) -- that's noise
 // in the printed table, not a real gap in this project's own JS coverage
 // (internal/adapters/restapi/*.js), so read the report with that in mind.
-const fs = require('fs');
-const path = require('path');
-const { spawnSync } = require('child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const restapiDir = path.join(__dirname, '..', 'internal', 'adapters', 'restapi');
 const testFiles = fs

@@ -18,7 +18,7 @@
     kvRow(poolEl, 'Closed (max lifetime)', String(d.pool.max_lifetime_closed));
 
     clear(tablesEl);
-    const rows = Object.keys(d.table_rows).sort().map((name) => ({ name, count: d.table_rows[name] }));
+    const rows = Object.keys(d.table_rows).sort((a, b) => a.localeCompare(b)).map((name) => ({ name, count: d.table_rows[name] }));
     const table = buildTable(
       [{ label: 'table' }, { label: 'rows', num: true }],
       rows,

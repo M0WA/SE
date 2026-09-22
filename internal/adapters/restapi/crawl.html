@@ -18,7 +18,7 @@
 <nav class="admin-rail" id="admin-rail" aria-label="Admin sections"></nav>
 <main>
   <form id="crawl-form" class="crawl-form stacked-form">
-    <input id="crawl-url" class="field" name="url" type="text" placeholder="example.com" autofocus required>
+    <input id="crawl-url" class="field" name="url" type="text" placeholder="example.com" aria-label="URL to crawl" autofocus required>
     <input id="max-pages" name="max_pages" type="number" min="1" value="20000" aria-label="Max pages">
     <button type="submit">Crawl</button>
   </form>
@@ -31,14 +31,14 @@
         <div class="form-row">
           <div class="label-row">
             <label for="crawl-interval">Interval (optional)</label>
-            <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Minutes between runs. Leave blank (or 0) to run once. A positive value repeats this crawl on that interval -- see it, pause it, or delete it under Schedules on the Jobs page -- until disabled or its max runs (below) is reached.</span></span>
+            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Minutes between runs. Leave blank (or 0) to run once. A positive value repeats this crawl on that interval -- see it, pause it, or delete it under Schedules on the Jobs page -- until disabled or its max runs (below) is reached.</span></span>
           </div>
           <input id="crawl-interval" class="field" type="number" min="0" value="360">
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="crawl-max-runs">Max runs (optional)</label>
-            <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Only used when repeating. Leave blank for unlimited -- the schedule disables itself automatically after this many runs.</span></span>
+            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Only used when repeating. Leave blank for unlimited -- the schedule disables itself automatically after this many runs.</span></span>
           </div>
           <span class="field-wrap" data-default="Unlimited"><input id="crawl-max-runs" class="field" type="number" min="0"></span>
         </div>
@@ -52,7 +52,7 @@
         <div class="form-row">
           <div class="label-row">
             <label for="crawl-renderer">Rendering</label>
-            <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">"Use site default" follows whatever the Settings page has set. Rendering a page in a real browser is much slower than a plain fetch and downloads that browser engine the first time it's ever used on this server.</span></span>
+            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">"Use site default" follows whatever the Settings page has set. Rendering a page in a real browser is much slower than a plain fetch and downloads that browser engine the first time it's ever used on this server.</span></span>
           </div>
           <select id="crawl-renderer" class="field">
             <option value="">Use site default</option>
@@ -66,12 +66,12 @@
             <span class="field-wrap" data-default="Off"><input id="crawl-respect-robots" type="checkbox"></span>
             Respect robots.txt
           </label>
-          <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">This crawl ignores robots.txt unless checked.</span></span>
+          <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">This crawl ignores robots.txt unless checked.</span></span>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="crawl-link-scope">How far to follow links</label>
-            <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">"Use site default" follows whatever the Settings page has set. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org. "Same domain, any subdomain, any top-level domain" is broader still -- from a seed of example.com it also follows example.org and www.example.de (the same domain name, any subdomain, under any TLD), but not other.com.</span></span>
+            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">"Use site default" follows whatever the Settings page has set. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org. "Same domain, any subdomain, any top-level domain" is broader still -- from a seed of example.com it also follows example.org and www.example.de (the same domain name, any subdomain, under any TLD), but not other.com.</span></span>
           </div>
           <select id="crawl-link-scope" class="field">
             <option value="">Use site default</option>
@@ -84,14 +84,14 @@
         <div class="form-row">
           <div class="label-row">
             <label for="crawl-allowed-domains">Allowed domains (optional)</label>
-            <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One domain per line. Always followed, even where "How far to follow links" above would otherwise reject them -- widens link scope, on top of it, rather than replacing it.</span></span>
+            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One domain per line. Always followed, even where "How far to follow links" above would otherwise reject them -- widens link scope, on top of it, rather than replacing it.</span></span>
           </div>
           <textarea id="crawl-allowed-domains" class="field" rows="3" placeholder="partner.example"></textarea>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="crawl-blocked-domains">Blocked domains (optional)</label>
-            <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One domain per line. Never followed, even where link scope or allowed domains above would otherwise allow them -- blocked domains always win.</span></span>
+            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One domain per line. Never followed, even where link scope or allowed domains above would otherwise allow them -- blocked domains always win.</span></span>
           </div>
           <textarea id="crawl-blocked-domains" class="field" rows="3" placeholder="spammy.example"></textarea>
         </div>
@@ -100,7 +100,7 @@
             <span class="field-wrap" data-default="Off"><input id="crawl-follow-indexed" type="checkbox"></span>
             Follow domains already in the index
           </label>
-          <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When checked, a discovered link is also followed if its domain already has at least one indexed page, even outside link scope. Blocked domains above still override this.</span></span>
+          <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When checked, a discovered link is also followed if its domain already has at least one indexed page, even outside link scope. Blocked domains above still override this.</span></span>
         </div>
       </div>
       <div class="subpanel">
@@ -110,14 +110,14 @@
             <span class="field-wrap" data-default="Off"><input id="crawl-use-sitemap" type="checkbox"></span>
             Discover pages via sitemap.xml
           </label>
-          <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When checked, /sitemap.xml is fetched from the seed's domain and every URL it lists is queued too.</span></span>
+          <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When checked, /sitemap.xml is fetched from the seed's domain and every URL it lists is queued too.</span></span>
         </div>
         <div class="form-row form-row-check">
           <label for="crawl-prioritize-unindexed">
             <span class="field-wrap" data-default="On"><input id="crawl-prioritize-unindexed" type="checkbox" checked></span>
             Prioritize pages not yet indexed
           </label>
-          <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When checked, newly discovered pages are fetched before re-fetching ones already in the index, so a limited page budget goes toward new content first on a mostly-indexed site. Already-indexed pages are still crawled once every new one has been attempted.</span></span>
+          <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When checked, newly discovered pages are fetched before re-fetching ones already in the index, so a limited page budget goes toward new content first on a mostly-indexed site. Already-indexed pages are still crawled once every new one has been attempted.</span></span>
         </div>
       </div>
     </details>

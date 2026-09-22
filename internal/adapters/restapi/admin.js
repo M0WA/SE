@@ -1,5 +1,5 @@
 function clear(el) {
-  while (el.firstChild) el.removeChild(el.firstChild);
+  while (el.firstChild) el.firstChild.remove();
 }
 
 // setButtonLoading swaps a button's label for a small spinner + verb while
@@ -174,7 +174,7 @@ async function patchJSON(url, body) {
 // (for numeric/technical columns).
 function textCell(text, opts) {
   const td = document.createElement('td');
-  if (opts && opts.num) td.className = 'num';
+  if (opts?.num) td.className = 'num';
   td.textContent = text;
   return td;
 }
@@ -227,7 +227,7 @@ function parseLines(text) {
 function formatTimestamp(iso, opts) {
   if (!iso) return '—';
   const d = new Date(iso);
-  return (opts && opts.timeOnly) ? d.toLocaleTimeString() : d.toLocaleString();
+  return opts?.timeOnly ? d.toLocaleTimeString() : d.toLocaleString();
 }
 
 // buildTable assembles a <table> from a header spec ({label, num?}[]) and
@@ -432,7 +432,8 @@ function buildVocabTable(terms) {
     th.classList.add('sortable-th');
     th.tabIndex = 0;
     const active = vocabSortBy === col.key;
-    th.textContent = col.label + (active ? (vocabSortDir === 'asc' ? ' ▲' : ' ▼') : '');
+    const sortIndicator = active ? (vocabSortDir === 'asc' ? ' ▲' : ' ▼') : '';
+    th.textContent = col.label + sortIndicator;
     const activate = () => {
       if (vocabSortBy === col.key) {
         vocabSortDir = vocabSortDir === 'asc' ? 'desc' : 'asc';
@@ -535,10 +536,10 @@ function wireVocabularySearch() {
 
   const pageSizeEl = document.getElementById('vocab-page-size');
   if (pageSizeEl) {
-    const initial = parseInt(pageSizeEl.value, 10);
+    const initial = Number.parseInt(pageSizeEl.value, 10);
     if (Number.isFinite(initial) && initial > 0) vocabPageSize = initial;
     pageSizeEl.addEventListener('change', () => {
-      const n = parseInt(pageSizeEl.value, 10);
+      const n = Number.parseInt(pageSizeEl.value, 10);
       vocabPageSize = (Number.isFinite(n) && n > 0) ? n : 20;
       vocabPage = 0;
       loadVocabulary();

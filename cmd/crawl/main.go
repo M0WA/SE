@@ -48,8 +48,8 @@ const crawlJobPrunePollInterval = 5 * time.Minute
 // trigger also resets this timer. Runs the first recompute in the
 // background so a large corpus's pass doesn't delay ListenAndServe.
 func runPageRankScheduler(ctx context.Context, repo ports.PageRankRepository, settingsStore ports.SettingsStore, opSettings *domain.OperationalSettings) *pageRankRecomputer {
-	pr := &pageRankRecomputer{ctx: ctx, repo: repo, settingsStore: settingsStore}
-	go pr.recompute()
+	pr := &pageRankRecomputer{repo: repo, settingsStore: settingsStore}
+	go pr.recompute(ctx)
 
 	go func() {
 		ticker := time.NewTicker(pageRankPollInterval)
@@ -61,7 +61,7 @@ func runPageRankScheduler(ctx context.Context, repo ports.PageRankRepository, se
 			case <-ticker.C:
 				interval := time.Duration(opSettings.Get().PageRankRecomputeIntervalMinutes) * time.Minute
 				if time.Since(pr.lastRun()) >= interval {
-					pr.recompute()
+					pr.recompute(ctx)
 				}
 			}
 		}
@@ -74,7 +74,6 @@ func runPageRankScheduler(ctx context.Context, repo ports.PageRankRepository, se
 // one "was it just recomputed" clock rather than racing two independent
 // timers.
 type pageRankRecomputer struct {
-	ctx           context.Context
 	repo          ports.PageRankRepository
 	settingsStore ports.SettingsStore
 	mu            sync.Mutex
@@ -85,7 +84,7 @@ type pageRankRecomputer struct {
 	running bool
 }
 
-func (p *pageRankRecomputer) recompute() {
+func (p *pageRankRecomputer) recompute(ctx context.Context) {
 	p.mu.Lock()
 	if p.running {
 		p.mu.Unlock()
@@ -94,7 +93,7 @@ func (p *pageRankRecomputer) recompute() {
 	p.running = true
 	p.mu.Unlock()
 
-	if _, err := application.RunPageRankJobWithStatus(p.ctx, p.repo, p.settingsStore); err != nil {
+	if _, err := application.RunPageRankJobWithStatus(ctx, p.repo, p.settingsStore); err != nil {
 		log.Printf("recomputing pagerank: %v", err)
 	}
 
@@ -115,8 +114,8 @@ func (p *pageRankRecomputer) lastRun() time.Time {
 // destructive -- gated inside contentDedupRecomputer.recompute so both this
 // scheduler and an external trigger are safe to call unconditionally.
 func runContentDedupScheduler(ctx context.Context, repo ports.ContentDedupRepository, settingsStore ports.SettingsStore, opSettings *domain.OperationalSettings) *contentDedupRecomputer {
-	cd := &contentDedupRecomputer{ctx: ctx, repo: repo, settingsStore: settingsStore, opSettings: opSettings}
-	go cd.recompute()
+	cd := &contentDedupRecomputer{repo: repo, settingsStore: settingsStore, opSettings: opSettings}
+	go cd.recompute(ctx)
 
 	go func() {
 		ticker := time.NewTicker(contentDedupPollInterval)
@@ -128,7 +127,7 @@ func runContentDedupScheduler(ctx context.Context, repo ports.ContentDedupReposi
 			case <-ticker.C:
 				interval := time.Duration(opSettings.Get().ContentDedupIntervalMinutes) * time.Minute
 				if time.Since(cd.lastRun()) >= interval {
-					cd.recompute()
+					cd.recompute(ctx)
 				}
 			}
 		}
@@ -140,7 +139,6 @@ func runContentDedupScheduler(ctx context.Context, repo ports.ContentDedupReposi
 // ran -- see pageRankRecomputer's identical doc comment for why this
 // shared-clock/running-guard shape exists.
 type contentDedupRecomputer struct {
-	ctx           context.Context
 	repo          ports.ContentDedupRepository
 	settingsStore ports.SettingsStore
 	opSettings    *domain.OperationalSettings
@@ -149,7 +147,7 @@ type contentDedupRecomputer struct {
 	running       bool
 }
 
-func (c *contentDedupRecomputer) recompute() {
+func (c *contentDedupRecomputer) recompute(ctx context.Context) {
 	v := c.opSettings.Get()
 	if !v.ContentDedupEnabled {
 		return
@@ -162,7 +160,7 @@ func (c *contentDedupRecomputer) recompute() {
 	c.running = true
 	c.mu.Unlock()
 
-	_, err := application.RunContentDedupJobWithStatus(c.ctx, c.repo, c.settingsStore, v.ContentDedupMethod, v.ContentDedupSimHashMaxDistance)
+	_, err := application.RunContentDedupJobWithStatus(ctx, c.repo, c.settingsStore, v.ContentDedupMethod, v.ContentDedupSimHashMaxDistance)
 	if err != nil && !errors.Is(err, ports.ErrContentDedupAlreadyRunning) {
 		log.Printf("recomputing content dedup: %v", err)
 	}
@@ -263,7 +261,7 @@ func main() {
 		// background (so it never delays the job's reported completion),
 		// on top of each recomputer's own ticker. contentDedup.recompute is
 		// a no-op when ContentDedupEnabled is off.
-		OnCrawlComplete: func() { go pageRank.recompute(); go contentDedup.recompute() },
+		OnCrawlComplete: func() { go pageRank.recompute(ctx); go contentDedup.recompute(ctx) },
 		// Opt-in shared secret admin-server's crawlclient.Client sends back
 		// -- empty by default, so an unconfigured deployment is unaffected.
 		CrawlInternalToken: bootstrap.GetEnv("CRAWL_INTERNAL_TOKEN", ""),

@@ -9,7 +9,7 @@
   // comment on why self-service pages stay decoupled from it) -- same
   // small local helpers account_mcp_servers.js already duplicates.
   function clear(el) {
-    while (el.firstChild) el.removeChild(el.firstChild);
+    while (el.firstChild) el.firstChild.remove();
   }
 
   async function getJSON(url) {
@@ -107,7 +107,7 @@
   }
 
   async function uploadSelectedFile() {
-    const selected = uploadInput.files && uploadInput.files[0];
+    const selected = uploadInput.files?.[0];
     if (!selected) {
       uploadStatusEl.textContent = 'Choose a file first.';
       return;

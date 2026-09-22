@@ -22,6 +22,15 @@ import (
 
 const sessionCookieName = "se_session"
 
+// loginRedirectPath and authRequiredMsg are shared by every
+// requireAuth*/requireAdminAuth*/requireRegularUserAuth* gate below, so the
+// "/login?next=" prefix and "authentication required" 401 body text stay in
+// exactly one place instead of being retyped at every call site.
+const (
+	loginRedirectPath = "/login?next="
+	authRequiredMsg   = "authentication required"
+)
+
 // sessionStore is a small in-memory session table, used only as the
 // fallback when no ports.SessionStore is configured. Lost on restart and
 // visible only to the process that created it -- fine for tests, not for
@@ -132,7 +141,7 @@ func (h *Handler) isAuthenticated(r *http.Request) bool {
 func (h *Handler) requireAuthPage(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !h.isAuthenticated(r) {
-			http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.Path), http.StatusSeeOther)
+			http.Redirect(w, r, loginRedirectPath+url.QueryEscape(r.URL.Path), http.StatusSeeOther)
 			return
 		}
 		next(w, r)
@@ -145,7 +154,7 @@ func (h *Handler) requireAuthPage(next http.HandlerFunc) http.HandlerFunc {
 func (h *Handler) requireAuthAPI(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !h.isAuthenticated(r) {
-			http.Error(w, "authentication required", http.StatusUnauthorized)
+			http.Error(w, authRequiredMsg, http.StatusUnauthorized)
 			return
 		}
 		next(w, r)
@@ -163,7 +172,7 @@ func (h *Handler) requireAdminAuthPage(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		role, _, ok := h.sessionRoleFor(r)
 		if !ok {
-			http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.Path), http.StatusSeeOther)
+			http.Redirect(w, r, loginRedirectPath+url.QueryEscape(r.URL.Path), http.StatusSeeOther)
 			return
 		}
 		if role != domain.RoleAdmin {
@@ -181,7 +190,7 @@ func (h *Handler) requireAdminAuthAPI(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		role, _, ok := h.sessionRoleFor(r)
 		if !ok {
-			http.Error(w, "authentication required", http.StatusUnauthorized)
+			http.Error(w, authRequiredMsg, http.StatusUnauthorized)
 			return
 		}
 		if role != domain.RoleAdmin {
@@ -204,7 +213,7 @@ func (h *Handler) requireRegularUserAuthPage(next http.HandlerFunc) http.Handler
 	return func(w http.ResponseWriter, r *http.Request) {
 		role, _, ok := h.sessionRoleFor(r)
 		if !ok {
-			http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.Path), http.StatusSeeOther)
+			http.Redirect(w, r, loginRedirectPath+url.QueryEscape(r.URL.Path), http.StatusSeeOther)
 			return
 		}
 		if role == domain.RoleAdmin {
@@ -223,7 +232,7 @@ func (h *Handler) requireRegularUserAuthAPI(next http.HandlerFunc) http.HandlerF
 	return func(w http.ResponseWriter, r *http.Request) {
 		role, _, ok := h.sessionRoleFor(r)
 		if !ok {
-			http.Error(w, "authentication required", http.StatusUnauthorized)
+			http.Error(w, authRequiredMsg, http.StatusUnauthorized)
 			return
 		}
 		if role == domain.RoleAdmin {
@@ -260,7 +269,7 @@ func (h *Handler) requireAuthAPIOrInternalKey(next http.HandlerFunc) http.Handle
 			return
 		}
 		if !h.isAuthenticated(r) {
-			http.Error(w, "authentication required", http.StatusUnauthorized)
+			http.Error(w, authRequiredMsg, http.StatusUnauthorized)
 			return
 		}
 		next(w, r)

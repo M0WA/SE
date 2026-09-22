@@ -47,33 +47,47 @@ func SimHash64(text string) uint64 {
 	words := strings.Fields(strings.ToLower(text))
 	var votes [64]int
 	shingleCount := 0
-	shingle := func(ws []string) uint64 {
-		h := fnv.New64a()
-		_, _ = h.Write([]byte(strings.Join(ws, " ")))
-		return h.Sum64()
-	}
-	addVotes := func(h uint64) {
-		shingleCount++
-		for bit := 0; bit < 64; bit++ {
-			if h&(1<<uint(bit)) != 0 {
-				votes[bit]++
-			} else {
-				votes[bit]--
-			}
-		}
-	}
 	if len(words) < simHashShingleSize {
 		if len(words) > 0 {
-			addVotes(shingle(words))
+			addSimHashVotes(&votes, simHashOfShingle(words))
+			shingleCount++
 		}
 	} else {
 		for i := 0; i+simHashShingleSize <= len(words); i++ {
-			addVotes(shingle(words[i : i+simHashShingleSize]))
+			addSimHashVotes(&votes, simHashOfShingle(words[i:i+simHashShingleSize]))
+			shingleCount++
 		}
 	}
 	if shingleCount == 0 {
 		return 0
 	}
+	return simHashFromVotes(votes)
+}
+
+// simHashOfShingle fnv-1a-hashes one word shingle -- shared by both of
+// SimHash64's branches (a too-short text hashed whole, or each sliding
+// window of a longer one).
+func simHashOfShingle(ws []string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(strings.Join(ws, " ")))
+	return h.Sum64()
+}
+
+// addSimHashVotes casts one shingle hash's per-bit majority vote into
+// votes: +1 for each set bit, -1 for each clear one.
+func addSimHashVotes(votes *[64]int, h uint64) {
+	for bit := 0; bit < 64; bit++ {
+		if h&(1<<uint(bit)) != 0 {
+			votes[bit]++
+		} else {
+			votes[bit]--
+		}
+	}
+}
+
+// simHashFromVotes collapses the accumulated per-bit votes into the final
+// fingerprint: a bit is set iff its vote total is positive.
+func simHashFromVotes(votes [64]int) uint64 {
 	var out uint64
 	for bit := 0; bit < 64; bit++ {
 		if votes[bit] > 0 {

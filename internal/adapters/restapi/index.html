@@ -76,9 +76,9 @@
       <label class="chat-rag-toggle" for="chat-web-search">
         <input id="chat-web-search" type="checkbox" checked> Web
       </label>
-      <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Lets the model use web search and page fetch tools to answer this question.</span></span>
+      <span class="hint" tabindex="0" role="button"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Lets the model use web search and page fetch tools to answer this question.</span></span>
       <select id="chat-agent-select" class="field chat-agent-select" aria-label="Agent"><option value="">Default agent</option></select>
-      <span id="chat-token-usage" class="hint chat-token-usage" tabindex="0">
+      <span id="chat-token-usage" class="hint chat-token-usage" tabindex="0" role="button">
         <span id="chat-token-usage-mini" class="chat-token-usage-mini"></span>
         <span id="chat-token-usage-summary"></span>
         <span class="hint-bubble">
@@ -94,7 +94,7 @@
   </div>
 
   <form id="search-form" autocomplete="off">
-    <input id="q" class="field" name="q" type="text" placeholder="Search the index…" autofocus>
+    <input id="q" class="field" name="q" type="text" placeholder="Search the index…" aria-label="Search the index">
     <select id="sort" class="field" name="sort" aria-label="Sort order">
       <option value="relevance" selected>Best match</option>
       <option value="recency">Most recent</option>
@@ -135,16 +135,16 @@
         <button type="button" id="chat-tab-fork" class="chat-tab-action" title="Fork this chat into a new tab" aria-label="Fork this chat into a new tab">⎇</button>
         <button type="button" id="chat-tab-export" class="chat-tab-action" title="Download this chat as JSON" aria-label="Download this chat as JSON">⬇</button>
         <button type="button" id="chat-tab-import" class="chat-tab-action" title="Load a chat from a JSON file" aria-label="Load a chat from a JSON file">⬆</button>
-        <input type="file" id="chat-tab-import-input" accept="application/json" hidden>
+        <input type="file" id="chat-tab-import-input" accept="application/json" hidden aria-label="Load a chat from a JSON file">
         <button type="button" id="chat-attach" class="chat-tab-action" title="Attach a file for the model to inspect" aria-label="Attach a file for the model to inspect"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
-        <input type="file" id="chat-attach-input" hidden>
+        <input type="file" id="chat-attach-input" hidden aria-label="Attach a file for the model to inspect">
       </div>
     </div>
     <div id="chat-messages"></div>
     <div id="chat-files" class="chat-files" hidden></div>
     <div id="chat-status" class="chat-status"></div>
     <form id="chat-form" autocomplete="off">
-      <textarea id="chat-input" class="field" name="message" rows="2" placeholder="Enter to send, Shift+Enter for a new line"></textarea>
+      <textarea id="chat-input" class="field" name="message" rows="2" placeholder="Enter to send, Shift+Enter for a new line" aria-label="Chat message"></textarea>
       <button id="chat-send" type="submit" title="Send" aria-label="Send">▶</button>
     </form>
   </div>

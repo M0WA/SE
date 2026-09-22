@@ -2,7 +2,7 @@ package restapi
 
 import (
 	"context"
-	_ "embed"
+	_ "embed" // enables every //go:embed directive below (pages, scripts, stylesheet)
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -17,6 +17,11 @@ import (
 
 //go:embed index.html
 var indexHTML []byte
+
+// jsContentType is the Content-Type every embedded admin/public page script
+// is served with -- pulled out as a constant since serveStatic repeats it
+// once per script below.
+const jsContentType = "text/javascript; charset=utf-8"
 
 //go:embed crawl.html
 var crawlHTML []byte
@@ -680,7 +685,7 @@ func (h *Handler) handleStyle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleAdminJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminJS)
+	serveStatic(w, r, jsContentType, adminJS)
 }
 
 func (h *Handler) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -692,103 +697,103 @@ func (h *Handler) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleIndexJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", indexJS)
+	serveStatic(w, r, jsContentType, indexJS)
 }
 
 func (h *Handler) handleLoginJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", loginJS)
+	serveStatic(w, r, jsContentType, loginJS)
 }
 
 func (h *Handler) handleAdminPageJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminPageJS)
+	serveStatic(w, r, jsContentType, adminPageJS)
 }
 
 func (h *Handler) handleAdminDatabaseJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminDatabaseJS)
+	serveStatic(w, r, jsContentType, adminDatabaseJS)
 }
 
 func (h *Handler) handleAdminContentDedupJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminContentDedupJS)
+	serveStatic(w, r, jsContentType, adminContentDedupJS)
 }
 
 func (h *Handler) handleAdminDocumentsJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminDocumentsJS)
+	serveStatic(w, r, jsContentType, adminDocumentsJS)
 }
 
 func (h *Handler) handleAdminDomainJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminDomainJS)
+	serveStatic(w, r, jsContentType, adminDomainJS)
 }
 
 func (h *Handler) handleAdminPageRankJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminPageRankJS)
+	serveStatic(w, r, jsContentType, adminPageRankJS)
 }
 
 func (h *Handler) handleAdminEmbeddingsJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminEmbeddingsJS)
+	serveStatic(w, r, jsContentType, adminEmbeddingsJS)
 }
 
 func (h *Handler) handleAdminEmbeddingEndpointsJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminEmbeddingEndpointsJS)
+	serveStatic(w, r, jsContentType, adminEmbeddingEndpointsJS)
 }
 
 func (h *Handler) handleAdminEmbeddingEndpointJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminEmbeddingEndpointJS)
+	serveStatic(w, r, jsContentType, adminEmbeddingEndpointJS)
 }
 
 func (h *Handler) handleAdminScheduleJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminScheduleJS)
+	serveStatic(w, r, jsContentType, adminScheduleJS)
 }
 
 func (h *Handler) handleAdminSearchJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminSearchJS)
+	serveStatic(w, r, jsContentType, adminSearchJS)
 }
 
 func (h *Handler) handleAdminSearchResultJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminSearchResultJS)
+	serveStatic(w, r, jsContentType, adminSearchResultJS)
 }
 
 func (h *Handler) handleAdminJobsJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminJobsJS)
+	serveStatic(w, r, jsContentType, adminJobsJS)
 }
 
 func (h *Handler) handleAdminSettingsJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminSettingsJS)
+	serveStatic(w, r, jsContentType, adminSettingsJS)
 }
 
 func (h *Handler) handleAdminChatSettingsJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminChatSettingsJS)
+	serveStatic(w, r, jsContentType, adminChatSettingsJS)
 }
 
 func (h *Handler) handleAdminMCPServersJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminMCPServersJS)
+	serveStatic(w, r, jsContentType, adminMCPServersJS)
 }
 
 func (h *Handler) handleAdminMCPServerJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminMCPServerJS)
+	serveStatic(w, r, jsContentType, adminMCPServerJS)
 }
 
 func (h *Handler) handleAdminAgentsJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminAgentsJS)
+	serveStatic(w, r, jsContentType, adminAgentsJS)
 }
 
 func (h *Handler) handleAdminAgentJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminAgentJS)
+	serveStatic(w, r, jsContentType, adminAgentJS)
 }
 
 func (h *Handler) handleAdminUsersJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminUsersJS)
+	serveStatic(w, r, jsContentType, adminUsersJS)
 }
 
 func (h *Handler) handleAdminUserJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminUserJS)
+	serveStatic(w, r, jsContentType, adminUserJS)
 }
 
 func (h *Handler) handleAdminVocabularyTermJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminVocabularyTermJS)
+	serveStatic(w, r, jsContentType, adminVocabularyTermJS)
 }
 
 func (h *Handler) handleAdminCrawlJS(w http.ResponseWriter, r *http.Request) {
-	serveStatic(w, r, "text/javascript; charset=utf-8", adminCrawlJS)
+	serveStatic(w, r, jsContentType, adminCrawlJS)
 }
 
 // serveStatic answers a GET/HEAD request with a fixed, embedded payload --

@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // registers the "sqlite" database/sql driver used by sqlrepo.Open in these tests
 
 	"searchengine/internal/adapters/restapi"
 	"searchengine/internal/adapters/settingscrypto"
@@ -839,6 +839,109 @@ func TestHandleAdminDocumentsOverview_ServiceError(t *testing.T) {
 	}
 }
 
+// overviewMetricsTestResp mirrors handleAdminOverviewMetrics' JSON response
+// shape (the real adminOverviewMetrics type is unexported in package
+// restapi, unreachable from this restapi_test package). Named (rather than
+// anonymous, as it used to be) so checkOverviewTier1/checkOverviewTier2
+// below can take it as a parameter -- splitting
+// TestHandleAdminOverviewMetrics_Success's single long chain of assertions
+// into smaller, independently-scoped helper functions to keep each one's
+// cognitive complexity low.
+type overviewMetricsTestResp struct {
+	RunningCrawlJobs int `json:"running_crawl_jobs"`
+	QueuedCrawlJobs  int `json:"queued_crawl_jobs"`
+	RunningJobs      []struct {
+		ID           string   `json:"id"`
+		SeedURLs     []string `json:"seed_urls"`
+		PagesCrawled int      `json:"pages_crawled"`
+	} `json:"running_jobs"`
+	SchedulesEnabled    int `json:"schedules_enabled"`
+	SchedulesDisabled   int `json:"schedules_disabled"`
+	SchedulesInProgress int `json:"schedules_in_progress"`
+	SchedulesOverdue    int `json:"schedules_overdue"`
+	Pool                struct {
+		MaxOpenConnections int `json:"max_open_connections"`
+		InUse              int `json:"in_use"`
+		Idle               int `json:"idle"`
+	} `json:"pool"`
+	JobOutcomes []struct {
+		Status string `json:"status"`
+		Count  int    `json:"count"`
+	} `json:"job_outcomes"`
+	DailyFetchOutcomes []struct {
+		Date     string         `json:"date"`
+		Outcomes map[string]int `json:"outcomes"`
+	} `json:"daily_fetch_outcomes"`
+	DocumentsByDay []struct {
+		Date  string `json:"date"`
+		Count int    `json:"count"`
+	} `json:"documents_by_day"`
+	FetchDurationByDay []struct {
+		Date          string  `json:"date"`
+		AvgDurationMs float64 `json:"avg_duration_ms"`
+	} `json:"fetch_duration_by_day"`
+	PageRankBuckets []struct {
+		Label string `json:"label"`
+		Count int    `json:"count"`
+	} `json:"pagerank_buckets"`
+	PageRankOrphanThreshold float64 `json:"pagerank_orphan_threshold"`
+	PageRankOrphanCount     int     `json:"pagerank_orphan_count"`
+	PageRankOrphanPercent   float64 `json:"pagerank_orphan_percent"`
+	PageRankTotalDocs       int     `json:"pagerank_total_docs"`
+}
+
+// checkOverviewTier1 asserts the pure-aggregation fields (see
+// adminOverviewMetrics' own "Tier 1" comment): crawl job counts, schedule
+// health, and DB pool passthrough.
+func checkOverviewTier1(t *testing.T, resp overviewMetricsTestResp) {
+	t.Helper()
+	if resp.RunningCrawlJobs != 1 || resp.QueuedCrawlJobs != 1 {
+		t.Errorf("expected 1 running and 1 queued job, got running=%d queued=%d", resp.RunningCrawlJobs, resp.QueuedCrawlJobs)
+	}
+	if len(resp.RunningJobs) != 1 || resp.RunningJobs[0].ID != "job-running" || resp.RunningJobs[0].PagesCrawled != 7 ||
+		len(resp.RunningJobs[0].SeedURLs) != 1 || resp.RunningJobs[0].SeedURLs[0] != "https://a.example" {
+		t.Errorf("unexpected running_jobs: %+v", resp.RunningJobs)
+	}
+	if resp.SchedulesEnabled != 3 || resp.SchedulesDisabled != 1 || resp.SchedulesInProgress != 1 || resp.SchedulesOverdue != 1 {
+		t.Errorf("unexpected schedule health: enabled=%d disabled=%d in_progress=%d overdue=%d",
+			resp.SchedulesEnabled, resp.SchedulesDisabled, resp.SchedulesInProgress, resp.SchedulesOverdue)
+	}
+	if resp.Pool.MaxOpenConnections != 10 || resp.Pool.InUse != 2 || resp.Pool.Idle != 2 {
+		t.Errorf("unexpected pool passthrough: %+v", resp.Pool)
+	}
+}
+
+// checkOverviewTier2 asserts the trend-chart fields, each backed by its own
+// AdminRepository aggregate query (see adminOverviewMetrics' own "Tier 2"
+// comment).
+func checkOverviewTier2(t *testing.T, resp overviewMetricsTestResp) {
+	t.Helper()
+	if len(resp.JobOutcomes) != 2 || resp.JobOutcomes[0].Status != "done" || resp.JobOutcomes[0].Count != 3 {
+		t.Errorf("unexpected job_outcomes: %+v", resp.JobOutcomes)
+	}
+	if len(resp.DailyFetchOutcomes) != 2 ||
+		resp.DailyFetchOutcomes[0].Date != "2025-01-01" || resp.DailyFetchOutcomes[0].Outcomes["indexed"] != 5 || resp.DailyFetchOutcomes[0].Outcomes["fetch_failed"] != 1 ||
+		resp.DailyFetchOutcomes[1].Date != "2025-01-02" || resp.DailyFetchOutcomes[1].Outcomes["indexed"] != 2 {
+		t.Errorf("unexpected daily_fetch_outcomes grouping: %+v", resp.DailyFetchOutcomes)
+	}
+	if len(resp.DocumentsByDay) != 2 || resp.DocumentsByDay[1].Count != 6 {
+		t.Errorf("unexpected documents_by_day: %+v", resp.DocumentsByDay)
+	}
+	if len(resp.FetchDurationByDay) != 1 || resp.FetchDurationByDay[0].AvgDurationMs != 120.5 {
+		t.Errorf("unexpected fetch_duration_by_day: %+v", resp.FetchDurationByDay)
+	}
+	if len(resp.PageRankBuckets) != 1 || resp.PageRankBuckets[0].Count != 9 {
+		t.Errorf("unexpected pagerank_buckets: %+v", resp.PageRankBuckets)
+	}
+	if resp.PageRankOrphanThreshold != domain.PageRankOrphanThreshold {
+		t.Errorf("expected pagerank_orphan_threshold=%v, got %v", domain.PageRankOrphanThreshold, resp.PageRankOrphanThreshold)
+	}
+	if resp.PageRankOrphanCount != 1 || resp.PageRankTotalDocs != 10 || resp.PageRankOrphanPercent != 10 {
+		t.Errorf("unexpected pagerank orphan stats: count=%d total=%d percent=%v",
+			resp.PageRankOrphanCount, resp.PageRankTotalDocs, resp.PageRankOrphanPercent)
+	}
+}
+
 func TestHandleAdminOverviewMetrics_Success(t *testing.T) {
 	now := time.Now().UTC()
 	jobs := &fakeJobService{jobs: []domain.CrawlJobSummary{
@@ -875,90 +978,13 @@ func TestHandleAdminOverviewMetrics_Success(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	var resp struct {
-		RunningCrawlJobs int `json:"running_crawl_jobs"`
-		QueuedCrawlJobs  int `json:"queued_crawl_jobs"`
-		RunningJobs      []struct {
-			ID           string   `json:"id"`
-			SeedURLs     []string `json:"seed_urls"`
-			PagesCrawled int      `json:"pages_crawled"`
-		} `json:"running_jobs"`
-		SchedulesEnabled    int `json:"schedules_enabled"`
-		SchedulesDisabled   int `json:"schedules_disabled"`
-		SchedulesInProgress int `json:"schedules_in_progress"`
-		SchedulesOverdue    int `json:"schedules_overdue"`
-		Pool                struct {
-			MaxOpenConnections int `json:"max_open_connections"`
-			InUse              int `json:"in_use"`
-			Idle               int `json:"idle"`
-		} `json:"pool"`
-		JobOutcomes []struct {
-			Status string `json:"status"`
-			Count  int    `json:"count"`
-		} `json:"job_outcomes"`
-		DailyFetchOutcomes []struct {
-			Date     string         `json:"date"`
-			Outcomes map[string]int `json:"outcomes"`
-		} `json:"daily_fetch_outcomes"`
-		DocumentsByDay []struct {
-			Date  string `json:"date"`
-			Count int    `json:"count"`
-		} `json:"documents_by_day"`
-		FetchDurationByDay []struct {
-			Date          string  `json:"date"`
-			AvgDurationMs float64 `json:"avg_duration_ms"`
-		} `json:"fetch_duration_by_day"`
-		PageRankBuckets []struct {
-			Label string `json:"label"`
-			Count int    `json:"count"`
-		} `json:"pagerank_buckets"`
-		PageRankOrphanThreshold float64 `json:"pagerank_orphan_threshold"`
-		PageRankOrphanCount     int     `json:"pagerank_orphan_count"`
-		PageRankOrphanPercent   float64 `json:"pagerank_orphan_percent"`
-		PageRankTotalDocs       int     `json:"pagerank_total_docs"`
-	}
+	var resp overviewMetricsTestResp
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decoding response: %v", err)
 	}
 
-	if resp.RunningCrawlJobs != 1 || resp.QueuedCrawlJobs != 1 {
-		t.Errorf("expected 1 running and 1 queued job, got running=%d queued=%d", resp.RunningCrawlJobs, resp.QueuedCrawlJobs)
-	}
-	if len(resp.RunningJobs) != 1 || resp.RunningJobs[0].ID != "job-running" || resp.RunningJobs[0].PagesCrawled != 7 ||
-		len(resp.RunningJobs[0].SeedURLs) != 1 || resp.RunningJobs[0].SeedURLs[0] != "https://a.example" {
-		t.Errorf("unexpected running_jobs: %+v", resp.RunningJobs)
-	}
-	if resp.SchedulesEnabled != 3 || resp.SchedulesDisabled != 1 || resp.SchedulesInProgress != 1 || resp.SchedulesOverdue != 1 {
-		t.Errorf("unexpected schedule health: enabled=%d disabled=%d in_progress=%d overdue=%d",
-			resp.SchedulesEnabled, resp.SchedulesDisabled, resp.SchedulesInProgress, resp.SchedulesOverdue)
-	}
-	if resp.Pool.MaxOpenConnections != 10 || resp.Pool.InUse != 2 || resp.Pool.Idle != 2 {
-		t.Errorf("unexpected pool passthrough: %+v", resp.Pool)
-	}
-	if len(resp.JobOutcomes) != 2 || resp.JobOutcomes[0].Status != "done" || resp.JobOutcomes[0].Count != 3 {
-		t.Errorf("unexpected job_outcomes: %+v", resp.JobOutcomes)
-	}
-	if len(resp.DailyFetchOutcomes) != 2 ||
-		resp.DailyFetchOutcomes[0].Date != "2025-01-01" || resp.DailyFetchOutcomes[0].Outcomes["indexed"] != 5 || resp.DailyFetchOutcomes[0].Outcomes["fetch_failed"] != 1 ||
-		resp.DailyFetchOutcomes[1].Date != "2025-01-02" || resp.DailyFetchOutcomes[1].Outcomes["indexed"] != 2 {
-		t.Errorf("unexpected daily_fetch_outcomes grouping: %+v", resp.DailyFetchOutcomes)
-	}
-	if len(resp.DocumentsByDay) != 2 || resp.DocumentsByDay[1].Count != 6 {
-		t.Errorf("unexpected documents_by_day: %+v", resp.DocumentsByDay)
-	}
-	if len(resp.FetchDurationByDay) != 1 || resp.FetchDurationByDay[0].AvgDurationMs != 120.5 {
-		t.Errorf("unexpected fetch_duration_by_day: %+v", resp.FetchDurationByDay)
-	}
-	if len(resp.PageRankBuckets) != 1 || resp.PageRankBuckets[0].Count != 9 {
-		t.Errorf("unexpected pagerank_buckets: %+v", resp.PageRankBuckets)
-	}
-	if resp.PageRankOrphanThreshold != domain.PageRankOrphanThreshold {
-		t.Errorf("expected pagerank_orphan_threshold=%v, got %v", domain.PageRankOrphanThreshold, resp.PageRankOrphanThreshold)
-	}
-	if resp.PageRankOrphanCount != 1 || resp.PageRankTotalDocs != 10 || resp.PageRankOrphanPercent != 10 {
-		t.Errorf("unexpected pagerank orphan stats: count=%d total=%d percent=%v",
-			resp.PageRankOrphanCount, resp.PageRankTotalDocs, resp.PageRankOrphanPercent)
-	}
+	checkOverviewTier1(t, resp)
+	checkOverviewTier2(t, resp)
 
 	// CrawlJobOutcomes' lookback window is documented as 30 days
 	// (overviewJobOutcomeDays) -- assert the cutoff it actually received
