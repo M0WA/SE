@@ -2600,6 +2600,67 @@ func TestMigrateDocumentAliasColumns_BackfillsHostOnPreExistingRows(t *testing.T
 	}
 }
 
+// TestMigrateUploadedFileColumns_PreExistingTableMigratesWithoutError is
+// the direct regression test for a real production incident: v4.13.63
+// crashed every one of se.mo-sys.de's binaries at startup ("column
+// \"chat_id\" does not exist") because idx_uploaded_files_chat_id's
+// CREATE INDEX statement lived in the static CreateSchemaSQL() list,
+// unconditionally, against a table that already existed there from before
+// persistent chats -- CREATE TABLE IF NOT EXISTS is a no-op for that
+// table, so the ALTER TABLE ADD COLUMN chat_id that migrateUploadedFileColumns
+// performs (further down the same migrate() call) hadn't run yet by the
+// time the index tried to build on a column that didn't exist. Fixed by
+// moving that index's creation to ensureUploadedFilesChatIDIndex, called
+// only after migrateUploadedFileColumns succeeds -- this test reproduces
+// the pre-existing-table shape that triggered it and proves New() no
+// longer errors.
+func TestMigrateUploadedFileColumns_PreExistingTableMigratesWithoutError(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testmigrateuploadedfiles%d?mode=memory&cache=shared", n)
+
+	pre, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open pre-migration DB: %v", err)
+	}
+	// The exact pre-persistent-chats shape (no chat_id column at all).
+	if _, err := pre.Exec(`CREATE TABLE uploaded_files (
+		id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+		filename TEXT NOT NULL, content_type TEXT NOT NULL DEFAULT '',
+		size INTEGER NOT NULL DEFAULT 0, data BLOB NOT NULL,
+		created_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("failed to create legacy schema: %v", err)
+	}
+	if _, err := pre.Exec(`INSERT INTO uploaded_files (id, user_id, filename, content_type, size, data, created_at)
+	                       VALUES ('f1', 'u1', 'old.txt', 'text/plain', 3, 'old', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("failed to insert legacy row: %v", err)
+	}
+	t.Cleanup(func() { _ = pre.Close() })
+
+	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("expected New to migrate the legacy uploaded_files table without error, got: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	files, err := repo.ListFiles(context.Background(), "u1")
+	if err != nil {
+		t.Fatalf("unexpected error listing files after migration: %v", err)
+	}
+	if len(files) != 1 || files[0].ChatID != "" {
+		t.Errorf("expected the pre-existing file to survive with an empty ChatID, got %+v", files)
+	}
+
+	// A new file with a real chat_id must also work, proving the column
+	// (and its index, exercised via ListFilesForChat) are both usable.
+	if _, err := repo.SaveFile(context.Background(), "u1", "", "new.txt", "text/plain", []byte("x")); err != nil {
+		t.Fatalf("unexpected error saving a new file post-migration: %v", err)
+	}
+	if _, err := repo.ListFilesForChat(context.Background(), "u1", "some-chat"); err != nil {
+		t.Fatalf("unexpected error querying by chat_id post-migration: %v", err)
+	}
+}
+
 // TestMigrateDocumentColumns_LegacyEmbeddingBlobIsNotAutoMigrated documents
 // a deliberate choice: documents.embedding/norm_embedding are retired now
 // that every provider's vector lives in document_embeddings instead (see
