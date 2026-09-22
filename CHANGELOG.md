@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.63 - 2026-09-22
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Persistent (pinnable) chats, scoped file attachments, MCP call logging by @M0WA in https://github.com/M0WA/SE/pull/270
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.62...v4.13.63
+
+
 ## v4.13.62 - 2026-09-22
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
