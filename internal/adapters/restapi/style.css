@@ -119,18 +119,25 @@ main {
   gap: 0.15rem;
 }
 
-/* .header-icon-button is the public search page's own header-row icon
-   treatment (Admin/Account/Sign out) -- same plain-Unicode-glyph-as-
-   content convention as .chat-tab-close/.chat-tab-action (see style.css's
-   own comment there), sized up slightly since these sit in the page
-   header rather than a dense tab strip. Works for both <a> and <button>
-   so Admin/Account (real links) and Sign out (a button) look identical. */
+/* .header-icon-button is the header row's own icon treatment
+   (Admin/Account/Sign out, every admin page's own Sign out). Admin uses a
+   plain Unicode glyph ("⚙", same plain-glyph-as-content convention as
+   .chat-tab-close/.chat-tab-action) since a real monochrome gear glyph
+   already exists in most fonts; Account/Sign out use an inline SVG
+   instead, since no monochrome Unicode character depicts "a person" or
+   "a door with an arrow pointing out of it" -- the closest codepoints
+   (person/door emoji) render as full-color pictograms in most fonts,
+   breaking the header's otherwise monochrome icon language. stroke:
+   currentColor on the SVG (see below) is what keeps it matching
+   color/hover/focus like every other icon here despite being markup
+   instead of a character. */
 .header-icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 2rem;
   height: 2rem;
+  padding: 0;
   font-size: 1.05rem;
   line-height: 1;
   color: var(--ink-muted);
@@ -139,6 +146,12 @@ main {
   border-radius: 6px;
   text-decoration: none;
   cursor: pointer;
+}
+
+.header-icon-button svg {
+  width: 1.1rem;
+  height: 1.1rem;
+  stroke: currentColor;
 }
 
 .header-icon-button:hover { color: var(--accent); background: var(--accent-soft); }
