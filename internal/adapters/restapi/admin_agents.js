@@ -2,20 +2,7 @@
   const tableEl = document.getElementById('agents-table');
 
   function agentActionsCell(a) {
-    const td = document.createElement('td');
-    td.className = 'actions';
-    const editLink = document.createElement('a');
-    editLink.className = 'text-button';
-    editLink.href = '/admin/agents/' + encodeURIComponent(a.id);
-    editLink.textContent = 'Edit';
-    td.appendChild(editLink);
-    const delBtn = document.createElement('button');
-    delBtn.type = 'button';
-    delBtn.className = 'text-button';
-    delBtn.textContent = 'Delete';
-    delBtn.addEventListener('click', () => deleteAgent(a));
-    td.appendChild(delBtn);
-    return td;
+    return actionsCell('/admin/agents/' + encodeURIComponent(a.id), 'Delete', () => deleteAgent(a));
   }
 
   function renderAgents(agents) {

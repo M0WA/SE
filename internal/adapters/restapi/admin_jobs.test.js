@@ -7,6 +7,17 @@ const { setupDOM, teardownDOM, requireFresh } = require('./dom_helper.test_util'
 
 const JOBS_HTML = fs.readFileSync(path.join(__dirname, 'admin_jobs.html'), 'utf8');
 
+// normalizedSVG round-trips raw through a detached element's innerHTML, so
+// it's compared against actual DOM output serialized the same way (jsdom,
+// like a real browser, re-serializes a self-closing SVG tag like
+// "<circle .../>" as an explicit "<circle ...></circle>" once parsed) --
+// comparing raw source strings directly would spuriously fail.
+function normalizedSVG(raw) {
+  const el = document.createElement('div');
+  el.innerHTML = raw;
+  return el.innerHTML;
+}
+
 function loadFixture() {
   setupDOM(JOBS_HTML);
   const adminHelpers = requireFresh('./admin.js');
@@ -16,7 +27,11 @@ function loadFixture() {
     if (url.includes('/admin/api/crawl/jobs')) return { ok: true, json: async () => [] };
     return { ok: true, json: async () => ({}) };
   };
-  return requireFresh('./admin_jobs.js');
+  // admin_jobs.js's own exports, plus admin.js's shared helpers (icon
+  // glyphs/SVGs, setIconLabel) it relies on as ambient globals -- same
+  // relationship as e.g. buildTable/getJSON, just not re-exported by this
+  // page's own module.exports.
+  return Object.assign({}, adminHelpers, requireFresh('./admin_jobs.js'));
 }
 
 test.afterEach(() => {
@@ -180,27 +195,6 @@ test('filterCrawls matches against the seed summary', () => {
   assert.deepEqual(filterCrawls(crawls, 'other'), [crawls[1]]);
 });
 
-test('crawlRecurrenceCell shows "once" for a non-recurring schedule', () => {
-  const { crawlRecurrenceCell } = loadFixture();
-  const td = crawlRecurrenceCell({ recurring: false });
-  assert.equal(td.textContent, 'once');
-});
-
-test('crawlRecurrenceCell shows the interval, plus a run count once max_runs is capped', () => {
-  const { crawlRecurrenceCell } = loadFixture();
-  const uncapped = crawlRecurrenceCell({ recurring: true, interval_minutes: 30, max_runs: 0, run_count: 4 });
-  assert.equal(uncapped.textContent, '30 min');
-  const capped = crawlRecurrenceCell({ recurring: true, interval_minutes: 30, max_runs: 10, run_count: 4 });
-  assert.equal(capped.textContent, '30 min (4/10 runs)');
-});
-
-test('crawlLinkScopeCell renders the human label for a known scope, falling back to the raw value otherwise', () => {
-  const { crawlLinkScopeCell, LINK_SCOPE_LABELS } = loadFixture();
-  assert.equal(crawlLinkScopeCell({ link_scope: 'host' }).textContent, LINK_SCOPE_LABELS.host);
-  assert.equal(crawlLinkScopeCell({ link_scope: '' }).textContent, LINK_SCOPE_LABELS['']);
-  assert.equal(crawlLinkScopeCell({ link_scope: 'something-unknown' }).textContent, 'something-unknown');
-});
-
 test('toggleCrawlEnabled POSTs to the dedicated toggle endpoint with the flipped value, not a full-schedule PATCH', async () => {
   const { toggleCrawlEnabled } = loadFixture();
   let gotMethod, gotURL, gotBody;
@@ -332,43 +326,45 @@ test('clicking an inactive column header switches to it at its default direction
   });
 });
 
-test('setIconLabel gives an element an icon glyph, a hover title, and an aria-label carrying the real action name', () => {
-  const { setIconLabel, ACTION_ICONS } = loadFixture();
-  const btn = document.createElement('button');
-  setIconLabel(btn, 'delete', 'Delete');
-  assert.equal(btn.textContent, ACTION_ICONS.delete);
-  assert.equal(btn.title, 'Delete');
-  assert.equal(btn.getAttribute('aria-label'), 'Delete');
-  assert.ok(btn.classList.contains('icon-button'));
-});
-
-test('viewButtonCell shows a View icon button always, and a Cancel icon button only for an active job', () => {
-  const { viewButtonCell, ACTION_ICONS } = loadFixture();
+test('viewButtonCell shows a View icon button always, and a Cancel icon button (reusing the trash icon) only for an active job', () => {
+  const { viewButtonCell, ICON_SVGS, ACTION_GLYPHS } = loadFixture();
 
   const done = viewButtonCell({ id: 'j1', status: 'done' });
   const doneButtons = done.querySelectorAll('button');
   assert.equal(doneButtons.length, 1);
-  assert.equal(doneButtons[0].textContent, ACTION_ICONS.view);
+  assert.equal(doneButtons[0].innerHTML, normalizedSVG(ICON_SVGS.view));
   assert.equal(doneButtons[0].title, 'View');
 
   const running = viewButtonCell({ id: 'j2', status: 'running' });
   const runningButtons = running.querySelectorAll('button');
   assert.equal(runningButtons.length, 2);
-  assert.equal(runningButtons[1].textContent, ACTION_ICONS.cancel);
+  // Cancel reuses the same trash icon as a schedule row's Delete button --
+  // only the title/aria-label ("Cancel") differ, not the glyph.
+  assert.equal(runningButtons[1].innerHTML, normalizedSVG(ICON_SVGS.delete));
   assert.equal(runningButtons[1].title, 'Cancel');
+  assert.notEqual(ACTION_GLYPHS.edit, undefined); // sanity: glyph table still has non-SVG entries
 });
 
-test('crawlActionsCell shows Run now/Edit/Delete as icon buttons/links with the real names as hover text', () => {
-  const { crawlActionsCell, ACTION_ICONS } = loadFixture();
+test('crawlActionsCell shows Run now/Edit as glyph icons and Delete as the shared trash SVG, with the real names as hover text', () => {
+  const { crawlActionsCell, ICON_SVGS, ACTION_GLYPHS } = loadFixture();
   const td = crawlActionsCell({ id: 's1' });
   const buttons = td.querySelectorAll('button');
   const link = td.querySelector('a');
   assert.equal(buttons.length, 2);
-  assert.equal(buttons[0].textContent, ACTION_ICONS.run);
+  assert.equal(buttons[0].textContent, ACTION_GLYPHS.run);
   assert.equal(buttons[0].title, 'Run now');
-  assert.equal(link.textContent, ACTION_ICONS.edit);
+  assert.equal(link.textContent, ACTION_GLYPHS.edit);
   assert.equal(link.title, 'Edit');
   assert.equal(link.getAttribute('href'), '/admin/schedule/s1');
-  assert.equal(buttons[1].textContent, ACTION_ICONS.delete);
+  assert.equal(buttons[1].innerHTML, normalizedSVG(ICON_SVGS.delete));
   assert.equal(buttons[1].title, 'Delete');
+});
+
+test('renderCrawls lists enabled as the first column and drops the repeats/links columns', () => {
+  const { renderCrawls } = loadFixture();
+  renderCrawls([{ id: 's1', seed_urls: ['http://a'], recurring: true, interval_minutes: 30, link_scope: 'host', enabled: true, next_run_at: '', last_run_at: '' }]);
+  const headers = Array.from(document.querySelectorAll('#crawls-table th')).map((th) => th.textContent);
+  assert.deepEqual(headers, ['enabled', 'seed', 'next run', 'last run', '']);
+  const firstRowCells = document.querySelectorAll('#crawls-table tbody tr')[0].children;
+  assert.ok(firstRowCells[0].querySelector('input[type="checkbox"]'));
 });

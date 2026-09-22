@@ -38,6 +38,63 @@ function normalizeURL(value) {
   return 'https://' + trimmed;
 }
 
+// ICON_SVGS/ACTION_GLYPHS/setIconLabel: the shared icon-only action-button
+// convention for every dense admin list (job/schedule rows here, MCP
+// server/agent/user list rows elsewhere) -- see CLAUDE.md's "Icon
+// conventions" section. A plain Unicode character is used where one exists
+// that's genuinely monochrome in most fonts (run "▶", edit "✎", same
+// plain-glyph-as-content convention as .chat-tab-action); "view" and
+// "delete" instead use an inline SVG, since the closest Unicode codepoints
+// (magnifying-glass/wastebasket emoji) render as full-color pictograms in
+// most fonts, breaking these tables' otherwise monochrome icon language --
+// same reasoning as .header-icon-button's own Account/Sign out icons and
+// #chat-attach. stroke="currentColor" (sized via the .icon-button svg CSS
+// rule) is what keeps an SVG icon matching color/hover/focus like a
+// character glyph despite being markup.
+const ICON_SVGS = {
+  view: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
+  delete: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>',
+};
+const ACTION_GLYPHS = { run: '▶', edit: '✎' };
+
+// setIconLabel gives el (a <button> or <a>) an icon (SVG or glyph) as its
+// only visible content plus a hover title and an aria-label carrying the
+// real action name -- iconKey picks the icon, label is the action name, so
+// e.g. the job list's Cancel button can reuse the "delete" trash icon
+// (setIconLabel(btn, 'delete', 'Cancel')) while still reading as "Cancel"
+// to a tooltip or screen reader.
+function setIconLabel(el, iconKey, label) {
+  el.classList.add('icon-button');
+  if (ICON_SVGS[iconKey]) {
+    el.innerHTML = ICON_SVGS[iconKey];
+  } else {
+    el.textContent = ACTION_GLYPHS[iconKey];
+  }
+  el.title = label;
+  el.setAttribute('aria-label', label);
+}
+
+// actionsCell builds a standard actions <td> with an icon-only Edit link
+// and Delete button -- the reused pattern behind every list page's Edit/
+// Delete column (MCP servers, agents, users; job/schedule rows build their
+// own actions cell since they have more than these two actions).
+function actionsCell(editHref, deleteLabel, onDelete) {
+  const td = document.createElement('td');
+  td.className = 'actions';
+  const editLink = document.createElement('a');
+  editLink.className = 'text-button';
+  editLink.href = editHref;
+  setIconLabel(editLink, 'edit', 'Edit');
+  td.appendChild(editLink);
+  const delBtn = document.createElement('button');
+  delBtn.type = 'button';
+  delBtn.className = 'text-button';
+  setIconLabel(delBtn, 'delete', deleteLabel);
+  delBtn.addEventListener('click', onDelete);
+  td.appendChild(delBtn);
+  return td;
+}
+
 function kvRow(container, key, value) {
   const row = document.createElement('div');
   row.className = 'kv-row';
@@ -641,5 +698,6 @@ if (typeof module !== 'undefined' && module.exports) {
     ADMIN_NAV_GROUPS, renderAdminNav,
     wireSignOut, loadStats, loadVocabulary, wireVocabularySearch, pollWhileInProgress,
     estimateTokensClient, buildDonutSVG, buildDonutLegend,
+    ICON_SVGS, ACTION_GLYPHS, setIconLabel, actionsCell,
   };
 }

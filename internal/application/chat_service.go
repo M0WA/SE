@@ -227,12 +227,17 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	// storage/restapi validation, as a last line of defense: a "stdio"
 	// server grants real local command execution on the server host, a
 	// trust tier that must never reach a regular (non-admin) user's own
-	// configuration, however it ended up in this store's rows. Best-effort,
-	// same tolerance as the global ListMCPServers call above.
+	// configuration, however it ended up in this store's rows. srv.SelfService
+	// = true tags each row as it's appended -- a SECOND, independent layer
+	// of the same defense, enforced by mcpclient itself rather than trusted
+	// solely on this filter never regressing (see domain.MCPServer.
+	// SelfService and mcpclient's own doc comment). Best-effort, same
+	// tolerance as the global ListMCPServers call above.
 	if opts.UserID != "" && s.userMCPServers != nil {
 		if own, err := s.userMCPServers.ListUserMCPServers(ctx, opts.UserID); err == nil {
 			for _, srv := range own {
 				if srv.Enabled && srv.Transport == "http" && (!srv.GatedByWebSearch || useWebSearch) {
+					srv.SelfService = true
 					activeServers = append(activeServers, srv)
 				}
 			}

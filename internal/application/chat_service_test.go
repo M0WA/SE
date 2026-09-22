@@ -1534,6 +1534,39 @@ func TestChatService_UserMCPServers_MergedRegardlessOfAgentScope(t *testing.T) {
 	}
 }
 
+// TestChatService_UserMCPServers_TaggedSelfService proves Chat sets
+// domain.MCPServer.SelfService=true on every personal server it merges in
+// (and leaves it false on global/admin ones) -- mcpclient's own
+// defense-in-depth stdio refusal depends on this being set correctly, not
+// just on the http-only filter TestChatService_UserMCPServers_
+// StdioTransportRejected covers.
+func TestChatService_UserMCPServers_TaggedSelfService(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
+	completer := &fakeChatCompleter{answer: "answer"}
+	globalServers := &fakeMCPServerStore{servers: []domain.MCPServer{
+		{ID: "web", Name: "web", Transport: "stdio", Command: "a", Enabled: true},
+	}}
+	userServers := &fakeUserMCPServerStore{byUser: map[string][]domain.MCPServer{
+		"alice": {{ID: "personal", Name: "personal", Transport: "http", BaseURL: "http://example.test", Enabled: true}},
+	}}
+	provider := &fakeMCPToolProvider{}
+	svc := NewChatService(endpoints, completer, globalServers, provider, nil, userServers)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	if _, err := svc.Chat(context.Background(), history, ChatOptions{UserID: "alice"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(provider.openedServers) != 2 {
+		t.Fatalf("expected the global server plus the personal one, got %+v", provider.openedServers)
+	}
+	for _, s := range provider.openedServers {
+		wantSelfService := s.ID == "personal"
+		if s.SelfService != wantSelfService {
+			t.Errorf("expected server %q SelfService=%v, got %v", s.ID, wantSelfService, s.SelfService)
+		}
+	}
+}
+
 // TestChatService_UserMCPServers_StdioTransportRejected proves a stored
 // "stdio" row in a user's own servers (however it got there -- restapi
 // validation should already prevent it, this is the last line of defense)

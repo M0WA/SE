@@ -399,9 +399,26 @@ actual correctness bugs.
   for detached background work — it cancels the instant the client disconnects.
 - **Admin list-view search filters**: client-side, case-insensitive regex against
   an already-fetched in-memory array (see `filterPages`/`filterJobs`/`filterCrawls`
-  in `internal/adapters/restapi/admin_crawl.js`, `filterDocs` in `admin_domain.js`).
+  in `internal/adapters/restapi/admin_jobs.js`, `filterDocs` in `admin_domain.js`).
   Reuse this pattern for any new unbounded-feeling admin list rather than
   inventing a new one.
 - **Backend list endpoints** take a `?limit=` query param via the shared
   `intQueryParam` helper (`internal/adapters/restapi/admin.go`) with a sane
   default constant — every admin list endpoint should have one.
+- **Icon conventions**: every admin-page icon (list-view action buttons, header
+  buttons, chat-tab actions) must be monochrome black/white, never a colorful
+  pictograph — a plain Unicode character is fine where the font renders one
+  genuinely monochrome (e.g. "▶" run, "✎" edit), but the closest codepoint for
+  some actions (magnifying glass, wastebasket, paperclip, gear, person, door)
+  renders as a full-color emoji in most fonts, which breaks a page's otherwise
+  monochrome icon language — use an inline SVG instead (`stroke="currentColor"`,
+  sized via a dedicated `<selector> svg` CSS rule) so it matches the
+  surrounding text color, hover, and focus states like a character glyph
+  would. Reuse an existing icon rather than inventing a new one for the same
+  action: `internal/adapters/restapi/admin.js`'s `ICON_SVGS`/`ACTION_GLYPHS`/
+  `setIconLabel`/`actionsCell` are the shared registry and helpers behind
+  every list page's Edit/Delete column (MCP servers, agents, users) and the
+  Jobs page's View/Cancel/Run now/Edit/Delete icons — loaded as ambient
+  globals via `<script src="/admin.js">`, same as `buildTable`/`getJSON`. An
+  icon-only button carries its real action name via `title` (hover tooltip)
+  and `aria-label` (screen reader), never only the glyph.

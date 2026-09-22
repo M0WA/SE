@@ -2,20 +2,7 @@
   const tableEl = document.getElementById('servers-table');
 
   function serverActionsCell(s) {
-    const td = document.createElement('td');
-    td.className = 'actions';
-    const editLink = document.createElement('a');
-    editLink.className = 'text-button';
-    editLink.href = '/admin/mcp-servers/' + encodeURIComponent(s.id);
-    editLink.textContent = 'Edit';
-    td.appendChild(editLink);
-    const delBtn = document.createElement('button');
-    delBtn.type = 'button';
-    delBtn.className = 'text-button';
-    delBtn.textContent = 'Delete';
-    delBtn.addEventListener('click', () => deleteServer(s));
-    td.appendChild(delBtn);
-    return td;
+    return actionsCell('/admin/mcp-servers/' + encodeURIComponent(s.id), 'Delete', () => deleteServer(s));
   }
 
   function renderServers(servers) {

@@ -10,7 +10,7 @@ The Jobs page is the operational view of crawling on this instance: every schedu
 
 ## Schedules table
 
-Lists every crawl set up on this instance, one-off or repeating, with its options saved for reuse. Each row shows the seed, how it repeats ("once", or an interval plus a run-count fraction like "5/30 runs" if it has a max-runs cap), its link scope, next run time, last run time, and an Enabled checkbox you can flip directly from this table to pause or resume it — this uses the same dedicated toggle as the schedule-detail page's Enabled field, so it never reschedules the next run just from pausing and resuming. Per-row actions let you Run now (trigger it immediately without waiting for its interval), Edit (opens the schedule-detail page for full options), or Delete.
+Lists every crawl set up on this instance, one-off or repeating, with its options saved for reuse. The first column is an Enabled checkbox you can flip directly from this table to pause or resume it — this uses the same dedicated toggle as the schedule-detail page's Enabled field, so it never reschedules the next run just from pausing and resuming — followed by the seed, next run time, and last run time (how it repeats and its link scope are still shown on the schedule-detail page, just not repeated as their own columns here). Per-row icon actions let you Run now (▶), Edit (✎, opens the schedule-detail page for full options), or Delete (the trash icon).
 
 ## Jobs table
 
@@ -18,7 +18,7 @@ Lists every crawl actually triggered on this instance — one-off runs and every
 
 ## Viewing and cancelling a job
 
-Click the magnifying-glass icon on a job row to load its detail below the tables: the exact options that job ran with (seed URLs, max pages, robots handling, link scope, allowed/blocked domains, renderer, sitemap/prioritization flags, fetch overrides, and whether a cookie or Basic auth was set — never the actual credential value), plus a per-page table of every URL the job attempted, its outcome, title, content length, links found, fetch duration, and timestamp. A Cancel action (✕) appears next to View only while a job is still Queued or Running; cancelling stops it and leaves whatever pages it already indexed in place rather than rolling them back.
+Click the magnifying-glass icon on a job row to load its detail below the tables: the exact options that job ran with (seed URLs, max pages, robots handling, link scope, allowed/blocked domains, renderer, sitemap/prioritization flags, fetch overrides, and whether a cookie or Basic auth was set — never the actual credential value), plus a per-page table of every URL the job attempted, its outcome, title, content length, links found, fetch duration, and timestamp. A Cancel action (the same trash icon used for Delete elsewhere, labeled "Cancel" on hover) appears next to View only while a job is still Queued or Running; cancelling stops it and leaves whatever pages it already indexed in place rather than rolling them back.
 
 ## Filtering and clearing ended jobs
 

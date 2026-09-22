@@ -135,6 +135,26 @@ func TestProvider_Open_ConnectionFailure_SkippedNotFatal(t *testing.T) {
 	}
 }
 
+// TestProvider_Open_SelfServiceStdio_RefusedEvenWithAValidCommand is the
+// defense-in-depth regression test: a SelfService=true server pointed at a
+// perfectly real, working stdio helper (proving the refusal is about the
+// SelfService flag specifically, not a connection failure the command
+// itself would have caused anyway) is still refused "stdio" transport
+// outright -- see connect's own doc comment for why this check exists
+// independent of ChatService.Chat's own filter.
+func TestProvider_Open_SelfServiceStdio_RefusedEvenWithAValidCommand(t *testing.T) {
+	command, args := stdioServerCommand()
+	server := domain.MCPServer{ID: "s1", Name: "helper", Transport: "stdio", Command: command, Args: args, Enabled: true, SelfService: true}
+
+	p := mcpclient.New()
+	session, tools := p.Open(context.Background(), []domain.MCPServer{server}, map[string]string{"MCP_TEST_STDIO_HELPER": "1"})
+	t.Cleanup(session.Close)
+
+	if len(tools) != 0 {
+		t.Fatalf("expected no tools discovered for a self-service stdio server, got %+v", tools)
+	}
+}
+
 // TestProvider_Open_ToolNameCollision_LaterServerSkipped proves two active
 // servers exposing the SAME tool name never silently misroute -- the
 // later-discovered one is skipped (logged), keeping the first server's tool.
@@ -219,7 +239,12 @@ func TestProvider_Open_HTTPTransport_BearerHeaderSent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	mcpServer := domain.MCPServer{ID: "s1", Name: "remote", Transport: "http", BaseURL: srv.URL, APIKey: "sk-test", Enabled: true}
+	// SelfService: true here too -- proves connect's own "stdio" refusal
+	// (see TestProvider_Open_SelfServiceStdio_RefusedEvenWithAValidCommand)
+	// is transport-specific, not a blanket ban on self-service servers: a
+	// personal server is always "http" in practice, and must keep working
+	// normally.
+	mcpServer := domain.MCPServer{ID: "s1", Name: "remote", Transport: "http", BaseURL: srv.URL, APIKey: "sk-test", Enabled: true, SelfService: true}
 	p := mcpclient.New()
 	session, tools := p.Open(context.Background(), []domain.MCPServer{mcpServer}, nil)
 	t.Cleanup(session.Close)

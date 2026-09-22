@@ -126,6 +126,19 @@ func connect(ctx context.Context, s domain.MCPServer, env map[string]string) (*s
 	var transport mcp.Transport
 	switch s.Transport {
 	case "stdio":
+		// Defense-in-depth, independent of ChatService.Chat's own filter
+		// (which already never lets a SelfService row reach here with
+		// "stdio" transport -- see its own doc comment): this package
+		// refuses to spawn a real local process for a personal server on
+		// its own terms too, rather than trusting a caller's filter to
+		// never regress. "stdio" execution is an admin-only trust tier
+		// (see domain.MCPServer.Command's own doc comment) -- a genuine,
+		// deliberate elevation for a row an admin configured, but one a
+		// regular user's own self-service row must never reach, however
+		// it got here.
+		if s.SelfService {
+			return nil, fmt.Errorf("mcpclient: refusing \"stdio\" transport for a self-service (non-admin) server (id=%q)", s.ID)
+		}
 		cmd := exec.CommandContext(ctx, s.Command, s.Args...)
 		cmd.Env = os.Environ()
 		for k, v := range env {

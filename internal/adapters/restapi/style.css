@@ -474,14 +474,22 @@ button:focus-visible {
   flex: none;
 }
 
-/* .icon-button (admin_jobs.js's job/schedule action cells): the glyph
-   itself needs to read clearly at a glance, bigger than this page's normal
-   0.9rem text-button label, and the browser's native title tooltip plus
-   aria-label (set alongside this class, see setIconLabel) carry the actual
-   action name that used to be the visible label. */
+/* .icon-button (admin.js's setIconLabel/actionsCell -- job/schedule action
+   cells, and every MCP server/agent/user list's Edit/Delete column): the
+   glyph itself needs to read clearly at a glance, bigger than this page's
+   normal 0.9rem text-button label, and the browser's native title tooltip
+   plus aria-label (set alongside this class, see setIconLabel) carry the
+   actual action name that used to be the visible label. */
 .icon-button {
   font-size: 1.15rem;
   line-height: 1;
+}
+
+.icon-button svg {
+  width: 1.05rem;
+  height: 1.05rem;
+  stroke: currentColor;
+  vertical-align: -0.2rem;
 }
 
 /* A small inline spinner for a button mid-action (see setButtonLoading in
