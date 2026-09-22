@@ -4,13 +4,13 @@
 
 *`/ (search + chat page)`*
 
-This is the page every signed-in user lands on after logging in -- it is not an admin screen. It has two modes, switched with one control in the top-right: Search, for querying the indexed pages directly, and Chat, for asking a model questions that it can answer using the index, the web, and your own files. Everything on this page works the same whether you're a regular self-service account or an admin (admins additionally get a gear icon that jumps to /admin).
+This is the page every signed-in user lands on after logging in -- it is not an admin screen. It has two modes, switched with one control in the top-right: Chat, for asking a model questions that it can answer using the index, the web, and your own files, and Search, for querying the indexed pages directly. Everything on this page works the same whether you're a regular self-service account or an admin (admins additionally get a gear icon that jumps to /admin).
 
 ![Search & Chat](images/search-chat.png)
 
-## Search vs Chat toggle
+## Chat vs Search toggle
 
-The pill-shaped control at the top switches the whole page between Search and Chat -- they are two independent views, not tabs of the same result: switching hides one set of controls and shows the other. Chat is selected by default when the page loads. Search is the plain, fast option when you already know roughly what you're looking for and want a ranked list of pages with snippets; Chat is for when you want a written answer synthesized from those pages (and optionally the live web), with the model doing the reading for you.
+The pill-shaped control at the top switches the whole page between Chat and Search -- they are two independent views, not tabs of the same result: switching hides one set of controls and shows the other. Chat sits on the left and is selected by default when the page loads. Chat is for when you want a written answer synthesized from the index (and optionally the live web), with the model doing the reading for you; Search, on the right, is the plain, fast option when you already know roughly what you're looking for and want a ranked list of pages with snippets.
 
 ## Search mode: the query box and syntax
 
