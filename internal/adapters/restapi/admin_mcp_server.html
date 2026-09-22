@@ -48,7 +48,7 @@
     <div class="form-row" id="server-args-row">
       <div class="label-row">
         <label for="server-args">Arguments</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Command-line arguments passed to Command, one per line. Leave empty for none. Built-in servers: mcp-sandbox accepts -network (enable network access, default off), -memory, -cpus, -pids-limit, -timeout (resource limits), -dns=&lt;ip&gt;,&lt;ip&gt; (DNS servers, only meaningful with -network), -host-dns (use this host's own real DNS servers instead of Docker's default, merged with -dns if both are set). mcp-files accepts -base-url (default http://127.0.0.1:8080).</span></span>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Command-line arguments passed to Command, one per line. Leave empty for none. Built-in servers: mcp-sandbox accepts -network (enable network access, default off), -memory, -cpus, -pids-limit, -timeout (resource limits), -dns=&lt;ip&gt;,&lt;ip&gt; (DNS servers, only meaningful with -network), -host-dns (use this host's own real DNS servers instead of Docker's default, merged with -dns if both are set), -host-network (run with Docker's host networking instead of the default bridge network -- DNS just works with no -dns/-host-dns needed, but this is a bigger privilege elevation than plain -network: the sandbox can see/bind the host's own network interfaces directly). mcp-files accepts -base-url (default http://127.0.0.1:8080).</span></span>
       </div>
       <textarea id="server-args" class="field" rows="3"></textarea>
     </div>

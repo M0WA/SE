@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -153,6 +154,72 @@ func TestRun_CustomDNSServerAppliedToContainer(t *testing.T) {
 	}
 	if !strings.Contains(res.Stdout, "8.8.8.8") || !strings.Contains(res.Stdout, "1.1.1.1") {
 		t.Errorf("expected both configured DNS servers in /etc/resolv.conf, got %+v", res)
+	}
+}
+
+// TestRun_HostNetworkSharesHostsNetworkNamespace proves Limits.HostNetwork
+// actually reaches the container as a real --network host flag, not just
+// plumbed-through-but-unused. Deliberately does NOT assert on
+// /etc/resolv.conf content (e.g. "must/must not contain Docker's own
+// 127.0.0.11 embedded DNS server") -- that turned out to be a Docker
+// version/daemon-config-dependent emergent behavior, not a stable
+// contract: on this environment's Docker, even the DEFAULT bridge network
+// already forwards the host's own real upstream DNS servers directly,
+// with no 127.0.0.11 indirection at all, contradicting what was assumed
+// (and briefly asserted here) based on se.mo-sys.de's own older Docker
+// version and generic Docker documentation. Instead this asserts the one
+// thing --network host actually, definitionally means: the container
+// shares the host's network namespace outright, so it sees every one of
+// the host's own network interfaces (loopback plus every real interface,
+// likely several) -- strictly more than a bridge-networked container's
+// fixed two (loopback + one veth pair), regardless of Docker version or
+// DNS daemon configuration.
+func TestRun_HostNetworkSharesHostsNetworkNamespace(t *testing.T) {
+	requireDockerTests(t)
+	countInterfaces := "import socket\nprint(len(socket.if_nameindex()))"
+
+	bridge := New(Limits{})
+	bridgeRes, err := bridge.Run(context.Background(), RunOptions{Language: Python, Network: true, Code: countInterfaces})
+	if err != nil {
+		t.Fatalf("unexpected error (bridge): %v", err)
+	}
+	bridgeCount, err := strconv.Atoi(strings.TrimSpace(bridgeRes.Stdout))
+	if err != nil {
+		t.Fatalf("parsing bridge interface count from %+v: %v", bridgeRes, err)
+	}
+
+	host := New(Limits{HostNetwork: true})
+	hostRes, err := host.Run(context.Background(), RunOptions{Language: Python, Network: true, Code: countInterfaces})
+	if err != nil {
+		t.Fatalf("unexpected error (host): %v", err)
+	}
+	hostCount, err := strconv.Atoi(strings.TrimSpace(hostRes.Stdout))
+	if err != nil {
+		t.Fatalf("parsing host interface count from %+v: %v", hostRes, err)
+	}
+
+	if hostCount <= bridgeCount {
+		t.Errorf("expected --network host to see strictly more network interfaces than the isolated bridge network (loopback + this host's own real interfaces vs. just loopback + one veth pair), got host=%d bridge=%d", hostCount, bridgeCount)
+	}
+}
+
+// TestRun_HostNetworkAllowsRealFetch proves a --network host container
+// still genuinely reaches the internet, same bar
+// TestRun_NetworkAllowedWhenRequested holds bridge networking to.
+func TestRun_HostNetworkAllowsRealFetch(t *testing.T) {
+	requireDockerTests(t)
+	r := New(Limits{HostNetwork: true})
+	res, err := r.Run(context.Background(), RunOptions{
+		Language: Python, Network: true,
+		Code: "import urllib.request\n" +
+			"r = urllib.request.urlopen('http://example.com', timeout=5)\n" +
+			"print('status', r.status)\n",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(res.Stdout, "status 200") {
+		t.Errorf("expected a successful network fetch with HostNetwork:true, got %+v", res)
 	}
 }
 

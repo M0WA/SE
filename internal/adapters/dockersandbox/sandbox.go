@@ -89,6 +89,24 @@ type Limits struct {
 	// use) in place -- see cmd/mcp-sandbox's -dns/-host-dns flags and
 	// DetectHostDNS for how an admin populates this.
 	DNS []string
+	// HostNetwork, when true, runs a network-enabled container with
+	// Docker's --network host instead of the default bridge network --
+	// only meaningful when a call's RunOptions.Network is true. Sharing
+	// the host's own network namespace outright means DNS resolution
+	// "just works" via whatever the host itself already has configured,
+	// with no DNS/HostDNS setup needed at all (confirmed: a --network
+	// host container with no --dns flag reads the host's own real
+	// /etc/resolv.conf, including reaching a systemd-resolved stub at
+	// 127.0.0.53, which is genuinely unreachable from a bridge-networked
+	// container's own separate network namespace -- see DNS's own doc
+	// comment for why that stub otherwise needs working around at all).
+	// This is a MEANINGFULLY bigger privilege elevation than bridge
+	// networking, not just a DNS convenience: the sandboxed container can
+	// see and bind to the host's own network interfaces/ports directly,
+	// not just get outbound NAT'd access -- an admin opts into this
+	// explicitly (see cmd/mcp-sandbox's -host-network flag), it is never
+	// the default even when Network is true.
+	HostNetwork bool
 }
 
 // withDefaults returns l with every zero-valued field resolved to its
@@ -255,9 +273,13 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 		"-v", dir + ":/sandbox:ro",
 		"-w", "/sandbox",
 	}
-	if !opts.Network {
+	switch {
+	case !opts.Network:
 		args = append(args, "--network", "none")
+	case r.limits.HostNetwork:
+		args = append(args, "--network", "host")
 	}
+	// else: no --network flag at all, Docker's own default bridge network.
 	for _, d := range r.limits.DNS {
 		args = append(args, "--dns", d)
 	}
