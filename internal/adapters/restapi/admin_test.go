@@ -5822,6 +5822,29 @@ func TestHandleAdminMCPServers_CreateThenList(t *testing.T) {
 	}
 }
 
+// TestHandleAdminMCPServers_CreateLowercasesLocalName proves a "stdio"
+// ("local") server's Name is lowercased on create, while an "http" (remote)
+// server's Name is left exactly as typed -- see normalizeMCPServerName's
+// own doc comment.
+func TestHandleAdminMCPServers_CreateLowercasesLocalName(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithMCPServers(t, repo)
+
+	_, local := createTestMCPServer(t, h, cookie, map[string]interface{}{
+		"name": "Web Tools", "transport": "stdio", "command": "/usr/bin/searchengine-mcp-web",
+	})
+	if local.Name != "web tools" {
+		t.Errorf("expected a stdio server's name lowercased to %q, got %q", "web tools", local.Name)
+	}
+
+	_, remote := createTestMCPServer(t, h, cookie, map[string]interface{}{
+		"name": "Remote Tools", "transport": "http", "base_url": "https://example.com/mcp",
+	})
+	if remote.Name != "Remote Tools" {
+		t.Errorf("expected an http server's name left as typed, got %q", remote.Name)
+	}
+}
+
 // TestHandleAdminMCPServers_CreateDedupesIDOnNameCollision proves two
 // servers created with the same name get distinct IDs, per
 // domain.NewMCPServerID's dedupe rule.
@@ -5961,6 +5984,30 @@ func TestHandleAdminUpdateMCPServer_ReplacesEditableFields(t *testing.T) {
 	}
 	if resp.Prompt != "renamed prompt" || resp.GatedByWebSearch {
 		t.Errorf("expected prompt and gated_by_web_search replaced, got %+v", resp)
+	}
+}
+
+// TestHandleAdminUpdateMCPServer_LowercasesLocalName proves a PATCH
+// lowercases a "stdio" server's Name the same way create does.
+func TestHandleAdminUpdateMCPServer_LowercasesLocalName(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithMCPServers(t, repo)
+	_, created := createTestMCPServer(t, h, cookie, map[string]interface{}{
+		"name": "server", "transport": "stdio", "command": "a",
+	})
+
+	rec := patchMCPServer(t, h, cookie, created.ID, map[string]interface{}{
+		"name": "Renamed Server", "transport": "stdio", "command": "b",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp mcpServerResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.Name != "renamed server" {
+		t.Errorf("expected the updated name lowercased to %q, got %q", "renamed server", resp.Name)
 	}
 }
 

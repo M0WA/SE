@@ -136,6 +136,74 @@ func TestRun_NetworkAllowedWhenRequested(t *testing.T) {
 	}
 }
 
+// TestRun_PythonPackagesInstalledWhenNetworkEnabled proves RunOptions.
+// Packages actually reaches a real "pip install --target=..." before the
+// script runs, and that the installed package is importable via the
+// PYTHONPATH the install script sets -- "six" is a tiny, pure-Python,
+// dependency-free package, chosen only so this test stays fast.
+func TestRun_PythonPackagesInstalledWhenNetworkEnabled(t *testing.T) {
+	requireDockerTests(t)
+	r := New(Limits{Timeout: 30 * time.Second})
+	res, err := r.Run(context.Background(), RunOptions{
+		Language: Python, Network: true, Packages: []string{"six"},
+		Code: "import six\nprint('six version', six.__version__)\n",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.ExitCode != 0 || !strings.Contains(res.Stdout, "six version") {
+		t.Errorf("expected six installed and importable, got %+v", res)
+	}
+}
+
+// TestRun_PackagesIgnoredWithoutNetwork proves Packages has no effect at
+// all (no install attempted, plain argv used) when Network is false --
+// mirrors DNS/HostNetwork's own "meaningless without Network" convention.
+// The package would need network to install, so if this silently tried
+// anyway it would hang/fail confusingly rather than just running the code
+// as if Packages were never set.
+func TestRun_PackagesIgnoredWithoutNetwork(t *testing.T) {
+	requireDockerTests(t)
+	r := New(Limits{})
+	res, err := r.Run(context.Background(), RunOptions{
+		Language: Python, Packages: []string{"six"},
+		Code: "import six\nprint('should not get here')\n",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.ExitCode == 0 || !strings.Contains(res.Stderr, "ModuleNotFoundError") {
+		t.Errorf("expected six NOT installed (no network), got %+v", res)
+	}
+}
+
+// TestRun_GoModulesInstalledWhenNetworkEnabled proves RunOptions.Packages
+// for Go actually reaches a real "go get" (against a throwaway go.mod in
+// /tmp) before "go run" -- rsc.io/quote is the Go project's own canonical
+// minimal test module, chosen only for how small and stable it is.
+func TestRun_GoModulesInstalledWhenNetworkEnabled(t *testing.T) {
+	requireDockerTests(t)
+	r := New(Limits{Timeout: 60 * time.Second})
+	res, err := r.Run(context.Background(), RunOptions{
+		Language: Go, Network: true, Packages: []string{"rsc.io/quote"},
+		Code: `package main
+
+import (
+	"fmt"
+	"rsc.io/quote"
+)
+
+func main() { fmt.Println(quote.Hello()) }
+`,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.ExitCode != 0 || res.Stdout == "" {
+		t.Errorf("expected rsc.io/quote fetched and its Hello() printed, got %+v", res)
+	}
+}
+
 // TestRun_CustomDNSServerAppliedToContainer proves Limits.DNS actually
 // reaches the container as a real --dns flag, not just plumbed-through-
 // but-unused -- read back via /etc/resolv.conf from inside the sandbox
