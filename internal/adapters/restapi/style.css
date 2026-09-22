@@ -1367,6 +1367,24 @@ body.admin main { max-width: 820px; margin: 0; flex: 1; min-width: 0; }
   body.admin main { max-width: 1160px; }
 }
 
+/* body.wide-form marks the handful of pages built around one long-form
+   prompt/system-prompt textarea (account, admin_user, admin_agent,
+   admin_mcp_server, admin_chat_settings) -- textarea.field's own width:
+   100% just inherits whatever its column happens to be, and the normal
+   admin column (820px, 1160px on a big screen) reads as cramped for a
+   0.9rem monospace prompt editor that's meant to hold real paragraphs.
+   Both .admin-shell (the rail+main flex container -- widening main alone
+   does nothing if the shell itself still caps the total available width)
+   and main get one full step more room than a normal admin page at both
+   breakpoints; same specificity as the rules above, so source order (this
+   comes later) is what makes it win on pages that carry the class. */
+body.wide-form .admin-shell { max-width: 1400px; }
+body.wide-form main { max-width: 1160px; }
+@media (min-width: 1400px) {
+  body.wide-form .admin-shell { max-width: 1700px; }
+  body.wide-form main { max-width: 1400px; }
+}
+
 .admin-rail {
   flex: none;
   width: 180px;
