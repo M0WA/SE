@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.46 - 2026-09-22
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Add Agent: a named specialization, admin CRUD (Stage 1) by @M0WA in https://github.com/M0WA/SE/pull/225
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.45...v4.13.46
+
+
 ## v4.13.45 - 2026-09-22
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
