@@ -26,6 +26,10 @@ type chatRequest struct {
 	// domain.ChatEndpoint.WebSearchEnabled, letting the chat UI's
 	// per-question toggle decide instead of a fixed global setting.
 	WebSearch *bool `json:"web_search,omitempty"`
+	// AgentID, when non-empty, overrides domain.ChatEndpoint.DefaultAgentID
+	// for this question only -- see application.ChatOptions.AgentID's doc
+	// comment. Empty (the default) means "use the endpoint's own default."
+	AgentID string `json:"agent_id,omitempty"`
 }
 
 type chatResponse struct {
@@ -54,6 +58,7 @@ type chatResponse struct {
 type chatTokenUsageResponse struct {
 	GlobalPromptTokens int `json:"global_prompt_tokens"`
 	UserPromptTokens   int `json:"user_prompt_tokens"`
+	AgentPromptTokens  int `json:"agent_prompt_tokens"`
 	ToolPromptTokens   int `json:"tool_prompt_tokens"`
 	HistoryTokens      int `json:"history_tokens"`
 	MaxContextTokens   int `json:"max_context_tokens,omitempty"`
@@ -158,7 +163,7 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.chat.Chat(r.Context(), req.Messages, application.ChatOptions{
 		WebSearch: req.WebSearch, UserCustomPrompt: h.userCustomPromptFor(r),
-		UserAgent: h.userAgentForMCPFetch(),
+		UserAgent: h.userAgentForMCPFetch(), AgentID: req.AgentID,
 	})
 	if errors.Is(err, ports.ErrChatEndpointNotConfigured) {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -173,4 +178,42 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		ToolResults: toToolCallResultResponses(result.ToolResults),
 		TokenUsage:  chatTokenUsageResponse(result.TokenUsage),
 	})
+}
+
+// publicAgentResponse is the minimal, browser-facing shape of a
+// domain.Agent -- deliberately narrower than admin.go's own agentResponse
+// (no mcp_server_ids/enabled): a signed-in chat user picking an agent only
+// needs enough to populate a dropdown, not the admin config surface.
+type publicAgentResponse struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// handleChatAgents lists every ENABLED agent for the chat page's own
+// picker (see index.js) -- unlike /admin/api/agents, this is reachable by
+// any signed-in session (role=admin or role=user), not just an admin one,
+// since picking an agent to talk to is a chat-page action, not an admin
+// one. Nil-safe like every other optional collaborator in this file: a
+// deployment with no agents wired (or none configured yet) just gets an
+// empty list, never an error -- there's nothing to fail over for a
+// supplementary picker.
+func (h *Handler) handleChatAgents(w http.ResponseWriter, r *http.Request) {
+	if !requireGetOrHead(w, r) {
+		return
+	}
+	out := []publicAgentResponse{}
+	if h.agents != nil {
+		if agents, err := h.agents.ListAgents(r.Context()); err == nil {
+			for _, a := range agents {
+				if a.Enabled {
+					out = append(out, publicAgentResponse{ID: a.ID, Name: a.Name, Description: a.Description})
+				}
+			}
+		}
+	}
+	if r.Method == http.MethodHead {
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }

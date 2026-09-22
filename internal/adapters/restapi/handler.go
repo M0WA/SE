@@ -473,9 +473,11 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 // stylesheet, search API) -- the mux the internet-facing search-server
 // binary listens with. Index and search both require the same signed-in
 // session /admin and /login use; style.css and healthz stay open.
-// /session, /account, /account.js and /account/api back the self-service
-// account page a role=user session uses to change their password and set
-// their personal chat prompt -- see account.go.
+// GET /agents lists every enabled agent for the chat page's own picker --
+// reachable by any signed-in session, unlike /admin/api/agents. /session,
+// /account, /account.js and /account/api back the self-service account
+// page a role=user session uses to change their password and set their
+// personal chat prompt -- see account.go.
 func (h *Handler) RoutesSearch() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.requireAuthPage(h.handleIndex))
@@ -483,6 +485,7 @@ func (h *Handler) RoutesSearch() http.Handler {
 	mux.HandleFunc("/index.js", h.handleIndexJS)
 	mux.HandleFunc("/search", h.requireAuthAPIOrInternalKey(h.handleSearch))
 	mux.HandleFunc("POST /chat", h.requireAuthAPI(h.handleChat))
+	mux.HandleFunc("/agents", h.requireAuthAPI(h.handleChatAgents))
 	mux.HandleFunc("/session", h.requireAuthAPI(h.handleSession))
 	mux.HandleFunc("/account", h.requireRegularUserAuthPage(h.handleAccountPage))
 	mux.HandleFunc("/account.js", h.handleAccountJS)

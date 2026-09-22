@@ -1625,6 +1625,12 @@ type chatEndpointRequest struct {
 	// that field's doc comment. Empty string is the default (no persistent
 	// prompt injected).
 	SystemPrompt string `json:"system_prompt"`
+	// DefaultAgentID mirrors domain.ChatEndpoint.DefaultAgentID exactly --
+	// see that field's doc comment. Empty string is the default (no agent
+	// specialization). Not cross-checked against the actual agents table,
+	// same "no foreign-key-like validation at this layer" convention as
+	// domain.Agent.MCPServerIDs.
+	DefaultAgentID string `json:"default_agent_id"`
 	// ClearAPIKey is meaningful only to a PATCH: since a GET response never
 	// echoes a stored key's real value (see chatEndpointResponse), an edit
 	// form has no way to distinguish "left blank because not being
@@ -1650,8 +1656,11 @@ type chatEndpointResponse struct {
 	WebSearchResultCount int `json:"web_search_result_count"`
 	// SystemPrompt mirrors domain.ChatEndpoint.SystemPrompt exactly -- see
 	// chatEndpointRequest.SystemPrompt's doc comment.
-	SystemPrompt string    `json:"system_prompt"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	SystemPrompt string `json:"system_prompt"`
+	// DefaultAgentID mirrors chatEndpointRequest.DefaultAgentID exactly --
+	// see that field's doc comment.
+	DefaultAgentID string    `json:"default_agent_id"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 func toChatEndpointResponse(e domain.ChatEndpoint) chatEndpointResponse {
@@ -1661,6 +1670,7 @@ func toChatEndpointResponse(e domain.ChatEndpoint) chatEndpointResponse {
 		WebSearchEnabled: e.WebSearchEnabled, WebSearchBaseURL: e.WebSearchBaseURL,
 		WebSearchResultCount: e.WebSearchResultCount,
 		SystemPrompt:         e.SystemPrompt,
+		DefaultAgentID:       e.DefaultAgentID,
 	}
 }
 
@@ -1757,6 +1767,7 @@ func (h *Handler) handleAdminChatEndpoint(w http.ResponseWriter, r *http.Request
 			WebSearchEnabled: req.WebSearchEnabled, WebSearchBaseURL: req.WebSearchBaseURL,
 			WebSearchResultCount: req.WebSearchResultCount,
 			SystemPrompt:         req.SystemPrompt,
+			DefaultAgentID:       req.DefaultAgentID,
 		}
 		if e.MaxContextTokens <= 0 {
 			e.MaxContextTokens = h.autoDetectMaxContextTokens(r.Context(), e)

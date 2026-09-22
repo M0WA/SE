@@ -355,6 +355,126 @@ test('forkActiveTab deep-copies history into a new independent tab, titled "<ori
   assert.equal(source.history.length, 2);
 });
 
+test('forkActiveTab carries over the source tab\'s own agentId', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'answer' }) });
+  const { sendChatMessage, forkActiveTab, activeTab } = loadFixture();
+  await sendChatMessage('q');
+  activeTab().agentId = 'researcher';
+
+  const forked = forkActiveTab();
+  assert.equal(forked.agentId, 'researcher');
+});
+
+test('renderAgentSelectOptions populates the picker, keeping "Default agent" first', () => {
+  const { renderAgentSelectOptions } = loadFixture();
+  renderAgentSelectOptions([
+    { id: 'researcher', name: 'Researcher' },
+    { id: 'fact_checker', name: 'Fact Checker' },
+  ]);
+  const select = document.getElementById('chat-agent-select');
+  const options = Array.from(select.options).map((o) => [o.value, o.textContent]);
+  assert.deepEqual(options, [
+    ['', 'Default agent'],
+    ['researcher', 'Researcher'],
+    ['fact_checker', 'Fact Checker'],
+  ]);
+});
+
+test('renderAgentSelectOptions clears previously-populated options before repopulating', () => {
+  const { renderAgentSelectOptions } = loadFixture();
+  renderAgentSelectOptions([{ id: 'researcher', name: 'Researcher' }]);
+  assert.equal(document.getElementById('chat-agent-select').options.length, 2);
+  renderAgentSelectOptions([]);
+  assert.equal(document.getElementById('chat-agent-select').options.length, 1);
+});
+
+test('loadAgentOptions populates the picker from GET /agents', async () => {
+  global.fetch = async (url) => {
+    assert.equal(url, '/agents');
+    return { ok: true, json: async () => [{ id: 'researcher', name: 'Researcher' }] };
+  };
+  const { loadAgentOptions } = loadFixture();
+  await loadAgentOptions();
+  const select = document.getElementById('chat-agent-select');
+  assert.equal(select.options.length, 2);
+  assert.equal(select.options[1].value, 'researcher');
+});
+
+test('loadAgentOptions leaves just "Default agent" on a failed fetch or a network error', async () => {
+  const { loadAgentOptions } = loadFixture();
+
+  global.fetch = async () => ({ ok: false, status: 500, text: async () => 'db down' });
+  await loadAgentOptions();
+  assert.equal(document.getElementById('chat-agent-select').options.length, 1);
+
+  global.fetch = async () => { throw new Error('network down'); };
+  await loadAgentOptions();
+  assert.equal(document.getElementById('chat-agent-select').options.length, 1);
+});
+
+test('choosing an agent from the picker sets the active tab\'s own agentId', () => {
+  const { activeTab } = loadFixture();
+  const select = document.getElementById('chat-agent-select');
+  const opt = document.createElement('option');
+  opt.value = 'researcher';
+  select.appendChild(opt);
+  select.value = 'researcher';
+  select.dispatchEvent(new window.Event('change'));
+  assert.equal(activeTab().agentId, 'researcher');
+});
+
+test('switching tabs reflects each tab\'s own agentId in the picker', async () => {
+  global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'answer' }) });
+  const { sendChatMessage, newChatTab, switchTab, activeTab } = loadFixture();
+  await sendChatMessage('q');
+  const first = activeTab();
+  first.agentId = 'researcher';
+  const select = document.createElement('option');
+  select.value = 'researcher';
+  document.getElementById('chat-agent-select').appendChild(select);
+
+  const second = newChatTab();
+  assert.equal(document.getElementById('chat-agent-select').value, '', 'a fresh tab has no agent selected');
+
+  switchTab(first.id);
+  assert.equal(document.getElementById('chat-agent-select').value, 'researcher');
+
+  switchTab(second.id);
+  assert.equal(document.getElementById('chat-agent-select').value, '');
+});
+
+test('sendChatMessage includes the active tab\'s own agent_id in the request body', async () => {
+  let gotBody;
+  global.fetch = async (url, opts) => {
+    gotBody = JSON.parse(opts.body);
+    return { ok: true, json: async () => ({ answer: 'answer' }) };
+  };
+  const { sendChatMessage, activeTab } = loadFixture();
+  activeTab().agentId = 'researcher';
+  await sendChatMessage('q');
+  assert.equal(gotBody.agent_id, 'researcher');
+});
+
+test('serializeTab/deserializeTab round trip a tab\'s own agent_id', () => {
+  const { serializeTab, deserializeTab } = loadFixture();
+  const tab = { title: 'Chat 1', history: [{ role: 'user', content: 'hi' }], agentId: 'researcher' };
+  const parsed = deserializeTab(serializeTab(tab));
+  assert.equal(parsed.agentId, 'researcher');
+});
+
+test('deserializeTab defaults agentId to empty string when absent from the import', () => {
+  const { deserializeTab } = loadFixture();
+  const parsed = deserializeTab(JSON.stringify({ title: 'Old export', history: [] }));
+  assert.equal(parsed.agentId, '');
+});
+
+test('importTabFromJSON carries the imported agentId into the new tab', async () => {
+  const { importTabFromJSON, activeTab } = loadFixture();
+  const exported = JSON.stringify({ title: 'Imported', history: [], agent_id: 'fact_checker' });
+  importTabFromJSON(exported);
+  assert.equal(activeTab().agentId, 'fact_checker');
+});
+
 test('closeTab removes a tab and falls back to its previous sibling when it was active', async () => {
   global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'hi' }) });
   const { sendChatMessage, newChatTab, closeTab, tabs, activeTab } = loadFixture();
@@ -585,7 +705,7 @@ test('sendChatMessage on success appends both turns to history and renders the a
   // At the moment the request was sent, the active tab's history held only
   // the user's just-appended turn -- the assistant's reply is pushed only
   // afterward, once the response comes back.
-  assert.deepEqual(JSON.parse(gotOpts.body), { messages: [{ role: 'user', content: 'what is the answer?' }], web_search: true });
+  assert.deepEqual(JSON.parse(gotOpts.body), { messages: [{ role: 'user', content: 'what is the answer?' }], web_search: true, agent_id: '' });
 
   const history = activeTab().history;
   assert.equal(history.length, 2);
@@ -852,7 +972,7 @@ test('sendChatMessage shows the persistent token-usage badge next to the Web che
   assert.equal(document.getElementById('chat-token-usage-summary').textContent, '20 / 1,000');
   const donut = document.getElementById('chat-token-usage-donut');
   assert.equal(donut.querySelectorAll('svg.donut-chart').length, 1);
-  assert.equal(donut.querySelectorAll('.donut-legend-row').length, 4);
+  assert.equal(donut.querySelectorAll('.donut-legend-row').length, 5);
   const mini = document.getElementById('chat-token-usage-mini');
   assert.equal(mini.querySelectorAll('svg.donut-chart').length, 1);
 });
@@ -897,11 +1017,11 @@ test('buildDonutLegend renders a swatch and label:value text per segment', () =>
   assert.equal(row.textContent, 'History: 1,234');
 });
 
-test('tokenUsageSegments maps the flat response shape to the four fixed chart segments', () => {
+test('tokenUsageSegments maps the flat response shape to the five fixed chart segments', () => {
   const { tokenUsageSegments } = loadFixture();
-  const segments = tokenUsageSegments({ global_prompt_tokens: 1, tool_prompt_tokens: 2, user_prompt_tokens: 8, history_tokens: 4 });
-  assert.deepEqual(segments.map((s) => s.value), [1, 2, 8, 4]);
-  assert.deepEqual(segments.map((s) => s.label), ['Global prompt', 'Tool prompts', 'Your prompt', 'Conversation history']);
+  const segments = tokenUsageSegments({ global_prompt_tokens: 1, tool_prompt_tokens: 2, user_prompt_tokens: 8, agent_prompt_tokens: 16, history_tokens: 4 });
+  assert.deepEqual(segments.map((s) => s.value), [1, 2, 8, 16, 4]);
+  assert.deepEqual(segments.map((s) => s.label), ['Global prompt', 'Tool prompts', 'Your prompt', 'Agent prompt', 'Conversation history']);
 });
 
 test('renderTokenUsage renders an all-zero donut, without a max-context suffix, for a falsy tokenUsage', () => {

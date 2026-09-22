@@ -20,6 +20,7 @@
   const chatForm = document.getElementById('chat-form');
   const chatInput = document.getElementById('chat-input');
   const chatWebSearch = document.getElementById('chat-web-search');
+  const chatAgentSelect = document.getElementById('chat-agent-select');
   const chatTokenUsage = document.getElementById('chat-token-usage');
   const chatTokenUsageMini = document.getElementById('chat-token-usage-mini');
   const chatTokenUsageSummary = document.getElementById('chat-token-usage-summary');
@@ -38,7 +39,7 @@
   let nextTabId = 1;
   function makeTab(overrides) {
     const id = nextTabId++;
-    return Object.assign({ id: id, title: 'Chat ' + id, history: [], tokenUsage: null }, overrides);
+    return Object.assign({ id: id, title: 'Chat ' + id, history: [], tokenUsage: null, agentId: '' }, overrides);
   }
   const tabs = [makeTab()];
   let activeTabId = tabs[0].id;
@@ -55,6 +56,38 @@
     const trimmed = content.trim().replace(/\s+/g, ' ');
     return trimmed.length > 24 ? trimmed.slice(0, 24) + '…' : trimmed;
   }
+
+  // renderAgentSelectOptions populates the agent picker from every enabled
+  // agent (GET /agents already filters to just those), keeping the
+  // built-in "Default agent" option (empty value, falls back to
+  // ChatEndpoint.DefaultAgentID server-side) first.
+  function renderAgentSelectOptions(agents) {
+    while (chatAgentSelect.options.length > 1) chatAgentSelect.remove(1);
+    for (const a of agents) {
+      const opt = document.createElement('option');
+      opt.value = a.id;
+      opt.textContent = a.name;
+      chatAgentSelect.appendChild(opt);
+    }
+  }
+
+  // loadAgentOptions fetches the picker's own options once on page load --
+  // best-effort, same convention as every other auxiliary fetch on this
+  // page: a failure just leaves the select at its built-in "Default agent"
+  // option rather than blocking the rest of the page.
+  async function loadAgentOptions() {
+    try {
+      const resp = await fetch('/agents');
+      if (!resp.ok) return;
+      renderAgentSelectOptions(await resp.json());
+    } catch (err) {
+      // Leave just "Default agent" in place.
+    }
+  }
+
+  chatAgentSelect.addEventListener('change', () => {
+    activeTab().agentId = chatAgentSelect.value;
+  });
 
   // buildDonutSVG/buildDonutLegend render a per-turn token-usage chart from
   // {label, value, color} segments -- a small, local duplicate of
@@ -148,16 +181,18 @@
 
   // tokenUsageSegments turns the backend's flat token_usage breakdown into
   // the {label, value, color} shape buildDonutSVG/buildDonutLegend expect
-  // -- a fixed 3-way split (global prompt, active MCP server prompts,
-  // conversation history) shared by every turn, regardless of which pieces
-  // were actually nonzero this time. Accepts a falsy u (e.g. before any
-  // turn has completed) and returns the same shape, all zeros.
+  // -- a fixed split (global prompt, active agent's own prompt, active MCP
+  // server prompts, your own prompt, conversation history) shared by every
+  // turn, regardless of which pieces were actually nonzero this time.
+  // Accepts a falsy u (e.g. before any turn has completed) and returns the
+  // same shape, all zeros.
   function tokenUsageSegments(u) {
     u = u || {};
     return [
       { label: 'Global prompt', value: u.global_prompt_tokens || 0, color: 'var(--chart-1)' },
       { label: 'Tool prompts', value: u.tool_prompt_tokens || 0, color: 'var(--chart-2)' },
       { label: 'Your prompt', value: u.user_prompt_tokens || 0, color: 'var(--chart-3)' },
+      { label: 'Agent prompt', value: u.agent_prompt_tokens || 0, color: 'var(--chart-4)' },
       { label: 'Conversation history', value: u.history_tokens || 0, color: 'var(--ink-muted)' },
     ];
   }
@@ -175,7 +210,7 @@
   function renderTokenUsage(tokenUsage) {
     const u = tokenUsage || {};
     const total = (u.global_prompt_tokens || 0) + (u.tool_prompt_tokens || 0) +
-      (u.user_prompt_tokens || 0) + (u.history_tokens || 0);
+      (u.user_prompt_tokens || 0) + (u.agent_prompt_tokens || 0) + (u.history_tokens || 0);
     const segments = tokenUsageSegments(u);
     clear(chatTokenUsageMini);
     chatTokenUsageMini.appendChild(buildDonutSVG(segments, { size: 14, strokeWidth: 4 }));
@@ -596,6 +631,11 @@
     }
     chatStatus.textContent = '';
     renderTokenUsage(tab.tokenUsage);
+    // Reflect this tab's own chosen agent in the picker -- falls back to
+    // "Default agent" (empty value) if the tab never had one selected, or
+    // if it named an agent this select has no matching option for (e.g.
+    // imported from another deployment, or since deleted).
+    chatAgentSelect.value = tab.agentId || '';
   }
 
   // renderTabs rebuilds the tab strip from `tabs` -- called after any
@@ -661,6 +701,7 @@
       title: source.title + ' (fork)',
       history: source.history.map((m) => Object.assign({}, m)),
       tokenUsage: source.tokenUsage,
+      agentId: source.agentId,
     });
     tabs.push(tab);
     activeTabId = tab.id;
@@ -686,7 +727,7 @@
   // exportActiveTab/importTabFromJSON below so the format itself is
   // testable without a real file download/upload round trip.
   function serializeTab(tab) {
-    return JSON.stringify({ title: tab.title, history: tab.history }, null, 2);
+    return JSON.stringify({ title: tab.title, history: tab.history, agent_id: tab.agentId || '' }, null, 2);
   }
 
   // deserializeTab validates and normalizes an imported chat export --
@@ -708,7 +749,8 @@
         tool_results: Array.isArray(m.tool_results) ? m.tool_results : [],
       }));
     const title = typeof parsed.title === 'string' && parsed.title ? parsed.title : 'Imported chat';
-    return { title: title, history: history };
+    const agentId = typeof parsed.agent_id === 'string' ? parsed.agent_id : '';
+    return { title: title, history: history, agentId: agentId };
   }
 
   // exportActiveTab downloads the active tab as a JSON file via a
@@ -729,7 +771,7 @@
 
   function importTabFromJSON(jsonText) {
     const parsedTab = deserializeTab(jsonText);
-    const tab = makeTab({ title: parsedTab.title, history: parsedTab.history, tokenUsage: null });
+    const tab = makeTab({ title: parsedTab.title, history: parsedTab.history, tokenUsage: null, agentId: parsedTab.agentId });
     tabs.push(tab);
     activeTabId = tab.id;
     renderTabs();
@@ -793,7 +835,7 @@
       const resp = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: toWireHistory(tab.history), web_search: chatWebSearch.checked }),
+        body: JSON.stringify({ messages: toWireHistory(tab.history), web_search: chatWebSearch.checked, agent_id: tab.agentId || '' }),
       });
       if (!resp.ok) {
         const msg = await resp.text();
@@ -855,6 +897,7 @@
   renderTabs();
   renderActiveTab();
   setMode('chat');
+  loadAgentOptions();
 
   chatForm.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -894,12 +937,12 @@
 
   // loadSession asks the backend which role the current session has (an
   // admin-only session vs. a regular self-service user) and shows exactly
-  // one of the two footer links accordingly -- #admin-link and
+  // one of the two header icon links accordingly -- #admin-link and
   // #account-link both start hidden in index.html, so any failure path
   // here (network error, non-ok status) just leaves both hidden rather
   // than risking showing the admin backend link to a non-admin session.
-  // This is a non-critical UI enhancement fetch (worst case: no footer
-  // link at all), so failures are swallowed silently, matching this file's
+  // This is a non-critical UI enhancement fetch (worst case: no icon link
+  // at all), so failures are swallowed silently, matching this file's
   // existing tone for that kind of call (cf. runSearch/sendChatMessage,
   // which surface errors because they're the user's actual action, vs. this
   // one which isn't triggered by anything the user did).
@@ -943,6 +986,6 @@
       toWireHistory, sendChatMessage, setMode,
       escapeHTML, renderInline, renderMarkdown,
       buildDonutSVG, buildDonutLegend, tokenUsageSegments, renderTokenUsage,
-      loadSession,
+      loadSession, renderAgentSelectOptions, loadAgentOptions,
     };
   }

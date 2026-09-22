@@ -22,13 +22,16 @@ function baseChatEndpoint(overrides) {
   }, overrides);
 }
 
-function loadFixture(chatEndpoint, fetchImpl, mcpServers) {
+function loadFixture(chatEndpoint, fetchImpl, mcpServers, agents) {
   setupDOM(CHAT_SETTINGS_HTML);
   const adminHelpers = requireFresh('./admin.js');
   Object.assign(global, adminHelpers);
   global.fetch = fetchImpl || (async (url) => {
     if (url.includes('/admin/api/chat-endpoint')) {
       return { ok: true, json: async () => chatEndpoint || baseChatEndpoint() };
+    }
+    if (url.includes('/admin/api/agents')) {
+      return { ok: true, json: async () => agents || [] };
     }
     if (url.includes('/admin/api/mcp-servers')) {
       return { ok: true, json: async () => mcpServers || [] };
@@ -54,6 +57,55 @@ test('loadChatEndpoint populates every chat field from the GET response', async 
   assert.equal(document.getElementById('chat-web-search-enabled').checked, true);
   assert.equal(document.getElementById('chat-web-search-base-url').value, 'http://127.0.0.1:8888');
   assert.equal(document.getElementById('chat-web-search-result-count').value, '5');
+});
+
+test('loadAgentOptions populates the select with every agent, keeping "(none)" first', async () => {
+  loadFixture(undefined, undefined, undefined, [
+    { id: 'researcher', name: 'Researcher' },
+    { id: 'fact_checker', name: 'Fact Checker' },
+  ]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const select = document.getElementById('chat-default-agent');
+  const options = Array.from(select.options).map((o) => [o.value, o.textContent]);
+  assert.deepEqual(options, [
+    ['', '(none)'],
+    ['researcher', 'Researcher'],
+    ['fact_checker', 'Fact Checker'],
+  ]);
+});
+
+test('loadChatEndpoint selects the stored default_agent_id once options are populated', async () => {
+  loadFixture(baseChatEndpoint({ default_agent_id: 'fact_checker' }), undefined, undefined, [
+    { id: 'researcher', name: 'Researcher' },
+    { id: 'fact_checker', name: 'Fact Checker' },
+  ]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('chat-default-agent').value, 'fact_checker');
+});
+
+test('loadAgentOptions leaves just "(none)" on a failed fetch, without blocking the rest of the page', async () => {
+  loadFixture(baseChatEndpoint(), async (url) => {
+    if (url.includes('/admin/api/agents')) return { ok: false, status: 500, text: async () => 'db down' };
+    if (url.includes('/admin/api/chat-endpoint')) return { ok: true, json: async () => baseChatEndpoint() };
+    return { ok: true, json: async () => [] };
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const select = document.getElementById('chat-default-agent');
+  assert.equal(select.options.length, 1);
+  assert.equal(select.options[0].value, '');
+  assert.equal(document.getElementById('chat-base-url').value, 'http://localhost:8000/v1');
+});
+
+test('loadAgentOptions clears previously-populated options before repopulating', async () => {
+  const { loadAgentOptions } = loadFixture(undefined, undefined, undefined, [{ id: 'researcher', name: 'Researcher' }]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('chat-default-agent').options.length, 2);
+  global.fetch = async (url) => {
+    if (url.includes('/admin/api/agents')) return { ok: true, json: async () => [] };
+    return { ok: true, json: async () => ({}) };
+  };
+  await loadAgentOptions();
+  assert.equal(document.getElementById('chat-default-agent').options.length, 1);
 });
 
 test('loadChatEndpoint defaults web search off when nothing is stored', async () => {
@@ -133,6 +185,31 @@ test('saveChatEndpoint PATCHes every field, including max_context_tokens', async
   assert.equal(gotBody.web_search_base_url, 'http://127.0.0.1:8888');
   assert.equal(gotBody.web_search_result_count, 3);
   assert.equal(document.getElementById('chat-settings-status').textContent, 'Saved.');
+});
+
+// This test deliberately does NOT re-require the module mid-test (unlike
+// most other save tests in this file) -- admin_chat_settings.js's own
+// module-load-time loadAgentOptions() clears the select's options
+// synchronously (before its repopulating fetch resolves), which would
+// race against and wipe out a value set on the original module's DOM
+// right before a requireFresh() call. Reusing the original module's own
+// saveChatEndpoint (global.fetch is still looked up dynamically at call
+// time, so reassigning it here still works) avoids that race entirely.
+test('saveChatEndpoint includes the selected default_agent_id', async () => {
+  const chatSvc = loadFixture(undefined, undefined, undefined, [{ id: 'fact_checker', name: 'Fact Checker' }]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  document.getElementById('chat-default-agent').value = 'fact_checker';
+
+  let gotBody;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/chat-endpoint') && opts && opts.method === 'PATCH') {
+      gotBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => baseChatEndpoint({ default_agent_id: 'fact_checker' }) };
+    }
+    return { ok: true, json: async () => baseChatEndpoint() };
+  };
+  await chatSvc.saveChatEndpoint();
+  assert.equal(gotBody.default_agent_id, 'fact_checker');
 });
 
 test('saveChatEndpoint sends clear_api_key when the "remove stored key" box is checked', async () => {

@@ -69,6 +69,17 @@
   </section>
 
   <section class="panel">
+    <h2>Agent</h2>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="chat-default-agent">Default agent</label>
+        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Selects an admin-defined agent (Settings -> Chat -> Agents) whose own specialization system prompt is injected on every turn, in addition to the system prompt above -- overridable per question from the chat page itself. "(none)" means no agent specialization at all, today's existing behavior.</span></span>
+      </div>
+      <span class="field-wrap" data-default="(none)"><select id="chat-default-agent" class="field"><option value="">(none)</option></select></span>
+    </div>
+  </section>
+
+  <section class="panel">
     <h2>Web search</h2>
     <div class="form-row form-row-check">
       <label for="chat-web-search-enabled">

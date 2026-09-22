@@ -329,6 +329,7 @@ Everything below lives in the shared SQL database and is edited only through `in
 | `chat-web-search-base-url` | none | required for the built-in `web_search` tool to work | Base URL of the SearXNG instance; passed to every active `stdio`-transport MCP server's spawned process as the `WEB_SEARCH_BASE_URL` environment variable. |
 | `chat-web-search-result-count` | `0` (no cap) | ≥ 0 | Caps how many results the built-in `web_search` tool returns per call; passed to every active `stdio`-transport MCP server's spawned process as the `WEB_SEARCH_RESULT_COUNT` environment variable. |
 | `chat-system-prompt` | empty (none injected) | — | Optional leading system-role message injected ahead of the rest of the conversation on every turn; never dropped by context trimming. |
+| `chat-default-agent` | `(none)` | must name a configured agent, or blank | Selects an agent (see "Agents" above) whose own `agent-system-prompt` is injected on every turn, after `chat-system-prompt` and any per-user custom prompt -- overridable per question from the chat page's own agent picker (`GET /agents` lists every enabled agent to any signed-in session, not just an admin one). |
 
 The built-in `web_fetch` tool sends the crawler's own `user-agent` setting
 (Settings → Crawling → Crawler, see above) rather than its own hardcoded
@@ -377,11 +378,11 @@ conversation, plus an optional scope over which of the MCP servers above
 it may use tools from. Mirrors the embedding-endpoints/MCP-servers list/
 detail-subpage split. The backing API is `GET`/`POST /admin/api/agents`
 (list/create) and `GET`/`PATCH`/`DELETE /admin/api/agents/{id}` (one
-agent). Not yet read by `application.ChatService.Chat` as of this
-section -- that wiring (single-agent addressing via
-`ChatEndpoint.DefaultAgentID`/a per-question override, plus multi-agent
-deep research) is tracked as a separate, later change; this page only
-defines agents for now.
+agent). Single-agent addressing is wired into `application.ChatService.
+Chat` -- see `chat-default-agent` in "Chat settings" above and `GET
+/agents`/`POST /chat`'s own `agent_id` field. Multi-agent deep research
+(fanning several agents out over sub-questions) is not yet built, tracked
+as separate, later work.
 
 | Field | Default | Bounds | Description |
 |---|---|---|---|

@@ -8,6 +8,7 @@
   const chatWebSearchEnabledEl = document.getElementById('chat-web-search-enabled');
   const chatWebSearchBaseURLEl = document.getElementById('chat-web-search-base-url');
   const chatWebSearchResultCountEl = document.getElementById('chat-web-search-result-count');
+  const chatDefaultAgentEl = document.getElementById('chat-default-agent');
   const chatSettingsStatusEl = document.getElementById('chat-settings-status');
   const saveChatSettingsBtn = document.getElementById('save-chat-settings-btn');
   const chatTokenUsageEl = document.getElementById('chat-token-usage');
@@ -64,6 +65,28 @@
     chatWebSearchEnabledEl.checked = !!c.web_search_enabled;
     chatWebSearchBaseURLEl.value = c.web_search_base_url || '';
     chatWebSearchResultCountEl.value = c.web_search_result_count || 0;
+    chatDefaultAgentEl.value = c.default_agent_id || '';
+  }
+
+  // loadAgentOptions populates the "Default agent" select from every
+  // configured agent (Settings -> Chat -> Agents), including disabled ones
+  // -- an admin can pick a not-yet-enabled agent as the default ahead of
+  // enabling it. Best-effort, same convention as loadEnabledServerPrompts:
+  // a failure here leaves the select at just its built-in "(none)" option
+  // rather than blocking the rest of the page.
+  async function loadAgentOptions() {
+    while (chatDefaultAgentEl.options.length > 1) chatDefaultAgentEl.remove(1);
+    try {
+      const agents = await getJSON('/admin/api/agents');
+      for (const a of agents) {
+        const opt = document.createElement('option');
+        opt.value = a.id;
+        opt.textContent = a.name;
+        chatDefaultAgentEl.appendChild(opt);
+      }
+    } catch (err) {
+      // Leave just the "(none)" option in place.
+    }
   }
 
   // loadEnabledServerPrompts fetches the MCP servers list from its own
@@ -81,14 +104,17 @@
     }
   }
 
-  // The chat-endpoint fetch and loadEnabledServerPrompts hit disjoint
-  // endpoints and populate disjoint state -- run them concurrently rather
-  // than one after the other, so this page's load time isn't paying for
-  // two round-trips back to back.
+  // The chat-endpoint fetch, loadEnabledServerPrompts, and loadAgentOptions
+  // hit disjoint endpoints and populate disjoint state -- run them
+  // concurrently rather than one after another, so this page's load time
+  // isn't paying for three round-trips back to back. loadAgentOptions must
+  // still finish before applyChatEndpoint sets the select's value below
+  // (Promise.allSettled waits for all three, so it always does).
   async function loadChatEndpoint() {
     const [endpointResult] = await Promise.allSettled([
       getJSON('/admin/api/chat-endpoint'),
       loadEnabledServerPrompts(),
+      loadAgentOptions(),
     ]);
     if (endpointResult.status === 'fulfilled') {
       applyChatEndpoint(endpointResult.value);
@@ -114,6 +140,7 @@
         web_search_enabled: chatWebSearchEnabledEl.checked,
         web_search_base_url: chatWebSearchBaseURLEl.value,
         web_search_result_count: parseInt(chatWebSearchResultCountEl.value, 10) || 0,
+        default_agent_id: chatDefaultAgentEl.value,
       });
       chatSettingsStatusEl.style.color = 'var(--ink-muted)';
       chatSettingsStatusEl.textContent = 'Saved.';
@@ -140,5 +167,5 @@
   // a browser's <script> tag, so this is a no-op there. See
   // internal/adapters/restapi/admin_chat_settings.test.js.
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { applyChatEndpoint, loadChatEndpoint, saveChatEndpoint, renderTokenUsageDonut };
+    module.exports = { applyChatEndpoint, loadChatEndpoint, saveChatEndpoint, renderTokenUsageDonut, loadAgentOptions };
   }
