@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.61 - 2026-09-22
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* chore: fix or dismiss every open SonarCloud issue by @M0WA in https://github.com/M0WA/SE/pull/266
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.60...v4.13.61
+
+
 ## v4.13.60 - 2026-09-22
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
