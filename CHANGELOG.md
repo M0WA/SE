@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.51 - 2026-09-22
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* Tighten header-to-toolbar spacing on the search page by @M0WA in https://github.com/M0WA/SE/pull/240
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.50...v4.13.51
+
+
 ## v4.13.50 - 2026-09-22
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
