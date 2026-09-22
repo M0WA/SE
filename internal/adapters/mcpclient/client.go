@@ -28,8 +28,19 @@ import (
 // misbehaving dependency hang a whole chat turn" reason.
 const connectTimeout = 10 * time.Second
 
-// callTimeout bounds a single CallTool round-trip once connected.
-const callTimeout = 10 * time.Second
+// callTimeout bounds a single CallTool round-trip once connected -- the
+// outer ceiling a server's own tool logic (e.g. dockersandbox's
+// admin-configured Limits.Timeout, via an MCPServer row's -timeout Args)
+// can never exceed, since its context is derived from this one. 10s
+// turned out too tight for cmd/mcp-sandbox's run_go: even with its Docker
+// image already cached, "go run" recompiling the standard library from
+// scratch (no build cache persists across a fresh, ephemeral container)
+// measured ~12s on the real se.mo-sys.de deployment -- confirmed live,
+// not a hypothetical. 60s matches httpchat's own requestTimeout for a
+// chat completion call, so this stays within the same order of "how long
+// one step of a chat turn may reasonably take" this codebase already
+// accepts elsewhere.
+const callTimeout = 60 * time.Second
 
 // implementationName/Version identify this client to every server it
 // connects to, per the MCP handshake.
