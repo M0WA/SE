@@ -3,8 +3,11 @@ info:
   title: searchengine API
   version: "1.0"
   description: |
-    A self-hosted hybrid (BM25 + semantic) search engine, deployed as three
-    independent Go binaries that share one SQL database:
+    A self-hosted AI chatbot with search-engine features, deployed as three
+    independent Go binaries that share one SQL database. Chat can cite live
+    web results and this instance's own crawled index side by side, backed
+    by a hybrid (BM25 + semantic) search engine also exposed as a plain
+    public search UI:
 
     - **search-server** (public, internet-facing): the index page and the
       public `/search` API. Requires a signed-in session (see `/login`).

@@ -1,6 +1,9 @@
 # searchengine
 
-A self-hosted hybrid (BM25 + semantic) search engine. Hexagonal architecture:
+A self-hosted AI chatbot with search-engine features: a chat model that can
+cite live web results and this instance's own crawled index side by side,
+backed by a hybrid (BM25 + semantic) search engine also exposed as a plain
+public search UI. Hexagonal architecture:
 `internal/domain` (pure logic), `internal/ports` (interfaces), `internal/application`
 (use cases), `internal/adapters/*` (SQL repo, HTTP fetcher, REST API, etc.).
 
@@ -79,20 +82,6 @@ image. **Editing the architecture means editing
 command) -- an `.mmd` edit with a stale `.svg` is incomplete work, same as
 any other change here.
 
-## Keep the configuration documentation in sync
-
-`docs/configuration.md` is the single reference for every way this system is
-configured: every environment variable any binary reads (`bootstrap.GetEnv`/
-`os.Getenv`), every config file under `packaging/` and its install/deploy
-path, every database-backed setting an admin edits through the web UI
-(`domain.OperationalSettings`, `TuningSettings`, `EmbeddingHTTPEndpoint`,
-`ChatEndpoint`, `ChatHook`, ...), and the end-to-end installation checklist.
-**Whenever any of these changes -- a new env var, a new or renamed config
-file, a new admin-configurable field, a new required install step -- update
-`docs/configuration.md` in the same change.** Treat a config-surface change
-without a matching doc update as incomplete work, same as every other rule
-in this section.
-
 ## Keep the Grafana dashboards in sync
 
 `packaging/grafana/dashboards/*.json` are the tracked source of truth for
@@ -112,20 +101,49 @@ incomplete work, same as every other rule in this section.
 
 ## Keep the user manual in sync
 
-`docs/manual/README.md` is the end-user manual for the admin web UI: every
-admin settings page, screenshotted (`docs/manual/images/*.png`) and
-explained field by field, plus the public search/chat page. Plain markdown,
-deliberately -- GitHub renders it natively in the repo browser, and it's
-also served as a real page via GitHub Pages (`docs/_config.yml`, enabled in
-repo Settings -> Pages -> Deploy from a branch -> main -> /docs); a single
-source avoids the drift risk a separate hand-maintained HTML copy would
-carry. **Whenever an admin page changes -- a field added/removed/renamed, a
-new admin page, a changed default or validation rule, a UI redesign that
-changes what the page looks like -- update the matching section of
-`docs/manual/README.md` in the same change**, including retaking that
-page's screenshot if its layout changed enough to make the old one
-misleading. Treat a UI change without a matching manual update as
-incomplete work, same as every other rule in this section.
+`docs/manual/` is the single reference for everything about running and
+using searchengine -- one markdown file per topic, not one giant page:
+
+- **Installation & configuration** (`installation.md`, `environment-
+  variables.md`, `config-files.md`, `infrastructure.md`) -- every
+  environment variable any binary reads (`bootstrap.GetEnv`/`os.Getenv`),
+  every config file under `packaging/` and its install/deploy path, and the
+  end-to-end installation checklist. **Whenever any of these changes -- a
+  new env var, a new or renamed config file, a new required install step --
+  update the matching page in the same change.**
+- **Every other page** -- one per admin settings page plus the public
+  search/chat page and the self-service `/account*` pages, each
+  screenshotted (`docs/manual/images/*.png`) and explained field by field
+  (a database-backed setting an admin edits through the web UI --
+  `domain.OperationalSettings`, `TuningSettings`, `EmbeddingHTTPEndpoint`,
+  `ChatEndpoint`, `MCPServer`, ...). **Whenever an admin page changes -- a
+  field added/removed/renamed, a new admin page, a changed default or
+  validation rule, a UI redesign that changes what the page looks like --
+  update the matching page in the same change**, including retaking that
+  page's screenshot if its layout changed enough to make the old one
+  misleading.
+
+`docs/manual/README.md` is the index -- grouped links to every page below
+it, in the same grouping as the real admin nav rail. Every page links back
+to it (`[← Manual home](README.md)`) and to its immediate neighbors
+(`← Previous · ↑ Manual home · Next →`) in that same group order -- keep
+both when adding, removing, splitting, or reordering a page: update
+`README.md`'s group list and the previous/next page's own footer links, not
+just the page itself. Split a page that's grown too long (a good rule of
+thumb: if a single settings page's own content stops fitting on one
+reasonable scroll, look at whether it has a natural sub-grouping worth its
+own pages, the way the giant `/admin/settings` page's four collapsible
+groups each became `settings-search-ranking.md`/`settings-crawling.md`/
+`settings-content-rules.md`/`settings-system.md` off of a `settings.md`
+hub) rather than letting one file keep growing.
+
+Plain markdown throughout, deliberately -- GitHub renders it natively in
+the repo browser, and it's also served as a real site via GitHub Pages
+(`docs/_config.yml`, enabled in repo Settings -> Pages -> Deploy from a
+branch -> main -> /docs); a single source avoids the drift risk a separate
+hand-maintained HTML copy would carry. Treat a config- or UI-surface change
+without a matching manual update as incomplete work, same as every other
+rule in this section.
 
 To retake a screenshot: run `cmd/search`/`cmd/admin`/`cmd/crawl` locally
 against a scratch SQLite DB, log in, and drive a headless Chromium instance
@@ -159,8 +177,8 @@ worth not re-discovering the hard way:
 ## Keep the root README in sync
 
 `README.md` (repo root) is a map of the documentation, not documentation
-itself -- it links to `docs/manual/`, `docs/configuration.md`,
-`docs/architecture/README.md`, and every `packaging/*/README.md`, and lists
+itself -- it links to `docs/manual/`, `docs/architecture/README.md`, and
+every `packaging/*/README.md`, and lists
 the current binaries. **Whenever a new top-level doc or `packaging/`
 subdirectory with its own README is added, or a binary is added/removed,
 update `README.md`'s tables in the same change.** Treat a new doc or
