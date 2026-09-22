@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.58 - 2026-09-22
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* dockersandbox: add -host-network as a simpler alternative to -dns/-host-dns by @M0WA in https://github.com/M0WA/SE/pull/255
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.57...v4.13.58
+
+
 ## v4.13.57 - 2026-09-22
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
