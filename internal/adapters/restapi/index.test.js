@@ -813,6 +813,81 @@ test('sendChatMessage renders a folded, closed <details> per tool result', async
   assert.equal(results[1].classList.contains('chat-hook-result-error'), true);
 });
 
+test('sendChatMessage renders a download link for a successful write_file tool result', async () => {
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      answer: 'answer',
+      tool_results: [
+        { tool_name: 'write_file', output: '{"id":"f1","filename":"report.txt","size":11}' },
+      ],
+    }),
+  });
+  const { sendChatMessage } = loadFixture();
+  await sendChatMessage('q');
+  const assistantMsg = document.getElementById('chat-messages').children[1];
+  const link = assistantMsg.querySelector('.chat-hook-target a');
+  assert.notEqual(link, null);
+  assert.equal(link.getAttribute('href'), '/account/api/files/f1');
+  assert.equal(link.textContent, 'Download report.txt');
+});
+
+test('sendChatMessage renders no download link for a failed write_file tool result', async () => {
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      answer: 'answer',
+      tool_results: [{ tool_name: 'write_file', err: 'no signed-in user' }],
+    }),
+  });
+  const { sendChatMessage } = loadFixture();
+  await sendChatMessage('q');
+  const assistantMsg = document.getElementById('chat-messages').children[1];
+  assert.equal(assistantMsg.querySelector('.chat-hook-target'), null);
+  const result = assistantMsg.querySelector('.chat-hook-result');
+  assert.equal(result.querySelector('summary').textContent, 'write_file');
+});
+
+test('the attach file input uploads the chosen file and shows a confirmation status', async () => {
+  loadFixture();
+  const input = document.getElementById('chat-attach-input');
+  const file = new window.File(['col1,col2\n1,2'], 'data.csv', { type: 'text/csv' });
+  Object.defineProperty(input, 'files', { value: [file], configurable: true });
+
+  let gotURL, gotBody;
+  global.fetch = async (url, opts) => {
+    gotURL = url;
+    gotBody = opts && opts.body;
+    return { ok: true, json: async () => ({ id: 'f1', filename: 'data.csv', size: 13 }) };
+  };
+  input.dispatchEvent(new window.Event('change'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(gotURL, '/account/api/files');
+  assert.equal(gotBody instanceof window.FormData, true);
+  assert.equal(document.getElementById('chat-status').textContent.includes('data.csv'), true);
+});
+
+test('the attach file input shows an error status on a failed upload', async () => {
+  loadFixture();
+  const input = document.getElementById('chat-attach-input');
+  const file = new window.File(['x'], 'x.bin', { type: 'application/octet-stream' });
+  Object.defineProperty(input, 'files', { value: [file], configurable: true });
+
+  global.fetch = async () => ({ ok: false, status: 503, text: async () => 'files not configured' });
+  input.dispatchEvent(new window.Event('change'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('chat-status').textContent.includes('files not configured'), true);
+});
+
+test('clicking the attach button opens the hidden file picker', () => {
+  loadFixture();
+  const input = document.getElementById('chat-attach-input');
+  let clicked = false;
+  input.addEventListener('click', () => { clicked = true; });
+  document.getElementById('chat-attach').dispatchEvent(new window.Event('click'));
+  assert.equal(clicked, true);
+});
+
 test('sendChatMessage renders no tool-result elements when tool_results is absent', async () => {
   global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'answer' }) });
   const { sendChatMessage } = loadFixture();

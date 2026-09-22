@@ -1887,6 +1887,41 @@ func TestChatService_MCPEnv_OmitsUserAgentWhenEmpty(t *testing.T) {
 	}
 }
 
+// TestChatService_MCPEnv_CarriesFileAccessTokenWhenSet proves a non-empty
+// ChatOptions.FileAccessToken reaches Open's env map as
+// SE_FILES_API_TOKEN -- mirrors TestChatService_MCPEnv_CarriesUserAgentWhenSet.
+func TestChatService_MCPEnv_CarriesFileAccessTokenWhenSet(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
+	completer, servers, provider := mcpEnvTestFixtures()
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	if _, err := svc.Chat(context.Background(), history, ChatOptions{FileAccessToken: "tok-abc"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := provider.openedEnv["SE_FILES_API_TOKEN"]; got != "tok-abc" {
+		t.Fatalf("expected env[SE_FILES_API_TOKEN] = %q, got %q (env=%v)", "tok-abc", got, provider.openedEnv)
+	}
+}
+
+// TestChatService_MCPEnv_OmitsFileAccessTokenWhenEmpty proves an empty
+// ChatOptions.FileAccessToken (e.g. an admin session, which never gets one
+// -- see restapi.fileAccessTokenFor) leaves SE_FILES_API_TOKEN out of the
+// env map entirely, mirrors TestChatService_MCPEnv_OmitsUserAgentWhenEmpty.
+func TestChatService_MCPEnv_OmitsFileAccessTokenWhenEmpty(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
+	completer, servers, provider := mcpEnvTestFixtures()
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil)
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
+	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := provider.openedEnv["SE_FILES_API_TOKEN"]; ok {
+		t.Fatalf("expected SE_FILES_API_TOKEN omitted when empty, got env=%v", provider.openedEnv)
+	}
+}
+
 // TestTrimToBudget_ThreeLeadingSystemMessages_KeepsAllIntact extends the
 // two-message case above to three -- endpoint prompt + 2 server prompts --
 // proving trimToBudget's generic "walk every leading system-role message"

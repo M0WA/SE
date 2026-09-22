@@ -243,6 +243,23 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			gated_by_web_search BOOLEAN NOT NULL DEFAULT false,
 			PRIMARY KEY (user_id, id)
 		)`,
+		// uploaded_files is user_mcp_servers' sibling for domain.UploadedFile
+		// -- every row owned by (cascade-deleted with) one user_id, id a
+		// random opaque token (see sqlrepo's randomFileID) rather than a
+		// name-derived slug, since a filename is never unique enough to
+		// safely reuse as an ID and this ID appears directly in a download
+		// URL, where unguessability matters the same way a session token's
+		// does. data holds the file's raw bytes directly in this shared
+		// database, the same tier of "just another row" every other piece
+		// of this app's state already gets -- no separate blob store to
+		// stand up or back up independently.
+		`CREATE TABLE IF NOT EXISTS uploaded_files (
+			id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			filename TEXT NOT NULL, content_type TEXT NOT NULL DEFAULT '',
+			size INTEGER NOT NULL DEFAULT 0, data BLOB NOT NULL,
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_uploaded_files_user_id ON uploaded_files(user_id)`,
 	}
 }
 
@@ -424,6 +441,18 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			PRIMARY KEY (user_id, id),
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		) ENGINE=InnoDB`,
+		// See the sqlite dialect's uploaded_files comment. id is
+		// VARCHAR(32) (a 16-byte random token, hex-encoded), unlike
+		// user_id/other slug-derived ids' VARCHAR(20).
+		`CREATE TABLE IF NOT EXISTS uploaded_files (
+			id VARCHAR(32) NOT NULL, user_id VARCHAR(20) NOT NULL,
+			filename VARCHAR(255) NOT NULL, content_type VARCHAR(255) NOT NULL DEFAULT '',
+			size INT NOT NULL DEFAULT 0, data LONGBLOB NOT NULL,
+			created_at VARCHAR(64) NOT NULL,
+			PRIMARY KEY (id),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		) ENGINE=InnoDB`,
+		`CREATE INDEX idx_uploaded_files_user_id ON uploaded_files(user_id)`,
 	}
 }
 
@@ -609,6 +638,14 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			gated_by_web_search BOOLEAN NOT NULL DEFAULT false,
 			PRIMARY KEY (user_id, id)
 		)`,
+		// See the sqlite dialect's uploaded_files comment.
+		`CREATE TABLE IF NOT EXISTS uploaded_files (
+			id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			filename TEXT NOT NULL, content_type TEXT NOT NULL DEFAULT '',
+			size INT NOT NULL DEFAULT 0, data BYTEA NOT NULL,
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_uploaded_files_user_id ON uploaded_files(user_id)`,
 	}
 }
 

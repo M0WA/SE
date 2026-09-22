@@ -19,6 +19,7 @@ flowchart LR
     MCPWeb["cmd/mcp-web<br/>spawned stdio subprocess<br/>(not a service)"]
     MCPDatetime["cmd/mcp-datetime<br/>spawned stdio subprocess<br/>(not a service)"]
     MCPSandbox["cmd/mcp-sandbox<br/>spawned stdio subprocess<br/>(not a service)"]
+    MCPFiles["cmd/mcp-files<br/>spawned stdio subprocess<br/>(not a service)"]
   end
 
   subgraph Core["Core: domain + ports + application"]
@@ -86,9 +87,11 @@ flowchart LR
   MCPClient -.->|"spawns as child process"| MCPWeb
   MCPClient -.->|"spawns as child process"| MCPDatetime
   MCPClient -.->|"spawns as child process"| MCPSandbox
+  MCPClient -.->|"spawns as child process"| MCPFiles
   MCPWeb -->|"web_search tool"| SearXNG
   MCPSandbox --> DockerSandbox
   DockerSandbox -.->|"docker CLI"| Docker
+  MCPFiles -->|"HTTP, per-turn bearer token<br/>/account/api/files"| Search
 
   Nginx -.->|"stub_status via<br/>prometheus-nginx-exporter"| IONOSMon
   SQLRepo -.->|"postgres-exporter"| IONOSMon

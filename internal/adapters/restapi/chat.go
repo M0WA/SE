@@ -117,6 +117,18 @@ func (h *Handler) userAgentForMCPFetch() string {
 	return h.opSettings.Get().UserAgent
 }
 
+// fileAccessTokenFor mints a fresh, short-lived bearer token (see
+// fileTokenStore) for userID, letting cmd/mcp-files call back into
+// /account/api/files as this turn's own user -- empty whenever userID is
+// empty (an admin session, or h.files/h.fileTokens not configured), same
+// tolerance as userCustomPromptFor.
+func (h *Handler) fileAccessTokenFor(userID string) string {
+	if userID == "" || h.fileTokens == nil {
+		return ""
+	}
+	return h.fileTokens.issue(userID)
+}
+
 // handleChat answers one chat turn against the search-server-only,
 // admin-configured chat endpoint (h.chat) -- see application.ChatService's
 // doc comment for the web-search-grounding behavior this delegates to. A
@@ -161,9 +173,14 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	role, userID, _ := h.sessionRoleFor(r)
+	if role != domain.RoleUser {
+		userID = ""
+	}
 	result, err := h.chat.Chat(r.Context(), req.Messages, application.ChatOptions{
 		WebSearch: req.WebSearch, UserCustomPrompt: h.userCustomPromptFor(r),
 		UserAgent: h.userAgentForMCPFetch(), AgentID: req.AgentID,
+		UserID: userID, FileAccessToken: h.fileAccessTokenFor(userID),
 	})
 	if errors.Is(err, ports.ErrChatEndpointNotConfigured) {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)

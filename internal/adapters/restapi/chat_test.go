@@ -588,6 +588,104 @@ func TestHandleChat_UserCustomPromptReachesChatOptions(t *testing.T) {
 	}
 }
 
+// TestHandleChat_UserIDReachesChatOptionsForPersonalMCPServers is the
+// regression test for a real bug: handleChat never actually set
+// application.ChatOptions.UserID at all, so a role=user session's own
+// self-service MCP servers (ports.UserMCPServerStore) were silently never
+// merged into any real chat turn despite the whole feature existing.
+// Proven here via provider.openedServers actually containing alice's own
+// personal server after a real /chat call as her.
+func TestHandleChat_UserIDReachesChatOptionsForPersonalMCPServers(t *testing.T) {
+	store := &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}}
+	provider := &fakeMCPToolProvider{}
+	userMCPServers := &fakeUserMCPServerStore{byUser: map[string][]domain.MCPServer{
+		"user1": {{ID: "personal", Name: "personal tools", Transport: "http", BaseURL: "https://example.com/mcp", Enabled: true}},
+	}}
+	svc := application.NewChatService(
+		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}},
+		&fakeChatCompleter{answer: "plain answer"}, nil, provider, nil, userMCPServers)
+	h, cookie := chatAuthedHandlerWithUser(t, svc, store, store.users[0])
+	rec := postChat(t, h, cookie, map[string]interface{}{
+		"messages": []map[string]string{{"role": "user", "content": "hi"}},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	found := false
+	for _, s := range provider.openedServers {
+		if s.ID == "personal" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected alice's own personal MCP server to be active for her chat turn, got %+v", provider.openedServers)
+	}
+}
+
+// TestHandleChat_FileAccessTokenReachesMCPEnv proves handleChat mints a
+// file-access token for a role=user session and passes it through
+// application.ChatOptions.FileAccessToken into ChatService.Chat's MCP env
+// map as SE_FILES_API_TOKEN -- see application.ChatService.Chat and
+// fileAccessTokenFor. See account_files_test.go's
+// TestHandleAccountFiles_BearerTokenAuth for the full round trip proving
+// that same token actually authenticates against /account/api/files.
+func TestHandleChat_FileAccessTokenReachesMCPEnv(t *testing.T) {
+	store := &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}}
+	provider := &fakeMCPToolProvider{}
+	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
+		{ID: "1", Name: "files", Transport: "stdio", Command: "mcp-files", Enabled: true},
+	}}
+	svc := application.NewChatService(
+		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}},
+		&fakeChatCompleter{answer: "plain answer"}, servers, provider, nil, nil)
+	h, cookie := chatAuthedHandlerWithUser(t, svc, store, store.users[0])
+	rec := postChat(t, h, cookie, map[string]interface{}{
+		"messages": []map[string]string{{"role": "user", "content": "hi"}},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := provider.openedEnv["SE_FILES_API_TOKEN"]; got == "" {
+		t.Errorf("expected a non-empty SE_FILES_API_TOKEN in the MCP env, got env=%v", provider.openedEnv)
+	}
+}
+
+// TestHandleChat_AdminRoleGetsNoFileAccessToken is
+// TestHandleChat_AdminRoleNeverLooksUpAPerUserPrompt's file-token sibling
+// -- an admin session has no domain.User row to own a file under, so no
+// token should ever be minted for one.
+func TestHandleChat_AdminRoleGetsNoFileAccessToken(t *testing.T) {
+	provider := &fakeMCPToolProvider{}
+	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
+		{ID: "1", Name: "files", Transport: "stdio", Command: "mcp-files", Enabled: true},
+	}}
+	svc := application.NewChatService(
+		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}},
+		&fakeChatCompleter{answer: "plain answer"}, servers, provider, nil, nil)
+	h := restapi.New(restapi.Config{
+		Search: &fakeSearch{}, Chat: svc,
+		AdminUser: testAdminUser, AdminPass: testAdminPass,
+	})
+	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
+	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login failed: %d %s", rec.Code, rec.Body.String())
+	}
+	cookie := rec.Result().Cookies()[0]
+
+	chatRec := postChat(t, h, cookie, map[string]interface{}{
+		"messages": []map[string]string{{"role": "user", "content": "hi"}},
+	})
+	if chatRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", chatRec.Code, chatRec.Body.String())
+	}
+	if got, ok := provider.openedEnv["SE_FILES_API_TOKEN"]; ok {
+		t.Errorf("expected no SE_FILES_API_TOKEN for an admin session, got %q", got)
+	}
+}
+
 // TestHandleChat_UserAgentFromOpSettingsReachesMCPEnv proves handleChat
 // reads the live *domain.OperationalSettings' UserAgent (the same value
 // crawls use) and passes it through application.ChatOptions.UserAgent into

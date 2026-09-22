@@ -411,6 +411,116 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
+  /account/api/files:
+    get:
+      tags: [account]
+      summary: List the current session's own uploaded files
+      description: >-
+        Metadata only (never file content), most recently uploaded first.
+        Unlike every other /account/api/* endpoint, this (and GET/DELETE
+        .../files/{id} below) also accepts an "Authorization: Bearer
+        <token>" header in place of a session cookie -- a short-lived,
+        per-chat-turn token cmd/mcp-files uses to call back in as that
+        turn's own signed-in user (see restapi.fileTokenStore and
+        application.ChatOptions.FileAccessToken). The 403 admin-account
+        response below applies only to the session-cookie path; an invalid
+        or expired bearer token gets a plain 401 instead, indistinguishable
+        from no credential at all.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/UploadedFile" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: The signed-in session is the hardcoded admin account, which has no User row to own files under.
+          content:
+            text/plain: { schema: { type: string } }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    post:
+      tags: [account]
+      summary: Upload a new file
+      description: >-
+        multipart/form-data with a single "file" field -- the same
+        encoding a plain HTML file input produces, and what cmd/mcp-files'
+        write_file tool also constructs server-side. Capped at 5 MiB
+        (maxUploadedFileBytes) and 100 files per owner (maxFilesPerUser),
+        neither admin-configurable.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+              required: [file]
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UploadedFile" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: The signed-in session is the hardcoded admin account, which has no User row to own files under.
+          content:
+            text/plain: { schema: { type: string } }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /account/api/files/{id}:
+    get:
+      tags: [account]
+      summary: Download one of the current session's own files
+      description: >-
+        404s the same way for an unknown id and for another user's id --
+        ownership scoping IS the access control, same convention
+        /account/api/mcp-servers/{id} uses. Returns the file's raw bytes
+        with Content-Disposition: attachment, not a JSON envelope.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: The signed-in session is the hardcoded admin account, which has no User row to own files under.
+          content:
+            text/plain: { schema: { type: string } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    delete:
+      tags: [account]
+      summary: Delete one of the current session's own files
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: The signed-in session is the hardcoded admin account, which has no User row to own files under.
+          content:
+            text/plain: { schema: { type: string } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
   # ----------------------------------------------------------------- admin
   /admin/api/stats:
     get:
@@ -2726,6 +2836,20 @@ components:
             has_api_key:
               type: boolean
               description: Whether an API key is stored for this server -- its actual value is never returned.
+
+    UploadedFile:
+      type: object
+      description: >-
+        Metadata for one file a signed-in regular-user session has
+        uploaded, or cmd/mcp-files' write_file tool has created on that
+        user's behalf -- never the file's own content, which is fetched
+        separately via GET /account/api/files/{id}.
+      properties:
+        id: { type: string, description: "A random opaque token (never a name-derived slug) -- see sqlrepo.randomFileID." }
+        filename: { type: string }
+        content_type: { type: string }
+        size: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
 
     MCPServerCandidateRequest:
       type: object
