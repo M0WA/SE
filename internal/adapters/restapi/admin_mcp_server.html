@@ -31,7 +31,7 @@
     <div class="form-row">
       <div class="label-row">
         <label for="server-transport">Transport</label>
-        <span class="hint" tabindex="0" role="button"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">"stdio" spawns Command as a child process and speaks MCP over its stdin/stdout -- for a locally installed server. "http" connects to Base URL over MCP's Streamable HTTP transport -- for a remote/third-party server.</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">"stdio" spawns Command as a child process and speaks MCP over its stdin/stdout -- for a locally installed server. "http" connects to Base URL over MCP's Streamable HTTP transport -- for a remote/third-party server.</span></button>
       </div>
       <select id="server-transport" class="field">
         <option value="stdio">stdio</option>
@@ -41,14 +41,14 @@
     <div class="form-row" id="server-command-row">
       <div class="label-row">
         <label for="server-command">Command</label>
-        <span class="hint" tabindex="0" role="button"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">The executable to spawn, e.g. /usr/bin/searchengine-mcp-web -- an absolute path or one resolvable on this process's own PATH.</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">The executable to spawn, e.g. /usr/bin/searchengine-mcp-web -- an absolute path or one resolvable on this process's own PATH.</span></button>
       </div>
       <input id="server-command" class="field" type="text" placeholder="/usr/bin/searchengine-mcp-web">
     </div>
     <div class="form-row" id="server-args-row">
       <div class="label-row">
         <label for="server-args">Arguments</label>
-        <span class="hint" tabindex="0" role="button"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Command-line arguments passed to Command, one per line. Leave empty for none. Built-in servers: mcp-sandbox accepts -network (enable network access, default off), -memory, -cpus, -pids-limit, -timeout (resource limits), -dns=&lt;ip&gt;,&lt;ip&gt; (DNS servers, only meaningful with -network), -host-dns (use this host's own real DNS servers instead of Docker's default, merged with -dns if both are set), -host-network (run with Docker's host networking instead of the default bridge network -- DNS just works with no -dns/-host-dns needed, but this is a bigger privilege elevation than plain -network: the sandbox can see/bind the host's own network interfaces directly). mcp-files accepts -base-url (default http://127.0.0.1:8080).</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Command-line arguments passed to Command, one per line. Leave empty for none. Built-in servers: mcp-sandbox accepts -network (enable network access, default off), -memory, -cpus, -pids-limit, -timeout (resource limits), -dns=&lt;ip&gt;,&lt;ip&gt; (DNS servers, only meaningful with -network), -host-dns (use this host's own real DNS servers instead of Docker's default, merged with -dns if both are set), -host-network (run with Docker's host networking instead of the default bridge network -- DNS just works with no -dns/-host-dns needed, but this is a bigger privilege elevation than plain -network: the sandbox can see/bind the host's own network interfaces directly). mcp-files accepts -base-url (default http://127.0.0.1:8080).</span></button>
       </div>
       <textarea id="server-args" class="field" rows="3"></textarea>
     </div>
@@ -59,7 +59,7 @@
     <div class="form-row" id="server-api-key-row">
       <div class="label-row">
         <label for="server-api-key">API key</label>
-        <span class="hint" tabindex="0" role="button"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Optional. Sent as an "Authorization: Bearer" header on every request to Base URL -- only meaningful for an "http" server that requires auth; ignored for "stdio". Encrypted at rest and never shown again after saving.</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Optional. Sent as an "Authorization: Bearer" header on every request to Base URL -- only meaningful for an "http" server that requires auth; ignored for "stdio". Encrypted at rest and never shown again after saving.</span></button>
       </div>
       <input id="server-api-key" class="field" type="password" autocomplete="new-password">
     </div>
@@ -68,7 +68,7 @@
         <input id="server-clear-api-key" type="checkbox">
         Remove the stored API key
       </label>
-      <span class="hint" tabindex="0" role="button"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Leaving API key blank above keeps whatever key is already stored -- check this box instead to actually delete it (e.g. the remote server no longer requires auth).</span></span>
+      <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Leaving API key blank above keeps whatever key is already stored -- check this box instead to actually delete it (e.g. the remote server no longer requires auth).</span></button>
     </div>
     <div class="form-row">
       <button id="server-list-tools-btn" type="button" class="text-button">⟳ Refresh tools</button>
@@ -78,7 +78,7 @@
     <div class="form-row">
       <div class="label-row">
         <label for="server-prompt">Prompt (optional)</label>
-        <span class="hint" tabindex="0" role="button"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">This is NOT where you describe what the server does -- each tool's own name/description (shown by "List tools" above) comes live from the server itself and already tells the model that. Prompt is for extra cross-tool steering beyond those descriptions, e.g. "after searching, fetch the top 3 results" -- injected as its own system message only while this server is active (see "Gated by web search" below), in addition to the endpoint's own persistent system prompt (Settings -> Chat), not instead of it. Leave empty if the tool descriptions already say everything the model needs.</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">This is NOT where you describe what the server does -- each tool's own name/description (shown by "List tools" above) comes live from the server itself and already tells the model that. Prompt is for extra cross-tool steering beyond those descriptions, e.g. "after searching, fetch the top 3 results" -- injected as its own system message only while this server is active (see "Gated by web search" below), in addition to the endpoint's own persistent system prompt (Settings -> Chat), not instead of it. Leave empty if the tool descriptions already say everything the model needs.</span></button>
       </div>
       <textarea id="server-prompt" class="field" rows="24"></textarea>
     </div>
@@ -93,7 +93,7 @@
         <input id="server-gated-by-web-search" type="checkbox">
         Gated by web search
       </label>
-      <span class="hint" tabindex="0" role="button"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When checked, this server (and its Prompt) is only active when the chat's Web toggle is on -- the same Search the web setting (Settings -> Chat) or its per-question override, not a separate control. When unchecked, this server is active whenever Enabled is checked, regardless of the Web toggle.</span></span>
+      <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When checked, this server (and its Prompt) is only active when the chat's Web toggle is on -- the same Search the web setting (Settings -> Chat) or its per-question override, not a separate control. When unchecked, this server is active whenever Enabled is checked, regardless of the Web toggle.</span></button>
     </div>
     <div class="form-row">
       <button id="server-save-btn" type="submit">Save</button>

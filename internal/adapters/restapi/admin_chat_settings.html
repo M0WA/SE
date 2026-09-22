@@ -26,26 +26,26 @@
         <span class="field-wrap" data-default="Off"><input id="chat-enabled" type="checkbox"></span>
         Enabled
       </label>
-      <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Turns the chat mode toggle on the public search page on or off.</span></span>
+      <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Turns the chat mode toggle on the public search page on or off.</span></button>
     </div>
     <div class="form-row">
       <div class="label-row">
         <label for="chat-base-url">Base URL</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">OpenAI-compatible chat-completions API base URL, e.g. http://localhost:8000/v1 -- POSTed to &lt;base_url&gt;/chat/completions.</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">OpenAI-compatible chat-completions API base URL, e.g. http://localhost:8000/v1 -- POSTed to &lt;base_url&gt;/chat/completions.</span></button>
       </div>
       <span class="field-wrap" data-default="(none)"><input id="chat-base-url" class="field" type="text" placeholder="http://localhost:8000/v1"></span>
     </div>
     <div class="form-row">
       <div class="label-row">
         <label for="chat-model">Model</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Sent as the chat request's model field.</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Sent as the chat request's model field.</span></button>
       </div>
       <span class="field-wrap" data-default="(none)"><input id="chat-model" class="field" type="text"></span>
     </div>
     <div class="form-row">
       <div class="label-row">
         <label for="chat-api-key">API key</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Sent as an Authorization: Bearer header. Optional for a local server. Leave blank when editing to keep the currently stored key.</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Sent as an Authorization: Bearer header. Optional for a local server. Leave blank when editing to keep the currently stored key.</span></button>
       </div>
       <input id="chat-api-key" class="field" type="password" autocomplete="new-password" placeholder="Leave blank to keep the current key">
     </div>
@@ -62,7 +62,7 @@
     <div class="form-row">
       <div class="label-row">
         <label for="chat-system-prompt">System prompt</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Injected as a system message before every turn, on every question -- never shown in the chat itself, and never dropped even when older messages are trimmed to fit the context budget.</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Injected as a system message before every turn, on every question -- never shown in the chat itself, and never dropped even when older messages are trimmed to fit the context budget.</span></button>
       </div>
       <span class="field-wrap" data-default="(none)"><textarea id="chat-system-prompt" class="field" rows="24"></textarea></span>
     </div>
@@ -73,7 +73,7 @@
     <div class="form-row">
       <div class="label-row">
         <label for="chat-default-agent">Default agent</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Selects an admin-defined agent (Settings -> Chat -> Agents) whose own specialization system prompt is injected on every turn, in addition to the system prompt above -- overridable per question from the chat page itself. "(none)" means no agent specialization at all, today's existing behavior.</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Selects an admin-defined agent (Settings -> Chat -> Agents) whose own specialization system prompt is injected on every turn, in addition to the system prompt above -- overridable per question from the chat page itself. "(none)" means no agent specialization at all, today's existing behavior.</span></button>
       </div>
       <span class="field-wrap" data-default="(none)"><select id="chat-default-agent" class="field"><option value="">(none)</option></select></span>
     </div>
@@ -86,19 +86,19 @@
         <span class="field-wrap" data-default="Off"><input id="chat-web-search-enabled" type="checkbox"></span>
         Search the web
       </label>
-      <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When on (as the default, or the chat page's own per-question Web toggle), every MCP server gated to web search becomes available to the model -- it decides whether to invoke a "web_search"/"web_fetch" tool, not this setting.</span></span>
+      <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When on (as the default, or the chat page's own per-question Web toggle), every MCP server gated to web search becomes available to the model -- it decides whether to invoke a "web_search"/"web_fetch" tool, not this setting.</span></button>
     </div>
     <div class="form-row">
       <div class="label-row">
         <label for="chat-web-search-base-url">SearXNG base URL</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">A self-hosted SearXNG instance's base URL, e.g. http://127.0.0.1:8888 -- passed to every active "stdio" MCP server as the WEB_SEARCH_BASE_URL environment variable, so a "web_search" tool knows which instance to query.</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">A self-hosted SearXNG instance's base URL, e.g. http://127.0.0.1:8888 -- passed to every active "stdio" MCP server as the WEB_SEARCH_BASE_URL environment variable, so a "web_search" tool knows which instance to query.</span></button>
       </div>
       <span class="field-wrap" data-default="(none)"><input id="chat-web-search-base-url" class="field" type="text" placeholder="http://127.0.0.1:8888"></span>
     </div>
     <div class="form-row">
       <div class="label-row">
         <label for="chat-web-search-result-count">Result count</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Caps how many results the "web_search" tool returns per call, passed to every active "stdio" MCP server as the WEB_SEARCH_RESULT_COUNT environment variable. 0 means no cap -- SearXNG's own full result set is returned as-is.</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Caps how many results the "web_search" tool returns per call, passed to every active "stdio" MCP server as the WEB_SEARCH_RESULT_COUNT environment variable. 0 means no cap -- SearXNG's own full result set is returned as-is.</span></button>
       </div>
       <span class="field-wrap" data-default="0 (no cap)"><input id="chat-web-search-result-count" class="field" type="number" step="1" min="0"></span>
     </div>
@@ -110,7 +110,7 @@
     <div class="form-row">
       <div class="label-row">
         <label for="chat-max-context-tokens">Max conversation length (tokens)</label>
-        <span class="hint" tabindex="0"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Bounds how much conversation (leading system/MCP server prompts plus message history, estimated by character count) is sent to the model per turn. Older messages are dropped first, oldest to newest -- the most recent message is always kept. Leave at 0 to auto-detect this from the model itself (75% of its own advertised max context length, reserving the rest for its reply) every time this form is saved -- type a smaller number here only to set a tighter budget than that.</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Bounds how much conversation (leading system/MCP server prompts plus message history, estimated by character count) is sent to the model per turn. Older messages are dropped first, oldest to newest -- the most recent message is always kept. Leave at 0 to auto-detect this from the model itself (75% of its own advertised max context length, reserving the rest for its reply) every time this form is saved -- type a smaller number here only to set a tighter budget than that.</span></button>
       </div>
       <span class="field-wrap" data-default="Auto-detected from the model"><input id="chat-max-context-tokens" class="field" type="number" step="1" min="0"></span>
     </div>

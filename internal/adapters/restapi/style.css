@@ -252,13 +252,25 @@ label {
    setting's full explanation (and its default, where one applies) on
    hover or keyboard focus -- so the name stays short and the field below
    it stays close, while the explanation is still one hover away rather
-   than gone. tabindex on the wrapping span (set in HTML) is what makes
-   :focus-visible reachable by keyboard, the same as any other
-   non-form-control interactive element needs to opt into focusability. */
+   than gone. A real <button> (not a <span> with role="button"/tabindex)
+   is what's in the HTML -- it's natively focusable and keyboard-operable
+   (Enter/Space) with no extra ARIA or a manual keydown handler, unlike a
+   role="button" span, which needs one to be truly operable, not just
+   focusable (a real gap SonarCloud's reliability check on a prior pass
+   caught: role="button" without onKeyDown/onKeyUp is a bug, not just a
+   style nit). The rules below reset the browser's native button chrome
+   (background/border/padding/font) so it's visually identical to the
+   plain inline mark it always was. */
 .hint {
   position: relative;
   display: inline-flex;
   cursor: help;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
 }
 
 .hint-icon {

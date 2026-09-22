@@ -76,15 +76,15 @@
       <label class="chat-rag-toggle" for="chat-web-search">
         <input id="chat-web-search" type="checkbox" checked> Web
       </label>
-      <span class="hint" tabindex="0" role="button"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Lets the model use web search and page fetch tools to answer this question.</span></span>
+      <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Lets the model use web search and page fetch tools to answer this question.</span></button>
       <select id="chat-agent-select" class="field chat-agent-select" aria-label="Agent"><option value="">Default agent</option></select>
-      <span id="chat-token-usage" class="hint chat-token-usage" tabindex="0" role="button">
+      <button type="button" id="chat-token-usage" class="hint chat-token-usage" aria-label="Token usage">
         <span id="chat-token-usage-mini" class="chat-token-usage-mini"></span>
         <span id="chat-token-usage-summary"></span>
         <span class="hint-bubble">
-          <div id="chat-token-usage-donut" class="donut-row"></div>
+          <span id="chat-token-usage-donut" class="donut-row"></span>
         </span>
-      </span>
+      </button>
     </div>
     <button type="button" id="mode-switch" class="mode-switch" role="switch" aria-checked="true" aria-label="Chat or search mode">
       <span class="mode-switch-indicator" aria-hidden="true"></span>

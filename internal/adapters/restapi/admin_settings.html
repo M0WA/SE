@@ -39,28 +39,28 @@
         <div class="form-row">
           <div class="label-row">
             <label for="alpha">Alpha</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">BM25 vs. semantic weight (0 = pure semantic, 1 = pure BM25). Values outside 0–1 are clamped.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">BM25 vs. semantic weight (0 = pure semantic, 1 = pure BM25). Values outside 0–1 are clamped.</span></button>
           </div>
           <span class="field-wrap" data-default="0.5"><input id="alpha" class="field" type="number" step="0.05" min="0" max="1" required></span>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="k1">k1</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Term-frequency saturation. Values below 0 are clamped.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Term-frequency saturation. Values below 0 are clamped.</span></button>
           </div>
           <span class="field-wrap" data-default="1.2"><input id="k1" class="field" type="number" step="0.1" min="0" required></span>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="b">b</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Document-length normalization (0 = none, 1 = full). Values outside 0–1 are clamped.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Document-length normalization (0 = none, 1 = full). Values outside 0–1 are clamped.</span></button>
           </div>
           <span class="field-wrap" data-default="0.75"><input id="b" class="field" type="number" step="0.05" min="0" max="1" required></span>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="title-weight">Title weight</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How many times a title match counts, vs. once for the same word in the body. Values below 1 fall back to the default. Only takes effect for documents crawled or re-crawled afterward -- not retroactively applied to already-indexed content.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How many times a title match counts, vs. once for the same word in the body. Values below 1 fall back to the default. Only takes effect for documents crawled or re-crawled afterward -- not retroactively applied to already-indexed content.</span></button>
           </div>
           <span class="field-wrap" data-default="2"><input id="title-weight" class="field" type="number" step="1" min="1" required></span>
         </div>
@@ -71,14 +71,14 @@
         <div class="form-row">
           <div class="label-row">
             <label for="default-top-k">Default result count</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Used when a search doesn't specify one.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Used when a search doesn't specify one.</span></button>
           </div>
           <span class="field-wrap" data-default="5000"><input id="default-top-k" class="field" type="number" step="1" min="1" required></span>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="semantic-pool-size">Semantic candidate pool size</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Max documents scored for semantic similarity per search, regardless of corpus size (also the ANN top-K, when active). Every BM25 match is always scored too -- this only bounds how many additional documents get sampled for a purely semantic match.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Max documents scored for semantic similarity per search, regardless of corpus size (also the ANN top-K, when active). Every BM25 match is always scored too -- this only bounds how many additional documents get sampled for a purely semantic match.</span></button>
           </div>
           <span class="field-wrap" data-default="200"><input id="semantic-pool-size" class="field" type="number" step="1" min="1" required></span>
         </div>
@@ -87,7 +87,7 @@
             <span class="field-wrap" data-default="On"><input id="ann-search-enabled" type="checkbox"></span>
             Use approximate nearest-neighbor (ANN) search when available
           </label>
-          <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">On Postgres with the pgvector extension installed, fills the semantic candidate pool from a real nearest-neighbor index instead of a bounded brute-force sample. Has no effect on SQLite/MySQL, or a Postgres server without the extension -- those always use the brute-force sample regardless of this setting. Uncheck to force the brute-force path for troubleshooting even when ANN is available.</span></span>
+          <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">On Postgres with the pgvector extension installed, fills the semantic candidate pool from a real nearest-neighbor index instead of a bounded brute-force sample. Has no effect on SQLite/MySQL, or a Postgres server without the extension -- those always use the brute-force sample regardless of this setting. Uncheck to force the brute-force path for troubleshooting even when ANN is available.</span></button>
         </div>
       </div>
 
@@ -98,19 +98,19 @@
             <span class="field-wrap" data-default="On"><input id="embedding-hash-enabled" type="checkbox"></span>
             Compute hash embeddings
           </label>
-          <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Dependency-free feature hashing -- the default provider, not a trained model.</span></span>
+          <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Dependency-free feature hashing -- the default provider, not a trained model.</span></button>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="embedding-search-weights">Active for search</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Weight each enabled provider gets in the blended semantic score (0 = not used) -- weights are relative to each other, not absolute (1 and 1 weighs two providers equally, the same as 10 and 10 would). Switching which provider is active takes effect live, without a restart. Enabling a provider that wasn't already enabled changes the vector space entirely for it -- existing stored embeddings from a different provider are meaningless to compare against until every document is recomputed for it; see <a href="/admin/embeddings">Embeddings</a> to trigger that. Configure additional HTTP endpoints (any number, each independently enabled) on <a href="/admin/embeddings/endpoints">HTTP endpoints</a>. Any search request may override these weights for itself via <code>?semantic=</code>.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Weight each enabled provider gets in the blended semantic score (0 = not used) -- weights are relative to each other, not absolute (1 and 1 weighs two providers equally, the same as 10 and 10 would). Switching which provider is active takes effect live, without a restart. Enabling a provider that wasn't already enabled changes the vector space entirely for it -- existing stored embeddings from a different provider are meaningless to compare against until every document is recomputed for it; see <a href="/admin/embeddings">Embeddings</a> to trigger that. Configure additional HTTP endpoints (any number, each independently enabled) on <a href="/admin/embeddings/endpoints">HTTP endpoints</a>. Any search request may override these weights for itself via <code>?semantic=</code>.</span></button>
           </div>
           <div id="embedding-search-weights"></div>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="embedding-title-weight">Title weight in embeddings</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">0 embeds the body only, 1 the title only; in between, blends two separate Embed calls. Only takes effect for documents crawled, re-crawled, or explicitly recomputed afterward.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">0 embeds the body only, 1 the title only; in between, blends two separate Embed calls. Only takes effect for documents crawled, re-crawled, or explicitly recomputed afterward.</span></button>
           </div>
           <span class="field-wrap" data-default="0.3"><input id="embedding-title-weight" class="field" type="number" step="0.05" min="0" max="1"></span>
         </div>
@@ -121,14 +121,14 @@
         <div class="form-row">
           <div class="label-row">
             <label for="pagerank-weight">PageRank weight</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How much link authority influences ranking (0 = no effect, 1 = ranking driven entirely by link authority).</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How much link authority influences ranking (0 = no effect, 1 = ranking driven entirely by link authority).</span></button>
           </div>
           <span class="field-wrap" data-default="0"><input id="pagerank-weight" class="field" type="number" step="0.05" min="0" max="1" required></span>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="pagerank-interval">Recompute interval</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Minutes between automatic PageRank recomputations. A recompute also always runs right after a crawl finishes, since that's when the link graph actually changes.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Minutes between automatic PageRank recomputations. A recompute also always runs right after a crawl finishes, since that's when the link graph actually changes.</span></button>
           </div>
           <span class="field-wrap" data-default="60 (min 5)"><input id="pagerank-interval" class="field" type="number" step="1" min="5" required></span>
         </div>
@@ -141,12 +141,12 @@
             <span class="field-wrap" data-default="On"><input id="fuzzy-enabled" type="checkbox"></span>
             Correct misspelled query terms
           </label>
-          <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When a query term has no matches at all, look it up against the index's vocabulary for a near-miss (within the edit distance below) and use that instead for scoring -- the displayed query is never rewritten, only what's used behind the scenes.</span></span>
+          <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When a query term has no matches at all, look it up against the index's vocabulary for a near-miss (within the edit distance below) and use that instead for scoring -- the displayed query is never rewritten, only what's used behind the scenes.</span></button>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="fuzzy-max-edit-distance">Max edit distance</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How many typos (insert/delete/substitute) a correction may be off by. A term that already matches something is never touched.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How many typos (insert/delete/substitute) a correction may be off by. A term that already matches something is never touched.</span></button>
           </div>
           <span class="field-wrap" data-default="2"><input id="fuzzy-max-edit-distance" class="field" type="number" step="1" min="1" max="2" required></span>
         </div>
@@ -161,63 +161,63 @@
         <div class="form-row">
           <div class="label-row">
             <label for="fetch-timeout">Fetch timeout</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Seconds per page before giving up.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Seconds per page before giving up.</span></button>
           </div>
           <span class="field-wrap" data-default="8"><input id="fetch-timeout" class="field" type="number" step="1" min="1" required></span>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="user-agent">User-Agent</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Sent with every fetch.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Sent with every fetch.</span></button>
           </div>
           <span class="field-wrap" data-default="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0"><input id="user-agent" class="field" type="text" required></span>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="default-max-pages">Default max pages</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Used when a crawl doesn't specify one.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Used when a crawl doesn't specify one.</span></button>
           </div>
           <span class="field-wrap" data-default="20000"><input id="default-max-pages" class="field" type="number" step="1" min="1" required></span>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="min-text-length">Minimum text length</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Shorter pages are skipped as thin content.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Shorter pages are skipped as thin content.</span></button>
           </div>
           <span class="field-wrap" data-default="50"><input id="min-text-length" class="field" type="number" step="1" min="0" required></span>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="crawl-delay">Crawl delay</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Milliseconds to wait before each fetch after the first.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Milliseconds to wait before each fetch after the first.</span></button>
           </div>
           <span class="field-wrap" data-default="250"><input id="crawl-delay" class="field" type="number" step="1" min="0" required></span>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="max-response-kb">Max response size</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Kilobytes read from a page before truncating.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Kilobytes read from a page before truncating.</span></button>
           </div>
           <span class="field-wrap" data-default="5120"><input id="max-response-kb" class="field" type="number" step="1" min="1" required></span>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="max-retained-crawl-jobs">Crawl history retention</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Number of past crawl jobs (with full per-page detail) kept before the oldest are deleted.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Number of past crawl jobs (with full per-page detail) kept before the oldest are deleted.</span></button>
           </div>
           <span class="field-wrap" data-default="200"><input id="max-retained-crawl-jobs" class="field" type="number" step="1" min="1" required></span>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="max-concurrent-crawls">Concurrent crawls</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How many crawl jobs actually fetch pages at once; a burst of triggered jobs beyond this queues instead of running immediately. Raising or lowering it takes effect for the next job that starts, without a restart -- an already-running job keeps going until it finishes, so a lowered limit takes a little while to fully apply.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How many crawl jobs actually fetch pages at once; a burst of triggered jobs beyond this queues instead of running immediately. Raising or lowering it takes effect for the next job that starts, without a restart -- an already-running job keeps going until it finishes, so a lowered limit takes a little while to fully apply.</span></button>
           </div>
           <span class="field-wrap" data-default="3"><input id="max-concurrent-crawls" class="field" type="number" step="1" min="1" required></span>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="default-renderer">Rendering</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How a crawl fetches each page, unless it overrides this itself. Rendering a page in a real browser is much slower than a plain fetch (each page opens its own browser tab) and downloads that browser engine the first time it's ever used -- turn it on only for sites whose real content needs JavaScript to appear.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How a crawl fetches each page, unless it overrides this itself. Rendering a page in a real browser is much slower than a plain fetch (each page opens its own browser tab) and downloads that browser engine the first time it's ever used -- turn it on only for sites whose real content needs JavaScript to appear.</span></button>
           </div>
           <span class="field-wrap" data-default="None (plain HTTP fetch)">
             <select id="default-renderer" class="field">
@@ -230,7 +230,7 @@
         <div class="form-row">
           <div class="label-row">
             <label for="default-link-scope">Link scope</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How far a crawl follows discovered links, unless it overrides this itself. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org. "Same domain, any subdomain, any top-level domain" is broader still -- from a seed of example.com it also follows example.org and www.example.de (the same domain name, any subdomain, under any TLD), but not other.com.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How far a crawl follows discovered links, unless it overrides this itself. "Seed's domain, including subdomains" follows e.g. blog.example.com and example.com from a seed of www.example.com, but not example.org. "Same domain, any subdomain, any top-level domain" is broader still -- from a seed of example.com it also follows example.org and www.example.de (the same domain name, any subdomain, under any TLD), but not other.com.</span></button>
           </div>
           <span class="field-wrap" data-default="Same domain, any subdomain, any top-level domain">
             <select id="default-link-scope" class="field">
@@ -246,7 +246,7 @@
             <span class="field-wrap" data-default="On"><input id="url-alias-www-enabled" type="checkbox"></span>
             Treat www. and the bare domain as the same page
           </label>
-          <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When crawling a page, folds a leading "www." off its host before deciding its identity -- so www.example.com/x and example.com/x are always the same document (stored under the bare-domain URL), never crawled or indexed twice. Only affects future crawls; already-indexed duplicates from before this was enabled (or before it existed) are found and merged separately by content dedup, not by this setting. Turn off only for a site that genuinely serves different content at www. than at its bare domain.</span></span>
+          <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">When crawling a page, folds a leading "www." off its host before deciding its identity -- so www.example.com/x and example.com/x are always the same document (stored under the bare-domain URL), never crawled or indexed twice. Only affects future crawls; already-indexed duplicates from before this was enabled (or before it existed) are found and merged separately by content dedup, not by this setting. Turn off only for a site that genuinely serves different content at www. than at its bare domain.</span></button>
         </div>
       </div>
 
@@ -255,7 +255,7 @@
         <div class="form-row">
           <div class="label-row">
             <label for="max-document-versions">Version history</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How many versions of a document (current plus archived) are kept when a re-crawl changes its content. A document that's never changed always has exactly one version regardless of this setting -- it only bounds how much prior history a frequently-changing page accumulates. Lowering it prunes existing extra versions the next time that document is re-crawled, not immediately.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How many versions of a document (current plus archived) are kept when a re-crawl changes its content. A document that's never changed always has exactly one version regardless of this setting -- it only bounds how much prior history a frequently-changing page accumulates. Lowering it prunes existing extra versions the next time that document is re-crawled, not immediately.</span></button>
           </div>
           <span class="field-wrap" data-default="3"><input id="max-document-versions" class="field" type="number" step="1" min="1" required></span>
         </div>
@@ -268,12 +268,12 @@
             <span class="field-wrap" data-default="On"><input id="content-dedup-enabled" type="checkbox"></span>
             Merge duplicate/near-duplicate documents
           </label>
-          <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Finds documents that are byte-identical or near-identical to another already-indexed document (a mirror, a copy under a different host, ...) and merges each group into one canonical document, so a search never lists the same content twice. A merge deletes the losing documents' own rows (their own link/version/embedding history is discarded, not migrated to the survivor) -- review the results on <a href="/admin/content_dedup">Content dedup</a>, which also has a "recompute now" button.</span></span>
+          <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Finds documents that are byte-identical or near-identical to another already-indexed document (a mirror, a copy under a different host, ...) and merges each group into one canonical document, so a search never lists the same content twice. A merge deletes the losing documents' own rows (their own link/version/embedding history is discarded, not migrated to the survivor) -- review the results on <a href="/admin/content_dedup">Content dedup</a>, which also has a "recompute now" button.</span></button>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="content-dedup-method">Matching method</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Exact matches only byte-identical normalized text. Near-duplicate additionally matches within the SimHash threshold below.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Exact matches only byte-identical normalized text. Near-duplicate additionally matches within the SimHash threshold below.</span></button>
           </div>
           <span class="field-wrap" data-default="Exact">
             <select id="content-dedup-method" class="field">
@@ -285,14 +285,14 @@
         <div class="form-row">
           <div class="label-row">
             <label for="content-dedup-simhash-max-distance">Near-duplicate threshold</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Max SimHash Hamming distance still considered a match (only used by the near-duplicate method).</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Max SimHash Hamming distance still considered a match (only used by the near-duplicate method).</span></button>
           </div>
           <span class="field-wrap" data-default="3"><input id="content-dedup-simhash-max-distance" class="field" type="number" step="1" min="1" max="10" required></span>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="content-dedup-interval">Recompute interval</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Minutes between automatic content-dedup passes. A recompute also always runs right after a crawl finishes, once enabled.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Minutes between automatic content-dedup passes. A recompute also always runs right after a crawl finishes, once enabled.</span></button>
           </div>
           <span class="field-wrap" data-default="120 (min 15)"><input id="content-dedup-interval" class="field" type="number" step="1" min="15" required></span>
         </div>
@@ -307,14 +307,14 @@
         <div class="form-row">
           <div class="label-row">
             <label for="blocked-terms">Blocked words</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One per line; a document containing any of these is excluded from results entirely. Uses the same tokenization as search, so casing and punctuation don't matter.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One per line; a document containing any of these is excluded from results entirely. Uses the same tokenization as search, so casing and punctuation don't matter.</span></button>
           </div>
           <textarea id="blocked-terms" class="field" rows="4" placeholder="spam&#10;scam"></textarea>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="blocked-domains">Blocked domains</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One host or URL per line; a document served from any of these is excluded entirely.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One host or URL per line; a document served from any of these is excluded entirely.</span></button>
           </div>
           <textarea id="blocked-domains" class="field" rows="4" placeholder="spammy.example"></textarea>
         </div>
@@ -325,14 +325,14 @@
         <div class="form-row">
           <div class="label-row">
             <label for="boosted-terms">Boosted words</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One "word factor" pair per line; a matching document's final score is multiplied by factor. A factor above 1 ranks higher, below 1 lower. Matching factors multiply together; zero or blank is ignored.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One "word factor" pair per line; a matching document's final score is multiplied by factor. A factor above 1 ranks higher, below 1 lower. Matching factors multiply together; zero or blank is ignored.</span></button>
           </div>
           <textarea id="boosted-terms" class="field" rows="4" placeholder="official 1.5"></textarea>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="boosted-domains">Boosted domains</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One "host factor" pair per line, same rules as boosted words.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">One "host factor" pair per line, same rules as boosted words.</span></button>
           </div>
           <textarea id="boosted-domains" class="field" rows="4" placeholder="trusted.example 2.0"></textarea>
         </div>
@@ -347,21 +347,21 @@
         <div class="form-row">
           <div class="label-row">
             <label for="db-max-open-conns">Max open connections</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">SQLite always keeps a single connection regardless of this value, since it serializes writers at the file level.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">SQLite always keeps a single connection regardless of this value, since it serializes writers at the file level.</span></button>
           </div>
           <span class="field-wrap" data-default="25"><input id="db-max-open-conns" class="field" type="number" step="1" min="1" required></span>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="db-max-idle-conns">Max idle connections</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Kept warm between requests instead of closed.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Kept warm between requests instead of closed.</span></button>
           </div>
           <span class="field-wrap" data-default="25"><input id="db-max-idle-conns" class="field" type="number" step="1" min="1" required></span>
         </div>
         <div class="form-row">
           <div class="label-row">
             <label for="db-conn-max-lifetime">Connection max lifetime</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Minutes before a pooled connection is recycled. A running process re-reads and re-applies these within about 10 seconds of a save, but the effect on already-open connections is limited to pool bookkeeping (idle/lifetime), not an instant reconnect.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Minutes before a pooled connection is recycled. A running process re-reads and re-applies these within about 10 seconds of a save, but the effect on already-open connections is limited to pool bookkeeping (idle/lifetime), not an instant reconnect.</span></button>
           </div>
           <span class="field-wrap" data-default="5"><input id="db-conn-max-lifetime" class="field" type="number" step="1" min="1" required></span>
         </div>
@@ -372,7 +372,7 @@
         <div class="form-row">
           <div class="label-row">
             <label for="session-ttl">Session length</label>
-            <span class="hint" role="button" tabindex="0" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Hours before a sign-in expires. Applies to sessions created after saving.</span></span>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Hours before a sign-in expires. Applies to sessions created after saving.</span></button>
           </div>
           <span class="field-wrap" data-default="12"><input id="session-ttl" class="field" type="number" step="1" min="1" required></span>
         </div>

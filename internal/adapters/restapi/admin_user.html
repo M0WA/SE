@@ -31,14 +31,14 @@
     <div class="form-row">
       <div class="label-row">
         <label for="user-password" id="user-password-label">Password</label>
-        <span class="hint" tabindex="0" role="button"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">At least 8 characters. Stored as a bcrypt hash -- never shown again after saving.</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">At least 8 characters. Stored as a bcrypt hash -- never shown again after saving.</span></button>
       </div>
       <input id="user-password" class="field" type="password" autocomplete="new-password" minlength="8">
     </div>
     <div class="form-row">
       <div class="label-row">
         <label for="user-custom-prompt">Personal prompt</label>
-        <span class="hint" tabindex="0" role="button"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Free text injected as this user's own system message on every chat turn they send, in addition to the site's own configured prompt. The user can also edit this themselves via their own Account page. Leave empty for none.</span></span>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Free text injected as this user's own system message on every chat turn they send, in addition to the site's own configured prompt. The user can also edit this themselves via their own Account page. Leave empty for none.</span></button>
       </div>
       <textarea id="user-custom-prompt" class="field" rows="24" maxlength="4000" placeholder="e.g. Always answer concisely and cite sources when possible."></textarea>
     </div>
