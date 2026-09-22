@@ -4,13 +4,13 @@
 
 *`/account/files`*
 
-Files you've uploaded, or that the model itself produced on your behalf via a write_file tool call during chat -- reachable from Your account, next to Your MCP servers.
+Files attached to your pinned chats, or that the model itself produced on your behalf via a write_file tool call during chat -- reachable from Your account, next to Your MCP servers. This page only ever lists and manages files; it has no upload form of its own -- see "Attaching files" below.
 
 ![Your files](images/account-files.png)
 
-## Uploading
+## Attaching files
 
-Choose a file and upload it. It becomes available to the model the next time it looks, via the file-access tools (see mcp-files on the [MCP servers](mcp-servers.md) page) -- uploading doesn't inject the file's contents into your next message directly.
+Files are attached from the chat page itself, via a tab's own paperclip button (see [Search & Chat](search-chat.md)'s "Attaching files" section) -- and only a pinned (persistent) chat tab can attach a file at all. A file becomes available to the model the next time it looks, via the file-access tools (see mcp-files on the [MCP servers](mcp-servers.md) page) -- attaching doesn't inject the file's contents into your next message directly. Unpinning or closing a pinned chat deletes every file attached to it, so this list shrinks along with your pinned chats, not just when you delete a row directly.
 
 ## Limits and ownership
 

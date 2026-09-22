@@ -14,7 +14,7 @@ func TestSaveFile_ThenListRoundTrips(t *testing.T) {
 	ctx := context.Background()
 	createTestUser(t, repo, "alice")
 
-	f, err := repo.SaveFile(ctx, "alice", "notes.txt", "text/plain", []byte("hello"))
+	f, err := repo.SaveFile(ctx, "alice", "", "notes.txt", "text/plain", []byte("hello"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -45,11 +45,11 @@ func TestSaveFile_MintsDistinctIDsForEachCall(t *testing.T) {
 	ctx := context.Background()
 	createTestUser(t, repo, "alice")
 
-	a, err := repo.SaveFile(ctx, "alice", "a.txt", "text/plain", []byte("a"))
+	a, err := repo.SaveFile(ctx, "alice", "", "a.txt", "text/plain", []byte("a"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	b, err := repo.SaveFile(ctx, "alice", "a.txt", "text/plain", []byte("b"))
+	b, err := repo.SaveFile(ctx, "alice", "", "a.txt", "text/plain", []byte("b"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -64,10 +64,10 @@ func TestListFiles_ScopedToOwner(t *testing.T) {
 	createTestUser(t, repo, "alice")
 	createTestUser(t, repo, "bob")
 
-	if _, err := repo.SaveFile(ctx, "alice", "a.txt", "text/plain", []byte("a")); err != nil {
+	if _, err := repo.SaveFile(ctx, "alice", "", "a.txt", "text/plain", []byte("a")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, err := repo.SaveFile(ctx, "bob", "b.txt", "text/plain", []byte("b")); err != nil {
+	if _, err := repo.SaveFile(ctx, "bob", "", "b.txt", "text/plain", []byte("b")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -97,10 +97,10 @@ func TestListFiles_MostRecentFirst(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
 	createTestUser(t, repo, "alice")
-	if _, err := repo.SaveFile(ctx, "alice", "first.txt", "text/plain", []byte("1")); err != nil {
+	if _, err := repo.SaveFile(ctx, "alice", "", "first.txt", "text/plain", []byte("1")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, err := repo.SaveFile(ctx, "alice", "second.txt", "text/plain", []byte("2")); err != nil {
+	if _, err := repo.SaveFile(ctx, "alice", "", "second.txt", "text/plain", []byte("2")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -117,7 +117,7 @@ func TestGetFile_ReturnsContent(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
 	createTestUser(t, repo, "alice")
-	saved, err := repo.SaveFile(ctx, "alice", "notes.txt", "text/plain", []byte("hello world"))
+	saved, err := repo.SaveFile(ctx, "alice", "", "notes.txt", "text/plain", []byte("hello world"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestGetFile_WrongOwnerNotFound(t *testing.T) {
 	ctx := context.Background()
 	createTestUser(t, repo, "alice")
 	createTestUser(t, repo, "bob")
-	saved, err := repo.SaveFile(ctx, "alice", "secret.txt", "text/plain", []byte("shh"))
+	saved, err := repo.SaveFile(ctx, "alice", "", "secret.txt", "text/plain", []byte("shh"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestDeleteFile_Success(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
 	createTestUser(t, repo, "alice")
-	saved, err := repo.SaveFile(ctx, "alice", "notes.txt", "text/plain", []byte("hello"))
+	saved, err := repo.SaveFile(ctx, "alice", "", "notes.txt", "text/plain", []byte("hello"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestDeleteFile_WrongOwnerNotFound(t *testing.T) {
 	ctx := context.Background()
 	createTestUser(t, repo, "alice")
 	createTestUser(t, repo, "bob")
-	saved, err := repo.SaveFile(ctx, "alice", "notes.txt", "text/plain", []byte("hello"))
+	saved, err := repo.SaveFile(ctx, "alice", "", "notes.txt", "text/plain", []byte("hello"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -16,7 +16,7 @@ Everything about running and using searchengine: installing and configuring a de
 - **[Search & Chat](search-chat.md)** -- This is the page every signed-in user lands on after logging in -- it is not an admin screen.
 - **[Your account](account.md)** -- Self-service page for a signed-in regular-user (not admin) account to change their own password and set a personal chat prompt -- no admin involvement needed for either.
 - **[Your MCP servers](account-mcp-servers.md)** -- Your own personal MCP tool servers, visible and usable only by you -- the same underlying idea as the admin-configured catalog on the [MCP servers](mcp-servers.md) page, but scoped to one account rather than shared deployment-wide.
-- **[Your files](account-files.md)** -- Files you've uploaded, or that the model itself produced on your behalf via a write_file tool call during chat -- reachable from Your account, next to Your MCP servers.
+- **[Your files](account-files.md)** -- Files attached to your pinned chats, or that the model itself produced on your behalf via a write_file tool call during chat -- reachable from Your account, next to Your MCP servers.
 
 ## Content
 

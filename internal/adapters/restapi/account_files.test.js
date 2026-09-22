@@ -35,10 +35,10 @@ test.afterEach(async () => {
   delete global.fetch;
 });
 
-test('loadFiles shows a message and no table when none are uploaded', async () => {
+test('loadFiles shows a message and no table when there are none', async () => {
   loadFixture(async () => ({ ok: true, json: async () => [] }));
   await flush();
-  assert.equal(document.getElementById('files-status').textContent.includes('No files uploaded'), true);
+  assert.equal(document.getElementById('files-status').textContent.includes('No files yet'), true);
   assert.equal(document.getElementById('files-table').querySelector('table'), null);
 });
 
@@ -118,64 +118,6 @@ test('a failed delete shows an alert and does not reload the list', async () => 
   document.querySelector('#files-table button.text-button').dispatchEvent(new window.Event('click'));
   await flush();
   assert.equal(alertMessage.includes('db down'), true);
-});
-
-test('submitting the upload form with no file selected shows a status message and does not fetch', async () => {
-  loadFixture();
-  await flush();
-  let fetchCalled = false;
-  global.fetch = async () => { fetchCalled = true; return { ok: true, json: async () => [] }; };
-  document.getElementById('upload-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
-  await flush();
-  assert.equal(fetchCalled, false);
-  assert.equal(document.getElementById('upload-status').textContent, 'Choose a file first.');
-});
-
-test('submitting the upload form with a selected file POSTs it and reloads the list', async () => {
-  loadFixture();
-  await flush();
-  const input = document.getElementById('upload-input');
-  const file = new window.File(['hello'], 'notes.txt', { type: 'text/plain' });
-  Object.defineProperty(input, 'files', { value: [file], configurable: true });
-
-  let gotURL, gotMethod, gotBody;
-  global.fetch = async (url, opts) => {
-    if (opts && opts.method === 'POST') {
-      gotURL = url;
-      gotMethod = opts.method;
-      gotBody = opts.body;
-      return { ok: true, json: async () => baseFile() };
-    }
-    return { ok: true, json: async () => [baseFile()] };
-  };
-  document.getElementById('upload-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
-  await flush();
-  assert.equal(gotURL, '/account/api/files');
-  assert.equal(gotMethod, 'POST');
-  // Bare FormData (Node's own global, via undici), not window.FormData --
-  // account_files.js runs in this test's Node global scope (loaded via
-  // require(), not a real <script> tag), so its unqualified `new
-  // FormData()` resolves to Node's global class, not jsdom's separate one
-  // on window; the two are different constructors even though a real
-  // browser would only ever have one FormData in scope at all.
-  assert.equal(gotBody instanceof FormData, true);
-  assert.equal(document.getElementById('upload-status').textContent, '');
-});
-
-test('a failed upload shows a status message and does not clear the form', async () => {
-  loadFixture();
-  await flush();
-  const input = document.getElementById('upload-input');
-  const file = new window.File(['hello'], 'notes.txt', { type: 'text/plain' });
-  Object.defineProperty(input, 'files', { value: [file], configurable: true });
-
-  global.fetch = async (url, opts) => {
-    if (opts && opts.method === 'POST') return { ok: false, status: 400, text: async () => 'file too large' };
-    return { ok: true, json: async () => [] };
-  };
-  document.getElementById('upload-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
-  await flush();
-  assert.equal(document.getElementById('upload-status').textContent.includes('file too large'), true);
 });
 
 test('sign-out posts to /logout on click', async () => {

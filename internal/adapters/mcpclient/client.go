@@ -213,16 +213,25 @@ func (s *Session) CallTool(ctx context.Context, toolName, argumentsJSON string) 
 		}
 	}
 
+	// Every MCP tool call is logged the same way regardless of which
+	// server or tool it names -- there's nothing web_search/web_fetch-
+	// specific to single out now that they're MCP tools like any other
+	// (mcp-web, mcp-sandbox, mcp-files, or a third-party server an admin
+	// configures); one log line per call keeps every tool's usage visible
+	// in the same place, not just the built-in ones.
 	callCtx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 	result, err := conn.session.CallTool(callCtx, &mcp.CallToolParams{Name: toolName, Arguments: args})
 	if err != nil {
+		log.Printf("mcpclient: tool %q (server %q) call failed: %v", toolName, conn.serverName, err)
 		return "", err
 	}
 	text := flattenContent(result.Content)
 	if result.IsError {
+		log.Printf("mcpclient: tool %q (server %q) returned an error result: %s", toolName, conn.serverName, text)
 		return "", fmt.Errorf("tool error: %s", text)
 	}
+	log.Printf("mcpclient: tool %q (server %q) call succeeded", toolName, conn.serverName)
 	return text, nil
 }
 

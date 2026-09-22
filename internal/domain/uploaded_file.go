@@ -14,6 +14,15 @@ import "time"
 type UploadedFile struct {
 	ID          string
 	OwnerUserID string
+	// ChatID ties this file to the PersistedChat it was attached/produced
+	// during -- only a pinned (persisted) chat may have files at all (see
+	// PersistedChat's own doc comment), so this is always non-empty for a
+	// file created after that feature shipped. Deleting the PersistedChat
+	// cascades to delete this file too (see the uploaded_files table's own
+	// foreign key). Empty for a file created before chats could be
+	// pinned -- still listed/downloadable/deletable, just not tied to any
+	// one conversation.
+	ChatID      string
 	Filename    string
 	ContentType string
 	Size        int64

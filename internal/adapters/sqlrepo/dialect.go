@@ -243,6 +243,23 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			gated_by_web_search BOOLEAN NOT NULL DEFAULT false,
 			PRIMARY KEY (user_id, id)
 		)`,
+		// chats holds domain.PersistedChat rows -- a chat a user explicitly
+		// pinned to persist across reloads, owned by (cascade-deleted
+		// with) one user_id, id a random opaque token (see sqlrepo's
+		// randomFileID/randomChatID) for the same reason uploaded_files.id
+		// is. history is the full turn-by-turn transcript, JSON-encoded
+		// (same convention as mcp_servers.args) rather than a normalized
+		// per-message table -- always read/written as one whole document,
+		// never queried by individual message. Created before
+		// uploaded_files (not alongside user_mcp_servers above) since that
+		// table's own chat_id FK needs this one to already exist.
+		`CREATE TABLE IF NOT EXISTS chats (
+			id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			title TEXT NOT NULL, agent_id TEXT NOT NULL DEFAULT '',
+			history TEXT NOT NULL DEFAULT '[]',
+			created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_chats_user_id ON chats(user_id)`,
 		// uploaded_files is user_mcp_servers' sibling for domain.UploadedFile
 		// -- every row owned by (cascade-deleted with) one user_id, id a
 		// random opaque token (see sqlrepo's randomFileID) rather than a
@@ -252,14 +269,31 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 		// does. data holds the file's raw bytes directly in this shared
 		// database, the same tier of "just another row" every other piece
 		// of this app's state already gets -- no separate blob store to
-		// stand up or back up independently.
+		// stand up or back up independently. chat_id ties a file to the
+		// domain.PersistedChat it was attached/produced during --
+		// NULLable (not NOT NULL DEFAULT '') specifically so a file
+		// created before chats could be pinned, with no chat to point at,
+		// doesn't fail this foreign key ('' would never match a real
+		// chats.id and NULL is the only value a FK constraint exempts
+		// from the check) -- scanned back into
+		// domain.UploadedFile.ChatID as "". The "ON DELETE CASCADE" here
+		// only actually fires under Postgres (which always enforces its
+		// own foreign keys) -- SQLite enforces one only when a
+		// connection has run "PRAGMA foreign_keys = ON", which this
+		// package's connections never do, so Repository.DeleteChat
+		// deletes a chat's files explicitly itself rather than relying
+		// on this constraint; it's kept for Postgres' own referential
+		// integrity and as documentation of the real relationship, not
+		// as the actual cross-dialect cleanup mechanism.
 		`CREATE TABLE IF NOT EXISTS uploaded_files (
 			id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			chat_id TEXT REFERENCES chats(id) ON DELETE CASCADE,
 			filename TEXT NOT NULL, content_type TEXT NOT NULL DEFAULT '',
 			size INTEGER NOT NULL DEFAULT 0, data BLOB NOT NULL,
 			created_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_uploaded_files_user_id ON uploaded_files(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_uploaded_files_chat_id ON uploaded_files(chat_id)`,
 	}
 }
 
@@ -441,18 +475,32 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			PRIMARY KEY (user_id, id),
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		) ENGINE=InnoDB`,
+		// See the sqlite dialect's chats comment. id is VARCHAR(32) (a
+		// 16-byte random token, hex-encoded), like uploaded_files.id.
+		`CREATE TABLE IF NOT EXISTS chats (
+			id VARCHAR(32) NOT NULL, user_id VARCHAR(20) NOT NULL,
+			title VARCHAR(255) NOT NULL, agent_id VARCHAR(20) NOT NULL DEFAULT '',
+			history LONGTEXT NOT NULL,
+			created_at VARCHAR(64) NOT NULL, updated_at VARCHAR(64) NOT NULL,
+			PRIMARY KEY (id),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		) ENGINE=InnoDB`,
+		`CREATE INDEX idx_chats_user_id ON chats(user_id)`,
 		// See the sqlite dialect's uploaded_files comment. id is
 		// VARCHAR(32) (a 16-byte random token, hex-encoded), unlike
-		// user_id/other slug-derived ids' VARCHAR(20).
+		// user_id/other slug-derived ids' VARCHAR(20). chat_id is
+		// NULLable (see the sqlite dialect's own note on why).
 		`CREATE TABLE IF NOT EXISTS uploaded_files (
-			id VARCHAR(32) NOT NULL, user_id VARCHAR(20) NOT NULL,
+			id VARCHAR(32) NOT NULL, user_id VARCHAR(20) NOT NULL, chat_id VARCHAR(32),
 			filename VARCHAR(255) NOT NULL, content_type VARCHAR(255) NOT NULL DEFAULT '',
 			size INT NOT NULL DEFAULT 0, data LONGBLOB NOT NULL,
 			created_at VARCHAR(64) NOT NULL,
 			PRIMARY KEY (id),
-			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+			FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
 		) ENGINE=InnoDB`,
 		`CREATE INDEX idx_uploaded_files_user_id ON uploaded_files(user_id)`,
+		`CREATE INDEX idx_uploaded_files_chat_id ON uploaded_files(chat_id)`,
 	}
 }
 
@@ -638,14 +686,25 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			gated_by_web_search BOOLEAN NOT NULL DEFAULT false,
 			PRIMARY KEY (user_id, id)
 		)`,
-		// See the sqlite dialect's uploaded_files comment.
+		// See the sqlite dialect's chats comment.
+		`CREATE TABLE IF NOT EXISTS chats (
+			id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			title TEXT NOT NULL, agent_id TEXT NOT NULL DEFAULT '',
+			history TEXT NOT NULL DEFAULT '[]',
+			created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_chats_user_id ON chats(user_id)`,
+		// See the sqlite dialect's uploaded_files comment. chat_id is
+		// NULLable (see that same comment for why).
 		`CREATE TABLE IF NOT EXISTS uploaded_files (
 			id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			chat_id TEXT REFERENCES chats(id) ON DELETE CASCADE,
 			filename TEXT NOT NULL, content_type TEXT NOT NULL DEFAULT '',
 			size INT NOT NULL DEFAULT 0, data BYTEA NOT NULL,
 			created_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_uploaded_files_user_id ON uploaded_files(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_uploaded_files_chat_id ON uploaded_files(chat_id)`,
 	}
 }
 

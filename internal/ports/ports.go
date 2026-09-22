@@ -736,16 +736,49 @@ type FileStore interface {
 	// descending (most recent upload first) -- metadata only, never the
 	// file content itself.
 	ListFiles(ctx context.Context, ownerUserID string) ([]domain.UploadedFile, error)
-	// SaveFile stores a new file owned by ownerUserID and returns its
-	// fully-populated domain.UploadedFile (ID/Size/CreatedAt included) --
-	// the caller never picks the ID.
-	SaveFile(ctx context.Context, ownerUserID, filename, contentType string, data []byte) (domain.UploadedFile, error)
+	// ListFilesForChat is ListFiles narrowed to one PersistedChat -- used
+	// for the in-chat file strip (and by cmd/mcp-files' list_files during
+	// a chat turn, scoped via the turn's own bearer token), unlike the
+	// Your files account page, which uses ListFiles' unscoped view.
+	ListFilesForChat(ctx context.Context, ownerUserID, chatID string) ([]domain.UploadedFile, error)
+	// SaveFile stores a new file owned by ownerUserID, attached to chatID
+	// (see domain.UploadedFile.ChatID -- required, since only a pinned
+	// chat may ever call this), and returns its fully-populated
+	// domain.UploadedFile (ID/Size/CreatedAt included) -- the caller never
+	// picks the ID.
+	SaveFile(ctx context.Context, ownerUserID, chatID, filename, contentType string, data []byte) (domain.UploadedFile, error)
 	// GetFile returns one of ownerUserID's own files, metadata and content
 	// together -- ErrFileNotFound if no file with (ownerUserID, id) exists.
 	GetFile(ctx context.Context, ownerUserID, id string) (domain.UploadedFile, []byte, error)
 	// DeleteFile removes one of ownerUserID's own files -- ErrFileNotFound
 	// if no file with (ownerUserID, id) exists.
 	DeleteFile(ctx context.Context, ownerUserID, id string) error
+}
+
+var ErrChatNotFound = errors.New("chat not found")
+
+// ChatStore persists domain.PersistedChat rows -- every operation scoped
+// by ownerUserID, the same discipline FileStore applies to uploaded files.
+// Backs the self-service /account/api/chats HTTP endpoints (restapi).
+type ChatStore interface {
+	// ListChats lists ownerUserID's own pinned chats, most recently
+	// updated first -- the set reloaded automatically on the chat page.
+	ListChats(ctx context.Context, ownerUserID string) ([]domain.PersistedChat, error)
+	// CreateChat pins a new chat and returns its fully-populated
+	// domain.PersistedChat (ID/CreatedAt/UpdatedAt included) -- the caller
+	// never picks the ID.
+	CreateChat(ctx context.Context, c domain.PersistedChat) (domain.PersistedChat, error)
+	// UpdateChat replaces c's editable fields (Title/AgentID/History) and
+	// bumps UpdatedAt -- ErrChatNotFound if no chat with (c.OwnerUserID,
+	// c.ID) exists.
+	UpdateChat(ctx context.Context, c domain.PersistedChat) error
+	// DeleteChat removes one of ownerUserID's own pinned chats --
+	// ErrChatNotFound if no chat with (ownerUserID, id) exists. Also
+	// deletes every file attached to it (sqlrepo does this explicitly,
+	// not via the chats table's own "ON DELETE CASCADE" foreign key --
+	// see sqlrepo's dialect.go for why that alone isn't reliable across
+	// every dialect this package supports).
+	DeleteChat(ctx context.Context, ownerUserID, id string) error
 }
 
 // ErrAgentNotFound is returned by AgentStore's Update and Delete when no

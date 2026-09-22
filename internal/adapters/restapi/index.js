@@ -42,13 +42,31 @@
   let nextTabId = 1;
   function makeTab(overrides) {
     const id = nextTabId++;
-    return { id: id, title: 'Chat ' + id, history: [], tokenUsage: null, agentId: '', ...overrides };
+    return {
+      id: id, title: 'Chat ' + id, history: [], tokenUsage: null, agentId: '',
+      // persisted/chatId: whether this tab is pinned to a server-side
+      // domain.PersistedChat row (chatId is its id once pinned) -- only a
+      // persisted tab may attach files (see updateAttachAvailability) or
+      // survives a page reload (see loadPersistedChats).
+      persisted: false, chatId: null,
+      ...overrides,
+    };
   }
   const tabs = [makeTab()];
   let activeTabId = tabs[0].id;
 
   function activeTab() {
     return tabs.find((t) => t.id === activeTabId);
+  }
+
+  // pinIconSVG returns the pin glyph for a tab's pin button -- filled
+  // (accent-tinted via .chat-tab-pin-active) once persisted, outline
+  // otherwise, same inline-SVG-over-Unicode-emoji reasoning as
+  // #chat-attach's own paperclip (see style.css's .chat-tab-close comment).
+  function pinIconSVG(filled) {
+    return '<svg width="24" height="24" viewBox="0 0 24 24" fill="' + (filled ? 'currentColor' : 'none') +
+      '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>';
   }
 
   // deriveTabTitle shortens a tab's first user message into a readable tab
@@ -703,9 +721,27 @@
       switchBtn.type = 'button';
       switchBtn.className = 'chat-tab-label';
       switchBtn.textContent = tab.title;
-      switchBtn.title = tab.title;
-      switchBtn.addEventListener('click', () => switchTab(tab.id));
+      // Clicking the label switches to that tab -- unless it's already
+      // the active one, in which case switching would be a no-op, so
+      // that same click instead renames it (see renameTab).
+      switchBtn.title = tab.id === activeTabId ? 'Rename "' + tab.title + '"' : tab.title;
+      switchBtn.addEventListener('click', () => {
+        if (tab.id === activeTabId) {
+          renameTab(tab.id);
+        } else {
+          switchTab(tab.id);
+        }
+      });
       item.appendChild(switchBtn);
+
+      const pinBtn = document.createElement('button');
+      pinBtn.type = 'button';
+      pinBtn.className = 'chat-tab-action chat-tab-pin' + (tab.persisted ? ' chat-tab-pin-active' : '');
+      pinBtn.title = tab.persisted ? 'Unpin (this chat and its files will be deleted)' : 'Pin to save this chat and allow file attachments';
+      pinBtn.setAttribute('aria-label', pinBtn.title);
+      pinBtn.innerHTML = pinIconSVG(tab.persisted);
+      pinBtn.addEventListener('click', () => togglePinTab(tab.id));
+      item.appendChild(pinBtn);
 
       if (tabs.length > 1) {
         const closeBtn = document.createElement('button');
@@ -726,6 +762,7 @@
     activeTabId = id;
     renderTabs();
     renderActiveTab();
+    refreshTabFileState();
   }
 
   function newChatTab() {
@@ -734,6 +771,7 @@
     activeTabId = tab.id;
     renderTabs();
     renderActiveTab();
+    refreshTabFileState();
     return tab;
   }
 
@@ -741,7 +779,10 @@
   // object shallow-copied, so editing the fork's own tool_results array
   // later can't ever mutate the source tab's) into a new, independent tab
   // and switches to it -- the source conversation keeps going exactly as
-  // it was.
+  // it was. A fork always starts unpinned/un-persisted (makeTab's own
+  // defaults), even when forking a pinned chat -- pinning it is a
+  // separate, deliberate action so a fork never silently starts sharing
+  // the source chat's saved files.
   function forkActiveTab() {
     const source = activeTab();
     const tab = makeTab({
@@ -754,17 +795,120 @@
     activeTabId = tab.id;
     renderTabs();
     renderActiveTab();
+    refreshTabFileState();
     return tab;
   }
 
-  function closeTab(id) {
+  // renameTab prompts for a new title and applies it locally -- for a
+  // persisted tab, also resyncs the new title to the server immediately
+  // so the rename survives a reload (see resyncPersistedChat). An
+  // unpersisted tab's title is session-only, same as before pinning
+  // existed, so nothing is sent for it.
+  function renameTab(id) {
+    const tab = tabs.find((t) => t.id === id);
+    if (!tab) return;
+    const next = window.prompt('Rename this chat', tab.title);
+    if (next === null) return;
+    const trimmed = next.trim();
+    if (!trimmed || trimmed === tab.title) return;
+    tab.title = trimmed;
+    renderTabs();
+    resyncPersistedChat(tab);
+  }
+
+  // resyncPersistedChat pushes tab's current title/agent/history to its
+  // own server-side row -- called after every turn and every rename of a
+  // persisted tab. Best-effort: a failed resync leaves the in-memory tab
+  // (and this session's view of it) correct regardless, and the next
+  // successful resync catches the server row back up.
+  async function resyncPersistedChat(tab) {
+    if (!tab.persisted || !tab.chatId) return;
+    try {
+      await fetch('/account/api/chats/' + encodeURIComponent(tab.chatId), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: tab.title, agent_id: tab.agentId || '', history: tab.history }),
+      });
+    } catch (err) {
+      // Non-critical: see doc comment above.
+    }
+  }
+
+  // pinTab creates this tab's server-side PersistedChat row from its
+  // current in-memory state -- from that point on it survives a reload
+  // and may attach files (see updateAttachAvailability).
+  async function pinTab(tab) {
+    try {
+      const resp = await fetch('/account/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: tab.title, agent_id: tab.agentId || '', history: tab.history }),
+      });
+      if (!resp.ok) throw new Error(await resp.text() || resp.statusText);
+      const data = await resp.json();
+      tab.persisted = true;
+      tab.chatId = data.id;
+      renderTabs();
+      refreshTabFileState();
+    } catch (err) {
+      chatStatus.textContent = 'Could not pin chat: ' + err.message;
+    }
+  }
+
+  // unpinTab deletes this tab's server-side row (and every file attached
+  // to it -- see handleAccountDeleteChat's own cascade) but leaves the
+  // tab itself open, now back to a plain session-only conversation.
+  async function unpinTab(tab) {
+    if (!tab.chatId) return;
+    try {
+      const resp = await fetch('/account/api/chats/' + encodeURIComponent(tab.chatId), { method: 'DELETE' });
+      if (!resp.ok) throw new Error(await resp.text() || resp.statusText);
+      tab.persisted = false;
+      tab.chatId = null;
+      renderTabs();
+      refreshTabFileState();
+    } catch (err) {
+      chatStatus.textContent = 'Could not unpin chat: ' + err.message;
+    }
+  }
+
+  function togglePinTab(id) {
+    const tab = tabs.find((t) => t.id === id);
+    if (!tab) return;
+    if (tab.persisted) {
+      unpinTab(tab);
+    } else {
+      pinTab(tab);
+    }
+  }
+
+  // closeTab removes a tab from the strip. For a persisted (pinned) tab
+  // this first deletes its server-side row -- cascading to every file
+  // attached to it, see handleAccountDeleteChat -- before removing it
+  // locally; the tab is left in place (not removed) if that delete fails,
+  // so a chat is never silently orphaned server-side while looking closed
+  // in the UI. An unpersisted tab is simply discarded, exactly as before
+  // pinning existed.
+  async function closeTab(id) {
     if (tabs.length <= 1) return;
+    const tab = tabs.find((t) => t.id === id);
+    if (!tab) return;
+    if (tab.persisted && tab.chatId) {
+      try {
+        const resp = await fetch('/account/api/chats/' + encodeURIComponent(tab.chatId), { method: 'DELETE' });
+        if (!resp.ok) throw new Error(await resp.text() || resp.statusText);
+      } catch (err) {
+        chatStatus.textContent = 'Could not close "' + tab.title + '": ' + err.message;
+        return;
+      }
+    }
     const idx = tabs.findIndex((t) => t.id === id);
     if (idx === -1) return;
     tabs.splice(idx, 1);
     if (activeTabId === id) {
       activeTabId = tabs[Math.max(0, idx - 1)].id;
       renderActiveTab();
+      refreshTabFileState();
     }
     renderTabs();
   }
@@ -823,6 +967,7 @@
     activeTabId = tab.id;
     renderTabs();
     renderActiveTab();
+    refreshTabFileState();
     return tab;
   }
 
@@ -849,10 +994,16 @@
   // message text itself. 404/503 here most likely means no signed-in
   // regular-user account (an admin session has no files of its own -- see
   // domain.UploadedFile's own doc comment) or the feature isn't
-  // configured on this deployment.
+  // configured on this deployment. Only a persisted (pinned) tab can
+  // reach this at all -- see updateAttachAvailability, which disables
+  // chatAttachBtn otherwise -- so the active tab always has a chatId here
+  // in practice; the backend rejects an upload with no chat_id regardless
+  // (defense in depth, not relied on as the only gate).
   async function uploadAttachedFile(file) {
+    const tab = activeTab();
     const body = new FormData();
     body.append('file', file);
+    if (tab && tab.chatId) body.append('chat_id', tab.chatId);
     const resp = await fetch('/account/api/files', { method: 'POST', body });
     if (!resp.ok) throw new Error(await resp.text() || resp.statusText);
     return resp.json();
@@ -914,14 +1065,79 @@
   // loadSession -- a role=admin session (no files of its own) or
   // Files not configured on this deployment both 404/503 here, and
   // #chat-files should just stay empty/hidden rather than show an error
-  // for a feature this session was never going to have anyway.
+  // for a feature this session was never going to have anyway. Scoped to
+  // the active tab's own chat_id -- an unpersisted tab has none, so it
+  // short-circuits to an empty (hidden) strip rather than fetching the
+  // account's *entire* unscoped file list (that unscoped view is what the
+  // Your files page itself is for, not a tab that was never pinned).
   async function loadChatFiles() {
+    const tab = activeTab();
+    if (!tab || !tab.persisted || !tab.chatId) {
+      renderChatFiles([]);
+      return;
+    }
     try {
-      const resp = await fetch('/account/api/files');
+      const resp = await fetch('/account/api/files?chat_id=' + encodeURIComponent(tab.chatId));
       if (!resp.ok) return;
       renderChatFiles(await resp.json());
     } catch (err) {
       // Non-critical: the strip simply stays empty/hidden.
+    }
+  }
+
+  // updateAttachAvailability enables the attach button only for a
+  // persisted (pinned) tab -- see account_files.go's own chat_id
+  // requirement on upload: an unpinned tab has no chat_id to attach a
+  // file against.
+  function updateAttachAvailability() {
+    const tab = activeTab();
+    const persisted = !!(tab && tab.persisted);
+    chatAttachBtn.disabled = !persisted;
+    chatAttachBtn.title = persisted ? 'Attach a file for the model to inspect' : 'Pin this chat first to attach files';
+    chatAttachBtn.setAttribute('aria-label', chatAttachBtn.title);
+  }
+
+  // refreshTabFileState re-evaluates file-attachment availability and
+  // reloads the file strip for whichever tab is now active -- called
+  // after anything that changes the active tab or a tab's persisted
+  // state (switch/new/fork/close/import/pin/unpin).
+  function refreshTabFileState() {
+    updateAttachAvailability();
+    loadChatFiles();
+  }
+
+  // loadPersistedChats reloads every one of this account's pinned chats
+  // on page load, replacing the single default empty tab with them (most
+  // recently updated first, same order ListChats itself returns) --
+  // called only for a confirmed role=user session (see loadSession).
+  // Leaves the default tab alone if the account has no pinned chats yet.
+  // A pinned chat's own history round-trips only {role, content} (see
+  // pinnedChatRequest's own doc comment) -- context_trimmed/tool_results
+  // are UI-only rendering metadata never sent to or stored by the
+  // server, so a reloaded turn's tool-result folds are simply not shown
+  // again, same as this tab starting a brand new one would look.
+  async function loadPersistedChats() {
+    try {
+      const resp = await fetch('/account/api/chats');
+      if (!resp.ok) return;
+      const chats = await resp.json();
+      if (!Array.isArray(chats) || chats.length === 0) return;
+      tabs.length = 0;
+      for (const c of chats) {
+        tabs.push(makeTab({
+          title: c.title,
+          history: (c.history || []).map((m) => ({ role: m.role, content: m.content, context_trimmed: false, tool_results: [] })),
+          agentId: c.agent_id || '',
+          persisted: true,
+          chatId: c.id,
+        }));
+      }
+      activeTabId = tabs[0].id;
+      renderTabs();
+      renderActiveTab();
+      refreshTabFileState();
+    } catch (err) {
+      // Non-critical: the default empty tab is left in place.
     }
   }
 
@@ -978,7 +1194,14 @@
       const resp = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: toWireHistory(tab.history), web_search: chatWebSearch.checked, agent_id: tab.agentId || '' }),
+        body: JSON.stringify({
+          messages: toWireHistory(tab.history), web_search: chatWebSearch.checked, agent_id: tab.agentId || '',
+          // chat_id, only for a pinned tab -- scopes this turn's own
+          // file-access token (see fileAccessTokenFor) to this chat, so
+          // the file-operations MCP server only ever sees this chat's
+          // own attached files during it.
+          chat_id: tab.persisted ? (tab.chatId || '') : '',
+        }),
       });
       if (!resp.ok) {
         const msg = await resp.text();
@@ -991,6 +1214,7 @@
         context_trimmed: data.context_trimmed, tool_results: data.tool_results || [],
       });
       tab.tokenUsage = data.token_usage;
+      resyncPersistedChat(tab);
       if (tab.id === activeTabId) {
         renderChatMessage('assistant', data.answer, data.context_trimmed, data.tool_results || []);
         renderTokenUsage(tab.tokenUsage);
@@ -1043,6 +1267,7 @@
 
   renderTabs();
   renderActiveTab();
+  updateAttachAvailability();
   setMode('chat');
   loadAgentOptions();
 
@@ -1102,7 +1327,7 @@
         adminLink.hidden = false;
       } else if (data.role === 'user') {
         accountLink.hidden = false;
-        loadChatFiles();
+        loadPersistedChats();
       }
     } catch (err) {
       // Non-critical: both links simply stay hidden.
@@ -1128,8 +1353,10 @@
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       renderCorrectionNote, clear, scoreRow, renderResults, runSearch,
-      tabs, activeTab, renderChatMessage, renderActiveTab, renderTabs,
-      switchTab, newChatTab, forkActiveTab, closeTab,
+      tabs, makeTab, activeTab, renderChatMessage, renderActiveTab, renderTabs,
+      switchTab, newChatTab, forkActiveTab, closeTab, renameTab,
+      pinTab, unpinTab, togglePinTab, resyncPersistedChat, loadPersistedChats,
+      pinIconSVG, updateAttachAvailability, refreshTabFileState,
       serializeTab, deserializeTab, exportActiveTab, importTabFromJSON,
       toWireHistory, sendChatMessage, setMode,
       escapeHTML, renderInline, renderMarkdown,

@@ -74,6 +74,7 @@ func main() {
 		Users:                repo,
 		UserMCPServers:       repo,
 		Files:                repo,
+		Chats:                repo,
 		InternalSearchAPIKey: internalSearchAPIKey,
 		Chat:                 application.NewChatService(repo, httpchat.New(), repo, mcpclient.New(), repo, repo),
 	})
