@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.56 - 2026-09-22
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* dockersandbox: add -dns/-host-dns flags for network-enabled sandboxes by @M0WA in https://github.com/M0WA/SE/pull/251
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.55...v4.13.56
+
+
 ## v4.13.55 - 2026-09-22
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
