@@ -863,7 +863,9 @@ test('the attach file input uploads the chosen file and shows a confirmation sta
   input.dispatchEvent(new window.Event('change'));
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(gotURL, '/account/api/files');
-  assert.equal(gotBody instanceof window.FormData, true);
+  // Bare FormData (Node's own global), not window.FormData -- see
+  // account_files.test.js's identical assertion for why.
+  assert.equal(gotBody instanceof FormData, true);
   assert.equal(document.getElementById('chat-status').textContent.includes('data.csv'), true);
 });
 

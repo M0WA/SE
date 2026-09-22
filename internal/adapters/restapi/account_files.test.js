@@ -152,7 +152,13 @@ test('submitting the upload form with a selected file POSTs it and reloads the l
   await flush();
   assert.equal(gotURL, '/account/api/files');
   assert.equal(gotMethod, 'POST');
-  assert.equal(gotBody instanceof window.FormData, true);
+  // Bare FormData (Node's own global, via undici), not window.FormData --
+  // account_files.js runs in this test's Node global scope (loaded via
+  // require(), not a real <script> tag), so its unqualified `new
+  // FormData()` resolves to Node's global class, not jsdom's separate one
+  // on window; the two are different constructors even though a real
+  // browser would only ever have one FormData in scope at all.
+  assert.equal(gotBody instanceof FormData, true);
   assert.equal(document.getElementById('upload-status').textContent, '');
 });
 
