@@ -10,6 +10,7 @@ Recommends: libnspr4, libnss3, libatk1.0-0t64, libatk-bridge2.0-0t64, libcups2t6
  libgbm1, libasound2t64, libatspi2.0-0t64, libxshmfence1, libgtk-3-0t64,
  libcairo-gobject2, libcairo2, libgdk-pixbuf-2.0-0, libxcursor1, libxcb-shm0,
  libpangocairo-1.0-0
+Suggests: docker.io
 Description: Custom hybrid search engine (BM25 + semantic)
  Crawler, inverted index, BM25 ranking, and semantic search
  over SQLite/MySQL/PostgreSQL. Hexagonal architecture, in Go.

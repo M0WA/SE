@@ -9,6 +9,7 @@ flowchart LR
     SearXNG["SearXNG metasearch<br/>127.0.0.1:8888"]
     Sites["Crawled websites"]
     IONOSMon["IONOS Monitoring Service"]
+    Docker["Docker daemon<br/>(local, opt-in via docker group)"]
   end
 
   subgraph Binaries["Binaries"]
@@ -17,6 +18,7 @@ flowchart LR
     Crawl["cmd/crawl<br/>internal only, 127.0.0.1:8082"]
     MCPWeb["cmd/mcp-web<br/>spawned stdio subprocess<br/>(not a service)"]
     MCPDatetime["cmd/mcp-datetime<br/>spawned stdio subprocess<br/>(not a service)"]
+    MCPSandbox["cmd/mcp-sandbox<br/>spawned stdio subprocess<br/>(not a service)"]
   end
 
   subgraph Core["Core: domain + ports + application"]
@@ -39,6 +41,7 @@ flowchart LR
     CrawlClient["crawlclient"]
     SettingsCrypto["settingscrypto"]
     MCPClient["mcpclient<br/>MCP client (stdio/http)"]
+    DockerSandbox["dockersandbox<br/>locked-down Docker containers"]
   end
 
   DB[("Shared SQL database<br/>SQLite local/CI, Postgres dev")]
@@ -82,7 +85,10 @@ flowchart LR
   App --> MCPClient
   MCPClient -.->|"spawns as child process"| MCPWeb
   MCPClient -.->|"spawns as child process"| MCPDatetime
+  MCPClient -.->|"spawns as child process"| MCPSandbox
   MCPWeb -->|"web_search tool"| SearXNG
+  MCPSandbox --> DockerSandbox
+  DockerSandbox -.->|"docker CLI"| Docker
 
   Nginx -.->|"stub_status via<br/>prometheus-nginx-exporter"| IONOSMon
   SQLRepo -.->|"postgres-exporter"| IONOSMon
