@@ -9,7 +9,7 @@ Source: [`architecture.mmd`](architecture.mmd) (Mermaid) -- edit that file, then
 ```sh
 echo '{"args": ["--no-sandbox"]}' > /tmp/puppeteer-config.json
 npx --yes @mermaid-js/mermaid-cli@latest \
-  -i docs/architecture.mmd -o docs/architecture.svg -b white \
+  -i docs/architecture/architecture.mmd -o docs/architecture/architecture.svg -b white \
   -p /tmp/puppeteer-config.json
 ```
 

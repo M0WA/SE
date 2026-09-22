@@ -1,0 +1,55 @@
+---
+---
+
+@import "{{ site.theme }}";
+
+/* Color overrides only -- layout/structure stay jekyll-theme-minimal's own.
+   Values are sourced directly from the real admin UI (see
+   docs/manual/images/*.png), not an invented palette: the app's own
+   background is #eceff1, body/heading text is a warm near-black, and its
+   link color is a quiet slate-blue -- this keeps the docs site from
+   reading like an unrelated generic theme bolted onto app documentation. */
+body {
+  background-color: #eceff1;
+  color: #1c2126;
+}
+
+.wrapper {
+  background-color: #eceff1;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  color: #1c2126;
+  font-family: "Source Serif 4", Georgia, serif;
+}
+
+a {
+  color: #2f5d73;
+}
+
+a:hover {
+  color: #1c2126;
+}
+
+header {
+  background-color: #1c2126;
+}
+
+header h1, header p {
+  color: #eceff1;
+}
+
+code, pre {
+  font-family: "IBM Plex Mono", Menlo, monospace;
+  background-color: #dfe6e8;
+  color: #1c2126;
+}
+
+blockquote {
+  border-left: 3px solid #2f5d73;
+  color: #55636b;
+}
+
+img {
+  border: 1px solid #c7d0d3;
+}
