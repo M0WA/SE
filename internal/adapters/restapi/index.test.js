@@ -854,11 +854,19 @@ test('the attach file input uploads the chosen file and shows a confirmation sta
   const file = new window.File(['col1,col2\n1,2'], 'data.csv', { type: 'text/csv' });
   Object.defineProperty(input, 'files', { value: [file], configurable: true });
 
+  // A successful upload also triggers loadChatFiles' own follow-up GET to
+  // the SAME /account/api/files URL -- distinguish by method (opts.method
+  // is only set on the POST) rather than capturing whichever call runs
+  // last, same pattern the dedicated
+  // "a successful attach-upload reloads #chat-files" test below uses.
   let gotURL, gotBody;
   global.fetch = async (url, opts) => {
-    gotURL = url;
-    gotBody = opts && opts.body;
-    return { ok: true, json: async () => ({ id: 'f1', filename: 'data.csv', size: 13 }) };
+    if (opts && opts.method === 'POST') {
+      gotURL = url;
+      gotBody = opts.body;
+      return { ok: true, json: async () => ({ id: 'f1', filename: 'data.csv', size: 13 }) };
+    }
+    return { ok: true, json: async () => [] };
   };
   input.dispatchEvent(new window.Event('change'));
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -879,6 +887,130 @@ test('the attach file input shows an error status on a failed upload', async () 
   input.dispatchEvent(new window.Event('change'));
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(document.getElementById('chat-status').textContent.includes('files not configured'), true);
+});
+
+function baseChatFile(overrides) {
+  return Object.assign({ id: 'f1', filename: 'notes.txt', content_type: 'text/plain', size: 5, created_at: '2026-01-01T00:00:00Z' }, overrides);
+}
+
+test('renderChatFiles builds a box with a download link and a close button, hidden when empty', () => {
+  const { renderChatFiles } = loadFixture();
+  const chatFiles = document.getElementById('chat-files');
+
+  renderChatFiles([baseChatFile()]);
+  assert.equal(chatFiles.hidden, false);
+  const link = chatFiles.querySelector('.chat-file-box a');
+  assert.equal(link.textContent, 'notes.txt');
+  assert.equal(link.getAttribute('href'), '/account/api/files/f1');
+  assert.notEqual(chatFiles.querySelector('.chat-file-close'), null);
+
+  renderChatFiles([]);
+  assert.equal(chatFiles.hidden, true);
+  assert.equal(chatFiles.children.length, 0);
+});
+
+test('clicking a file box\'s × deletes it immediately, without a confirm dialog', async () => {
+  const { renderChatFiles } = loadFixture();
+  renderChatFiles([baseChatFile()]);
+  const chatFiles = document.getElementById('chat-files');
+
+  let gotURL, gotMethod;
+  let confirmCalled = false;
+  window.confirm = () => { confirmCalled = true; return false; };
+  global.fetch = async (url, opts) => {
+    gotURL = url;
+    gotMethod = opts && opts.method;
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  chatFiles.querySelector('.chat-file-close').dispatchEvent(new window.Event('click'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(confirmCalled, false);
+  assert.equal(gotURL, '/account/api/files/f1');
+  assert.equal(gotMethod, 'DELETE');
+  assert.equal(chatFiles.querySelector('.chat-file-box'), null);
+  assert.equal(chatFiles.hidden, true);
+});
+
+test('a failed file delete shows a status message and leaves the box in place', async () => {
+  const { renderChatFiles } = loadFixture();
+  renderChatFiles([baseChatFile()]);
+  const chatFiles = document.getElementById('chat-files');
+
+  global.fetch = async () => ({ ok: false, status: 500, text: async () => 'db down' });
+  chatFiles.querySelector('.chat-file-close').dispatchEvent(new window.Event('click'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(document.getElementById('chat-status').textContent.includes('db down'), true);
+  assert.notEqual(chatFiles.querySelector('.chat-file-box'), null);
+});
+
+test('loadChatFiles populates #chat-files from GET /account/api/files', async () => {
+  const { loadChatFiles } = loadFixture();
+  global.fetch = async (url) => {
+    assert.equal(url, '/account/api/files');
+    return { ok: true, json: async () => [baseChatFile()] };
+  };
+  await loadChatFiles();
+  assert.equal(document.getElementById('chat-files').hidden, false);
+  assert.equal(document.querySelector('.chat-file-box a').textContent, 'notes.txt');
+});
+
+test('loadChatFiles is silent and leaves #chat-files empty on a non-ok response', async () => {
+  const { loadChatFiles } = loadFixture();
+  global.fetch = async () => ({ ok: false, status: 503, text: async () => 'not configured' });
+  await loadChatFiles();
+  assert.equal(document.getElementById('chat-files').hidden, true);
+  assert.equal(document.getElementById('chat-status').textContent, '');
+});
+
+test('loadSession for a user-role session also loads that user\'s files into #chat-files', async () => {
+  global.fetch = async (url) => {
+    if (url === '/session') return { ok: true, json: async () => ({ role: 'user' }) };
+    if (url === '/account/api/files') return { ok: true, json: async () => [baseChatFile()] };
+    return { ok: false, status: 404, text: async () => 'not found' };
+  };
+  const { loadSession } = loadFixture();
+  await loadSession();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('account-link').hidden, false);
+  assert.notEqual(document.querySelector('.chat-file-box'), null);
+});
+
+test('a successful attach-upload reloads #chat-files so the new file box appears', async () => {
+  loadFixture();
+  const input = document.getElementById('chat-attach-input');
+  const file = new window.File(['hi'], 'notes.txt', { type: 'text/plain' });
+  Object.defineProperty(input, 'files', { value: [file], configurable: true });
+
+  global.fetch = async (url, opts) => {
+    if (opts && opts.method === 'POST') return { ok: true, json: async () => baseChatFile() };
+    return { ok: true, json: async () => [baseChatFile()] };
+  };
+  input.dispatchEvent(new window.Event('change'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.notEqual(document.querySelector('.chat-file-box'), null);
+});
+
+test('a successful write_file tool result reloads #chat-files so the new file\'s box appears', async () => {
+  global.fetch = async (url) => {
+    if (url === '/chat') {
+      return {
+        ok: true,
+        json: async () => ({
+          answer: 'done',
+          tool_results: [{ tool_name: 'write_file', output: '{"id":"f2","filename":"report.txt","size":11}' }],
+        }),
+      };
+    }
+    return { ok: true, json: async () => [baseChatFile({ id: 'f2', filename: 'report.txt' })] };
+  };
+  const { sendChatMessage } = loadFixture();
+  await sendChatMessage('q');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const box = document.querySelector('.chat-file-box');
+  assert.notEqual(box, null);
+  assert.equal(box.querySelector('a').textContent, 'report.txt');
 });
 
 test('clicking the attach button opens the hidden file picker', () => {
