@@ -16,6 +16,7 @@
   const chatTabImportBtn = document.getElementById('chat-tab-import');
   const chatTabImportInput = document.getElementById('chat-tab-import-input');
   const chatMessages = document.getElementById('chat-messages');
+  const chatFiles = document.getElementById('chat-files');
   const chatStatus = document.getElementById('chat-status');
   const chatForm = document.getElementById('chat-form');
   const chatInput = document.getElementById('chat-input');
@@ -542,6 +543,9 @@
             link.textContent = 'Download ' + parsed.filename;
             target.appendChild(link);
             details.appendChild(target);
+            // Also refresh #chat-files so a model-created file shows up as
+            // its own box below the transcript, not just this inline link.
+            loadChatFiles();
           }
           details.appendChild(buildToolResponseFold(tr, 'Raw output'));
           msg.appendChild(details);
@@ -849,10 +853,76 @@
     try {
       const uploaded = await uploadAttachedFile(file);
       chatStatus.textContent = 'Attached "' + uploaded.filename + '" -- ask about it and the model will read it.';
+      loadChatFiles();
     } catch (err) {
       chatStatus.textContent = 'Could not attach file: ' + err.message;
     }
   });
+
+  // renderChatFileBox builds one box for #chat-files -- a real download
+  // link (never a JS-triggered download, so it works the same as any
+  // other link: open in a new tab, copy the address, etc.) plus a "×"
+  // button that deletes it outright, no confirmation dialog -- unlike
+  // the Your files page's own delete (a more deliberate settings-page
+  // action), this is meant as a quick, low-friction remove for a file
+  // just attached or produced in this same conversation.
+  function renderChatFileBox(f) {
+    const box = document.createElement('div');
+    box.className = 'chat-file-box';
+    box.dataset.fileId = f.id;
+    const link = document.createElement('a');
+    link.href = '/account/api/files/' + encodeURIComponent(f.id);
+    link.textContent = f.filename;
+    link.title = 'Download ' + f.filename;
+    box.appendChild(link);
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'chat-file-close';
+    closeBtn.textContent = '×';
+    closeBtn.title = 'Delete ' + f.filename;
+    closeBtn.setAttribute('aria-label', 'Delete ' + f.filename);
+    closeBtn.addEventListener('click', () => deleteChatFile(f.id));
+    box.appendChild(closeBtn);
+    return box;
+  }
+
+  // renderChatFiles fully replaces #chat-files' contents -- called after
+  // every load/upload/create/delete rather than patched incrementally,
+  // the same "small list, just re-render it" convention account_files.js
+  // uses for its own table. Hidden entirely (not just empty) when there
+  // are no files, so it never reserves visible space for nothing.
+  function renderChatFiles(files) {
+    clear(chatFiles);
+    files.forEach((f) => chatFiles.appendChild(renderChatFileBox(f)));
+    chatFiles.hidden = files.length === 0;
+  }
+
+  // loadChatFiles is best-effort and silent on failure, same tolerance as
+  // loadSession -- a role=admin session (no files of its own) or
+  // Files not configured on this deployment both 404/503 here, and
+  // #chat-files should just stay empty/hidden rather than show an error
+  // for a feature this session was never going to have anyway.
+  async function loadChatFiles() {
+    try {
+      const resp = await fetch('/account/api/files');
+      if (!resp.ok) return;
+      renderChatFiles(await resp.json());
+    } catch (err) {
+      // Non-critical: the strip simply stays empty/hidden.
+    }
+  }
+
+  async function deleteChatFile(id) {
+    try {
+      const resp = await fetch('/account/api/files/' + encodeURIComponent(id), { method: 'DELETE' });
+      if (!resp.ok) throw new Error(await resp.text() || resp.statusText);
+      const box = chatFiles.querySelector('[data-file-id="' + id + '"]');
+      if (box) box.remove();
+      if (chatFiles.children.length === 0) chatFiles.hidden = true;
+    } catch (err) {
+      chatStatus.textContent = 'Could not delete file: ' + err.message;
+    }
+  }
 
   // toWireHistory strips a tab's own client-side rendering metadata
   // (context_trimmed/tool_results, kept in tab.history purely so
@@ -1015,6 +1085,7 @@
         adminLink.hidden = false;
       } else if (data.role === 'user') {
         accountLink.hidden = false;
+        loadChatFiles();
       }
     } catch (err) {
       // Non-critical: both links simply stay hidden.
@@ -1047,6 +1118,6 @@
       escapeHTML, renderInline, renderMarkdown,
       buildDonutSVG, buildDonutLegend, tokenUsageSegments, renderTokenUsage,
       loadSession, renderAgentSelectOptions, loadAgentOptions,
-      uploadAttachedFile,
+      uploadAttachedFile, renderChatFiles, loadChatFiles, deleteChatFile,
     };
   }

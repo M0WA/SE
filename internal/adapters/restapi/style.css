@@ -805,6 +805,57 @@ button:focus-visible {
 
 .chat-tab-actions { display: flex; gap: 0.15rem; flex: none; }
 
+/* .chat-files: the strip of uploaded/model-created file boxes below
+   #chat-messages -- same box/label/close-button anatomy as .chat-tab
+   above (border, radius, small "×" close glyph), styled as its own class
+   rather than reused literally since a file box's label is a real
+   download link, not a tab-switch button. */
+.chat-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.6rem 0;
+}
+
+.chat-file-box {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 0.2rem 0.2rem 0.2rem 0.6rem;
+  background: transparent;
+}
+
+.chat-file-box a {
+  font-size: 0.82rem;
+  color: var(--ink-muted);
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-file-box a:hover { color: var(--accent); }
+
+.chat-file-close {
+  font-size: 0.85rem;
+  line-height: 1;
+  color: var(--ink-muted);
+  background: none;
+  border: none;
+  border-radius: 3px;
+  padding: 0.2rem 0.4rem;
+  cursor: pointer;
+}
+
+.chat-file-close:hover { color: var(--accent); background: var(--accent-soft); }
+
+.chat-file-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* Chat panel -- #chat-tabs/#chat-messages/#chat-status/#chat-form stay in
    that order (input last, like a normal chat compose box: new answers
    grow the conversation above it, not below), but none carries a margin
