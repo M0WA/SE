@@ -190,6 +190,10 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 		return Result{}, fmt.Errorf("dockersandbox: unsupported language %q", opts.Language)
 	}
 
+	if err := ensureImage(ctx, cfg.image); err != nil {
+		return Result{}, err
+	}
+
 	dir, err := os.MkdirTemp("", "se-sandbox-*")
 	if err != nil {
 		return Result{}, fmt.Errorf("creating sandbox workdir: %w", err)
@@ -283,6 +287,33 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 		return result, fmt.Errorf("running sandbox: %w", runErr)
 	}
 	return result, nil
+}
+
+// imagePullTimeout bounds a cold "docker pull" of a sandbox image --
+// generous, since a first pull on a fresh host can take a while, and
+// deliberately separate from Limits.Timeout (which bounds the sandboxed
+// CODE's own wall-clock time, not one-time image setup).
+const imagePullTimeout = 5 * time.Minute
+
+// ensureImage makes sure image is present locally before a timed `docker
+// run` touches it. Without this, `docker run` auto-pulls a missing image
+// inline: the pull's own progress log lands directly in the container's
+// captured stdout/stderr (breaking the "captured output is exactly what
+// the code printed" contract), and the pull time is charged against
+// Limits.Timeout even though it has nothing to do with the code being
+// executed. "docker image inspect" is a fast local metadata check with no
+// network I/O, so the common case (image already cached) costs nothing.
+func ensureImage(ctx context.Context, image string) error {
+	if err := exec.CommandContext(ctx, "docker", "image", "inspect", image).Run(); err == nil {
+		return nil
+	}
+	pullCtx, cancel := context.WithTimeout(ctx, imagePullTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(pullCtx, "docker", "pull", image).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("pulling sandbox image %s: %w: %s", image, err, out)
+	}
+	return nil
 }
 
 // randomHex returns n random bytes hex-encoded, for a unique-enough

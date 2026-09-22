@@ -71,6 +71,34 @@ func TestRun_Go_CapturesStdout(t *testing.T) {
 	}
 }
 
+// TestRun_MissingImageIsPulledWithoutContaminatingOutput is the direct
+// regression test for a real bug found via CI on a cold runner: without
+// ensureImage, `docker run` auto-pulls a missing image and its progress
+// log lands in the container's own captured stderr, and the pull time
+// eats into Limits.Timeout -- both reproduced here by force-removing the
+// image first.
+func TestRun_MissingImageIsPulledWithoutContaminatingOutput(t *testing.T) {
+	requireDockerTests(t)
+	const image = "python:3-slim"
+	if err := exec.Command("docker", "rmi", "-f", image).Run(); err != nil {
+		t.Logf("docker rmi %s (best-effort, ignoring result): %v", image, err)
+	}
+	r := New(Limits{Timeout: 30 * time.Second})
+	res, err := r.Run(context.Background(), RunOptions{Language: Python, Code: "print('out line')"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.TimedOut {
+		t.Fatalf("expected the pull to be covered by imagePullTimeout, not Limits.Timeout, got %+v", res)
+	}
+	if strings.TrimSpace(res.Stdout) != "out line" {
+		t.Errorf("expected stdout %q, got %q", "out line", res.Stdout)
+	}
+	if res.Stderr != "" {
+		t.Errorf("expected no pull-progress noise in stderr, got %q", res.Stderr)
+	}
+}
+
 func TestRun_NetworkDisallowedByDefault(t *testing.T) {
 	requireDockerTests(t)
 	r := New(Limits{})
