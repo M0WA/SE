@@ -177,21 +177,28 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		agentID = opts.AgentID
 	}
 	agent := s.resolveAgent(ctx, agentID)
+	// agentActive distinguishes "no agent selected at all" (the zero
+	// domain.Agent{} resolveAgent returns, ID == "") from "an agent IS
+	// selected, and its own MCPServerIDs happens to be empty" -- the latter
+	// now means that agent gets NO global tools (see MCPServerIDs' own doc
+	// comment), which would be wrong to apply when there's no agent in the
+	// picture at all. Only when an agent is genuinely active does its scope
+	// (agent.AllowsServer) get consulted below; with no agent active, every
+	// enabled/gated-appropriate global server stays available, same as
+	// always.
+	agentActive := agent.ID != ""
 
 	// List ALL servers early, before building the messages sent to the
 	// first completion call -- a server's discovered tools and its own
 	// Prompt (see below) both need to reach the model before it can decide
 	// to invoke one of its tools at all, so this can't wait until after an
 	// answer comes back. A ListMCPServers error is best-effort: it just
-	// leaves activeServers empty rather than failing the turn. When an
-	// agent is active AND itself scopes MCPServerIDs, the global catalog is
-	// further narrowed to just that scope -- see domain.Agent.MCPServerIDs'
-	// own doc comment (an empty scope means no narrowing, not "none").
+	// leaves activeServers empty rather than failing the turn.
 	var activeServers []domain.MCPServer
 	if s.mcpServers != nil {
 		if all, err := s.mcpServers.ListMCPServers(ctx); err == nil {
 			for _, srv := range all {
-				if srv.Enabled && (!srv.GatedByWebSearch || useWebSearch) && agent.AllowsServer(srv.ID) {
+				if srv.Enabled && (!srv.GatedByWebSearch || useWebSearch) && (!agentActive || agent.AllowsServer(srv.ID)) {
 					activeServers = append(activeServers, srv)
 				}
 			}
@@ -375,11 +382,12 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 // resolveAgent looks up id (opts.AgentID or endpoint.DefaultAgentID, see
 // Chat) among every configured agent, returning it only when found AND
 // Enabled -- a blank id, a nil s.agents, a lookup error, an unknown id, or
-// a disabled one all resolve to the zero domain.Agent, which Chat's own use
-// of it (empty SystemPrompt, allowsServer always true since MCPServerIDs is
-// nil) is equivalent to no agent being active at all. ports.AgentStore has
-// no single-row get (like MCPServerStore), so this scans ListAgents, same
-// tolerance as MCP server lookups elsewhere in this file.
+// a disabled one all resolve to the zero domain.Agent (ID == ""), which
+// Chat's own agentActive check treats as no agent being active at all
+// (empty SystemPrompt injected, no MCPServerIDs-based narrowing applied).
+// ports.AgentStore has no single-row get (like MCPServerStore), so this
+// scans ListAgents, same tolerance as MCP server lookups elsewhere in this
+// file.
 func (s *ChatService) resolveAgent(ctx context.Context, id string) domain.Agent {
 	if id == "" || s.agents == nil {
 		return domain.Agent{}

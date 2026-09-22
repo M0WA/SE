@@ -2803,10 +2803,13 @@ components:
           items: { type: string }
           description: >-
             Restricts which rows of the global MCP server catalog
-            (/admin/api/mcp-servers) this agent may use tools from. Empty
-            means every globally active server is available -- the same as
-            not scoping at all. This never affects a user's own per-user
-            MCP servers, which stay available to every agent regardless.
+            (/admin/api/mcp-servers) this agent may use tools from. There is
+            no "unscoped" state: empty means this agent gets NO global
+            servers at all -- list every id explicitly to allow every one.
+            Only applied while this agent is actually active; a turn with no
+            agent selected still gets every globally active server. This
+            never affects a user's own per-user MCP servers, which stay
+            available to every agent regardless.
         enabled:
           type: boolean
           description: Whether this agent can be selected/addressed at all.

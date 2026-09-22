@@ -23,24 +23,27 @@ type Agent struct {
 	// application.ChatService.Chat). Empty means this Agent adds no message
 	// of its own beyond what every conversation already gets.
 	SystemPrompt string
-	// MCPServerIDs, when non-empty, restricts which rows of the GLOBAL
-	// MCPServer catalog this agent may use tools from -- an empty list
-	// means every globally active server is available, the same as not
-	// having an Agent selected at all. This scope only ever narrows the
-	// shared/admin catalog: a user's own per-user MCP servers (a separate
-	// store) are always available to every Agent regardless of this list.
+	// MCPServerIDs lists which rows of the GLOBAL MCPServer catalog this
+	// agent may use tools from. There is no "unscoped" state: an empty list
+	// means this agent gets NO global tools at all, not every one -- to
+	// give an agent every globally active server, select them all
+	// explicitly. This scope only ever narrows the shared/admin catalog: a
+	// user's own per-user MCP servers (a separate store) are always
+	// available to every Agent regardless of this list. Only consulted at
+	// all while an agent is actually active -- see
+	// application.ChatService.Chat, which skips AllowsServer entirely (every
+	// global server stays available) when no agent is selected for a turn.
 	MCPServerIDs []string
 	Enabled      bool
 }
 
-// AllowsServer reports whether serverID is usable under this agent's own
-// MCPServerIDs scope -- true whenever the scope is empty (no narrowing,
-// including for the zero Agent{} value returned when no agent is active at
-// all) or serverID is explicitly listed.
+// AllowsServer reports whether serverID is one of this agent's own
+// explicitly listed MCPServerIDs -- false for an empty list, since there is
+// no "unscoped" meaning here (see MCPServerIDs' own doc comment). Only
+// meaningful for an actually-active agent; a caller with no agent selected
+// at all must not call this at all (it would incorrectly block every
+// server) -- see ChatService.Chat's own agentActive check.
 func (a Agent) AllowsServer(serverID string) bool {
-	if len(a.MCPServerIDs) == 0 {
-		return true
-	}
 	for _, id := range a.MCPServerIDs {
 		if id == serverID {
 			return true

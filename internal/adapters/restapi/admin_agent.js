@@ -17,9 +17,10 @@
   // renderMCPServerCheckboxes builds one checkbox per globally configured
   // MCP server (fetched fresh every load, since the catalog can change
   // independently of this agent) -- checkedIDs is which of them this
-  // agent's own mcp_server_ids already names, empty meaning "every
-  // globally active server" per Agent.MCPServerIDs' own doc comment, not
-  // "none".
+  // agent's own mcp_server_ids already names. Empty means this agent has NO
+  // global tools at all (there is no "unscoped" state -- see
+  // Agent.MCPServerIDs' own doc comment), so every box renders unchecked,
+  // not every box checked.
   function renderMCPServerCheckboxes(servers, checkedIDs) {
     clear(mcpServersListEl);
     if (servers.length === 0) {
