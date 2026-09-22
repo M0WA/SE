@@ -34,6 +34,7 @@ func main() {
 	timeout := flag.Duration("timeout", dockersandbox.DefaultTimeout, "wall-clock time limit for a single run_python/run_go call")
 	dns := flag.String("dns", "", "comma-separated DNS server IP(s) for a network-enabled sandbox (Docker --dns); only meaningful with -network")
 	hostDNS := flag.Bool("host-dns", false, "use this host's own real upstream DNS servers inside a network-enabled sandbox, instead of Docker's default embedded DNS -- merged with -dns if both are set; only meaningful with -network")
+	hostNetwork := flag.Bool("host-network", false, "run network-enabled sandboxes with Docker's --network host instead of the default bridge network -- shares the host's own network namespace outright, so DNS resolution just works with no -dns/-host-dns needed, at the cost of a bigger privilege elevation (the container can see/bind the host's own network interfaces directly); only meaningful with -network")
 	flag.Parse()
 
 	dnsServers := splitNonEmpty(*dns)
@@ -46,11 +47,12 @@ func main() {
 	}
 
 	runner := dockersandbox.New(dockersandbox.Limits{
-		Memory:    *memory,
-		CPUs:      *cpus,
-		PidsLimit: *pidsLimit,
-		Timeout:   *timeout,
-		DNS:       dnsServers,
+		Memory:      *memory,
+		CPUs:        *cpus,
+		PidsLimit:   *pidsLimit,
+		Timeout:     *timeout,
+		DNS:         dnsServers,
+		HostNetwork: *hostNetwork,
 	})
 	server := newServer(runner, *network)
 
