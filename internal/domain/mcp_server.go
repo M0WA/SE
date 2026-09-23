@@ -27,8 +27,11 @@ type MCPServer struct {
 	// Prompt is optional steering text for this server's tools collectively
 	// -- injected as its own system message (after SystemPrompt) when this
 	// server is active. MCP has no per-server prompt concept of its own, so
-	// this is where a cross-tool workflow instruction lives (e.g. "fetch the
-	// top 3 results before answering"). Empty adds no message.
+	// this is where a cross-tool workflow instruction lives (e.g. "after
+	// searching, fetch results from different domains -- not just the
+	// top-ranked ones -- until you can validate the answer across
+	// independent sources; if a fetch is blocked, try a different domain").
+	// Empty adds no message.
 	Prompt string
 	// GatedByWebSearch ties this server's activation to the same effective
 	// "Web" toggle that gates web-search context injection

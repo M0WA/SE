@@ -79,7 +79,11 @@ type ChatEndpoint struct {
 	WebSearchBaseURL string
 	// WebSearchResultCount, when positive, caps results per call from
 	// mcp-web's "web_search" tool, passed as WEB_SEARCH_RESULT_COUNT the
-	// same way WebSearchBaseURL is. Zero means no cap.
+	// same way WebSearchBaseURL is. Zero means no cap. Keep this generous
+	// (20+): too small a cap can leave the model with only a couple of
+	// same-domain results, and nothing to fall back to if that domain
+	// blocks fetching (confirmed live: capped at 2, both AccuWeather, both
+	// blocked -- the model never found a working source).
 	WebSearchResultCount int
 	// SystemPrompt, when non-empty, is injected as a leading system-role
 	// message ahead of the conversation, before any MCP server's own

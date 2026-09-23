@@ -98,9 +98,9 @@
     <div class="form-row">
       <div class="label-row">
         <label for="chat-web-search-result-count">Result count</label>
-        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Caps how many results the "web_search" tool returns per call, passed to every active "stdio" MCP server as the WEB_SEARCH_RESULT_COUNT environment variable. 0 means no cap -- SearXNG's own full result set is returned as-is.</span></button>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Caps how many results the "web_search" tool returns per call, passed to every active "stdio" MCP server as the WEB_SEARCH_RESULT_COUNT environment variable. 0 means no cap -- SearXNG's own full result set is returned as-is. Keep this generous (20 or more): too small a cap can leave the model with only a couple of same-domain results, and if that domain blocks fetching, it has nothing else to fall back to.</span></button>
       </div>
-      <span class="field-wrap" data-default="0 (no cap)"><input id="chat-web-search-result-count" class="field" type="number" step="1" min="0"></span>
+      <span class="field-wrap" data-default="20"><input id="chat-web-search-result-count" class="field" type="number" step="1" min="0" value="20"></span>
     </div>
   </section>
 
