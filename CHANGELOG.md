@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.64 - 2026-09-23
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* fix: uploaded_files.chat_id index crashed migration on a pre-existing table by @M0WA in https://github.com/M0WA/SE/pull/272
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.63...v4.13.64
+
+
 ## v4.13.63 - 2026-09-22
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
