@@ -96,7 +96,9 @@
       enabledServerPrompts = servers.filter((s) => s.enabled && s.prompt).map((s) => s.prompt);
     } catch (err) {
       // Best-effort, per this function's doc comment above -- leave the
-      // server-prompt slice at 0 rather than surfacing the error.
+      // server-prompt slice at 0 rather than surfacing the error, but log
+      // it for anyone debugging from the console.
+      console.error('loading MCP server prompts for context-budget preview failed:', err);
       enabledServerPrompts = [];
     }
   }

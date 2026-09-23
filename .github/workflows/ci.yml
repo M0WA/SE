@@ -32,6 +32,11 @@ jobs:
           --health-retries=5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history, not the default shallow clone -- SonarCloud's
+          # scan step below needs it for accurate blame/new-code-period
+          # detection on a PR.
+          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -93,7 +98,8 @@ jobs:
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
-      - run: go test ./... -v
+      - run: mkdir -p build
+      - run: go test ./... -v -coverprofile=build/coverage.out -covermode=atomic
         env:
           TEST_POSTGRES_DSN: postgres://searchengine:searchengine@localhost:5432/searchengine_test?sslmode=disable
           # Actually run internal/adapters/browserfetcher's real-browser
@@ -112,6 +118,17 @@ jobs:
         run: npm ci --ignore-scripts
       - name: JS unit tests (with coverage)
         run: npm run test:coverage
+      # sonar-project.properties points at build/coverage.out and
+      # build/coverage-js.lcov, both produced above -- CI-based analysis,
+      # replacing SonarCloud's own "Automatic Analysis" GitHub-App scan
+      # (which can't be fed coverage, a Python version, or an explicit
+      # source encoding at all). SonarCloud turns Automatic Analysis off
+      # for a project itself once a CI-based analysis with a valid token
+      # lands -- nothing else to disable here.
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@ba9859eae8dd6bd29e412f25ddbbef3d032000f4 # v8.2.2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   package-debian:
     name: Build .deb (Debian)

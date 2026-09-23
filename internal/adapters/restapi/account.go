@@ -21,7 +21,7 @@ func (h *Handler) handleSession(w http.ResponseWriter, r *http.Request) {
 	}
 	role, _, ok := h.sessionRoleFor(r)
 	if !ok {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
+		http.Error(w, authRequiredMsg, http.StatusUnauthorized)
 		return
 	}
 	if r.Method == http.MethodHead {
@@ -59,7 +59,7 @@ func (h *Handler) handleAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	_, userID, ok := h.sessionRoleFor(r)
 	if !ok || userID == "" {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
+		http.Error(w, authRequiredMsg, http.StatusUnauthorized)
 		return
 	}
 	switch r.Method {
