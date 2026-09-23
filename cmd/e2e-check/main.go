@@ -860,11 +860,15 @@ func looksMutating(name string) bool {
 }
 
 // authRelatedErrorSubstrings mark a tool error as likely caused by this
-// check itself running under an admin session (which has no domain.User
-// row -- see account_files.go's own doc comment -- so a user-scoped tool
-// like mcp-files' has nothing to authenticate with here) rather than a
-// real regression. Treated as a skip, not a failure, when matched.
-var authRelatedErrorSubstrings = []string{"unauthorized", "authentication", "chat_id", "no active", "not configured", "signed-in", "signed in", "no signed"}
+// generic check's own lack of realistic context -- running under an admin
+// session (which has no domain.User row -- see account_files.go's own doc
+// comment -- so a user-scoped tool like mcp-files' has nothing to
+// authenticate with here), or calling a tool that needs a real prior
+// attachment (e.g. vision_caption/vision_similarity's file_id, which this
+// check never attaches -- see the file-based servers' own dedicated
+// user-session checks for that) -- rather than a real regression. Treated
+// as a skip, not a failure, when matched.
+var authRelatedErrorSubstrings = []string{"unauthorized", "authentication", "chat_id", "no active", "not configured", "signed-in", "signed in", "no signed", "file not found"}
 
 func looksAuthRelated(errMsg string) bool {
 	lower := strings.ToLower(errMsg)
