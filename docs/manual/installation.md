@@ -210,8 +210,14 @@ The `.deb` already installs `/usr/bin/searchengine-mcp-{web,datetime,sandbox,fil
 [Embedding endpoints](embedding-endpoint-detail.md) and [Chat settings](chat-settings.md) each point at a plain OpenAI-compatible HTTP endpoint -- any such API works, self-hosted or third-party. As a concrete reference, the project's own dev deployment points both at self-hosted [vLLM](https://github.com/vllm-project/vllm) processes on a separate GPU host:
 
 ```
-# Embeddings: Alibaba-NLP/gte-Qwen2-7B-instruct
-vllm serve Alibaba-NLP/gte-Qwen2-7B-instruct --runner pooling --convert embed
+# Embeddings: Qwen/Qwen3-VL-Embedding-8B -- --gpu-memory-utilization is
+# required whenever a second vLLM process (the chat one below, or any
+# other) already shares the same GPU: the flag's default (~0.9) sizes
+# itself against the GPU's TOTAL memory, not what's actually free, so it
+# fails to start ("Free memory ... is less than desired GPU memory
+# utilization") the moment another process has already claimed most of
+# the card. Size it to fit in whatever's actually free at the time.
+vllm serve Qwen/Qwen3-VL-Embedding-8B --runner pooling --convert embed --gpu-memory-utilization 0.2
 
 # Chat -- --enable-auto-tool-choice and --tool-call-parser are required for
 # MCP servers to work at all: without them the model is never offered tool
