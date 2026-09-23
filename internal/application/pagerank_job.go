@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"searchengine/internal/domain"
@@ -23,6 +24,12 @@ type PageRankRunResult struct {
 // leaves it untouched rather than resetting it to 0.
 func RunPageRankJob(ctx context.Context, repo ports.PageRankRepository) (PageRankRunResult, error) {
 	start := time.Now()
+	// Best-effort: a link resolved here just means a more complete graph
+	// this run; a failure here is never a reason to skip the recompute
+	// itself -- it proceeds against whatever's already resolved.
+	if _, err := repo.ResolvePendingLinks(ctx); err != nil {
+		log.Printf("resolving pending links before pagerank recompute: %v", err)
+	}
 	graph, err := repo.LinkGraph(ctx)
 	if err != nil {
 		return PageRankRunResult{}, err

@@ -49,6 +49,9 @@ type fakePageRankRepo struct {
 	updated           map[string]float64
 	updatePageRankErr error
 	updateCalls       int
+	resolvePendingErr error
+	resolvePendingN   int
+	resolveCalls      int
 }
 
 func (r *fakePageRankRepo) LinkGraph(context.Context) (map[string][]string, error) {
@@ -68,6 +71,14 @@ func (r *fakePageRankRepo) UpdatePageRanks(_ context.Context, scores map[string]
 	}
 	r.updated = scores
 	return nil
+}
+
+func (r *fakePageRankRepo) ResolvePendingLinks(context.Context) (int, error) {
+	r.resolveCalls++
+	if r.resolvePendingErr != nil {
+		return 0, r.resolvePendingErr
+	}
+	return r.resolvePendingN, nil
 }
 
 func TestRunPageRankJob_ComputesAndWritesScores(t *testing.T) {
@@ -133,6 +144,43 @@ func TestRunPageRankJob_PropagatesLinkGraphError(t *testing.T) {
 	}
 	if repo.updateCalls != 0 {
 		t.Errorf("expected UpdatePageRanks not called when LinkGraph fails, got %d calls", repo.updateCalls)
+	}
+}
+
+// TestRunPageRankJob_CallsResolvePendingLinksBeforeLinkGraph proves
+// RunPageRankJob resolves any previously-unresolved links before loading
+// the graph, so a target crawled since the last recompute is picked up.
+func TestRunPageRankJob_CallsResolvePendingLinksBeforeLinkGraph(t *testing.T) {
+	repo := &fakePageRankRepo{
+		graph:           map[string][]string{"a": {"b"}, "b": {"a"}},
+		resolvePendingN: 3,
+	}
+	if _, err := application.RunPageRankJob(context.Background(), repo); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.resolveCalls != 1 {
+		t.Fatalf("expected ResolvePendingLinks called exactly once, got %d", repo.resolveCalls)
+	}
+}
+
+// TestRunPageRankJob_ContinuesWhenResolvePendingLinksFails proves a
+// ResolvePendingLinks error is best-effort: it's logged, never propagated,
+// and the recompute still proceeds (and still writes scores) using
+// whatever was already resolved.
+func TestRunPageRankJob_ContinuesWhenResolvePendingLinksFails(t *testing.T) {
+	repo := &fakePageRankRepo{
+		graph:             map[string][]string{"a": {"b"}, "b": {"a"}},
+		resolvePendingErr: errors.New("db unavailable"),
+	}
+	result, err := application.RunPageRankJob(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("expected ResolvePendingLinks error not to propagate, got: %v", err)
+	}
+	if repo.updateCalls != 1 {
+		t.Errorf("expected the recompute to still proceed and write scores, got %d UpdatePageRanks calls", repo.updateCalls)
+	}
+	if result.Documents != 2 {
+		t.Errorf("expected result.Documents=2, got %d", result.Documents)
 	}
 }
 

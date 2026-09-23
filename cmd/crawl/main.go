@@ -71,13 +71,20 @@ type pageRankRecomputer struct {
 	mu            sync.Mutex
 	last          time.Time
 	// running guards against two recompute()s overlapping -- a second call
-	// while one is in flight just returns immediately.
+	// while one is in flight sets pending instead of doing its own run.
 	running bool
+	// pending records a recompute() call that arrived while running was
+	// already true, so a crawl's new links aren't dropped until the next
+	// ticker interval (which can be up to PageRankRecomputeIntervalMinutes
+	// away) just because they landed during a busy window -- the in-flight
+	// call runs one extra pass for it before releasing running.
+	pending bool
 }
 
 func (p *pageRankRecomputer) recompute(ctx context.Context) {
 	p.mu.Lock()
 	if p.running {
+		p.pending = true
 		p.mu.Unlock()
 		return
 	}
@@ -86,6 +93,20 @@ func (p *pageRankRecomputer) recompute(ctx context.Context) {
 
 	if _, err := application.RunPageRankJobWithStatus(ctx, p.repo, p.settingsStore); err != nil {
 		log.Printf("recomputing pagerank: %v", err)
+	}
+
+	// One extra pass, not a loop -- a call landing during THIS pass just
+	// sets pending again for some future recompute() to pick up, so this
+	// can't run forever.
+	p.mu.Lock()
+	runAgain := p.pending
+	p.pending = false
+	p.mu.Unlock()
+
+	if runAgain {
+		if _, err := application.RunPageRankJobWithStatus(ctx, p.repo, p.settingsStore); err != nil {
+			log.Printf("recomputing pagerank: %v", err)
+		}
 	}
 
 	p.mu.Lock()

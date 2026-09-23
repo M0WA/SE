@@ -72,6 +72,14 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			crawled_at TEXT NOT NULL DEFAULT '',
 			content_hash TEXT NOT NULL DEFAULT '', simhash TEXT NOT NULL DEFAULT ''
 		)`,
+		// documents.url has existed since this table's first release, so
+		// (unlike links.to_id below) this index needs no ALTER-based
+		// migration to add the column itself -- just the ensureIndex
+		// backstop in migrate() for a database that predates the index.
+		// Used both for direct url lookups and, since this change, as the
+		// join key insertLinksBatch/ResolvePendingLinks use to resolve a
+		// link's target in a batch-scoped join rather than a full scan.
+		`CREATE INDEX IF NOT EXISTS idx_documents_url ON documents(url)`,
 		`CREATE TABLE IF NOT EXISTS postings (
 			term TEXT NOT NULL, doc_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
 			term_freq INTEGER NOT NULL, PRIMARY KEY (term, doc_id)
@@ -317,6 +325,15 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			crawled_at VARCHAR(64) NOT NULL DEFAULT '',
 			content_hash VARCHAR(64) NOT NULL DEFAULT '', simhash VARCHAR(16) NOT NULL DEFAULT ''
 		) ENGINE=InnoDB`,
+		// See the sqlite dialect's idx_documents_url comment. url is TEXT
+		// (unbounded) in MySQL, unlike VARCHAR(n) columns elsewhere in this
+		// schema -- MySQL requires an explicit prefix length to index a
+		// TEXT/BLOB column at all ("BLOB/TEXT column ... used in key
+		// specification without a key length" otherwise); 255 mirrors the
+		// prefix length MySQL itself defaults an implicit index to for a
+		// VARCHAR(255) column, ample for a host+path prefix to disambiguate
+		// on already-indexed hosts.
+		`CREATE INDEX idx_documents_url ON documents(url(255))`,
 		`CREATE TABLE IF NOT EXISTS postings (
 			term VARCHAR(128) NOT NULL, doc_id VARCHAR(64) NOT NULL,
 			term_freq INT NOT NULL, PRIMARY KEY (term, doc_id),
@@ -529,6 +546,8 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			crawled_at TEXT NOT NULL DEFAULT '',
 			content_hash TEXT NOT NULL DEFAULT '', simhash TEXT NOT NULL DEFAULT ''
 		)`,
+		// See the sqlite dialect's idx_documents_url comment.
+		`CREATE INDEX IF NOT EXISTS idx_documents_url ON documents(url)`,
 		`CREATE TABLE IF NOT EXISTS postings (
 			term TEXT NOT NULL, doc_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
 			term_freq INT NOT NULL, PRIMARY KEY (term, doc_id)

@@ -150,6 +150,9 @@ func (r *Repository) migrate(ctx context.Context) error {
 	if err := r.migrateDocumentAliasColumns(ctx); err != nil {
 		return err
 	}
+	if err := r.migrateLinkColumns(ctx); err != nil {
+		return err
+	}
 	if err := r.migrateScheduledCrawlColumns(ctx); err != nil {
 		return err
 	}
@@ -180,7 +183,13 @@ func (r *Repository) migrate(ctx context.Context) error {
 	if err := r.ensureCrawledAtIndex(ctx); err != nil {
 		return err
 	}
-	return r.ensureDocumentAliasHostIndex(ctx)
+	if err := r.ensureDocumentAliasHostIndex(ctx); err != nil {
+		return err
+	}
+	if err := r.ensureLinksToIDIndex(ctx); err != nil {
+		return err
+	}
+	return r.ensureDocumentsURLIndex(ctx)
 }
 
 // addColumnIfMissing adds ddl (a full "<name> <type> ..." definition) to
@@ -456,6 +465,33 @@ func (r *Repository) ensureDocumentAliasHostIndex(ctx context.Context) error {
 	return r.ensureIndex(ctx, "document_aliases", "idx_document_aliases_host", "host")
 }
 
+// ensureLinksToIDIndex creates links(to_id)'s index only after
+// migrateLinkColumns guarantees the column exists -- building it in the
+// static CreateSchemaSQL() list would fail against a pre-existing table,
+// same reasoning as ensureDocumentAliasHostIndex's own comment. This is
+// what LinkGraph's rewritten query now scans instead of the old
+// documents/document_aliases join.
+func (r *Repository) ensureLinksToIDIndex(ctx context.Context) error {
+	return r.ensureIndex(ctx, "links", "idx_links_to_id", "to_id")
+}
+
+// ensureDocumentsURLIndex backstops idx_documents_url onto a database that
+// predates it. documents.url has existed since this table's first
+// release (unlike links.to_id), so a fresh install already gets the index
+// straight from CreateSchemaSQL -- but an existing production database
+// (se.mo-sys.de's included) needs this same backstop CreateSchemaSQL()
+// alone can't provide, exactly the gap ensureUploadedFilesChatIDIndex's
+// own comment explains (a real, previously-hit incident, not a
+// hypothetical one). MySQL needs an explicit prefix length to index a
+// TEXT column -- see CreateSchemaSQL's mysql idx_documents_url comment.
+func (r *Repository) ensureDocumentsURLIndex(ctx context.Context) error {
+	column := "url"
+	if r.dialect.Name() == "mysql" {
+		column = "url(255)"
+	}
+	return r.ensureIndex(ctx, "documents", "idx_documents_url", column)
+}
+
 // ensureUploadedFilesChatIDIndex creates uploaded_files(chat_id)'s index
 // only after migrateUploadedFileColumns guarantees the column exists --
 // same gap as ensureDocumentAliasHostIndex describes, but a real one here:
@@ -588,6 +624,29 @@ func (r *Repository) migrateDocumentAliasColumns(ctx context.Context) error {
 		return err
 	}
 	return r.backfillDocumentAliasHosts(ctx)
+}
+
+// migrateLinkColumns adds to_id to a links table predating it --
+// insertLinksBatch resolves and populates it once, at insert time (or
+// later, in a bounded catch-up batch via ResolvePendingLinks), so
+// LinkGraph can scan links(to_id) directly instead of re-resolving every
+// row against documents/document_aliases on every PageRank recompute (the
+// join this column replaces; see LinkGraph's own comment). ” is this
+// column's "not yet resolved" sentinel, the same NOT NULL DEFAULT ”
+// convention this schema already uses elsewhere (e.g. host). MySQL needs
+// an explicit VARCHAR(64) rather than TEXT -- matching documents.id's own
+// MySQL type (dialect.go) -- since idx_links_to_id (ensureLinksToIDIndex)
+// needs an indexable, non-BLOB/TEXT column there.
+func (r *Repository) migrateLinkColumns(ctx context.Context) error {
+	existing, err := r.existingColumns(ctx, "links")
+	if err != nil {
+		return err
+	}
+	toIDType := "TEXT NOT NULL DEFAULT ''"
+	if r.dialect.Name() == "mysql" {
+		toIDType = "VARCHAR(64) NOT NULL DEFAULT ''"
+	}
+	return r.addColumnIfMissing(ctx, "links", existing, "to_id", "to_id "+toIDType)
 }
 
 // backfillDocumentAliasHosts fills host for any document_aliases row
@@ -971,29 +1030,252 @@ func (r *Repository) insertPostingsBatch(ctx context.Context, tx *sql.Tx, docID 
 	return nil
 }
 
+// setPostgresResolutionWorkMem bumps work_mem for the remainder of the
+// CURRENT transaction, Postgres only, right before insertLinksBatch's or
+// ResolvePendingLinks's documents/document_aliases join. Both are far
+// smaller than the old full-table LinkGraph join this migration replaces
+// (bounded to one insert batch, or to pendingLinkResolveBatchSize rows),
+// but each is still a real join -- and under concurrent write pressure
+// from other crawls hitting the same database, Postgres can still choose
+// to spill a hash/sort to disk rather than do it in memory without enough
+// work_mem, exactly the condition behind the original query's measured
+// 90.9s worst case. SET LOCAL only lasts until this transaction's
+// COMMIT/ROLLBACK, so it must run inside the same transaction the
+// resolution query itself runs in (both insertLinksBatch and
+// ResolvePendingLinks already take/open one). SQLite/MySQL have no
+// equivalent knob worth adding, so this is a no-op for both -- LinkGraph
+// itself no longer needs this at all, since it's a plain indexed scan now.
+func (r *Repository) setPostgresResolutionWorkMem(ctx context.Context, tx *sql.Tx) error {
+	if r.dialect.Name() != "postgres" {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, "SET LOCAL work_mem = '64MB'"); err != nil {
+		return fmt.Errorf("setting work_mem for link resolution: %w", err)
+	}
+	return nil
+}
+
 // insertLinksBatch runs one multi-row INSERT INTO links covering links (a
 // saveDocumentInsertBatchSize-sized or smaller chunk from SaveDocument,
-// already deduplicated and self-loop-filtered).
+// already deduplicated and self-loop-filtered), resolving each link's
+// to_id as part of the SAME statement -- an INSERT ... SELECT joining a
+// derived table of this batch's (to_url, to_host) pairs against
+// documents/document_aliases, the same COALESCE(d.id, da.canonical_id)
+// resolution LinkGraph's old per-recompute query used, but bounded to just
+// this batch rather than a full-table join. A target not yet
+// crawled/indexed (neither join matches) resolves to ” via the trailing
+// COALESCE fallback -- this table's usual NOT NULL DEFAULT ” sentinel for
+// "no value" -- and ResolvePendingLinks retries it later.
 func (r *Repository) insertLinksBatch(ctx context.Context, tx *sql.Tx, docID string, links []string) error {
 	if len(links) == 0 {
 		return nil
 	}
-	var stmt strings.Builder
-	stmt.WriteString("INSERT INTO links (from_id, to_url, to_host) VALUES ")
-	args := make([]interface{}, 0, len(links)*3)
+	if err := r.setPostgresResolutionWorkMem(ctx, tx); err != nil {
+		return err
+	}
+
 	pos := 1
+	docIDPlaceholder := r.dialect.Placeholder(pos)
+	args := make([]interface{}, 0, 1+len(links)*2)
+	args = append(args, docID)
+	pos++
+
+	var values strings.Builder
 	for i, link := range links {
 		if i > 0 {
-			stmt.WriteString(", ")
+			values.WriteString(" UNION ALL ")
 		}
-		stmt.WriteString("(" + r.placeholderList(3, pos) + ")")
-		args = append(args, docID, link, hostOf(link))
-		pos += 3
+		if i == 0 {
+			// Column aliases only need stating once -- every dialect names
+			// a UNION's derived-table columns after its first branch.
+			values.WriteString("SELECT " + r.dialect.Placeholder(pos) + " AS to_url, " + r.dialect.Placeholder(pos+1) + " AS to_host")
+		} else {
+			values.WriteString("SELECT " + r.placeholderList(2, pos))
+		}
+		args = append(args, link, hostOf(link))
+		pos += 2
 	}
-	if _, err := tx.ExecContext(ctx, stmt.String(), args...); err != nil {
+
+	query := `INSERT INTO links (from_id, to_url, to_host, to_id)
+	          SELECT ` + docIDPlaceholder + `, v.to_url, v.to_host, COALESCE(d.id, da.canonical_id, '')
+	          FROM (` + values.String() + `) v
+	          LEFT JOIN documents d ON d.url = v.to_url
+	          LEFT JOIN document_aliases da ON da.alias_url = v.to_url`
+	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("saving links batch: %w", err)
 	}
 	return nil
+}
+
+// pendingLinkResolveBatchSize bounds how many to_id = ” links
+// ResolvePendingLinks resolves per call. A link's target may not have been
+// crawled yet when insertLinksBatch first tried it, so this backlog can
+// grow with the corpus -- capping it keeps each call's cost predictable
+// (one bounded select, one bounded join, one batch of updates) rather than
+// letting it become an unbounded catch-up scan the longer a target stays
+// uncrawled.
+const pendingLinkResolveBatchSize = 5000
+
+// linkTargetResolveChunkSize bounds how many URLs one resolveLinkTargets
+// lookup covers per underlying query. insertLinksBatch's own INSERT ...
+// SELECT (bounded by saveDocumentInsertBatchSize=300) safely fits under
+// SQLite's default compound-SELECT term limit (SQLITE_MAX_COMPOUND_SELECT
+// = 500) as one UNION ALL, but ResolvePendingLinks' batch
+// (pendingLinkResolveBatchSize=5000) does not -- so resolveLinkTargets
+// instead chunks into plain "IN (...)" lookups here, well under both that
+// compound-SELECT limit and SQLite's SQLITE_MAX_VARIABLE_NUMBER=999,
+// mirroring saveDocumentInsertBatchSize's own reasoning.
+const linkTargetResolveChunkSize = 300
+
+// resolveLinkTargets resolves urls (a distinct batch of links.to_url
+// values, of any size) to their document ID, via the same
+// documents/document_aliases lookup LinkGraph's old per-recompute join
+// used to run against every link row -- here chunked to just
+// linkTargetResolveChunkSize URLs per underlying query rather than a
+// full-table join. Shared by ResolvePendingLinks; a URL absent from the
+// returned map has no resolvable target yet (still uncrawled, and not a
+// known alias).
+func (r *Repository) resolveLinkTargets(ctx context.Context, tx *sql.Tx, urls []string) (map[string]string, error) {
+	resolved := make(map[string]string, len(urls))
+	for start := 0; start < len(urls); start += linkTargetResolveChunkSize {
+		end := start + linkTargetResolveChunkSize
+		if end > len(urls) {
+			end = len(urls)
+		}
+		if err := r.resolveLinkTargetsChunk(ctx, tx, urls[start:end], resolved); err != nil {
+			return nil, err
+		}
+	}
+	return resolved, nil
+}
+
+// resolveLinkTargetsChunk resolves one linkTargetResolveChunkSize-or-smaller
+// chunk of urls, writing results into resolved. documents.url is checked
+// first (via idx_documents_url); only a URL that misses there falls
+// through to a second document_aliases.alias_url lookup (already its
+// primary key) -- the same documents-then-aliases priority LinkGraph's old
+// COALESCE(d.id, da.canonical_id) join gave.
+func (r *Repository) resolveLinkTargetsChunk(ctx context.Context, tx *sql.Tx, urls []string, resolved map[string]string) error {
+	if len(urls) == 0 {
+		return nil
+	}
+	args := make([]interface{}, len(urls))
+	unresolved := make(map[string]bool, len(urls))
+	for i, u := range urls {
+		args[i] = u
+		unresolved[u] = true
+	}
+
+	docQuery := `SELECT url, id FROM documents WHERE url IN (` + r.placeholderList(len(urls), 1) + `)`
+	docRows, err := tx.QueryContext(ctx, docQuery, args...)
+	if err != nil {
+		return fmt.Errorf("resolving link targets via documents: %w", err)
+	}
+	for docRows.Next() {
+		var url, id string
+		if err := docRows.Scan(&url, &id); err != nil {
+			docRows.Close()
+			return fmt.Errorf("scanning resolved document target: %w", err)
+		}
+		resolved[url] = id
+		delete(unresolved, url)
+	}
+	docRows.Close()
+	if err := docRows.Err(); err != nil {
+		return err
+	}
+	if len(unresolved) == 0 {
+		return nil
+	}
+
+	remaining := make([]string, 0, len(unresolved))
+	remainingArgs := make([]interface{}, 0, len(unresolved))
+	for u := range unresolved {
+		remaining = append(remaining, u)
+		remainingArgs = append(remainingArgs, u)
+	}
+	aliasQuery := `SELECT alias_url, canonical_id FROM document_aliases WHERE alias_url IN (` + r.placeholderList(len(remaining), 1) + `)`
+	aliasRows, err := tx.QueryContext(ctx, aliasQuery, remainingArgs...)
+	if err != nil {
+		return fmt.Errorf("resolving link targets via document_aliases: %w", err)
+	}
+	defer aliasRows.Close()
+	for aliasRows.Next() {
+		var aliasURL, canonicalID string
+		if err := aliasRows.Scan(&aliasURL, &canonicalID); err != nil {
+			return fmt.Errorf("scanning resolved alias target: %w", err)
+		}
+		resolved[aliasURL] = canonicalID
+	}
+	return aliasRows.Err()
+}
+
+// ResolvePendingLinks re-resolves a bounded batch (pendingLinkResolveBatchSize)
+// of links whose to_id is still ” -- their target wasn't
+// crawled/indexed yet when insertLinksBatch first tried them, but may be
+// resolvable now that more of the corpus has been crawled since. Called by
+// RunPageRankJob right before every LinkGraph recompute (best-effort --
+// see its own call site). Returns how many rows were newly resolved.
+func (r *Repository) ResolvePendingLinks(ctx context.Context) (int, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("starting transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := r.setPostgresResolutionWorkMem(ctx, tx); err != nil {
+		return 0, err
+	}
+
+	selectSQL := r.ph(`SELECT from_id, to_url FROM links WHERE to_id = %s LIMIT %s`, 1, 2)
+	rows, err := tx.QueryContext(ctx, selectSQL, "", pendingLinkResolveBatchSize)
+	if err != nil {
+		return 0, fmt.Errorf("selecting pending links: %w", err)
+	}
+	type pendingLink struct{ fromID, toURL string }
+	var pending []pendingLink
+	for rows.Next() {
+		var p pendingLink
+		if err := rows.Scan(&p.fromID, &p.toURL); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scanning pending link row: %w", err)
+		}
+		pending = append(pending, p)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if len(pending) == 0 {
+		return 0, tx.Commit()
+	}
+
+	distinctURLs := make([]string, 0, len(pending))
+	seen := make(map[string]bool, len(pending))
+	for _, p := range pending {
+		if !seen[p.toURL] {
+			seen[p.toURL] = true
+			distinctURLs = append(distinctURLs, p.toURL)
+		}
+	}
+	resolved, err := r.resolveLinkTargets(ctx, tx, distinctURLs)
+	if err != nil {
+		return 0, err
+	}
+
+	updateSQL := r.ph(`UPDATE links SET to_id = %s WHERE from_id = %s AND to_url = %s`, 1, 2, 3)
+	updated := 0
+	for _, p := range pending {
+		toID, ok := resolved[p.toURL]
+		if !ok {
+			continue // still not resolvable -- left as '' for a later call
+		}
+		if _, err := tx.ExecContext(ctx, updateSQL, toID, p.fromID, p.toURL); err != nil {
+			return 0, fmt.Errorf("updating resolved link (%s -> %s): %w", p.fromID, p.toURL, err)
+		}
+		updated++
+	}
+	return updated, tx.Commit()
 }
 
 func (r *Repository) PostingsForTerm(ctx context.Context, term string, limit int) ([]domain.PostingStats, error) {
@@ -1965,21 +2247,21 @@ func (r *Repository) attachLinkStats(ctx context.Context, docs []domain.IndexedD
 	return backlinkRows.Err()
 }
 
-// LinkGraph loads the crawled link graph as a document-ID adjacency map
-// in one query. links stores each link's raw target URL, not a document
-// ID, so an uncrawled/unindexed target is naturally omitted by the join.
+// LinkGraph loads the crawled link graph as a document-ID adjacency map in
+// one query. to_id is resolved once -- at insert time by insertLinksBatch,
+// or later by a ResolvePendingLinks catch-up pass for a link whose target
+// wasn't crawled yet -- so this is now a plain indexed scan of
+// links(to_id), not the documents/document_aliases join this used to run
+// fresh on every call: that join re-resolved every one of 20.4M link rows
+// against documents (itself an unindexed Seq Scan, until idx_documents_url)
+// on every PageRank recompute, measured at a mean 26.4s and a 90.9s worst
+// case against se.mo-sys.de's production Postgres. A link whose target
+// still hasn't resolved (to_id == ”) is simply omitted, same as before.
 // Self-loops are defensively filtered even though SaveDocument already
 // skips them, since two distinct source URLs could resolve to one ID.
 func (r *Repository) LinkGraph(ctx context.Context) (map[string][]string, error) {
-	// to_url resolves against documents.url first; if that misses but
-	// names a known alias (merged away by RunContentDedupJob, or
-	// www-folded), document_aliases.canonical_id is used instead, so a
-	// link to a since-merged-away URL still credits the surviving document.
-	query := `SELECT l.from_id, COALESCE(d.id, da.canonical_id) FROM links l
-	          LEFT JOIN documents d ON d.url = l.to_url
-	          LEFT JOIN document_aliases da ON da.alias_url = l.to_url
-	          WHERE d.id IS NOT NULL OR da.canonical_id IS NOT NULL`
-	rows, err := r.db.QueryContext(ctx, query)
+	query := r.ph(`SELECT from_id, to_id FROM links WHERE to_id != %s`, 1)
+	rows, err := r.db.QueryContext(ctx, query, "")
 	if err != nil {
 		return nil, fmt.Errorf("querying link graph: %w", err)
 	}
