@@ -104,7 +104,7 @@ func (h *Handler) requireFileAccess(w http.ResponseWriter, r *http.Request) (use
 	if status == 0 {
 		return userID, tokenChatID, true
 	}
-	http.Error(w, "authentication required", status)
+	http.Error(w, authRequiredMsg, status)
 	return "", "", false
 }
 

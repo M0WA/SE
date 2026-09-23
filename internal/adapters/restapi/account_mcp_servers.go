@@ -8,9 +8,8 @@ import (
 )
 
 const (
-	accountMCPServersFeatureName  = "mcp servers"
-	accountMCPServersAuthRequired = "authentication required"
-	accountMCPServerNotFound      = "mcp server not found"
+	accountMCPServersFeatureName = "mcp servers"
+	accountMCPServerNotFound     = "mcp server not found"
 )
 
 // validateUserMCPServerRequest is validateMCPServerRequest's self-service
@@ -42,7 +41,7 @@ func (h *Handler) handleAccountMCPServers(w http.ResponseWriter, r *http.Request
 	}
 	_, userID, ok := h.sessionRoleFor(r)
 	if !ok || userID == "" {
-		http.Error(w, accountMCPServersAuthRequired, http.StatusUnauthorized)
+		http.Error(w, authRequiredMsg, http.StatusUnauthorized)
 		return
 	}
 	switch r.Method {
@@ -92,7 +91,7 @@ func (h *Handler) handleAccountGetMCPServer(w http.ResponseWriter, r *http.Reque
 	}
 	_, userID, ok := h.sessionRoleFor(r)
 	if !ok || userID == "" {
-		http.Error(w, accountMCPServersAuthRequired, http.StatusUnauthorized)
+		http.Error(w, authRequiredMsg, http.StatusUnauthorized)
 		return
 	}
 	servers, err := h.userMCPServers.ListUserMCPServers(r.Context(), userID)
@@ -119,7 +118,7 @@ func (h *Handler) handleAccountUpdateMCPServer(w http.ResponseWriter, r *http.Re
 	}
 	_, userID, ok := h.sessionRoleFor(r)
 	if !ok || userID == "" {
-		http.Error(w, accountMCPServersAuthRequired, http.StatusUnauthorized)
+		http.Error(w, authRequiredMsg, http.StatusUnauthorized)
 		return
 	}
 	req, ok := decodeJSON[mcpServerRequest](w, r)
@@ -164,7 +163,7 @@ func (h *Handler) handleAccountDeleteMCPServer(w http.ResponseWriter, r *http.Re
 	}
 	_, userID, ok := h.sessionRoleFor(r)
 	if !ok || userID == "" {
-		http.Error(w, accountMCPServersAuthRequired, http.StatusUnauthorized)
+		http.Error(w, authRequiredMsg, http.StatusUnauthorized)
 		return
 	}
 	err := h.userMCPServers.DeleteUserMCPServer(r.Context(), userID, r.PathValue("id"))

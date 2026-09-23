@@ -56,6 +56,10 @@ const captionCallTimeout = 45 * time.Second
 // should be resized/cropped by the user first.
 const maxImageBytes = 8 << 20
 
+// headerContentType names the header read (a fetched image's own MIME
+// type) and set (every JSON POST below) more than once in this file.
+const headerContentType = "Content-Type"
+
 type visionSimilarityArgs struct {
 	FileID string `json:"file_id" jsonschema:"the id of the attached image file to use, from list_files"`
 	Limit  int    `json:"limit,omitempty" jsonschema:"how many matches to return -- optional, defaults to 5"`
@@ -196,7 +200,7 @@ func (c *filesClient) fetch(ctx context.Context, fileID string) (fetchedImage, e
 			filename = fn
 		}
 	}
-	return fetchedImage{data: body, contentType: resp.Header.Get("Content-Type"), filename: filename}, nil
+	return fetchedImage{data: body, contentType: resp.Header.Get(headerContentType), filename: filename}, nil
 }
 
 // similarityTool implements vision_similarity: fetch the image, then call
@@ -237,7 +241,7 @@ func (t *similarityTool) run(ctx context.Context, args visionSimilarityArgs) (st
 	if err != nil {
 		return "", fmt.Errorf("building request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(headerContentType, "application/json")
 	req.Header.Set("X-Internal-API-Key", t.apiKey)
 	resp, err := t.http.Do(req)
 	if err != nil {
@@ -331,7 +335,7 @@ func (t *captionTool) run(ctx context.Context, args visionCaptionArgs) (string, 
 	if err != nil {
 		return "", fmt.Errorf("building request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(headerContentType, "application/json")
 	if t.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+t.apiKey)
 	}

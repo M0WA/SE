@@ -323,9 +323,10 @@
       const data = await resp.json();
       renderResults(query, data.results || []);
     } catch (err) {
-      // Ignored: any failure (network error, refused connection, malformed JSON) is reported
-      // the same way -- no more specific message is worth showing than "could not reach the
-      // server."
+      // Any failure (network error, refused connection, malformed JSON) is reported the same
+      // way -- no more specific message is worth showing than "could not reach the server," but
+      // log the real error for anyone debugging from the console.
+      console.error('search request failed:', err);
       status.textContent = 'Search failed: could not reach the server.';
     }
   }
@@ -895,7 +896,7 @@
     const tab = activeTab();
     const body = new FormData();
     body.append('file', file);
-    if (tab && tab.chatId) body.append('chat_id', tab.chatId);
+    if (tab?.chatId) body.append('chat_id', tab.chatId);
     const resp = await fetch('/account/api/files', { method: 'POST', body });
     if (!resp.ok) throw new Error(await resp.text() || resp.statusText);
     return resp.json();
@@ -953,7 +954,7 @@
   // fetching the account's entire file list (that's what Your files is for).
   async function loadChatFiles() {
     const tab = activeTab();
-    if (!tab || !tab.persisted || !tab.chatId) {
+    if (!tab?.persisted || !tab?.chatId) {
       renderChatFiles([]);
       return;
     }
@@ -970,7 +971,7 @@
   // requires a chat_id on upload, and an unpinned tab has none.
   function updateAttachAvailability() {
     const tab = activeTab();
-    const persisted = !!(tab && tab.persisted);
+    const persisted = !!tab?.persisted;
     chatAttachBtn.disabled = !persisted;
     chatAttachBtn.title = persisted ? 'Attach a file for the model to inspect' : 'Pin this chat first to attach files';
     chatAttachBtn.setAttribute('aria-label', chatAttachBtn.title);
@@ -1076,8 +1077,10 @@
         chatStatus.textContent = '';
       }
     } catch (err) {
-      // err isn't inspected: a network-level failure has no server response text to include,
-      // unlike the !resp.ok branch -- a generic message is all there is.
+      // A network-level failure has no server response text to include, unlike the !resp.ok
+      // branch -- a generic message is all there is for the user, but log the real error for
+      // anyone debugging from the console.
+      console.error('chat request failed:', err);
       if (tab.id === activeTabId) chatStatus.textContent = 'Chat failed: could not reach the server.';
     }
   }

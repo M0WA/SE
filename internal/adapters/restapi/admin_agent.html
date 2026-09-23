@@ -42,13 +42,13 @@
       </div>
       <textarea id="agent-system-prompt" class="field" rows="16"></textarea>
     </div>
-    <div class="form-row">
-      <div class="label-row">
-        <span id="agent-mcp-servers-label" style="display:block; margin:0; font-size:0.92rem; font-weight:400; color:var(--ink);">MCP servers</span>
+    <fieldset class="form-row" style="border:none; margin:0; padding:0;">
+      <legend id="agent-mcp-servers-label" class="label-row" style="width:100%; padding:0; font-size:0.92rem; font-weight:400; color:var(--ink);">
+        MCP servers
         <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Restricts which of the globally configured MCP servers (Settings -> Chat -> MCP servers) this agent may use tools from. There is no "unscoped" option: leaving every box unchecked gives this agent NO global tools at all -- check every box to allow every one instead. This never affects a user's own personal MCP servers, which stay available to every agent regardless.</span></button>
-      </div>
-      <div id="agent-mcp-servers-list" role="group" aria-labelledby="agent-mcp-servers-label"></div>
-    </div>
+      </legend>
+      <div id="agent-mcp-servers-list"></div>
+    </fieldset>
     <div class="form-row form-row-check">
       <label for="agent-enabled">
         <input id="agent-enabled" type="checkbox">

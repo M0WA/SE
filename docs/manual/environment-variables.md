@@ -19,6 +19,7 @@ created from `/admin/users` by an existing admin.
 | `DB_DSN` | `"file:search.db?cache=shared"` | search, admin, crawl | The data-source-name/connection string for the SQL database. |
 | `SETTINGS_ENCRYPTION_KEY` | none, empty (encryption disabled) | search, admin, crawl | Hex-encoded AES-256 key used to encrypt/decrypt sensitive stored settings (e.g. endpoint/MCP server API keys) at rest in the DB. |
 | `SEARCH_INTERNAL_API_KEY` | none, empty (bypass disabled) | search | Optional pre-shared key letting a trusted local caller call the public `/search` endpoint via an `X-Internal-API-Key` header instead of a browser session cookie. |
+| `CHAT_VISION_INTERNAL_API_KEY` | none, empty (bypass disabled) | search | Same mechanism as `SEARCH_INTERNAL_API_KEY`, but a deliberately separate key: lets `cmd/mcp-vision` (spawned per chat turn) call the internal `/search/api/vision-similarity` endpoint. Required for the Chat settings page's "Vision -> Similarity search" to actually work, not just be enabled in the DB. |
 | `SEARCH_LISTEN_ADDR` | `"127.0.0.1:8080"` | search | The host:port the public, internet-facing search HTTP server binds and listens on. |
 | `CRAWL_INTERNAL_TOKEN` | none, empty (auth check disabled) | admin, crawl | Shared secret authenticating admin-server's network calls to crawl-server's internal API. |
 | `CRAWL_SERVER_URL` | `"http://127.0.0.1:8082"` | admin | Base URL admin-server uses to reach the crawl-server binary over the network. |
