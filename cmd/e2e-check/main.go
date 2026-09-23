@@ -845,6 +845,19 @@ func (c *client) buildMCPConnectivityChecks() []check {
 				if !s.Enabled {
 					return skip("disabled")
 				}
+				// cmd/mcp-vision's own tools (vision_similarity/vision_caption)
+				// always require a real, previously attached image's file_id --
+				// unlike mcp-files' read_file_base64/list_files, there's no
+				// zero-context call of its own this generic check (no attached
+				// file, no specific agent/prompt) could ever reasonably trigger.
+				// checkImageVision below is the real, fully-attached functional
+				// test for this server; this one would either 404 fetching a
+				// guessed file_id or (as reasonably observed live) have the
+				// model call a DIFFERENT server's tool (e.g. list_files)
+				// instead of guessing -- neither is a regression.
+				if s.Name == "vision" {
+					return skip("vision's own tools all require a real attached image -- see checkImageVision for the real functional test")
+				}
 				if len(tools) == 0 {
 					return skip("connectivity check didn't discover any tools to call")
 				}
