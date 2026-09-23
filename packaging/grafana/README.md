@@ -1,6 +1,6 @@
 # Grafana dashboards
 
-Four dashboards on the same Grafana instance
+Five dashboards on the same Grafana instance
 (`https://grafana.logging.de-fra.ionos.com`, org `2348`), fed by the IONOS
 Monitoring Service pipelines in `../prometheus/` and `../prometheus-gpu/`,
 one per Prometheus `external_labels.site` value those directories set:
@@ -10,7 +10,8 @@ one per Prometheus `external_labels.site` value those directories set:
 | `dashboards/se-mo-sys-de.json` | `se.mo-sys.de` | `../prometheus/`'s `node`/`nginx`/`postgres` jobs (`site="se-mo-sys-de"`) |
 | `dashboards/postgres.json` | `postgres` | `../prometheus/`'s `postgres` job (query time, connections, cache hit ratio, replication lag) |
 | `dashboards/searxng.json` | `searxng` | `../prometheus/`'s `searxng` job -- per-engine request rate, result count, response time, reliability, selectable via an `engine_name` template variable |
-| `dashboards/gpu-mo-sys-de.json` | `gpu.mo-sys.de` | `../prometheus-gpu/`'s `node`/`gpu`/`vllm`/`vllm-chat` jobs (`site="gpu-h200"`) -- GPU utilization/memory/temperature/power plus both vLLM instances' request/latency/queue metrics |
+| `dashboards/gpu-mo-sys-de.json` | `gpu.mo-sys.de` | `../prometheus-gpu/`'s `node`/`gpu`/`vllm`/`vllm-chat` jobs (`site="gpu-h200"`) -- host/GPU utilization/memory/temperature/power, plus the chat instance's own request/latency/queue metrics |
+| `dashboards/vllm.json` | `vLLM` | `../prometheus-gpu/`'s `vllm`/`vllm-chat` jobs (`site="gpu-h200"`) -- request/latency/queue/token-throughput metrics, one panel repeated per active vLLM model on the GPU host (Grafana's native panel-repeat, driven by a `model_name` template variable populated from live label values -- no per-model panel to hand-maintain when a model is swapped) |
 
 Every dashboard queries the same Prometheus datasource (UID `efxuqky56wikgf`
 in this org) -- these JSON files aren't portable to a different Grafana
