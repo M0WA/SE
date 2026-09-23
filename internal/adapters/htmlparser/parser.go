@@ -34,20 +34,12 @@ func resolveHTTPURL(base *url.URL, raw string) (string, bool) {
 // a document row for a page whose canonical points elsewhere). canonicalURL
 // is "" when absent; both it and links are resolved/filtered the same way.
 func Parse(r io.Reader, pageURL string) (title, text string, links []string, canonicalURL string) {
-	// html.Parse has no charset handling of its own -- its own doc comment
-	// requires the caller to already provide UTF-8. charset.NewReader
-	// detects the real encoding (a <meta charset> tag or a byte-order mark
-	// sniffed from the body; falls back to UTF-8/Windows-1252 per the
-	// HTML5 sniffing algorithm if neither is present) and transcodes to
-	// UTF-8 first. Without this, a page actually served in a legacy
-	// encoding (Windows-1252/ISO-8859-1 -- not rare even on an otherwise
-	// modern site, e.g. one legacy embedded widget) leaks raw non-UTF-8
-	// bytes straight into title/text, which Postgres's strict UTF8
-	// encoding then rejects outright at save time ("invalid byte sequence
-	// for encoding UTF8") -- a real crawl failure this fixes. No Content-
-	// Type header is passed through (httpfetcher doesn't currently expose
-	// one to this layer) -- body-sniffing alone still catches the common
-	// case of a page declaring its own charset via a meta tag.
+	// html.Parse requires UTF-8 input. charset.NewReader detects the real
+	// encoding (<meta charset>, BOM, or HTML5 sniffing fallback) and
+	// transcodes first -- without this, a legacy-encoded page (Windows-1252
+	// etc, not rare even on modern sites) leaks raw non-UTF-8 bytes into
+	// title/text, which Postgres's UTF8 column then rejects outright at
+	// save time -- a real crawl failure this fixes.
 	utf8Reader, err := charset.NewReader(r, "")
 	if err != nil {
 		utf8Reader = r
@@ -121,14 +113,11 @@ func Parse(r io.Reader, pageURL string) (title, text string, links []string, can
 	if title == "" {
 		title = pageURL
 	}
-	// Defense in depth on top of the charset.NewReader conversion above:
-	// guarantees title/text are valid UTF-8 no matter what (a wrong
-	// encoding guess, a genuinely mixed-encoding page, or any other
-	// upstream surprise), since every downstream consumer -- most strictly
-	// Postgres's UTF8 column encoding -- has zero tolerance for anything
-	// less. Runs of invalid bytes are replaced with U+FFFD rather than
-	// dropped outright, so a save never silently loses unrelated content
-	// alongside the bad bytes.
+	// Defense in depth on top of charset.NewReader: guarantees valid UTF-8
+	// no matter what (a wrong encoding guess, a mixed-encoding page), since
+	// Postgres's UTF8 column has zero tolerance otherwise. Invalid bytes
+	// are replaced with U+FFFD rather than dropped, so a save never loses
+	// unrelated content alongside the bad bytes.
 	if !utf8.ValidString(title) {
 		title = strings.ToValidUTF8(title, "�")
 	}

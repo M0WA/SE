@@ -5,11 +5,9 @@
 
   let searchTimer = null;
 
-  // candidatesFetchPromise caches the one broad fetch of every domain and
-  // every document so each keystroke's regex filter runs against in-memory
-  // arrays instead of re-querying the server -- the same fetch-once,
-  // filter-client-side pattern as admin.js's vocabulary search. A failed
-  // fetch clears the cache so the next keystroke gets to retry.
+  // candidatesFetchPromise caches one broad fetch of every domain/document so each keystroke
+  // filters in-memory (fetch-once, filter-client-side, like admin.js's vocabulary search). A
+  // failed fetch clears the cache so the next keystroke retries.
   let candidatesFetchPromise = null;
 
   function fetchCandidatesOnce() {
@@ -25,9 +23,8 @@
     return candidatesFetchPromise;
   }
 
-  // hostOf pulls the host out of a document's URL for display/filtering --
-  // the documents endpoint doesn't carry a separate host field, so it's
-  // derived the same way a browser would resolve the link.
+  // hostOf pulls the host from a document's URL for display/filtering -- the endpoint has no
+  // separate host field.
   function hostOf(url) {
     try {
       return new URL(url).host;

@@ -8,27 +8,22 @@ const { teardownDOM, requireFresh } = require('./dom_helper.test_util');
 
 const DOMAIN_HTML = fs.readFileSync(path.join(__dirname, 'admin_domain.html'), 'utf8');
 
-// admin_domain.js reads the domain host out of window.location.pathname at
-// load time, so (unlike most other pages) its fixture needs a real
-// pathname, not just a body -- dom_helper.test_util's setupDOM() always
-// uses http://localhost/, so this constructs its own JSDOM directly instead.
+// admin_domain.js reads the domain host from window.location.pathname at load time, so this
+// fixture needs a real pathname -- setupDOM() always uses http://localhost/, so this builds its
+// own JSDOM directly.
 function setupDOMAt(html, pathname) {
   const dom = new JSDOM(html, { url: 'http://localhost' + pathname });
   global.window = dom.window;
   global.document = dom.window.document;
-  // Node's own getter-only global `navigator` (since Node 21) rejects a
-  // plain assignment in strict mode -- see dom_helper.test_util.js's
-  // setupDOM for the same fix.
+  // navigator is getter-only since Node 21; assignment throws -- see dom_helper.test_util.js's fix.
   Object.defineProperty(global, 'navigator', {
     value: dom.window.navigator, configurable: true, writable: true,
   });
   return dom;
 }
 
-// fetchImpl is installed *before* requireFresh, because admin_domain.js
-// calls load() itself at module load time -- setting global.fetch after
-// requiring the module would race the module's own auto-triggered call
-// instead of controlling it.
+// fetchImpl is installed before requireFresh, since admin_domain.js calls load() at module-load
+// time -- setting it after would race the module's own auto-triggered call.
 function loadFixture(host, fetchImpl) {
   setupDOMAt(DOMAIN_HTML, '/admin/documents/' + encodeURIComponent(host || 'example.com'));
   const adminHelpers = requireFresh('./admin.js');

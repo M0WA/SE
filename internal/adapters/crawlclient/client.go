@@ -14,17 +14,14 @@ import (
 )
 
 // Client implements ports.CrawlJobService by delegating to a separate
-// crawl-server process over HTTP -- admin-server itself never fetches
-// pages, checks robots.txt, or writes documents; it only starts jobs on
-// crawl-server and polls their progress.
+// crawl-server process over HTTP -- admin-server itself never fetches or
+// writes documents; it only starts jobs and polls their progress.
 type Client struct {
 	BaseURL string
 	HTTP    *http.Client
-	// Token, when set, is sent as the X-Internal-Token header on every
-	// request -- crawl-server's own opt-in shared-secret check (see
-	// restapi.Handler.requireCrawlInternalToken). Left empty, requests
-	// carry no such header, matching a crawl-server that hasn't been
-	// given CRAWL_INTERNAL_TOKEN either.
+	// Token, when set, is sent as X-Internal-Token -- crawl-server's opt-in
+	// shared-secret check. Empty means no header, matching a crawl-server
+	// with no CRAWL_INTERNAL_TOKEN configured either.
 	Token string
 }
 

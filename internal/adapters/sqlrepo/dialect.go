@@ -10,12 +10,10 @@ type Dialect interface {
 	UpsertSettingSQL() string
 	UpsertDocumentAliasSQL() string
 	UpsertChatEndpointSQL() string
-	// SeedContentDedupLockSQL atomically inserts content_dedup_lock's one
-	// sentinel row (id=1, in_progress=false) if it isn't already there --
-	// a plain SELECT-then-INSERT would have the exact same
-	// multiple-processes-racing-at-startup problem CreateSchemaSQL's own
-	// doc comment describes, so this is a single insert-or-noop statement
-	// per dialect instead.
+	// SeedContentDedupLockSQL atomically inserts content_dedup_lock's
+	// sentinel row (id=1, in_progress=false) if missing -- a
+	// SELECT-then-INSERT would race the same way CreateSchemaSQL's doc
+	// comment describes, so this is one insert-or-noop statement per dialect.
 	SeedContentDedupLockSQL() string
 	CreateSchemaSQL() []string
 }
@@ -79,12 +77,10 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			term_freq INTEGER NOT NULL, PRIMARY KEY (term, doc_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_postings_term ON postings(term)`,
-		// doc_id is the trailing column of postings' own (term, doc_id)
-		// primary key, so "DELETE FROM postings WHERE doc_id = ?" (every
-		// re-crawl of an existing page, in SaveDocument) can't seek that
-		// index directly -- confirmed via EXPLAIN ANALYZE on production
-		// taking 600ms+ on a 9.7M-row table. This index makes it a direct
-		// index lookup instead.
+		// doc_id is only the trailing column of postings' (term, doc_id)
+		// key, so a per-doc_id DELETE (every re-crawl, in SaveDocument)
+		// can't seek it directly -- confirmed via EXPLAIN ANALYZE taking
+		// 600ms+ on a 9.7M-row production table. This index makes it direct.
 		`CREATE INDEX IF NOT EXISTS idx_postings_doc_id ON postings(doc_id)`,
 		`CREATE TABLE IF NOT EXISTS document_aliases (
 			alias_url TEXT PRIMARY KEY, canonical_id TEXT NOT NULL,
@@ -134,11 +130,9 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			created_at TEXT NOT NULL
 		)`,
 		// chat_endpoint holds the single admin-configured chat-completions
-		// backend (see domain.ChatEndpoint) -- unlike
-		// embedding_http_endpoints (a list of many blended providers), chat
-		// only ever has one active configuration, kept as a single sentinel
-		// row (id = the fixed value chatEndpointRowID) upserted in place
-		// rather than a growing table.
+		// backend (domain.ChatEndpoint) -- unlike embedding_http_endpoints'
+		// list of many providers, this is one sentinel row
+		// (id = chatEndpointRowID) upserted in place, not a growing table.
 		`CREATE TABLE IF NOT EXISTS chat_endpoint (
 			id TEXT PRIMARY KEY, base_url TEXT NOT NULL,
 			api_key TEXT NOT NULL DEFAULT '', model TEXT NOT NULL,
@@ -152,15 +146,12 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			default_agent_id TEXT NOT NULL DEFAULT '',
 			updated_at TEXT NOT NULL
 		)`,
-		// mcp_servers is a list of many admin-configured MCP (Model Context
-		// Protocol) server connections (see domain.MCPServer) -- unlike
-		// chat_endpoint's single sentinel row, this grows the same way
-		// embedding_http_endpoints does. Replaces the old chat_hooks table
-		// (one-row-per-script tool hooks, removed in favor of real MCP
-		// tool-calling) -- an already-deployed instance's own chat_hooks
-		// table and any rows in it are left physically in place, untouched
-		// and unused, rather than dropped (see repository.go's migrate()
-		// doc comments for why a real DROP TABLE isn't done here).
+		// mcp_servers lists admin-configured MCP server connections
+		// (domain.MCPServer) -- grows like embedding_http_endpoints, unlike
+		// chat_endpoint's sentinel row. Replaces the old chat_hooks table
+		// (removed in favor of real MCP tool-calling); an already-deployed
+		// chat_hooks table is left in place, untouched (see repository.go's
+		// migrate() for why no DROP TABLE).
 		`CREATE TABLE IF NOT EXISTS mcp_servers (
 			id TEXT PRIMARY KEY, name TEXT NOT NULL, transport TEXT NOT NULL,
 			command TEXT NOT NULL DEFAULT '', args TEXT NOT NULL DEFAULT '[]',
@@ -168,26 +159,22 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			enabled BOOLEAN NOT NULL DEFAULT true, prompt TEXT NOT NULL DEFAULT '',
 			gated_by_web_search BOOLEAN NOT NULL DEFAULT false
 		)`,
-		// agents holds admin-defined domain.Agent rows -- a named
-		// specialization (Description for a planner/picker to reason
-		// about, SystemPrompt actually injected into the agent's own
-		// conversation) plus an optional MCPServerIDs allow-list scoping
-		// which of the global mcp_servers rows it may use (JSON-encoded
-		// []string, same convention as mcp_servers.args).
+		// agents holds admin-defined domain.Agent rows: Description for a
+		// planner/picker, SystemPrompt injected into the agent's own
+		// conversation, plus an optional MCPServerIDs allow-list
+		// (JSON []string, same convention as mcp_servers.args) scoping
+		// which mcp_servers rows it may use.
 		`CREATE TABLE IF NOT EXISTS agents (
 			id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
 			system_prompt TEXT NOT NULL DEFAULT '', mcp_server_ids TEXT NOT NULL DEFAULT '[]',
 			enabled BOOLEAN NOT NULL DEFAULT true
 		)`,
-		// content_dedup_lock is a single sentinel row (id = 1) whose
+		// content_dedup_lock is a single sentinel row (id=1) whose
 		// in_progress flag TryAcquireContentDedupLock/ReleaseContentDedupLock
-		// claim/clear via a conditional UPDATE -- see ports.
-		// ContentDedupRepository's doc comment for why this needs to be a
-		// real DB row (visible to every process) rather than an in-memory
-		// bool. The row is seeded once at migration time (see
-		// migrateDocumentColumns), not here, since CREATE TABLE alone
-		// leaves it empty and the conditional UPDATE has no row to match
-		// against otherwise.
+		// claim/clear via a conditional UPDATE -- a real DB row so every
+		// process sees it (see ports.ContentDedupRepository). Seeded once at
+		// migration time (migrateDocumentColumns), since CREATE TABLE alone
+		// leaves no row for the UPDATE to match.
 		`CREATE TABLE IF NOT EXISTS content_dedup_lock (
 			id INTEGER PRIMARY KEY, in_progress BOOLEAN NOT NULL DEFAULT false
 		)`,
@@ -211,29 +198,24 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			role TEXT NOT NULL DEFAULT 'admin', user_id TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
-		// users is a list of many DB-backed regular-user accounts (see
-		// domain.User) -- distinct from the single hardcoded admin account,
-		// which is never a row here. Unlike chat_hooks, username must be
-		// unique (enforced at the DB layer, not just checked-then-inserted
-		// at the application layer, to close the race between the two).
+		// users lists DB-backed regular-user accounts (domain.User) --
+		// distinct from the single hardcoded admin account, never a row
+		// here. username is unique at the DB layer, not just
+		// checked-then-inserted at the application layer, to close that race.
 		`CREATE TABLE IF NOT EXISTS users (
 			id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE,
 			password_hash TEXT NOT NULL, custom_prompt TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 		)`,
-		// user_mcp_servers is mcp_servers' self-service, per-user sibling --
-		// same domain.MCPServer field set, but every row is owned by one
-		// user_id (cascade-deleted with its owner) and (user_id, id) is the
-		// primary key rather than id alone, since two different users may
-		// each independently mint a server they call "web-tools" (see
-		// domain.NewMCPServerID -- ports.UserMCPServerStore only checks
-		// uniqueness within one owner's own rows). transport defaults to,
-		// and restapi's validation enforces, "http" only -- see
-		// ports.UserMCPServerStore's own doc comment for why "stdio" (real
-		// local command execution) can never be handed to a regular,
-		// non-admin user. Created after users (not alongside mcp_servers
-		// above) since its FK needs that table to already exist -- SQLite
-		// doesn't check at CREATE TABLE time, but Postgres/MySQL do.
+		// user_mcp_servers is mcp_servers' per-user sibling -- same
+		// domain.MCPServer fields, but owned by user_id (cascade-deleted
+		// with it) with (user_id, id) as the primary key, since two users
+		// may each mint a server called "web-tools" (ports.UserMCPServerStore
+		// only checks uniqueness per owner). transport is restricted to
+		// "http" -- "stdio" (real command execution) is never handed to a
+		// non-admin user (see ports.UserMCPServerStore). Created after
+		// users since its FK needs that table to exist -- SQLite doesn't
+		// check this at CREATE TABLE time, but Postgres/MySQL do.
 		`CREATE TABLE IF NOT EXISTS user_mcp_servers (
 			user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			id TEXT NOT NULL, name TEXT NOT NULL, transport TEXT NOT NULL DEFAULT 'http',
@@ -243,16 +225,12 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			gated_by_web_search BOOLEAN NOT NULL DEFAULT false,
 			PRIMARY KEY (user_id, id)
 		)`,
-		// chats holds domain.PersistedChat rows -- a chat a user explicitly
-		// pinned to persist across reloads, owned by (cascade-deleted
-		// with) one user_id, id a random opaque token (see sqlrepo's
-		// randomFileID/randomChatID) for the same reason uploaded_files.id
-		// is. history is the full turn-by-turn transcript, JSON-encoded
-		// (same convention as mcp_servers.args) rather than a normalized
-		// per-message table -- always read/written as one whole document,
-		// never queried by individual message. Created before
-		// uploaded_files (not alongside user_mcp_servers above) since that
-		// table's own chat_id FK needs this one to already exist.
+		// chats holds domain.PersistedChat rows -- a chat a user pinned to
+		// persist across reloads, owned by (cascade-deleted with) user_id,
+		// id a random opaque token (randomChatID) like uploaded_files.id.
+		// history is the full transcript, JSON-encoded, not a normalized
+		// per-message table -- always read/written whole. Created before
+		// uploaded_files since its chat_id FK needs this table to exist first.
 		`CREATE TABLE IF NOT EXISTS chats (
 			id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			title TEXT NOT NULL, agent_id TEXT NOT NULL DEFAULT '',
@@ -261,30 +239,17 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_chats_user_id ON chats(user_id)`,
 		// uploaded_files is user_mcp_servers' sibling for domain.UploadedFile
-		// -- every row owned by (cascade-deleted with) one user_id, id a
-		// random opaque token (see sqlrepo's randomFileID) rather than a
-		// name-derived slug, since a filename is never unique enough to
-		// safely reuse as an ID and this ID appears directly in a download
-		// URL, where unguessability matters the same way a session token's
-		// does. data holds the file's raw bytes directly in this shared
-		// database, the same tier of "just another row" every other piece
-		// of this app's state already gets -- no separate blob store to
-		// stand up or back up independently. chat_id ties a file to the
-		// domain.PersistedChat it was attached/produced during --
-		// NULLable (not NOT NULL DEFAULT '') specifically so a file
-		// created before chats could be pinned, with no chat to point at,
-		// doesn't fail this foreign key ('' would never match a real
-		// chats.id and NULL is the only value a FK constraint exempts
-		// from the check) -- scanned back into
-		// domain.UploadedFile.ChatID as "". The "ON DELETE CASCADE" here
-		// only actually fires under Postgres (which always enforces its
-		// own foreign keys) -- SQLite enforces one only when a
-		// connection has run "PRAGMA foreign_keys = ON", which this
-		// package's connections never do, so Repository.DeleteChat
-		// deletes a chat's files explicitly itself rather than relying
-		// on this constraint; it's kept for Postgres' own referential
-		// integrity and as documentation of the real relationship, not
-		// as the actual cross-dialect cleanup mechanism.
+		// -- owned by (cascade-deleted with) user_id, id a random opaque
+		// token (randomFileID), not a name-derived slug, since it appears
+		// directly in a download URL where unguessability matters like a
+		// session token. data holds the file's raw bytes inline in this
+		// shared database -- no separate blob store. chat_id ties a file to
+		// the chat it was produced during -- NULLable so a file created
+		// before chats existed doesn't fail the FK ('' can't match a real
+		// chats.id, NULL is exempt). Its ON DELETE CASCADE only actually
+		// fires under Postgres; SQLite doesn't enforce FKs here, so
+		// Repository.DeleteChat deletes a chat's files explicitly instead
+		// of relying on it.
 		`CREATE TABLE IF NOT EXISTS uploaded_files (
 			id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			chat_id TEXT REFERENCES chats(id) ON DELETE CASCADE,
@@ -292,10 +257,10 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			size INTEGER NOT NULL DEFAULT 0, data BLOB NOT NULL,
 			created_at TEXT NOT NULL
 		)`,
-		// idx_uploaded_files_chat_id is deliberately NOT listed here --
-		// see ensureUploadedFilesChatIDIndex's own doc comment for why a
-		// column added via a later ALTER TABLE can never have its index
-		// created unconditionally in this same static list.
+		// idx_uploaded_files_chat_id is deliberately NOT listed here -- a
+		// column added via a later ALTER TABLE can't get its index created
+		// unconditionally in this static list (see
+		// ensureUploadedFilesChatIDIndex's doc comment).
 		`CREATE INDEX IF NOT EXISTS idx_uploaded_files_user_id ON uploaded_files(user_id)`,
 	}
 }
@@ -490,9 +455,9 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 		) ENGINE=InnoDB`,
 		`CREATE INDEX idx_chats_user_id ON chats(user_id)`,
 		// See the sqlite dialect's uploaded_files comment. id is
-		// VARCHAR(32) (a 16-byte random token, hex-encoded), unlike
-		// user_id/other slug-derived ids' VARCHAR(20). chat_id is
-		// NULLable (see the sqlite dialect's own note on why).
+		// VARCHAR(32) (16-byte random token, hex-encoded), unlike other
+		// VARCHAR(20) slug-derived ids. chat_id is NULLable (see that
+		// comment for why).
 		`CREATE TABLE IF NOT EXISTS uploaded_files (
 			id VARCHAR(32) NOT NULL, user_id VARCHAR(20) NOT NULL, chat_id VARCHAR(32),
 			filename VARCHAR(255) NOT NULL, content_type VARCHAR(255) NOT NULL DEFAULT '',

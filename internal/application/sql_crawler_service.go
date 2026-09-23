@@ -12,18 +12,17 @@ type sqlCrawlerService struct {
 	fetcher ports.AuthFetcher
 	robots  ports.RobotsChecker
 	repo    ports.SQLRepository
-	// embedders holds one ports.EmbeddingProvider per currently-enabled
-	// provider, keyed by name -- every enabled provider gets its own
-	// embedding stored per document, not just the one active for search.
+	// embedders holds one ports.EmbeddingProvider per enabled provider --
+	// every one gets its own embedding stored per document, not just the
+	// one active for search.
 	embedders map[string]ports.EmbeddingProvider
 	parseHTML func(html, pageURL string) (title, text string, links []string, canonicalURL string)
 	settings  *domain.OperationalSettings
 }
 
 // NewSQLCrawlerService is a CrawlerService that persists crawled documents
-// (with their embeddings) to a SQL-backed ports.SQLRepository, for use with
-// the hybrid (BM25 + semantic) search service. Each provider's own rate
-// limit is enforced inside its own httpembed.Embedder, not here.
+// (with embeddings) to a SQL-backed ports.SQLRepository. Each provider's
+// rate limit is enforced inside its own httpembed.Embedder, not here.
 func NewSQLCrawlerService(
 	fetcher ports.AuthFetcher,
 	robots ports.RobotsChecker,
@@ -69,11 +68,10 @@ func (c *sqlCrawlerService) Crawl(ctx context.Context, opts ports.CrawlOptions, 
 	}, onPage)
 }
 
-// buildDomainIndexed returns a closure crawlLoop calls to check whether an
-// already-indexed document exists for a discovered link's host (backing
-// opts.FollowIndexedDomains), memoized per host across the crawl. A failed
-// lookup is cached as "not indexed" rather than retried -- same tradeoff
-// as buildIsIndexed below.
+// buildDomainIndexed returns a closure crawlLoop calls to check whether a
+// discovered link's host already has an indexed document (backing
+// opts.FollowIndexedDomains), memoized per host. A failed lookup is
+// cached as "not indexed" rather than retried.
 func (c *sqlCrawlerService) buildDomainIndexed(ctx context.Context) func([]string) map[string]bool {
 	cache := make(map[string]bool)
 	return func(hosts []string) map[string]bool {
@@ -98,10 +96,8 @@ func (c *sqlCrawlerService) buildDomainIndexed(ctx context.Context) func([]strin
 }
 
 // buildIsIndexed fetches every already-indexed document ID for seeds'
-// host(s) in one query, then returns a cheap, I/O-free predicate crawlLoop
-// can call once per candidate URL -- rather than a query per URL, or
-// threading the repository (and a context per call) into the hot loop
-// itself.
+// host(s) in one query, returning a cheap, I/O-free predicate crawlLoop
+// can call per candidate URL instead of a query per URL.
 func (c *sqlCrawlerService) buildIsIndexed(ctx context.Context, seeds []string) (func(string) bool, error) {
 	hostSet := make(map[string]bool)
 	for _, s := range seeds {

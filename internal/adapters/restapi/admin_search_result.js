@@ -6,10 +6,8 @@
   const statusEl = document.getElementById('result-status');
   const bodyEl = document.getElementById('result-body');
 
-  // barRow builds one .bar-row: a label, a track filled to fraction (0..1)
-  // of its own width, a right-aligned value, and an optional meta string --
-  // the one bar shape reused for both the per-term BM25 bars and the
-  // semantic-similarity gauge below.
+  // barRow builds one .bar-row (label, fraction-filled track, value, optional meta) -- the one
+  // bar shape reused for both the BM25 bars and the semantic-similarity gauge.
   function barRow(label, fraction, value, meta) {
     const row = document.createElement('div');
     row.className = 'bar-row';
@@ -155,9 +153,7 @@
   wireSignOut();
   load();
 
-  // Exports for the Node test runner only -- `typeof module` is undefined in
-  // a browser's <script> tag, so this is a no-op there. See
-  // internal/adapters/restapi/admin_search_result.test.js.
+  // Node test-runner export only; no-op in a browser <script> tag.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { barRow, renderComposition, renderBM25Terms, render, load };
   }

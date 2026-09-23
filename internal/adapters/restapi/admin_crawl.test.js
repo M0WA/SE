@@ -7,13 +7,9 @@ const { setupDOM, teardownDOM, requireFresh } = require('./dom_helper.test_util'
 
 const CRAWL_HTML = fs.readFileSync(path.join(__dirname, 'crawl.html'), 'utf8');
 
-// admin_crawl.js is a plain page script, not a module -- it expects admin.js's
-// helpers (wireSignOut, getJSON, postJSON, normalizeURL, parseLines,
-// setButtonLoading) as ambient globals, the same way <script src="/admin.js">
-// loading before it in the real page does. It also unconditionally runs its
-// own bootstrap (wireSignOut/showCurrentDefaults) at load time -- loadFixture
-// sets a fetch mock that satisfies showCurrentDefaults' settings GET before
-// requiring it, the same way the real page's own initial load would.
+// admin_crawl.js expects admin.js's helpers as ambient globals (same as <script src="/admin.js">
+// loading first in the real page), and runs its bootstrap at load time -- loadFixture sets a
+// fetch mock satisfying showCurrentDefaults' GET before requiring it.
 function settingsPayload(overrides) {
   return {
     tuning: { alpha: 0.5, k1: 1.2, b: 0.75, pagerank_weight: 0.1 },

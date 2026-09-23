@@ -42,12 +42,9 @@
 
     nameEl.value = e.name;
     baseURLEl.value = e.base_url;
-    // The server never echoes a stored API key's real value (see
-    // embeddingEndpointResponse) -- this field always starts blank, and
-    // saving with it left blank keeps whatever key is already stored (see
-    // requestBody). has_api_key only drives the placeholder text and the
-    // "remove" checkbox's availability, so the admin can see whether a key
-    // is set without ever seeing its value.
+    // Server never echoes a stored API key (see embeddingEndpointResponse); field starts blank,
+    // and blank on save keeps it (see requestBody). has_api_key only drives the placeholder/
+    // remove-checkbox UI.
     apiKeyEl.value = '';
     apiKeyEl.placeholder = e.has_api_key ? '(unchanged — a key is already set)' : '';
     clearAPIKeyEl.checked = false;
@@ -62,16 +59,11 @@
     form.hidden = false;
   }
 
-  // candidateBody is what a not-yet-saved (or being-edited) endpoint looks
-  // like to the test-connection/list-models probes -- just the fields a
-  // real Embed/ListModels call needs, independent of whether this form is
-  // in "new" or "edit" mode. id (blank for a brand new endpoint) lets the
-  // server fall back to the real stored API key when api_key is left blank
-  // here -- this form never re-populates that field with an already-saved
-  // endpoint's real value (see applyEndpoint), so without this, testing an
-  // endpoint the admin hasn't just retyped the key for would always send an
-  // empty one and fail with 401 regardless of whether the stored key
-  // actually works.
+  // candidateBody is what the test-connection/list-models probes see for a not-yet-saved endpoint
+  // -- just the fields Embed/ListModels need. id (blank for new) lets the server fall back to the
+  // real stored key when api_key is blank, since this form never re-populates that field (see
+  // applyEndpoint) -- without this, testing an untouched endpoint would always send an empty key
+  // and 401.
   function candidateBody() {
     return {
       id: isNew ? '' : id,
@@ -177,9 +169,7 @@
   wireSignOut();
   load();
 
-  // Exports for the Node test runner only -- `typeof module` is undefined in
-  // a browser's <script> tag, so this is a no-op there. See
-  // admin_embedding_endpoint.test.js.
+  // Node test-runner export only; no-op in a browser <script> tag.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { applyEndpoint, requestBody, candidateBody, load };
   }

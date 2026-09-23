@@ -1,17 +1,13 @@
-// Command mcp-sandbox is a first-party MCP (Model Context Protocol) server
-// exposing "run_python" and "run_go" -- native tool-calling tools that
-// execute a snippet of code inside a fresh, locked-down Docker container
-// (see internal/adapters/dockersandbox for the confinement this applies:
-// resource limits, dropped capabilities, a read-only root filesystem, and
-// no network access unless this server was started with -network). Spawned
-// as a stdio subprocess by internal/adapters/mcpclient (see
-// domain.MCPServer's Transport="stdio" configuration) rather than run as a
-// systemd service, same operational model as cmd/mcp-web/cmd/mcp-datetime.
+// Command mcp-sandbox is a first-party MCP server exposing "run_python"
+// and "run_go", executing code inside a fresh, locked-down Docker
+// container (see internal/adapters/dockersandbox: resource limits,
+// dropped capabilities, read-only root, no network unless -network).
+// Spawned as a stdio subprocess by internal/adapters/mcpclient, same
+// model as cmd/mcp-web/cmd/mcp-datetime -- not a systemd service.
 //
-// Every flag here is admin-configured, via the MCPServer row's own Args
-// (e.g. Args: ["-network", "-memory=1g"]) -- never the model, and never
-// per-call: the model only ever supplies the CODE that runs inside an
-// already-built container, never anything about the container itself.
+// Every flag here is admin-configured via the MCPServer row's Args --
+// never the model, and never per-call: the model only supplies the code
+// that runs inside an already-built container.
 package main
 
 import (
@@ -62,9 +58,7 @@ func main() {
 }
 
 // splitNonEmpty splits a comma-separated flag value into its trimmed,
-// non-empty parts -- "" and "1.2.3.4, , 8.8.8.8" both handled sanely,
-// unlike a bare strings.Split which would produce a [""] or an empty-string
-// element for either.
+// non-empty parts -- unlike a bare strings.Split, "" produces no elements.
 func splitNonEmpty(s string) []string {
 	var out []string
 	for _, part := range strings.Split(s, ",") {
@@ -80,12 +74,9 @@ type runArgs struct {
 	Code string `json:"code" jsonschema:"the complete, runnable source code to execute"`
 }
 
-// runArgsWithPackages is runArgs plus an optional Packages field -- used
-// in place of runArgs (see newServer) only when this server was started
-// with -network, so the model can even discover the parameter exists
-// exclusively when it's actually usable (installing needs a real network
-// call). Never exposed at all otherwise, rather than exposed-but-silently-
-// ignored, so "why didn't my packages install" can't come up.
+// runArgsWithPackages is runArgs plus an optional Packages field, used
+// only when started with -network, so the model discovers the parameter
+// exclusively when it's actually usable, never exposed-but-ignored.
 type runArgsWithPackages struct {
 	Code string `json:"code" jsonschema:"the complete, runnable source code to execute"`
 	// Packages is model-supplied, like Code -- passed to pip/go as real
@@ -94,10 +85,8 @@ type runArgsWithPackages struct {
 	Packages []string `json:"packages,omitempty" jsonschema:"optional package names to install before running the code -- pip package names for run_python, Go module import paths (optionally with an @version) for run_go"`
 }
 
-// runResult is the tool's own wire shape -- the same "small,
-// self-describing JSON object" convention cmd/mcp-datetime's get_datetime
-// uses, so the model can read exit_code/timed_out programmatically rather
-// than having to parse a formatted string.
+// runResult is the tool's wire shape -- a small, self-describing JSON
+// object so the model can read exit_code/timed_out programmatically.
 type runResult struct {
 	ExitCode int    `json:"exit_code"`
 	TimedOut bool   `json:"timed_out"`
@@ -106,10 +95,8 @@ type runResult struct {
 }
 
 // newServer builds the mcp.Server exposing "run_python"/"run_go", factored
-// out of main so a test can connect to it directly over an in-memory
-// transport (mcp.NewInMemoryTransports) instead of exercising it only via
-// a real stdio subprocess -- same pattern cmd/mcp-web/cmd/mcp-datetime
-// already use.
+// out of main so a test can connect via an in-memory transport instead of
+// a real stdio subprocess.
 func newServer(runner *dockersandbox.Runner, network bool) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "mcp-sandbox", Version: "1"}, nil)
 
@@ -161,11 +148,9 @@ func newServer(runner *dockersandbox.Runner, network bool) *mcp.Server {
 }
 
 // runInSandbox is the shared body behind both tools -- only the language
-// differs. IsError is reserved for a genuine infrastructure failure
-// (docker missing, permission denied, couldn't prepare the sandbox
-// workdir): the sandboxed code itself exiting non-zero, panicking, or
-// timing out is ordinary, useful information the model should see and can
-// act on, not a tool-call failure.
+// differs. IsError is reserved for a genuine infrastructure failure; the
+// sandboxed code exiting non-zero or timing out is ordinary information
+// the model should see, not a tool-call failure.
 func runInSandbox(ctx context.Context, runner *dockersandbox.Runner, lang dockersandbox.Language, code string, packages []string, network bool) (*mcp.CallToolResult, any, error) {
 	res, err := runner.Run(ctx, dockersandbox.RunOptions{Language: lang, Code: code, Packages: packages, Network: network})
 	if err != nil {
@@ -179,9 +164,8 @@ func runInSandbox(ctx context.Context, runner *dockersandbox.Runner, lang docker
 		Stdout: res.Stdout, Stderr: res.Stderr,
 	})
 	if err != nil {
-		// json.Marshal on this plain, all-string/int/bool struct cannot
-		// actually fail -- this exists only so the (never-reached) error
-		// path is handled rather than silently swallowed.
+		// json.Marshal on this plain struct cannot actually fail -- handled
+		// anyway rather than silently swallowed.
 		return &mcp.CallToolResult{
 			IsError: true,
 			Content: []mcp.Content{&mcp.TextContent{Text: "encoding sandbox result: " + err.Error()}},

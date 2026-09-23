@@ -47,11 +47,9 @@
   const tileBlockedEl = document.getElementById('tile-blocked');
   const tileBoostedEl = document.getElementById('tile-boosted');
 
-  // renderSettingsSummary/renderOverridesSummary fill the read-only "at a
-  // glance" tiles above the (collapsed-by-default) settings groups, so the
-  // current configuration is visible without opening anything. Called from
-  // applySettings/applyOverrides, so the tiles refresh on both initial load
-  // and right after a save.
+  // renderSettingsSummary/renderOverridesSummary fill the read-only "at a glance" tiles above
+  // the collapsed settings groups. Called from applySettings/applyOverrides, so they refresh on
+  // load and after a save.
   function renderSettingsSummary(s) {
     tileRankingEl.textContent = s.tuning.alpha + ' · ' + s.tuning.k1 + ' · ' + s.tuning.b;
     tileTitleWeightEl.textContent = s.operational.title_weight + '×';
@@ -74,11 +72,9 @@
       ' · ' + countLabel(Object.keys(o.boosted_domains || {}).length, 'domain');
   }
 
-  // weightInputID is the DOM id for provider's weight <input>, shared
-  // between building the list (loadEmbeddingSearchWeights) and reading it
-  // back (collectEmbeddingSearchWeights) -- also readable off the input's
-  // own data-provider attribute, but a stable id is handy for direct
-  // lookups (see the test suite).
+  // weightInputID is the DOM id for provider's weight <input>, shared between building the list
+  // and reading it back -- also readable via data-provider, but a stable id is handy for direct
+  // lookups (see the tests).
   function weightInputID(provider) {
     return 'embedding-search-weight-' + provider;
   }
@@ -104,17 +100,11 @@
     embeddingSearchWeightsEl.appendChild(row);
   }
 
-  // loadEmbeddingSearchWeights populates one weight <input> per provider:
-  // hash (always offered) plus every currently *enabled* HTTP endpoint
-  // (fetched fresh -- endpoints are managed on their own page, not this
-  // form), pre-filled from weights (0 for anything not already weighted).
-  // A weight entry naming a provider that's no longer enabled (its
-  // endpoint deleted or disabled since this value was saved) is shown
-  // anyway, locked and clearly labeled, so the form doesn't silently drop
-  // it out from under an admin who hasn't saved yet -- but it's excluded
-  // from collectEmbeddingSearchWeights's resubmission, since the next save
-  // would have it dropped by domain.ReconcileSearchWeights server-side
-  // either way.
+  // loadEmbeddingSearchWeights populates one weight <input> per provider: hash plus every enabled
+  // HTTP endpoint, pre-filled from weights (0 if unweighted). A weight naming a now-disabled/
+  // deleted provider is still shown, locked, so the form doesn't silently drop it -- but it's
+  // excluded from collectEmbeddingSearchWeights's resubmission, since domain.ReconcileSearchWeights
+  // would drop it server-side anyway.
   async function loadEmbeddingSearchWeights(weights) {
     weights = weights || {};
     clear(embeddingSearchWeightsEl);
@@ -125,10 +115,8 @@
       const r = await getJSON('/admin/api/embeddings/endpoints');
       if (Array.isArray(r)) endpoints = r;
     } catch (err) {
-      // The endpoints list is a convenience for populating this section --
-      // a failed (or unexpectedly-shaped) fetch just means "hash only, for
-      // now," not a reason to block the rest of the settings page from
-      // loading.
+      // The endpoints list is just a convenience here -- a failed fetch means "hash only, for
+      // now," not a reason to block the rest of the page.
     }
     const enabledIDs = new Set(['hash']);
     endpoints.filter((e) => e.enabled).forEach((e) => {
@@ -143,10 +131,8 @@
     });
   }
 
-  // collectEmbeddingSearchWeights reads every non-stale weight <input>
-  // back into a provider->weight map, omitting anything left at (or
-  // parsed as) 0 or below -- a 0 weight simply isn't part of the active
-  // set, the same as omitting the provider entirely.
+  // collectEmbeddingSearchWeights reads every non-stale weight <input> into a provider->weight
+  // map, omitting anything at/below 0 -- same as omitting the provider entirely.
   function collectEmbeddingSearchWeights() {
     const weights = {};
     embeddingSearchWeightsEl.querySelectorAll('input[data-provider]').forEach((input) => {
@@ -183,9 +169,8 @@
     semanticPoolSizeEl.value = s.operational.semantic_candidate_pool_size;
     annSearchEnabledEl.checked = s.operational.ann_search_enabled;
     embeddingHashEnabledEl.checked = s.operational.embedding_hash_enabled;
-    // Unlike the fields above, 0 is a real, meaningful value here (title
-    // blending disabled -- see the field's own doc comment in admin.go),
-    // so it's assigned directly rather than falling back to '' on falsy.
+    // Unlike the fields above, 0 here is real and meaningful (title blending disabled -- see
+    // admin.go), so it's assigned directly, not falling back to '' on falsy.
     embeddingTitleWeightEl.value = s.operational.embedding_title_weight;
     loadEmbeddingSearchWeights(s.operational.embedding_search_weights);
     maxDocumentVersionsEl.value = s.operational.max_document_versions;
@@ -208,15 +193,10 @@
     }
   }
 
-  // Ranking/Crawler/.../Session and Blocked/Boosted are two logically
-  // independent resources (GET/POST /admin/api/settings vs.
-  // /admin/api/overrides, merged onto this page from the old standalone
-  // Overrides page) but share this one form and one Save button -- saving
-  // both together on a single click, rather than needing to remember to
-  // click two separate buttons for one page of settings. Each save is
-  // attempted independently (one endpoint failing doesn't stop the other
-  // from being tried), and the combined result is reported on one status
-  // line.
+  // Ranking/.../Session and Blocked/Boosted are two independent resources (settings vs.
+  // overrides, merged from the old standalone Overrides page) sharing one form/Save button --
+  // one click saves both. Each save is attempted independently (one failing doesn't stop the
+  // other), reported on one combined status line.
   async function saveSettings() {
     const s = await postJSON('/admin/api/settings', {
       tuning: {
@@ -331,9 +311,7 @@
   loadSettings();
   loadOverrides();
 
-  // Exports for the Node test runner only -- `typeof module` is undefined in
-  // a browser's <script> tag, so this is a no-op there. See
-  // internal/adapters/restapi/admin_settings.test.js.
+  // Node test-runner export only; no-op in a browser <script> tag.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       applySettings, loadSettings, saveSettings,

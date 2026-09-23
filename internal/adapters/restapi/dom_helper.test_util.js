@@ -1,14 +1,11 @@
 'use strict';
-// dom_helper.test_util.js -- shared jsdom setup for *.test.js files in this
-// directory. Named without a .test.js suffix so node's test runner never
-// tries to execute it as a test file itself.
+// dom_helper.test_util.js -- shared jsdom setup for *.test.js files here. Named without .test.js
+// so node's test runner doesn't execute it directly.
 //
-// The admin/search JS files (admin.js, admin_crawl.js, ...) are plain scripts
-// meant for a <script> tag, not CommonJS modules -- they read/write
-// document/window as ambient globals. setupDOM() points those globals at a
-// fresh jsdom Document before each test requires the file under test, so
-// its top-level DOM lookups (e.g. `document.getElementById(...)` at script
-// load time) see the fixture HTML this test controls, not a real browser.
+// Admin/search JS files are plain <script>-tag scripts, not CommonJS modules -- they read/write
+// document/window as ambient globals. setupDOM() points those at a fresh jsdom Document before
+// each test requires the file under test, so top-level DOM lookups see this test's fixture HTML,
+// not a real browser.
 const { JSDOM } = require('jsdom');
 
 function setupDOM(html, url) {
@@ -17,12 +14,9 @@ function setupDOM(html, url) {
   });
   global.window = dom.window;
   global.document = dom.window.document;
-  // Node itself defines a getter-only `navigator` directly on globalThis
-  // (since Node 21) -- a plain assignment throws "Cannot set property
-  // navigator ... which has only a getter" in this file's strict mode.
-  // The property is configurable (just setter-less), so defineProperty
-  // can still replace it with jsdom's own Navigator for the duration of
-  // the test.
+  // Node 21+ defines a getter-only `navigator` on globalThis -- plain assignment throws in
+  // strict mode. It's configurable (just setter-less), so defineProperty can still replace it
+  // with jsdom's Navigator for the test.
   Object.defineProperty(global, 'navigator', {
     value: dom.window.navigator, configurable: true, writable: true,
   });
@@ -35,10 +29,8 @@ function teardownDOM() {
   delete global.navigator;
 }
 
-// requireFresh re-requires path with an empty module cache entry, so a
-// script that runs top-level DOM lookups (e.g. `document.getElementById`
-// at load time, as several admin pages' scripts do) sees the *current*
-// test's fixture HTML rather than a stale one cached from an earlier test.
+// requireFresh re-requires path with an empty module cache entry, so a script with top-level DOM
+// lookups sees the current test's fixture HTML, not one cached from an earlier test.
 function requireFresh(path) {
   delete require.cache[require.resolve(path)];
   return require(path);

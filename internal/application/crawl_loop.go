@@ -17,10 +17,9 @@ import (
 )
 
 // crawlLoop drives the crawl control flow shared by every CrawlerService
-// backend: seed queue, dedup, robots check, fetch, and thin-content
-// filtering. save is called once per successfully fetched, non-thin page;
-// what it does with that page (in-memory index vs. SQL + embedding) is the
-// one thing that actually differs between backends.
+// backend: seed queue, dedup, robots check, fetch, thin-content filtering.
+// save runs once per fetched, non-thin page; what it does with that page
+// is the only thing that differs between backends.
 func crawlLoop(
 	ctx context.Context,
 	fetcher ports.AuthFetcher,
@@ -29,14 +28,13 @@ func crawlLoop(
 	settings *domain.OperationalSettings,
 	opts ports.CrawlOptions,
 	isIndexed func(url string) bool,
-	// isDomainIndexed batch-checks whether any given host already has an
-	// indexed document, for opts.FollowIndexedDomains -- nil when off.
+	// isDomainIndexed batch-checks whether a host already has an indexed
+	// document, for opts.FollowIndexedDomains -- nil when off.
 	isDomainIndexed func(hosts []string) map[string]bool,
 	save func(ctx context.Context, doc domain.Document) error,
 	// recordAlias persists that aliasURL's content lives under canonicalID,
-	// called instead of save when a page's <link rel="canonical"> resolves
-	// elsewhere. nil-safe: without it, an aliased page is just saved as
-	// its own document (pre-this-feature behavior).
+	// called instead of save when a canonical link resolves elsewhere.
+	// nil-safe: without it, an aliased page is saved as its own document.
 	recordAlias func(ctx context.Context, aliasURL, canonicalID string) error,
 	onPage func(domain.CrawlPageEvent),
 ) (int, error) {
@@ -63,9 +61,7 @@ func crawlLoop(
 		Renderer: opts.Renderer,
 	}
 	// A sitemap is XML, never a page to render -- NoRender forces the
-	// plain HTTP path regardless of this crawl's own Renderer or the
-	// Tuning page's global default, so a rendering-aware fetcher (see
-	// application.RenderAwareFetcher) never hands it to a real browser.
+	// plain HTTP path regardless of this crawl's Renderer setting.
 	sitemapFetchOpts := fetchOpts
 	sitemapFetchOpts.NoRender = true
 
@@ -84,10 +80,9 @@ func crawlLoop(
 	blocklist := newDomainListMatcher(opts.BlockedDomains)
 
 	// prioritize is true only when PrioritizeUnindexed is set and isIndexed
-	// is available. freshQueue/knownQueue split discovery so fresh URLs
-	// always dequeue first, spending a bounded maxPages budget on new
-	// content before refreshing what's already indexed. When false, every
-	// URL lands in freshQueue -- the original single FIFO queue.
+	// is available. freshQueue/knownQueue split lets fresh URLs dequeue
+	// first, spending the maxPages budget on new content before refreshing
+	// what's indexed. When false, everything lands in freshQueue.
 	prioritize := opts.PrioritizeUnindexed && isIndexed != nil
 	var freshQueue, knownQueue []string
 	classify := func(urls []string) {
@@ -114,10 +109,9 @@ func crawlLoop(
 		return popFront(&knownQueue)
 	}
 	// enqueue precedence: BlockedDomains always rejects; then LinkScope or
-	// AllowedDomains allows; finally, if isDomainIndexed is available, a
-	// link whose host already has an indexed document is allowed too (it
-	// only widens scope, never narrows it). isDomainIndexed is called once
-	// per batch over distinct undecided hosts, not once per link.
+	// AllowedDomains allows; finally isDomainIndexed (if available) allows
+	// a link whose host already has an indexed document -- widens scope,
+	// never narrows it. Called once per batch of distinct hosts.
 	enqueue := func(links []string) {
 		var allowed []string
 		var undecided []string
@@ -228,15 +222,12 @@ func crawlLoop(
 		}
 
 		selfURL := domain.CanonicalizeURL(u, v.URLAliasWWWEnabled)
-		// A <link rel="canonical"> naming a different URL means this
-		// page's content only ever indexes under that URL -- no document
-		// row is created for u. Its outbound links are enqueued as usual,
-		// plus the canonical target itself: without this, the target is
-		// only ever crawled if it happens to also be linked from elsewhere,
-		// which real sites frequently don't do for their own canonical URLs
-		// (e.g. one stripped of tracking params), leaving most aliases
-		// permanently dangling -- recorded, but never resolving to an
-		// actual indexed document.
+		// A <link rel="canonical"> naming a different URL means this page's
+		// content indexes only under that URL -- no document row for u. Its
+		// links are enqueued as usual, plus the canonical target itself:
+		// otherwise real sites often never link to their own canonical URL
+		// (e.g. one stripped of tracking params), leaving the alias
+		// dangling forever.
 		if recordAlias != nil && canonicalURL != "" {
 			if canon := domain.CanonicalizeURL(canonicalURL, v.URLAliasWWWEnabled); canon != selfURL {
 				_ = recordAlias(ctx, selfURL, documentID(canon, v.URLAliasWWWEnabled))
@@ -267,10 +258,9 @@ func crawlLoop(
 }
 
 // linkScopeMatcher decides whether a discovered link is in scope for a
-// crawl, relative to its seeds -- see domain.LinkScope*. hosts holds each
-// seed's exact host; domains holds each seed's registrable domain
-// (eTLD+1); names holds each seed's domain name with suffix stripped, so
-// LinkScopeTLD matching ignores which TLD a link uses.
+// crawl, relative to its seeds -- see domain.LinkScope*. hosts is each
+// seed's exact host; domains its registrable domain (eTLD+1); names its
+// domain name with suffix stripped, so LinkScopeTLD ignores TLD.
 type linkScopeMatcher struct {
 	hosts   map[string]bool
 	domains map[string]bool
@@ -296,12 +286,11 @@ func newLinkScopeMatcher(seeds []string) linkScopeMatcher {
 	return m
 }
 
-// allows reports whether rawURL is in scope for the crawl's resolved
-// LinkScope. LinkScopeAny always allows; LinkScopeHost requires an exact
-// seed-host match; LinkScopeDomain (default) allows any host sharing a
-// seed's registrable domain; LinkScopeTLD allows any host whose domain
-// name matches a seed's regardless of TLD (example.com also allows
-// example.org, www.example.co.uk, but not other.com).
+// allows reports whether rawURL is in scope for the crawl's LinkScope.
+// Any always allows; Host requires an exact seed-host match; Domain
+// (default) allows any host sharing a seed's registrable domain; TLD
+// allows any host whose domain name matches regardless of TLD
+// (example.com also allows example.org, but not other.com).
 func (m linkScopeMatcher) allows(rawURL, scope string) bool {
 	if scope == domain.LinkScopeAny {
 		return true
@@ -322,10 +311,8 @@ func (m linkScopeMatcher) allows(rawURL, scope string) bool {
 }
 
 // registrableDomain returns host's eTLD+1 (e.g. "blog.example.co.uk" ->
-// "example.co.uk"), using the public suffix list so multi-part TLDs are
-// handled correctly. Falls back to host itself (an IP, "localhost", or a
-// bare public suffix) when the list can't derive one -- such a host still
-// only ever matches itself.
+// "example.co.uk") via the public suffix list. Falls back to host itself
+// (IP, "localhost", bare suffix) when none can be derived.
 func registrableDomain(host string) string {
 	etld1, err := publicsuffix.EffectiveTLDPlusOne(host)
 	if err != nil {
@@ -335,9 +322,7 @@ func registrableDomain(host string) string {
 }
 
 // domainName returns host's registrable domain with its public suffix
-// stripped (e.g. "blog.example.co.uk" -> "example"), for LinkScopeTLD --
-// ignores both subdomain and TLD. Falls back to registrableDomain's own
-// fallback when no recognized suffix can be stripped.
+// stripped (e.g. "blog.example.co.uk" -> "example"), for LinkScopeTLD.
 func domainName(host string) string {
 	reg := registrableDomain(host)
 	if suffix, _ := publicsuffix.PublicSuffix(host); suffix != "" {
@@ -348,9 +333,8 @@ func domainName(host string) string {
 	return reg
 }
 
-// domainListMatcher checks a link's host against a per-crawl allow/block
-// list -- registrable-domain-based, so listing "example.com" also matches
-// its subdomains. An empty list never matches anything.
+// domainListMatcher checks a host against a per-crawl allow/block list --
+// registrable-domain-based, so "example.com" also matches its subdomains.
 type domainListMatcher struct {
 	domains map[string]bool
 }
@@ -396,9 +380,8 @@ type sitemapURLSet struct {
 	} `xml:"url"`
 }
 
-// parseSitemap extracts every <loc> from a sitemap.xml body. A body that
-// isn't valid XML, or isn't a urlset, just yields no URLs -- the caller
-// treats a sitemap as an optional bonus, never a reason to fail the crawl.
+// parseSitemap extracts every <loc> from a sitemap.xml body -- invalid
+// XML or a non-urlset body just yields no URLs, never an error.
 func parseSitemap(body string) []string {
 	var set sitemapURLSet
 	if err := xml.Unmarshal([]byte(body), &set); err != nil {
@@ -418,10 +401,9 @@ func isHTTP(raw string) bool {
 	return err == nil && (u.Scheme == "http" || u.Scheme == "https")
 }
 
-// documentID derives a stable ID from a URL so re-crawling the same page
-// always upserts the same row. rawURL is hashed after CanonicalizeURL, so
-// URLs that canonicalize identically (e.g. www vs bare host, when stripWWW
-// is true) produce the same ID with no separate alias bookkeeping needed.
+// documentID derives a stable ID from a URL so re-crawling upserts the
+// same row. Hashed after CanonicalizeURL, so URLs that canonicalize
+// identically (e.g. www vs bare host) produce the same ID.
 func documentID(rawURL string, stripWWW bool) string {
 	sum := sha256.Sum256([]byte(domain.CanonicalizeURL(rawURL, stripWWW)))
 	return "doc-" + hex.EncodeToString(sum[:8])

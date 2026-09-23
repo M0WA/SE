@@ -13,8 +13,7 @@ import (
 )
 
 // accountMCPServersAuthedHandler logs in as u (role=user, via a real POST
-// /login through fakeUserStore) with both Users and UserMCPServers wired,
-// mirroring userAuthedHandler (admin_users_test.go) plus the MCP store.
+// /login) with Users and UserMCPServers wired, mirroring userAuthedHandler.
 func accountMCPServersAuthedHandler(t *testing.T, userStore *fakeUserStore, mcpStore *fakeUserMCPServerStore, u domain.User) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
 	h := restapi.New(restapi.Config{
@@ -72,8 +71,7 @@ func TestHandleAccountMCPServers_Unauthenticated(t *testing.T) {
 }
 
 // TestHandleAccountMCPServers_AdminRoleForbidden proves a role=admin
-// session (which has no domain.User row of its own) is refused the same
-// way /account/api itself is -- requireRegularUserAuthAPI's own 403.
+// session gets requireRegularUserAuthAPI's 403, same as the rest of /account/api.
 func TestHandleAccountMCPServers_AdminRoleForbidden(t *testing.T) {
 	h := restapi.New(restapi.Config{
 		AdminUser: testAdminUser, AdminPass: testAdminPass,
@@ -97,14 +95,11 @@ func TestHandleAccountMCPServers_AdminRoleForbidden(t *testing.T) {
 	}
 }
 
-// TestHandleAccountMCPServers_NotConfigured builds its own Config (rather
-// than going through accountMCPServersAuthedHandler with a nil
-// *fakeUserMCPServerStore) since a nil CONCRETE pointer assigned into the
-// ports.UserMCPServerStore interface field is a non-nil interface value
-// (the classic Go typed-nil gotcha) -- h.userMCPServers != nil would still
-// be true, defeating the very check this test means to exercise. Omitting
-// the field entirely, like TestHandleAdminMCPServers_NotConfigured does for
-// MCPServers, is the only way to get a genuinely nil interface.
+// TestHandleAccountMCPServers_NotConfigured builds its own Config instead
+// of passing a nil *fakeUserMCPServerStore: a nil concrete pointer in the
+// interface field is a non-nil interface (the typed-nil gotcha), defeating
+// the nil check. Omitting the field, like the admin equivalent, is the
+// only way to get a genuinely nil interface.
 func TestHandleAccountMCPServers_NotConfigured(t *testing.T) {
 	userStore := &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}}
 	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass, Users: userStore})
@@ -151,10 +146,9 @@ func TestHandleAccountMCPServers_CreateInvalidJSON(t *testing.T) {
 }
 
 // TestHandleAccountMCPServers_CreateValidation covers every
-// validateUserMCPServerRequest rejection branch: empty name, a "stdio"
-// transport (the one case that never applies to validateMCPServerRequest --
-// this is the http-only enforcement itself), an unrecognized transport, and
-// a missing base_url.
+// validateUserMCPServerRequest rejection branch: empty name, "stdio"
+// transport (the http-only enforcement itself), unrecognized transport,
+// and missing base_url.
 func TestHandleAccountMCPServers_CreateValidation(t *testing.T) {
 	userStore := &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}}
 	h, cookie := accountMCPServersAuthedHandler(t, userStore, &fakeUserMCPServerStore{}, userStore.users[0])
@@ -178,10 +172,9 @@ func TestHandleAccountMCPServers_CreateValidation(t *testing.T) {
 	}
 }
 
-// TestHandleAccountMCPServers_CreateForcesHTTPTransport proves a create
-// request always stores Transport "http" -- validateUserMCPServerRequest
-// already rejects anything else, but the handler forces it explicitly too
-// (see account_mcp_servers.go), so this is the belt to that suspenders.
+// TestHandleAccountMCPServers_CreateForcesHTTPTransport proves create
+// always stores Transport "http" -- the handler forces it explicitly too,
+// belt to validateUserMCPServerRequest's suspenders.
 func TestHandleAccountMCPServers_CreateForcesHTTPTransport(t *testing.T) {
 	userStore := &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}}
 	h, cookie := accountMCPServersAuthedHandler(t, userStore, &fakeUserMCPServerStore{}, userStore.users[0])
@@ -206,10 +199,9 @@ func TestHandleAccountMCPServers_CreateForcesHTTPTransport(t *testing.T) {
 	}
 }
 
-// TestHandleAccountMCPServers_CreateDedupesIDOnNameCollision mirrors
-// TestHandleAdminMCPServers_CreateDedupesIDOnNameCollision -- two servers
-// created (by the same owner) with the same name get distinct IDs, per
-// domain.NewMCPServerID's dedupe rule.
+// TestHandleAccountMCPServers_CreateDedupesIDOnNameCollision mirrors the
+// admin test: two servers from the same owner with the same name get
+// distinct IDs, per domain.NewMCPServerID's dedupe rule.
 func TestHandleAccountMCPServers_CreateDedupesIDOnNameCollision(t *testing.T) {
 	userStore := &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}}
 	h, cookie := accountMCPServersAuthedHandler(t, userStore, &fakeUserMCPServerStore{}, userStore.users[0])
@@ -399,8 +391,7 @@ func TestHandleAccountGetMCPServer_NotFound(t *testing.T) {
 }
 
 // TestHandleAccountGetMCPServer_WrongOwnerNotFound proves bob can't read
-// alice's server by guessing its ID -- indistinguishable from it not
-// existing at all.
+// alice's server by guessing its ID -- looks like a nonexistent ID.
 func TestHandleAccountGetMCPServer_WrongOwnerNotFound(t *testing.T) {
 	userStore := &fakeUserStore{users: []domain.User{
 		newTestUser("user1", "alice"), newTestUser("user2", "bob"),
@@ -493,9 +484,7 @@ func TestHandleAccountUpdateMCPServer_NotFound(t *testing.T) {
 	}
 }
 
-// TestHandleAccountUpdateMCPServer_WrongOwnerNotFound is
-// TestHandleAccountGetMCPServer_WrongOwnerNotFound's write-path
-// counterpart.
+// TestHandleAccountUpdateMCPServer_WrongOwnerNotFound is the get test's write-path counterpart.
 func TestHandleAccountUpdateMCPServer_WrongOwnerNotFound(t *testing.T) {
 	userStore := &fakeUserStore{users: []domain.User{
 		newTestUser("user1", "alice"), newTestUser("user2", "bob"),
@@ -543,9 +532,7 @@ func TestHandleAccountDeleteMCPServer_NotFound(t *testing.T) {
 	}
 }
 
-// TestHandleAccountDeleteMCPServer_WrongOwnerNotFound is
-// TestHandleAccountGetMCPServer_WrongOwnerNotFound's delete-path
-// counterpart.
+// TestHandleAccountDeleteMCPServer_WrongOwnerNotFound is the get test's delete-path counterpart.
 func TestHandleAccountDeleteMCPServer_WrongOwnerNotFound(t *testing.T) {
 	userStore := &fakeUserStore{users: []domain.User{
 		newTestUser("user1", "alice"), newTestUser("user2", "bob"),

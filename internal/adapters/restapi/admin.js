@@ -2,12 +2,9 @@ function clear(el) {
   while (el.firstChild) el.firstChild.remove();
 }
 
-// setButtonLoading swaps a button's label for a small spinner + verb while
-// an action is in flight, and disables it so the same click can't fire
-// twice -- restoring the exact original label when the action settles
-// (success or failure) via the matching setButtonLoading(btn, false) call.
-// Shared by every admin form's submit button (see crawl.html, admin_pagerank.html)
-// rather than each page hand-rolling its own busy state.
+// setButtonLoading swaps a button's label for a spinner+verb while busy, disabling it against
+// double-clicks, and restores the label on setButtonLoading(btn, false). Shared by every admin
+// form's submit button.
 function setButtonLoading(btn, loading, loadingLabel) {
   if (loading) {
     if (btn.dataset.originalLabel === undefined) btn.dataset.originalLabel = btn.textContent;
@@ -26,10 +23,8 @@ function setButtonLoading(btn, loading, loadingLabel) {
   }
 }
 
-// normalizeURL prepends https:// when a URL has no scheme at all, so an
-// admin can type "example.com" instead of always needing the full
-// "https://example.com" -- a URL that already names an explicit scheme
-// (http://, ftp://, etc.) is left untouched.
+// normalizeURL prepends https:// to a scheme-less URL (so "example.com" works); a URL with an
+// explicit scheme is left untouched.
 function normalizeURL(value) {
   const trimmed = value.trim();
   if (trimmed === '' || /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) {
@@ -38,31 +33,19 @@ function normalizeURL(value) {
   return 'https://' + trimmed;
 }
 
-// ICON_SVGS/ACTION_GLYPHS/setIconLabel: the shared icon-only action-button
-// convention for every dense admin list (job/schedule rows here, MCP
-// server/agent/user list rows elsewhere) -- see CLAUDE.md's "Icon
-// conventions" section. A plain Unicode character is used where one exists
-// that's genuinely monochrome in most fonts (run "▶", edit "✎", same
-// plain-glyph-as-content convention as .chat-tab-action); "view" and
-// "delete" instead use an inline SVG, since the closest Unicode codepoints
-// (magnifying-glass/wastebasket emoji) render as full-color pictograms in
-// most fonts, breaking these tables' otherwise monochrome icon language --
-// same reasoning as .header-icon-button's own Account/Sign out icons and
-// #chat-attach. stroke="currentColor" (sized via the .icon-button svg CSS
-// rule) is what keeps an SVG icon matching color/hover/focus like a
-// character glyph despite being markup.
+// ICON_SVGS/ACTION_GLYPHS/setIconLabel: shared icon-only action-button convention for admin lists
+// (see CLAUDE.md's "Icon conventions"). Plain Unicode glyphs where genuinely monochrome ("▶" run,
+// "✎" edit); "view"/"delete" use inline SVG instead, since their closest Unicode codepoints render
+// as full-color emoji. stroke="currentColor" keeps an SVG matching color/hover/focus like a glyph would.
 const ICON_SVGS = {
   view: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
   delete: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>',
 };
 const ACTION_GLYPHS = { run: '▶', edit: '✎' };
 
-// setIconLabel gives el (a <button> or <a>) an icon (SVG or glyph) as its
-// only visible content plus a hover title and an aria-label carrying the
-// real action name -- iconKey picks the icon, label is the action name, so
-// e.g. the job list's Cancel button can reuse the "delete" trash icon
-// (setIconLabel(btn, 'delete', 'Cancel')) while still reading as "Cancel"
-// to a tooltip or screen reader.
+// setIconLabel gives el an icon (SVG or glyph) as its only content, plus a title/aria-label carrying
+// the real action name -- e.g. Cancel can reuse the "delete" trash icon while still reading as
+// "Cancel" to a screen reader.
 function setIconLabel(el, iconKey, label) {
   el.classList.add('icon-button');
   if (ICON_SVGS[iconKey]) {
@@ -74,10 +57,8 @@ function setIconLabel(el, iconKey, label) {
   el.setAttribute('aria-label', label);
 }
 
-// actionsCell builds a standard actions <td> with an icon-only Edit link
-// and Delete button -- the reused pattern behind every list page's Edit/
-// Delete column (MCP servers, agents, users; job/schedule rows build their
-// own actions cell since they have more than these two actions).
+// actionsCell builds a standard Edit/Delete actions <td>, reused by every list page's Edit/Delete
+// column (job/schedule rows build their own, having more actions).
 function actionsCell(editHref, deleteLabel, onDelete) {
   const td = document.createElement('td');
   td.className = 'actions';
@@ -109,10 +90,8 @@ function kvRow(container, key, value) {
   container.appendChild(row);
 }
 
-// listItem appends one plain row with no key column -- for a flat list of
-// same-kind values (e.g. the model names an embedding endpoint reports)
-// where every kvRow would repeat the same label, reading as a redundant
-// two-column table rather than a list.
+// listItem appends one plain row with no key column -- for a flat list of same-kind values, where
+// kvRow would just repeat the same label.
 function listItem(container, value) {
   const row = document.createElement('div');
   row.className = 'list-item';
@@ -120,10 +99,8 @@ function listItem(container, value) {
   container.appendChild(row);
 }
 
-// buildTile builds one ".tile" box (see style.css's ".tiles" grid, used by
-// the Settings page's at-a-glance summary and the Overview page's
-// operational-health stats) -- a compact key/value pair, distinct from
-// kvRow's row-in-a-list treatment.
+// buildTile builds one ".tile" box (see style.css's ".tiles" grid) -- a compact key/value pair,
+// distinct from kvRow's list-row treatment.
 function buildTile(k, v) {
   const tile = document.createElement('div');
   tile.className = 'tile';
@@ -179,10 +156,8 @@ function textCell(text, opts) {
   return td;
 }
 
-// snippetCell builds a <td> for a server-rendered search excerpt, which
-// carries <mark> tags around the matched terms (see domain.Snippet) --
-// rendered via innerHTML, same as the public search page's result-snippet,
-// so the highlighting actually shows rather than the raw markup as text.
+// snippetCell builds a <td> for a server-rendered excerpt carrying <mark> tags (domain.Snippet) --
+// rendered via innerHTML so the highlighting actually shows.
 function snippetCell(html) {
   const td = document.createElement('td');
   td.className = 'excerpt';
@@ -199,19 +174,16 @@ function urlCell(text) {
   return td;
 }
 
-// seedSummary renders a crawl's seed URL list as "first +N more" (or
-// "(no seed)" for an empty list) -- shared by the crawl job table and the
-// schedules table.
+// seedSummary renders a crawl's seed URLs as "first +N more" (or "(no seed)") -- shared by the
+// job and schedules tables.
 function seedSummary(seedURLs) {
   const urls = seedURLs || [];
   if (urls.length === 0) return '(no seed)';
   return urls.length === 1 ? urls[0] : urls[0] + ' +' + (urls.length - 1) + ' more';
 }
 
-// linesToText/parseLines round-trip a one-value-per-line <textarea> (seed
-// URLs, allow/block domain lists, ...) against the string array a JSON
-// request/response actually carries -- shared by every page with one of
-// these fields (see crawl.html, admin_schedule.html, admin_settings.html).
+// linesToText/parseLines round-trip a one-value-per-line <textarea> against the string array a
+// JSON request/response carries -- shared by every page with such a field.
 function linesToText(lines) {
   return (lines || []).join('\n');
 }
@@ -220,19 +192,16 @@ function parseLines(text) {
   return text.split('\n').map((s) => s.trim()).filter(Boolean);
 }
 
-// formatTimestamp renders an ISO timestamp for display, or an em-dash for
-// an empty/missing one. opts.timeOnly renders just the time (for a
-// same-page list of events that's already scoped to one job); otherwise
-// renders the full local date and time.
+// formatTimestamp renders an ISO timestamp, or an em-dash if empty. opts.timeOnly renders just the
+// time (for an already-job-scoped list); otherwise full date+time.
 function formatTimestamp(iso, opts) {
   if (!iso) return '—';
   const d = new Date(iso);
   return opts?.timeOnly ? d.toLocaleTimeString() : d.toLocaleString();
 }
 
-// buildTable assembles a <table> from a header spec ({label, num?}[]) and
-// one or more data rows, delegating each row's <td> cells to cellsForRow
-// so callers can mix textCell with richer custom cells (links, buttons).
+// buildTable assembles a <table> from a header spec and data rows, delegating each row's cells to
+// cellsForRow so callers can mix textCell with richer custom cells.
 function buildTable(headers, rows, cellsForRow) {
   const table = document.createElement('table');
   const thead = document.createElement('thead');
@@ -258,12 +227,9 @@ function buildTable(headers, rows, cellsForRow) {
   return table;
 }
 
-// regexFilter implements the shared "case-insensitive regex against an
-// already-fetched in-memory array" client-side admin list filter (see
-// filterJobs/filterPages/filterCrawls in admin_jobs.js, filterDocs in
-// admin_domain.js): a blank pattern returns items unchanged, a valid one
-// filters via testFn(re, item), and an invalid one reports errorPrefix plus
-// the regex engine's own message into errorEl rather than throwing.
+// regexFilter is the shared case-insensitive-regex-against-an-in-memory-array admin list filter
+// (see filterJobs/filterPages/filterCrawls, filterDocs). Blank pattern returns items unchanged;
+// an invalid one reports errorPrefix+message into errorEl rather than throwing.
 function regexFilter(items, pattern, errorEl, testFn, errorPrefix) {
   if (!pattern) {
     errorEl.textContent = '';
@@ -279,12 +245,9 @@ function regexFilter(items, pattern, errorEl, testFn, errorPrefix) {
   }
 }
 
-// ADMIN_NAV_GROUPS is the admin sidebar's single source of truth for
-// grouping and order -- every top-level admin page used to carry its own
-// copy of the same flat, ten-link <nav>, differing only in which entry had
-// aria-current="page", so adding or reordering a page meant editing ten
-// HTML files by hand. Now renderAdminNav builds it once per page load from
-// this list; a page picks up any change here just by loading admin.js.
+// ADMIN_NAV_GROUPS is the sidebar's single source of truth for grouping/order -- previously every
+// page hand-copied the same flat nav, so reordering meant editing ten HTML files. renderAdminNav
+// now builds it once per page from this list.
 const ADMIN_NAV_GROUPS = [
   { label: 'Overview', href: '/admin' },
   {
@@ -327,11 +290,8 @@ const ADMIN_NAV_GROUPS = [
   },
 ];
 
-// renderAdminNav fills #admin-rail with the grouped sidebar built from
-// ADMIN_NAV_GROUPS, marking whichever entry's href matches the current path
-// as current. A no-op on any page without that element -- the drill-down
-// detail pages (admin_domain.html and similar) keep their own plain "back"
-// link instead of the full sidebar.
+// renderAdminNav fills #admin-rail from ADMIN_NAV_GROUPS, marking the current path's entry. No-op
+// without that element -- drill-down pages keep a plain "back" link instead.
 function renderAdminNav() {
   const rail = document.getElementById('admin-rail');
   if (!rail) return;
@@ -390,15 +350,9 @@ async function loadStats() {
   }
 }
 
-// Vocabulary state: a real server-driven page (limit/offset), sorted by a
-// real server-driven column/direction (sort/dir) -- see
-// handleAdminVocabulary. Unlike the old approach (fetch up to 2000 terms
-// once, then regex-filter/display that fixed slice client-side), every
-// page and sort order rendered here is correct regardless of how large the
-// corpus's vocabulary actually is, since the database itself does the
-// ordering and paging rather than a client-side slice of a bounded sample.
-// The tradeoff: the search box is now a plain substring filter (what the
-// server itself supports), not a client-side regex.
+// Vocabulary state is a real server-paged/sorted list (see handleAdminVocabulary), unlike the old
+// fetch-2000-then-filter-client-side approach -- correct regardless of corpus size, since the DB
+// does the ordering/paging. Tradeoff: search is now a plain substring filter, not client-side regex.
 let vocabPage = 0;
 let vocabPageSize = 20;
 let vocabSearch = '';
@@ -411,17 +365,14 @@ const VOCAB_COLUMNS = [
   { key: 'total_freq', label: 'total freq', num: true },
 ];
 
-// vocabDefaultDir picks a sensible starting direction the first time a
-// column is clicked: alphabetical starts ascending, frequency columns
-// start descending (most-frequent first, the old fixed behavior).
+// vocabDefaultDir picks a first-click direction: alphabetical starts ascending, frequency columns
+// start descending (most-frequent first).
 function vocabDefaultDir(key) {
   return key === 'term' ? 'asc' : 'desc';
 }
 
-// buildVocabTable renders one page of terms with clickable, sort-indicating
-// column headers -- clicking the already-active column flips its
-// direction; clicking a different one switches to it at its default
-// direction (see vocabDefaultDir) and reloads page 1.
+// buildVocabTable renders one page of terms with clickable sort headers -- clicking the active
+// column flips direction; a different one switches to its default (vocabDefaultDir) and reloads page 1.
 function buildVocabTable(terms) {
   const table = document.createElement('table');
   const thead = document.createElement('thead');
@@ -472,9 +423,8 @@ function buildVocabTable(terms) {
   return table;
 }
 
-// renderVocabPager shows/hides the Previous/Next controls and page count --
-// hidden entirely when everything fits on one page, same convention as
-// admin_jobs.js's per-job page detail pager.
+// renderVocabPager shows/hides Previous/Next and the page count -- hidden entirely when everything
+// fits on one page.
 function renderVocabPager(pagerEl, matchedCount) {
   const totalPages = Math.max(1, Math.ceil(matchedCount / vocabPageSize));
   pagerEl.hidden = totalPages <= 1;
@@ -486,12 +436,9 @@ function renderVocabPager(pagerEl, matchedCount) {
   if (next) next.disabled = vocabPage + 1 >= totalPages;
 }
 
-// loadVocabulary fetches the current page (vocabPage/vocabPageSize/
-// vocabSearch/vocabSortBy/vocabSortDir) from the server and renders it.
-// `vocabulary_size` in the summary is always the server's real
-// corpus-wide distinct-term count; `matched_count` (shown alongside it
-// only while a search filter is active) is what that filter matches, and
-// is what the pager's page count is computed from.
+// loadVocabulary fetches/renders the current page. `vocabulary_size` is the real corpus-wide
+// distinct-term count; `matched_count` (shown only while filtering) is what the pager's page
+// count is based on.
 async function loadVocabulary() {
   const summaryEl = document.getElementById('vocab-summary');
   const tableEl = document.getElementById('vocab-table');
@@ -524,11 +471,8 @@ async function loadVocabulary() {
   }
 }
 
-// wireVocabularySearch wires the vocabulary panel's filter (debounced on
-// input, immediate on submit), items-per-page field, and Previous/Next
-// pager, then loads page 1 immediately -- unlike the old regex-search
-// version, this is a real pageable list, so it has something to show
-// before the admin types anything.
+// wireVocabularySearch wires the filter (debounced on input, immediate on submit), page-size field,
+// and pager, then loads page 1 immediately -- a real pageable list, unlike the old regex-search version.
 function wireVocabularySearch() {
   const form = document.getElementById('vocab-search-form');
   const input = document.getElementById('vocab-q');
@@ -580,14 +524,10 @@ function wireVocabularySearch() {
   loadVocabulary();
 }
 
-// pollWhileInProgress implements the shared "keep re-fetching status every
-// 2s while a background job is running, stop the moment it isn't" pattern
-// (see admin_pagerank.js, admin_embeddings.js, admin_content_dedup.js's own
-// recompute-status polling): call it with the latest inProgress flag, the
-// caller's current timer handle, and its own reload callback (which the
-// caller is responsible for clearing its own timer variable inside, e.g.
-// `() => { pollTimer = null; load(); }`), and store the return value back
-// into that timer variable.
+// pollWhileInProgress is the shared "re-fetch every 2s while a job runs, stop once it isn't" pattern
+// (see admin_pagerank.js/admin_embeddings.js/admin_content_dedup.js). Call with the inProgress flag,
+// current timer handle, and a reload callback that clears the caller's own timer var, then store the
+// return value back into it.
 function pollWhileInProgress(inProgress, pollTimer, reload) {
   if (inProgress) {
     return pollTimer || setTimeout(reload, 2000);
@@ -596,25 +536,17 @@ function pollWhileInProgress(inProgress, pollTimer, reload) {
   return null;
 }
 
-// estimateTokensClient mirrors application.estimateTokens's own
-// deliberately approximate character-count-based estimate (3 chars/token)
-// -- used by admin_chat_settings.js to preview a configured prompt's
-// approximate size against the context budget before it's ever sent in a
-// real turn, when there's no live chat response to read the real
-// server-computed estimate from instead.
+// estimateTokensClient mirrors application.estimateTokens's approximate 3-chars/token estimate --
+// lets admin_chat_settings.js preview a prompt's size against budget before any real turn exists
+// to read a server estimate from.
 const APPROX_CHARS_PER_TOKEN = 3;
 function estimateTokensClient(text) {
   return Math.ceil((text || '').length / APPROX_CHARS_PER_TOKEN);
 }
 
-// buildDonutSVG renders segments (an array of {label, value, color}) as an
-// SVG ring, each segment's arc length proportional to its share of the
-// total -- built from stroke-dasharray/dashoffset on concentric circles
-// rather than a canvas or a charting library, so it stays a plain,
-// dependency-free DOM node like every other element these admin pages
-// build. A zero/negative-total input (nothing configured yet) renders a
-// single muted full ring instead of an empty svg, so the chart's presence
-// doesn't silently disappear the moment every value is 0.
+// buildDonutSVG renders {label,value,color} segments as an SVG ring (stroke-dasharray/dashoffset
+// on concentric circles, no canvas/charting library) -- a plain dependency-free DOM node. A
+// zero/negative total renders one muted full ring instead of vanishing.
 function buildDonutSVG(segments, opts) {
   opts = opts || {};
   const size = opts.size || 120;
@@ -665,10 +597,8 @@ function buildDonutSVG(segments, opts) {
   return svg;
 }
 
-// buildDonutLegend renders one line per segment (a color swatch, label, and
-// value) below/beside a buildDonutSVG chart -- the chart alone can't convey
-// exact numbers or which color is which, so every use of buildDonutSVG in
-// these admin pages pairs it with this.
+// buildDonutLegend renders one line (swatch, label, value) per segment beside a buildDonutSVG chart
+// -- the chart alone can't convey exact numbers or which color is which.
 function buildDonutLegend(segments) {
   const list = document.createElement('div');
   list.className = 'donut-legend';
@@ -687,9 +617,7 @@ function buildDonutLegend(segments) {
   return list;
 }
 
-// Exports for the Node test runner only -- `typeof module` is undefined in
-// a browser's <script> tag, so this is a no-op there. See
-// internal/adapters/restapi/admin.test.js.
+// Node test-runner export only; no-op in a browser <script> tag.
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     clear, setButtonLoading, normalizeURL, kvRow, listItem, buildTile, checkResponse,

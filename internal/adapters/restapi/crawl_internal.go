@@ -14,16 +14,13 @@ import (
 )
 
 // crawlConcurrencyPollInterval bounds how long a queued job waits before
-// re-checking whether MaxConcurrentCrawls has been raised -- without this
-// it would stay stuck on the old, still-full permit channel until enough
-// of its original occupants finished naturally.
+// re-checking whether MaxConcurrentCrawls was raised, instead of staying
+// stuck on the old, still-full permit channel.
 const crawlConcurrencyPollInterval = 1 * time.Second
 
 // crawlConcurrencySemaphore bounds how many crawl jobs fetch pages at
-// once, reading MaxConcurrentCrawls fresh on every acquire (via acquire's
-// poll loop, even while already queued) instead of a fixed capacity baked
-// in at construction -- so a live setting change applies without a
-// restart, self-correcting as old-permit jobs finish.
+// once, reading MaxConcurrentCrawls fresh on every acquire instead of a
+// fixed capacity, so a live setting change applies without a restart.
 type crawlConcurrencySemaphore struct {
 	opSettings *domain.OperationalSettings
 
@@ -32,9 +29,8 @@ type crawlConcurrencySemaphore struct {
 	current int
 }
 
-// defaultMaxConcurrentCrawls is used only if opSettings is nil (should
-// never happen on a real crawl-server process, which always configures
-// one) -- matches domain.OperationalSettingsValues' own default.
+// defaultMaxConcurrentCrawls is used only if opSettings is nil (shouldn't
+// happen in a real process) -- matches domain.OperationalSettingsValues' default.
 const defaultMaxConcurrentCrawls = 3
 
 func newCrawlConcurrencySemaphore(opSettings *domain.OperationalSettings) *crawlConcurrencySemaphore {
@@ -53,9 +49,8 @@ func (s *crawlConcurrencySemaphore) configuredLimit() int {
 	return defaultMaxConcurrentCrawls
 }
 
-// channel returns the current permit channel to acquire from (and later
-// release into) for one crawl job, resizing it first if the configured
-// limit has changed since the last call.
+// channel returns the current permit channel for one crawl job, resizing
+// it first if the configured limit changed since the last call.
 func (s *crawlConcurrencySemaphore) channel() chan struct{} {
 	s.resize(s.configuredLimit())
 	s.mu.Lock()
@@ -73,11 +68,10 @@ func (s *crawlConcurrencySemaphore) resize(n int) {
 	s.current = n
 }
 
-// acquire blocks until a permit is available or ctx is cancelled. Unlike
-// a blocking send on one fixed channel, this re-fetches the (possibly
-// resized) channel every crawlConcurrencyPollInterval while queued, so a
-// limit raised mid-wait still applies. The caller must release into this
-// same returned channel, never "whatever's current now".
+// acquire blocks until a permit is available or ctx is cancelled,
+// re-fetching the (possibly resized) channel every
+// crawlConcurrencyPollInterval so a limit raised mid-wait applies. The
+// caller must release into this same returned channel.
 func (s *crawlConcurrencySemaphore) acquire(ctx context.Context) (chan struct{}, error) {
 	for {
 		ch := s.channel()
@@ -91,11 +85,10 @@ func (s *crawlConcurrencySemaphore) acquire(ctx context.Context) (chan struct{},
 	}
 }
 
-// RoutesCrawlInternal serves crawl-server's endpoints, reporting progress
-// on jobs the scheduler ticker started. Meant only for admin-server, over
-// crawlclient -- enforced only by network topology (no nginx proxy, a
-// loopback-only bind), so every route but /healthz also goes through
-// requireCrawlInternalToken as a second, independent layer.
+// RoutesCrawlInternal serves crawl-server's endpoints. Meant only for
+// admin-server over crawlclient -- enforced by network topology
+// (loopback-only, no nginx proxy), so every route but /healthz also goes
+// through requireCrawlInternalToken as a second, independent layer.
 func (h *Handler) RoutesCrawlInternal() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /jobs", h.requireCrawlInternalToken(h.handleListCrawlJobs))
@@ -106,11 +99,10 @@ func (h *Handler) RoutesCrawlInternal() *http.ServeMux {
 	return mux
 }
 
-// requireCrawlInternalToken gates a RoutesCrawlInternal handler behind a
-// shared secret, checked via constant-time comparison against
-// X-Internal-Token. Only enforced when configured. Never falls back to a
-// loopback check on r.RemoteAddr: the two servers aren't necessarily on
-// the same host.
+// requireCrawlInternalToken gates a handler behind a shared secret,
+// constant-time compared against X-Internal-Token -- only enforced when
+// configured, and never falls back to a loopback check since the two
+// servers aren't necessarily on the same host.
 func (h *Handler) requireCrawlInternalToken(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if h.crawlInternalToken == "" {
@@ -126,19 +118,16 @@ func (h *Handler) requireCrawlInternalToken(next http.HandlerFunc) http.HandlerF
 }
 
 // TriggerScheduledCrawl registers a new job, starts it in the background,
-// and calls onDone exactly once it finishes -- so TriggerDueCrawls
-// advances next_run_at only once truly done. ctx only scopes the Create
-// call; the crawl itself runs against context.Background().
+// and calls onDone once it finishes, so TriggerDueCrawls only advances
+// next_run_at when truly done. ctx scopes only the Create call; the crawl
+// itself runs against context.Background().
 //
-// Refuses with domain.ErrCrawlAlreadyActiveForSeed if any currently
-// Queued/Running job already covers one of opts.SeedURLs -- a
-// defense-in-depth check independent of scheduled_crawls' own in_progress
-// bookkeeping, which a code/schema transition or a scheduler race could
-// otherwise get out of sync with (this exact class of bug hit production
-// against cnn.com once already; see
-// sqlrepo.Repository.ResetStaleInProgress's own doc comment). The caller
-// (application.TriggerDueCrawls) treats this the same as any other trigger
-// failure: logged and skipped, retried on the next tick.
+// Refuses with domain.ErrCrawlAlreadyActiveForSeed if a Queued/Running job
+// already covers one of opts.SeedURLs -- defense-in-depth independent of
+// scheduled_crawls' in_progress bookkeeping, which a scheduler race
+// already got out of sync with in production once (against cnn.com; see
+// sqlrepo.Repository.ResetStaleInProgress). The caller logs and skips on
+// this failure, retrying next tick.
 func (h *Handler) TriggerScheduledCrawl(ctx context.Context, opts ports.CrawlOptions, onDone func()) (string, error) {
 	active, err := h.hasActiveJobForSeeds(ctx, opts.SeedURLs)
 	if err != nil {
@@ -183,9 +172,8 @@ func (h *Handler) hasActiveJobForSeeds(ctx context.Context, seedURLs []string) (
 	return false, nil
 }
 
-// createCrawlJob persists a new job record for opts -- TriggerScheduledCrawl's
-// shared first step with ResumeCrawlJob's "existing job, no new record"
-// counterpart below.
+// createCrawlJob persists a new job record for opts -- shared first step
+// with ResumeCrawlJob's "existing job, no new record" counterpart below.
 func (h *Handler) createCrawlJob(ctx context.Context, opts ports.CrawlOptions) (domain.CrawlJob, error) {
 	if len(opts.SeedURLs) == 0 {
 		return domain.CrawlJob{}, errors.New("seed_urls must not be empty")
@@ -212,19 +200,17 @@ func (h *Handler) createCrawlJob(ctx context.Context, opts ports.CrawlOptions) (
 	})
 }
 
-// ResumeCrawlJob re-runs an existing job in the background without
-// creating a new record -- used only by RecoverInterruptedCrawls at
-// startup, so a crash-interrupted crawl continues accumulating history
-// under the same ID rather than looking replaced by a fresh job.
+// ResumeCrawlJob re-runs an existing job without creating a new record --
+// used by RecoverInterruptedCrawls at startup, so a crash-interrupted
+// crawl keeps its ID instead of looking replaced.
 func (h *Handler) ResumeCrawlJob(jobID string, opts ports.CrawlOptions) {
 	go h.runCrawlJob(jobID, opts)
 }
 
-// runCrawlJob executes opts in the background. Store writes always use a
-// fresh context.Background(), since final state must be recorded even
-// after cancellation; a store error is logged, not fatal. The cancel func
-// is registered for the job's whole lifetime, including while queued, so
-// CancelCrawlJob works pre-fetch too.
+// runCrawlJob executes opts in the background. Store writes use a fresh
+// context.Background() since final state must be recorded even after
+// cancellation. The cancel func is registered for the job's whole
+// lifetime, including while queued, so CancelCrawlJob works pre-fetch too.
 func (h *Handler) runCrawlJob(jobID string, opts ports.CrawlOptions) {
 	crawlCtx, cancel := context.WithCancel(context.Background())
 	h.registerCancel(jobID, cancel)
@@ -265,9 +251,9 @@ func (h *Handler) runCrawlJob(jobID string, opts ports.CrawlOptions) {
 	if err := h.crawlJobs.MarkDone(storeCtx, jobID); err != nil {
 		log.Printf("crawl job %s: marking done: %v", jobID, err)
 	}
-	// A crawl just changed the link graph -- give the caller (cmd/crawl, to
-	// trigger a PageRank recompute) a chance to react. See Config's
-	// OnCrawlComplete doc comment for why this is deliberately synchronous.
+	// A crawl just changed the link graph -- give the caller (cmd/crawl,
+	// PageRank recompute) a chance to react. See Config.OnCrawlComplete
+	// for why this is deliberately synchronous.
 	if h.onCrawlComplete != nil {
 		h.onCrawlComplete()
 	}
@@ -285,10 +271,9 @@ func (h *Handler) unregisterCancel(jobID string) {
 	delete(h.cancelFuncs, jobID)
 }
 
-// CancelCrawlJob stops a queued or running job and reports whether it
-// found one to cancel -- false means jobID isn't currently registered in
-// this process (finished, never existed, or a restart lost the old
-// registration, fine since ResumeCrawlJob re-registers it).
+// CancelCrawlJob stops a queued or running job, reporting whether it
+// found one -- false means jobID isn't registered (finished, never
+// existed, or lost by a restart, fine since ResumeCrawlJob re-registers it).
 func (h *Handler) CancelCrawlJob(jobID string) bool {
 	h.cancelMu.Lock()
 	cancel, ok := h.cancelFuncs[jobID]
@@ -300,9 +285,8 @@ func (h *Handler) CancelCrawlJob(jobID string) bool {
 	return true
 }
 
-// handleCancelCrawlJob is crawl-server's own cancel endpoint -- called only
-// by admin-server's crawlclient.Client, never directly reachable from the
-// internet (see RoutesCrawlInternal's doc comment).
+// handleCancelCrawlJob is crawl-server's cancel endpoint -- called only by
+// admin-server's crawlclient.Client, never reachable from the internet.
 func (h *Handler) handleCancelCrawlJob(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if h.CancelCrawlJob(id) {
@@ -325,10 +309,9 @@ func (h *Handler) handleListCrawlJobs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, jobs)
 }
 
-// handleDeleteEndedCrawlJobs is crawl-server's own "clear ended jobs"
-// endpoint (DELETE /jobs -- the collection path itself, not a
-// "/jobs/clear-ended" sub-path, which would collide with the "/jobs/{id}"
-// wildcard above), called only by admin-server's crawlclient.Client.
+// handleDeleteEndedCrawlJobs is crawl-server's "clear ended jobs" endpoint
+// (DELETE /jobs itself, not "/jobs/clear-ended", which would collide with
+// the "/jobs/{id}" wildcard above).
 func (h *Handler) handleDeleteEndedCrawlJobs(w http.ResponseWriter, r *http.Request) {
 	n, err := h.crawlJobs.DeleteEndedCrawlJobs(r.Context())
 	if err != nil {

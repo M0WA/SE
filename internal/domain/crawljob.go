@@ -8,19 +8,13 @@ import (
 )
 
 // ErrCrawlJobNotFound is returned by CrawlJobStore.Get when no job with the
-// given ID exists (or is no longer retained). A separate sentinel from
-// ports.ErrCrawlJobNotFound since domain can't import ports, and this one
-// must be producible by an in-memory, domain-only implementation.
+// given ID exists. A separate sentinel from ports.ErrCrawlJobNotFound since
+// domain can't import ports.
 var ErrCrawlJobNotFound = errors.New("crawl job not found")
 
-// ErrCrawlAlreadyActiveForSeed is returned when a new crawl is about to be
-// started (scheduled trigger or one-off) for a seed URL that some other
-// Queued/Running job is already crawling -- the same seed must never have
-// two crawls running at once (see
-// restapi.Handler.TriggerScheduledCrawl/hasActiveJobForSeeds), regardless
-// of how the two triggers came to overlap (a scheduler race, a stale
-// scheduled_crawls.in_progress flag, a manual "run now" while one is
-// already in flight, ...).
+// ErrCrawlAlreadyActiveForSeed is returned when starting a crawl for a seed
+// URL some other Queued/Running job is already crawling -- the same seed
+// must never run twice at once, regardless of how the triggers overlapped.
 var ErrCrawlAlreadyActiveForSeed = errors.New("a crawl is already active for this seed")
 
 // CrawlJobStatus is where a triggered crawl currently stands.
@@ -42,19 +36,15 @@ const (
 	CrawlPageThinContent      CrawlPageStatus = "thin_content"
 	CrawlPageRobotsDisallowed CrawlPageStatus = "robots_disallowed"
 	CrawlPageFetchFailed      CrawlPageStatus = "fetch_failed"
-	// CrawlPageAliased marks a page whose <link rel="canonical"> points at
-	// a different URL (see application.crawlLoop) -- its own outbound links
-	// are still followed, but it never gets a document row of its own, so
-	// (unlike CrawlPageIndexed) this status does not advance a job's
-	// PagesCrawled count.
+	// CrawlPageAliased marks a page whose <link rel="canonical"> points
+	// elsewhere -- its links are still followed, but it gets no document
+	// row, so unlike CrawlPageIndexed it doesn't advance PagesCrawled.
 	CrawlPageAliased CrawlPageStatus = "aliased"
 )
 
-// CrawlPageEvent reports what happened to one URL a crawl job visited, with
-// as much diagnostic detail as is available for that outcome: DocLength and
-// LinksFound are only meaningful once a page was actually parsed (so they're
-// zero for a robots-disallowed or fetch-failed URL), and DurationMs is zero
-// for a robots-disallowed URL since no fetch was ever attempted for it.
+// CrawlPageEvent reports what happened to one URL a crawl job visited.
+// DocLength/LinksFound are zero unless the page was actually parsed;
+// DurationMs is zero for a robots-disallowed URL (no fetch attempted).
 type CrawlPageEvent struct {
 	URL        string          `json:"url"`
 	Status     CrawlPageStatus `json:"status"`
@@ -67,10 +57,9 @@ type CrawlPageEvent struct {
 }
 
 // CrawlJobRequest is a redacted summary of the request that started a job:
-// it deliberately carries HasCookie/HasBasicAuth booleans rather than the
-// actual credentials, so a crawl's secrets never appear in a job listing
-// or detail view. RespectRobots, UserAgent, LinkScope and UseSitemap
-// aren't secrets, so they're carried through as-is.
+// HasCookie/HasBasicAuth are booleans, not the actual credentials, so
+// secrets never appear in a job listing. Other fields aren't secrets and
+// are carried through as-is.
 type CrawlJobRequest struct {
 	SeedURLs      []string `json:"seed_urls"`
 	MaxPages      int      `json:"max_pages"`
@@ -78,32 +67,24 @@ type CrawlJobRequest struct {
 	HasBasicAuth  bool     `json:"has_basic_auth"`
 	RespectRobots bool     `json:"respect_robots"`
 	UserAgent     string   `json:"user_agent,omitempty"`
-	// LinkScope is "" when this job used the Tuning page's global default
-	// (see domain.LinkScope*), or an explicit override otherwise -- not a
-	// secret, so it's the actual value, not a boolean.
+	// LinkScope is "" when this job used the Tuning page's global default,
+	// or an explicit override otherwise.
 	LinkScope string `json:"link_scope,omitempty"`
-	// AllowedDomains/BlockedDomains/FollowIndexedDomains aren't secrets
-	// either, so (like LinkScope) they're the actual values this job ran
-	// with -- see ports.CrawlOptions' doc comment for the exact allow/block
-	// precedence between them and LinkScope.
+	// AllowedDomains/BlockedDomains/FollowIndexedDomains: see
+	// ports.CrawlOptions' doc comment for allow/block precedence vs LinkScope.
 	AllowedDomains       []string `json:"allowed_domains,omitempty"`
 	BlockedDomains       []string `json:"blocked_domains,omitempty"`
 	FollowIndexedDomains bool     `json:"follow_indexed_domains,omitempty"`
 	UseSitemap           bool     `json:"use_sitemap"`
 	// FetchTimeoutSeconds/MinTextLength/CrawlDelayMs/MaxResponseKB are 0
-	// when this job used the global operational default for that setting,
-	// non-zero when it overrode it -- see ports.CrawlOptions' doc comment.
-	// None of these are secrets, unlike Cookie/BasicAuth above, so (unlike
-	// those) they're carried here as their actual values, not booleans.
+	// when this job used the global operational default, non-zero when overridden.
 	FetchTimeoutSeconds int  `json:"fetch_timeout_seconds,omitempty"`
 	MinTextLength       int  `json:"min_text_length,omitempty"`
 	CrawlDelayMs        int  `json:"crawl_delay_ms,omitempty"`
 	MaxResponseKB       int  `json:"max_response_kb,omitempty"`
 	PrioritizeUnindexed bool `json:"prioritize_unindexed,omitempty"`
-	// Renderer is "" when this job used the Tuning page's global default
-	// rendering mode, or an explicit override ("none"/"chromium"/
-	// "firefox") otherwise -- not a secret, so (like the fields above,
-	// unlike Cookie/BasicAuth) it's the actual value, not a boolean.
+	// Renderer is "" for the Tuning page's global default rendering mode,
+	// or an explicit override ("none"/"chromium"/"firefox") otherwise.
 	Renderer string `json:"renderer,omitempty"`
 }
 
@@ -149,9 +130,8 @@ const maxRetainedCrawlJobs = 200
 
 // CrawlJobStore holds every crawl job triggered on this process, safe for
 // concurrent use. Purely in-memory (lost on restart) -- a lightweight
-// ports.CrawlJobStore for tests; crawl-server itself uses sqlrepo's
-// DB-backed implementation so history survives restarts. Every method
-// returns an error only to satisfy that interface, except Get's not-found.
+// ports.CrawlJobStore for tests; crawl-server uses sqlrepo's DB-backed
+// implementation instead.
 type CrawlJobStore struct {
 	mu    sync.RWMutex
 	jobs  map[string]*CrawlJob
@@ -164,10 +144,8 @@ func NewCrawlJobStore() *CrawlJobStore {
 
 var crawlJobSeq int64
 
-// NewCrawlJobID mints an ID for a newly created crawl job, unique within a
-// process without needing a database round-trip first -- shared by this
-// in-memory store and sqlrepo's persistent one, so both name jobs exactly
-// the same way.
+// NewCrawlJobID mints a job ID, unique within a process without a database
+// round-trip -- shared by this in-memory store and sqlrepo's persistent one.
 func NewCrawlJobID() string {
 	return newSeqID("job", &crawlJobSeq)
 }
@@ -237,9 +215,8 @@ func (s *CrawlJobStore) MarkFailed(_ context.Context, id string, failErr error) 
 	return nil
 }
 
-// MarkCancelled records that a job was stopped by an admin request before
-// it finished on its own -- distinct from MarkFailed so the UI can tell
-// "the admin cancelled this" apart from "this crawl actually errored out".
+// MarkCancelled records an admin-stopped job, distinct from MarkFailed so
+// the UI can tell a cancellation from an actual error.
 func (s *CrawlJobStore) MarkCancelled(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -251,9 +228,8 @@ func (s *CrawlJobStore) MarkCancelled(_ context.Context, id string) error {
 	return nil
 }
 
-// Get returns a snapshot of the job (its Pages slice copied) so a caller
-// reading it concurrently with AppendPage never races or sees a slice that
-// mutates under it. Returns ErrCrawlJobNotFound if id isn't retained.
+// Get returns a snapshot (Pages copied) so a concurrent AppendPage never
+// races. Returns ErrCrawlJobNotFound if id isn't retained.
 func (s *CrawlJobStore) Get(_ context.Context, id string) (CrawlJob, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -292,19 +268,14 @@ func (s *CrawlJobStore) ListActive(_ context.Context) ([]CrawlJobSummary, error)
 	return out, nil
 }
 
-// IsEndedCrawlJobStatus reports whether a job in this status has finished
-// one way or another (as opposed to CrawlJobQueued/CrawlJobRunning, which
-// are still active) -- shared by DeleteEndedCrawlJobs here and sqlrepo's
-// DB-backed equivalent so both agree on exactly what "ended" means.
+// IsEndedCrawlJobStatus reports whether a job has finished (as opposed to
+// still-active Queued/Running) -- shared with sqlrepo's DB-backed equivalent.
 func IsEndedCrawlJobStatus(status CrawlJobStatus) bool {
 	return status == CrawlJobDone || status == CrawlJobFailed || status == CrawlJobCancelled
 }
 
 // DeleteEndedCrawlJobs removes every done/failed/cancelled job, keeping
-// queued/running ones, and returns how many were removed. Filters s.order
-// in place (the standard "kept := s.order[:0]" idiom) rather than
-// allocating a new slice, since this can run against up to
-// maxRetainedCrawlJobs entries.
+// queued/running ones, and returns how many were removed.
 func (s *CrawlJobStore) DeleteEndedCrawlJobs(_ context.Context) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

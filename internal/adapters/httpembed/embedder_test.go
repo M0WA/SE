@@ -141,12 +141,10 @@ func TestEmbedder_NonOKStatusBodyIsTruncated(t *testing.T) {
 	}
 }
 
-// TestEmbedder_NonOKStatusBodyRedactsAPIKey proves the configured API key
-// never appears verbatim in the error Embed returns -- this error is
-// persisted to a crawl job's record and shown in the admin UI, so if a
-// malicious/misconfigured embeddings endpoint echoes the request's own
-// Authorization header back in its error body (some gateways do), that
-// shouldn't round-trip the real key back out through this app.
+// TestEmbedder_NonOKStatusBodyRedactsAPIKey proves the API key never
+// appears verbatim in Embed's error -- persisted to a crawl job and shown
+// in the admin UI, so an endpoint echoing the Authorization header back in
+// its error body (some gateways do) must not leak the real key.
 func TestEmbedder_NonOKStatusBodyRedactsAPIKey(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -168,8 +166,7 @@ func TestEmbedder_NonOKStatusBodyRedactsAPIKey(t *testing.T) {
 }
 
 // TestEmbedder_NonOKStatusBodyUnaffectedWithNoAPIKey proves redact is a
-// no-op when no API key is configured -- nothing to scrub, the body passes
-// through unchanged.
+// no-op with no API key configured -- the body passes through unchanged.
 func TestEmbedder_NonOKStatusBodyUnaffectedWithNoAPIKey(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
@@ -239,14 +236,10 @@ func TestEmbedder_InvalidBaseURLReturnsError(t *testing.T) {
 	}
 }
 
-// TestEmbedder_BlocksCloudMetadataEndpoint proves checkEndpointURL's
-// pre-request netguard check rejects a BaseURL pointing at the cloud
-// metadata address before ever making the request -- mirrors httpchat's
-// identically-named regression test (see that package's
-// TestComplete_BlocksCloudMetadataEndpoint). An ordinary private-network
-// or loopback BaseURL, as every other test in this file uses via
-// httptest.NewServer, stays allowed -- only this one class of address
-// (with no legitimate self-hosted-embeddings use case) is blocked.
+// TestEmbedder_BlocksCloudMetadataEndpoint proves checkEndpointURL
+// rejects a BaseURL pointing at cloud metadata before making the request
+// -- mirrors httpchat's identically-named test. Ordinary private/loopback
+// addresses, as every other test here uses, stay allowed.
 func TestEmbedder_BlocksCloudMetadataEndpoint(t *testing.T) {
 	e := httpembed.New(httpembed.Config{BaseURL: "http://169.254.169.254", Dimensions: 8})
 	_, err := e.Embed(context.Background(), "x")
@@ -409,10 +402,9 @@ func TestEmbedder_ListModelsNetworkErrorReturnsError(t *testing.T) {
 	}
 }
 
-// TestEmbedder_ListModelsBlocksCloudMetadataEndpoint mirrors
-// TestEmbedder_BlocksCloudMetadataEndpoint for ListModels -- proves the
-// same netguard check applies to the GET {base_url}/models path, not just
-// POST {base_url}/embeddings.
+// TestEmbedder_ListModelsBlocksCloudMetadataEndpoint proves the same
+// netguard check applies to GET {base_url}/models too, not just POST
+// {base_url}/embeddings.
 func TestEmbedder_ListModelsBlocksCloudMetadataEndpoint(t *testing.T) {
 	e := httpembed.New(httpembed.Config{BaseURL: "http://169.254.169.254"})
 	_, err := e.ListModels(context.Background())
@@ -449,11 +441,9 @@ func TestEmbedder_ListModelsBodyReadErrorReturnsError(t *testing.T) {
 	}
 }
 
-// TestEmbedder_RetriesOn429ThenSucceeds proves the core rate-limit
-// retry behavior IONOS's own docs call for (see
-// docs.ionos.com/cloud/ai/ai-model-hub/how-tos/rate-limits): a 429 is
-// retried, not treated as a terminal failure, and a subsequent success is
-// returned to the caller as if it had succeeded on the first try.
+// TestEmbedder_RetriesOn429ThenSucceeds proves the core rate-limit retry
+// behavior IONOS's docs call for: a 429 is retried, not terminal, and a
+// subsequent success is returned as if it succeeded first try.
 func TestEmbedder_RetriesOn429ThenSucceeds(t *testing.T) {
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -483,9 +473,8 @@ func TestEmbedder_RetriesOn429ThenSucceeds(t *testing.T) {
 }
 
 // TestEmbedder_RetriesExhaustedReturnsRateLimitError proves Embed gives up
-// after RateLimitMaxRetries and surfaces the underlying 429 error, rather
-// than retrying forever and stalling a caller like
-// application.RunEmbeddingRecomputeJob.
+// after RateLimitMaxRetries and surfaces the 429, rather than retrying
+// forever and stalling a caller.
 func TestEmbedder_RetriesExhaustedReturnsRateLimitError(t *testing.T) {
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -508,10 +497,8 @@ func TestEmbedder_RetriesExhaustedReturnsRateLimitError(t *testing.T) {
 	}
 }
 
-// TestEmbedder_Retries529HonorsRetryAfter proves a 529's own Retry-After
-// header is honored exactly (per IONOS's "retry only after the indicated
-// delay" guidance), not overridden by the exponential backoff sequence
-// used for 429.
+// TestEmbedder_Retries529HonorsRetryAfter proves a 529's Retry-After
+// header is honored exactly, not overridden by 429's backoff sequence.
 func TestEmbedder_Retries529HonorsRetryAfter(t *testing.T) {
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -547,8 +534,7 @@ func TestEmbedder_Retries529HonorsRetryAfter(t *testing.T) {
 }
 
 // TestEmbedder_NonRateLimitStatusIsNeverRetried proves an ordinary
-// non-2xx failure (one retrying could never fix) returns immediately on
-// the first attempt.
+// non-2xx failure returns immediately, no retry.
 func TestEmbedder_NonRateLimitStatusIsNeverRetried(t *testing.T) {
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -614,14 +600,10 @@ func TestListModels_RetriesOn429ThenSucceeds(t *testing.T) {
 }
 
 // TestEmbedder_RateLimitPacesChunkRequests proves pacing lives inside
-// httpembed itself, so it applies to every real HTTP request a single
-// Embed call makes internally -- not just once per Embed call at the
-// application layer (insufficient once chunking means one Embed call can
-// fire many real embeddings requests). A small
-// ChunkSizeTokens forces multiple chunks, each its own embeddings POST;
-// with RateLimitPerSecond configured, consecutive requests' arrival times
-// at the fake server must be spaced apart by at least the configured
-// interval.
+// httpembed itself, applying to every real request one Embed call makes
+// internally, not just once per call. A small ChunkSizeTokens forces
+// multiple chunks; with RateLimitPerSecond set, consecutive arrivals at
+// the fake server must be spaced at least the configured interval apart.
 func TestEmbedder_RateLimitPacesChunkRequests(t *testing.T) {
 	var mu sync.Mutex
 	var arrivals []time.Time
@@ -661,9 +643,8 @@ func TestEmbedder_RateLimitPacesChunkRequests(t *testing.T) {
 }
 
 // TestEmbedder_RateLimitZeroDisablesPacing proves RateLimitPerSecond's
-// zero value (the common case -- a local provider with no rate limit of
-// its own) never adds pacing: the same 3-chunk request burst as above
-// must complete near-instantly rather than waiting between requests.
+// zero value (a local provider with no rate limit) never adds pacing: the
+// same 3-chunk burst must complete near-instantly.
 func TestEmbedder_RateLimitZeroDisablesPacing(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -683,9 +664,7 @@ func TestEmbedder_RateLimitZeroDisablesPacing(t *testing.T) {
 }
 
 // TestEmbedder_RateLimitPacesTokenizeRequests proves the pacer also
-// covers countTokens -- the tokenize verification step chunking makes
-// when TokenizeURL is configured is a real HTTP request too, and must be
-// paced the same as an embeddings request.
+// covers countTokens -- a real HTTP request too, paced like embeddings.
 func TestEmbedder_RateLimitPacesTokenizeRequests(t *testing.T) {
 	embedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -912,13 +891,10 @@ func TestEmbedder_TokenizeURLErrorPropagatesFromEmbed(t *testing.T) {
 }
 
 // TestEmbedder_TokenizeURLUnsplittableChunkFallsBackToRuneSplit proves
-// fitChunkToTokenBudget's rune-based fallback (the fix for the "CJK/one
-// giant token silently never splits" bug) actually kicks in for a single
-// "word" (no whitespace to split on) that a misbehaving/unusual tokenizer
-// reports as perpetually over budget: rather than giving up and shipping
-// the whole thing as one unsplit chunk (the original bug), it now halves
-// by rune count instead, terminating (not recursing forever) once
-// maxTokenizeSplitDepth is reached.
+// fitChunkToTokenBudget's rune-based fallback (fixing "CJK/one giant token
+// never splits") kicks in for a single word a tokenizer reports as always
+// over budget: it halves by rune count instead of shipping it unsplit,
+// terminating at maxTokenizeSplitDepth.
 func TestEmbedder_TokenizeURLUnsplittableChunkFallsBackToRuneSplit(t *testing.T) {
 	var embedCalls, tokenizeCalls int
 	embedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -954,12 +930,9 @@ func TestEmbedder_TokenizeURLUnsplittableChunkFallsBackToRuneSplit(t *testing.T)
 }
 
 // TestEmbedder_ChunkTextSplitsCJKTextWithNoWhitespace proves CJK text (no
-// ASCII whitespace between "words" at all, so strings.Fields collapses it
-// to exactly one unsplittable "word") longer than a small ChunkSizeTokens
-// budget is actually split into more than one chunk, rather than sailing
-// through whole -- the exact original context-length failure chunking
-// exists to prevent, for precisely the multilingual case a real endpoint
-// would see.
+// whitespace, so strings.Fields sees one "word") over a small
+// ChunkSizeTokens budget actually splits -- the context-length failure
+// chunking exists to prevent.
 func TestEmbedder_ChunkTextSplitsCJKTextWithNoWhitespace(t *testing.T) {
 	var inputs []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -972,10 +945,8 @@ func TestEmbedder_ChunkTextSplitsCJKTextWithNoWhitespace(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// 30 CJK characters, no whitespace anywhere -- strings.Fields sees
-	// this as exactly one "word". ChunkSizeTokens=4 -> a 12-character
-	// budget (approxCharsPerToken=3), so this must split into multiple
-	// chunks via splitByRuneBudget rather than staying whole.
+	// 30 CJK chars, no whitespace -- ChunkSizeTokens=4 gives a 12-char
+	// budget (approxCharsPerToken=3), so this must split via splitByRuneBudget.
 	text := strings.Repeat("日本語", 10) // 30 runes, 90 bytes (3 bytes/rune in UTF-8)
 	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 2, ChunkSizeTokens: 4})
 	if _, err := e.Embed(context.Background(), text); err != nil {
@@ -984,9 +955,8 @@ func TestEmbedder_ChunkTextSplitsCJKTextWithNoWhitespace(t *testing.T) {
 	if len(inputs) <= 1 {
 		t.Fatalf("expected CJK text with no whitespace to be split into multiple chunks, got %d: %v", len(inputs), inputs)
 	}
-	// Every chunk must stay within the 12-rune budget, and rejoining them
-	// must reproduce the original text exactly -- no character lost or
-	// duplicated by the rune-boundary splitting.
+	// Every chunk must stay within the 12-rune budget, and rejoining must
+	// reproduce the original text exactly.
 	var rejoined strings.Builder
 	for _, c := range inputs {
 		if n := utf8.RuneCountInString(c); n > 12 {
@@ -1000,12 +970,8 @@ func TestEmbedder_ChunkTextSplitsCJKTextWithNoWhitespace(t *testing.T) {
 }
 
 // TestEmbedder_ChunkTextRuneCountNotByteCountForMultiByteText proves the
-// per-word budget accumulation counts runes (characters), not UTF-8
-// bytes, matching what approxCharsPerToken's doc comment already claims
-// it measures. Accented Latin text where each "word" is 2 bytes
-// per rune (byte count double the rune count) must pack according to its
-// rune count, not silently be treated as over budget (or under-budget by
-// the wrong margin) from counting bytes instead.
+// per-word budget counts runes, not UTF-8 bytes. Accented Latin text (2
+// bytes/rune) must pack by rune count, not be mis-budgeted from bytes.
 func TestEmbedder_ChunkTextRuneCountNotByteCountForMultiByteText(t *testing.T) {
 	var inputs []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1048,9 +1014,8 @@ func TestEmbedder_ChunkTextRuneCountNotByteCountForMultiByteText(t *testing.T) {
 }
 
 // TestEmbedder_ChunkTextWhitespaceOnlyReturnsItUnchanged covers chunkText's
-// "no words at all" branch: whitespace-only text (strings.Fields returns
-// nothing) is sent to embedChunk exactly as given, rather than chunkText
-// producing an empty chunk list.
+// "no words" branch: whitespace-only text is sent to embedChunk as given,
+// not turned into an empty chunk list.
 func TestEmbedder_ChunkTextWhitespaceOnlyReturnsItUnchanged(t *testing.T) {
 	embedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body embedInput
@@ -1199,12 +1164,9 @@ func TestEmbedder_CountTokensInvalidURLReturnsError(t *testing.T) {
 	}
 }
 
-// TestEmbedder_CountTokensBlocksCloudMetadataEndpoint mirrors
-// TestEmbedder_BlocksCloudMetadataEndpoint for TokenizeURL -- proves the
-// same netguard check applies to countTokens' own request, which unlike
-// the embeddings/models paths isn't BaseURL-derived (TokenizeURL is a
-// fully separate admin-configured URL, see domain.EmbeddingHTTPEndpoint.
-// TokenizeURL).
+// TestEmbedder_CountTokensBlocksCloudMetadataEndpoint proves the same
+// netguard check applies to countTokens too, even though TokenizeURL is a
+// separate admin-configured URL, not BaseURL-derived.
 func TestEmbedder_CountTokensBlocksCloudMetadataEndpoint(t *testing.T) {
 	e := httpembed.New(httpembed.Config{
 		BaseURL: "http://unused.invalid", Dimensions: 1, ChunkSizeTokens: 4,
@@ -1274,10 +1236,8 @@ func TestEmbedder_CountTokensMalformedJSONReturnsError(t *testing.T) {
 }
 
 // TestEmbedder_CountTokensMissingCountFieldReturnsError guards against a
-// tokenize endpoint schema mismatch silently reading as count=0 (which
-// fitChunkToTokenBudget would treat as "fits under budget", the opposite
-// of failing closed) -- a valid JSON object missing "count" entirely must
-// still error, not decode to a zero value.
+// schema mismatch silently reading as count=0 (which fitChunkToTokenBudget
+// would wrongly treat as "fits") -- a missing "count" field must error.
 func TestEmbedder_CountTokensMissingCountFieldReturnsError(t *testing.T) {
 	tokenizeSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"tokens": ["aa", "bb"]}`))

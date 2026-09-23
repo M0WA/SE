@@ -6,24 +6,16 @@ import (
 	"strings"
 )
 
-// DetectHostDNS returns the DNS nameserver IPs this host itself actually
-// uses to resolve names -- for populating Limits.DNS (see cmd/mcp-sandbox's
-// -host-dns flag) so a network-enabled sandbox resolves names the same way
-// the host does, rather than through Docker's own embedded DNS server
-// (127.0.0.11, forwarding to whatever the Docker daemon's own network
-// config happens to be, which can differ from the host's -- e.g. a
-// corporate/VPN DNS setup the host resolves through but the Docker daemon
-// itself was never told about).
+// DetectHostDNS returns the DNS nameservers this host actually uses (for
+// Limits.DNS, see cmd/mcp-sandbox's -host-dns flag), so a network-enabled
+// sandbox resolves the same way the host does rather than via Docker's own
+// embedded DNS (127.0.0.11), which can differ (e.g. corporate/VPN DNS).
 //
-// Prefers /run/systemd/resolve/resolv.conf over /etc/resolv.conf when
-// present: on a systemd-resolved host (the default on Debian/Ubuntu, this
-// project's own target deployment OS), /etc/resolv.conf points at
-// 127.0.0.53, a stub resolver that only listens on the HOST's own
-// loopback -- unreachable from inside a container's own network
-// namespace, so passing it straight through as --dns would break
-// resolution entirely rather than fix it. /run/systemd/resolve/resolv.conf
-// is systemd-resolved's own record of the REAL upstream nameservers it
-// forwards to, which a container can actually reach.
+// Prefers /run/systemd/resolve/resolv.conf over /etc/resolv.conf: on a
+// systemd-resolved host (Debian/Ubuntu default), /etc/resolv.conf points
+// at 127.0.0.53, a stub resolver reachable only from the host's own
+// loopback -- unreachable from a container. The systemd-resolve path holds
+// the real upstream nameservers a container can actually reach.
 func DetectHostDNS() ([]string, error) {
 	return detectHostDNSFromPaths([]string{"/run/systemd/resolve/resolv.conf", "/etc/resolv.conf"})
 }

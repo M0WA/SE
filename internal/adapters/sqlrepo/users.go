@@ -12,9 +12,8 @@ import (
 
 const userColumns = "id, username, password_hash, custom_prompt, created_at, updated_at"
 
-// ListUsers lists every DB-backed regular-user account, ordered by
-// username for a stable, human-friendly admin table order (mirrors
-// ListMCPServers ordering by name for the same reason).
+// ListUsers lists every regular-user account, ordered by username for a
+// stable admin table order (mirrors ListMCPServers ordering by name).
 func (r *Repository) ListUsers(ctx context.Context) ([]domain.User, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT `+userColumns+` FROM users ORDER BY username ASC`)
 	if err != nil {
@@ -47,8 +46,7 @@ func (r *Repository) GetUser(ctx context.Context, id string) (domain.User, error
 }
 
 // GetUserByUsername returns ports.ErrUserNotFound if no row has that
-// username -- used by the login path to check a submitted username against
-// a DB-backed regular-user account.
+// username -- used by the login path to check a submitted username.
 func (r *Repository) GetUserByUsername(ctx context.Context, username string) (domain.User, error) {
 	row := r.db.QueryRowContext(ctx, r.ph(`SELECT `+userColumns+` FROM users WHERE username = %s`, 1), username)
 	u, err := scanUser(row)
@@ -62,10 +60,9 @@ func (r *Repository) GetUserByUsername(ctx context.Context, username string) (do
 }
 
 // CreateUser inserts a new regular-user account, returning
-// ports.ErrUsernameTaken if u.Username is already used by a different row
-// (username is UNIQUE at the DB layer -- see dialect.go's users table --
-// so this is a real constraint enforced under concurrent creates, not just
-// a check-then-insert race).
+// ports.ErrUsernameTaken if u.Username is taken (UNIQUE at the DB layer --
+// see dialect.go's users table -- a real constraint under concurrent
+// creates, not a check-then-insert race).
 func (r *Repository) CreateUser(ctx context.Context, u domain.User) error {
 	insertSQL := r.ph(`INSERT INTO users (`+userColumns+`) VALUES (%s, %s, %s, %s, %s, %s)`, 1, 2, 3, 4, 5, 6)
 	_, err := r.db.ExecContext(ctx, insertSQL, u.ID, u.Username, u.PasswordHash, u.CustomPrompt,
@@ -79,12 +76,11 @@ func (r *Repository) CreateUser(ctx context.Context, u domain.User) error {
 	return nil
 }
 
-// UpdateUser replaces u's stored fields wholesale (ID never changes after
-// creation), returning ports.ErrUserNotFound if no row with u.ID exists.
-// Used both for an admin password reset (restapi.handleAdminUpdateUser,
-// which loads the existing row first and only changes PasswordHash/
-// UpdatedAt) and a user's own self-service password/custom-prompt update
-// (restapi.handleAccount, same load-then-selectively-change pattern).
+// UpdateUser replaces u's stored fields wholesale (ID never changes),
+// returning ports.ErrUserNotFound if no row with u.ID exists. Used both
+// for an admin password reset and a user's self-service password/prompt
+// update -- both load-then-selectively-change (restapi.handleAdminUpdateUser
+// / handleAccount).
 func (r *Repository) UpdateUser(ctx context.Context, u domain.User) error {
 	updateSQL := r.ph(`UPDATE users SET username = %s, password_hash = %s, custom_prompt = %s, updated_at = %s WHERE id = %s`, 1, 2, 3, 4, 5)
 	res, err := r.db.ExecContext(ctx, updateSQL, u.Username, u.PasswordHash, u.CustomPrompt, u.UpdatedAt.UTC().Format(crawledAtLayout), u.ID)
@@ -116,12 +112,10 @@ func scanUser(row scanner) (domain.User, error) {
 
 // isUniqueViolationError reports whether err is a unique-constraint
 // violation on an INSERT, across all three dialects -- distinct from
-// isAlreadyExistsError above, which is scoped to the benign
-// concurrent-migration race on CREATE TABLE/ALTER TABLE/CREATE INDEX; this
-// is for a genuine application-level conflict (CreateUser's username
-// UNIQUE constraint) that should surface as ports.ErrUsernameTaken, not a
-// generic 500. Like isAlreadyExistsError, only ever called with a non-nil
-// err (CreateUser's own error check guards the call), so no nil check here.
+// isAlreadyExistsError's benign migration race on CREATE TABLE/INDEX; this
+// is a genuine conflict (CreateUser's username UNIQUE) that should surface
+// as ports.ErrUsernameTaken, not a 500. Only ever called with non-nil err,
+// so no nil check here.
 func isUniqueViolationError(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "UNIQUE constraint failed") || // SQLite

@@ -45,10 +45,9 @@ func TestHandleLogin_WrongPassword(t *testing.T) {
 	}
 }
 
-// TestHandleLogin_LockoutAfterTooManyFailures proves the end-to-end
-// behavior of loginLimiter (see its doc comment): enough failed attempts
-// from the same source lock out even a correct subsequent attempt, with a
-// 429 and a Retry-After header telling the caller how long to wait.
+// TestHandleLogin_LockoutAfterTooManyFailures proves loginLimiter's
+// end-to-end behavior: enough failures lock out even a correct subsequent
+// attempt, with a 429 and a Retry-After header.
 func TestHandleLogin_LockoutAfterTooManyFailures(t *testing.T) {
 	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
 	wrongBody, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": "wrong"})
@@ -80,8 +79,7 @@ func TestHandleLogin_LockoutAfterTooManyFailures(t *testing.T) {
 }
 
 // TestHandleLogin_LockoutIsPerSource proves one source's lockout doesn't
-// block a different one -- a different client IP still gets a normal 401
-// for a wrong password rather than inheriting someone else's lockout.
+// block another -- a different client IP still gets a normal 401.
 func TestHandleLogin_LockoutIsPerSource(t *testing.T) {
 	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
 	wrongBody, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": "wrong"})

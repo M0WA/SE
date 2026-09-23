@@ -10,18 +10,17 @@ import (
 )
 
 // hashSessionToken returns the hex-encoded SHA-256 digest stored as the
-// sessions table's key, never the raw token -- so DB-only access (a
-// backup, a SQL injection) yields digests that can't be replayed as a
-// live session cookie, the same way a password hash can't log in directly.
+// sessions key, never the raw token -- so DB-only access (a backup, a SQL
+// injection) yields digests that can't be replayed as a cookie, like a
+// password hash can't log in directly.
 func hashSessionToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
 
 // CreateSession persists a login session so every process sharing this
-// database recognizes the same token, not just the one that issued it.
-// Opportunistically deletes every already-expired session first, so the
-// table doesn't grow unbounded from sessions nobody explicitly logged out of.
+// database recognizes it, not just the one that issued it. Opportunistically
+// deletes expired sessions first, so the table doesn't grow unbounded.
 func (r *Repository) CreateSession(ctx context.Context, token string, expiresAt time.Time, role string, userID string) error {
 	now := time.Now().UTC().Format(crawledAtLayout)
 	if _, err := r.db.ExecContext(ctx, r.ph(`DELETE FROM sessions WHERE expires_at < %s`, 1), now); err != nil {
@@ -34,10 +33,9 @@ func (r *Repository) CreateSession(ctx context.Context, token string, expiresAt 
 	return nil
 }
 
-// ValidSession reports whether token names a session that hasn't expired
-// yet and, if so, the role and userID it was created with. An expired
-// session is deleted as a side effect of being found, the same
-// lazy-cleanup behavior the old in-memory session store had.
+// ValidSession reports whether token names an unexpired session and, if
+// so, its role and userID. An expired session is deleted as a side effect
+// of being found (same lazy cleanup the old in-memory store had).
 func (r *Repository) ValidSession(ctx context.Context, token string) (bool, string, string, error) {
 	hashed := hashSessionToken(token)
 	var expiresAtStr, role, userID string
@@ -61,10 +59,9 @@ func (r *Repository) ValidSession(ctx context.Context, token string) (bool, stri
 	return true, role, userID, nil
 }
 
-// RevokeSession deletes a session outright (a sign-out), regardless of
-// whether it had already expired. Deleting a token that doesn't exist is
-// not an error -- signing out twice, or of an already-expired session, is a
-// normal, harmless occurrence, not a fault.
+// RevokeSession deletes a session outright (sign-out), expired or not.
+// Deleting a nonexistent token isn't an error -- signing out twice, or of
+// an already-expired session, is normal, not a fault.
 func (r *Repository) RevokeSession(ctx context.Context, token string) error {
 	if _, err := r.db.ExecContext(ctx, r.ph(`DELETE FROM sessions WHERE token = %s`, 1), hashSessionToken(token)); err != nil {
 		return fmt.Errorf("revoking session: %w", err)

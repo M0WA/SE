@@ -187,14 +187,10 @@ test('saveChatEndpoint PATCHes every field, including max_context_tokens', async
   assert.equal(document.getElementById('chat-settings-status').textContent, 'Saved.');
 });
 
-// This test deliberately does NOT re-require the module mid-test (unlike
-// most other save tests in this file) -- admin_chat_settings.js's own
-// module-load-time loadAgentOptions() clears the select's options
-// synchronously (before its repopulating fetch resolves), which would
-// race against and wipe out a value set on the original module's DOM
-// right before a requireFresh() call. Reusing the original module's own
-// saveChatEndpoint (global.fetch is still looked up dynamically at call
-// time, so reassigning it here still works) avoids that race entirely.
+// Doesn't re-require the module mid-test (unlike most save tests here) -- loadAgentOptions()
+// clears the select synchronously at load, which would race a requireFresh() and wipe a
+// just-set value. Reuses the original module's saveChatEndpoint instead (global.fetch is still
+// looked up dynamically, so reassigning it still works).
 test('saveChatEndpoint includes the selected default_agent_id', async () => {
   const chatSvc = loadFixture(undefined, undefined, undefined, [{ id: 'fact_checker', name: 'Fact Checker' }]);
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -260,11 +256,9 @@ test('saveChatEndpoint shows an error message and re-enables the button on failu
   };
   const { saveChatEndpoint } = requireFresh('./admin_chat_settings.js');
   await saveChatEndpoint();
-  // requireFresh re-executes the module, which auto-invokes its own
-  // loadChatEndpoint() (and, via that, loadEnabledServerPrompts()) as a
-  // dangling promise this test never awaits directly -- flush it before
-  // teardownDOM (in afterEach) deletes global.document, or its tail
-  // (renderTokenUsageDonut) can fire against a torn-down DOM.
+  // requireFresh auto-invokes loadChatEndpoint()/loadEnabledServerPrompts() as a dangling promise
+  // -- flush it before teardownDOM deletes global.document, or its tail can fire against a
+  // torn-down DOM.
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   const status = document.getElementById('chat-settings-status');

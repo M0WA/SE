@@ -5,11 +5,10 @@ import (
 	"strings"
 )
 
-// CanonicalizeURL normalizes rawURL into the exact string a document's
-// identity is derived from: scheme/host lowercased, default port and
-// fragment stripped, empty path. Query string untouched (a content-dedup
-// concern, not identity). stripWWW also strips a leading "www." (gated
-// behind URLAliasWWWEnabled -- a judgment call, not lossless).
+// CanonicalizeURL normalizes rawURL into the string a document's identity
+// is derived from: scheme/host lowercased, default port and fragment
+// stripped, empty path. Query string untouched. stripWWW also strips a
+// leading "www." (gated behind URLAliasWWWEnabled -- lossy, a judgment call).
 func CanonicalizeURL(rawURL string, stripWWW bool) string {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" {

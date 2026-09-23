@@ -1,10 +1,9 @@
 # Grafana dashboards
 
-Four dashboards, all on the same Grafana instance
-(`https://grafana.logging.de-fra.ionos.com`, org `2348`) that the IONOS
-Monitoring Service pipelines in `../prometheus/` and `../prometheus-gpu/`
-feed, one per Prometheus `external_labels.site` value those two directories'
-`prometheus.yml` set:
+Four dashboards on the same Grafana instance
+(`https://grafana.logging.de-fra.ionos.com`, org `2348`), fed by the IONOS
+Monitoring Service pipelines in `../prometheus/` and `../prometheus-gpu/`,
+one per Prometheus `external_labels.site` value those directories set:
 
 | File | Dashboard | Data source |
 |---|---|---|
@@ -13,17 +12,15 @@ feed, one per Prometheus `external_labels.site` value those two directories'
 | `dashboards/searxng.json` | `searxng` | `../prometheus/`'s `searxng` job -- per-engine request rate, result count, response time, reliability, selectable via an `engine_name` template variable |
 | `dashboards/gpu-mo-sys-de.json` | `gpu.mo-sys.de` | `../prometheus-gpu/`'s `node`/`gpu`/`vllm`/`vllm-chat` jobs (`site="gpu-h200"`) -- GPU utilization/memory/temperature/power plus both vLLM instances' request/latency/queue metrics |
 
-Every dashboard queries the same single Prometheus datasource (Grafana
-datasource UID `efxuqky56wikgf` in this org) -- these JSON files aren't
-portable to a different Grafana org/datasource without either changing that
-UID throughout or re-pointing the panels after import.
+Every dashboard queries the same Prometheus datasource (UID `efxuqky56wikgf`
+in this org) -- these JSON files aren't portable to a different Grafana
+org/datasource without changing that UID or re-pointing panels after import.
 
-Each file is a dashboard's `dashboard` object exactly as Grafana's own
-`GET /api/dashboards/uid/<uid>` returns it (`id` nulled out, `version`
-stripped -- both are meaningless outside this specific org's dashboard
-store) -- not a hand-authored file. `uid` is kept, since importing with it
-present updates that same dashboard in place rather than creating a
-duplicate.
+Each file is a dashboard's `dashboard` object exactly as Grafana's
+`GET /api/dashboards/uid/<uid>` returns it (`id` nulled, `version`
+stripped -- both meaningless outside this org's store), not hand-authored.
+`uid` is kept, since importing with it present updates the same dashboard
+rather than creating a duplicate.
 
 ## Import / update
 
@@ -38,23 +35,19 @@ done
 ```
 
 `<GRAFANA_API_TOKEN>` is a service-account token with at least Editor access
-on this org (Administration -> Service accounts) -- never committed
-anywhere, generated per-use the same way every other credential in this
-repo's packaging is handled.
+on this org (Administration -> Service accounts) -- never committed,
+generated per-use like every other credential in this repo's packaging.
 
-`overwrite: true` is required -- without it, re-importing a `uid` that
-already exists is rejected as a conflict rather than updating it.
+`overwrite: true` is required -- without it, re-importing an existing `uid`
+is rejected as a conflict instead of updating it.
 
 ## Keeping these in sync
 
-These dashboards get edited live, in the Grafana UI or via its API, the same
-way the `searxng` dashboard's `engine_name` template variable was added --
-there's no mechanism that pushes a live edit back into this repo
-automatically. **After editing a dashboard live, re-export it here in the
-same change** (or as an immediate follow-up), the same way
-`docs/architecture/README.md`/`docs/manual/` must be kept in sync with the
-code changes that motivate them -- see the root `CLAUDE.md`'s "Keep the
-Grafana dashboards in sync" section.
+These dashboards get edited live, in the Grafana UI or via its API (the same
+way the `searxng` dashboard's `engine_name` template variable was added) --
+nothing pushes a live edit back into this repo automatically. **After
+editing a dashboard live, re-export it here in the same change** -- see the
+root `CLAUDE.md`'s "Keep the Grafana dashboards in sync" section.
 
 ```sh
 curl -s -H "Authorization: Bearer <GRAFANA_API_TOKEN>" \

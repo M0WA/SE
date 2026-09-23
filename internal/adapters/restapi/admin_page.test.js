@@ -7,10 +7,9 @@ const { setupDOM, teardownDOM, requireFresh } = require('./dom_helper.test_util'
 
 const OVERVIEW_HTML = fs.readFileSync(path.join(__dirname, 'admin.html'), 'utf8');
 
-// neutralFetch answers every endpoint admin_page.js's own top-level
-// loadOverview() call touches, with empty-but-valid data -- so requiring
-// the module doesn't race a test's own fetch mock (see flush()) or throw
-// once teardownDOM() has already removed `document`.
+// neutralFetch answers every endpoint the module's top-level loadOverview() touches with
+// empty-but-valid data, so requiring it doesn't race a test's own mock (see flush()) or throw
+// after teardownDOM() removes `document`.
 async function neutralFetch(url) {
   if (url.includes('/vocabulary')) return { ok: true, json: async () => ({ vocabulary_size: 0 }) };
   if (url.includes('/documents/overview')) return { ok: true, json: async () => ({ total_domains: 0, top_domains: [], age_buckets: [] }) };
@@ -26,9 +25,8 @@ function loadFixture() {
   return requireFresh('./admin_page.js');
 }
 
-// flush lets a chain of already-scheduled microtasks (module-load-time
-// async calls, in particular) fully settle before assertions or teardown --
-// a single macrotask tick is enough, since microtasks always drain before it.
+// flush lets already-scheduled microtasks (module-load-time async calls) settle before
+// assertions/teardown -- one macrotask tick suffices, since microtasks always drain first.
 function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
@@ -174,10 +172,8 @@ test('buildThroughputStackBars still renders a segment for a status outside FETC
   await flush();
   const wrap = buildThroughputStackBars([{ date: '2025-01-01', outcomes: { indexed: 3, some_future_status: 2 } }]);
   const segs = wrap.querySelectorAll('.stack-seg');
-  // Both statuses get a segment, so the count label (from the day's raw
-  // total) and the segments' combined flex weight stay consistent -- an
-  // unrecognized status never silently vanishes from the stack while
-  // still counting toward the bar's height/count.
+  // Both statuses get a segment, keeping the count label and combined flex weight consistent --
+  // an unrecognized status never vanishes while still counting toward the bar's height.
   assert.equal(segs.length, 2);
   assert.equal(wrap.querySelector('.age-bar-count').textContent, '5');
   assert.equal(segs[0].title, '2025-01-01 indexed: 3');
@@ -224,10 +220,8 @@ test('buildLineChart draws one point per entry with a hover title, and first/las
 test('buildLineChart spaces points by actual elapsed days, not by array index, so a multi-day gap shows up as real horizontal space', async () => {
   const { buildLineChart } = loadFixture();
   await flush();
-  // 2025-01-01 -> 2025-01-02 is a 1-day gap; 2025-01-02 -> 2025-01-10 is an
-  // 8-day gap. Index-based spacing would place the middle dot exactly
-  // halfway across; date-based spacing must place it much closer to the
-  // first point instead.
+  // A 1-day gap then an 8-day gap: index-based spacing would place the middle dot halfway
+  // across; date-based spacing must place it much closer to the first point.
   const points = [{ date: '2025-01-01', value: 1 }, { date: '2025-01-02', value: 2 }, { date: '2025-01-10', value: 3 }];
   const wrap = buildLineChart(points, (v) => String(v));
   const dots = wrap.querySelectorAll('circle');

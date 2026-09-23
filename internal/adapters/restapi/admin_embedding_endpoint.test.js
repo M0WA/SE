@@ -8,9 +8,8 @@ const { teardownDOM, requireFresh } = require('./dom_helper.test_util');
 
 const ENDPOINT_HTML = fs.readFileSync(path.join(__dirname, 'admin_embedding_endpoint.html'), 'utf8');
 
-// admin_embedding_endpoint.js reads its endpoint id (or the literal "new")
-// from window.location.pathname at load time, so it needs a jsdom instance
-// constructed with a specific URL, the same reasoning as admin_schedule.test.js.
+// Reads endpoint id (or "new") from window.location.pathname at load time, so needs a jsdom
+// instance with a specific URL -- same as admin_schedule.test.js.
 function setupEndpointDOM(id) {
   const dom = new JSDOM(ENDPOINT_HTML, { url: 'http://localhost/admin/embeddings/endpoint/' + encodeURIComponent(id) });
   global.window = dom.window;
@@ -141,10 +140,8 @@ test('candidateBody reflects the form fields relevant to a connectivity/models p
   assert.equal(body.dimensions, 1024);
 });
 
-// candidateBody includes id in edit mode -- see resolveCandidateAPIKey in
-// admin.go, which uses it to fall back to the real stored API key when
-// api_key is left blank, since this form never re-populates that field with
-// an already-saved endpoint's actual value.
+// candidateBody includes id in edit mode -- resolveCandidateAPIKey (admin.go) uses it to fall
+// back to the real stored key when api_key is blank, since this form never re-populates that field.
 test('candidateBody includes the endpoint id in edit mode', async () => {
   loadFixture('ionos_bge_m3', async () => ({ ok: true, json: async () => baseEndpoint() }));
   await flush();
@@ -226,9 +223,8 @@ test('submitting reports the error message on failure', async () => {
   assert.equal(document.getElementById('endpoint-status').textContent, 'Could not save: dimensions must be positive');
 });
 
-// Each model renders as a plain .list-item, not a kvRow -- a repeated
-// "Model" key column next to every entry would read as a redundant table
-// for what is really just a flat list of names.
+// Each model renders as a plain .list-item, not a kvRow -- a repeated "Model" key column would
+// be a redundant table for a flat list of names.
 test('clicking "List available models" renders each returned model as a plain list item', async () => {
   loadFixture('ionos_bge_m3', async () => ({ ok: true, json: async () => baseEndpoint() }));
   await flush();
@@ -248,10 +244,9 @@ test('clicking "List available models" renders each returned model as a plain li
   assert.equal(resultEl.querySelectorAll('.kv-row').length, 0);
 });
 
-// The endpoint edit page never re-populates the API key field with an
-// already-saved endpoint's real value, so testing/listing models without
-// retyping it must still send the request -- the server (resolveCandidateAPIKey)
-// is what falls back to the real stored key via the id these requests carry.
+// The edit page never re-populates the API key field, so testing/listing models without
+// retyping it must still send the request -- resolveCandidateAPIKey falls back to the real
+// stored key via the id these requests carry.
 test('clicking "List available models" sends the endpoint id alongside a blank api_key', async () => {
   loadFixture('ionos_bge_m3', async () => ({ ok: true, json: async () => baseEndpoint() }));
   await flush();
@@ -383,9 +378,8 @@ test('clicking Delete does nothing when the confirm dialog is declined', async (
   assert.equal(deleteCalled, false);
 });
 
-// The success path's window.location.href assignment prints a harmless
-// "Not implemented: navigation" jsdom console error, same limitation noted
-// in admin_schedule.test.js's identical delete test.
+// window.location.href on success prints a harmless jsdom "Not implemented: navigation" error,
+// same limitation as admin_schedule.test.js's identical delete test.
 test('clicking Delete removes the endpoint when confirmed', async () => {
   let deletedURL = null;
   loadFixture('ionos_bge_m3', async () => ({ ok: true, json: async () => baseEndpoint() }));

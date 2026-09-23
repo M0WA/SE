@@ -4,41 +4,41 @@
 
 *`/admin/documents/{host}`*
 
-This page is the complete, current view of every page indexed under a single domain — reached by clicking a domain from the Documents search. It's where you review a site's crawl results in detail, spot pages worth re-crawling or removing, and see a page's edit history across re-crawls.
+The complete, current view of every page indexed under one domain — reached by clicking a domain from the Documents search. Review a site's crawl results in detail, spot pages worth re-crawling or removing, and see a page's edit history across re-crawls.
 
 ![Domain detail](images/domain-detail.png)
 
 ## Header and summary
 
-The host is read straight from the page's own URL (`/admin/documents/{host}`), so this one static page works for any domain you land on. The summary line next to the title gives page count, average and total indexed length (in tokens), and totals for internal links, external links, and backlinks across every page in the domain — a quick read on how substantial and how well-interlinked this domain's crawl is. A "Crawl" link next to it jumps straight to the Crawl page pre-filled with this domain's origin URL, so re-crawling a domain you're already looking at is one click away.
+The host is read from the URL (`/admin/documents/{host}`), so this one static page works for any domain. The summary line gives page count, average and total indexed length (tokens), and totals for internal links, external links, and backlinks — a quick read on how substantial and well-interlinked the crawl is. A "Crawl" link jumps to the Crawl page pre-filled with this domain's origin URL, so re-crawling is one click away.
 
 ## The length chart
 
-Above the table, a bar chart shows each page's indexed document length (in tokens) as one bar, tallest relative to the domain's longest page. Hover a bar to see that page's title and exact token count. It's a fast way to spot outliers — a page that's suspiciously short (a near-empty template, a paywall stub) or one page that dwarfs the rest (maybe a sitemap or archive dump that shouldn't be weighted like a normal article).
+A bar chart above the table shows each page's indexed length in tokens, tallest relative to the domain's longest page; hover for title and exact count. A fast way to spot outliers — a suspiciously short page (a near-empty template, a paywall stub) or one that dwarfs the rest (maybe a sitemap dump that shouldn't weight like a normal article).
 
 ## Filtering the page table
 
-The filter box matches a regex, case-insensitively, against each page's title or URL — the same convention used across the admin's other list filters. An invalid pattern is reported inline rather than throwing; fix it and the table updates automatically. This is purely a client-side filter over the domain's already-loaded pages, so it's instant with no extra requests.
+The filter box matches a regex, case-insensitively, against title or URL — the same convention as the admin's other list filters. An invalid pattern is reported inline rather than thrown; fix it and the table updates. Purely client-side over already-loaded pages, so it's instant with no extra requests.
 
 ## The page table's columns
 
-Each row is one page: title (linking out to the live URL) with the URL shown underneath, indexed length, internal links (links from this page to the same domain), external links (links to other domains), backlinks (other indexed pages that link to this one), and PageRank — the link-authority score fed into ranking, tunable via the Tuning page's PageRank weight. Hovering internal/external/backlinks explains each in a tooltip if you forget which is which.
+Each row is one page: title (linking to the live URL) with the URL underneath, indexed length, internal links (to the same domain), external links (to other domains), backlinks (other indexed pages linking here), and PageRank — the link-authority score fed into ranking, tunable via the Tuning page's PageRank weight. Hovering a links column explains it in a tooltip.
 
 ## Version history
 
-A page that's been re-crawled with materially different content shows a version number greater than v1 in the last-but-one column; click it to open the History panel below, listing every prior version with its own title, indexed length, and crawl timestamp. A page still on v1 has only ever been crawled once, so there's nothing to show — the button only appears once there's real history.
+A page re-crawled with materially different content shows a version number greater than v1; click it to open the History panel, listing every prior version with its title, indexed length, and crawl timestamp. A page still on v1 has only ever been crawled once, so the button only appears once there's real history.
 
 ## Deleting a single page
 
-The Delete button on a row asks for confirmation, then removes that one page from the index immediately — the row disappears from the table as soon as the request succeeds. This is a straightforward, synchronous single-document delete, unrelated to the bulk delete-all flow below.
+The row's Delete button asks for confirmation, then removes that page from the index immediately — a synchronous single-document delete, unrelated to the bulk delete-all flow below.
 
 ## Delete all in this domain
 
-This button removes every page in the domain from the index in one action. After you confirm, the server looks up every matching document ID, queues their deletion in a background goroutine detached from your request, and responds immediately — so the removal survives you navigating away or closing the tab; it does not get silently half-finished the way one-request-per-page used to. While you stay on the page, it polls every 1.5 seconds and updates the status line and table live so you can watch the count shrink. If progress stalls (the remaining count holds steady for several polls in a row — some deletions failed and were logged server-side), it tells you how many were removed and how many are stuck rather than polling forever, and re-enables the button.
+Removes every page in the domain in one action. After confirming, the server queues deletion in a background goroutine detached from your request and responds immediately — the removal survives navigating away or closing the tab. While you stay, it polls every 1.5s and updates the status/table live. If progress stalls (the remaining count holds steady across several polls — some deletions failed and were logged server-side), it reports how many were removed vs. stuck rather than polling forever, and re-enables the button.
 
 > **Worth knowing:**
-> - Deleting all pages in a domain is irreversible and starts immediately after you confirm — there's no undo, only re-crawling the domain again from scratch.
-> - If "Delete all" reports pages stuck rather than removed, check the server log for the specific document IDs that failed rather than assuming the whole domain is gone.
+> - Deleting all pages in a domain is irreversible and starts immediately on confirm — only re-crawling from scratch brings them back.
+> - If "Delete all" reports stuck pages, check the server log for the failed document IDs rather than assuming the whole domain is gone.
 
 ---
 ← [Documents](documents.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Vocabulary term detail](vocabulary-term.md) →

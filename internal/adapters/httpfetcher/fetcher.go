@@ -18,11 +18,10 @@ type Fetcher struct {
 	settings *domain.OperationalSettings
 }
 
-// New builds a Fetcher whose timeout/User-Agent are read from settings on
-// every request (live-configurable; nil settings uses the built-in
-// defaults). Its Transport routes every dial, including redirect hops,
-// through netguard.SafeDialContext, so a crawl target resolving to a
-// loopback/private/reserved address is refused at the TCP layer.
+// New builds a Fetcher whose timeout/User-Agent are read live from
+// settings (nil uses built-in defaults). Its Transport routes every dial,
+// including redirects, through netguard.SafeDialContext, refusing a
+// loopback/private/reserved target at the TCP layer.
 func New(settings *domain.OperationalSettings) *Fetcher {
 	return &Fetcher{Client: &http.Client{Transport: netguard.Transport()}, settings: settings}
 }
@@ -81,11 +80,9 @@ func (f *Fetcher) FetchWithOptions(ctx context.Context, rawURL string, opts port
 	return string(body), nil
 }
 
-// looksTextual reports whether a Content-Type header value looks like it
-// carries parseable text rather than a binary format (image, video, PDF,
-// etc.) we have no use for. It deliberately allows "xml" alongside "html"
-// and "text" -- sitemap.xml is commonly served as application/xml or
-// text/xml, and both need to pass through this same guard.
+// looksTextual reports whether a Content-Type looks like parseable text
+// rather than a binary format we have no use for. Allows "xml" alongside
+// "html"/"text" since sitemap.xml is commonly served as application/xml.
 func looksTextual(contentType string) bool {
 	ct := strings.ToLower(contentType)
 	return strings.Contains(ct, "html") || strings.Contains(ct, "text") || strings.Contains(ct, "xml")

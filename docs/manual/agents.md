@@ -4,33 +4,33 @@
 
 *`/admin/agents`*
 
-The Agents list, under Settings -> Chat -> Agents, shows every agent you've defined for the chat page and lets you add a new one or open an existing one for editing.
+Under Settings -> Chat -> Agents, this list shows every agent you've defined and lets you add or edit one.
 
 ![Agents](images/agents.png)
 
 ## What an agent is
 
-An agent is a named specialization: a fixed system prompt bundled with a scoped subset of the MCP servers configured on the MCP servers page. Instead of writing a persona into the endpoint's one global system prompt (Settings -> Chat -> Settings) and living with it on every conversation, you define a handful of agents -- a fact-checker, a code reviewer, a terse summarizer -- each with its own instructions and its own set of tools, and let whoever is chatting pick the one that fits the question in front of them. Nothing about an agent changes the underlying model or endpoint; it only adds a leading instruction and narrows tool access for the turns it's active on.
+An agent is a named specialization: a fixed system prompt bundled with a scoped subset of the MCP servers on the MCP servers page. Instead of writing one persona into the endpoint's global system prompt (Settings -> Chat -> Settings) for every conversation, define a handful of agents -- a fact-checker, a code reviewer, a terse summarizer -- each with its own instructions and tools, and let whoever's chatting pick the one that fits. An agent never changes the underlying model or endpoint; it only adds a leading instruction and narrows tool access for its active turns.
 
 ## The list and its columns
 
-Each row shows the agent's name, its description, and whether it's enabled. Name and description are exactly what a person picking an agent from the chat page's dropdown sees, so keep the description short and about the agent's purpose rather than about how it's built -- it's read by a human (or, eventually, a multi-agent planner) deciding whether this agent fits the question at hand, and it is never sent to the model as part of that agent's own conversation. Click a row's Edit icon (✎) to open its full detail page, or the Delete (trash) icon to remove it immediately after a confirmation -- there's no undo, so a mistaken delete means re-entering the system prompt from scratch.
+Each row shows the agent's name, description, and whether it's enabled -- exactly what a person picking from the chat page's dropdown sees, so keep the description short and about purpose, not build details; it's never sent to the model. Click Edit (✎) to open the detail page, or Delete (trash) to remove it after a confirmation -- there's no undo, so a mistaken delete means re-entering the system prompt from scratch.
 
 ## Adding an agent
 
-Click "Add agent" to open a blank detail page (this takes you to /admin/agents/new, the same form as editing, just with empty fields and "Enabled" checked by default). Nothing is saved until you fill in a name and submit -- see the agent-detail page for what each field does.
+Click "Add agent" for a blank detail page (/admin/agents/new -- the same form as editing, empty fields, "Enabled" checked by default). Nothing saves until you fill in a name and submit -- see the agent-detail page for what each field does.
 
 ## Enabled vs. disabled
 
-Disabling an agent removes it from the chat page's agent picker (GET /agents, which the chat UI uses to build its dropdown, only returns enabled agents) without deleting its configuration. Use this to retire an agent temporarily -- while you're still tuning its system prompt, say -- without losing the work, or to keep an agent around as a default-agent candidate (Settings -> Chat -> Settings lets you pick a disabled agent as the endpoint's default ahead of turning it on) before rolling it out.
+Disabling removes an agent from the chat page's picker (GET /agents returns only enabled agents) without deleting its configuration. Use this to retire an agent temporarily while tuning its prompt, or to line it up as a default-agent candidate (Settings -> Chat -> Settings allows picking a disabled agent as default) before rolling it out.
 
 ## If the page says agents aren't configured
 
-The agents feature depends on an agent store being wired into the admin server; if it isn't, every agents endpoint returns 503 and the list page shows a "not configured" status instead of a table. This mirrors how the MCP servers and other optional admin features degrade -- it's a deployment/configuration state, not something you can fix by clicking around this page.
+The agents feature depends on an agent store being wired into the admin server; if it isn't, every agents endpoint returns 503 and the list page shows "not configured" instead of a table -- same degradation pattern as MCP servers and other optional admin features. It's a deployment/config state, not something clicking around this page fixes.
 
 ## Suggested global agents
 
-A fresh install seeds six ready-to-use starter agents automatically, the first time the agents table is completely empty -- delete one and it stays deleted; delete all six back down to zero and the next restart re-seeds them, since that's indistinguishable from a genuinely fresh database. Each one starts with an **empty MCP-server scope** deliberately, not as an oversight: a real MCP server's row ID is deployment-specific data nothing can safely guess. To actually let one use web search (or the sandbox/files tools), open it and check the box for whichever server row this deployment's own MCP server is configured as.
+A fresh install seeds six ready-to-use starter agents the first time the agents table is completely empty -- delete one and it stays deleted; delete all six and the next restart re-seeds them, since that looks identical to a genuinely fresh database. Each starts with an **empty MCP-server scope** deliberately: a real server's row ID is deployment-specific data nothing can safely guess. To let one use web search (or sandbox/files), open it and check the box for whatever row this deployment's server is configured as.
 
 | Agent | Purpose | Needs an MCP server scoped to work as intended? |
 |---|---|---|
@@ -42,9 +42,9 @@ A fresh install seeds six ready-to-use starter agents automatically, the first t
 | Image analyst | Analyzes an uploaded image's content and extracts any text in it (OCR), via a sandboxed Python script using Pillow/easyocr. | Yes (a network-enabled sandbox MCP server, plus the files MCP server to read the uploaded image) |
 
 > **Worth knowing:**
-> - An agent with an empty MCP-server scope isn't "unrestricted" -- it gets no global MCP tools at all. See the agent-detail page's MCP-servers section for the full explanation.
-> - Deleting an agent that's currently set as a chat endpoint's default agent (Settings -> Chat -> Settings) doesn't clear that setting for you -- the stored default_agent_id just stops matching anything, and turns fall back to running with no agent specialization.
-> - Image analyst needs its sandbox MCP server configured with `-network` (so run_python can `pip install` Pillow/easyocr) and a generous `-timeout`/`-memory` -- easyocr bundles its own models but downloads them fresh on every single call (nothing persists between sandbox runs), which is slow. See [MCP server detail](mcp-server-detail.md)'s Command/Arguments section.
+> - An empty MCP-server scope isn't "unrestricted" -- it gets no global tools at all. See agent-detail's MCP-servers section.
+> - Deleting an agent set as a chat endpoint's default doesn't clear that setting -- default_agent_id just stops matching, and turns fall back to no specialization.
+> - Image analyst needs its sandbox server configured with `-network` (for run_python's Pillow/easyocr installs) and generous `-timeout`/`-memory` -- easyocr re-downloads its models every call, which is slow. See [MCP server detail](mcp-server-detail.md)'s Command/Arguments section.
 
 ---
 ← [MCP Server detail](mcp-server-detail.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Agent detail](agent-detail.md) →

@@ -1,22 +1,15 @@
-// Command mcp-files is a first-party MCP (Model Context Protocol) server
-// exposing "list_files"/"read_file"/"read_file_base64"/"write_file" --
-// letting the chat model inspect files a signed-in regular-user account
-// has uploaded (see restapi's /account/files page) and produce new ones
-// for that user to
-// download again. Spawned as a stdio subprocess by
-// internal/adapters/mcpclient (see domain.MCPServer's Transport="stdio"
-// configuration), same operational model as cmd/mcp-web/cmd/mcp-datetime/
-// cmd/mcp-sandbox -- not a systemd service.
+// Command mcp-files is a first-party MCP server exposing "list_files"/
+// "read_file"/"read_file_base64"/"write_file", letting the chat model
+// inspect a signed-in user's uploaded files and produce new ones. Spawned
+// as a stdio subprocess by internal/adapters/mcpclient, same model as
+// cmd/mcp-web/cmd/mcp-datetime/cmd/mcp-sandbox -- not a systemd service.
 //
-// Unlike those three, this server holds NO direct database connection and
-// no admin-level credential at all: every tool call is a plain HTTP
-// request back to search-server's own /account/api/files endpoints,
-// authenticated with a short-lived bearer token scoped to exactly one
-// user (SE_FILES_API_TOKEN, minted per chat turn -- see
-// application.ChatOptions.FileAccessToken and restapi's fileTokenStore).
-// This keeps the blast radius of a compromised/misbehaving mcp-files
-// process down to "read/write this one user's own files," never the
-// shared database's own credentials or another user's files.
+// Unlike those three, this server holds no direct DB connection or
+// admin-level credential: every call is plain HTTP back to search-server's
+// /account/api/files, authenticated with a short-lived bearer token scoped
+// to one user (SE_FILES_API_TOKEN, minted per turn -- see
+// application.ChatOptions.FileAccessToken). This keeps a compromised
+// process's blast radius to that one user's own files.
 package main
 
 import (
@@ -41,35 +34,28 @@ import (
 )
 
 // callTimeout bounds a single HTTP round-trip back to search-server's own
-// /account/api/files -- both processes run on the same host (a loopback
-// call), so this stays well under mcpclient's own 60s callTimeout with
-// generous margin.
+// /account/api/files -- a loopback call, so this stays well under
+// mcpclient's own 60s callTimeout.
 const callTimeout = 20 * time.Second
 
 // maxReadableBytes caps how much of a file's content read_file returns as
-// text -- a runaway-sized file must never be allowed to blow up the tool
-// result handed back to the chat completion call, mirrors
-// dockersandbox.maxOutputBytes' own reasoning.
+// text -- a runaway file must never blow up the tool result handed back
+// to the chat completion call.
 const maxReadableBytes = 256 * 1024
 
 // maxBase64ReadableBytes caps a binary file's raw size for
-// read_file_base64 -- deliberately far smaller than maxReadableBytes: this
-// content is meant to be embedded directly in a run_python/run_go tool
-// call's own code argument (see docs/manual/agents.md's "Image analyst"
-// row), where base64 encoding alone already inflates it by a third, and
-// every byte of that becomes real tokens in the chat completion request.
-// 300KB raw (~400KB base64) comfortably covers a compressed screenshot or
-// small photo without blowing an ordinary context budget -- a larger file
-// genuinely needs a smaller/resized copy uploaded instead.
+// read_file_base64 -- far smaller than maxReadableBytes, since this
+// content is embedded in a run_python/run_go call's code argument, where
+// base64 inflates it by a third and every byte becomes real tokens. 300KB
+// raw covers a compressed screenshot without blowing a context budget.
 const maxBase64ReadableBytes = 300 * 1024
 
 type readFileArgs struct {
 	FileID string `json:"file_id" jsonschema:"the id of the file to read, from list_files"`
 }
 
-// readFileBase64Result is read_file_base64's own wire shape -- mirrors
-// cmd/mcp-sandbox's runResult convention (a small, self-describing JSON
-// object) so the model can read content_type/size programmatically.
+// readFileBase64Result is read_file_base64's wire shape -- a small,
+// self-describing JSON object so the model can read content_type/size.
 type readFileBase64Result struct {
 	Filename    string `json:"filename"`
 	ContentType string `json:"content_type"`
@@ -86,13 +72,10 @@ func main() {
 	baseURL := flag.String("base-url", "http://127.0.0.1:8080", "search-server's own base URL, for calling back into /account/api/files")
 	flag.Parse()
 
-	// SE_FILES_API_TOKEN is set unconditionally by mcpclient.Provider on
-	// every spawned "stdio" server for a turn with a signed-in role=user
-	// caller -- see application.ChatOptions.FileAccessToken. Empty means
-	// no user is signed in this turn (e.g. a role=admin session, which has
-	// no files of its own -- see domain.UploadedFile's own doc comment),
-	// so every tool call below fails with a clear, expected message rather
-	// than silently doing nothing.
+	// SE_FILES_API_TOKEN is set by mcpclient.Provider on every spawned
+	// stdio server for a signed-in role=user turn. Empty means no user is
+	// signed in (e.g. role=admin), so every tool call below fails with a
+	// clear message rather than silently doing nothing.
 	token := bootstrap.GetEnv("SE_FILES_API_TOKEN", "")
 
 	client := &client{baseURL: strings.TrimRight(*baseURL, "/"), token: token, http: &http.Client{Timeout: callTimeout}}
@@ -104,9 +87,8 @@ func main() {
 }
 
 // newServer builds the mcp.Server exposing "list_files"/"read_file"/
-// "write_file", factored out of main so a test can connect to it directly
-// over an in-memory transport instead of exercising it only via a real
-// stdio subprocess -- mirrors cmd/mcp-web/cmd/mcp-sandbox's own newServer.
+// "write_file", factored out of main so a test can connect via an
+// in-memory transport instead of a real stdio subprocess.
 func newServer(c *client) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "mcp-files", Version: "1"}, nil)
 
@@ -155,11 +137,8 @@ func newServer(c *client) *mcp.Server {
 	return server
 }
 
-// toolResult wraps a (text, error) pair from one of client's methods into
-// an MCP tool result -- IsError only for a genuine call failure (the HTTP
-// round-trip itself, an unexpected status, a missing token), never for
-// ordinary "here's the answer" content, mirroring cmd/mcp-sandbox's own
-// error-vs-result split.
+// toolResult wraps a (text, error) pair into an MCP tool result --
+// IsError only for a genuine call failure, never ordinary content.
 func toolResult(text string, err error) (*mcp.CallToolResult, any, error) {
 	if err != nil {
 		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, nil, nil
@@ -167,10 +146,8 @@ func toolResult(text string, err error) (*mcp.CallToolResult, any, error) {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, nil, nil
 }
 
-// client is a thin HTTP client for search-server's own /account/api/files
-// endpoints, authenticated with a per-turn bearer token -- see the package
-// doc comment for why this calls back over HTTP rather than holding a
-// direct database connection.
+// client is a thin HTTP client for search-server's /account/api/files
+// endpoints, authenticated with a per-turn bearer token (see package doc).
 type client struct {
 	baseURL string
 	token   string
@@ -274,11 +251,8 @@ func (c *client) readFileBase64(ctx context.Context, fileID string) (string, err
 		Base64:      base64.StdEncoding.EncodeToString(body),
 	})
 	if err != nil {
-		// json.Marshal on this plain, all-string/int struct cannot
-		// actually fail -- this exists only so the (never-reached) error
-		// path is handled rather than silently swallowed, mirrors
-		// cmd/mcp-sandbox's own runInSandbox doc comment for the same
-		// reasoning.
+		// json.Marshal on this plain struct cannot actually fail -- handled
+		// anyway rather than silently swallowed.
 		return "", fmt.Errorf("encoding result: %w", err)
 	}
 	return string(out), nil

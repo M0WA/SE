@@ -163,11 +163,9 @@ func TestDecrypt_TooShortCiphertextErrors(t *testing.T) {
 	}
 }
 
-// TestEncrypt_BadKeySizeErrors and TestDecrypt_BadKeySizeErrors exercise
-// newGCM's own error path directly -- unreachable through ParseKey (which
-// only ever hands out a nil or exactly-32-byte key), but Encrypt/Decrypt
-// take a plain []byte, not a ParseKey-branded type, so nothing stops a
-// caller from passing a malformed one.
+// TestEncrypt_BadKeySizeErrors/TestDecrypt_BadKeySizeErrors exercise
+// newGCM's error path directly -- unreachable through ParseKey, but
+// Encrypt/Decrypt take a plain []byte so a caller could still pass one.
 func TestEncrypt_BadKeySizeErrors(t *testing.T) {
 	if _, err := settingscrypto.Encrypt([]byte("too-short"), "plaintext"); err == nil {
 		t.Error("expected an error for a key that isn't a valid AES key size")
@@ -184,10 +182,8 @@ type failingReader struct{}
 
 func (failingReader) Read([]byte) (int, error) { return 0, errors.New("boom") }
 
-// TestEncrypt_NonceGenerationFailureErrors swaps crypto/rand.Reader (a
-// package-level var, restored via defer) to prove Encrypt surfaces a
-// nonce-generation failure rather than silently sealing with a zero/short
-// nonce.
+// TestEncrypt_NonceGenerationFailureErrors swaps crypto/rand.Reader to
+// prove Encrypt surfaces a nonce failure rather than sealing with a bad one.
 func TestEncrypt_NonceGenerationFailureErrors(t *testing.T) {
 	key := testKey(t)
 	orig := rand.Reader

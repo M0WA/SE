@@ -29,9 +29,7 @@ func TestSessionStore_CreateThenValidSucceeds(t *testing.T) {
 
 // TestSessionStore_CreateThenValidSucceeds_UserRole mirrors the admin-role
 // case above for a regular-user session, proving role and userID both
-// round trip through the in-memory fallback store too (see sqlrepo's
-// identical TestSession_CreateThenValidSucceeds_UserRole for the SQL-backed
-// store).
+// round trip through the in-memory fallback store too.
 func TestSessionStore_CreateThenValidSucceeds_UserRole(t *testing.T) {
 	s := newSessionStore()
 	ctx := context.Background()
@@ -64,10 +62,8 @@ func TestSessionStore_ValidUnknownTokenReportsFalse(t *testing.T) {
 	}
 }
 
-// TestSessionStore_ExpiredSessionReportsInvalidAndIsForgotten proves
-// ValidSession's expiry branch: a session past its TTL reports invalid and
-// is removed from the store (a subsequent check doesn't need to
-// re-discover the same expired entry every time).
+// TestSessionStore_ExpiredSessionReportsInvalidAndIsForgotten proves a
+// session past its TTL reports invalid and is evicted from the store.
 func TestSessionStore_ExpiredSessionReportsInvalidAndIsForgotten(t *testing.T) {
 	s := newSessionStore()
 	ctx := context.Background()
@@ -110,18 +106,12 @@ func TestSessionStore_RevokeInvalidatesSession(t *testing.T) {
 	}
 }
 
-// TestSafeNext covers every branch of safeNext's open-redirect guard: an
-// empty value, a bare "/", a same-site path, and the various absolute /
-// protocol-relative forms browsers will follow off-site -- "//host",
-// "/\host" (backslash is treated the same as a forward slash by browsers
-// when resolving a URL, so it's an equally valid open-redirect vector),
-// a double-backslash, and a plain absolute URL. The literal character
-// check rejects any second character that's "/" or "\" outright (matching
-// CodeQL's own go/bad-redirect-check recommendation), even though a
-// two-backslash value alone would actually resolve as a safe same-origin
-// path in both net/url and real browsers -- deliberately more conservative
-// than strictly necessary rather than relying solely on the url.Parse
-// layer underneath it.
+// TestSafeNext covers safeNext's open-redirect guard: empty, "/", a
+// same-site path, and the off-site forms browsers will follow -- "//host",
+// "/\host" (backslash resolves like forward slash), "\\", and an absolute
+// URL. Rejecting any second char that's "/" or "\" outright (matching
+// CodeQL's go/bad-redirect-check) is deliberately more conservative than
+// url.Parse alone requires.
 func TestSafeNext(t *testing.T) {
 	cases := []struct {
 		name string
@@ -198,9 +188,8 @@ func TestLoginLimiter_LockoutExpires(t *testing.T) {
 func TestLoginLimiter_BackoffGrowsAndCapsAtMaxLockout(t *testing.T) {
 	l := newLoginLimiter()
 	now := time.Now()
-	// Cross the threshold, then keep failing (each still within the
-	// lockout, as a real attacker retrying would) far past what it'd take
-	// to exceed loginMaxLockout without capping.
+	// Cross the threshold, then keep failing within the lockout, far past
+	// what it'd take to exceed loginMaxLockout without capping.
 	for i := 0; i < loginMaxAttempts+20; i++ {
 		l.recordFailure("1.2.3.4", now)
 	}
@@ -222,9 +211,8 @@ func TestLoginLimiter_WindowResetsAfterExpiry(t *testing.T) {
 	for i := 0; i < loginMaxAttempts; i++ {
 		l.recordFailure("1.2.3.4", start)
 	}
-	// One more failure, but long after the sliding window expired -- this
-	// must start a fresh window (failures reset to 1) rather than treating
-	// it as the failure that crosses the threshold.
+	// One more failure, long after the window expired -- must start a
+	// fresh window (reset to 1), not cross the threshold.
 	later := start.Add(loginAttemptWindow + time.Minute)
 	l.recordFailure("1.2.3.4", later)
 	if _, locked := l.locked("1.2.3.4", later); locked {

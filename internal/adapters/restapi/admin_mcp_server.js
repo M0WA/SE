@@ -27,10 +27,9 @@
   const listToolsStatusEl = document.getElementById('server-list-tools-status');
   const listToolsResultEl = document.getElementById('server-list-tools-result');
 
-  // updateTransportVisibility shows only the fields relevant to the
-  // selected transport -- Command/Arguments for "stdio", Base URL/API key
-  // for "http" -- matching mcpclient.connect's own switch on Transport, so
-  // the form never invites filling in a field the backend will ignore.
+  // updateTransportVisibility shows only the fields for the selected transport (Command/Arguments
+  // for stdio, Base URL/API key for http), matching mcpclient.connect's switch -- so the form
+  // never invites filling a field the backend ignores.
   function updateTransportVisibility() {
     const isStdio = transportEl.value === 'stdio';
     commandRowEl.hidden = !isStdio;
@@ -64,12 +63,9 @@
     commandEl.value = s.command || '';
     argsEl.value = (s.args || []).join('\n');
     baseURLEl.value = s.base_url || '';
-    // The server never echoes a stored API key's real value (see
-    // mcpServerResponse) -- this field always starts blank, and saving with
-    // it left blank keeps whatever key is already stored (see
-    // requestBody). has_api_key only drives the placeholder text and the
-    // "remove" checkbox's availability, so the admin can see whether a key
-    // is set without ever seeing its value.
+    // Server never echoes a stored API key (see mcpServerResponse); field starts blank, and
+    // blank on save keeps it (see requestBody). has_api_key only drives the placeholder/
+    // remove-checkbox UI, so the admin never sees the actual value.
     apiKeyEl.value = '';
     apiKeyEl.placeholder = s.has_api_key ? '(unchanged — a key is already set)' : '';
     clearAPIKeyEl.checked = false;
@@ -97,12 +93,9 @@
     };
   }
 
-  // candidateBody is what a not-yet-saved (or being-edited) server looks
-  // like to the "List tools" probe -- just the fields a real connect+
-  // tools/list call needs, independent of "new" vs "edit" mode. id (blank
-  // for a brand new server) lets the server fall back to the real stored
-  // API key when api_key is left blank here -- mirrors
-  // admin_embedding_endpoint.js's own candidateBody.
+  // candidateBody is what the "List tools" probe sees for a not-yet-saved server -- just the
+  // fields connect+tools/list needs. id (blank for new) lets the server fall back to the real
+  // stored key when api_key is blank -- mirrors admin_embedding_endpoint.js's candidateBody.
   function candidateBody() {
     return {
       id: isNew ? '' : id,
@@ -115,12 +108,9 @@
     };
   }
 
-  // listTools connects to the server as currently filled in and shows
-  // whatever tools it actually exposes -- run automatically right after an
-  // existing server loads (see load() below), and available on demand via
-  // the "List tools" button for a not-yet-saved server or after editing
-  // fields, so the admin never has to guess what a server does or save
-  // first to find out.
+  // listTools connects using the form's current fields and shows the tools actually exposed --
+  // runs automatically after an existing server loads, and on demand via the button, so the
+  // admin never has to save first to find out.
   async function listTools() {
     setButtonLoading(listToolsBtn, true, 'Listing…');
     listToolsStatusEl.textContent = '';
@@ -191,9 +181,7 @@
   wireSignOut();
   load();
 
-  // Exports for the Node test runner only -- `typeof module` is undefined in
-  // a browser's <script> tag, so this is a no-op there. See
-  // admin_mcp_server.test.js.
+  // Node test-runner export only; no-op in a browser <script> tag.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { applyServer, requestBody, candidateBody, listTools, load, updateTransportVisibility };
   }

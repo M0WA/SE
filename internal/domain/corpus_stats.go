@@ -2,21 +2,17 @@ package domain
 
 import "sync"
 
-// CorpusStatsCache holds the corpus-wide statistics BM25 scoring needs
-// (doc count, average doc length), refreshed on a timer (see
-// bootstrap.SyncCorpusStats) rather than recomputed on every search.
-// Safe for concurrent use: read on every search, written only by the
-// background refresh.
+// CorpusStatsCache holds the corpus-wide stats BM25 scoring needs (doc
+// count, average doc length), refreshed on a timer rather than recomputed
+// per search. Safe for concurrent use.
 type CorpusStatsCache struct {
 	mu        sync.RWMutex
 	totalDocs int
 	avgDocLen float64
 }
 
-// NewCorpusStatsCache seeds the cache with an initial snapshot -- typically
-// whatever CorpusStats(ctx) reports at startup -- so a request handled
-// before the first background refresh still sees a real value rather than
-// an empty-corpus default.
+// NewCorpusStatsCache seeds the cache with an initial snapshot so a request
+// handled before the first background refresh sees a real value.
 func NewCorpusStatsCache(totalDocs int, avgDocLen float64) *CorpusStatsCache {
 	c := &CorpusStatsCache{}
 	c.Set(totalDocs, avgDocLen)
@@ -35,11 +31,8 @@ func (c *CorpusStatsCache) Get() (totalDocs int, avgDocLen float64) {
 	return c.totalDocs, c.avgDocLen
 }
 
-// Set replaces the cached snapshot -- called once at startup and again on
-// every subsequent refresh tick by bootstrap.SyncCorpusStats. avgDocLen is
-// floored at 1 (mirroring sqlrepo.Repository.CorpusStats' own handling of an
-// empty corpus) so BM25Score's length-normalization term never divides by
-// zero or a negative value.
+// Set replaces the cached snapshot. avgDocLen is floored at 1 so BM25Score's
+// length-normalization term never divides by zero or a negative value.
 func (c *CorpusStatsCache) Set(totalDocs int, avgDocLen float64) {
 	if c == nil {
 		return

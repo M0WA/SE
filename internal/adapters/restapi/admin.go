@@ -19,10 +19,8 @@ import (
 
 const defaultDocumentListLimit = 100
 
-// Response-body literals repeated across many independent handlers --
-// pulled out to named constants (rather than left as inline string
-// literals) purely to satisfy the "don't duplicate this literal N times"
-// lint rule; each handler's meaning is unchanged.
+// Response-body literals repeated across handlers, pulled into named
+// constants to satisfy a duplicate-literal lint rule -- meaning unchanged.
 const (
 	msgMethodNotAllowed          = "method not allowed"
 	contentTypeHTML              = "text/html; charset=utf-8"
@@ -49,9 +47,8 @@ func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 	return true
 }
 
-// requireGetOrHead is requireMethod for the (rarer) case of a handler that
-// accepts both GET and HEAD -- a plain static/health response, never a
-// single-method API endpoint.
+// requireGetOrHead is requireMethod for a handler accepting both GET and
+// HEAD -- a static/health response, never a single-method API endpoint.
 func requireGetOrHead(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, msgMethodNotAllowed, http.StatusMethodNotAllowed)
@@ -70,11 +67,9 @@ func requireConfigured(w http.ResponseWriter, configured bool, what string) bool
 	return true
 }
 
-// respondOrNotFound writes okPayload as a 200 JSON response if err is nil,
-// a 404 with notFoundMsg if err is notFound, or err's own message as a 500
-// otherwise -- the "success / not-found / other error" 3-way response
-// every admin endpoint backed by a store that can report a specific
-// not-found sentinel needs.
+// respondOrNotFound writes okPayload as 200 if err is nil, notFoundMsg as
+// 404 if err is notFound, else err's message as 500 -- the shared
+// success/not-found/other-error response for a store with a not-found sentinel.
 func respondOrNotFound(w http.ResponseWriter, err, notFound error, notFoundMsg string, okPayload interface{}) {
 	switch {
 	case err == nil:
@@ -86,12 +81,9 @@ func respondOrNotFound(w http.ResponseWriter, err, notFound error, notFoundMsg s
 	}
 }
 
-// resolveUpdatedAPIKey implements the shared "blank means unchanged,
-// explicit clear flag means remove it" convention every PATCH handler with a
-// redacted secret field (embedding endpoint, chat endpoint) uses: a
-// non-empty newVal is encrypted and used, an empty newVal with clear set
-// removes the stored key, and an empty newVal with clear unset leaves
-// existing untouched.
+// resolveUpdatedAPIKey implements the shared "blank means unchanged, clear
+// flag means remove" convention for a redacted secret field: a non-empty
+// newVal is encrypted, empty+clear removes it, empty+!clear keeps existing.
 func (h *Handler) resolveUpdatedAPIKey(existing, newVal string, clearFlag bool) string {
 	if newVal != "" {
 		return h.encryptAPIKey(newVal)
@@ -102,10 +94,8 @@ func (h *Handler) resolveUpdatedAPIKey(existing, newVal string, clearFlag bool) 
 	return existing
 }
 
-// mapSlice converts each element of in via f, preserving order and length --
-// the "make a slice of the same length, loop with index, convert one
-// element" shape every domain-to-wire-response conversion in this file
-// repeats.
+// mapSlice converts each element of in via f, preserving order/length --
+// the shape every domain-to-wire-response conversion in this file repeats.
 func mapSlice[T, U any](in []T, f func(T) U) []U {
 	out := make([]U, len(in))
 	for i, x := range in {
@@ -114,11 +104,9 @@ func mapSlice[T, U any](in []T, f func(T) U) []U {
 	return out
 }
 
-// existingIDSet builds the "already-taken IDs" set a freshly minted
-// slug ID (NewEmbeddingEndpointID, NewMCPServerID) is deduped against,
-// optionally pre-seeded with reserved IDs (e.g. the built-in hash
-// provider's own ID, which is never itself in the existing list but must
-// still never be minted for a new endpoint).
+// existingIDSet builds the "already-taken IDs" set a freshly minted slug
+// ID is deduped against, optionally pre-seeded with reserved IDs (e.g. the
+// built-in hash provider's own ID).
 func existingIDSet[T any](existing []T, id func(T) string, seed ...string) map[string]bool {
 	ids := make(map[string]bool, len(existing)+len(seed))
 	for _, s := range seed {
@@ -130,9 +118,8 @@ func existingIDSet[T any](existing []T, id func(T) string, seed ...string) map[s
 	return ids
 }
 
-// decodeJSON decodes r's JSON body into a T, writing a 400 and reporting
-// false on any decode error -- the "invalid JSON body" 3-line check every
-// PATCH/POST admin handler with a request struct repeats.
+// decodeJSON decodes r's JSON body into a T, writing 400 and reporting
+// false on error -- the shared check every PATCH/POST admin handler repeats.
 func decodeJSON[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	var req T
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -142,10 +129,9 @@ func decodeJSON[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	return req, true
 }
 
-// intQueryParam reads name from r's query string as an int, falling back
-// to def if it's missing, non-numeric, or -- when positiveOnly is set --
-// not greater than zero. Shared by every endpoint that accepts an optional
-// ?limit=/?top_k=-style override with its own default.
+// intQueryParam reads name from the query string as an int, falling back
+// to def if missing, non-numeric, or (if positiveOnly) not greater than
+// zero. Shared by every ?limit=/?top_k=-style endpoint.
 func intQueryParam(r *http.Request, name string, def int, positiveOnly bool) int {
 	v := r.URL.Query().Get(name)
 	if v == "" {
@@ -167,16 +153,14 @@ func (h *Handler) handleAdminDocumentsPage(w http.ResponseWriter, r *http.Reques
 }
 
 // handleAdminDomainPage serves the per-domain subpage template; the
-// domain name in the path is read client-side (JS) to fetch that
-// domain's documents, so the same static page works for every host.
+// domain name is read client-side (JS), so one static page works for every host.
 func (h *Handler) handleAdminDomainPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, contentTypeHTML, adminDomainHTML)
 }
 
-// handleAdminVocabularyTermPage serves the vocabulary term-detail subpage
-// template; like handleAdminDomainPage, the term itself is read client-side
-// from the page's own URL querystring, so the same static page works for
-// every term.
+// handleAdminVocabularyTermPage serves the term-detail subpage template;
+// like handleAdminDomainPage, the term is read client-side from the URL,
+// so one static page works for every term.
 func (h *Handler) handleAdminVocabularyTermPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, contentTypeHTML, adminVocabularyTermHTML)
 }
@@ -222,10 +206,8 @@ func (h *Handler) handleAdminSearchPage(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleAdminSearchResultPage serves the per-result score-breakdown
-// subpage: one static template whose JS reads the query/doc ID from its
-// own URL and re-runs /admin/api/search, since every score is normalized
-// against that search's own candidate batch -- there's no way to
-// reproduce it except by recomputing that batch.
+// subpage: its JS reads the query/doc ID from the URL and re-runs
+// /admin/api/search, since every score is normalized against that batch.
 func (h *Handler) handleAdminSearchResultPage(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, contentTypeHTML, adminSearchResultHTML)
 }
@@ -271,16 +253,14 @@ type adminVocabularyResponse struct {
 	// by search/limit/offset.
 	VocabularySize int `json:"vocabulary_size"`
 	// MatchedCount is how many terms match search (ignoring limit/offset),
-	// equal to VocabularySize when search is empty -- what the page uses to
-	// compute how many pages exist.
+	// equal to VocabularySize when search is empty -- used to compute page count.
 	MatchedCount int             `json:"matched_count"`
 	Terms        []adminTermStat `json:"terms"`
 }
 
-// vocabularySortParam whitelists the sort/dir query params against the
-// admin vocabulary page's actual sortable columns/directions, defaulting
-// anything else exactly the way this endpoint always ordered before
-// pagination/sorting existed (highest doc_freq first).
+// vocabularySortParam whitelists sort/dir against the vocabulary page's
+// sortable columns/directions, defaulting to the pre-pagination order
+// (highest doc_freq first).
 func vocabularySortParam(r *http.Request, name, def string, valid ...string) string {
 	v := r.URL.Query().Get(name)
 	for _, ok := range valid {
@@ -297,9 +277,8 @@ func (h *Handler) handleAdminVocabulary(w http.ResponseWriter, r *http.Request) 
 	}
 	limit := intQueryParam(r, "limit", defaultVocabularyPageSize, true)
 	offset := intQueryParam(r, "offset", 0, false)
-	// Indexed terms are always lowercased at tokenize time (see
-	// domain.Tokenize), so a mixed-case search would otherwise silently miss
-	// every match.
+	// Indexed terms are always lowercased at tokenize time (domain.Tokenize),
+	// so a mixed-case search would otherwise silently miss matches.
 	search := strings.ToLower(r.URL.Query().Get("search"))
 	sortBy := vocabularySortParam(r, "sort", "doc_freq", "term", "doc_freq", "total_freq")
 	sortDir := vocabularySortParam(r, "dir", "desc", "asc", "desc")
@@ -329,8 +308,7 @@ type adminDocument struct {
 }
 
 // handleAdminDocuments lists indexed pages, optionally narrowed to one
-// domain via ?domain= (used by the per-domain admin subpage) -- without
-// that filter it's the whole corpus, still capped at limit.
+// domain via ?domain= -- without it, the whole corpus, capped at limit.
 func (h *Handler) handleAdminDocuments(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
@@ -353,8 +331,7 @@ func (h *Handler) handleAdminDocuments(w http.ResponseWriter, r *http.Request) {
 }
 
 // maxDeleteDomainDocs bounds how many of a domain's documents one bulk
-// delete looks up and queues -- generous enough that no real domain hits
-// it, but still a bound rather than an unbounded query.
+// delete looks up/queues -- generous enough no real domain hits it.
 const maxDeleteDomainDocs = 100000
 
 type adminDeleteDomainResponse struct {
@@ -362,9 +339,8 @@ type adminDeleteDomainResponse struct {
 }
 
 // handleAdminDeleteDomainDocuments removes every document in one domain.
-// Fire-and-forget: looks up IDs synchronously, then queues deletion in a
-// background goroutine (context.Background(), surviving the admin
-// navigating away) and returns 202 immediately.
+// Fire-and-forget: looks up IDs synchronously, then deletes in a
+// background goroutine (context.Background()) and returns 202 immediately.
 func (h *Handler) handleAdminDeleteDomainDocuments(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
@@ -385,11 +361,8 @@ func (h *Handler) handleAdminDeleteDomainDocuments(w http.ResponseWriter, r *htt
 		ctx := context.Background()
 		for _, id := range ids {
 			if err := h.admin.DeleteDocument(ctx, id); err != nil {
-				// %q, not %s: domainName is straight from the ?domain=
-				// query parameter, so an embedded CR/LF (or any other
-				// control character) would otherwise let a caller forge
-				// what looks like a separate, fake log line -- %q quotes
-				// and escapes it instead of writing it out raw.
+				// %q, not %s: domainName comes straight from ?domain=, so an
+				// embedded CR/LF could forge a fake log line -- %q quotes/escapes it.
 				log.Printf("bulk-deleting domain %q: deleting %q: %v", domainName, id, err)
 			}
 		}
@@ -410,8 +383,7 @@ func toAdminDomainSummary(d domain.DomainSummary) adminDomainSummary {
 }
 
 // handleAdminSearchDomains backs the Documents page's domain search: an
-// empty or missing q returns an empty list on purpose, so domains are
-// discoverable by name rather than dumped in full by default.
+// empty/missing q returns an empty list, not the full list, by design.
 func (h *Handler) handleAdminSearchDomains(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
@@ -452,8 +424,7 @@ type adminDocumentsOverview struct {
 }
 
 // handleAdminDocumentsOverview backs the admin Overview page's summary
-// panels. Registered as "GET /admin/api/documents/overview", so the
-// method is already guaranteed -- no separate check needed here.
+// panels. Registered as "GET /admin/api/documents/overview", so no method check needed.
 func (h *Handler) handleAdminDocumentsOverview(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
@@ -488,8 +459,7 @@ type adminDocumentVersion struct {
 }
 
 // handleAdminDocumentVersions lists a document's superseded prior
-// versions (an empty list just means it's never been re-crawled with
-// different content, not an error).
+// versions -- an empty list just means it's never been re-crawled differently.
 func (h *Handler) handleAdminDocumentVersions(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
@@ -505,11 +475,9 @@ func (h *Handler) handleAdminDocumentVersions(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleAdminDeleteDocument is registered on the Go 1.22+ pattern
-// "DELETE /admin/api/documents/{id}", since a wildcard path segment is
-// exactly what that routing style is for. The mux never invokes this
-// handler with an empty {id} (a bare or double-slash path either 404s or
-// redirects before reaching here), so no separate empty-id check is needed.
+// handleAdminDeleteDocument is registered on "DELETE
+// /admin/api/documents/{id}" -- the mux never invokes it with an empty
+// {id}, so no separate empty-id check is needed.
 func (h *Handler) handleAdminDeleteDocument(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
@@ -533,15 +501,13 @@ type adminPostingsResponse struct {
 	Postings []adminPosting `json:"postings"`
 }
 
-// postingsSnippetMaxLen bounds each match excerpt built for the vocabulary
-// term-detail view -- the same length the public/debug search snippet uses
-// (see domain.Snippet's callers in hybrid_search_service.go), so an excerpt
-// here reads the same as everywhere else in the admin UI.
+// postingsSnippetMaxLen bounds each match excerpt for the vocabulary
+// term-detail view -- same length the public/debug search snippet uses,
+// so it reads consistently across the admin UI.
 const postingsSnippetMaxLen = 200
 
-// defaultPostingsLimit bounds the vocabulary term-detail view's page list --
-// PostingsForTerm otherwise has no inherent bound, unlike the other admin
-// list endpoints, since a term can appear in every indexed document.
+// defaultPostingsLimit bounds the vocabulary term-detail page list --
+// PostingsForTerm has no inherent bound, since a term can appear in every document.
 const defaultPostingsLimit = 500
 
 func (h *Handler) handleAdminPostings(w http.ResponseWriter, r *http.Request) {
@@ -599,24 +565,20 @@ type adminDebugResult struct {
 	NormBM25    float64 `json:"norm_bm25"`
 	SemanticSim float64 `json:"semantic_sim"`
 	PageRank    float64 `json:"pagerank"`
-	// NormalizedPageRank is 0 whenever PageRankWeight is 0 or every result
-	// in the batch has a zero PageRank -- see domain.HybridResult's field
-	// doc comment.
+	// NormalizedPageRank is 0 whenever PageRankWeight is 0 or every result in
+	// the batch has a zero PageRank -- see domain.HybridResult.
 	NormalizedPageRank float64          `json:"normalized_pagerank"`
 	FinalScore         float64          `json:"final_score"`
 	BM25Terms          []adminTermScore `json:"bm25_terms,omitempty"`
-	// Alpha/K1/B/PageRankWeight are the tuning parameters that actually
-	// produced this result -- identical across every result of one search,
-	// like CorrectedTerms below.
+	// Alpha/K1/B/PageRankWeight are the tuning parameters that produced this
+	// result -- identical across every result of one search, like CorrectedTerms.
 	Alpha          float64 `json:"alpha"`
 	K1             float64 `json:"k1"`
 	B              float64 `json:"b"`
 	PageRankWeight float64 `json:"pagerank_weight"`
-	// CorrectedTerms describes the query, not this particular result -- it
-	// is identical across every result of one search (see
-	// domain.HybridResult.CorrectedTerms) -- and is present here so the
-	// debug UI's raw JSON view can show a fuzzy-matched query term
-	// transparently.
+	// CorrectedTerms describes the query, not this result -- identical
+	// across every result of one search, present so the debug UI can show a
+	// fuzzy-matched term transparently.
 	CorrectedTerms []domain.CorrectedTerm `json:"corrected_terms,omitempty"`
 }
 
@@ -652,14 +614,13 @@ type tuningValues struct {
 	K1    float64 `json:"k1"`
 	B     float64 `json:"b"`
 	// PageRankWeight blends a document's normalized link-authority score
-	// into ranking (see hybridSearchService.Search) -- 0 (the default)
-	// means no influence at all.
+	// into ranking -- 0 (default) means no influence.
 	PageRankWeight float64 `json:"pagerank_weight"`
 }
 
 // operationalValues mirrors domain.OperationalSettingsValues for the wire
-// format: durations as whole seconds/hours, which are friendlier for an
-// admin form (and JSON) than Go's time.Duration nanosecond encoding.
+// format: durations as whole seconds/hours, friendlier for a form/JSON
+// than Go's nanosecond time.Duration.
 type operationalValues struct {
 	FetchTimeoutSeconds       int    `json:"fetch_timeout_seconds"`
 	UserAgent                 string `json:"user_agent"`
@@ -676,59 +637,44 @@ type operationalValues struct {
 	FuzzyMatchEnabled         bool   `json:"fuzzy_match_enabled"`
 	FuzzyMaxEditDistance      int    `json:"fuzzy_max_edit_distance"`
 	// PageRankRecomputeIntervalMinutes is how often cmd/crawl's ticker
-	// recomputes every document's PageRank score (see
-	// domain.OperationalSettingsValues for the full doc comment).
+	// recomputes PageRank -- see domain.OperationalSettingsValues.
 	PageRankRecomputeIntervalMinutes int `json:"pagerank_recompute_interval_minutes"`
-	// ANNSearchEnabled forces the brute-force semantic fallback path even
-	// when Postgres pgvector ANN is available, when set false (see
-	// domain.OperationalSettingsValues for the full doc comment).
+	// ANNSearchEnabled forces the brute-force semantic fallback even when
+	// Postgres pgvector ANN is available, when false -- see
+	// domain.OperationalSettingsValues.
 	ANNSearchEnabled bool `json:"ann_search_enabled"`
-	// MaxRetainedCrawlJobs bounds crawl-server's persistent crawl job
-	// history -- see domain.OperationalSettingsValues for the full doc
-	// comment.
+	// MaxRetainedCrawlJobs bounds crawl-server's persistent job history --
+	// see domain.OperationalSettingsValues.
 	MaxRetainedCrawlJobs int `json:"max_retained_crawl_jobs"`
-	// MaxConcurrentCrawls bounds how many crawl jobs actually fetch pages
-	// at once on crawl-server -- see domain.OperationalSettingsValues for
-	// the full doc comment.
+	// MaxConcurrentCrawls bounds how many crawl jobs fetch pages at once on
+	// crawl-server -- see domain.OperationalSettingsValues.
 	MaxConcurrentCrawls int `json:"max_concurrent_crawls"`
-	// DefaultRenderer is the crawler's global default rendering mode
-	// (domain.RendererNone/RendererChromium/RendererFirefox) -- a
+	// DefaultRenderer is the crawler's global default rendering mode -- a
 	// scheduled/one-off crawl's own renderer overrides this when set.
 	DefaultRenderer string `json:"default_renderer"`
-	// LinkScope is the crawler's global default for how far a crawl
-	// follows discovered links (domain.LinkScopeHost/LinkScopeDomain/
-	// LinkScopeAny) -- a scheduled/one-off crawl's own link_scope
-	// overrides this when set.
+	// LinkScope is the crawler's global default for how far a crawl follows
+	// links -- a scheduled/one-off crawl's own link_scope overrides it when set.
 	LinkScope string `json:"link_scope"`
-	// MaxDocumentVersions bounds how many versions of a document (current
-	// plus archived) are kept -- see domain.OperationalSettingsValues for
-	// the full doc comment.
+	// MaxDocumentVersions bounds how many versions of a document are kept
+	// -- see domain.OperationalSettingsValues.
 	MaxDocumentVersions int `json:"max_document_versions"`
-	// TitleWeight is how many times a document's title is counted into its
-	// indexed token stream, ahead of its body -- see
-	// domain.OperationalSettingsValues for the full doc comment.
+	// TitleWeight is how many times a title is counted into its indexed
+	// token stream, ahead of the body -- see domain.OperationalSettingsValues.
 	TitleWeight int `json:"title_weight"`
 	// EmbeddingHashEnabled/EmbeddingSearchWeights mirror the same-named
-	// domain.OperationalSettingsValues fields -- see there for the full
-	// doc comment, including why EmbeddingHashEnabled requires a process
-	// restart to take effect and why every key in EmbeddingSearchWeights
-	// must name a currently-enabled provider. Every configured HTTP
-	// endpoint is managed separately via GET/POST
-	// /admin/api/embeddings/endpoints, not through this settings payload.
+	// domain.OperationalSettingsValues fields -- see there for why
+	// EmbeddingHashEnabled needs a restart and every EmbeddingSearchWeights
+	// key must name a currently-enabled provider. HTTP endpoints are
+	// managed separately via /admin/api/embeddings/endpoints.
 	EmbeddingHashEnabled   bool               `json:"embedding_hash_enabled"`
 	EmbeddingSearchWeights map[string]float64 `json:"embedding_search_weights"`
-	// EmbeddingTitleWeight mirrors the same-named
-	// domain.OperationalSettingsValues field -- see there for the full
-	// doc comment.
+	// EmbeddingTitleWeight mirrors the same-named domain.OperationalSettingsValues field.
 	EmbeddingTitleWeight float64 `json:"embedding_title_weight"`
-	// URLAliasWWWEnabled mirrors the same-named domain.
-	// OperationalSettingsValues field -- see there for the full doc
-	// comment.
+	// URLAliasWWWEnabled mirrors the same-named domain.OperationalSettingsValues field.
 	URLAliasWWWEnabled bool `json:"url_alias_www_enabled"`
 	// ContentDedupEnabled/ContentDedupMethod/ContentDedupSimHashMaxDistance/
-	// ContentDedupIntervalMinutes mirror the same-named domain.
-	// OperationalSettingsValues fields -- see there for the full doc
-	// comments.
+	// ContentDedupIntervalMinutes mirror the same-named
+	// domain.OperationalSettingsValues fields.
 	ContentDedupEnabled            bool   `json:"content_dedup_enabled"`
 	ContentDedupMethod             string `json:"content_dedup_method"`
 	ContentDedupSimHashMaxDistance int    `json:"content_dedup_simhash_max_distance"`
@@ -811,36 +757,29 @@ type settingsResponse struct {
 }
 
 // embeddingConnectivityTestTimeout bounds a single probe call against a
-// candidate HTTP embedding endpoint -- testEmbeddingConnectivity's Embed
-// call and handleAdminEmbeddingsModels' ListModels call alike -- short
-// enough that a hung/unreachable endpoint doesn't stall the request for
-// too long, generous enough for a real (if slow) inference call to finish.
+// candidate HTTP embedding endpoint -- short enough that a hung endpoint
+// doesn't stall the request, generous enough for a real inference call.
 const embeddingConnectivityTestTimeout = 10 * time.Second
 
 // modelLister is the narrow capability httpembed.Embedder implements
-// beyond ports.EmbeddingProvider -- not every embedding provider has a
-// remote catalog to list (hashembed doesn't), so this is a type assertion
-// at the point of use rather than a method on ports.EmbeddingProvider
-// itself. See httpembed.Embedder.ListModels's doc comment.
+// beyond ports.EmbeddingProvider -- not every provider has a remote
+// catalog (hashembed doesn't), so this is a type assertion at point of use.
 type modelLister interface {
 	ListModels(ctx context.Context) ([]string, error)
 }
 
 // chatModelProber is the narrow capability httpchat.Client implements
-// beyond ports.ChatCompleter -- querying a configured chat model's own
-// advertised max context length (not every OpenAI-compatible endpoint
-// exposes this) -- same type-assertion-at-point-of-use convention as
-// modelLister above, and for the same reason: not every ports.ChatCompleter
-// implementation (a test fake, say) needs to support it.
+// beyond ports.ChatCompleter -- querying a model's advertised max context
+// length, not every endpoint exposes this. Same type-assertion convention
+// as modelLister above.
 type chatModelProber interface {
 	ModelMaxContextTokens(ctx context.Context, endpoint domain.ChatEndpoint) (tokens int, ok bool, err error)
 }
 
 // embeddingCandidateRequest is a not-yet-saved HTTP endpoint config,
-// probed by handleAdminEmbeddingsModels/handleAdminEmbeddingsTest so the
-// "Test connection"/"List models" buttons work against the form as typed.
-// ID, when set, names the already-saved endpoint being edited -- see
-// resolveCandidateAPIKey for how a blank APIKey resolves from it.
+// probed by handleAdminEmbeddingsModels/handleAdminEmbeddingsTest. ID,
+// when set, names the already-saved endpoint being edited -- see
+// resolveCandidateAPIKey.
 type embeddingCandidateRequest struct {
 	ID         string `json:"id"`
 	BaseURL    string `json:"base_url"`
@@ -854,9 +793,8 @@ func (req embeddingCandidateRequest) toEndpoint() domain.EmbeddingHTTPEndpoint {
 }
 
 // resolveCandidateAPIKey treats a blank APIKey as "not retyped," not "no
-// key at all" -- the endpoint form never echoes a stored key back (see
-// embeddingEndpointResponse), so without this, testing an already-saved
-// endpoint without retyping its key would always 401. A blank APIKey with
+// key" -- the form never echoes a stored key back, so testing a saved
+// endpoint without retyping its key would otherwise always 401. Blank with
 // no ID, or a failed lookup, leaves e unchanged.
 func (h *Handler) resolveCandidateAPIKey(ctx context.Context, e domain.EmbeddingHTTPEndpoint, id string) domain.EmbeddingHTTPEndpoint {
 	if e.APIKey != "" || id == "" || h.embeddingEndpoints == nil {
@@ -872,17 +810,14 @@ func (h *Handler) resolveCandidateAPIKey(ctx context.Context, e domain.Embedding
 
 type adminEmbeddingModelsResponse struct {
 	Models []string `json:"models"`
-	// Error is set when base_url is non-empty but the ListModels call
-	// itself fails (bad credentials, endpoint doesn't implement /models,
-	// network error) -- a soft failure the admin UI shows as "couldn't
-	// fetch model list," not a hard error, since the model field always
-	// stays usable as free text either way.
+	// Error is set when base_url is non-empty but ListModels itself fails
+	// (bad credentials, no /models, network error) -- a soft failure shown
+	// as "couldn't fetch model list," since model stays usable as free text.
 	Error string `json:"error,omitempty"`
 }
 
-// handleAdminEmbeddingsModels lists the models a candidate (not-yet-saved)
-// HTTP endpoint config reports, so the add/edit subpage can prefill model
-// suggestions. Returns an empty list (200) rather than calling out at all
+// handleAdminEmbeddingsModels lists the models a candidate endpoint
+// reports, so the subpage can prefill suggestions. Returns an empty list
 // when base_url is blank. No "not configured" gate: h.newEmbedder is
 // always set by New.
 func (h *Handler) handleAdminEmbeddingsModels(w http.ResponseWriter, r *http.Request) {
@@ -918,11 +853,9 @@ type adminEmbeddingTestResponse struct {
 	Error string `json:"error,omitempty"`
 }
 
-// handleAdminEmbeddingsTest probes a candidate (not-yet-saved) HTTP
-// endpoint config with one real Embed call, so the add/edit subpage can
-// tell the admin immediately if it doesn't work, rather than only
-// surfacing on the next real search. No "not configured" gate, same as
-// handleAdminEmbeddingsModels.
+// handleAdminEmbeddingsTest probes a candidate endpoint with one real
+// Embed call, so the subpage can flag a problem immediately rather than on
+// the next real search. No "not configured" gate, same as handleAdminEmbeddingsModels.
 func (h *Handler) handleAdminEmbeddingsTest(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
@@ -936,8 +869,8 @@ func (h *Handler) handleAdminEmbeddingsTest(w http.ResponseWriter, r *http.Reque
 }
 
 // testEmbeddingConnectivity makes one real Embed call against e to check
-// a base URL/model/API key combination. A no-op when e.BaseURL is blank
-// or h.newEmbedder isn't set (a test fixture that skips New).
+// a base URL/model/API key combination. A no-op when BaseURL is blank or
+// h.newEmbedder isn't set.
 func (h *Handler) testEmbeddingConnectivity(ctx context.Context, e domain.EmbeddingHTTPEndpoint) string {
 	if e.BaseURL == "" || h.newEmbedder == nil {
 		return ""
@@ -952,8 +885,8 @@ func (h *Handler) testEmbeddingConnectivity(ctx context.Context, e domain.Embedd
 
 // persistSetting saves v (JSON-encoded) under key so every other
 // process's next poll picks it up -- a no-op with no SettingsStore.
-// Failures are logged, not surfaced: the in-memory update already
-// succeeded, and this is a best-effort convenience, not a transactional write.
+// Failures are logged, not surfaced: a best-effort convenience, not a
+// transactional write.
 func (h *Handler) persistSetting(ctx context.Context, key string, v interface{}) {
 	if h.settingsStore == nil {
 		return
@@ -980,15 +913,10 @@ type embeddingEndpointRequest struct {
 	// same-named fields -- see that type's doc comments.
 	ChunkSizeTokens int    `json:"chunk_size_tokens"`
 	TokenizeURL     string `json:"tokenize_url"`
-	// ClearAPIKey is meaningful only to handleAdminUpdateEmbeddingEndpoint
-	// (PATCH): since a GET response never echoes a stored key's real value
-	// (see embeddingEndpointResponse), an edit form has no way to
-	// distinguish "the admin left this blank because they don't want to
-	// change it" from "the admin wants to remove it" -- APIKey left blank
-	// means the former (preserve whatever's already stored); this explicit
-	// flag is how the admin asks for the latter instead. Ignored by
-	// handleAdminEmbeddingEndpoints' POST, which has no prior key to
-	// preserve or clear in the first place.
+	// ClearAPIKey is meaningful only to the PATCH handler: since GET never
+	// echoes a stored key, an edit form can't distinguish "left blank,
+	// don't change" from "remove it" -- blank APIKey means the former; this
+	// flag asks for the latter. Ignored by POST, which has no prior key.
 	ClearAPIKey bool `json:"clear_api_key"`
 }
 
@@ -997,8 +925,7 @@ type embeddingEndpointResponse struct {
 	Name    string `json:"name"`
 	BaseURL string `json:"base_url"`
 	// HasAPIKey reports only whether a key is set, never its value -- same
-	// redacted-summary treatment scheduledCrawlResponse already gives a
-	// schedule's stored credentials.
+	// redacted-summary treatment scheduledCrawlResponse gives stored credentials.
 	HasAPIKey          bool      `json:"has_api_key"`
 	Model              string    `json:"model"`
 	Dimensions         int       `json:"dimensions"`
@@ -1043,8 +970,8 @@ func validateEmbeddingEndpointRequest(w http.ResponseWriter, req embeddingEndpoi
 }
 
 // validateChatEndpointRequest mirrors validateEmbeddingEndpointRequest's
-// ChunkSizeTokens check for the same reason: MaxContextTokens shares the
-// same "0 disables, negative is invalid" convention.
+// ChunkSizeTokens check: MaxContextTokens shares the same "0 disables,
+// negative invalid" convention.
 func validateChatEndpointRequest(w http.ResponseWriter, req chatEndpointRequest) bool {
 	if req.MaxContextTokens < 0 {
 		http.Error(w, "max_context_tokens must not be negative", http.StatusBadRequest)
@@ -1057,9 +984,8 @@ func validateChatEndpointRequest(w http.ResponseWriter, req chatEndpointRequest)
 	return true
 }
 
-// encryptAPIKey seals apiKey via settingscrypto for storage (a no-op
-// passthrough when h.settingsEncryptionKey is nil, or apiKey is already
-// empty -- see Encrypt's doc comment).
+// encryptAPIKey seals apiKey via settingscrypto for storage (a no-op when
+// h.settingsEncryptionKey is nil, or apiKey is already empty).
 func (h *Handler) encryptAPIKey(apiKey string) string {
 	enc, err := settingscrypto.Encrypt(h.settingsEncryptionKey, apiKey)
 	if err != nil {
@@ -1070,9 +996,8 @@ func (h *Handler) encryptAPIKey(apiKey string) string {
 }
 
 // decryptAPIKey reverses encryptAPIKey for a stored value, used by
-// resolveCandidateAPIKey to recover a real key for a probe. A decryption
-// failure is logged and returns apiKey unchanged -- it then simply fails
-// the probe's HTTP call with its own 401, rather than masking the failure.
+// resolveCandidateAPIKey. A decryption failure is logged and returns
+// apiKey unchanged -- it then just fails the probe with its own 401.
 func (h *Handler) decryptAPIKey(apiKey string) string {
 	dec, err := settingscrypto.Decrypt(h.settingsEncryptionKey, apiKey)
 	if err != nil {
@@ -1083,9 +1008,8 @@ func (h *Handler) decryptAPIKey(apiKey string) string {
 }
 
 // handleAdminEmbeddingEndpoints lists (GET) or creates (POST) HTTP
-// embedding endpoint configs. A freshly created endpoint's ID is minted
-// from its name, deduped against every existing ID plus the reserved
-// "hash" (the built-in provider's own ID).
+// embedding endpoint configs. A new endpoint's ID is minted from its name,
+// deduped against every existing ID plus the reserved "hash" provider ID.
 func (h *Handler) handleAdminEmbeddingEndpoints(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.embeddingEndpoints != nil, configNameEmbeddingEndpoints) {
 		return
@@ -1138,10 +1062,9 @@ func (h *Handler) handleAdminGetEmbeddingEndpoint(w http.ResponseWriter, r *http
 }
 
 // handleAdminUpdateEmbeddingEndpoint replaces an endpoint's editable
-// fields. APIKey is the one exception to "PATCH is a full replace": since
-// GET never echoes its real value, blank means "unchanged," not "clear
-// it" -- req.ClearAPIKey removes it explicitly. ID is never editable
-// once created (it's baked into document_embeddings.provider and ANN names).
+// fields. APIKey is the one exception to "PATCH is a full replace": blank
+// means unchanged, req.ClearAPIKey removes it explicitly. ID is never
+// editable (it's baked into document_embeddings.provider and ANN names).
 func (h *Handler) handleAdminUpdateEmbeddingEndpoint(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.embeddingEndpoints != nil, configNameEmbeddingEndpoints) {
 		return
@@ -1201,8 +1124,7 @@ type mcpServerResponse struct {
 	Args      []string `json:"args"`
 	BaseURL   string   `json:"base_url"`
 	// HasAPIKey reports only whether a key is set, never its value -- same
-	// redacted-summary treatment embeddingEndpointResponse already gives a
-	// stored credential.
+	// redacted-summary treatment embeddingEndpointResponse gives.
 	HasAPIKey        bool   `json:"has_api_key"`
 	Enabled          bool   `json:"enabled"`
 	Prompt           string `json:"prompt"`
@@ -1217,13 +1139,9 @@ func toMCPServerResponse(s domain.MCPServer) mcpServerResponse {
 	}
 }
 
-// normalizeMCPServerName lowercases req.Name for a "stdio" ("local" -- a
-// process spawned on this host, as opposed to a remote "http" server)
-// server -- Name is a purely cosmetic admin-UI display label (see
-// MCPServer.Name's own doc comment), so this just keeps every local
-// server's label consistent rather than dependent on how an admin
-// happened to type it, matching the lowercase convention its own doc
-// comment example ("web tools") already follows.
+// normalizeMCPServerName lowercases req.Name for a "stdio" server -- Name
+// is a cosmetic admin-UI label (see MCPServer.Name), so this keeps every
+// local server's label consistent regardless of how the admin typed it.
 func normalizeMCPServerName(req mcpServerRequest) mcpServerRequest {
 	if req.Transport == "stdio" {
 		req.Name = strings.ToLower(req.Name)
@@ -1232,10 +1150,8 @@ func normalizeMCPServerName(req mcpServerRequest) mcpServerRequest {
 }
 
 // validateMCPServerRequest requires a non-empty Name and a Transport of
-// either "stdio" (which also requires a non-empty Command) or "http" (which
-// also requires a non-empty BaseURL) -- mirroring mcpclient.connect's own
-// switch on Transport, so a row this handler accepts is always one
-// mcpclient can actually act on.
+// "stdio" (needs Command) or "http" (needs BaseURL) -- mirroring
+// mcpclient.connect's own switch, so an accepted row is always actionable.
 func validateMCPServerRequest(w http.ResponseWriter, req mcpServerRequest) bool {
 	if req.Name == "" {
 		http.Error(w, msgNameMustNotBeEmpty, http.StatusBadRequest)
@@ -1259,11 +1175,9 @@ func validateMCPServerRequest(w http.ResponseWriter, req mcpServerRequest) bool 
 	return true
 }
 
-// handleAdminMCPServers lists (GET) or creates (POST) admin-configured MCP
-// servers, mirroring handleAdminEmbeddingEndpoints' style closely. A
-// freshly created server's ID is minted from its name, deduped against
-// every existing ID (domain.NewMCPServerID, the same convention
-// domain.NewEmbeddingEndpointID uses).
+// handleAdminMCPServers lists (GET) or creates (POST) admin-configured
+// MCP servers, mirroring handleAdminEmbeddingEndpoints' style. A new
+// server's ID is minted from its name, deduped against existing IDs.
 func (h *Handler) handleAdminMCPServers(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.mcpServers != nil, configNameMCPServers) {
 		return
@@ -1307,10 +1221,9 @@ func (h *Handler) handleAdminMCPServers(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-// handleAdminGetMCPServer returns one server by ID. ports.MCPServerStore has
-// no single-row get (unlike EmbeddingEndpointStore), so this scans
-// ListMCPServers -- an admin's server list is small enough (like scheduled
-// crawls) that this is never a real cost.
+// handleAdminGetMCPServer returns one server by ID. ports.MCPServerStore
+// has no single-row get, so this scans ListMCPServers -- never a real cost
+// at admin-list scale.
 func (h *Handler) handleAdminGetMCPServer(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.mcpServers != nil, configNameMCPServers) {
 		return
@@ -1330,10 +1243,9 @@ func (h *Handler) handleAdminGetMCPServer(w http.ResponseWriter, r *http.Request
 	http.Error(w, msgMCPServerNotFound, http.StatusNotFound)
 }
 
-// handleAdminUpdateMCPServer replaces a server's editable fields. APIKey is
-// the one exception to "PATCH is a full replace" -- see
-// embeddingEndpointRequest.ClearAPIKey's doc comment for why. ID is never
-// editable once created (mirrors handleAdminUpdateEmbeddingEndpoint).
+// handleAdminUpdateMCPServer replaces a server's editable fields. APIKey
+// is the one exception to "PATCH is a full replace" (see
+// embeddingEndpointRequest.ClearAPIKey). ID is never editable.
 func (h *Handler) handleAdminUpdateMCPServer(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.mcpServers != nil, configNameMCPServers) {
 		return
@@ -1407,12 +1319,10 @@ func toAgentResponse(a domain.Agent) agentResponse {
 	}
 }
 
-// validateAgentRequest requires a non-empty Name -- MCPServerIDs is not
-// cross-checked against the actual mcp_servers table (same "no
-// foreign-key-like validation at this layer" convention as every other
-// admin CRUD handler in this file, e.g. gated_by_web_search referencing no
-// enforced set of values either); a stale ID just never matches anything
-// when ChatService.Chat filters the global catalog by it.
+// validateAgentRequest requires a non-empty Name -- MCPServerIDs isn't
+// cross-checked against mcp_servers (same convention as every other admin
+// CRUD handler here); a stale ID just never matches anything when
+// ChatService.Chat filters by it.
 func validateAgentRequest(w http.ResponseWriter, req agentRequest) bool {
 	if req.Name == "" {
 		http.Error(w, msgNameMustNotBeEmpty, http.StatusBadRequest)
@@ -1421,10 +1331,9 @@ func validateAgentRequest(w http.ResponseWriter, req agentRequest) bool {
 	return true
 }
 
-// handleAdminAgents lists (GET) or creates (POST) admin-configured agents,
-// mirroring handleAdminMCPServers' style closely. A freshly created agent's
-// ID is minted from its name, deduped against every existing ID
-// (domain.NewAgentID, the same convention domain.NewMCPServerID uses).
+// handleAdminAgents lists (GET) or creates (POST) admin-configured
+// agents, mirroring handleAdminMCPServers' style. A new agent's ID is
+// minted from its name, deduped against existing IDs.
 func (h *Handler) handleAdminAgents(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.agents != nil, "agents") {
 		return
@@ -1467,8 +1376,7 @@ func (h *Handler) handleAdminAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAdminGetAgent returns one agent by ID -- scans ListAgents, same
-// tolerance as handleAdminGetMCPServer (ports.AgentStore has no single-row
-// get either, and an admin's agent list is never large enough to matter).
+// tolerance as handleAdminGetMCPServer.
 func (h *Handler) handleAdminGetAgent(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.agents != nil, "agents") {
 		return
@@ -1518,11 +1426,9 @@ func (h *Handler) handleAdminDeleteAgent(w http.ResponseWriter, r *http.Request)
 	respondOrNotFound(w, err, ports.ErrAgentNotFound, msgAgentNotFound, map[string]bool{"ok": true})
 }
 
-// mcpServerCandidateRequest is a not-yet-saved MCP server config, probed by
-// handleAdminMCPServersTest so the "List tools" button works against the
-// form as typed -- mirrors embeddingCandidateRequest's own shape/reasoning.
-// ID, when set, names the already-saved server being edited -- see
-// resolveCandidateMCPServerAPIKey for how a blank APIKey resolves from it.
+// mcpServerCandidateRequest is a not-yet-saved MCP server config, probed
+// by handleAdminMCPServersTest, mirroring embeddingCandidateRequest's
+// shape. ID, when set, names the already-saved server being edited.
 type mcpServerCandidateRequest struct {
 	ID        string   `json:"id"`
 	Name      string   `json:"name"`
@@ -1541,9 +1447,8 @@ func (req mcpServerCandidateRequest) toServer() domain.MCPServer {
 }
 
 // resolveCandidateMCPServerAPIKey mirrors resolveCandidateAPIKey for MCP
-// servers -- ports.MCPServerStore has no single-row get (like
-// EmbeddingEndpointStore does), so this scans ListMCPServers, same
-// tolerance as handleAdminGetMCPServer.
+// servers -- scans ListMCPServers since ports.MCPServerStore has no
+// single-row get.
 func (h *Handler) resolveCandidateMCPServerAPIKey(ctx context.Context, s domain.MCPServer, id string) domain.MCPServer {
 	if s.APIKey != "" || id == "" || h.mcpServers == nil {
 		return s
@@ -1568,12 +1473,9 @@ type mcpServerToolResponse struct {
 
 type adminMCPServerTestResponse struct {
 	Tools []mcpServerToolResponse `json:"tools"`
-	// Error is set when connecting produced no tools at all -- mcpclient.
-	// Provider.Open is deliberately best-effort/silent per server (a
-	// connect or tools/list failure is only logged, see its own doc
-	// comment), so a genuine connection failure and a server that legitimately
-	// exposes zero tools are indistinguishable here; the message says so
-	// rather than guessing which one happened.
+	// Error is set when connecting produced no tools at all -- Provider.Open
+	// is best-effort/silent per server, so a real connection failure and a
+	// server that legitimately exposes zero tools are indistinguishable here.
 	Error string `json:"error,omitempty"`
 }
 
@@ -1581,13 +1483,10 @@ type adminMCPServerTestResponse struct {
 // embeddingConnectivityTestTimeout's own reasoning.
 const mcpServerTestTimeout = 10 * time.Second
 
-// handleAdminMCPServersTest connects to a candidate (not-yet-saved) MCP
-// server config and lists whatever tools it actually exposes, so the
-// add/edit subpage can show each tool's real name/description straight
-// from the server's own live tools/list response -- never admin-typed
-// (unlike the old ChatHook.Description) -- before the admin saves
-// anything. No "not configured" gate on h.mcpServers: this only needs
-// h.mcpTools, which is independent of whether any server is saved yet.
+// handleAdminMCPServersTest connects to a candidate MCP server config and
+// lists its actual tools, so the subpage can show each tool's real
+// name/description from the live tools/list response before saving. No
+// "not configured" gate: only needs h.mcpTools, independent of h.mcpServers.
 func (h *Handler) handleAdminMCPServersTest(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
@@ -1630,10 +1529,9 @@ func (h *Handler) handleAdminEmbeddingEndpointsPage(w http.ResponseWriter, r *ht
 	serveStatic(w, r, contentTypeHTML, adminEmbeddingEndpointsHTML)
 }
 
-// currentEmbeddingEndpoints lists every configured HTTP embedding endpoint,
-// or an empty slice if h.embeddingEndpoints isn't configured or the list
-// fails -- the same "degrade gracefully, never fail the caller over this"
-// convention used throughout this file for optional dependencies.
+// currentEmbeddingEndpoints lists every configured HTTP embedding
+// endpoint, or an empty slice if unconfigured/failing -- the same
+// degrade-gracefully convention used throughout this file.
 func (h *Handler) currentEmbeddingEndpoints(ctx context.Context) []domain.EmbeddingHTTPEndpoint {
 	if h.embeddingEndpoints == nil {
 		return nil
@@ -1657,23 +1555,16 @@ type chatEndpointRequest struct {
 	// WebSearchResultCount mirrors domain.ChatEndpoint.WebSearchResultCount
 	// exactly -- see that field's doc comment. 0 is the default (no cap).
 	WebSearchResultCount int `json:"web_search_result_count"`
-	// SystemPrompt mirrors domain.ChatEndpoint.SystemPrompt exactly -- see
-	// that field's doc comment. Empty string is the default (no persistent
-	// prompt injected).
+	// SystemPrompt mirrors domain.ChatEndpoint.SystemPrompt exactly -- empty
+	// is the default (no persistent prompt injected).
 	SystemPrompt string `json:"system_prompt"`
 	// DefaultAgentID mirrors domain.ChatEndpoint.DefaultAgentID exactly --
-	// see that field's doc comment. Empty string is the default (no agent
-	// specialization). Not cross-checked against the actual agents table,
-	// same "no foreign-key-like validation at this layer" convention as
-	// domain.Agent.MCPServerIDs.
+	// empty means no agent specialization. Not cross-checked against
+	// agents, same convention as domain.Agent.MCPServerIDs.
 	DefaultAgentID string `json:"default_agent_id"`
-	// ClearAPIKey is meaningful only to a PATCH: since a GET response never
-	// echoes a stored key's real value (see chatEndpointResponse), an edit
-	// form has no way to distinguish "left blank because not being
-	// changed" from "wants it removed" -- APIKey left blank means the
-	// former (preserve whatever's already stored); this explicit flag is
-	// how the admin asks for the latter instead. Mirrors
-	// embeddingEndpointRequest.ClearAPIKey exactly.
+	// ClearAPIKey is meaningful only to a PATCH: GET never echoes a stored
+	// key, so blank means "left unchanged," this flag means "remove it" --
+	// mirrors embeddingEndpointRequest.ClearAPIKey exactly.
 	ClearAPIKey bool `json:"clear_api_key"`
 }
 
@@ -1710,35 +1601,26 @@ func toChatEndpointResponse(e domain.ChatEndpoint) chatEndpointResponse {
 	}
 }
 
-// defaultChatEndpointResponse is what handleAdminChatEndpoint's GET returns
-// when nothing has ever been saved -- a settings page GET should never fail
-// just because it hasn't been configured yet, same spirit as
-// /admin/api/settings always succeeding.
+// defaultChatEndpointResponse is what GET returns when nothing's been
+// saved -- a settings page GET should never fail just for being unconfigured.
 func defaultChatEndpointResponse() chatEndpointResponse {
 	return chatEndpointResponse{}
 }
 
 // chatModelContextProbeTimeout bounds the best-effort auto-detection call
-// against the configured chat model's own /models endpoint -- short enough
-// that a slow/unreachable model host doesn't stall a settings save for
-// long, generous enough for a real (if slow) network round trip to finish.
+// against the model's /models endpoint -- short enough not to stall a
+// save, generous enough for a real round trip.
 const chatModelContextProbeTimeout = 10 * time.Second
 
-// autoDetectMaxContextTokens best-effort probes e's own configured model
-// for its advertised max context length and returns the resulting
-// prompt-only budget (domain.AutoMaxContextTokens), so a chat endpoint
-// saved with MaxContextTokens left unset gets a real, model-derived value
-// instead of silently meaning "trimming disabled" -- see
-// handleAdminChatEndpoint's PATCH branch, the fix for a live incident
-// where MaxContextTokens kept getting reset to 0 by an incomplete PATCH
-// (this admin API is a full replace, not a merge, for every field) with
-// nothing to notice or correct it.
+// autoDetectMaxContextTokens best-effort probes e's model for its
+// advertised max context length, so a chat endpoint saved with
+// MaxContextTokens unset gets a real value instead of silently meaning
+// "trimming disabled" -- fixes a live incident where an incomplete PATCH
+// (a full replace, not a merge) kept resetting it to 0 unnoticed.
 //
-// Returns 0 (today's existing "disabled" meaning) whenever detection isn't
-// possible or fails: e.BaseURL/Model unset, h.chatModelProber nil, the
-// wired ports.ChatCompleter doesn't implement the optional probing
-// capability, or the probe call itself errors/reports nothing -- this is
-// pure best-effort, never a reason to fail the save.
+// Returns 0 whenever detection isn't possible: BaseURL/Model unset,
+// h.chatModelProber nil, the prober doesn't implement probing, or the call
+// errors -- pure best-effort, never a reason to fail the save.
 func (h *Handler) autoDetectMaxContextTokens(ctx context.Context, e domain.ChatEndpoint) int {
 	if e.BaseURL == "" || e.Model == "" || h.chatModelProber == nil {
 		return 0
@@ -1756,14 +1638,11 @@ func (h *Handler) autoDetectMaxContextTokens(ctx context.Context, e domain.ChatE
 	return domain.AutoMaxContextTokens(modelMax)
 }
 
-// handleAdminChatEndpoint is single-row admin config CRUD for the chat
-// endpoint (GET current config, PATCH to upsert it), mirroring
-// handleAdminEmbeddingEndpoints/handleAdminUpdateEmbeddingEndpoint's style
-// closely -- see chatEndpointRequest.ClearAPIKey's doc comment for the
-// "blank api_key on update means unchanged" convention shared with that
-// endpoint. MaxContextTokens left unset (<= 0) in the request is
-// auto-detected from the model itself rather than simply stored as 0 --
-// see autoDetectMaxContextTokens.
+// handleAdminChatEndpoint is single-row CRUD for the chat endpoint (GET
+// current config, PATCH to upsert), mirroring
+// handleAdminEmbeddingEndpoints' style -- see chatEndpointRequest.ClearAPIKey
+// for the shared "blank means unchanged" convention. MaxContextTokens left
+// unset (<= 0) is auto-detected from the model -- see autoDetectMaxContextTokens.
 func (h *Handler) handleAdminChatEndpoint(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.chatEndpoints != nil, "chat endpoint") {
 		return
@@ -1853,8 +1732,7 @@ func (h *Handler) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 // overridesValues mirrors domain.RankingOverridesValues for the wire
-// format, keeping JSON tags (and the map-vs-slice choice for the wire
-// format) out of the domain type.
+// format, keeping JSON tags out of the domain type.
 type overridesValues struct {
 	BlockedTerms   []string           `json:"blocked_terms"`
 	BoostedTerms   map[string]float64 `json:"boosted_terms"`
@@ -1905,9 +1783,8 @@ func (h *Handler) handleAdminOverrides(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAdminCrawlJobs serves the Jobs collection: GET lists every job,
-// DELETE clears every ended one (the "Clear ended jobs" button). Both
-// live on this path rather than a separate "/clear-ended" sub-path, to
-// avoid colliding with the "{id}" wildcard route below.
+// DELETE clears ended ones. Both live here rather than a separate
+// sub-path, to avoid colliding with the "{id}" wildcard route below.
 func (h *Handler) handleAdminCrawlJobs(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.jobs != nil, configNameCrawlJobs) {
 		return
@@ -1960,10 +1837,8 @@ func (h *Handler) handleAdminCancelCrawlJob(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// scheduledCrawlRequest is the wire shape for creating (POST) and
-// replacing (PATCH) a crawl -- no separate "just run once" shape or
-// explicit "recurring" flag: IntervalMinutes 0 means "run once," positive
-// means "repeat" -- see toScheduledCrawl.
+// scheduledCrawlRequest is the wire shape for creating/replacing a crawl
+// -- IntervalMinutes 0 means "run once," positive means "repeat" -- see toScheduledCrawl.
 type scheduledCrawlRequest struct {
 	SeedURLs      []string `json:"seed_urls"`
 	MaxPages      int      `json:"max_pages"`
@@ -1972,16 +1847,9 @@ type scheduledCrawlRequest struct {
 	Cookie        string   `json:"cookie"`
 	BasicAuthUser string   `json:"basic_auth_user"`
 	BasicAuthPass string   `json:"basic_auth_pass"`
-	// ClearCookie/ClearBasicAuth are meaningful only to
-	// handleAdminUpdateSchedule (PATCH): since a GET response never
-	// echoes a stored credential's real value (see scheduledCrawlResponse),
-	// an edit form has no way to distinguish "the admin left this blank
-	// because they don't want to change it" from "the admin wants to
-	// remove it" -- Cookie/BasicAuthUser/BasicAuthPass left blank means
-	// the former (preserve whatever's already stored); these two explicit
-	// flags are how the admin asks for the latter instead. Ignored by
-	// handleAdminSchedules' POST, which has no prior credential to
-	// preserve or clear in the first place.
+	// ClearCookie/ClearBasicAuth are meaningful only to the PATCH handler:
+	// GET never echoes a stored credential, so blank means "unchanged,"
+	// these flags mean "remove it." Ignored by POST, which has no prior credential.
 	ClearCookie         bool `json:"clear_cookie"`
 	ClearBasicAuth      bool `json:"clear_basic_auth"`
 	UseSitemap          bool `json:"use_sitemap"`
@@ -1992,24 +1860,20 @@ type scheduledCrawlRequest struct {
 	PrioritizeUnindexed bool `json:"prioritize_unindexed"`
 	IntervalMinutes     int  `json:"interval_minutes"`
 	// LinkScope overrides the Tuning page's global default for how far
-	// this crawl follows discovered links -- "" (domain.LinkScopeDefault)
-	// means "inherit the global default"; "host"/"domain"/"any" choose
-	// explicitly.
+	// this crawl follows links -- "" means inherit the default;
+	// "host"/"domain"/"any" choose explicitly.
 	LinkScope string `json:"link_scope"`
 	// AllowedDomains/BlockedDomains/FollowIndexedDomains mirror
-	// ports.CrawlOptions' fields of the same name -- see its doc comment
-	// for the exact allow/block precedence against LinkScope.
+	// ports.CrawlOptions' same-named fields -- see its doc comment for the
+	// allow/block precedence against LinkScope.
 	AllowedDomains       []string `json:"allowed_domains"`
 	BlockedDomains       []string `json:"blocked_domains"`
 	FollowIndexedDomains bool     `json:"follow_indexed_domains"`
 	// MaxRuns caps how many times a recurring crawl repeats before
-	// disabling itself; 0 (the default) means unlimited. Meaningless when
-	// IntervalMinutes is 0 (a one-off crawl already stops after its one
-	// run).
+	// disabling itself; 0 means unlimited. Meaningless for a one-off crawl.
 	MaxRuns int `json:"max_runs"`
 	// Renderer overrides the Tuning page's global default rendering mode
-	// for this crawl alone -- "" (domain.RendererDefault) means "inherit
-	// the global default"; "none"/"chromium"/"firefox" choose explicitly.
+	// for this crawl alone -- "" means inherit the default.
 	Renderer string `json:"renderer"`
 	Enabled  bool   `json:"enabled"`
 }
@@ -2021,10 +1885,8 @@ type scheduledCrawlResponse struct {
 	RespectRobots bool     `json:"respect_robots"`
 	UserAgent     string   `json:"user_agent"`
 	// HasCookie/HasBasicAuth report only whether a credential is set, never
-	// its value -- same redacted-summary treatment ports.CrawlJobRequest
-	// already gives a one-off crawl's credentials (see its doc comment),
-	// now applied here too so a scheduled crawl's stored Cookie/
-	// BasicAuthUser/BasicAuthPass never round-trip through a GET response.
+	// its value -- same redaction ports.CrawlJobRequest gives a one-off
+	// crawl's credentials, so a scheduled crawl's never round-trips through GET.
 	HasCookie            bool       `json:"has_cookie"`
 	HasBasicAuth         bool       `json:"has_basic_auth"`
 	LinkScope            string     `json:"link_scope"`
@@ -2066,10 +1928,8 @@ func toScheduledCrawlResponse(s domain.ScheduledCrawl) scheduledCrawlResponse {
 }
 
 // toScheduledCrawl builds the domain.ScheduledCrawl req describes, shared
-// by handleAdminSchedules' POST and handleAdminUpdateSchedule's PATCH.
-// Recurring is derived from IntervalMinutes (positive = repeat, 0 = run
-// once); a recurring entry's first run is interval_minutes from now, a
-// one-off's is right now. created_at is harmless-if-ignored for an update.
+// by POST and PATCH. Recurring is derived from IntervalMinutes; a
+// recurring entry's first run is interval_minutes from now, a one-off's is now.
 func (req scheduledCrawlRequest) toScheduledCrawl(id string, enabled bool, now time.Time) domain.ScheduledCrawl {
 	recurring := req.IntervalMinutes > 0
 	next := now
@@ -2117,11 +1977,9 @@ func validateScheduledCrawlRequest(w http.ResponseWriter, req scheduledCrawlRequ
 	return true
 }
 
-// handleAdminSchedules lists (GET) or creates (POST) crawls -- every one
-// an admin triggers, one-off or recurring, is one of these; a freshly
+// handleAdminSchedules lists (GET) or creates (POST) crawls -- a freshly
 // created entry is always enabled. POST enforces at most one schedule per
-// domain: a submission matching an existing schedule's seed host replaces
-// its options in place instead of inserting a second row.
+// domain: a submission matching an existing seed host replaces it in place.
 func (h *Handler) handleAdminSchedules(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.scheduledCrawls != nil, configNameScheduledCrawls) {
 		return
@@ -2167,10 +2025,8 @@ func (h *Handler) handleAdminSchedules(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// scheduledCrawlIDForSameDomain returns the ID of an already-existing
-// schedule sharing seedURLs' first host, or "" if none (empty/unparseable
-// seedURLs never match) -- keeps handleAdminSchedules' POST "one schedule
-// per domain" true.
+// scheduledCrawlIDForSameDomain returns the ID of a schedule already
+// sharing seedURLs' first host, or "" if none -- keeps "one schedule per domain" true.
 func (h *Handler) scheduledCrawlIDForSameDomain(ctx context.Context, seedURLs []string) (string, error) {
 	if len(seedURLs) == 0 {
 		return "", nil
@@ -2192,9 +2048,8 @@ func (h *Handler) scheduledCrawlIDForSameDomain(ctx context.Context, seedURLs []
 }
 
 // handleAdminUpdateSchedule replaces a schedule's editable fields and
-// reschedules it (next_run_at = interval_minutes from now). Cookie/
-// BasicAuthUser/BasicAuthPass are the exception to "PATCH is a full
-// replace" -- GET never echoes them, so blank means "unchanged."
+// reschedules it. Cookie/BasicAuthUser/BasicAuthPass are the exception to
+// "PATCH is a full replace" -- GET never echoes them, so blank means unchanged.
 func (h *Handler) handleAdminUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.scheduledCrawls != nil, configNameScheduledCrawls) {
 		return
@@ -2233,8 +2088,7 @@ func (h *Handler) handleAdminDeleteSchedule(w http.ResponseWriter, r *http.Reque
 }
 
 // handleAdminGetSchedule backs the schedule-detail/edit subpage's initial
-// load -- a single schedule's full options, the same shape ListScheduledCrawls'
-// entries already have.
+// load -- one schedule's full options, same shape ListScheduledCrawls gives.
 func (h *Handler) handleAdminGetSchedule(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.scheduledCrawls != nil, configNameScheduledCrawls) {
 		return
@@ -2243,10 +2097,9 @@ func (h *Handler) handleAdminGetSchedule(w http.ResponseWriter, r *http.Request)
 	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, msgScheduledCrawlNotFound, toScheduledCrawlResponse(s))
 }
 
-// handleAdminRunScheduleNow marks a schedule due immediately -- crawl-server's
-// own scheduler ticker picks it up on its next tick and creates the actual
-// CrawlJob, the same path a freshly created one-off crawl already goes
-// through -- so this handler itself never talks to crawl-server directly.
+// handleAdminRunScheduleNow marks a schedule due immediately --
+// crawl-server's ticker picks it up next tick, same path a fresh one-off
+// crawl goes through, so this handler never talks to crawl-server directly.
 func (h *Handler) handleAdminRunScheduleNow(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.scheduledCrawls != nil, configNameScheduledCrawls) {
 		return
@@ -2259,10 +2112,8 @@ func (h *Handler) handleAdminRunScheduleNow(w http.ResponseWriter, r *http.Reque
 	respondOrNotFound(w, err, ports.ErrScheduledCrawlNotFound, msgScheduledCrawlNotFound, map[string]bool{"ok": true})
 }
 
-// handleAdminToggleSchedule flips only Enabled -- unlike PATCHing the
-// schedule (handleAdminUpdateSchedule), it never touches NextRunAt, so
-// pausing/resuming from the Jobs list's checkbox doesn't reschedule the
-// crawl or reorder that list (sorted by NextRunAt).
+// handleAdminToggleSchedule flips only Enabled -- unlike PATCH, it never
+// touches NextRunAt, so pausing/resuming doesn't reschedule or reorder the list.
 func (h *Handler) handleAdminToggleSchedule(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.scheduledCrawls != nil, configNameScheduledCrawls) {
 		return
@@ -2296,8 +2147,7 @@ type adminPageRankResponse struct {
 	MaxPageRank float64 `json:"max_pagerank"`
 	AvgPageRank float64 `json:"avg_pagerank"`
 	// Damping/MaxIterations/Epsilon are domain.PageRank's fixed algorithm
-	// constants -- not configurable, but worth showing on the debug page
-	// alongside the values they actually produced.
+	// constants -- not configurable, shown for context alongside their output.
 	Damping                  float64 `json:"damping"`
 	MaxIterations            int     `json:"max_iterations"`
 	Epsilon                  float64 `json:"epsilon"`
@@ -2306,17 +2156,12 @@ type adminPageRankResponse struct {
 	// RecomputeInProgress/LastRecomputedAt/LastRecomputeDocuments/
 	// LastRecomputeIterations/LastRecomputeFinalDelta reflect
 	// domain.PageRankStatus, persisted by any process that ran a recompute
-	// (this admin-server's own "force recalculation" click, another
-	// admin-server instance, or cmd/crawl's periodic ticker/post-crawl
-	// trigger) -- so this shows the real cross-process state, not just
-	// whatever this one browser tab remembers triggering.
+	// -- real cross-process state, not just this browser tab's memory.
 	RecomputeInProgress bool       `json:"recompute_in_progress"`
 	LastRecomputedAt    *time.Time `json:"last_recomputed_at,omitempty"`
 	// No omitempty on these three: a run over an empty link graph
 	// legitimately scores 0 documents in 0 iterations, and omitempty would
-	// silently drop that real value the same way a genuinely-missing one
-	// would -- the JS side only reads them once LastRecomputedAt is set
-	// anyway, so there's nothing to gain by omitting a real zero.
+	// drop that real value the same way a missing one would.
 	LastRecomputeDocuments  int     `json:"last_recompute_documents"`
 	LastRecomputeIterations int     `json:"last_recompute_iterations"`
 	LastRecomputeFinalDelta float64 `json:"last_recompute_final_delta"`
@@ -2373,10 +2218,9 @@ type adminPageRankRecomputeResponse struct {
 	AvgPageRank float64 `json:"avg_pagerank"`
 }
 
-// handleAdminPageRankRecompute runs a full PageRank recompute
-// synchronously (unlike bulk document delete's fire-and-forget) and
-// reports documents scored, iterations, final delta, and duration -- an
-// admin clicking "force recalculation" is waiting to see this run's result.
+// handleAdminPageRankRecompute runs a full recompute synchronously
+// (unlike bulk delete's fire-and-forget) and reports documents scored,
+// iterations, final delta, duration -- the admin is waiting for this result.
 func (h *Handler) handleAdminPageRankRecompute(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.pageRank != nil, "pagerank") {
 		return
@@ -2404,9 +2248,7 @@ type adminEmbeddingRecomputeStatusResponse struct {
 	TotalDocs  int  `json:"total_docs"`
 	InProgress bool `json:"in_progress"`
 	// LastRunAt/Documents/Failed/DurationMs reflect the persisted
-	// cross-process status, not just this browser tab's own trigger. No
-	// omitempty on Documents/Failed/DurationMs: 0 is a legitimate result
-	// (an empty corpus), not the same as "missing".
+	// cross-process status. No omitempty: 0 is a legitimate result (empty corpus).
 	LastRunAt  *time.Time `json:"last_run_at,omitempty"`
 	Documents  int        `json:"documents"`
 	Failed     int        `json:"failed"`
@@ -2435,10 +2277,9 @@ func (h *Handler) handleAdminEmbeddingsRecomputeStatus(w http.ResponseWriter, r 
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// handleAdminEmbeddingsRecomputeStart kicks off a full-corpus embedding
-// recompute in the background -- unlike PageRank's synchronous recompute,
-// this is a real per-document network round-trip, too slow to do inline.
-// Rejects a second trigger while one is running (409).
+// handleAdminEmbeddingsRecomputeStart kicks off a full-corpus recompute
+// in the background -- unlike PageRank's synchronous one, this is a real
+// per-document network round trip. Rejects a second trigger while running (409).
 func (h *Handler) handleAdminEmbeddingsRecomputeStart(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.embeddingRepo != nil && len(h.embedders) > 0, "embedding recompute") {
 		return
@@ -2460,8 +2301,7 @@ func (h *Handler) handleAdminEmbeddingsRecomputeStart(w http.ResponseWriter, r *
 type adminContentDedupStatusResponse struct {
 	InProgress bool `json:"in_progress"`
 	// LastRunAt/GroupsFound/DocumentsMerged/DurationMs reflect the
-	// persisted cross-process status (cmd/crawl's ticker, a post-crawl
-	// trigger, or this page's own button), not just this tab's trigger.
+	// persisted cross-process status, not just this tab's trigger.
 	LastRunAt       *time.Time `json:"last_run_at,omitempty"`
 	GroupsFound     int        `json:"groups_found"`
 	DocumentsMerged int        `json:"documents_merged"`
@@ -2485,11 +2325,10 @@ func (h *Handler) handleAdminContentDedupStatus(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// handleAdminContentDedupRecomputeStart kicks off a full-corpus content
-// dedup pass in the background, mirroring
-// handleAdminEmbeddingsRecomputeStart's fire-and-forget shape -- a
-// corpus-wide scan (plus simhash banding) can take real time. Rejects a
-// second trigger while one is running (409): real DB contention otherwise.
+// handleAdminContentDedupRecomputeStart kicks off a full-corpus dedup
+// pass in the background, mirroring the embeddings recompute's
+// fire-and-forget shape. Rejects a second trigger while running (409):
+// real DB contention otherwise.
 func (h *Handler) handleAdminContentDedupRecomputeStart(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.contentDedupRepo != nil, configNameContentDedup) {
 		return
@@ -2505,11 +2344,9 @@ func (h *Handler) handleAdminContentDedupRecomputeStart(w http.ResponseWriter, r
 		switch {
 		case err == nil:
 		case errors.Is(err, ports.ErrContentDedupAlreadyRunning):
-			// The fast-path check above already rejected the common case
-			// (200/409 back to this same request) -- this is the rarer
-			// case where cmd/crawl's own scheduler won the race in the
-			// gap between that check and this goroutine actually starting.
-			// Expected, not worth logging as an error.
+			// The fast-path check above already rejected the common case --
+			// this is the rarer race where cmd/crawl's scheduler won between
+			// that check and this goroutine starting. Expected, not an error.
 		default:
 			log.Printf("recomputing content dedup: %v", err)
 		}
@@ -2522,9 +2359,8 @@ func (h *Handler) handleAdminContentDedupRecomputeStart(w http.ResponseWriter, r
 const defaultAliasGroupsPageSize = 20
 
 // adminDocumentAlias mirrors domain.DocumentAlias for the wire format --
-// reason is included (not just the URL) so the admin UI can tell an actual
-// content-dedup merge apart from ordinary canonical_tag bookkeeping
-// recorded during crawling, which never deleted or merged anything.
+// reason is included so the admin UI can tell an actual dedup merge apart
+// from ordinary canonical_tag bookkeeping.
 type adminDocumentAlias struct {
 	URL    string `json:"url"`
 	Reason string `json:"reason"`
@@ -2541,13 +2377,10 @@ type adminAliasGroupsResponse struct {
 	Groups []adminDocumentAliasGroup `json:"groups"`
 }
 
-// handleAdminContentDedupAliasGroups lists every canonical document that
-// has at least one alias of it, from any reason -- ordinary canonical_tag
-// bookkeeping recorded during crawling as well as an actual content-dedup
-// merge (see each entry's own reason) -- the "what's actually aliased"
-// transparency listing a black-box merge count can't provide, letting an
-// admin verify a dedup pass did what they expect before trusting it
-// further.
+// handleAdminContentDedupAliasGroups lists every canonical document with
+// at least one alias, from any reason -- the "what's actually aliased"
+// transparency a black-box merge count can't provide, letting an admin
+// verify a dedup pass before trusting it.
 func (h *Handler) handleAdminContentDedupAliasGroups(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) || !requireConfigured(w, h.admin != nil, configNameContentDedup) {
 		return
@@ -2576,9 +2409,8 @@ func (h *Handler) handleAdminDatabasePage(w http.ResponseWriter, r *http.Request
 	serveStatic(w, r, contentTypeHTML, adminDatabaseHTML)
 }
 
-// adminDBPoolStats is sql.DBStats' wire shape, with its one time.Duration
-// field converted to milliseconds -- JSON has no native duration type, and
-// milliseconds reads more directly than a raw nanosecond count.
+// adminDBPoolStats is sql.DBStats' wire shape, with its time.Duration
+// field converted to milliseconds -- JSON has no native duration type.
 type adminDBPoolStats struct {
 	MaxOpenConnections int   `json:"max_open_connections"`
 	OpenConnections    int   `json:"open_connections"`
@@ -2598,8 +2430,7 @@ type adminDatabaseResponse struct {
 }
 
 // toAdminDBPoolStats maps sql.DBStats to its wire shape -- shared by
-// handleAdminDatabase and handleAdminOverviewMetrics, the two admin panels
-// that both surface the same live pool via AdminRepository.PoolStats.
+// handleAdminDatabase and handleAdminOverviewMetrics.
 func toAdminDBPoolStats(stats sql.DBStats) adminDBPoolStats {
 	return adminDBPoolStats{
 		MaxOpenConnections: stats.MaxOpenConnections,
@@ -2630,9 +2461,8 @@ func (h *Handler) handleAdminDatabase(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleAdminClearContent permanently deletes every crawled document
-// (postings, links, versions, embeddings, aliases) and every crawl job --
-// see ports.AdminRepository.ClearContent's own doc comment. Every settings
+// handleAdminClearContent permanently deletes every crawled document and
+// crawl job -- see ports.AdminRepository.ClearContent. Every settings
 // table is left untouched.
 func (h *Handler) handleAdminClearContent(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
@@ -2645,19 +2475,15 @@ func (h *Handler) handleAdminClearContent(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]bool{"cleared": true})
 }
 
-// defaultTuningAlpha mirrors the literal cmd/search and cmd/admin's main.go
-// bootstrap domain.NewTuningSettings with -- k1/b already have named
-// domain.DefaultBM25K1/DefaultBM25B constants; alpha never got one.
+// defaultTuningAlpha mirrors the literal both main.go bootstraps use --
+// k1/b already have named domain.DefaultBM25K1/B constants, alpha never got one.
 const defaultTuningAlpha = 0.5
 
-// handleAdminClearSettings permanently deletes every row of every settings
-// table -- see ports.AdminRepository.ClearSettings's own doc comment. This
-// process's own in-memory settings are reset to their built-in defaults
-// immediately afterward (for immediate feedback on this admin-server), but
-// other processes (search-server, crawl-server) only pick up the change
-// once restarted -- deliberately not attempted automatically, since
-// bootstrap.SyncSettings can't tell "cleared on purpose" apart from a
-// transient DB read error.
+// handleAdminClearSettings permanently deletes every settings row -- see
+// ports.AdminRepository.ClearSettings. This process's in-memory settings
+// reset immediately; other processes only pick it up on restart, since
+// bootstrap.SyncSettings can't tell "cleared on purpose" from a transient
+// read error.
 func (h *Handler) handleAdminClearSettings(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) || !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
@@ -2679,10 +2505,9 @@ func (h *Handler) handleAdminClearSettings(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]bool{"cleared": true})
 }
 
-// Lookback windows for the admin Overview page's tier-2 panels: the
+// Lookback windows for the Overview page's tier-2 panels: the
 // crawl-outcome donut and documents-indexed trend look back 30 days; the
-// higher-volume crawl_job_pages panels use a narrower 14 to keep their
-// one-bar/point-per-day charts readable.
+// higher-volume crawl_job_pages panels use 14 to keep per-day charts readable.
 const (
 	overviewJobOutcomeDays     = 30
 	overviewDocumentsTrendDays = 30
@@ -2710,10 +2535,9 @@ type adminDailyDuration struct {
 	AvgDurationMs float64 `json:"avg_duration_ms"`
 }
 
-// adminOverviewRunningJob is the inline-visible detail for one currently
-// running crawl job on the Overview page -- just enough to summarize it
-// (seedSummary already renders SeedURLs client-side the same way the
-// Jobs/Schedules tables do), not the full CrawlJobSummary.
+// adminOverviewRunningJob is the inline-visible detail for one running
+// crawl job on the Overview page -- just enough to summarize it, not the
+// full CrawlJobSummary.
 type adminOverviewRunningJob struct {
 	ID           string   `json:"id"`
 	SeedURLs     []string `json:"seed_urls"`
@@ -2738,10 +2562,9 @@ type adminOverviewMetrics struct {
 	DocumentsByDay     []adminDailyCount        `json:"documents_by_day"`
 	FetchDurationByDay []adminDailyDuration     `json:"fetch_duration_by_day"`
 	PageRankBuckets    []adminAgeBucket         `json:"pagerank_buckets"`
-	// PageRankOrphanThreshold documents the fixed cutoff PageRankOrphanCount/
-	// PageRankOrphanPercent were computed against (domain.
-	// PageRankOrphanThreshold), so the client can label the stat tile
-	// correctly without hardcoding the number itself.
+	// PageRankOrphanThreshold documents the fixed cutoff
+	// PageRankOrphanCount/Percent were computed against, so the client can
+	// label the stat tile without hardcoding the number.
 	PageRankOrphanThreshold float64 `json:"pagerank_orphan_threshold"`
 	PageRankOrphanCount     int     `json:"pagerank_orphan_count"`
 	PageRankOrphanPercent   float64 `json:"pagerank_orphan_percent"`
@@ -2749,9 +2572,9 @@ type adminOverviewMetrics struct {
 }
 
 // handleAdminOverviewMetrics backs the Overview page's operational panels
-// beyond handleAdminDocumentsOverview's corpus summary: crawl/schedule
-// health, DB pool stats, and tier-2 trend charts. Only h.admin is
-// required; h.jobs/h.scheduledCrawls degrade to zero-valued fields if unset.
+// beyond handleAdminDocumentsOverview: crawl/schedule health, DB pool
+// stats, tier-2 trends. Only h.admin required; h.jobs/h.scheduledCrawls
+// degrade to zero-valued fields if unset.
 func (h *Handler) handleAdminOverviewMetrics(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.admin != nil, configNameAdminDiagnostics) {
 		return
@@ -2832,11 +2655,9 @@ func (h *Handler) handleAdminOverviewMetrics(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// summarizeOverviewCrawlJobs computes the Overview page's running/queued
-// crawl-job counts and the detail list of currently running jobs from a
-// full job list -- split out of handleAdminOverviewMetrics purely to keep
-// that handler's own branching (and therefore its cognitive complexity)
-// down; behavior is unchanged.
+// summarizeOverviewCrawlJobs computes the running/queued job counts and
+// running-job detail list from a full job list -- split out purely to
+// keep handleAdminOverviewMetrics' complexity down; behavior unchanged.
 func summarizeOverviewCrawlJobs(jobs []domain.CrawlJobSummary) (running, queued int, runningJobs []adminOverviewRunningJob) {
 	for _, j := range jobs {
 		switch j.Status {
@@ -2852,10 +2673,9 @@ func summarizeOverviewCrawlJobs(jobs []domain.CrawlJobSummary) (running, queued 
 	return running, queued, runningJobs
 }
 
-// summarizeOverviewSchedules computes the Overview page's enabled/disabled/
-// in-progress/overdue schedule counts from a full schedule list -- split
-// out of handleAdminOverviewMetrics for the same reason as
-// summarizeOverviewCrawlJobs.
+// summarizeOverviewSchedules computes the enabled/disabled/in-progress/
+// overdue schedule counts from a full list -- split out for the same
+// reason as summarizeOverviewCrawlJobs.
 func summarizeOverviewSchedules(schedules []domain.ScheduledCrawl, now time.Time) (enabled, disabled, inProgress, overdue int) {
 	for _, s := range schedules {
 		if s.Enabled {
@@ -2874,9 +2694,8 @@ func summarizeOverviewSchedules(schedules []domain.ScheduledCrawl, now time.Time
 }
 
 // groupDailyFetchOutcomes regroups sqlrepo's flat (day, status, count)
-// rows into one entry per day with every outcome nested underneath, the
-// shape the Overview page's stacked-bar chart wants. Rows arrive already
-// ordered by day, so a single pass suffices.
+// rows into one entry per day with every outcome nested -- the shape the
+// stacked-bar chart wants. Rows arrive ordered by day, so one pass suffices.
 func groupDailyFetchOutcomes(rows []domain.DailyFetchOutcome) []adminDailyFetchOutcome {
 	var out []adminDailyFetchOutcome
 	for _, row := range rows {

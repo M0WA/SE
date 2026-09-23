@@ -12,9 +12,8 @@ import (
 	"searchengine/internal/domain"
 )
 
-// pinnedChatResp mirrors account_chats.go's own unexported wire type --
-// same convention fileResponse/mcpServerResp use for an external _test
-// package.
+// pinnedChatResp mirrors account_chats.go's unexported wire type, same as
+// fileResponse/mcpServerResp do for this external _test package.
 type pinnedChatResp struct {
 	ID        string               `json:"id"`
 	Title     string               `json:"title"`
@@ -215,8 +214,7 @@ func TestHandleAccountUpdateChat_EmptyTitleRejected(t *testing.T) {
 }
 
 // TestHandleAccountUpdateChat_WrongOwnerNotFound proves a session can't
-// rename/resync another user's chat -- indistinguishable from the ID not
-// existing at all.
+// touch another user's chat -- looks identical to a nonexistent ID.
 func TestHandleAccountUpdateChat_WrongOwnerNotFound(t *testing.T) {
 	userStore := &fakeUserStore{users: []domain.User{
 		{ID: "u1", Username: "alice", PasswordHash: testUserPasswordHash},

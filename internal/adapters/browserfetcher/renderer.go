@@ -17,21 +17,17 @@ import (
 	"searchengine/internal/ports"
 )
 
-// Renderer wraps one browser engine (Chromium or Firefox -- see
-// domain.RendererChromium/RendererFirefox). Safe for concurrent use: each
-// Render call opens its own isolated browser context (nothing leaks between
-// concurrent crawls), while the underlying browser/driver starts at most
-// once, lazily, on first use.
+// Renderer wraps one browser engine (Chromium or Firefox). Safe for
+// concurrent use: each Render call opens its own isolated browser context,
+// while the underlying browser/driver starts at most once, lazily.
 type Renderer struct {
 	// Engine is "chromium" or "firefox" (see domain.Renderer* constants).
 	Engine string
 
-	// AllowURL decides whether a request (the top-level navigation or any
-	// subresource request the rendered page's own JavaScript issues) may
-	// go out -- see Render's SSRF-guard comment. Defaults to
+	// AllowURL decides whether a request (navigation or subresource) may go
+	// out -- see Render's SSRF-guard comment. Defaults to
 	// netguard.URLAllowed when nil; overridable so tests can render an
-	// httptest.Server, whose loopback address the default guard rejects
-	// by design.
+	// httptest.Server, whose loopback address the default guard rejects.
 	AllowURL func(rawURL string) bool
 
 	mu      sync.Mutex
@@ -48,10 +44,9 @@ func New(engine string) *Renderer {
 }
 
 // ensureBrowser lazily installs (if needed) and launches this renderer's
-// browser engine, memoizing it for reuse. Installing downloads Playwright's
-// managed browser binary on first use per engine (slow, idempotent) --
-// deferred to first crawl rather than startup, so a deployment that never
-// enables rendering never pays that cost.
+// browser engine, memoizing it for reuse -- deferred to first crawl rather
+// than startup, so a deployment that never enables rendering never pays
+// Playwright's install cost.
 func (r *Renderer) ensureBrowser() (playwright.Browser, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -67,10 +62,9 @@ func (r *Renderer) ensureBrowser() (playwright.Browser, error) {
 		return nil, fmt.Errorf("starting playwright driver: %w", err)
 	}
 
-	// Playwright defaults ChromiumSandbox to false (--no-sandbox) for broad
-	// compatibility, but this crawler renders arbitrary untrusted sites, so
-	// explicitly turn it on. Firefox has no equivalent toggle -- its
-	// sandboxing is always active.
+	// Playwright defaults ChromiumSandbox to false, but this crawler renders
+	// untrusted sites, so turn it on explicitly. Firefox has no equivalent
+	// toggle -- its sandboxing is always active.
 	launchOpts := playwright.BrowserTypeLaunchOptions{}
 	browserType := pw.Chromium
 	if r.Engine == "firefox" {
@@ -89,12 +83,11 @@ func (r *Renderer) ensureBrowser() (playwright.Browser, error) {
 	return r.browser, nil
 }
 
-// Render implements ports.Renderer: opens a fresh, isolated browser context
-// (no leaked cookies/credentials between concurrent crawls), navigates to
-// url, waits for load (opts.FetchTimeoutSeconds bounds it), and returns the
-// rendered DOM's HTML. ctx cancellation closes the in-flight page promptly
-// by racing ctx.Done() against the navigation goroutine, since Playwright's
-// API takes no context.Context directly.
+// Render implements ports.Renderer: opens a fresh, isolated browser
+// context, navigates to url (opts.FetchTimeoutSeconds bounds it), and
+// returns the rendered DOM's HTML. ctx cancellation closes the in-flight
+// page promptly by racing ctx.Done() against the navigation goroutine,
+// since Playwright takes no context.Context directly.
 func (r *Renderer) Render(ctx context.Context, url string, opts ports.FetchOptions) (string, error) {
 	browser, err := r.ensureBrowser()
 	if err != nil {
@@ -107,12 +100,11 @@ func (r *Renderer) Render(ctx context.Context, url string, opts ports.FetchOptio
 	}
 	defer bctx.Close()
 
-	// A rendered page's own JS can issue fetch()/XHR requests anywhere, so
-	// route every request (navigation and subresources alike) through the
-	// same loopback/private-IP guard as the plain fetcher -- a DNS lookup
-	// here rather than a connect-time hook, since Playwright exposes no
-	// dial-level control (leaves a narrow resolve-then-connect gap vs. the
-	// plain fetcher). data: URLs are always allowed -- inline, never SSRF.
+	// A rendered page's JS can issue fetch()/XHR anywhere, so route every
+	// request through the same loopback/private-IP guard as the plain
+	// fetcher -- a DNS lookup here, not a connect-time hook, since
+	// Playwright exposes no dial-level control (a narrow resolve-then-connect
+	// gap vs. the plain fetcher). data: URLs are always allowed.
 	allowURL := r.AllowURL
 	if allowURL == nil {
 		allowURL = netguard.URLAllowed
@@ -147,14 +139,11 @@ func (r *Renderer) Render(ctx context.Context, url string, opts ports.FetchOptio
 			done <- result{err: fmt.Errorf("rendering %s: %w", url, err)}
 			return
 		}
-		// The native "load" event fires once static resources finish, but
-		// for a typical SPA that's often well before its own JS has
-		// fetched/rendered real content (confirmed on a real site: DOM
-		// empty at `load`, populated ~1s later). networkidle waits for a
-		// quiet window with no in-flight requests as a proxy for "JS done
-		// fetching," bounded by the same timeout; a page with continuous
-		// background requests just times out here (not an error) and
-		// rendering proceeds with whatever's in the DOM.
+		// "load" fires once static resources finish, often before a SPA's
+		// own JS has rendered real content (confirmed: DOM empty at
+		// `load`, populated ~1s later). networkidle is a proxy for "JS
+		// done fetching"; a page with continuous background requests just
+		// times out here (not an error) and rendering proceeds regardless.
 		_ = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 			State:   playwright.LoadStateNetworkidle,
 			Timeout: gotoOpts.Timeout,
@@ -184,9 +173,8 @@ func (r *Renderer) Render(ctx context.Context, url string, opts ports.FetchOptio
 }
 
 // buildContextOptions maps FetchOptions' identity knobs (user agent, basic
-// auth) onto a fresh browser context's options -- pulled out of Render so
-// this straightforward field mapping doesn't add to Render's own cognitive
-// complexity.
+// auth) onto a fresh browser context's options -- pulled out of Render to
+// keep this field mapping off its cognitive complexity.
 func buildContextOptions(opts ports.FetchOptions) playwright.BrowserNewContextOptions {
 	contextOpts := playwright.BrowserNewContextOptions{}
 	if opts.UserAgent != "" {
@@ -201,11 +189,9 @@ func buildContextOptions(opts ports.FetchOptions) playwright.BrowserNewContextOp
 	return contextOpts
 }
 
-// ssrfRouteHandler returns the playwright.Route callback Render installs on
-// every browser context: blocks any request (navigation or subresource)
-// allowURL rejects, same SSRF guard described on Render's own Route call --
-// pulled out as its own function so the closure's branching doesn't add to
-// Render's cognitive complexity.
+// ssrfRouteHandler returns the playwright.Route callback Render installs:
+// blocks any request allowURL rejects (see Render's SSRF-guard comment) --
+// its own function so the branching doesn't add to Render's complexity.
 func ssrfRouteHandler(allowURL func(string) bool) func(playwright.Route) {
 	return func(route playwright.Route) {
 		reqURL := route.Request().URL()
@@ -217,10 +203,9 @@ func ssrfRouteHandler(allowURL func(string) bool) func(playwright.Route) {
 	}
 }
 
-// setCookies parses opts.Cookie (a raw "name=value; name2=value2" Cookie
-// header, exactly what ports.FetchOptions.Cookie already carries for the
-// plain HTTP fetcher) into individual cookies scoped to url, using
-// net/http's own header parser rather than hand-rolling one.
+// setCookies parses opts.Cookie (a raw "name=value; ..." Cookie header)
+// into individual cookies scoped to url, using net/http's own header
+// parser rather than hand-rolling one.
 func setCookies(bctx playwright.BrowserContext, url, cookieHeader string) error {
 	req := &http.Request{Header: http.Header{"Cookie": []string{cookieHeader}}}
 	parsed := req.Cookies()

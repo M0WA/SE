@@ -29,11 +29,10 @@ func main() {
 	corpusStats := domain.NewCorpusStatsCache(0, 1)
 	vocabulary := domain.NewVocabularyCache(nil)
 
-	// See cmd/search's identical block: these three are independent
-	// blocking DB round-trips against unrelated tables/state, so running
-	// them concurrently makes startup latency the slowest one rather than
-	// their sum. Embedder construction can't join this batch -- it needs
-	// opSettings already synced.
+	// These three are independent blocking DB round-trips (see cmd/search's
+	// identical block) -- run concurrently so startup latency is the
+	// slowest one, not their sum. Embedder construction needs opSettings
+	// already synced, so it can't join this batch.
 	var wg sync.WaitGroup
 	wg.Add(3)
 	go func() {
@@ -50,25 +49,20 @@ func main() {
 	}
 	endpoints := bootstrap.LoadEmbeddingEndpoints(ctx, repo, settingsEncryptionKey)
 	embedders := bootstrap.NewEmbedders(opSettings.Get().EmbeddingHashEnabled, endpoints)
-	// Enables Postgres pgvector ANN search for this process when
-	// available, never fatal otherwise. Must run after embedders are
-	// constructed -- see cmd/search's identical comment.
+	// Enables Postgres pgvector ANN search when available, never fatal
+	// otherwise. Must run after embedders are constructed.
 	repo.EnableANN(ctx, bootstrap.EmbedderDimensions(embedders))
 
 	debugSvc := application.NewHybridSearchService(repo, embedders, settings, opSettings, overrides, corpusStats, vocabulary)
 
 	// A previous instance killed mid-recompute leaves InProgress=true,
-	// permanently blocking future triggers -- mirrors cmd/crawl's
-	// ResetStaleInProgress call for scheduled_crawls.
+	// permanently blocking future triggers.
 	if application.ResetStaleEmbeddingRecomputeStatus(ctx, repo) {
 		log.Print("reset a stale embedding recompute status left in-progress from a previous restart")
 	}
 
-	// Best-effort, non-fatal: a fresh deployment gets a small set of
-	// ready-to-use starter Agent rows (see
-	// sqlrepo.SeedDefaultAgents/default_agents.go); an existing one with
-	// any agents already configured (including an admin who deleted every
-	// seeded default down to zero) is left untouched.
+	// Best-effort, non-fatal: seeds starter Agent rows for a fresh
+	// deployment; one with any agents already configured is untouched.
 	if err := repo.SeedDefaultAgents(ctx); err != nil {
 		log.Printf("seeding default agents: %v", err)
 	}

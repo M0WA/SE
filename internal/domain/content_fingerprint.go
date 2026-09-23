@@ -10,10 +10,9 @@ import (
 	"time"
 )
 
-// DocumentFingerprint is the narrow shape application.RunContentDedupJob
-// needs per document -- just enough to group duplicates and report a
-// human-readable merge result, not the full Document (text/embeddings
-// would be wasted memory across an entire corpus scan).
+// DocumentFingerprint is the narrow per-document shape RunContentDedupJob
+// needs to group duplicates and report a merge result -- not the full
+// Document, whose text/embeddings would waste memory across a corpus scan.
 type DocumentFingerprint struct {
 	ID          string
 	URL         string
@@ -32,17 +31,13 @@ func ContentHash(text string) string {
 }
 
 // simHashShingleSize is the word-shingle width SimHash64 hashes over -- 3
-// words is the standard, well-tested choice for near-duplicate web page
-// detection (long enough that common short phrases don't collide
-// constantly, short enough that a handful of edited words don't change
-// most shingles).
+// words, the standard choice for near-duplicate web page detection.
 const simHashShingleSize = 3
 
-// SimHash64 returns a 64-bit locality-sensitive fingerprint of text
-// (16 hex chars -- dialect-portable, unlike a signed BIGINT). Fingerprints
-// differing in only a few bits (HammingDistance64) mean near-duplicate
-// text: each fnv-1a-hashed word shingle casts a per-bit majority vote,
-// so similar texts share most shingles and stay close in Hamming distance.
+// SimHash64 returns a 64-bit locality-sensitive fingerprint of text (16 hex
+// chars -- dialect-portable, unlike a signed BIGINT). Each word shingle
+// casts a per-bit majority vote, so near-duplicate texts stay close in
+// Hamming distance (HammingDistance64).
 func SimHash64(text string) uint64 {
 	words := strings.Fields(strings.ToLower(text))
 	var votes [64]int
@@ -64,9 +59,8 @@ func SimHash64(text string) uint64 {
 	return simHashFromVotes(votes)
 }
 
-// simHashOfShingle fnv-1a-hashes one word shingle -- shared by both of
-// SimHash64's branches (a too-short text hashed whole, or each sliding
-// window of a longer one).
+// simHashOfShingle fnv-1a-hashes one word shingle, shared by both of
+// SimHash64's branches.
 func simHashOfShingle(ws []string) uint64 {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(strings.Join(ws, " ")))
@@ -113,9 +107,8 @@ func DecodeSimHash64(s string) uint64 {
 	return binary.BigEndian.Uint64(b)
 }
 
-// HammingDistance64 counts the differing bits between two SimHash64
-// fingerprints -- the near-duplicate distance metric application.
-// RunContentDedupJob compares against OperationalSettingsValues.
+// HammingDistance64 counts differing bits between two SimHash64
+// fingerprints -- the near-duplicate metric compared against
 // ContentDedupSimHashMaxDistance.
 func HammingDistance64(a, b uint64) int {
 	return bits.OnesCount64(a ^ b)

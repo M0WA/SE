@@ -205,12 +205,9 @@ func patchAccount(t *testing.T, h *restapi.Handler, cookie *http.Cookie, body in
 	return rec
 }
 
-// fakeUserRoleSessionStore is a minimal ports.SessionStore fake that
-// treats EVERY token as a valid domain.RoleUser session for a fixed
-// userID -- used only to reach handleAccount's own requireConfigured(h.users
-// != nil) branch with h.users deliberately left nil, which a real login
-// (always going through h.users when issuing a role=user session) could
-// never produce on its own.
+// fakeUserRoleSessionStore treats every token as a valid role=user session
+// -- lets a test reach handleAccount's h.users-nil branch, which a real
+// login (which always goes through h.users) could never produce.
 type fakeUserRoleSessionStore struct{}
 
 func (fakeUserRoleSessionStore) CreateSession(context.Context, string, time.Time, string, string) error {

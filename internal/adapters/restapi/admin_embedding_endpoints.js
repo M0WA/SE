@@ -68,9 +68,7 @@
   wireSignOut();
   loadEndpoints();
 
-  // Exports for the Node test runner only -- `typeof module` is undefined in
-  // a browser's <script> tag, so this is a no-op there. See
-  // admin_embedding_endpoints.test.js.
+  // Node test-runner export only; no-op in a browser <script> tag.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { renderEndpoints, loadEndpoints };
   }

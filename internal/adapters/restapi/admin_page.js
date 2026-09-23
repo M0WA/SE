@@ -91,11 +91,8 @@
     return wrap;
   }
 
-  // buildVersionBars mirrors buildAgeBars' bar-chart shape (same CSS
-  // classes, same "count above a height-scaled bar, label below" layout)
-  // for the version-number breakdown -- a document's version count is a
-  // small, discrete distribution just like an age bucket, so the same
-  // visual treatment reads the same way at a glance.
+  // buildVersionBars mirrors buildAgeBars' bar-chart shape for the version-number breakdown --
+  // a small discrete distribution, same as an age bucket, reading the same way at a glance.
   function buildVersionBars(versionCounts) {
     const maxCount = Math.max.apply(null, versionCounts.map((v) => v.count).concat([1]));
     const wrap = document.createElement('div');
@@ -121,12 +118,10 @@
     return wrap;
   }
 
-  // buildStoredVersionsBars mirrors buildVersionBars' bar-chart shape for
-  // a different distribution: how many documents currently have exactly N
-  // versions actually retained in storage (current + archived, bounded by
-  // the Settings > Documents > "Version history" limit) -- distinct from
-  // "Documents by version" above, which buckets by a document's version
-  // NUMBER (total historical changes, unaffected by pruning).
+  // buildStoredVersionsBars mirrors buildVersionBars for a different distribution: how many
+  // documents have exactly N versions retained in storage (bounded by the "Version history"
+  // limit) -- distinct from "Documents by version" above, which buckets by total historical
+  // changes, unaffected by pruning.
   function buildStoredVersionsBars(storedVersionCounts) {
     const maxCount = Math.max.apply(null, storedVersionCounts.map((s) => s.doc_count).concat([1]));
     const wrap = document.createElement('div');
@@ -153,10 +148,8 @@
     return wrap;
   }
 
-  // buildJobOutcomeDonut mirrors buildDonut's arc math exactly (same size/
-  // radius/stroke, same opacity ramp per slice) for a different field shape
-  // -- crawl job outcomes (status/count) rather than domains (host/
-  // doc_count) -- see the admin Overview page's "Crawl job outcomes" panel.
+  // buildJobOutcomeDonut mirrors buildDonut's arc math exactly, for crawl job outcomes
+  // (status/count) rather than domains -- see the Overview page's "Crawl job outcomes" panel.
   function buildJobOutcomeDonut(outcomes, total) {
     const size = 120;
     const r = 46;
@@ -202,10 +195,9 @@
     return svg;
   }
 
-  // buildJobOutcomeLegend mirrors buildDonutLegend's row shape, minus the
-  // link (a job status isn't a page to navigate to) -- reuses
-  // .donut-legend-row directly since that class's anchor-specific rules
-  // (`a`, `a:hover`) simply don't match here, with no link ever appended.
+  // buildJobOutcomeLegend mirrors buildDonutLegend's row shape minus the link (a job status
+  // isn't navigable) -- reuses .donut-legend-row directly since its anchor-specific rules simply
+  // don't match with no link appended.
   function buildJobOutcomeLegend(outcomes) {
     const legend = document.createElement('div');
     legend.className = 'donut-legend';
@@ -228,20 +220,16 @@
     return legend;
   }
 
-  // FETCH_OUTCOME_ORDER/OPACITY fixes one opacity per outcome across every
-  // day's column, so the same outcome always reads as the same shade
-  // regardless of which outcomes a particular day actually had. Any status
-  // not listed here (a future CrawlPageStatus this list hasn't been
-  // updated for) still gets a segment -- see FETCH_OUTCOME_FALLBACK_OPACITY
-  // below -- rather than silently vanishing from the stack while still
-  // counting toward the bar's total height and count label.
+  // FETCH_OUTCOME_ORDER/OPACITY fixes one opacity per outcome so the same outcome always reads
+  // as the same shade. A status not listed (a future CrawlPageStatus) still gets a segment, via
+  // FETCH_OUTCOME_FALLBACK_OPACITY, rather than vanishing while still counting toward the bar's
+  // total.
   const FETCH_OUTCOME_ORDER = ['indexed', 'thin_content', 'robots_disallowed', 'fetch_failed'];
   const FETCH_OUTCOME_OPACITY = { indexed: 1, thin_content: 0.7, robots_disallowed: 0.45, fetch_failed: 0.25 };
   const FETCH_OUTCOME_FALLBACK_OPACITY = 0.15;
 
-  // buildThroughputStackBars draws one column per day (see .stack-bars),
-  // each a bottom-up stack of same-hue, per-outcome-opacity segments sized
-  // by that outcome's share of the day -- the admin Overview page's fetch
+  // buildThroughputStackBars draws one column per day (.stack-bars), a bottom-up stack of
+  // per-outcome-opacity segments sized by share of the day -- the Overview page's
   // throughput/outcome-breakdown panel.
   function buildThroughputStackBars(dailyOutcomes) {
     const totals = dailyOutcomes.map((d) => Object.values(d.outcomes || {}).reduce((a, b) => a + b, 0));
@@ -256,10 +244,8 @@
       const total = totals[i];
       bar.style.height = Math.max(2, (total / maxTotal) * 80) + 'px';
       const outcomes = d.outcomes || {};
-      // FETCH_OUTCOME_ORDER first (fixed order/shade), then any status this
-      // day has that isn't in that list, so every counted outcome always
-      // gets a segment and the segments' flex sizes always sum to the
-      // day's real total.
+      // FETCH_OUTCOME_ORDER first, then any status not in that list, so every counted outcome
+      // gets a segment and flex sizes always sum to the day's real total.
       const statusesToday = FETCH_OUTCOME_ORDER.concat(
         Object.keys(outcomes).filter((s) => !FETCH_OUTCOME_ORDER.includes(s)).sort((a, b) => a.localeCompare(b))
       );
@@ -318,17 +304,11 @@
     return wrap;
   }
 
-  // buildLineChart draws a simple accent-colored trend line for a
-  // day-bucketed series (points: [{date, value}]) -- shared by the
-  // documents-indexed and fetch-duration-trend panels, whose data shares
-  // the same shape (one value per day; a day with nothing to report simply
-  // has no point, never a zero-filled gap -- see admin.go's
-  // DocumentsIndexedByDay/DailyFetchDuration doc comments). Points are
-  // spaced along x by actual elapsed days since the first point, not by
-  // array index, so a gap where several days reported nothing shows up as
-  // real horizontal space rather than silently compressing the line and
-  // distorting its apparent slope. formatValue renders one point's value
-  // for its hover title.
+  // buildLineChart draws an accent-colored trend line for a day-bucketed series -- shared by
+  // the documents-indexed and fetch-duration-trend panels (a day with nothing to report has no
+  // point, never a zero-filled gap; see admin.go's doc comments). Points space along x by actual
+  // elapsed days, not array index, so a gap shows as real horizontal space rather than
+  // compressing the line's slope. formatValue renders a point's hover title.
   function buildLineChart(points, formatValue) {
     const wrap = document.createElement('div');
     wrap.className = 'line-chart-wrap';
@@ -351,10 +331,9 @@
     const minV = Math.min.apply(null, values.concat([0]));
     const span = maxV - minV || 1;
 
-    // dayOffset turns a "YYYY-MM-DD" date into its day count since the
-    // first point (parsed as UTC midnight so this never shifts by the
-    // viewer's local timezone), so xAt places points by real elapsed time
-    // rather than assuming every point is one uniform day apart.
+    // dayOffset turns a date into its day count since the first point (parsed as UTC midnight,
+    // so it never shifts by local timezone), so xAt places points by real elapsed time, not
+    // uniform spacing.
     const dayMs = 24 * 60 * 60 * 1000;
     const dayOffset = (date) => (Date.parse(date + 'T00:00:00Z') - Date.parse(points[0].date + 'T00:00:00Z')) / dayMs;
     const totalDays = dayOffset(points[points.length - 1].date) || 1;
@@ -410,13 +389,9 @@
     return wrap;
   }
 
-  // loadOverviewMetrics fetches /admin/api/overview/metrics -- everything
-  // on the Overview page beyond the corpus summary loadCorpusOverview
-  // already renders: crawl job/schedule health and DB pool utilization as
-  // stat tiles, plus the tier-2 trend/breakdown charts as a second chart
-  // row. A fetch failure here is reported in tilesEl and stops there,
-  // without touching chartsEl -- it never blots out the corpus overview
-  // row loadCorpusOverview already rendered above it.
+  // loadOverviewMetrics fetches everything beyond loadCorpusOverview's corpus summary: job/
+  // schedule health and DB pool stats, plus tier-2 trend charts. A fetch failure is reported in
+  // tilesEl only, never touching chartsEl or the corpus row above it.
   async function loadOverviewMetrics(tilesEl, chartsEl) {
     let m;
     try {
@@ -601,10 +576,8 @@
   async function loadOverview() {
     await loadStats();
     const chartsEl = document.getElementById('overview-charts');
-    // loadCorpusOverview clears chartsEl before rendering its own row, so
-    // it must run before loadOverviewMetrics appends its second row --
-    // reversing the order would wipe out the tier-2 charts the instant the
-    // corpus overview's own fetch resolved.
+    // loadCorpusOverview clears chartsEl before rendering, so it must run before
+    // loadOverviewMetrics appends its row -- reversed order would wipe the tier-2 charts on resolve.
     await loadCorpusOverview(
       document.getElementById('stats'),
       document.getElementById('overview-status'),

@@ -29,9 +29,8 @@
       statusEl.textContent = 'Showing the ' + data.postings.length + ' strongest matches — refine the term to narrow further.';
     }
 
-    // Highest term frequency first -- the strongest matches for this term
-    // lead the list, same ordering convention as the search debug page's
-    // BM25 term breakdown.
+    // Highest term frequency first, same ordering convention as the search debug page's BM25
+    // term breakdown.
     const sorted = data.postings.slice().sort((a, b) => b.term_freq - a.term_freq);
 
     const table = buildTable(

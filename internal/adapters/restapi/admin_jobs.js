@@ -28,25 +28,19 @@
   let jobDetailPages = [];
   let jobDetailFilterText = '';
   let jobDetailPageNum = 1;
-  // jobDetailSortBy/jobDetailSortDir default to newest-fetched-first, the
-  // most useful view right after a crawl finishes (or while it's still
-  // running) -- reset back to this default whenever a different job is
-  // selected (see loadJobDetail), but preserved across a poll refresh or
-  // page-turn within the same job.
+  // jobDetailSortBy/Dir default to newest-first, the most useful view right after/during a crawl
+  // -- reset on selecting a different job (loadJobDetail), preserved across a poll refresh or
+  // page-turn.
   let jobDetailSortBy = 'fetched_at';
   let jobDetailSortDir = 'desc';
   let allJobs = [];
   let jobsFilterText = '';
   let allCrawls = [];
   let crawlsFilterText = '';
-  // awaitingNewJobUntil keeps loadJobs polling for a short window right
-  // after a crawl on the Crawl page (/admin/crawl) creates a new schedule,
-  // even though no job exists yet -- it's only created once crawl-server's
-  // scheduler ticker (application.TriggerDueCrawls) next runs, not
-  // synchronously with that page's request. This page has no crawl-form of
-  // its own -- it just keeps polling for a natural window after the admin
-  // arrives here (e.g. redirected here right after creating a crawl), same
-  // idea, driven purely by whether anything is currently active.
+  // awaitingNewJobUntil keeps loadJobs polling for a short window after the Crawl page creates a
+  // new schedule, since the Job itself is only created once the scheduler ticker
+  // (TriggerDueCrawls) next runs, not synchronously. This page has no crawl-form; it just polls
+  // for a window after arriving, driven by whatever's currently active.
   let awaitingNewJobUntil = 0;
 
   function capitalize(s) {
@@ -62,14 +56,10 @@
     return Math.floor(secs / 60) + 'm ' + Math.round(secs % 60) + 's';
   }
 
-  // jobSpeedSamples/jobSpeedRates: speed is the delta between two
-  // consecutive polls of the jobs list, not pages_crawled/started_at --
-  // that formula breaks the moment a job survives a crawl-server restart
-  // (recovered jobs get a fresh started_at from MarkRunning, but
-  // pages_crawled is a lifetime counter that doesn't reset), which
-  // divides a lifetime page count by a tiny elapsed window and reports a
-  // wildly inflated rate. `now` is a parameter (not a bare Date.now()
-  // call) so tests can drive it deterministically.
+  // jobSpeedSamples/Rates: speed is the delta between two consecutive polls, not
+  // pages_crawled/started_at -- that formula breaks after a crawl-server restart (started_at
+  // resets via MarkRunning but pages_crawled is a lifetime counter), inflating the rate wildly.
+  // `now` is a parameter so tests can drive it deterministically.
   const jobSpeedSamples = new Map();
   const jobSpeedRates = new Map();
 
@@ -88,9 +78,8 @@
     }
   }
 
-  // formatSpeed reports the most recently computed poll-to-poll rate for
-  // job.id -- '—' until at least two polls have seen this job (a brand
-  // new job, or one just noticed for the first time this page load).
+  // formatSpeed reports the last computed poll-to-poll rate for job.id -- '—' until at least two
+  // polls have seen this job.
   function formatSpeed(job) {
     const rate = jobSpeedRates.get(job.id);
     if (rate === undefined) return '—';
@@ -101,10 +90,8 @@
     setButtonLoading(clearEndedJobsBtn, true, 'Clearing…');
     try {
       const resp = await deleteRequest('/admin/api/crawl/jobs');
-      // loadJobs (via renderJobs) sets jobsStatusEl's text itself based on
-      // the refreshed list, so this message must be set after it returns,
-      // not before, or renderJobs immediately overwrites it -- same
-      // ordering runScheduleNow uses for the same reason.
+      // loadJobs (via renderJobs) sets jobsStatusEl itself -- this message must be set after it
+      // returns, or renderJobs overwrites it immediately (same ordering as runScheduleNow).
       await loadJobs();
       jobsStatusEl.textContent = 'Cleared ' + resp.removed + (resp.removed === 1 ? ' ended job.' : ' ended jobs.');
     } catch (err) {
@@ -245,11 +232,9 @@
       (re, p) => re.test(p.url) || re.test(p.status) || re.test(p.title || '') || re.test(p.error || ''));
   }
 
-  // JOB_DETAIL_COLUMNS drives both the sortable headers and the sort
-  // comparator below -- this table's data is already fully loaded
-  // client-side (one job's whole page list, see loadJobDetail), so
-  // sorting is plain in-memory array sort, never a server round-trip
-  // (unlike e.g. admin.js's vocabulary table, which is server-paginated).
+  // JOB_DETAIL_COLUMNS drives both the sortable headers and the comparator below -- this table's
+  // data is already fully loaded client-side, so sorting is a plain in-memory sort, never a
+  // server round-trip (unlike admin.js's server-paginated vocabulary table).
   const JOB_DETAIL_COLUMNS = [
     { key: 'url', label: 'url' },
     { key: 'status', label: 'status' },
@@ -261,9 +246,8 @@
     { key: 'error', label: 'detail' },
   ];
 
-  // jobDetailDefaultDir picks a sensible starting direction the first time
-  // a column is clicked: text columns start ascending (alphabetical),
-  // numeric/recency columns start descending (biggest/most-recent first).
+  // jobDetailDefaultDir picks a first-click direction: text columns start ascending,
+  // numeric/recency columns start descending.
   function jobDetailDefaultDir(key) {
     return (key === 'doc_length' || key === 'links_found' || key === 'duration_ms' || key === 'fetched_at') ? 'desc' : 'asc';
   }
@@ -285,9 +269,8 @@
     });
   }
 
-  // buildJobDetailTable mirrors admin.js's buildVocabTable click-to-sort
-  // header pattern, but re-renders locally (renderJobDetailTable) instead
-  // of refetching from the server.
+  // buildJobDetailTable mirrors admin.js's buildVocabTable click-to-sort pattern, but re-renders
+  // locally instead of refetching.
   function buildJobDetailTable(pages) {
     const table = document.createElement('table');
     const thead = document.createElement('thead');
@@ -511,11 +494,9 @@
     }
   }
 
-  // Uses the dedicated toggle endpoint, not the full-schedule PATCH --
-  // that one always reschedules (next_run_at = interval from now), which
-  // would reorder this list (sorted by next_run_at) on every checkbox
-  // click and push a paused-then-resumed crawl's next run further out
-  // than a plain pause/resume implies.
+  // Uses the dedicated toggle endpoint, not the full-schedule PATCH -- that one always
+  // reschedules (next_run_at = interval from now), reordering this list and pushing a resumed
+  // crawl's next run out further than a plain pause/resume implies.
   async function toggleCrawlEnabled(s) {
     try {
       await postJSON('/admin/api/schedules/' + encodeURIComponent(s.id) + '/toggle', { enabled: !s.enabled });

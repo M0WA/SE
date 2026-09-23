@@ -1,9 +1,9 @@
 # searchengine
 
 A self-hosted AI chatbot with search-engine features, written in Go: chat
-with a model that can cite live web results and this instance's own
-crawled index side by side, backed by a hybrid BM25 + semantic search
-engine you also get as a plain public search UI.
+with a model that cites live web results and this instance's own crawled
+index side by side, backed by a hybrid BM25 + semantic search engine also
+exposed as a plain public search UI.
 
 Docs: **[User manual](docs/manual/README.md)** (install, configure, and use
 it) · **[Architecture](docs/architecture/README.md)** (how it's built) --

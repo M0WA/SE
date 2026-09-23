@@ -45,10 +45,7 @@
     formStatusEl.textContent = '';
     setSaving(true);
     try {
-      // password is only included when non-blank (blank means "keep the
-      // current password") -- custom_prompt is always included, since the
-      // textarea is the single source of truth for it every save,
-      // including clearing it back to empty.
+      // Blank password = keep current; custom_prompt is always sent, even cleared.
       const body = { custom_prompt: customPromptEl.value };
       if (passwordEl.value) {
         body.password = passwordEl.value;

@@ -14,13 +14,9 @@
   const deleteBtn = document.getElementById('agent-delete-btn');
   const formStatusEl = document.getElementById('agent-form-status');
 
-  // renderMCPServerCheckboxes builds one checkbox per globally configured
-  // MCP server (fetched fresh every load, since the catalog can change
-  // independently of this agent) -- checkedIDs is which of them this
-  // agent's own mcp_server_ids already names. Empty means this agent has NO
-  // global tools at all (there is no "unscoped" state -- see
-  // Agent.MCPServerIDs' own doc comment), so every box renders unchecked,
-  // not every box checked.
+  // renderMCPServerCheckboxes builds one checkbox per configured MCP server, checked per
+  // checkedIDs (agent.mcp_server_ids). Empty means no global tools at all -- there's no
+  // "unscoped" state (see Agent.MCPServerIDs) -- so every box renders unchecked.
   function renderMCPServerCheckboxes(servers, checkedIDs) {
     clear(mcpServersListEl);
     if (servers.length === 0) {
@@ -51,11 +47,9 @@
       .map((el) => el.value);
   }
 
-  // loadMCPServerOptions fetches the global MCP server catalog to populate
-  // the checkbox list -- best-effort, same convention as every other
-  // best-effort auxiliary fetch on an edit page (e.g.
-  // admin_chat_settings.js's loadEnabledServerPrompts): a failure here
-  // shouldn't block the agent's own fields from loading.
+  // loadMCPServerOptions fetches the MCP server catalog for the checkbox list -- best-effort
+  // (like admin_chat_settings.js's loadEnabledServerPrompts): a failure shouldn't block the
+  // agent's own fields from loading.
   async function loadMCPServerOptions(checkedIDs) {
     try {
       renderMCPServerCheckboxes(await getJSON('/admin/api/mcp-servers'), checkedIDs);
@@ -151,9 +145,7 @@
   wireSignOut();
   load();
 
-  // Exports for the Node test runner only -- `typeof module` is undefined in
-  // a browser's <script> tag, so this is a no-op there. See
-  // admin_agent.test.js.
+  // Node test-runner export only; no-op in a browser <script> tag.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { applyAgent, requestBody, load, renderMCPServerCheckboxes, checkedMCPServerIDs };
   }

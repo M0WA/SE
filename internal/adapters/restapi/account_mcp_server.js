@@ -16,9 +16,7 @@
   const deleteBtn = document.getElementById('server-delete-btn');
   const formStatusEl = document.getElementById('server-form-status');
 
-  // This page intentionally does NOT load admin.js (see account.js's own
-  // comment on why self-service pages stay decoupled from it) -- these are
-  // small local duplicates of the handful of helpers it needs.
+  // Doesn't load admin.js (see account.js) -- these are small local duplicates of the helpers it needs.
   async function getJSON(url) {
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(await resp.text() || resp.statusText);
@@ -80,11 +78,8 @@
 
     nameEl.value = s.name;
     baseURLEl.value = s.base_url || '';
-    // The server never echoes a stored API key's real value (see
-    // mcpServerResponse) -- this field always starts blank, and saving with
-    // it left blank keeps whatever key is already stored (see
-    // requestBody). has_api_key only drives the placeholder text and the
-    // "remove" checkbox's availability.
+    // Server never echoes a stored API key (see mcpServerResponse); field starts blank, and blank on save
+    // keeps it (see requestBody). has_api_key only drives the placeholder/remove-checkbox UI.
     apiKeyEl.value = '';
     apiKeyEl.placeholder = s.has_api_key ? '(unchanged — a key is already set)' : '';
     clearAPIKeyEl.checked = false;
@@ -164,9 +159,7 @@
 
   load();
 
-  // Exports for the Node test runner only -- `typeof module` is undefined in
-  // a browser's <script> tag, so this is a no-op there. See
-  // internal/adapters/restapi/account_mcp_server.test.js.
+  // Node test-runner export only; no-op in a browser <script> tag.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { applyServer, requestBody, load };
   }

@@ -16,9 +16,9 @@ import (
 	"searchengine/internal/ports"
 )
 
-// fileResponse mirrors account_files.go's own unexported wire type -- a
-// local copy, same convention mcpServerResp (admin_test.go) uses, since an
-// external _test package can't reference an unexported type directly.
+// fileResponse mirrors account_files.go's unexported wire type -- a local
+// copy, same as mcpServerResp, since an external _test package can't
+// reference an unexported type directly.
 type fileResponse struct {
 	ID          string `json:"id"`
 	ChatID      string `json:"chat_id,omitempty"`
@@ -28,11 +28,9 @@ type fileResponse struct {
 	CreatedAt   string `json:"created_at"`
 }
 
-// fakeFileStore is a minimal ports.FileStore fake, mirroring
-// fakeUserMCPServerStore's shape (chat_test.go) closely -- keyed by
-// ownerUserID so two different owners' files never leak into each other's
-// List/Get/Delete calls, same isolation the real sqlrepo implementation's
-// user_id-scoped SQL gives.
+// fakeFileStore is a minimal ports.FileStore fake, keyed by ownerUserID so
+// two owners' files never leak into each other's calls -- same isolation
+// the real sqlrepo's user_id-scoped SQL gives.
 type fakeFileStore struct {
 	byOwner   map[string][]fakeFile
 	nextID    int
@@ -113,12 +111,9 @@ func (f *fakeFileStore) DeleteFile(ctx context.Context, ownerUserID, id string) 
 	return ports.ErrFileNotFound
 }
 
-// testChatID is the pinned-chat id filesAuthedHandler always seeds (owned
-// by whichever user it logs in as) and uploadTestFile always attaches an
-// upload to -- since only a pinned chat may ever have files, every
-// existing upload test needs one real, owned chat_id to keep working
-// unchanged; a test specifically about chat_id validation uses
-// uploadTestFileWithChatID directly instead.
+// testChatID is the pinned-chat id filesAuthedHandler seeds and
+// uploadTestFile attaches uploads to, since only a pinned chat may have
+// files. A test about chat_id validation uses uploadTestFileWithChatID instead.
 const testChatID = "chat-1"
 
 // fakeChatStore is a minimal ports.ChatStore fake, mirroring
@@ -180,20 +175,16 @@ func (c *fakeChatStore) DeleteChat(ctx context.Context, ownerUserID, id string) 
 	return ports.ErrChatNotFound
 }
 
-// filesAuthedHandler logs in as u (role=user, via a real POST /login
-// through fakeUserStore) with Users and Files wired, mirroring
-// accountMCPServersAuthedHandler. Also seeds one pinned chat (testChatID)
-// owned by u, since every upload now requires a real, owned chat_id.
+// filesAuthedHandler logs in as u (role=user, via a real POST /login) with
+// Users and Files wired, mirroring accountMCPServersAuthedHandler -- and
+// seeds one pinned chat (testChatID) owned by u, since uploads require one.
 func filesAuthedHandler(t *testing.T, userStore *fakeUserStore, fileStore *fakeFileStore, u domain.User) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
 	cfg := restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass, Users: userStore}
-	// fileStore is assigned only when non-nil: a nil *fakeFileStore
-	// assigned directly to the ports.FileStore-typed field would produce a
-	// non-nil interface wrapping a nil pointer (the classic Go typed-nil
-	// gotcha), which would pass Handler's "is this configured" nil check
-	// and then panic on the first real call -- omitting the field
-	// entirely is how TestHandleAccountFiles_NotConfigured gets a
-	// genuinely nil h.files.
+	// fileStore is assigned only when non-nil: a nil *fakeFileStore in the
+	// ports.FileStore-typed field would be a non-nil interface wrapping a
+	// nil pointer (the typed-nil gotcha), passing Handler's nil check and
+	// then panicking -- omitting it keeps h.files genuinely nil.
 	if fileStore != nil {
 		cfg.Files = fileStore
 		cfg.Chats = &fakeChatStore{byOwner: map[string][]domain.PersistedChat{
@@ -254,8 +245,7 @@ func TestHandleAccountFiles_Unauthenticated(t *testing.T) {
 }
 
 // TestHandleAccountFiles_AdminRoleForbidden proves a role=admin session
-// (which has no domain.User row of its own) is refused the same way
-// /account/api/mcp-servers itself is -- 403, not a generic 401.
+// (no domain.User row of its own) gets 403, same as /account/api/mcp-servers.
 func TestHandleAccountFiles_AdminRoleForbidden(t *testing.T) {
 	h := restapi.New(restapi.Config{
 		AdminUser: testAdminUser, AdminPass: testAdminPass,
@@ -335,8 +325,7 @@ func TestHandleAccountFiles_UploadWithoutChatIDRejected(t *testing.T) {
 }
 
 // TestHandleAccountFiles_UploadWithForeignChatIDRejected proves a chat_id
-// that isn't one of the caller's own pinned chats is rejected the same
-// way, not silently accepted.
+// not owned by the caller is rejected, not silently accepted.
 func TestHandleAccountFiles_UploadWithForeignChatIDRejected(t *testing.T) {
 	userStore := &fakeUserStore{users: []domain.User{{ID: "u1", Username: "alice", PasswordHash: testUserPasswordHash}}}
 	fileStore := &fakeFileStore{}
@@ -349,8 +338,7 @@ func TestHandleAccountFiles_UploadWithForeignChatIDRejected(t *testing.T) {
 }
 
 // TestHandleAccountFiles_ListScopedToChat proves a "chat_id" query param
-// narrows the list to just that chat's files, unlike the unscoped Your
-// files view.
+// narrows the list to just that chat's files.
 func TestHandleAccountFiles_ListScopedToChat(t *testing.T) {
 	userStore := &fakeUserStore{users: []domain.User{{ID: "u1", Username: "alice", PasswordHash: testUserPasswordHash}}}
 	fileStore := &fakeFileStore{}
@@ -456,11 +444,9 @@ func TestHandleAccountFile_Download(t *testing.T) {
 }
 
 // TestHandleAccountFile_DownloadEmptyContentTypeFallsBack covers
-// handleAccountFile's own "contentType == ”" branch -- upload's own
-// multipart-derived content type is never empty in practice (mime/
-// multipart's CreateFormFile always sets one), so this seeds the fake
-// store directly with a file that has none, the same way a pre-existing
-// row from before ContentType was tracked could look.
+// handleAccountFile's own "contentType == ”" branch -- upload never produces
+// one in practice, so this seeds the fake store directly, as a
+// pre-ContentType-tracking row would look.
 func TestHandleAccountFile_DownloadEmptyContentTypeFallsBack(t *testing.T) {
 	userStore := &fakeUserStore{users: []domain.User{{ID: "u1", Username: "alice", PasswordHash: testUserPasswordHash}}}
 	fileStore := &fakeFileStore{byOwner: map[string][]fakeFile{
@@ -503,9 +489,8 @@ func TestHandleAccountFile_DownloadNotFound(t *testing.T) {
 	}
 }
 
-// TestHandleAccountFile_WrongOwnerNotFound proves one user can never
-// download another's file even by guessing its ID -- indistinguishable
-// from the ID not existing at all.
+// TestHandleAccountFile_WrongOwnerNotFound proves one user can't download
+// another's file even by guessing its ID -- looks like a nonexistent ID.
 func TestHandleAccountFile_WrongOwnerNotFound(t *testing.T) {
 	userStore := &fakeUserStore{users: []domain.User{
 		{ID: "u1", Username: "alice", PasswordHash: testUserPasswordHash},
@@ -593,15 +578,10 @@ func TestHandleAccountFile_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-// TestHandleAccountFiles_BearerTokenAuth proves the whole per-turn-token
-// chain end to end: a real POST /chat call (as a role=user session, with
-// an active MCP server so ChatService.Chat actually opens a session)
-// mints a token, passed to mcpTools.Open's env exactly the way
-// cmd/mcp-files would receive it (SE_FILES_API_TOKEN) -- captured here via
-// a fake provider instead of a real subprocess -- and that SAME captured
-// token, presented as "Authorization: Bearer <token>" with NO session
-// cookie at all, successfully authenticates against /account/api/files as
-// alice.
+// TestHandleAccountFiles_BearerTokenAuth proves the per-turn-token chain
+// end to end: a real POST /chat mints a token, passed via SE_FILES_API_TOKEN
+// (captured by a fake provider) -- and that same token, as "Authorization:
+// Bearer <token>" with no session cookie, authenticates as alice.
 func TestHandleAccountFiles_BearerTokenAuth(t *testing.T) {
 	userStore := &fakeUserStore{users: []domain.User{{ID: "u1", Username: "alice", PasswordHash: testUserPasswordHash}}}
 	fileStore := &fakeFileStore{}
@@ -702,8 +682,7 @@ func TestHandleAccountFilesPage_ServesHTML(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
 	// Unauthenticated -> redirected to /login (requireRegularUserAuthPage),
-	// not served directly -- proves the page route is actually gated, same
-	// convention account_mcp_servers.html's page route uses.
+	// proving the page route is actually gated.
 	if rec.Code != http.StatusSeeOther {
 		t.Errorf("expected a redirect to /login, got %d", rec.Code)
 	}
@@ -723,9 +702,8 @@ func TestHandleAccountFilesPage_ServesHTMLWhenAuthenticated(t *testing.T) {
 }
 
 // TestHandleAccountFiles_UploadListErrorPropagates covers
-// handleUploadFile's own ListFiles error branch (the per-user-cap check
-// reads the list first) -- distinct from the plain GET-list error branch
-// TestFakeFileStore_ErrorsPropagate already covers.
+// handleUploadFile's own ListFiles error branch (the per-user-cap check),
+// distinct from the GET-list branch TestFakeFileStore_ErrorsPropagate covers.
 func TestHandleAccountFiles_UploadListErrorPropagates(t *testing.T) {
 	userStore := &fakeUserStore{users: []domain.User{{ID: "u1", Username: "alice", PasswordHash: testUserPasswordHash}}}
 	fileStore := &fakeFileStore{listErr: errors.New("boom")}
@@ -737,9 +715,8 @@ func TestHandleAccountFiles_UploadListErrorPropagates(t *testing.T) {
 	}
 }
 
-// TestHandleAccountFiles_UploadMalformedMultipartRejected covers
-// ParseMultipartForm's own decode-error branch, distinct from the
-// oversized-body case (TestHandleAccountFiles_UploadTooLargeRejected).
+// TestHandleAccountFiles_UploadMalformedMultipartRejected covers the
+// decode-error branch, distinct from the oversized-body case.
 func TestHandleAccountFiles_UploadMalformedMultipartRejected(t *testing.T) {
 	userStore := &fakeUserStore{users: []domain.User{{ID: "u1", Username: "alice", PasswordHash: testUserPasswordHash}}}
 	h, cookie := filesAuthedHandler(t, userStore, &fakeFileStore{}, userStore.users[0])

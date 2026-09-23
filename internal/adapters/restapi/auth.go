@@ -22,27 +22,23 @@ import (
 
 const sessionCookieName = "se_session"
 
-// loginRedirectPath and authRequiredMsg are shared by every
-// requireAuth*/requireAdminAuth*/requireRegularUserAuth* gate below, so the
-// "/login?next=" prefix and "authentication required" 401 body text stay in
-// exactly one place instead of being retyped at every call site.
+// loginRedirectPath and authRequiredMsg keep the "/login?next=" prefix and
+// 401 body text in one place across every gate below.
 const (
 	loginRedirectPath = "/login?next="
 	authRequiredMsg   = "authentication required"
 )
 
-// sessionStore is a small in-memory session table, used only as the
-// fallback when no ports.SessionStore is configured. Lost on restart and
-// visible only to the process that created it -- fine for tests, not for
-// production where search-server and admin-server must share a login.
+// sessionStore is a small in-memory session table, the fallback when no
+// ports.SessionStore is configured. Lost on restart, process-local -- fine
+// for tests, not production where search/admin-server must share a login.
 type sessionStore struct {
 	mu       sync.Mutex
 	sessions map[string]sessionRecord
 }
 
-// sessionRecord mirrors what the SQL-backed sessions table stores per
-// token -- see ports.SessionStore's doc comment for why role/userID live
-// here rather than in the cookie itself.
+// sessionRecord mirrors the SQL-backed sessions table -- see
+// ports.SessionStore for why role/userID live here, not in the cookie.
 type sessionRecord struct {
 	expiresAt time.Time
 	role      string
@@ -89,9 +85,8 @@ func randomToken() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-// authConfigured reports whether an admin account has been set up at all.
-// Until it is, /login always refuses and /crawl and /admin stay locked --
-// authentication fails closed rather than defaulting to open access.
+// authConfigured reports whether an admin account exists. Until it does,
+// /login always refuses -- fails closed, never defaults to open access.
 func (h *Handler) authConfigured() bool {
 	return h.adminUser != "" && h.adminPass != ""
 }
@@ -105,18 +100,13 @@ func (h *Handler) checkCredentials(user, pass string) bool {
 	return userOK && passOK
 }
 
-// sessionRoleFor resolves the caller's role AND userID from the se_session
-// cookie by looking up the SERVER-SIDE session record -- the cookie itself
-// is always just an opaque random token, so this is the only place a role
-// is ever determined; nothing the client sends can influence it. ok is
-// false for no cookie, an unknown token, or an expired one; role is
-// domain.RoleAdmin or domain.RoleUser when ok is true. userID is only ever
-// non-empty for a domain.RoleUser session (a domain.RoleAdmin session --
-// the single hardcoded admin account -- has no associated domain.User row
-// to attach one to). Every caller needing either value goes through this
-// one function so a single request never looks up its session more than
-// once: requireAdminAuthPage/requireAdminAuthAPI below (role only),
-// isAuthenticated (neither), and handleChat/handleAccount (both).
+// sessionRoleFor resolves the caller's role and userID from the se_session
+// cookie via the server-side session record -- the cookie is just an
+// opaque token, so nothing the client sends can influence the role. ok is
+// false for no/unknown/expired cookie. userID is non-empty only for
+// domain.RoleUser (the hardcoded admin has no domain.User row). Every
+// caller goes through this one function so a request never looks up its
+// session twice.
 func (h *Handler) sessionRoleFor(r *http.Request) (role string, userID string, ok bool) {
 	c, err := r.Cookie(sessionCookieName)
 	if err != nil {
@@ -135,9 +125,7 @@ func (h *Handler) isAuthenticated(r *http.Request) bool {
 }
 
 // requireAuthPage gates an HTML page: unauthenticated visitors are sent to
-// the login page, carrying the original path so they land back on it.
-// Either role passes -- used by RoutesSearch (and RoutesAdmin's own
-// unauthenticated-vs-authenticated pages that aren't admin-only, if any).
+// /login, carrying the original path so they land back on it. Either role passes.
 func (h *Handler) requireAuthPage(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !h.isAuthenticated(r) {
@@ -149,8 +137,7 @@ func (h *Handler) requireAuthPage(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // requireAuthAPI gates a JSON endpoint: unauthenticated callers get a plain
-// 401, since there's no page to redirect an API client to. Either role
-// passes.
+// 401, no redirect. Either role passes.
 func (h *Handler) requireAuthAPI(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !h.isAuthenticated(r) {
@@ -162,12 +149,9 @@ func (h *Handler) requireAuthAPI(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // requireAdminAuthPage is requireAuthPage's admin-only counterpart, gating
-// every RoutesAdmin page. Unauthenticated -> redirect to /login exactly
-// like requireAuthPage (nothing to distinguish yet). Authenticated but
-// role != domain.RoleAdmin (a regular user) -> a plain 403, NOT a redirect
-// to /login -- a logged-in regular user can't "log in harder", so bouncing
-// them back to the login page would just be a dead end dressed up as a
-// login prompt.
+// every RoutesAdmin page. Unauthenticated -> redirect to /login.
+// Authenticated but role != domain.RoleAdmin -> plain 403, not a redirect
+// -- a logged-in regular user can't "log in harder".
 func (h *Handler) requireAdminAuthPage(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		role, _, ok := h.sessionRoleFor(r)
@@ -183,9 +167,8 @@ func (h *Handler) requireAdminAuthPage(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// requireAdminAuthAPI is requireAuthAPI's admin-only counterpart, gating
-// every /admin/api/* endpoint. Unauthenticated -> 401. Authenticated but
-// not domain.RoleAdmin -> 403.
+// requireAdminAuthAPI gates every /admin/api/* endpoint: 401 if
+// unauthenticated, 403 if authenticated but not domain.RoleAdmin.
 func (h *Handler) requireAdminAuthAPI(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		role, _, ok := h.sessionRoleFor(r)
@@ -201,14 +184,10 @@ func (h *Handler) requireAdminAuthAPI(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// requireRegularUserAuthPage is requireAdminAuthPage's mirror image, gating
-// a page that only a DB-backed regular-user account (domain.RoleUser)
-// should reach -- e.g. /account, the self-service page a role=admin
-// session can never use since there's no domain.User row for the hardcoded
-// admin to attach a password/custom-prompt change to. Unauthenticated ->
-// redirect to /login exactly like requireAuthPage/requireAdminAuthPage.
-// Authenticated but role == domain.RoleAdmin -> a plain 403 explaining why,
-// not a redirect (an admin can't "log in harder" into having a User row).
+// requireRegularUserAuthPage mirrors requireAdminAuthPage, gating a page
+// only domain.RoleUser should reach (e.g. /account -- admin has no
+// domain.User row to edit). Unauthenticated -> redirect to /login.
+// role == domain.RoleAdmin -> 403, not a redirect.
 func (h *Handler) requireRegularUserAuthPage(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		role, _, ok := h.sessionRoleFor(r)
@@ -224,10 +203,8 @@ func (h *Handler) requireRegularUserAuthPage(next http.HandlerFunc) http.Handler
 	}
 }
 
-// requireRegularUserAuthAPI is requireRegularUserAuthPage's JSON-endpoint
-// counterpart, gating /account/api -- same status-code convention as
-// requireAdminAuthAPI: unauthenticated -> 401. Authenticated but
-// role == domain.RoleAdmin -> 403.
+// requireRegularUserAuthAPI gates /account/api: 401 if unauthenticated,
+// 403 if role == domain.RoleAdmin.
 func (h *Handler) requireRegularUserAuthAPI(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		role, _, ok := h.sessionRoleFor(r)
@@ -244,24 +221,16 @@ func (h *Handler) requireRegularUserAuthAPI(next http.HandlerFunc) http.HandlerF
 }
 
 // internalAPIKeyHeader is the header a trusted local caller (e.g. a
-// SearXNG engine plugin) presents to requireAuthAPIOrInternalKey in place
-// of a session cookie.
+// SearXNG engine plugin) presents in place of a session cookie.
 const internalAPIKeyHeader = "X-Internal-API-Key"
 
-// requireAuthAPIOrInternalKey gates a JSON endpoint the same way
-// requireAuthAPI does, plus one additional bypass: when
-// h.internalSearchAPIKey is configured (non-empty) and the request's
-// X-Internal-API-Key header matches it exactly, the request is let through
-// with no session check at all. This exists so a trusted same-host caller
-// -- a SearXNG engine plugin folding this instance's own index into
-// SearXNG's aggregated search, rather than /search staying a
-// browser-session-only endpoint -- can call /search without ever having a
-// browser session. It's opt-in and secure-by-default: h.internalSearchAPIKey
-// is empty unless an admin explicitly sets SEARCH_INTERNAL_API_KEY, in
-// which case this behaves byte-for-byte like requireAuthAPI (session
-// cookie required, 401 otherwise). The comparison uses
-// subtle.ConstantTimeCompare rather than ==, so a caller without the key
-// can't learn it one byte at a time via response-timing differences.
+// requireAuthAPIOrInternalKey is requireAuthAPI plus one bypass: a request
+// whose X-Internal-API-Key header matches h.internalSearchAPIKey exactly
+// is let through with no session check, so a trusted same-host caller
+// (e.g. a SearXNG engine plugin) can call /search without a browser
+// session. Opt-in and secure-by-default: the key is empty unless an admin
+// sets SEARCH_INTERNAL_API_KEY, and comparison uses
+// subtle.ConstantTimeCompare, not ==, to resist timing attacks.
 func (h *Handler) requireAuthAPIOrInternalKey(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if h.internalSearchAPIKey != "" && requestHasSecretHeader(r, internalAPIKeyHeader, h.internalSearchAPIKey) {
@@ -277,12 +246,8 @@ func (h *Handler) requireAuthAPIOrInternalKey(next http.HandlerFunc) http.Handle
 }
 
 // requestHasSecretHeader reports whether r carries header set to exactly
-// secret, compared via subtle.ConstantTimeCompare (not ==) so a caller
-// without the right value can't learn it one byte at a time via
-// response-timing differences -- shared by every shared-secret-header check
-// in this package (requireAuthAPIOrInternalKey above, requireCrawlInternalToken
-// in crawl_internal.go), so that comparison detail only needs to be gotten
-// right once.
+// secret, via subtle.ConstantTimeCompare (not ==) to resist timing
+// attacks -- shared by every secret-header check in this package.
 func requestHasSecretHeader(r *http.Request, header, secret string) bool {
 	return subtle.ConstantTimeCompare([]byte(r.Header.Get(header)), []byte(secret)) == 1
 }
@@ -292,10 +257,8 @@ func isHTTPS(r *http.Request) bool {
 }
 
 // safeNext keeps post-login redirects on this site, rejecting an
-// absolute/protocol-relative "next" (an open-redirect vector otherwise).
-// Two checks, both required: the first two characters rule out "//" and
-// "\\" (browsers treat a leading "\" like "/"), and url.Parse confirms no
-// host component at all.
+// absolute/protocol-relative "next" (an open-redirect vector). Two checks:
+// the leading chars rule out "//"/"\\", and url.Parse confirms no host.
 func safeNext(next string) string {
 	if next == "/" {
 		return next
@@ -331,10 +294,9 @@ type loginRequest struct {
 }
 
 // loginAttemptWindow/loginMaxAttempts/loginBaseLockout/loginMaxLockout tune
-// loginLimiter -- see its doc comment. loginMaxAttempts failures within
-// loginAttemptWindow trigger a lockout starting at loginBaseLockout and
-// doubling on every further failure while still locked out, capped at
-// loginMaxLockout.
+// loginLimiter: loginMaxAttempts failures within loginAttemptWindow lock
+// out starting at loginBaseLockout, doubling per further failure, capped
+// at loginMaxLockout.
 const (
 	loginAttemptWindow = 15 * time.Minute
 	loginMaxAttempts   = 5
@@ -342,10 +304,9 @@ const (
 	loginMaxLockout    = 15 * time.Minute
 )
 
-// loginLimiter is a small in-process, per-key (see clientIP) sliding-window
-// rate limiter for public, unauthenticated POST /login -- without it an
-// attacker can script unthrottled password guessing. In-memory/per-process
-// and IP-only, an accepted gap for this single-admin, dev/test app.
+// loginLimiter is a small in-process, per-IP sliding-window rate limiter
+// for POST /login -- without it an attacker can script unthrottled
+// password guessing. In-memory and IP-only, an accepted gap for this app.
 type loginLimiter struct {
 	mu      sync.Mutex
 	entries map[string]*loginAttempts
@@ -373,10 +334,9 @@ func (l *loginLimiter) locked(key string, now time.Time) (time.Duration, bool) {
 	return e.lockedUntil.Sub(now), true
 }
 
-// recordFailure records a failed attempt for key: starts a fresh sliding
-// window if the previous one has expired, then locks key out (with
-// exponential backoff for repeated lockouts) once it crosses
-// loginMaxAttempts failures within the current window.
+// recordFailure records a failed attempt for key: starts a fresh window if
+// the previous one expired, then locks out (exponential backoff) once
+// loginMaxAttempts is crossed within the current window.
 func (l *loginLimiter) recordFailure(key string, now time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -395,9 +355,8 @@ func (l *loginLimiter) recordFailure(key string, now time.Time) {
 	}
 }
 
-// recordSuccess clears key's failure history -- a correct login shouldn't
-// leave a stale attempt count around to make the next legitimate login
-// look like part of an ongoing attack.
+// recordSuccess clears key's failure history, so a correct login doesn't
+// leave a stale count that makes the next attempt look like an attack.
 func (l *loginLimiter) recordSuccess(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -405,9 +364,9 @@ func (l *loginLimiter) recordSuccess(key string) {
 }
 
 // clientIP returns the address /login's rate limiter keys on. Production
-// nginx always sets X-Real-IP; r.RemoteAddr alone would be nginx's own
-// loopback address, sharing one bucket across every client. Falls back
-// to r.RemoteAddr when absent (direct connections, e.g. tests).
+// nginx always sets X-Real-IP (r.RemoteAddr alone would be nginx's own
+// loopback address, one bucket for every client); falls back to
+// r.RemoteAddr otherwise (e.g. tests).
 func clientIP(r *http.Request) string {
 	if ip := r.Header.Get("X-Real-IP"); ip != "" {
 		return ip
@@ -415,24 +374,18 @@ func clientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-// dummyPasswordHash is compared against (via bcrypt.CompareHashAndPassword)
-// whenever a login's username doesn't match any domain.User row, so that
-// path takes roughly the same time as a real user with a wrong password --
-// without it, a login attempt for a nonexistent username would return
-// faster than one for a real username, letting an attacker enumerate valid
-// usernames by response timing alone. The actual password compared against
-// it is never checked for a match (there's no way it legitimately could
-// be); only the constant-time work matters here.
+// dummyPasswordHash is compared against whenever a login's username
+// doesn't match any domain.User row, so that path takes the same time as a
+// wrong password on a real user -- otherwise an attacker could enumerate
+// valid usernames by response timing. Only the bcrypt work matters here;
+// it never actually matches.
 var dummyPasswordHash, _ = bcrypt.GenerateFromPassword([]byte("dummy-password-for-timing-safety"), bcrypt.DefaultCost)
 
-// authenticatedRole checks user/pass against the hardcoded admin account
-// first, then (if that fails and h.users is configured) against
-// domain.User rows -- returns the resulting session role and, for a
-// domain.RoleUser match, that user's ID (empty otherwise), or ok=false if
-// neither matched. Every failure path -- wrong admin password, unknown
-// username, wrong user password -- does the same amount of constant-time/
-// bcrypt work and returns the identical ok=false, so none of the three is
-// distinguishable from the others by response timing or shape.
+// authenticatedRole checks user/pass against the hardcoded admin first,
+// then domain.User rows if configured -- returns the role and, for a
+// RoleUser match, the user's ID, or ok=false if neither matched. Every
+// failure path does the same bcrypt work, so none is distinguishable by
+// response timing.
 func (h *Handler) authenticatedRole(ctx context.Context, user, pass string) (role string, userID string, ok bool) {
 	if h.checkCredentials(user, pass) {
 		return domain.RoleAdmin, "", true
@@ -489,9 +442,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 // setSessionCookie sets (or, with value="" and maxAge=-1, clears) the
-// session cookie -- shared by handleLogin and handleLogout, which
-// otherwise each built the identical http.Cookie literal differing only
-// in Value and MaxAge.
+// session cookie -- shared by handleLogin and handleLogout.
 func (h *Handler) setSessionCookie(w http.ResponseWriter, r *http.Request, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,

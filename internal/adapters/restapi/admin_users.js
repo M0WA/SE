@@ -46,9 +46,7 @@
   wireSignOut();
   loadUsers();
 
-  // Exports for the Node test runner only -- `typeof module` is undefined in
-  // a browser's <script> tag, so this is a no-op there. See
-  // internal/adapters/restapi/admin_users.test.js.
+  // Node test-runner export only; no-op in a browser <script> tag.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { renderUsers, loadUsers, deleteUser };
   }

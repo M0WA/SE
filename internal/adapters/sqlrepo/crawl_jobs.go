@@ -11,13 +11,12 @@ import (
 )
 
 // crawlJobColumns lists crawl_jobs' columns in the fixed order every
-// query/scan in this file uses, the same convention scheduledCrawlColumns
-// follows for scheduled_crawls.
+// query/scan here uses (same convention as scheduledCrawlColumns).
 const crawlJobColumns = "id, request, status, pages_crawled, error, created_at, started_at, finished_at"
 
-// Create persists a new crawl job in domain.CrawlJobQueued status. Unlike
-// the in-memory domain.CrawlJobStore, this survives a crawl-server
-// restart -- see ports.CrawlJobStore's doc comment for why that matters.
+// Create persists a new crawl job in domain.CrawlJobQueued status; unlike
+// the in-memory domain.CrawlJobStore, this survives a crawl-server restart
+// (see ports.CrawlJobStore's doc comment).
 func (r *Repository) Create(ctx context.Context, req domain.CrawlJobRequest) (domain.CrawlJob, error) {
 	reqJSON, err := json.Marshal(req)
 	if err != nil {
@@ -48,10 +47,10 @@ func (r *Repository) MarkRunning(ctx context.Context, id string) error {
 	return nil
 }
 
-// AppendPage records one page's outcome and, for an indexed page, advances
-// crawl_jobs.pages_crawled -- both in one transaction, so a concurrent Get
-// never observes one without the other. Appending against a since-evicted
-// job ID is a silent no-op, matching the in-memory store's contract.
+// AppendPage records a page's outcome and, if indexed, advances
+// pages_crawled -- both in one transaction so a concurrent Get never sees
+// one without the other. A since-evicted job ID is a silent no-op,
+// matching the in-memory store.
 func (r *Repository) AppendPage(ctx context.Context, id string, ev domain.CrawlPageEvent) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -110,9 +109,9 @@ func (r *Repository) MarkCancelled(ctx context.Context, id string) error {
 	return nil
 }
 
-// Get returns the job and every one of its page events, oldest first
-// (insertion order, served by crawl_job_pages' own auto-increment primary
-// key). Returns domain.ErrCrawlJobNotFound if no job with this ID exists.
+// Get returns the job and its page events, oldest first (crawl_job_pages'
+// auto-increment order). Returns domain.ErrCrawlJobNotFound if no job with
+// this ID exists.
 func (r *Repository) Get(ctx context.Context, id string) (domain.CrawlJob, error) {
 	row := r.db.QueryRowContext(ctx, r.ph(`SELECT `+crawlJobColumns+` FROM crawl_jobs WHERE id = %s`, 1), id)
 	job, err := scanCrawlJob(row)
@@ -167,9 +166,8 @@ func (r *Repository) List(ctx context.Context) ([]domain.CrawlJobSummary, error)
 	return out, rows.Err()
 }
 
-// ListActive returns every crawl job currently Queued or Running -- a
-// cheap, targeted query (unlike List, which scans the whole table
-// including every historical job) used to check for an already-active
+// ListActive returns every Queued/Running job -- cheap and targeted,
+// unlike List's full-table scan -- used to check for an already-active
 // crawl of the same seed before starting a new one (see
 // restapi.Handler.TriggerScheduledCrawl).
 func (r *Repository) ListActive(ctx context.Context) ([]domain.CrawlJobSummary, error) {
@@ -196,9 +194,9 @@ func (r *Repository) ListActive(ctx context.Context) ([]domain.CrawlJobSummary, 
 }
 
 // PruneCrawlJobs deletes every crawl job beyond the maxRetained most
-// recently created, cascading to their crawl_job_pages rows -- called
-// periodically by cmd/crawl's own maintenance ticker, not part of
-// ports.CrawlJobStore itself since no HTTP handler triggers it directly.
+// recent, cascading to crawl_job_pages -- called periodically by
+// cmd/crawl's maintenance ticker, not part of ports.CrawlJobStore since no
+// handler triggers it directly.
 func (r *Repository) PruneCrawlJobs(ctx context.Context, maxRetained int) error {
 	if maxRetained <= 0 {
 		return nil
@@ -216,8 +214,8 @@ func (r *Repository) PruneCrawlJobs(ctx context.Context, maxRetained int) error 
 
 // DeleteEndedCrawlJobs deletes every done/failed/cancelled job (cascading
 // to crawl_job_pages) and reports how many were removed -- backs the admin
-// Jobs page's "Clear ended jobs" button. Unlike PruneCrawlJobs' count-based
-// retention, this always leaves queued/running jobs alone regardless of count.
+// Jobs page's "Clear ended jobs" button. Unlike PruneCrawlJobs, it always
+// leaves queued/running jobs alone regardless of count.
 func (r *Repository) DeleteEndedCrawlJobs(ctx context.Context) (int, error) {
 	deleteSQL := r.ph(`DELETE FROM crawl_jobs WHERE status IN (%s, %s, %s)`, 1, 2, 3)
 	res, err := r.db.ExecContext(ctx, deleteSQL,

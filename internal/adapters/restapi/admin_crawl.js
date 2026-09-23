@@ -31,29 +31,23 @@
     if (crawlURL.value.trim() !== '') crawlURL.value = normalizeURL(crawlURL.value);
   });
 
-  // The Basic auth fields start readonly and only become editable on
-  // focus -- a browser won't offer to autofill a saved login into a field
-  // that's readonly when the page loads, which "autocomplete=off" alone
-  // no longer reliably stops in most browsers. This is a one-time crawl
-  // credential, not a saved login, so there's nothing to fill in anyway.
+  // Basic-auth fields start readonly, editable only on focus -- browsers ignore "autocomplete=off"
+  // but won't autofill a readonly field. This is a one-time crawl credential, not a saved login.
   for (const el of [crawlBasicUser, crawlBasicPass]) {
     el.addEventListener('focus', () => el.removeAttribute('readonly'), { once: true });
   }
 
-  // The submit button's label says exactly what it's about to do -- a
-  // one-off crawl (interval left blank/0) reads "Crawl", a repeating one
-  // (positive interval) reads "Schedule".
+  // The submit button's label matches the action: blank/0 interval reads "Crawl" (one-off), a
+  // positive interval reads "Schedule".
   function updateSubmitLabel() {
     crawlSubmitBtn.textContent = (Number.parseInt(crawlInterval.value, 10) || 0) > 0 ? 'Schedule' : 'Crawl';
   }
   crawlInterval.addEventListener('input', updateSubmitLabel);
   updateSubmitLabel();
 
-  // Every crawl -- one-off or repeating -- is created the same way: a
-  // crawl definition (POST /admin/api/schedules) with every option this
-  // form carries. A one-off crawl (recurring unchecked) is due right away;
-  // crawl-server's scheduler ticker picks it up within a few seconds and
-  // creates the Job that now shows up on the separate Jobs page.
+  // Every crawl, one-off or repeating, is created via POST /admin/api/schedules with this form's
+  // options. A one-off crawl is due right away; the scheduler ticker picks it up within seconds
+  // and creates the Job shown on the Jobs page.
   crawlForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const url = normalizeURL(crawlURL.value);
@@ -104,11 +98,9 @@
     }
   });
 
-  // showCurrentDefaults fills each per-crawl override's placeholder with
-  // the actual value it would fall back to (rather than a generic "global
-  // setting" string), so leaving a field blank has a visible, concrete
-  // meaning. Failure here is silent -- the generic placeholder text
-  // already in the HTML is a perfectly fine fallback.
+  // showCurrentDefaults fills each override's placeholder with its real fallback value (not a
+  // generic string), so a blank field has concrete meaning. Fails silently -- the HTML's generic
+  // placeholder is a fine fallback.
   async function showCurrentDefaults() {
     try {
       const s = await getJSON('/admin/api/settings');
@@ -127,11 +119,8 @@
   wireSignOut();
   showCurrentDefaults();
 
-  // Exports for the Node test runner only -- `typeof module` is undefined
-  // in a browser's <script> tag, so this is a no-op there. See
-  // internal/adapters/restapi/admin_crawl.test.js. Requiring this file still
-  // runs the bootstrap calls just above (same as loading the real page
-  // would) -- the test file's fetch mock has to tolerate that.
+  // Node test-runner export only; no-op in a browser. Requiring this file still runs the bootstrap
+  // calls above, as loading the real page would -- the test's fetch mock must tolerate that.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       updateSubmitLabel,

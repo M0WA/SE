@@ -4,10 +4,8 @@
   const recomputeStatusEl = document.getElementById('embeddings-recompute-status');
   const recomputeResultEl = document.getElementById('embeddings-recompute-result');
 
-  // providerLabel resolves a provider id (either the literal "hash" or a
-  // configured HTTP endpoint's ID) against the fetched endpoint list to a
-  // human name -- falling back to the raw ID if it names an endpoint
-  // that's been deleted since (self-heals on the next settings sync, see
+  // providerLabel resolves a provider id ("hash" or an endpoint ID) to a human name -- falls
+  // back to the raw ID if the endpoint's since been deleted (self-heals via
   // domain.ReconcileSearchWeights).
   function providerLabel(providerID, endpoints) {
     if (providerID === 'hash') return 'Hash (dependency-free)';
@@ -15,11 +13,9 @@
     return match ? match.name + ' (' + match.id + ')' : providerID;
   }
 
-  // activeSearchWeightsLabel summarizes op.embedding_search_weights (see
-  // domain.OperationalSettingsValues.EmbeddingSearchWeights) as "name
-  // (weight)" pairs, one per provider actually contributing to the
-  // blended semantic score -- a provider absent or at weight <= 0 doesn't
-  // appear, same as it not contributing to search at all.
+  // activeSearchWeightsLabel summarizes embedding_search_weights as "name (weight)" pairs, one
+  // per contributing provider -- one absent or at weight <=0 doesn't appear, same as not
+  // contributing at all.
   function activeSearchWeightsLabel(weights, endpoints) {
     const active = Object.entries(weights || {}).filter(([, w]) => w > 0);
     if (active.length === 0) return 'none';
@@ -49,11 +45,9 @@
     }
   }
 
-  // pollTimer keeps polling GET /admin/api/embeddings/recompute while a
-  // recompute is in progress -- triggered by ANY admin-server instance,
-  // not just this browser's own click below -- mirroring admin_pagerank.js's
-  // identical pollTimer for the same reason: this page should reflect real
-  // cross-process state.
+  // pollTimer keeps polling while a recompute is in progress, triggered by ANY admin-server
+  // instance, not just this click -- mirrors admin_pagerank.js's pollTimer so this page reflects
+  // real cross-process state.
   let pollTimer = null;
 
   function renderRecomputeStatus(s) {
@@ -86,10 +80,8 @@
     }
   }
 
-  // The recompute itself runs in the background on the server -- this
-  // click only starts it and switches to polling loadRecomputeStatus for
-  // the result, since a corpus-wide recompute is a real, possibly
-  // minutes-long background job, not something to await inline.
+  // The recompute runs server-side in the background -- this click only starts it and switches
+  // to polling loadRecomputeStatus, since it can be a minutes-long job.
   recomputeBtn.addEventListener('click', async () => {
     setButtonLoading(recomputeBtn, true, 'Recomputing…');
     recomputeStatusEl.textContent = 'Starting…';

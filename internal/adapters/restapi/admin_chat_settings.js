@@ -13,21 +13,14 @@
   const saveChatSettingsBtn = document.getElementById('save-chat-settings-btn');
   const chatTokenUsageEl = document.getElementById('chat-token-usage');
 
-  // enabledServerPrompts is populated once by loadChatEndpoint (see below)
-  // -- rendered every time the system prompt textarea changes, so an admin
-  // sees the split update live while editing without waiting for a save.
+  // enabledServerPrompts is populated once by loadChatEndpoint, then re-rendered on every prompt
+  // textarea change, so the split updates live without needing a save.
   let enabledServerPrompts = [];
 
-  // renderTokenUsageDonut is the static, settings-page counterpart of
-  // index.js's per-turn donut: since there's no live chat turn here, it
-  // estimates each piece the same way the backend's own estimateTokens
-  // does (see admin.js's estimateTokensClient) from whatever's currently
-  // in the form, rather than showing a real server-computed count. Global
-  // prompt + MCP server prompts are shown against the configured max
-  // conversation length as "remaining" budget for web-search context and
-  // history -- when no budget is configured (0), there's nothing to show as
-  // "remaining", so the chart just compares the two prompt pieces to each
-  // other.
+  // renderTokenUsageDonut is the settings-page counterpart of index.js's per-turn donut: with no
+  // live turn to read, it estimates each piece from the form via admin.js's estimateTokensClient.
+  // Prompts are shown against max conversation length as "remaining" budget; at 0 budget, it just
+  // compares the two prompt pieces.
   function renderTokenUsageDonut() {
     clear(chatTokenUsageEl);
     const globalTokens = estimateTokensClient(chatSystemPromptEl.value);
@@ -47,11 +40,9 @@
   chatSystemPromptEl.addEventListener('input', renderTokenUsageDonut);
   chatMaxContextTokensEl.addEventListener('input', renderTokenUsageDonut);
 
-  // applyChatEndpoint mirrors admin_embedding_endpoint.js's applyEndpoint API-
-  // key masking: the server never echoes a stored key's real value, so this
-  // field always starts blank -- has_api_key only drives the placeholder
-  // text and whether "remove stored key" is available, never the field's
-  // value.
+  // applyChatEndpoint mirrors admin_embedding_endpoint.js's API-key masking: the server never
+  // echoes a stored key, so the field starts blank; has_api_key only drives the placeholder/
+  // remove-key UI.
   function applyChatEndpoint(c) {
     chatEnabledEl.checked = !!c.enabled;
     chatBaseURLEl.value = c.base_url || '';
@@ -68,12 +59,9 @@
     chatDefaultAgentEl.value = c.default_agent_id || '';
   }
 
-  // loadAgentOptions populates the "Default agent" select from every
-  // configured agent (Settings -> Chat -> Agents), including disabled ones
-  // -- an admin can pick a not-yet-enabled agent as the default ahead of
-  // enabling it. Best-effort, same convention as loadEnabledServerPrompts:
-  // a failure here leaves the select at just its built-in "(none)" option
-  // rather than blocking the rest of the page.
+  // loadAgentOptions populates "Default agent" from every configured agent, including disabled
+  // ones (so one can be pre-selected before enabling). Best-effort: a failure just leaves the
+  // built-in "(none)" option.
   async function loadAgentOptions() {
     while (chatDefaultAgentEl.options.length > 1) chatDefaultAgentEl.remove(1);
     try {
@@ -89,12 +77,9 @@
     }
   }
 
-  // loadEnabledServerPrompts fetches the MCP servers list from its own
-  // settings page (Settings -> Chat -> MCP servers) purely to feed this
-  // page's context-budget preview -- best-effort, same convention as every
-  // other best-effort fetch on this page: a failure here shouldn't block
-  // the chat endpoint's own settings from loading, so it just leaves the
-  // server-prompt slice at 0 rather than surfacing an error.
+  // loadEnabledServerPrompts fetches the MCP servers list purely to feed the context-budget
+  // preview -- best-effort: a failure leaves the server-prompt slice at 0 rather than blocking
+  // the page.
   async function loadEnabledServerPrompts() {
     try {
       const servers = await getJSON('/admin/api/mcp-servers');
@@ -106,12 +91,9 @@
     }
   }
 
-  // The chat-endpoint fetch, loadEnabledServerPrompts, and loadAgentOptions
-  // hit disjoint endpoints and populate disjoint state -- run them
-  // concurrently rather than one after another, so this page's load time
-  // isn't paying for three round-trips back to back. loadAgentOptions must
-  // still finish before applyChatEndpoint sets the select's value below
-  // (Promise.allSettled waits for all three, so it always does).
+  // The chat-endpoint fetch, loadEnabledServerPrompts, and loadAgentOptions hit disjoint endpoints
+  // -- run concurrently, not three round-trips in sequence. loadAgentOptions must finish before
+  // applyChatEndpoint sets the select (Promise.allSettled guarantees this).
   async function loadChatEndpoint() {
     const [endpointResult] = await Promise.allSettled([
       getJSON('/admin/api/chat-endpoint'),
@@ -146,10 +128,8 @@
       });
       chatSettingsStatusEl.style.color = 'var(--ink-muted)';
       chatSettingsStatusEl.textContent = 'Saved.';
-      // Re-fetch so the API-key field reflects the masked state (blank,
-      // with a placeholder if one is now stored) rather than whatever was
-      // just typed -- same post-save refresh as
-      // admin_embedding_endpoint.js's submit handler.
+      // Re-fetch so the API-key field reflects the masked state, not what was just typed --
+      // same post-save refresh as admin_embedding_endpoint.js.
       await loadChatEndpoint();
     } catch (err) {
       chatSettingsStatusEl.style.color = 'var(--accent)';
@@ -165,9 +145,7 @@
   wireSignOut();
   loadChatEndpoint();
 
-  // Exports for the Node test runner only -- `typeof module` is undefined in
-  // a browser's <script> tag, so this is a no-op there. See
-  // internal/adapters/restapi/admin_chat_settings.test.js.
+  // Node test-runner export only; no-op in a browser <script> tag.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { applyChatEndpoint, loadChatEndpoint, saveChatEndpoint, renderTokenUsageDonut, loadAgentOptions };
   }

@@ -2,7 +2,7 @@
 
 [← Manual home](README.md)
 
-All variables are read once at process startup, typically from `/etc/searchengine/searchengine.env` via systemd's `EnvironmentFile=`. Changing any of them requires restarting the affected service(s).
+All variables are read once at startup, typically from `/etc/searchengine/searchengine.env` via systemd's `EnvironmentFile=`. Changing any requires restarting the affected service(s).
 
 ## The full list
 

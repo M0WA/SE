@@ -7,25 +7,18 @@ import (
 	"searchengine/internal/domain"
 )
 
-// defaultAgents is a small, ready-to-use starter set covering the common
-// chat personas this deployment's own tooling (web_search/web_fetch,
-// get_datetime, run_python/run_go, read_file_base64) supports -- see
-// docs/manual/agents.md's "Suggested global agents" section for the
-// rationale behind each one. Every ID here is a fixed literal, not
-// domain.NewAgentID-minted, since seedDefaultAgents only ever runs once
-// (see its own doc comment) -- there is no existing-ID set to dedupe
-// against.
+// defaultAgents is a small starter set of personas for this deployment's
+// tooling (web_search/web_fetch, get_datetime, run_python/run_go,
+// read_file_base64) -- see docs/manual/agents.md's "Suggested global
+// agents" for rationale. IDs are fixed literals, not domain.NewAgentID-
+// minted, since SeedDefaultAgents only ever runs once (no existing-ID set
+// to dedupe against).
 //
-// Each one starts with an empty MCPServerIDs -- which now means NO global
-// tools at all, not "every tool" (see domain.Agent.MCPServerIDs' own doc
-// comment) -- deliberately, not as an oversight: a real MCP server's own ID
-// is admin-configured, deployment-specific data (e.g. "web_tools" here,
-// "mcp_web_1" there) that this package has no safe way to guess or
-// hardcode. An admin wanting Researcher/Current events/Deep research/This
-// index to actually use web tools (or Image analyst to use the sandbox/
-// files tools) scopes them to whichever server row actually exists on
-// THIS deployment via the agent's own edit page, same as
-// they would for any agent they created themselves.
+// Each starts with empty MCPServerIDs -- meaning NO global tools, not
+// "every tool" (see domain.Agent.MCPServerIDs) -- deliberately: a real MCP
+// server ID is admin-configured, deployment-specific data this package
+// can't guess. An admin wanting web/sandbox tools scopes them via the
+// agent's edit page, to whichever server row actually exists here.
 var defaultAgents = []domain.Agent{
 	{
 		ID:          "researcher",
@@ -77,16 +70,12 @@ var defaultAgents = []domain.Agent{
 		ID:          "image_analyst",
 		Name:        "Image analyst",
 		Description: "Analyzes an uploaded image's content and extracts any text in it (OCR).",
-		// The sandbox's container root is read-only (see
-		// dockersandbox's own package doc comment), which rules out
-		// "apt-get install tesseract-ocr" -- pytesseract's usual system
-		// dependency -- entirely, at any privilege level. easyocr is
-		// used instead specifically because it's pure pip (bundles its
-		// own models, no system package needed), at the real cost of a
-		// large, slow, uncached download every single call (nothing
-		// persists between sandbox runs) -- this agent only works
-		// well with a generously long -timeout (several minutes) and
-		// -memory on its sandbox MCP server row.
+		// The sandbox's container root is read-only (see dockersandbox's
+		// doc comment), ruling out tesseract-ocr's usual apt-get install.
+		// easyocr is used instead since it's pure pip (bundles its own
+		// models) -- at the cost of a large, uncached download every call,
+		// so this agent needs a generous -timeout (minutes) and -memory
+		// on its sandbox server row.
 		SystemPrompt: "When asked to analyze an image or read text out of one, first call " +
 			"read_file_base64 to get its base64 content (list_files first if you don't already " +
 			"have the file id). Then call run_python with packages [\"Pillow\", \"easyocr\"] and code " +
@@ -102,27 +91,18 @@ var defaultAgents = []domain.Agent{
 	},
 }
 
-// SeedDefaultAgents inserts defaultAgents the FIRST time this database's
-// agents table is completely empty. A per-row "INSERT ... ON CONFLICT (id)
-// DO NOTHING" (the content_dedup_lock sentinel row's own pattern) would
-// resurrect exactly that row on every subsequent restart, which is right
-// for an internal sentinel but wrong for admin-owned, individually-
-// deletable content like this: as long as at least one agent (seeded or
-// the admin's own) still exists, deleting any ONE default sticks across
-// restarts, since the table is never empty again. The one caveat: deleting
-// EVERY agent back down to zero rows is indistinguishable from "a
-// genuinely fresh database" by this check, so the next restart re-seeds
-// all six -- accepted as an edge case too narrow (a deliberate full
-// reset) to design a persisted "already seeded" flag around.
+// SeedDefaultAgents inserts defaultAgents only the FIRST time the agents
+// table is completely empty. Unlike a per-row "ON CONFLICT DO NOTHING"
+// (content_dedup_lock's pattern, right for a sentinel), this lets deleting
+// any one default stick across restarts, since the table is never empty
+// again as long as one agent remains. Caveat: deleting every agent back to
+// zero re-seeds all six on the next restart -- accepted as too narrow an
+// edge case (a deliberate full reset) to persist an "already seeded" flag for.
 //
-// Deliberately NOT wired into migrate() -- migrate() runs for every
-// process (search/admin/crawl) AND every test fixture that opens a
-// Repository, and seeding agent rows there would silently inflate every
-// sqlrepo test's fresh, otherwise-empty database. Agents are an
-// admin-facing concern, so cmd/admin's own main() calls this explicitly,
-// once, right after opening the DB -- search-server/crawl-server never
-// call it, and a fresh test repository stays genuinely empty unless a test
-// calls it itself.
+// Deliberately NOT wired into migrate(), which runs for every process and
+// test fixture -- seeding there would inflate every sqlrepo test's empty
+// database. cmd/admin's main() calls this explicitly, once; search/crawl
+// never do, so a test repository stays empty unless it calls it itself.
 func (r *Repository) SeedDefaultAgents(ctx context.Context) error {
 	var count int
 	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM agents`).Scan(&count); err != nil {

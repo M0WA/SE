@@ -49,10 +49,8 @@ type TermStat struct {
 	TotalFreq int
 }
 
-// TermScore is one query term's BM25 contribution to a specific document --
-// the postings stats that produced it plus the resulting score -- for the
-// admin debug view, which wants to show which terms actually drove a
-// result's BM25Score rather than only its summed total.
+// TermScore is one query term's BM25 contribution to a document, for the
+// admin debug view showing which terms drove a result's score.
 type TermScore struct {
 	Term      string
 	TermFreq  int
@@ -61,11 +59,9 @@ type TermScore struct {
 	Score     float64
 }
 
-// BM25TermScores is BM25ScoreDocument's per-term counterpart, for admin
-// diagnostics: the same total score, split by which term contributed how
-// much. terms and postingsPerTerm must be parallel slices (same length,
-// same index order) -- the shape hybridSearchService.Search already builds
-// them in. Sorted by descending score so the strongest contributor leads.
+// BM25TermScores is BM25ScoreDocument's per-term counterpart: the same total
+// score split by term. terms and postingsPerTerm must be parallel slices.
+// Sorted by descending score.
 func BM25TermScores(terms []string, postingsPerTerm []PostingStats, k1, b float64) []TermScore {
 	if len(terms) == 0 {
 		return nil

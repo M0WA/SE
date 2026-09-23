@@ -7,17 +7,13 @@ import (
 )
 
 // Snippet extracts a text window around the first match and highlights it.
-// phrases take priority over terms for centering and highlighting -- a
-// phrase marks one contiguous span, and terms only highlight outside it, so
-// nothing double-wraps. text is untrusted crawled content rendered as HTML,
-// so it's always escaped before any <mark> tag is added (a term containing
-// an HTML metacharacter like "AT&T" may then fail to highlight -- acceptable).
+// phrases take priority over terms for centering/highlighting so nothing
+// double-wraps. text is untrusted, so it's always HTML-escaped before any
+// <mark> tag is added (a term with an HTML metacharacter like "AT&T" may
+// then fail to highlight -- acceptable).
 func Snippet(text string, phrases, terms []string, maxLen int) string {
-	// Compiled once per call and reused across every use below (indexOfEarliest
-	// runs one pass over phrases and one over terms; highlight/
-	// highlightOutsideMarks run once more per phrase/term) -- word count is
-	// typically small, but this still avoids recompiling the identical
-	// pattern for the same word up to four times over within one call.
+	// Compiled once per call and reused across every use below, avoiding
+	// recompiling the same pattern up to four times over.
 	phraseFinders := compileFinders(phrases)
 	termFinders := compileFinders(terms)
 
@@ -58,18 +54,12 @@ func Snippet(text string, phrases, terms []string, maxLen int) string {
 }
 
 // caseInsensitiveFinder compiles word into a case-insensitive regexp whose
-// match offsets are always valid byte offsets within whatever string it is
-// matched against -- unlike searching a separately lowercased copy (the
-// previous approach here), which silently breaks whenever
-// strings.ToLower changes a string's byte length, as it does for some
-// Unicode characters (e.g. Turkish İ, German ẞ): offsets found in the
-// lowercased copy no longer line up with the original string, and slicing
-// the original at those offsets can read out of range or misalign
-// entirely. This was the root cause of a real crash ("slice bounds out of
-// range") triggered by ordinary crawled content containing such a
-// character. Returns nil (matches nothing) for an empty word or one that
-// fails to compile as a regexp (defensive -- Tokenize-derived words
-// shouldn't normally fail this).
+// match offsets are always valid within the original string -- unlike
+// searching a separately lowercased copy, which breaks when
+// strings.ToLower changes byte length (e.g. Turkish İ, German ẞ),
+// misaligning offsets and causing out-of-range slicing. Root cause of a
+// real "slice bounds out of range" crash on ordinary crawled content.
+// Returns nil for an empty or uncompilable word.
 func caseInsensitiveFinder(word string) *regexp.Regexp {
 	if word == "" {
 		return nil
@@ -107,9 +97,7 @@ func indexOfEarliest(text string, finders []*regexp.Regexp) int {
 }
 
 // highlight is only ever called with a re from compileFinders' output
-// (never nil -- compileFinders drops every word that fails to compile), so
-// unlike caseInsensitiveFinder's other callers, it never needs its own nil
-// check.
+// (never nil), so it needs no nil check of its own.
 func highlight(s string, re *regexp.Regexp) string {
 	matches := re.FindAllStringIndex(s, -1)
 	if matches == nil {
@@ -130,10 +118,8 @@ func highlight(s string, re *regexp.Regexp) string {
 
 var markRe = regexp.MustCompile(`(?s)<mark>.*?</mark>`)
 
-// highlightOutsideMarks is highlight, but skips any text already wrapped in
-// a <mark> span from a prior (higher-priority) highlight pass -- so a
-// phrase's own words don't get separately re-wrapped inside the phrase's
-// own contiguous span.
+// highlightOutsideMarks is highlight, but skips text already wrapped in a
+// <mark> span from a prior pass, so a phrase's words aren't re-wrapped.
 func highlightOutsideMarks(s string, re *regexp.Regexp) string {
 	spans := markRe.FindAllStringIndex(s, -1)
 	if spans == nil {

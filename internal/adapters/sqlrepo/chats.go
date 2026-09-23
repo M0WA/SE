@@ -71,15 +71,12 @@ func (r *Repository) UpdateChat(ctx context.Context, c domain.PersistedChat) err
 }
 
 // DeleteChat returns ports.ErrChatNotFound if no chat with (ownerUserID,
-// id) exists. Explicitly deletes every file attached to it FIRST, in the
-// same transaction, rather than relying on uploaded_files.chat_id's own
-// "ON DELETE CASCADE" foreign key to do it: SQLite only enforces foreign
-// keys when a connection has run "PRAGMA foreign_keys = ON", which this
-// package's connections never do (confirmed -- a chat's files silently
-// survived its deletion under sqlite without this explicit delete, while
-// the exact same code would have cascaded correctly under Postgres, which
-// always enforces its own foreign keys). Deleting explicitly here keeps
-// behavior identical across every dialect regardless of that difference.
+// id) exists. Deletes every attached file FIRST, in the same transaction,
+// rather than relying on uploaded_files.chat_id's ON DELETE CASCADE:
+// SQLite only enforces foreign keys with "PRAGMA foreign_keys = ON", which
+// this package never sets (confirmed -- files silently survived chat
+// deletion under sqlite without this, while Postgres cascaded correctly).
+// Explicit delete keeps behavior identical across dialects.
 func (r *Repository) DeleteChat(ctx context.Context, ownerUserID, id string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -119,18 +116,15 @@ func scanChat(row scanner) (domain.PersistedChat, error) {
 	return c, nil
 }
 
-// randomChatID returns a 16-byte random token, hex-encoded -- unguessable
-// the same way a file ID is, since a chat ID appears directly in
-// /account/api/chats/{id} URLs (see randomFileID's own doc comment for the
-// identical reasoning).
+// randomChatID returns a 16-byte hex-encoded random token -- unguessable,
+// since chat IDs appear directly in /account/api/chats/{id} URLs (see
+// randomFileID's doc comment).
 func randomChatID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		// crypto/rand.Read practically never fails on any platform this
-		// runs on; falling back to a timestamp keeps IDs unique enough
-		// even in that vanishingly unlikely case, rather than panicking a
-		// chat creation over an ID-generation hiccup (same tolerance
-		// randomFileID/dockersandbox.randomHex apply to their own IDs).
+		// crypto/rand.Read practically never fails; a timestamp fallback
+		// keeps IDs unique enough in that case rather than panicking a
+		// chat creation (same tolerance randomFileID/dockersandbox.randomHex apply).
 		return fmt.Sprintf("%x", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b)

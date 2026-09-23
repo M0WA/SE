@@ -22,9 +22,7 @@ function baseServer(overrides) {
   }, overrides);
 }
 
-// This page's own script intentionally does NOT load admin.js -- see
-// account_mcp_servers.js's own comment -- so, unlike admin_mcp_servers.test.js's
-// fixture, there's no admin.js global to assign in first.
+// Doesn't load admin.js (see account_mcp_servers.js) -- no admin.js global to assign in this fixture.
 function loadFixture(fetchImpl) {
   setupDOM(ACCOUNT_MCP_SERVERS_HTML);
   global.fetch = fetchImpl || (async () => ({ ok: true, json: async () => [] }));
@@ -69,15 +67,9 @@ test('renderServers shows base url and enabled columns', () => {
   const { renderServers } = loadFixture();
   renderServers([baseServer({ enabled: false })]);
   const cells = Array.from(document.querySelectorAll('#servers-table td')).map((td) => td.textContent);
-  // Array.prototype.some with strict equality, not Array.prototype.includes
-  // -- CodeQL's js/incomplete-url-substring-sanitization rule flagged the
-  // equivalent .includes() call here as if it were a String.prototype.includes
-  // substring-based URL/origin check (the real bypass pattern that rule
-  // exists to catch, e.g. "evil.com/https://example.com".includes("https://
-  // example.com")); this is an exact-match check against an array of
-  // rendered cell strings, not that pattern at all, but re-expressed this
-  // way so the false positive doesn't need re-litigating on every future
-  // scan.
+  // Uses Array.some+strict equality, not .includes() -- CodeQL's js/incomplete-url-substring-sanitization
+  // rule misreads .includes() here as a URL-substring check; this is an exact-match against rendered
+  // cell strings, not that pattern. Rephrased to avoid re-litigating the false positive.
   assert.equal(cells.some((c) => c === 'https://example.com/mcp'), true);
   assert.equal(cells.some((c) => c === 'no'), true);
 });

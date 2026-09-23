@@ -35,16 +35,11 @@ type fakeCrawler struct {
 	count int
 	err   error
 
-	// mu guards gotOptions, since a single fakeCrawler shared across
-	// several concurrently-triggered crawls (see
-	// TestHandleCrawlInternal_ConcurrentJobsAllComplete) gets Crawl called
-	// from more than one runCrawlJob goroutine at once. Every test that
-	// reads gotOptions back only ever does so after waitForJob confirms
-	// that crawl's own job finished, which already happens-after the one
-	// write it cares about via the job store's own locking -- this mutex
-	// exists only to keep the write itself race-free under the race
-	// detector, not to make gotOptions safe to read concurrently with more
-	// crawls still in flight.
+	// mu guards gotOptions, since a shared fakeCrawler can get Crawl called
+	// from more than one runCrawlJob goroutine at once (see
+	// TestHandleCrawlInternal_ConcurrentJobsAllComplete). Reads always come
+	// after waitForJob confirms that job finished; this mutex only keeps
+	// the write itself race-free under the race detector.
 	mu         sync.Mutex
 	gotOptions ports.CrawlOptions
 }
@@ -104,8 +99,8 @@ const (
 )
 
 // authedHandler returns a Handler with an admin account configured, plus a
-// valid session cookie obtained via a real POST /login -- so tests exercise
-// the actual login flow rather than bypassing it.
+// valid session cookie from a real POST /login -- exercising the actual
+// login flow rather than bypassing it.
 func authedHandler(t *testing.T, search *fakeSearch, jobs ports.CrawlJobService) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
 	h := restapi.New(restapi.Config{
@@ -307,11 +302,9 @@ func TestHandleSearch_Unauthenticated_Returns401(t *testing.T) {
 }
 
 // TestHandleSearch_NoInternalKeyConfigured_StillRequiresSession proves the
-// default-off behavior of requireAuthAPIOrInternalKey is byte-for-byte
-// identical to plain requireAuthAPI: with InternalSearchAPIKey left unset,
-// a request with no session cookie and no X-Internal-API-Key header at all
-// still gets a plain 401, exactly as /search behaved before this bypass
-// existed.
+// default-off behavior of requireAuthAPIOrInternalKey is identical to
+// plain requireAuthAPI: with InternalSearchAPIKey unset, no cookie/header
+// still gets a plain 401, as before this bypass existed.
 func TestHandleSearch_NoInternalKeyConfigured_StillRequiresSession(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: &fakeSearch{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
 	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen", nil)
@@ -327,9 +320,8 @@ func TestHandleSearch_NoInternalKeyConfigured_StillRequiresSession(t *testing.T)
 }
 
 // TestHandleSearch_CorrectInternalKey_BypassesSession proves a trusted
-// caller (e.g. the SearXNG engine plugin) that presents the exact
-// configured X-Internal-API-Key reaches handleSearch with no session
-// cookie at all.
+// caller presenting the exact configured X-Internal-API-Key reaches
+// handleSearch with no session cookie.
 func TestHandleSearch_CorrectInternalKey_BypassesSession(t *testing.T) {
 	fs := &fakeSearch{results: []domain.SearchResult{{URL: "http://a", Score: 1}}}
 	h := restapi.New(restapi.Config{Search: fs, InternalSearchAPIKey: "s3cret-key"})
@@ -348,9 +340,8 @@ func TestHandleSearch_CorrectInternalKey_BypassesSession(t *testing.T) {
 }
 
 // TestHandleSearch_WrongInternalKey_StillRequiresSession proves a wrong
-// X-Internal-API-Key does not fall through to the bypass, and (with no
-// session cookie either) still gets a plain 401 -- a wrong key is not
-// itself treated as an authenticated session.
+// X-Internal-API-Key doesn't fall through to the bypass -- still 401, not
+// treated as an authenticated session.
 func TestHandleSearch_WrongInternalKey_StillRequiresSession(t *testing.T) {
 	h := restapi.New(restapi.Config{Search: &fakeSearch{}, InternalSearchAPIKey: "s3cret-key"})
 
@@ -364,10 +355,9 @@ func TestHandleSearch_WrongInternalKey_StillRequiresSession(t *testing.T) {
 	}
 }
 
-// TestHandleSearch_ValidSessionWithInternalKeyConfigured_StillWorks is
-// regression coverage that configuring InternalSearchAPIKey doesn't
-// disturb the normal session-cookie path: a valid session with no
-// X-Internal-API-Key header at all still works exactly as before.
+// TestHandleSearch_ValidSessionWithInternalKeyConfigured_StillWorks proves
+// configuring InternalSearchAPIKey doesn't disturb the normal
+// session-cookie path.
 func TestHandleSearch_ValidSessionWithInternalKeyConfigured_StillWorks(t *testing.T) {
 	fs := &fakeSearch{results: []domain.SearchResult{{URL: "http://a", Score: 1}}}
 	h := restapi.New(restapi.Config{
@@ -401,10 +391,8 @@ func TestHandleSearch_ValidSessionWithInternalKeyConfigured_StillWorks(t *testin
 	}
 }
 
-// TestHandleSearch_SurfacesCorrectedTerms verifies a fuzzy correction made
-// by the search service reaches the public /search JSON response, so a
-// caller/UI can show it transparently rather than the query being silently
-// rewritten.
+// TestHandleSearch_SurfacesCorrectedTerms verifies a fuzzy correction
+// reaches the public /search JSON response, not a silently rewritten query.
 func TestHandleSearch_SurfacesCorrectedTerms(t *testing.T) {
 	fs := &fakeSearch{results: []domain.SearchResult{{
 		URL: "http://a", Score: 1,

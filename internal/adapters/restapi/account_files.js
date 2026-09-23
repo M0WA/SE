@@ -1,9 +1,7 @@
   const statusEl = document.getElementById('files-status');
   const tableEl = document.getElementById('files-table');
 
-  // This page intentionally does NOT load admin.js (see account.js's own
-  // comment on why self-service pages stay decoupled from it) -- same
-  // small local helpers account_mcp_servers.js already duplicates.
+  // Intentionally doesn't load admin.js (see account.js) -- small local helpers duplicated instead.
   function clear(el) {
     while (el.firstChild) el.firstChild.remove();
   }
@@ -109,9 +107,7 @@
 
   loadFiles();
 
-  // Exports for the Node test runner only -- `typeof module` is undefined in
-  // a browser's <script> tag, so this is a no-op there. See
-  // internal/adapters/restapi/account_files.test.js.
+  // Node test-runner export only; no-op in a browser <script> tag.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { renderFiles, loadFiles, deleteFile, formatSize };
   }

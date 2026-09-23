@@ -4,7 +4,7 @@
 
 *`/admin/settings`*
 
-This is the single page for every global tuning knob in searchengine: how ranking blends BM25 and semantic scores, how the crawler behaves by default, which words or domains get blocked or boosted, and system-level limits like the database pool and session length. Every field here applies to all three processes (search, admin, crawl) within about 10 seconds of saving — there's no restart step. Groups are collapsed by default; open the one you need with the summary bar, and check the eight tiles at the top of the page for a quick read of the current configuration before you dig into any group.
+The single page for every global tuning knob: ranking's BM25/semantic blend, default crawler behavior, blocked/boosted words and domains, and system limits like the database pool and session length. Every field applies to all three processes (search, admin, crawl) within about 10 seconds of saving — no restart. Groups are collapsed by default; open the one you need, and check the eight tiles at the top for a quick read before digging into any group.
 
 ![Settings](images/settings.png)
 
@@ -17,7 +17,7 @@ This single page holds four collapsible groups of global tuning knobs, each docu
 
 ## At a glance (summary tiles)
 
-The eight tiles above the form (alpha·k1·b, title weight, ANN search, fuzzy matching, blocked, boosted, session length, crawl default) are a read-only snapshot of the current values, refreshed the instant you save. Use them to sanity-check a change without reopening every group, or to confirm at a glance that nothing drifted from what you expect before you start editing. They read from the same two API calls (GET /admin/api/settings and GET /admin/api/overrides) that populate the form fields, so they're always in sync with what's actually stored.
+The eight tiles above the form (alpha·k1·b, title weight, ANN search, fuzzy matching, blocked, boosted, session length, crawl default) are a read-only snapshot, refreshed the instant you save. Use them to sanity-check a change without reopening every group. They read from the same two API calls (GET /admin/api/settings, GET /admin/api/overrides) that populate the form, so they're always in sync with what's stored.
 
 ---
 ← [Agent detail](agent-detail.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Settings: Search & ranking](settings-search-ranking.md) →

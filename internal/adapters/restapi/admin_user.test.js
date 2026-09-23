@@ -8,10 +8,8 @@ const { teardownDOM, requireFresh } = require('./dom_helper.test_util');
 
 const USER_HTML = fs.readFileSync(path.join(__dirname, 'admin_user.html'), 'utf8');
 
-// admin_user.js reads its user id (or the literal "new") from
-// window.location.pathname at load time, so it needs a jsdom instance
-// constructed with a specific URL, same reasoning as
-// admin_embedding_endpoint.test.js's setupEndpointDOM.
+// Reads user id (or "new") from window.location.pathname at load time, so needs a jsdom instance
+// with a specific URL -- same as admin_embedding_endpoint.test.js's setupEndpointDOM.
 function setupUserDOM(id) {
   const dom = new JSDOM(USER_HTML, { url: 'http://localhost/admin/users/' + encodeURIComponent(id) });
   global.window = dom.window;
@@ -67,11 +65,9 @@ test('load() applies the fetched user to the form and reveals it', async () => {
   assert.equal(meta.includes('user_alice'), true);
 });
 
-// The user-edit subpage must show the same admin nav rail as every other
-// admin page (unlike a plain "back link only" drill-down page) -- a
-// reported UX gap: the rail was originally omitted here, mirroring
-// admin_embedding_endpoint.html's own no-rail convention, but this page
-// needs it.
+// The user-edit subpage must show the same admin nav rail as every other admin page (unlike a
+// plain back-link drill-down page) -- originally omitted here (mirroring
+// admin_embedding_endpoint.html), a reported UX gap.
 test('renders the admin nav rail on load', async () => {
   loadFixture('user_alice', async () => ({ ok: true, json: async () => baseUser() }));
   await flush();

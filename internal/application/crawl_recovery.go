@@ -13,24 +13,18 @@ import (
 // safely resumed (it needed credentials that were never persisted).
 var ErrCrawlInterruptedByRestart = errors.New("crawl-server restarted before this job finished")
 
-// RecoverInterruptedCrawls runs once at crawl-server startup. A job left
-// queued/running when the process last stopped has no goroutine working on
-// it anymore, so without this it would show "running" forever and never
-// get picked back up.
+// RecoverInterruptedCrawls runs once at crawl-server startup: a job left
+// queued/running when the process stopped has no goroutine working it,
+// so without this it'd show "running" forever.
 //
-// A job needing a cookie/Basic auth can't be resumed (credentials are
-// never persisted) -- marked failed with ErrCrawlInterruptedByRestart; an
-// admin must re-trigger it with credentials supplied again.
+// A job needing a cookie/Basic auth can't resume (credentials aren't
+// persisted) -- marked failed with ErrCrawlInterruptedByRestart. Every
+// other job resumes in place under its existing ID, restarting from the
+// same seeds (safe: document IDs are idempotent), with PrioritizeUnindexed
+// forced on so the remaining budget reaches missing pages first.
 //
-// Every other job resumes in place under its existing ID (pages_crawled
-// and history keep accumulating), restarting from the same seed URLs --
-// safe since per-URL document IDs are idempotent, and PrioritizeUnindexed
-// is forced on so the remaining budget reaches still-missing pages first.
-//
-// MaxPages is shrunk by PagesCrawled already spent before resuming, so a
-// job surviving several restarts doesn't get a fresh full budget each
-// time; one already at or past budget is marked done instead of resumed.
-// MaxPages<=0 (no explicit cap) is left untouched.
+// MaxPages is shrunk by PagesCrawled already spent, so repeated restarts
+// don't reset the budget; one already past budget is marked done instead.
 func RecoverInterruptedCrawls(
 	ctx context.Context,
 	jobs ports.CrawlJobStore,

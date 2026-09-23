@@ -9,16 +9,11 @@ import (
 	"searchengine/internal/ports"
 )
 
-// TriggerDueCrawls finds every due crawl (enabled, not in-progress,
-// next_run_at <= now), triggers each and marks it in-progress immediately
-// so a scheduler tick never double-triggers a still-running job. onDone
-// fires once the job finishes: sets last_run_at/next_run_at, clears
-// in_progress, and (only for a one-off or a recurring entry past MaxRuns)
-// disables it. Reports how many crawls were triggered.
-//
-// stillEnabled is computed once per entry so trigger and onDone agree on
-// what enabled/runCount to record. A trigger failure is logged and
-// skipped, not fatal -- the next tick retries it.
+// TriggerDueCrawls finds every due crawl, triggers each, and marks it
+// in-progress immediately so a tick never double-triggers a running job.
+// onDone fires on finish: sets last/next run, clears in-progress, and
+// disables a one-off or MaxRuns-exhausted entry. Returns how many were
+// triggered; a failed trigger is logged and skipped, retried next tick.
 func TriggerDueCrawls(ctx context.Context, store ports.ScheduledCrawlStore, trigger func(context.Context, ports.CrawlOptions, func()) (string, error), now time.Time) (int, error) {
 	due, err := store.DueScheduledCrawls(ctx, now)
 	if err != nil {
@@ -43,12 +38,10 @@ func TriggerDueCrawls(ctx context.Context, store ports.ScheduledCrawlStore, trig
 			continue
 		}
 
-		// enabled stays s.Enabled -- this call's only job is marking the
-		// entry in-progress (and recording jobID, so a crash-recovery pass
-		// at next startup can tell this run apart from a genuinely stale
-		// one -- see ports.ScheduledCrawlStore.ResetStaleInProgress).
-		// next_run_at is a placeholder for the UI; onDone overwrites it
-		// with the real finish+interval.
+		// enabled stays s.Enabled here -- this call only marks in-progress
+		// and records jobID, so startup crash-recovery can tell this run
+		// apart from a stale one (see ResetStaleInProgress). next_run_at is
+		// a UI placeholder; onDone overwrites it with the real value.
 		nextRun := now.Add(interval)
 		if err := store.MarkScheduledCrawlRun(ctx, s.ID, now, nextRun, s.Enabled, true, runCount, jobID); err != nil {
 			log.Printf("recording run for scheduled crawl %s (job %s): %v", s.ID, jobID, err)

@@ -21,32 +21,26 @@ import (
 	"searchengine/internal/ports"
 )
 
-// schedulerPollInterval is how often crawl-server checks for crawls that
-// have come due -- short enough that a one-off crawl starts within a few
-// seconds, cheap enough to be negligible load for a single-admin instance.
+// schedulerPollInterval is how often crawl-server checks for due crawls --
+// short enough to start within seconds, cheap enough to be negligible.
 const schedulerPollInterval = 3 * time.Second
 
 // pageRankPollInterval is how often runPageRankScheduler checks whether the
-// admin-configured recompute interval has elapsed -- independent of (and
-// much shorter than) that interval itself.
+// admin-configured recompute interval has elapsed.
 const pageRankPollInterval = 60 * time.Second
 
-// contentDedupPollInterval is how often runContentDedupScheduler checks
-// whether the admin-configured recompute interval has elapsed -- mirrors
-// pageRankPollInterval.
+// contentDedupPollInterval mirrors pageRankPollInterval, for content dedup.
 const contentDedupPollInterval = 60 * time.Second
 
 // crawlJobPrunePollInterval is how often runCrawlJobPruner deletes crawl
-// jobs beyond the admin-configured retention limit -- infrequent, since
-// unlike the old in-memory store's per-Create trim, persistent storage
-// doesn't need pruning to happen the instant the limit is crossed.
+// jobs beyond the retention limit -- infrequent, since persistent storage
+// doesn't need pruning the instant the limit is crossed.
 const crawlJobPrunePollInterval = 5 * time.Minute
 
 // runPageRankScheduler recomputes PageRank once immediately, then again
-// whenever PageRankRecomputeIntervalMinutes has elapsed (checked on a
-// shorter poll tick so an admin edit takes effect promptly). A post-crawl
-// trigger also resets this timer. Runs the first recompute in the
-// background so a large corpus's pass doesn't delay ListenAndServe.
+// whenever PageRankRecomputeIntervalMinutes has elapsed (a post-crawl
+// trigger also resets this timer). Runs the first recompute in the
+// background so a large corpus doesn't delay ListenAndServe.
 func runPageRankScheduler(ctx context.Context, repo ports.PageRankRepository, settingsStore ports.SettingsStore, opSettings *domain.OperationalSettings) *pageRankRecomputer {
 	pr := &pageRankRecomputer{repo: repo, settingsStore: settingsStore}
 	go pr.recompute(ctx)
@@ -69,18 +63,15 @@ func runPageRankScheduler(ctx context.Context, repo ports.PageRankRepository, se
 	return pr
 }
 
-// pageRankRecomputer tracks when application.RunPageRankJob last ran, so
-// both runPageRankScheduler's own ticker and a post-crawl trigger can share
-// one "was it just recomputed" clock rather than racing two independent
-// timers.
+// pageRankRecomputer tracks when RunPageRankJob last ran, so the ticker
+// and a post-crawl trigger share one clock rather than racing two.
 type pageRankRecomputer struct {
 	repo          ports.PageRankRepository
 	settingsStore ports.SettingsStore
 	mu            sync.Mutex
 	last          time.Time
-	// running guards against two recompute()s overlapping (startup call vs.
-	// ticker vs. a post-crawl trigger) -- a second call while one is in
-	// flight just returns immediately rather than contending.
+	// running guards against two recompute()s overlapping -- a second call
+	// while one is in flight just returns immediately.
 	running bool
 }
 
@@ -111,8 +102,7 @@ func (p *pageRankRecomputer) lastRun() time.Time {
 
 // runContentDedupScheduler mirrors runPageRankScheduler, gated by
 // ContentDedupIntervalMinutes. Unlike PageRank this pass is opt-in and
-// destructive -- gated inside contentDedupRecomputer.recompute so both this
-// scheduler and an external trigger are safe to call unconditionally.
+// destructive, gated inside recompute so callers are safe unconditionally.
 func runContentDedupScheduler(ctx context.Context, repo ports.ContentDedupRepository, settingsStore ports.SettingsStore, opSettings *domain.OperationalSettings) *contentDedupRecomputer {
 	cd := &contentDedupRecomputer{repo: repo, settingsStore: settingsStore, opSettings: opSettings}
 	go cd.recompute(ctx)
@@ -135,9 +125,8 @@ func runContentDedupScheduler(ctx context.Context, repo ports.ContentDedupReposi
 	return cd
 }
 
-// contentDedupRecomputer tracks when application.RunContentDedupJob last
-// ran -- see pageRankRecomputer's identical doc comment for why this
-// shared-clock/running-guard shape exists.
+// contentDedupRecomputer mirrors pageRankRecomputer's shared-clock/
+// running-guard shape, for RunContentDedupJob.
 type contentDedupRecomputer struct {
 	repo          ports.ContentDedupRepository
 	settingsStore ports.SettingsStore
@@ -178,9 +167,8 @@ func (c *contentDedupRecomputer) lastRun() time.Time {
 }
 
 // runScheduler triggers every due scheduled crawl once immediately, then
-// again on every tick, via handler.TriggerScheduledCrawl -- with a
-// completion callback so next_run_at reflects when a crawl actually
-// finished, not just when it started.
+// on every tick, with a completion callback so next_run_at reflects when
+// a crawl actually finished, not when it started.
 func runScheduler(ctx context.Context, store ports.ScheduledCrawlStore, handler *restapi.Handler) {
 	bootstrap.PollRefresh(ctx, schedulerPollInterval, func() {
 		if _, err := application.TriggerDueCrawls(ctx, store, handler.TriggerScheduledCrawl, time.Now()); err != nil {
@@ -191,16 +179,15 @@ func runScheduler(ctx context.Context, store ports.ScheduledCrawlStore, handler 
 
 // crawlJobPruner is satisfied by *sqlrepo.Repository's PruneCrawlJobs --
 // called directly on the concrete repo (like EnableANN), not through a
-// ports interface, since pruning is a maintenance concern internal to
-// crawl-server rather than part of the CrawlJobStore contract handlers use.
+// ports interface, since pruning is internal maintenance, not part of
+// the CrawlJobStore contract handlers use.
 type crawlJobPruner interface {
 	PruneCrawlJobs(ctx context.Context, maxRetained int) error
 }
 
 // runCrawlJobPruner deletes crawl jobs beyond opSettings' current
-// MaxRetainedCrawlJobs on every tick, once immediately and then on the
-// fixed poll interval for as long as ctx stays alive -- an admin raising
-// or lowering the limit takes effect within one poll tick either way.
+// MaxRetainedCrawlJobs, once immediately then on each poll tick -- an
+// admin raising or lowering the limit takes effect within one tick.
 func runCrawlJobPruner(ctx context.Context, pruner crawlJobPruner, opSettings *domain.OperationalSettings) {
 	bootstrap.PollRefresh(ctx, crawlJobPrunePollInterval, func() {
 		if err := pruner.PruneCrawlJobs(ctx, opSettings.Get().MaxRetainedCrawlJobs); err != nil {
@@ -227,13 +214,11 @@ func main() {
 	endpoints := bootstrap.LoadEmbeddingEndpoints(ctx, repo, settingsEncryptionKey)
 	embedders := bootstrap.NewEmbedders(opSettings.Get().EmbeddingHashEnabled, endpoints)
 	// Enables Postgres pgvector ANN search when available, never fatal
-	// otherwise -- see cmd/search's identical comment. Must run after
-	// embedders are constructed.
+	// otherwise. Must run after embedders are constructed.
 	repo.EnableANN(ctx, bootstrap.EmbedderDimensions(embedders))
-	// fetcher does plain HTTP; RenderAwareFetcher adds an opt-in real-browser
-	// path on top, chosen per-crawl or by the Tuning page's default -- with
-	// rendering off (the default), byte-for-byte the same as before the
-	// feature existed. Neither browser engine starts until a crawl asks for it.
+	// fetcher does plain HTTP; RenderAwareFetcher adds an opt-in
+	// real-browser path on top, chosen per-crawl or by the Tuning page's
+	// default. Neither browser engine starts until a crawl asks for it.
 	fetcher := httpfetcher.New(opSettings)
 	renderingFetcher := &application.RenderAwareFetcher{
 		Base:       fetcher,
@@ -258,30 +243,26 @@ func main() {
 		Health:     repo,
 		OpSettings: opSettings,
 		// A crawl just changed the corpus -- recompute right away in the
-		// background (so it never delays the job's reported completion),
-		// on top of each recomputer's own ticker. contentDedup.recompute is
-		// a no-op when ContentDedupEnabled is off.
+		// background, on top of each recomputer's own ticker.
+		// contentDedup.recompute is a no-op when ContentDedupEnabled is off.
 		OnCrawlComplete: func() { go pageRank.recompute(ctx); go contentDedup.recompute(ctx) },
 		// Opt-in shared secret admin-server's crawlclient.Client sends back
 		// -- empty by default, so an unconfigured deployment is unaffected.
 		CrawlInternalToken: bootstrap.GetEnv("CRAWL_INTERNAL_TOKEN", ""),
 	})
 
-	// Any job still queued/running from before this process last stopped
-	// has no goroutine actually working on it anymore -- recover it (or,
-	// for one that needed credentials that were never persisted, mark it
-	// failed) before this process starts accepting new crawl requests.
+	// A job still queued/running from before this process stopped has no
+	// goroutine working on it -- recover it (or mark it failed if it
+	// needed never-persisted credentials) before accepting new requests.
 	if recovered, abandoned, err := application.RecoverInterruptedCrawls(ctx, repo, handler.ResumeCrawlJob); err != nil {
 		log.Printf("recovering interrupted crawl jobs: %v", err)
 	} else if recovered > 0 || abandoned > 0 {
 		log.Printf("recovered %d interrupted crawl job(s), %d could not be resumed (needed credentials) and were marked failed", recovered, abandoned)
 	}
 
-	// in_progress is only ever cleared by its triggering run's completion
-	// callback, an in-memory closure that dies with this process -- a
-	// restart mid-run otherwise leaves it stuck true forever, silently
-	// blocking that schedule's recurring cadence and "Run now." Nothing can
-	// genuinely still be in progress the instant this process starts.
+	// in_progress is only cleared by its run's completion callback, an
+	// in-memory closure that dies with this process -- a restart mid-run
+	// otherwise leaves it stuck true, blocking that schedule forever.
 	if reset, err := repo.ResetStaleInProgress(ctx); err != nil {
 		log.Printf("resetting stale scheduled-crawl in-progress flags: %v", err)
 	} else if reset > 0 {

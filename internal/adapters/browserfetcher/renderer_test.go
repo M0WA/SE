@@ -15,13 +15,9 @@ import (
 )
 
 // requireBrowserTests skips unless SE_BROWSER_TESTS=1 is set. A Renderer
-// test launches a real headless browser -- the first run on any given
-// machine downloads Playwright's own managed Chromium/Firefox binary (a
-// few hundred MB), which would make an ordinary `go test ./...` (and CI)
-// slow and network-dependent by default. Set SE_BROWSER_TESTS=1 to run
-// these for real (once Playwright's browsers are installed -- see
-// Renderer.ensureBrowser's doc comment -- the first run pays the download
-// cost, every run after is fast).
+// test launches a real headless browser -- the first run per machine
+// downloads Playwright's managed browser binary (a few hundred MB), which
+// would make ordinary `go test ./...`/CI slow and network-dependent.
 func requireBrowserTests(t *testing.T) {
 	t.Helper()
 	if os.Getenv("SE_BROWSER_TESTS") == "" {
@@ -29,16 +25,12 @@ func requireBrowserTests(t *testing.T) {
 	}
 }
 
-// skipIfNoUsableSandbox skips the test (rather than failing it) when err is
-// Chromium's own "No usable sandbox!" failure -- Renderer deliberately
-// enables ChromiumSandbox (see ensureBrowser's doc comment), which requires
-// the host to support unprivileged user namespaces. Some hosts (e.g.
-// Ubuntu 23.10+ with its AppArmor restriction on unprivileged userns, or
-// this project's own CI/dev sandboxes) don't, and that's a fact about the
-// machine running the test, not a bug for these tests to catch -- the
-// production behavior for a host that genuinely can't sandbox is to fail
-// loudly with this same diagnostic (surfaced as the crawl job's
-// fetch_failed error), by design.
+// skipIfNoUsableSandbox skips (rather than fails) when err is Chromium's
+// "No usable sandbox!" failure -- Renderer deliberately enables
+// ChromiumSandbox, which needs unprivileged user namespaces; some hosts
+// (e.g. Ubuntu 23.10+'s AppArmor restriction) don't support that, a fact
+// about the machine, not a bug. Production fails loudly with the same
+// diagnostic (surfaced as fetch_failed), by design.
 func skipIfNoUsableSandbox(t *testing.T, err error) {
 	t.Helper()
 	if err != nil && strings.Contains(err.Error(), "No usable sandbox") {
@@ -67,13 +59,10 @@ func TestRenderer_ExecutesJavaScriptAndWaitsForLoad(t *testing.T) {
 }
 
 // TestRenderer_WaitsForDelayedNetworkContentAfterLoad guards against a real
-// production gap: the browser's own "load" event fires once the initial
-// document is parsed, but a typical client-rendered page (a static shell +
-// JS bundle) issues its own fetch()/XHR afterward and populates its real
-// content only once that resolves -- confirmed against a real site, where
-// the DOM had 0 links right at `load` and 115 once its own JS caught up
-// roughly a second later. Without waiting past `load`, Render would
-// capture the pre-fetch placeholder instead of the page's real content.
+// gap: "load" fires once the initial document is parsed, but a
+// client-rendered page's own fetch()/XHR populates real content only
+// after -- confirmed on a real site (0 links at `load`, 115 ~1s later).
+// Without waiting past `load`, Render would capture the placeholder.
 func TestRenderer_WaitsForDelayedNetworkContentAfterLoad(t *testing.T) {
 	requireBrowserTests(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -121,10 +110,10 @@ func TestRenderer_RespectsMaxResponseBytes(t *testing.T) {
 	}
 }
 
-// alwaysAllowURL is a Renderer.AllowURL override for tests that render an
-// httptest.Server -- a loopback address the real SSRF guard
-// (netguard.URLAllowed) rejects by design. The guard itself is exercised
-// separately, in TestRenderer_BlocksLoopbackNavigationTarget.
+// alwaysAllowURL is a Renderer.AllowURL override for tests rendering an
+// httptest.Server, whose loopback address the real SSRF guard rejects by
+// design -- that guard is exercised separately in
+// TestRenderer_BlocksLoopbackNavigationTarget.
 func alwaysAllowURL(string) bool { return true }
 
 func TestRenderer_SetsUserAgentAndCookie(t *testing.T) {
@@ -199,9 +188,8 @@ func TestRenderer_SetsBasicAuth(t *testing.T) {
 }
 
 // TestRenderer_ContextCancellationInterruptsRender proves cancelling ctx
-// stops an in-flight render promptly, the same way it stops a plain HTTP
-// fetch -- needed for Handler.CancelCrawlJob to work for a rendered crawl,
-// not just an unrendered one.
+// stops an in-flight render promptly, needed for Handler.CancelCrawlJob to
+// work for a rendered crawl too.
 func TestRenderer_ContextCancellationInterruptsRender(t *testing.T) {
 	requireBrowserTests(t)
 	block := make(chan struct{})
@@ -230,10 +218,9 @@ func TestRenderer_ContextCancellationInterruptsRender(t *testing.T) {
 	}
 }
 
-// TestRenderer_BlocksLoopbackNavigationTarget exercises the real SSRF guard
-// (Renderer.AllowURL left at its default, netguard.URLAllowed) against a
-// loopback navigation target -- the browser's very first request (the page
-// navigation itself) must be aborted before it ever reaches the target.
+// TestRenderer_BlocksLoopbackNavigationTarget exercises the real SSRF
+// guard against a loopback navigation target -- the browser's first
+// request must be aborted before reaching it.
 func TestRenderer_BlocksLoopbackNavigationTarget(t *testing.T) {
 	requireBrowserTests(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {

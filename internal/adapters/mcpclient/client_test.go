@@ -15,15 +15,12 @@ import (
 	"searchengine/internal/ports"
 )
 
-// TestHelperMCPServer is not a real test -- it's a stdio MCP server this
-// file's own tests spawn as a SUBPROCESS by re-executing the compiled test
-// binary itself (os.Args[0]) with "-test.run=TestHelperMCPServer" and the
-// MCP_TEST_STDIO_HELPER=1 marker env var (see stdioServerCommand). Every
-// normal `go test` run skips this immediately, since that env var is unset.
-// Mirrors the standard library's own os/exec "TestHelperProcess" pattern --
-// the only realistic way to exercise mcpclient's real "stdio" transport
-// (spawn a real child process and speak MCP over its stdin/stdout) without
-// depending on a separately-built binary.
+// TestHelperMCPServer is not a real test -- it's a stdio MCP server spawned
+// as a subprocess by re-executing this test binary with
+// "-test.run=TestHelperMCPServer" and MCP_TEST_STDIO_HELPER=1 (see
+// stdioServerCommand); a normal `go test` run skips it immediately. Mirrors
+// os/exec's "TestHelperProcess" pattern, the only realistic way to exercise
+// mcpclient's real "stdio" transport without a separately-built binary.
 func TestHelperMCPServer(t *testing.T) {
 	if os.Getenv("MCP_TEST_STDIO_HELPER") != "1" {
 		t.Skip("not invoked as the stdio helper subprocess")
@@ -43,9 +40,8 @@ func TestHelperMCPServer(t *testing.T) {
 			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "boom"}}}, nil, nil
 		})
 
-	// server.Run blocks until stdin is closed (the client disconnecting) --
-	// os.Exit afterward skips the normal go test summary line, which would
-	// otherwise corrupt the JSON-RPC stream on stdout if printed first.
+	// os.Exit skips the go test summary line, which would otherwise
+	// corrupt the JSON-RPC stream on stdout.
 	_ = server.Run(context.Background(), &mcp.StdioTransport{})
 	os.Exit(0)
 }
@@ -135,13 +131,9 @@ func TestProvider_Open_ConnectionFailure_SkippedNotFatal(t *testing.T) {
 	}
 }
 
-// TestProvider_Open_SelfServiceStdio_RefusedEvenWithAValidCommand is the
-// defense-in-depth regression test: a SelfService=true server pointed at a
-// perfectly real, working stdio helper (proving the refusal is about the
-// SelfService flag specifically, not a connection failure the command
-// itself would have caused anyway) is still refused "stdio" transport
-// outright -- see connect's own doc comment for why this check exists
-// independent of ChatService.Chat's own filter.
+// TestProvider_Open_SelfServiceStdio_RefusedEvenWithAValidCommand proves a
+// SelfService=true server pointed at a real, working stdio helper is still
+// refused (the refusal is about SelfService, not a connection failure).
 func TestProvider_Open_SelfServiceStdio_RefusedEvenWithAValidCommand(t *testing.T) {
 	command, args := stdioServerCommand()
 	server := domain.MCPServer{ID: "s1", Name: "helper", Transport: "stdio", Command: command, Args: args, Enabled: true, SelfService: true}

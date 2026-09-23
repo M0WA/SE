@@ -1,10 +1,8 @@
   const statusEl = document.getElementById('servers-status');
   const tableEl = document.getElementById('servers-table');
 
-  // This page intentionally does NOT load admin.js (see account.js's own
-  // comment on why self-service pages stay decoupled from it) -- these are
-  // small local duplicates of the handful of helpers it needs, same
-  // convention account.js already established for getJSON/patchJSON.
+  // Doesn't load admin.js (see account.js) -- small local duplicates of the needed helpers,
+  // per account.js's own convention.
   function clear(el) {
     while (el.firstChild) el.firstChild.remove();
   }
@@ -104,9 +102,7 @@
 
   loadServers();
 
-  // Exports for the Node test runner only -- `typeof module` is undefined in
-  // a browser's <script> tag, so this is a no-op there. See
-  // internal/adapters/restapi/account_mcp_servers.test.js.
+  // Node test-runner export only; no-op in a browser <script> tag.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { renderServers, loadServers, deleteServer };
   }

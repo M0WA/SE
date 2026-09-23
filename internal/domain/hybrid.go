@@ -6,10 +6,8 @@ import (
 )
 
 // CorrectedTerm records that a query term had zero postings hits and was
-// fuzzy-matched to a near-miss vocabulary term (within a bounded edit
-// distance) for BM25 scoring purposes -- see hybridSearchService.Search and
-// domain.NearestTerm. Surfaced to callers/UI so a correction is always shown
-// transparently rather than silently rewriting the displayed query.
+// fuzzy-matched (NearestTerm) to a near-miss vocabulary term for BM25
+// scoring. Surfaced to the UI so a correction is shown, not silent.
 type CorrectedTerm struct {
 	Original  string `json:"original"`
 	Corrected string `json:"corrected"`
@@ -24,35 +22,26 @@ type HybridResult struct {
 	Title     string
 	Snippet   string
 	BM25Score float64
-	// NormBM25 is BM25Score normalized against this search's own candidate
-	// batch's max BM25Score (set by CombineScores) -- the actual fraction
-	// blended into FinalScore's BM25 half, since raw BM25Score alone doesn't
-	// say what share of the batch's top score it represents.
+	// NormBM25 is BM25Score normalized against this batch's max (set by
+	// CombineScores) -- the actual fraction blended into FinalScore.
 	NormBM25    float64
 	SemanticSim float64
-	// PageRank is this document's raw (unnormalized) link-authority score,
-	// carried so Search can normalize it against the batch's max and blend
-	// it into FinalScore.
+	// PageRank is this document's raw link-authority score, carried so
+	// Search can normalize and blend it into FinalScore.
 	PageRank float64
-	// NormalizedPageRank is PageRank normalized against this batch's own max
-	// (set by hybridSearchService.Search) -- the actual value blended into
-	// FinalScore's PageRank component. Zero whenever PageRankWeight is 0 or
-	// every candidate in the batch has a zero PageRank.
+	// NormalizedPageRank is PageRank normalized against this batch's max --
+	// the value actually blended into FinalScore. Zero when PageRankWeight
+	// is 0 or every candidate has zero PageRank.
 	NormalizedPageRank float64
 	FinalScore         float64
 	CrawledAt          time.Time
 	CorrectedTerms     []CorrectedTerm
-	// BM25Terms breaks BM25Score down by query term -- empty whenever the
-	// query had no BM25 hits for this document at all (a purely semantic
-	// match). Populated by hybridSearchService.Search, not CombineScores,
-	// since it isn't needed for scoring itself, only for the admin debug
-	// view.
+	// BM25Terms breaks BM25Score down by query term -- empty for a purely
+	// semantic match. Populated only for the admin debug view, not scoring.
 	BM25Terms []TermScore
-	// Alpha, K1, B and PageRankWeight are the tuning parameters actually
-	// used to produce this result -- identical across every result of one
-	// Search call (like CorrectedTerms), carried here so the admin debug
-	// view can show them without a second round trip to the tuning
-	// settings.
+	// Alpha, K1, B and PageRankWeight are the tuning parameters that
+	// produced this result -- identical across one Search call's results,
+	// carried so the admin debug view can show them without a round trip.
 	Alpha          float64
 	K1             float64
 	B              float64
@@ -91,9 +80,8 @@ func CombineScores(candidates []HybridResult, alpha float64) []HybridResult {
 }
 
 // SortByFinalScore orders results by descending FinalScore, breaking ties
-// by DocID for a deterministic order. Exported so callers that adjust
-// FinalScore after CombineScores (a boost multiplier, say) can restore
-// this invariant without duplicating the tie-break rule.
+// by DocID. Exported so callers that adjust FinalScore after CombineScores
+// can restore this invariant.
 func SortByFinalScore(results []HybridResult) {
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].FinalScore == results[j].FinalScore {

@@ -70,11 +70,9 @@ func TestParse_MalformedURLInHrefIgnored(t *testing.T) {
 	}
 }
 
-// TestParse_ExtractsCanonicalLinkTag proves a rel=canonical tag's href
-// resolves against the page's own URL exactly like an <a href> link does
-// -- relative hrefs, fragments dropped -- since application.crawlLoop
-// compares this value against the page's own normalized URL to decide
-// whether the page is an alias of another document.
+// TestParse_ExtractsCanonicalLinkTag proves a rel=canonical href resolves
+// like an <a href> (relative hrefs, fragments dropped) -- crawlLoop
+// compares it against the page's own normalized URL to detect an alias.
 func TestParse_ExtractsCanonicalLinkTag(t *testing.T) {
 	raw := `<html><head><link rel="canonical" href="/de/seite#abschnitt"></head><body>x</body></html>`
 	_, _, _, canonicalURL := htmlparser.Parse(strings.NewReader(raw), "https://basis.example/start")
@@ -107,15 +105,11 @@ func TestParse_MalformedCanonicalHrefIgnored(t *testing.T) {
 	}
 }
 
-// TestParse_LegacyEncodingViaMetaCharsetIsTranscodedToUTF8 is the
-// regression test for a real crawl failure: html.Parse has no charset
-// handling of its own and requires already-UTF-8 input, so a page actually
-// served in a legacy encoding used to leak its raw, non-UTF-8 bytes
-// straight into the extracted text -- which Postgres's strict UTF8 column
-// encoding then rejected outright at save time. Windows-1252 encodes "ü"
-// and "ß" as single bytes (0xFC, 0xDF) that are not valid UTF-8 on their
-// own; a page declaring that charset via <meta charset> must still come
-// out as correctly transcoded, valid UTF-8 text.
+// TestParse_LegacyEncodingViaMetaCharsetIsTranscodedToUTF8 regression-tests
+// a real crawl failure: html.Parse requires UTF-8, so a legacy-encoded
+// page used to leak raw bytes into text, which Postgres then rejected.
+// Windows-1252 encodes "ü"/"ß" as single bytes (0xFC, 0xDF) invalid on
+// their own in UTF-8; a <meta charset> page must still transcode correctly.
 func TestParse_LegacyEncodingViaMetaCharsetIsTranscodedToUTF8(t *testing.T) {
 	raw := []byte("<html><head><meta charset=\"windows-1252\"></head><body><p>Gr\xfc\xdfe</p></body></html>")
 	_, text, _, _ := htmlparser.Parse(bytes.NewReader(raw), "https://basis.example/start")
@@ -127,12 +121,10 @@ func TestParse_LegacyEncodingViaMetaCharsetIsTranscodedToUTF8(t *testing.T) {
 	}
 }
 
-// TestParse_InvalidUTF8BytesReplacedWithoutPropagating is the regression
-// test for the defensive backstop on top of charset detection: a page
-// explicitly declared UTF-8 (so no transcoding is attempted) whose body
-// still contains a stray invalid byte must still come out as valid UTF-8
-// -- Postgres has zero tolerance for anything less, so this must be an
-// absolute guarantee, not just "usually true after charset detection."
+// TestParse_InvalidUTF8BytesReplacedWithoutPropagating tests the defensive
+// backstop on top of charset detection: a declared-UTF-8 page with a
+// stray invalid byte must still come out as valid UTF-8, an absolute
+// guarantee since Postgres has zero tolerance otherwise.
 func TestParse_InvalidUTF8BytesReplacedWithoutPropagating(t *testing.T) {
 	raw := []byte("<html><head><meta charset=\"utf-8\"></head><body><p>Berlin\xa0Wahl</p></body></html>")
 	title, text, _, _ := htmlparser.Parse(bytes.NewReader(raw), "https://basis.example/start")
