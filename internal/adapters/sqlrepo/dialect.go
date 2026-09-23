@@ -141,7 +141,7 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			max_context_tokens INTEGER NOT NULL DEFAULT 0,
 			web_search_enabled BOOLEAN NOT NULL DEFAULT false,
 			web_search_base_url TEXT NOT NULL DEFAULT '',
-			web_search_result_count INTEGER NOT NULL DEFAULT 0,
+			web_search_result_count INTEGER NOT NULL DEFAULT 20,
 			system_prompt TEXT NOT NULL DEFAULT '',
 			default_agent_id TEXT NOT NULL DEFAULT '',
 			updated_at TEXT NOT NULL
@@ -385,7 +385,7 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			max_context_tokens INT NOT NULL DEFAULT 0,
 			web_search_enabled BOOLEAN NOT NULL DEFAULT false,
 			web_search_base_url TEXT NOT NULL,
-			web_search_result_count INT NOT NULL DEFAULT 0,
+			web_search_result_count INT NOT NULL DEFAULT 20,
 			system_prompt TEXT NOT NULL,
 			default_agent_id TEXT NOT NULL,
 			updated_at VARCHAR(64) NOT NULL
@@ -596,7 +596,7 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			max_context_tokens INT NOT NULL DEFAULT 0,
 			web_search_enabled BOOLEAN NOT NULL DEFAULT false,
 			web_search_base_url TEXT NOT NULL DEFAULT '',
-			web_search_result_count INT NOT NULL DEFAULT 0,
+			web_search_result_count INT NOT NULL DEFAULT 20,
 			system_prompt TEXT NOT NULL DEFAULT '',
 			default_agent_id TEXT NOT NULL DEFAULT '',
 			updated_at TEXT NOT NULL

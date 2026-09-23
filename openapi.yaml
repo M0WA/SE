@@ -2735,9 +2735,12 @@ components:
             Caps how many results the first-party mcp-web server's
             "web_search" tool returns per call, passed to every active
             "stdio" MCP server's spawned process as the
-            WEB_SEARCH_RESULT_COUNT environment variable. 0 (the default)
-            means no cap -- SearXNG's own full result set is returned
-            as-is. A negative value is rejected with 400.
+            WEB_SEARCH_RESULT_COUNT environment variable. 0 means no cap --
+            SearXNG's own full result set is returned as-is. Keep this
+            generous (20+): too small a cap can leave the model with only
+            a couple of same-domain results, and nothing to fall back to
+            if that domain blocks fetching. A negative value is rejected
+            with 400.
         system_prompt:
           type: string
           description: >-
