@@ -2645,8 +2645,8 @@ func (h *Handler) handleAdminClearContent(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]bool{"cleared": true})
 }
 
-// defaultTuningAlpha mirrors the literal every cmd/*/main.go bootstraps
-// domain.NewTuningSettings with -- k1/b already have named
+// defaultTuningAlpha mirrors the literal cmd/search and cmd/admin's main.go
+// bootstrap domain.NewTuningSettings with -- k1/b already have named
 // domain.DefaultBM25K1/DefaultBM25B constants; alpha never got one.
 const defaultTuningAlpha = 0.5
 

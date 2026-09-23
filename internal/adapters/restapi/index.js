@@ -647,10 +647,10 @@
           details.appendChild(buildToolResponseFold(tr, tr.err ? 'Error' : 'Raw output'));
           msg.appendChild(details);
         } else {
-          // Generic fallback: today's original single-level, closed-by-
-          // default rendering, unchanged -- used for any tool name that
-          // isn't fetch/search-shaped, and also when a fetch/search tool
-          // fired without a single string argument to show.
+          // Generic fallback: single-level, closed-by-default rendering --
+          // used for any tool name that isn't fetch/search-shaped, and also
+          // when a fetch/search tool fired without a single string argument
+          // to show.
           const details = document.createElement('details');
           details.className = 'chat-hook-result' + (tr.err ? ' chat-hook-result-error' : '');
           const summary = document.createElement('summary');

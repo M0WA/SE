@@ -49,8 +49,7 @@
 
   // renderSettingsSummary/renderOverridesSummary fill the read-only "at a
   // glance" tiles above the (collapsed-by-default) settings groups, so the
-  // current configuration is visible without opening anything -- see
-  // CLAUDE.md/the settings-page redesign discussion. Called from
+  // current configuration is visible without opening anything. Called from
   // applySettings/applyOverrides, so the tiles refresh on both initial load
   // and right after a save.
   function renderSettingsSummary(s) {

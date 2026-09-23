@@ -3419,9 +3419,7 @@ components:
         redacted to has_cookie/has_basic_auth booleans on the response) and
         its create/PATCH-only fields (see ScheduledCrawlRequest) vs.
         server-assigned metadata (see ScheduledCrawl). There's no separate
-        "recurring" flag: `interval_minutes` 0 (the default, left blank)
-        means "run once, immediately"; a positive value means "repeat on
-        this cadence" until disabled or `max_runs` is reached.
+        "recurring" flag -- see `interval_minutes` below.
       type: object
       required: [seed_urls]
       properties:

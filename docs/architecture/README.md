@@ -43,7 +43,7 @@ Pure logic — every file imports only the Go standard library, with no SQL, HTT
 
 ### Ports (`internal/ports`)
 
-27 interfaces defining pure contracts between the core and adapters; the package imports `database/sql` only for the `sql.DBStats` value type, performing no I/O itself.
+30 interfaces defining pure contracts between the core and adapters; the package imports `database/sql` only for the `sql.DBStats` value type, performing no I/O itself.
 
 | Port | Responsibility | Implemented by |
 |---|---|---|
@@ -92,7 +92,7 @@ Orchestration/use-case layer; verified to import only `internal/domain` and `int
 
 ### Adapters (`internal/adapters`)
 
-14 adapter packages, plus `restapi` (15 total) as the shared HTTP handler layer for `cmd/search` and `cmd/admin`.
+13 adapter packages, plus `restapi` (14 total) as the shared HTTP handler layer for `cmd/search` and `cmd/admin`.
 
 | Adapter | Responsibility |
 |---|---|

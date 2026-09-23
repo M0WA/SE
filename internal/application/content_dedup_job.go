@@ -112,11 +112,6 @@ func RunContentDedupJob(ctx context.Context, repo ports.ContentDedupRepository, 
 	return result, nil
 }
 
-// groupByExactHash groups fingerprints sharing an identical, non-empty
-// ContentHash -- O(n). A fingerprint with an empty ContentHash (a document
-// row saved before this feature existed, not yet caught up by the
-// migration backfill) is skipped rather than grouped with every other
-// empty-hash row.
 // groupsOfAtLeastTwo returns only byKey's groups with more than one member
 // -- a single fingerprint sharing its key with nothing else isn't a
 // duplicate. Shared by groupByExactHash (string keys) and groupBySimHash
@@ -131,6 +126,11 @@ func groupsOfAtLeastTwo[K comparable](byKey map[K][]domain.DocumentFingerprint) 
 	return groups
 }
 
+// groupByExactHash groups fingerprints sharing an identical, non-empty
+// ContentHash -- O(n). A fingerprint with an empty ContentHash (a document
+// row saved before this feature existed, not yet caught up by the
+// migration backfill) is skipped rather than grouped with every other
+// empty-hash row.
 func groupByExactHash(fingerprints []domain.DocumentFingerprint) [][]domain.DocumentFingerprint {
 	byHash := make(map[string][]domain.DocumentFingerprint)
 	for _, f := range fingerprints {

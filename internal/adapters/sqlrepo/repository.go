@@ -2454,9 +2454,6 @@ func (r *Repository) DeleteScheduledCrawl(ctx context.Context, id string) error 
 	return requireRowsAffected(res, id, ports.ErrScheduledCrawlNotFound)
 }
 
-// requireRowsAffected turns a zero-rows-affected result into
-// ErrScheduledCrawlNotFound, so callers can tell "nothing to do" apart from
-// "that ID doesn't exist".
 // requireRowsAffected turns a zero-rows-affected result into notFound, so
 // a caller can tell "nothing to do" apart from "that ID doesn't exist" --
 // shared by every resource's Update/Delete (each with its own not-found

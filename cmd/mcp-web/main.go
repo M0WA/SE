@@ -48,11 +48,11 @@ type fetchArgs struct {
 func main() {
 	// WEB_SEARCH_BASE_URL is set unconditionally by mcpclient.Provider on
 	// every spawned "stdio" server -- see ports.MCPToolProvider's own doc
-	// comment -- sourced server-side from the SAME admin-configured
-	// domain.ChatEndpoint.WebSearchBaseURL the deterministic web-search
-	// context injection already uses, so the two never drift out of sync.
-	// Falls back to 127.0.0.1:8888 if somehow unset (e.g. invoked
-	// standalone for local testing), matching web_search.sh's own default.
+	// comment -- sourced server-side from the admin-configured
+	// domain.ChatEndpoint.WebSearchBaseURL field, so the admin never
+	// configures the same URL twice. Falls back to 127.0.0.1:8888 if
+	// somehow unset (e.g. invoked standalone for local testing), matching
+	// web_search.sh's own default.
 	searxBaseURL := bootstrap.GetEnv("WEB_SEARCH_BASE_URL", "http://127.0.0.1:8888")
 	// WEB_SEARCH_RESULT_COUNT/WEB_FETCH_USER_AGENT are set the same
 	// admin-configured-value-at-spawn-time way as WEB_SEARCH_BASE_URL

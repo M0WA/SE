@@ -235,9 +235,9 @@ func dropCrawledAtIndex(b *testing.B, dsn string) {
 // randomly over 90 days, then compares two of the crawled_at-index's
 // beneficiaries -- DocumentsOverview's four age-bucket range-COUNT queries,
 // and a recency-sorted top-candidate fetch via
-// DocumentsByIDsSortedByCrawledAt -- with the index present (as every
-// database gets by default since missing-crawled-at-index) against the same
-// corpus with the index dropped (the pre-fix state).
+// DocumentsByIDsSortedByCrawledAt -- with the index present (the default
+// every database gets via ensureCrawledAtIndex) against the same corpus
+// with the index dropped (the pre-fix state).
 func BenchmarkRecencyQueries(b *testing.B) {
 	ctx := context.Background()
 	dsn := benchDSN("benchrecency")
@@ -383,7 +383,7 @@ func buildSaveDocumentBenchDoc(termCount, linkCount int) domain.Document {
 // existing-version SELECT, the documents upsert, and the two DELETEs) --
 // computed analytically from the known implementation (one INSERT per
 // unique term/link row-by-row before this change; one INSERT per
-// saveDocumentInsertChunkSize-sized chunk after), not measured via a
+// saveDocumentInsertBatchSize-sized chunk after), not measured via a
 // counting driver, since the loop shape is a fixed, known property of the
 // code under test at any given commit.
 func BenchmarkSaveDocumentWrites(b *testing.B) {
@@ -461,12 +461,11 @@ func seedBenchEmbeddingCorpus(b *testing.B, repo *sqlrepo.Repository, n, dims in
 // (SemanticCandidatePoolSize's real default) and poolSize=5000 (this
 // package's larger-corpus benchmark convention). 128-dim embeddings, this
 // codebase's actual embedder default (see BenchmarkEmbeddingCodec's doc
-// comment for why 128, not the proposal's assumed 384).
+// comment for why).
 //
-// Run before and after documents.embedding's on-disk encoding changes from
-// JSON text to packed binary (see dialect.go/repository.go) to capture the
-// real row-size + I/O + CPU cost together -- not just the pure codec cost
-// BenchmarkEmbeddingCodec measures in isolation.
+// Measures the real row-size + I/O + CPU cost together (documents.embedding
+// is stored packed-binary, see dialect.go/embedding_codec.go), not just the
+// pure codec cost BenchmarkEmbeddingCodec measures in isolation.
 func BenchmarkSampleEmbeddings(b *testing.B) {
 	const dims = 128
 	const corpusSize = 5000
@@ -498,11 +497,11 @@ func BenchmarkSampleEmbeddings(b *testing.B) {
 
 // BenchmarkConnectionPoolTuning validates connection-pool-tuning's actual
 // mechanism -- database/sql's own MaxOpenConns limiting, which ConfigurePool
-// drives -- under concurrent load. A live Postgres/MySQL server (what the
-// original analysis's plan called for, to see real network-connection churn)
-// isn't available in this default, no-external-dependency test environment,
-// so this instead points a repository constructed with a non-sqlite dialect
-// name at a real in-memory SQLite database (via NewWithDB, exactly as
+// drives -- under concurrent load. A live Postgres/MySQL server would show
+// real network-connection churn, but isn't available in this default,
+// no-external-dependency test environment, so this instead points a
+// repository constructed with a non-sqlite dialect name at a real
+// in-memory SQLite database (via NewWithDB, exactly as
 // TestConfigurePool_NonSQLiteAppliesGivenValues already does) -- ConfigurePool
 // never issues dialect-specific SQL, so this still exercises the real
 // SetMaxOpenConns/SetMaxIdleConns calls and the real database/sql pool-wait

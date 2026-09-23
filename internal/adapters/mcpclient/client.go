@@ -23,9 +23,8 @@ import (
 )
 
 // connectTimeout bounds how long connecting to (and initializing a session
-// with, and listing tools from) one configured server may take -- mirrors
-// hookrunner's own former default timeout, for the same "don't let one
-// misbehaving dependency hang a whole chat turn" reason.
+// with, and listing tools from) one configured server may take -- so one
+// misbehaving dependency can never hang a whole chat turn.
 const connectTimeout = 10 * time.Second
 
 // callTimeout bounds a single CallTool round-trip once connected -- the
@@ -199,13 +198,12 @@ func (s *Session) CallTool(ctx context.Context, toolName, argumentsJSON string) 
 
 	// SECURITY: argumentsJSON comes from the model's own OUTPUT, which can
 	// itself be influenced by untrusted web content when search context is
-	// enabled (indirect prompt injection, same as the former hookrunner's
-	// own security note). It is parsed as a plain JSON object and handed
-	// to the MCP session as structured arguments -- never interpolated
-	// into a shell command, a path, or a URL by this package; whatever
-	// the connected server's own tool handler does with each argument
-	// value is that server's responsibility, same trust boundary as any
-	// other admin-configured tool provider.
+	// enabled (indirect prompt injection). It is parsed as a plain JSON
+	// object and handed to the MCP session as structured arguments -- never
+	// interpolated into a shell command, a path, or a URL by this package;
+	// whatever the connected server's own tool handler does with each
+	// argument value is that server's responsibility, same trust boundary
+	// as any other admin-configured tool provider.
 	var args map[string]any
 	if argumentsJSON != "" {
 		if err := json.Unmarshal([]byte(argumentsJSON), &args); err != nil {

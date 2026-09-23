@@ -31,8 +31,8 @@
   const runNowBtn = document.getElementById('schedule-run-now-btn');
   const deleteBtn = document.getElementById('schedule-delete-btn');
 
-  // linesToText/parseLines now live in admin.js, shared with every other
-  // page that has a one-value-per-line <textarea> field.
+  // linesToText/parseLines live in admin.js, shared with every page that
+  // has a one-value-per-line <textarea> field.
 
   function applySchedule(s) {
     titleEl.textContent = seedSummary(s.seed_urls);

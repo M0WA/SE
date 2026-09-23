@@ -122,9 +122,9 @@ type ChatResult struct {
 	ToolResults []domain.ToolCallResult
 	// TokenUsage breaks down the estimated size of what was actually sent to
 	// the model for this turn's first completion call -- lets the chat UI
-	// show where a turn's context budget went (global prompt vs. active
-	// servers' own prompts vs. search context vs. conversation history)
-	// instead of just a single opaque total.
+	// show where a turn's context budget went (global/user/agent prompts vs.
+	// active servers' own prompts vs. conversation history) instead of just
+	// a single opaque total.
 	TokenUsage TokenUsage
 }
 
@@ -461,11 +461,11 @@ func estimateTokens(messages []domain.ChatMessage) int {
 
 // trimToBudget drops the oldest messages in messages -- keeping every
 // leading system-role message intact (there can now be several: the
-// persistent per-endpoint SystemPrompt, then one per active MCP server's own
-// Prompt, then the search-context message, see ChatService.Chat), and
-// always keeping at least the single most recent message even if it
-// alone exceeds budget, since trimming it away would leave nothing left to
-// answer -- until the estimated token count fits within maxTokens.
+// persistent per-endpoint SystemPrompt, the user/agent prompts, then one
+// per active MCP server's own Prompt, see ChatService.Chat), and always
+// keeping at least the single most recent message even if it alone exceeds
+// budget, since trimming it away would leave nothing left to answer --
+// until the estimated token count fits within maxTokens.
 func trimToBudget(messages []domain.ChatMessage, maxTokens int) []domain.ChatMessage {
 	if estimateTokens(messages) <= maxTokens {
 		return messages

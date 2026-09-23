@@ -180,10 +180,9 @@ test('setMode toggles the switch and swaps panel visibility in both directions',
   const status = document.getElementById('status');
   const resultsEl = document.getElementById('results');
 
-  // The page now defaults to chat mode on load (see the new
-  // 'defaults to chat mode on load' test below), so before any explicit
-  // setMode call here the switch is already checked and the chat panel
-  // already visible.
+  // The page defaults to chat mode on load, so before any explicit setMode
+  // call here the switch is already checked and the chat panel already
+  // visible.
   assert.equal(modeSwitch.getAttribute('aria-checked'), 'true');
   assert.equal(chatPanel.hidden, false);
   assert.equal(chatOptions.hidden, false);

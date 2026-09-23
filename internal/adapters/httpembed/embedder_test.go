@@ -613,11 +613,11 @@ func TestListModels_RetriesOn429ThenSucceeds(t *testing.T) {
 	}
 }
 
-// TestEmbedder_RateLimitPacesChunkRequests proves fix 3: pacing now lives
-// inside httpembed itself, so it applies to every real HTTP request a
-// single Embed call makes internally -- not just once per Embed call at
-// the application layer (which chunking made insufficient, since one
-// Embed call can fire many real embeddings requests). A small
+// TestEmbedder_RateLimitPacesChunkRequests proves pacing lives inside
+// httpembed itself, so it applies to every real HTTP request a single
+// Embed call makes internally -- not just once per Embed call at the
+// application layer (insufficient once chunking means one Embed call can
+// fire many real embeddings requests). A small
 // ChunkSizeTokens forces multiple chunks, each its own embeddings POST;
 // with RateLimitPerSecond configured, consecutive requests' arrival times
 // at the fake server must be spaced apart by at least the configured
@@ -953,13 +953,13 @@ func TestEmbedder_TokenizeURLUnsplittableChunkFallsBackToRuneSplit(t *testing.T)
 	}
 }
 
-// TestEmbedder_ChunkTextSplitsCJKTextWithNoWhitespace proves fix 1: CJK
-// text (no ASCII whitespace between "words" at all, so strings.Fields
-// collapses it to exactly one unsplittable "word") longer than a small
-// ChunkSizeTokens budget is actually split into more than one chunk,
-// rather than sailing through whole -- the exact original
-// context-length failure chunking exists to prevent, for precisely the
-// multilingual case a real endpoint would see.
+// TestEmbedder_ChunkTextSplitsCJKTextWithNoWhitespace proves CJK text (no
+// ASCII whitespace between "words" at all, so strings.Fields collapses it
+// to exactly one unsplittable "word") longer than a small ChunkSizeTokens
+// budget is actually split into more than one chunk, rather than sailing
+// through whole -- the exact original context-length failure chunking
+// exists to prevent, for precisely the multilingual case a real endpoint
+// would see.
 func TestEmbedder_ChunkTextSplitsCJKTextWithNoWhitespace(t *testing.T) {
 	var inputs []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -999,10 +999,10 @@ func TestEmbedder_ChunkTextSplitsCJKTextWithNoWhitespace(t *testing.T) {
 	}
 }
 
-// TestEmbedder_ChunkTextRuneCountNotByteCountForMultiByteText proves fix
-// 2: the per-word budget accumulation counts runes (characters), not
-// UTF-8 bytes, matching what approxCharsPerToken's doc comment already
-// claims it measures. Accented Latin text where each "word" is 2 bytes
+// TestEmbedder_ChunkTextRuneCountNotByteCountForMultiByteText proves the
+// per-word budget accumulation counts runes (characters), not UTF-8
+// bytes, matching what approxCharsPerToken's doc comment already claims
+// it measures. Accented Latin text where each "word" is 2 bytes
 // per rune (byte count double the rune count) must pack according to its
 // rune count, not silently be treated as over budget (or under-budget by
 // the wrong margin) from counting bytes instead.
