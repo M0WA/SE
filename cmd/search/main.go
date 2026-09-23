@@ -85,6 +85,8 @@ func main() {
 		Chats:                repo,
 		InternalSearchAPIKey: internalSearchAPIKey,
 		SemanticMatcher:      repo,
+		EmbeddingRepo:        repo,
+		Embedders:            embedders,
 		InternalVisionAPIKey: internalVisionAPIKey,
 		Chat:                 application.NewChatService(repo, httpchat.New(), repo, mcpclient.New(), repo, repo, application.VisionConfig{Settings: chatVision, InternalAPIKey: internalVisionAPIKey}),
 	})
