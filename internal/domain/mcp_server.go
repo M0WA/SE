@@ -28,8 +28,9 @@ type MCPServer struct {
 	// -- injected as its own system message (after SystemPrompt) when this
 	// server is active. MCP has no per-server prompt concept of its own, so
 	// this is where a cross-tool workflow instruction lives (e.g. "after
-	// searching, fetch results from a few different domains, not just the
-	// top-ranked ones -- if a fetch is blocked, try a different domain").
+	// searching, fetch results from different domains -- not just the
+	// top-ranked ones -- until you can validate the answer across
+	// independent sources; if a fetch is blocked, try a different domain").
 	// Empty adds no message.
 	Prompt string
 	// GatedByWebSearch ties this server's activation to the same effective
