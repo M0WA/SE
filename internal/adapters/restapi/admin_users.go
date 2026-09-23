@@ -75,8 +75,8 @@ type updateUserRequest struct {
 	CustomPrompt *string `json:"custom_prompt"`
 }
 
-// handleAdminUsers lists (GET) or creates (POST) regular-user accounts,
-// mirroring handleAdminMCPServers' style closely.
+// handleAdminUsers lists (GET) or creates (POST) accounts, admin and
+// regular alike, mirroring handleAdminMCPServers' style closely.
 func (h *Handler) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.users != nil, "users") {
 		return
@@ -158,9 +158,10 @@ func (h *Handler) handleAdminGetUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toUserResponse(u))
 }
 
-// handleAdminUpdateUser lets the admin reset a password and/or
-// custom_prompt on a user's behalf (username never editable). Loads the
-// existing row first and only changes fields present in the request.
+// handleAdminUpdateUser lets an admin reset another account's password,
+// is_admin flag, and/or custom_prompt on its behalf (username never
+// editable). Loads the existing row first and only changes fields present
+// in the request.
 func (h *Handler) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.users != nil, "users") {
 		return
