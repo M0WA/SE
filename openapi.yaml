@@ -2300,6 +2300,19 @@ components:
                 volume against any enabled HTTP endpoint when non-zero --
                 free for "hash". Only affects documents crawled,
                 re-crawled, or explicitly recomputed after the change.
+            embedding_recompute_concurrency:
+              type: integer
+              description: >-
+                How many documents POST /admin/api/embeddings/recompute
+                processes at once (each still pays its own real per-provider
+                Embed HTTP round trip). Defaults to 4; a value <= 0
+                self-heals to the default. Surfaced on the embeddings admin
+                page's own recompute panel rather than the general settings
+                form, but still round-trips through this same object.
+                Applies live: re-read at the start of every batch of an
+                in-progress recompute, so a change here takes effect on
+                that run's very next batch without needing a restart or a
+                fresh trigger.
             url_alias_www_enabled:
               type: boolean
               description: >-
@@ -2402,10 +2415,26 @@ components:
         last_run_at:
           type: string
           format: date-time
-          description: When the last completed run finished. Absent if none has ever run on this instance.
-        documents: { type: integer, description: "How many documents that run successfully re-embedded." }
-        failed: { type: integer, description: "How many documents that run failed to re-embed (a flaky endpoint, a rate limit, a since-deleted document) -- logged, not fatal to the run." }
-        duration_ms: { type: integer }
+          description: >-
+            When the most recently COMPLETED run finished. Absent while a
+            run is still in progress, or if none has ever completed on this
+            instance.
+        documents:
+          type: integer
+          description: >-
+            How many documents have been successfully re-embedded so far.
+            Live and checkpointed once per batch while in_progress is true
+            (so a poller sees real, moving progress during a run that can
+            take hours, not a frozen 0 until it finishes); the final total
+            once the run completes.
+        failed:
+          type: integer
+          description: >-
+            How many documents have failed to re-embed so far (a flaky
+            endpoint, a rate limit, a since-deleted document) -- logged, not
+            fatal to the run. Live during in_progress the same way
+            documents is.
+        duration_ms: { type: integer, description: "Set only once the most recently completed run finished; 0 while in progress." }
 
     ContentDedupStatus:
       type: object

@@ -105,6 +105,17 @@ type OperationalSettingsValues struct {
 	// RunContentDedupJob. Clamped to a 15-minute minimum -- higher than
 	// PageRank's floor since a merge is a destructive write.
 	ContentDedupIntervalMinutes int
+	// EmbeddingRecomputeConcurrency bounds how many documents a corpus
+	// embedding recompute (RunEmbeddingRecomputeJob) processes at once --
+	// each in-flight document still pays its own real Embed HTTP round
+	// trip per enabled provider, so raising this mainly hides network
+	// latency rather than adding real load beyond what each endpoint's own
+	// RateLimitPerSecond already allows through. Safe to raise freely for
+	// an endpoint with a configured limit (httpembed.Embedder throttles to
+	// it regardless of how many goroutines are waiting); for an
+	// unlimited (0) endpoint, this concurrency IS the only throttle, so
+	// raise it carefully there.
+	EmbeddingRecomputeConcurrency int
 }
 
 // defaultUserAgent mimics a standard desktop Firefox so crawled sites treat
@@ -167,6 +178,12 @@ const (
 	// topical signal, but the semantic vector should still be driven
 	// mostly by body content.
 	defaultEmbeddingTitleWeight = 0.3
+	// defaultEmbeddingRecomputeConcurrency is conservative on purpose: an
+	// admin-configured HTTP embedding endpoint with no RateLimitPerSecond
+	// set has no OTHER throttle at all, so a too-high default here could
+	// genuinely overwhelm a single shared inference GPU the moment a
+	// recompute starts.
+	defaultEmbeddingRecomputeConcurrency = 4
 )
 
 func defaultOperationalSettings() OperationalSettingsValues {
@@ -202,6 +219,7 @@ func defaultOperationalSettings() OperationalSettingsValues {
 		ContentDedupMethod:               ContentDedupMethodExact,
 		ContentDedupSimHashMaxDistance:   defaultContentDedupSimHashMaxDistance,
 		ContentDedupIntervalMinutes:      defaultContentDedupIntervalMinutes,
+		EmbeddingRecomputeConcurrency:    defaultEmbeddingRecomputeConcurrency,
 	}
 }
 
@@ -273,6 +291,9 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 	}
 	if v.SemanticRescoreCap <= 0 {
 		v.SemanticRescoreCap = d.SemanticRescoreCap
+	}
+	if v.EmbeddingRecomputeConcurrency <= 0 {
+		v.EmbeddingRecomputeConcurrency = d.EmbeddingRecomputeConcurrency
 	}
 	if v.DBMaxOpenConns <= 0 {
 		v.DBMaxOpenConns = d.DBMaxOpenConns

@@ -182,6 +182,11 @@ type EmbeddingRepository interface {
 	// AllDocumentIDs lists every document ID, ordered so repeated calls
 	// (and the batches fetched via DocumentsByIDs) are stable.
 	AllDocumentIDs(ctx context.Context) ([]string, error)
+	// DocumentIDsAfter lists every document ID that sorts after afterID in
+	// AllDocumentIDs' own ordering -- lets RunEmbeddingRecomputeJob resume
+	// an interrupted run from its last checkpoint instead of restarting
+	// the whole corpus.
+	DocumentIDsAfter(ctx context.Context, afterID string) ([]string, error)
 	// DocumentsByIDs batch-fetches each document's URL/title/text -- see
 	// AdminRepository's identical method (implemented once for both ports).
 	DocumentsByIDs(ctx context.Context, ids []string) (map[string]domain.Document, error)

@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
 
 	"searchengine/internal/domain"
@@ -11,7 +12,10 @@ import (
 
 // EmbeddingRecomputeBatchSize bounds how many documents' text is held in
 // memory at once while recomputing -- keeps memory bounded regardless of
-// corpus size, same reason AllDocumentIDs returns bare IDs up front.
+// corpus size, same reason AllDocumentIDs returns bare IDs up front. Also
+// how often progress is checkpointed (see RunEmbeddingRecomputeJob's
+// onBatchDone) -- a smaller batch means finer-grained resume/progress at
+// the cost of more frequent status writes.
 const EmbeddingRecomputeBatchSize = 50
 
 // EmbeddingRecomputeResult reports what RunEmbeddingRecomputeJob actually
@@ -25,12 +29,41 @@ type EmbeddingRecomputeResult struct {
 // and writes it back -- no recrawl, just a fresh Embed call, since a
 // changed provider/model invalidates the vector space, not the text.
 //
+// resumeFromID, when non-empty, starts from repo.DocumentIDsAfter(afterID)
+// instead of the full repo.AllDocumentIDs -- lets a caller resume a run
+// interrupted partway through (see RunEmbeddingRecomputeJobWithStatus)
+// rather than re-embedding documents already done. Empty means start at
+// the beginning, same as before this existed.
+//
+// onBatchDone, when non-nil, is called after every batch finishes with the
+// batch's last document ID and the running totals so far -- lets a caller
+// persist a resumable checkpoint and live progress without waiting for the
+// whole run (which can take hours for a real corpus) to finish. A nil
+// onBatchDone is a plain no-op, unused by a caller (e.g. a test) that
+// doesn't need either.
+//
+// concurrency, when non-nil, is called fresh at the START OF EVERY BATCH
+// (not once at job start) to decide how many of that batch's documents are
+// processed in-flight at once -- so an admin raising/lowering it on the
+// recompute page takes effect on this run's very next batch, not only on a
+// future run. A nil concurrency, or one returning <= 0, processes one
+// document at a time (the original sequential behavior). Raising it is safe
+// by design: each embedder's own httpembed.Embedder already rate-limits
+// itself when configured, so extra concurrency here mainly overlaps network
+// latency rather than adding load an endpoint didn't already allow through.
+//
 // A single Embed failure is logged and counted, not fatal to the run.
 // Every embedders entry gets recomputed, not just the active one, so
 // switching later needs no second recompute. titleWeight blends each
 // title the same way sqlCrawlerService.Crawl does at crawl time.
-func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepository, embedders map[string]ports.EmbeddingProvider, titleWeight float64) (EmbeddingRecomputeResult, error) {
-	ids, err := repo.AllDocumentIDs(ctx)
+func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepository, embedders map[string]ports.EmbeddingProvider, titleWeight float64, resumeFromID string, concurrency func() int, onBatchDone func(lastID string, documents, failed int)) (EmbeddingRecomputeResult, error) {
+	var ids []string
+	var err error
+	if resumeFromID == "" {
+		ids, err = repo.AllDocumentIDs(ctx)
+	} else {
+		ids, err = repo.DocumentIDsAfter(ctx, resumeFromID)
+	}
 	if err != nil {
 		return EmbeddingRecomputeResult{}, err
 	}
@@ -46,34 +79,61 @@ func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepositor
 		if err != nil {
 			return EmbeddingRecomputeResult{}, err
 		}
+
+		n := 1
+		if concurrency != nil {
+			if c := concurrency(); c > 0 {
+				n = c
+			}
+		}
+		sem := make(chan struct{}, n)
+		var wg sync.WaitGroup
+		var mu sync.Mutex
 		for _, id := range batch {
 			doc, ok := docs[id]
 			if !ok {
-				// Deleted between AllDocumentIDs listing it and this batch
-				// being fetched -- nothing to recompute.
+				// Deleted between the ID listing and this batch being
+				// fetched -- nothing to recompute.
 				continue
 			}
-			embeddings := make(map[string][]float32, len(embedders))
-			var embedErr error
-			for provider, embedder := range embedders {
-				vec, err := embedTitleWeighted(ctx, embedder.Embed, doc.Title, doc.Text, titleWeight)
-				if err != nil {
-					log.Printf("recomputing %s embedding for %s: %v", provider, id, err)
-					embedErr = err
-					break
+			sem <- struct{}{}
+			wg.Add(1)
+			go func(id string, doc domain.Document) {
+				defer wg.Done()
+				defer func() { <-sem }()
+
+				embeddings := make(map[string][]float32, len(embedders))
+				var embedErr error
+				for provider, embedder := range embedders {
+					vec, err := embedTitleWeighted(ctx, embedder.Embed, doc.Title, doc.Text, titleWeight)
+					if err != nil {
+						log.Printf("recomputing %s embedding for %s: %v", provider, id, err)
+						embedErr = err
+						break
+					}
+					embeddings[provider] = vec
 				}
-				embeddings[provider] = vec
-			}
-			if embedErr != nil {
-				result.Failed++
-				continue
-			}
-			if err := repo.UpdateEmbedding(ctx, id, embeddings); err != nil {
-				log.Printf("saving recomputed embedding for %s: %v", id, err)
-				result.Failed++
-				continue
-			}
-			result.Documents++
+				failed := embedErr != nil
+				if !failed {
+					if err := repo.UpdateEmbedding(ctx, id, embeddings); err != nil {
+						log.Printf("saving recomputed embedding for %s: %v", id, err)
+						failed = true
+					}
+				}
+
+				mu.Lock()
+				if failed {
+					result.Failed++
+				} else {
+					result.Documents++
+				}
+				mu.Unlock()
+			}(id, doc)
+		}
+		wg.Wait()
+
+		if onBatchDone != nil {
+			onBatchDone(batch[len(batch)-1], result.Documents, result.Failed)
 		}
 	}
 	return result, nil
@@ -84,20 +144,54 @@ func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepositor
 // instance can show progress and last result. settings may be nil
 // (bookkeeping skipped). Meant to run in its own goroutine -- one Embed
 // call per document can take minutes for a real corpus.
-func RunEmbeddingRecomputeJobWithStatus(ctx context.Context, repo ports.EmbeddingRepository, embedders map[string]ports.EmbeddingProvider, settings ports.SettingsStore, titleWeight float64) (EmbeddingRecomputeResult, error) {
-	start := time.Now()
+//
+// resumeFromID has the same meaning as RunEmbeddingRecomputeJob's: pass
+// "" for a fresh, full pass (the normal explicit-trigger case -- never
+// uses any old checkpoint as a resume cursor, since it may belong to a
+// run under different settings), or a previous run's own LastDocID to
+// resume it after an interruption (see ResumeStaleEmbeddingRecomputeIfAny,
+// the only other caller that passes a non-empty value).
+//
+// concurrency is passed straight through to RunEmbeddingRecomputeJob -- see
+// its own doc comment for why this must stay a closure over live settings
+// rather than a value captured once here, for a run that can last hours.
+func RunEmbeddingRecomputeJobWithStatus(ctx context.Context, repo ports.EmbeddingRepository, embedders map[string]ports.EmbeddingProvider, settings ports.SettingsStore, titleWeight float64, resumeFromID string, concurrency func() int) (EmbeddingRecomputeResult, error) {
+	runStart := time.Now()
 	status := LoadEmbeddingRecomputeStatus(ctx, settings)
 	status.InProgress = true
+
+	// For a resumed run, carry the checkpoint's own prior progress forward
+	// as a base so live/final counts stay cumulative across the
+	// interruption, not reset to only what this resumed pass itself does.
+	// A fresh trigger has no prior progress of its own to add -- its first
+	// batch's onBatchDone below naturally overwrites whatever the previous
+	// run left in status with this run's own real numbers. Deliberately
+	// NOT reset here, upfront: if this fresh run fails before even one
+	// batch completes (e.g. the corpus listing itself errors), the
+	// previous run's last-known-good result should stay visible, exactly
+	// like before onBatchDone/checkpointing existed -- not get clobbered
+	// by a run that never actually produced anything of its own.
+	baseDocuments, baseFailed := 0, 0
+	if resumeFromID != "" {
+		baseDocuments, baseFailed = status.Documents, status.Failed
+	}
 	saveEmbeddingRecomputeStatus(ctx, settings, status)
 
-	result, err := RunEmbeddingRecomputeJob(ctx, repo, embedders, titleWeight)
+	onBatchDone := func(lastID string, documents, failed int) {
+		status.LastDocID = lastID
+		status.Documents = baseDocuments + documents
+		status.Failed = baseFailed + failed
+		saveEmbeddingRecomputeStatus(ctx, settings, status)
+	}
+	result, err := RunEmbeddingRecomputeJob(ctx, repo, embedders, titleWeight, resumeFromID, concurrency, onBatchDone)
 
 	status.InProgress = false
 	if err == nil {
 		status.LastRunAt = time.Now().UTC()
-		status.Documents = result.Documents
-		status.Failed = result.Failed
-		status.DurationMs = time.Since(start).Milliseconds()
+		status.Documents = baseDocuments + result.Documents
+		status.Failed = baseFailed + result.Failed
+		status.DurationMs = time.Since(runStart).Milliseconds()
+		status.LastDocID = ""
 	}
 	saveEmbeddingRecomputeStatus(ctx, settings, status)
 	return result, err
@@ -110,11 +204,17 @@ func LoadEmbeddingRecomputeStatus(ctx context.Context, settings ports.SettingsSt
 	return loadJSONStatus[domain.EmbeddingRecomputeStatus](ctx, settings, ports.SettingsKeyEmbeddingRecomputeStatus, "embedding recompute status")
 }
 
-// ResetStaleEmbeddingRecomputeStatus clears a leftover InProgress=true at
-// startup, since it can only mean a previous instance was killed mid-run
-// -- otherwise every future trigger would 409 forever. Returns whether a
-// stale flag was found; nil settings/errors are no-ops.
-func ResetStaleEmbeddingRecomputeStatus(ctx context.Context, settings ports.SettingsStore) bool {
+// ResumeStaleEmbeddingRecomputeIfAny checks for a recompute run a previous
+// instance was killed mid-flight (InProgress left true from a restart --
+// RunEmbeddingRecomputeJobWithStatus always clears it on a clean finish),
+// and if found, resumes that SAME run in the background from its
+// LastDocID checkpoint instead of silently discarding the progress --
+// unlike a fresh POST /admin/api/embeddings/recompute trigger, which
+// always starts over (see RunEmbeddingRecomputeJobWithStatus's
+// resumeFromID: "" there). Returns whether a resume was actually started,
+// so the caller can log it; nil settings or no stale run found are both a
+// no-op, not an error.
+func ResumeStaleEmbeddingRecomputeIfAny(ctx context.Context, repo ports.EmbeddingRepository, embedders map[string]ports.EmbeddingProvider, settings ports.SettingsStore, titleWeight float64, concurrency func() int) bool {
 	if settings == nil {
 		return false
 	}
@@ -122,8 +222,13 @@ func ResetStaleEmbeddingRecomputeStatus(ctx context.Context, settings ports.Sett
 	if !status.InProgress {
 		return false
 	}
-	status.InProgress = false
-	saveEmbeddingRecomputeStatus(ctx, settings, status)
+	resumeFromID := status.LastDocID
+	go func() {
+		bgCtx := context.Background()
+		if _, err := RunEmbeddingRecomputeJobWithStatus(bgCtx, repo, embedders, settings, titleWeight, resumeFromID, concurrency); err != nil {
+			log.Printf("resuming interrupted embedding recompute: %v", err)
+		}
+	}()
 	return true
 }
 

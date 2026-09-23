@@ -97,6 +97,30 @@ func TestOperationalSettings_SetPositiveSemanticCandidatePoolSizeIsPreserved(t *
 	}
 }
 
+func TestOperationalSettings_SetZeroEmbeddingRecomputeConcurrencyFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{EmbeddingRecomputeConcurrency: 0})
+	if v := s.Get(); v.EmbeddingRecomputeConcurrency != 4 {
+		t.Errorf("expected a zero EmbeddingRecomputeConcurrency to fall back to the default, got %d", v.EmbeddingRecomputeConcurrency)
+	}
+}
+
+func TestOperationalSettings_SetNegativeEmbeddingRecomputeConcurrencyFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{EmbeddingRecomputeConcurrency: -1})
+	if v := s.Get(); v.EmbeddingRecomputeConcurrency != 4 {
+		t.Errorf("expected a negative EmbeddingRecomputeConcurrency to fall back to the default, got %d", v.EmbeddingRecomputeConcurrency)
+	}
+}
+
+func TestOperationalSettings_SetPositiveEmbeddingRecomputeConcurrencyIsPreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{EmbeddingRecomputeConcurrency: 16})
+	if v := s.Get(); v.EmbeddingRecomputeConcurrency != 16 {
+		t.Errorf("expected EmbeddingRecomputeConcurrency=16 to be preserved, got %d", v.EmbeddingRecomputeConcurrency)
+	}
+}
+
 func TestOperationalSettings_SetZeroSemanticRescoreCapFallsBackToDefault(t *testing.T) {
 	s := domain.DefaultOperationalSettings()
 	s.Set(domain.OperationalSettingsValues{SemanticRescoreCap: 0})
@@ -244,6 +268,7 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 		ContentDedupMethod:               domain.ContentDedupMethodExact,
 		ContentDedupSimHashMaxDistance:   3,
 		ContentDedupIntervalMinutes:      120,
+		EmbeddingRecomputeConcurrency:    4,
 	}
 	if !reflect.DeepEqual(v, want) {
 		t.Errorf("expected defaults %+v, got %+v", want, v)
