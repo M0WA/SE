@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.72 - 2026-09-23
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* docs: reflect the self-hosted embedding model swap to Qwen3-VL-Embedding-8B by @M0WA in https://github.com/M0WA/SE/pull/291
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.71...v4.13.72
+
+
 ## v4.13.71 - 2026-09-23
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
