@@ -27,11 +27,22 @@
 
   <section class="panel">
     <h2>Recompute embeddings</h2>
-    <p class="tuning-hint">Re-embeds every document's already-stored text against every currently-enabled provider -- no re-crawl needed, since the indexed text itself doesn't change. Necessary after enabling a provider or changing its model/dimensions on Settings; switching which already-enabled provider is active for search never needs this, since both are kept warm on every crawl.</p>
+    <p class="tuning-hint">Re-embeds every document's already-stored text against every currently-enabled provider -- no re-crawl needed, since the indexed text itself doesn't change. Necessary after enabling a provider or changing its model/dimensions on Settings; switching which already-enabled provider is active for search never needs this, since both are kept warm on every crawl. Resumes automatically from its last checkpoint if this instance restarts mid-run.</p>
     <div id="embeddings-recompute-summary"></div>
     <button id="embeddings-recompute-btn" type="button">Recompute embeddings</button>
     <div id="embeddings-recompute-status" class="panel-status"></div>
+    <div id="embeddings-recompute-progress"></div>
     <div id="embeddings-recompute-result"></div>
+
+    <div class="form-row">
+      <div class="label-row">
+        <label for="embeddings-recompute-concurrency">Concurrency</label>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How many documents are embedded at once during a recompute. Applies live -- takes effect on the run's next batch, no restart needed. Safe to raise for a provider with its own rate limit configured; raise cautiously for one without.</span></button>
+      </div>
+      <span class="field-wrap"><input id="embeddings-recompute-concurrency" class="field" type="number" step="1" min="1"></span>
+      <button id="embeddings-recompute-concurrency-save" type="button" class="text-button">Save</button>
+    </div>
+    <div id="embeddings-recompute-concurrency-status" class="panel-status"></div>
   </section>
 </main>
 </div>

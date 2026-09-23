@@ -111,6 +111,7 @@ func main() {
 		{"admin CRUD: mcp server", c.checkAdminMCPServerCRUD},
 		{"admin CRUD: agent", c.checkAdminAgentCRUD},
 		{"admin: embedding endpoints (list)", c.checkAdminEmbeddingEndpointsList},
+		{"admin: embeddings recompute status", c.checkAdminEmbeddingsRecomputeStatus},
 	})
 
 	// Phase 3: "user login" switches the one shared cookie jar over to
@@ -1013,6 +1014,31 @@ func (c *client) checkAdminAgentCRUD() error {
 func (c *client) checkAdminEmbeddingEndpointsList() error {
 	var out []any
 	status, err := c.getJSON("/admin/api/embeddings/endpoints", &out)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("expected 200, got %d", status)
+	}
+	return nil
+}
+
+// checkAdminEmbeddingsRecomputeStatus is read-only (structural only), same
+// spirit as checkAdminEmbeddingEndpointsList: never POSTs /recompute here,
+// since triggering a real full-corpus recompute against this deployment's
+// actual embedding endpoint(s) would be a genuinely disruptive, minutes-to-
+// hours-long action -- just proves the status endpoint answers with the
+// documents/failed fields live during-or-after a run (see
+// RunEmbeddingRecomputeJob's onBatchDone checkpointing), not just once a
+// run completes.
+func (c *client) checkAdminEmbeddingsRecomputeStatus() error {
+	var out struct {
+		TotalDocs  int  `json:"total_docs"`
+		InProgress bool `json:"in_progress"`
+		Documents  int  `json:"documents"`
+		Failed     int  `json:"failed"`
+	}
+	status, err := c.getJSON("/admin/api/embeddings/recompute", &out)
 	if err != nil {
 		return err
 	}

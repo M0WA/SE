@@ -1778,6 +1778,28 @@ func (r *Repository) AllDocumentIDs(ctx context.Context) ([]string, error) {
 	return ids, rows.Err()
 }
 
+// DocumentIDsAfter lists every document ID sorting after afterID in the
+// same ORDER BY id AllDocumentIDs uses -- lets RunEmbeddingRecomputeJob
+// resume an interrupted run from its last checkpoint rather than walking
+// the whole corpus again.
+func (r *Repository) DocumentIDsAfter(ctx context.Context, afterID string) ([]string, error) {
+	rows, err := r.db.QueryContext(ctx, r.ph(`SELECT id FROM documents WHERE id > %s ORDER BY id`, 1), afterID)
+	if err != nil {
+		return nil, fmt.Errorf("querying document ids after %q: %w", afterID, err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning row: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // UpdateEmbedding overwrites one document's embedding+norm_embedding per
 // provider, without touching text/postings/links/versions/pagerank/host --
 // used after a model change recomputes vectors from stored text (see

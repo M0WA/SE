@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,7 +15,12 @@ import (
 
 // fakeSettingsStore is a minimal in-memory ports.SettingsStore -- enough to
 // exercise RunPageRankJobWithStatus/LoadPageRankStatus without a real DB.
+// Guarded by mu since ResumeStaleEmbeddingRecomputeIfAny's tests exercise a
+// real background goroutine writing to the same instance a test's own
+// polling goroutine reads from -- every other (synchronous, single-
+// goroutine) test's behavior is unaffected by the added locking.
 type fakeSettingsStore struct {
+	mu        sync.Mutex
 	values    map[string]string
 	saveErr   error
 	getErr    error
@@ -26,6 +32,8 @@ func newFakeSettingsStore() *fakeSettingsStore {
 }
 
 func (s *fakeSettingsStore) SaveSetting(_ context.Context, key, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.saveErr != nil {
 		return s.saveErr
 	}
@@ -35,11 +43,28 @@ func (s *fakeSettingsStore) SaveSetting(_ context.Context, key, value string) er
 }
 
 func (s *fakeSettingsStore) GetSetting(_ context.Context, key string) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.getErr != nil {
 		return "", false, s.getErr
 	}
 	v, ok := s.values[key]
 	return v, ok, nil
+}
+
+// snapshotValues returns a plain copy of values under mu -- direct field
+// access (settings.values[...]) is safe for a test that never sets up
+// concurrent access to that instance, but a test asserting against
+// saveCalls/values *after* triggering a background goroutine (e.g.
+// ResumeStaleEmbeddingRecomputeIfAny) must go through this instead.
+func (s *fakeSettingsStore) snapshotValues() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]string, len(s.values))
+	for k, v := range s.values {
+		out[k] = v
+	}
+	return out
 }
 
 type fakePageRankRepo struct {

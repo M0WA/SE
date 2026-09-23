@@ -56,10 +56,13 @@ func main() {
 
 	debugSvc := application.NewHybridSearchService(repo, embedders, settings, opSettings, overrides, corpusStats, vocabulary)
 
-	// A previous instance killed mid-recompute leaves InProgress=true,
-	// permanently blocking future triggers.
-	if application.ResetStaleEmbeddingRecomputeStatus(ctx, repo) {
-		log.Print("reset a stale embedding recompute status left in-progress from a previous restart")
+	// A previous instance killed mid-recompute leaves InProgress=true and
+	// a LastDocID checkpoint behind -- resume that same run in the
+	// background from the checkpoint rather than silently discarding the
+	// (possibly hours of) progress it already made.
+	embeddingRecomputeConcurrency := func() int { return opSettings.Get().EmbeddingRecomputeConcurrency }
+	if application.ResumeStaleEmbeddingRecomputeIfAny(ctx, repo, embedders, repo, opSettings.Get().EmbeddingTitleWeight, embeddingRecomputeConcurrency) {
+		log.Print("resuming an embedding recompute left in-progress from a previous restart")
 	}
 
 	// Best-effort, non-fatal: seeds starter Agent rows for a fresh

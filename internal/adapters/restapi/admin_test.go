@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -217,6 +218,19 @@ func (f fakeEmbeddingProvider) Embed(context.Context, string) ([]float32, error)
 	return []float32{1}, f.err
 }
 func (f fakeEmbeddingProvider) Dimensions() int { return 1 }
+
+// slowFakeEmbeddingProvider adds a small fixed delay per Embed call --
+// enough for a test to observe a real recompute's live in-progress status
+// between batch checkpoints, without slowing the suite noticeably.
+type slowFakeEmbeddingProvider struct {
+	delay time.Duration
+}
+
+func (f slowFakeEmbeddingProvider) Embed(context.Context, string) ([]float32, error) {
+	time.Sleep(f.delay)
+	return []float32{1}, nil
+}
+func (f slowFakeEmbeddingProvider) Dimensions() int { return 1 }
 
 // stubNewEmbedder returns a restapi.Config.NewEmbedder that always hands
 // back a fakeEmbeddingProvider failing with err (nil for success).
@@ -2580,6 +2594,84 @@ func TestHandleAdminSettings_EmbeddingTitleWeightFieldRoundTrips(t *testing.T) {
 	}
 }
 
+// TestHandleAdminSettings_EmbeddingRecomputeConcurrencyFieldRoundTrips
+// mirrors TestHandleAdminSettings_EmbeddingTitleWeightFieldRoundTrips --
+// the embeddings admin page's own concurrency control reads/writes this
+// same field through this same general settings endpoint, so it must
+// round-trip identically even though its UI control lives elsewhere.
+func TestHandleAdminSettings_EmbeddingRecomputeConcurrencyFieldRoundTrips(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingRecomputeConcurrency: 2})
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", getRec.Code)
+	}
+	var getResp struct {
+		Operational struct {
+			EmbeddingRecomputeConcurrency int `json:"embedding_recompute_concurrency"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decoding GET response: %v", err)
+	}
+	if getResp.Operational.EmbeddingRecomputeConcurrency != 2 {
+		t.Errorf("expected GET to report embedding_recompute_concurrency=2, got %+v", getResp.Operational)
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
+			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
+			"embedding_recompute_concurrency": 12,
+		},
+	})
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	postReq.AddCookie(cookie)
+	postRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
+	}
+	if ov := opSettings.Get(); ov.EmbeddingRecomputeConcurrency != 12 {
+		t.Errorf("expected embedding_recompute_concurrency=12 to be applied, got %+v", ov)
+	}
+}
+
+// TestHandleAdminSettings_EmbeddingRecomputeConcurrencySelfHealsToDefault
+// proves an omitted/zero/negative value self-heals to
+// defaultEmbeddingRecomputeConcurrency rather than leaving the job with no
+// concurrency at all (0 would panic the semaphore channel size).
+func TestHandleAdminSettings_EmbeddingRecomputeConcurrencySelfHealsToDefault(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingRecomputeConcurrency: 9})
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
+			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
+			"embedding_recompute_concurrency": 0,
+		},
+	})
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	postReq.AddCookie(cookie)
+	postRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
+	}
+	if ov := opSettings.Get(); ov.EmbeddingRecomputeConcurrency != 4 {
+		t.Errorf("expected embedding_recompute_concurrency=0 to self-heal to the default (4), got %+v", ov)
+	}
+}
+
 // TestHandleAdminSettings_URLAliasWWWEnabledFieldRoundTrips proves
 // url_alias_www_enabled round-trips through GET/POST, and that false is
 // actually applied, not just left at Set's default (false is also its zero value).
@@ -4530,6 +4622,18 @@ func (r *fakeEmbeddingRepo) AllDocumentIDs(context.Context) ([]string, error) {
 	return r.ids, nil
 }
 
+// DocumentIDsAfter mimics the real "WHERE id > afterID ORDER BY id" query
+// against r.ids, which this fake already keeps in sorted order.
+func (r *fakeEmbeddingRepo) DocumentIDsAfter(_ context.Context, afterID string) ([]string, error) {
+	var out []string
+	for _, id := range r.ids {
+		if id > afterID {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
 func (r *fakeEmbeddingRepo) DocumentsByIDs(_ context.Context, ids []string) (map[string]domain.Document, error) {
 	out := make(map[string]domain.Document)
 	for _, id := range ids {
@@ -4799,6 +4903,59 @@ func TestHandleAdminEmbeddingsRecompute_PersistsStatusForGetToRead(t *testing.T)
 	if resp.Documents != 1 || resp.Failed != 0 {
 		t.Errorf("expected documents=1, failed=0, got %+v", resp)
 	}
+}
+
+// TestHandleAdminEmbeddingsRecomputeStatus_ReportsLiveProgressWhileInProgress
+// proves a GET mid-run sees real, moving Documents/Failed counts checkpointed
+// after each batch, rather than staying at 0 until the whole (possibly
+// hours-long) run finishes -- the embeddings admin page polls this to show
+// up-to-date progress during a recompute, not just once it completes.
+func TestHandleAdminEmbeddingsRecomputeStatus_ReportsLiveProgressWhileInProgress(t *testing.T) {
+	store := newSettingsStoreTestRepo(t)
+	total := application.EmbeddingRecomputeBatchSize + 5
+	ids := make([]string, 0, total)
+	docs := make(map[string]domain.Document, total)
+	for i := 0; i < total; i++ {
+		id := fmt.Sprintf("doc-%03d", i)
+		ids = append(ids, id)
+		docs[id] = domain.Document{ID: id, Text: id}
+	}
+	repo := &fakeEmbeddingRepo{ids: ids, docs: docs}
+	h, cookie := adminAuthedHandlerWithEmbedding(t, repo, slowFakeEmbeddingProvider{delay: 5 * time.Millisecond}, store)
+
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/embeddings/recompute", nil)
+	postReq.AddCookie(cookie)
+	postRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", postRec.Code, postRec.Body.String())
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var sawLiveProgress bool
+	for time.Now().Before(deadline) {
+		getReq := httptest.NewRequest(http.MethodGet, "/admin/api/embeddings/recompute", nil)
+		getReq.AddCookie(cookie)
+		getRec := httptest.NewRecorder()
+		h.RoutesAdmin().ServeHTTP(getRec, getReq)
+		var resp struct {
+			InProgress bool `json:"in_progress"`
+			Documents  int  `json:"documents"`
+		}
+		if err := json.Unmarshal(getRec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decoding GET response: %v", err)
+		}
+		if resp.InProgress && resp.Documents > 0 {
+			sawLiveProgress = true
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !sawLiveProgress {
+		t.Fatal("expected to observe in_progress=true with a nonzero live documents count before the run finished")
+	}
+
+	waitForEmbeddingRecomputeDone(t, store)
 }
 
 // fakeContentDedupRepo backs the content-dedup admin handler tests --

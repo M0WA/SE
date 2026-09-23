@@ -672,6 +672,13 @@ type operationalValues struct {
 	EmbeddingSearchWeights map[string]float64 `json:"embedding_search_weights"`
 	// EmbeddingTitleWeight mirrors the same-named domain.OperationalSettingsValues field.
 	EmbeddingTitleWeight float64 `json:"embedding_title_weight"`
+	// EmbeddingRecomputeConcurrency mirrors the same-named
+	// domain.OperationalSettingsValues field -- surfaced on the embeddings
+	// admin page (its own control there, not this general settings form)
+	// rather than here, since it's specific to the recompute job rather
+	// than an always-active knob. Still round-trips through this same
+	// settings object, applied live on the recompute's next batch.
+	EmbeddingRecomputeConcurrency int `json:"embedding_recompute_concurrency"`
 	// URLAliasWWWEnabled mirrors the same-named domain.OperationalSettingsValues field.
 	URLAliasWWWEnabled bool `json:"url_alias_www_enabled"`
 	// ContentDedupEnabled/ContentDedupMethod/ContentDedupSimHashMaxDistance/
@@ -711,6 +718,7 @@ func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 		EmbeddingHashEnabled:             v.EmbeddingHashEnabled,
 		EmbeddingSearchWeights:           v.EmbeddingSearchWeights,
 		EmbeddingTitleWeight:             v.EmbeddingTitleWeight,
+		EmbeddingRecomputeConcurrency:    v.EmbeddingRecomputeConcurrency,
 		URLAliasWWWEnabled:               v.URLAliasWWWEnabled,
 		ContentDedupEnabled:              v.ContentDedupEnabled,
 		ContentDedupMethod:               v.ContentDedupMethod,
@@ -747,6 +755,7 @@ func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 		EmbeddingHashEnabled:             o.EmbeddingHashEnabled,
 		EmbeddingSearchWeights:           o.EmbeddingSearchWeights,
 		EmbeddingTitleWeight:             o.EmbeddingTitleWeight,
+		EmbeddingRecomputeConcurrency:    o.EmbeddingRecomputeConcurrency,
 		URLAliasWWWEnabled:               o.URLAliasWWWEnabled,
 		ContentDedupEnabled:              o.ContentDedupEnabled,
 		ContentDedupMethod:               o.ContentDedupMethod,
@@ -2251,11 +2260,16 @@ func (h *Handler) handleAdminPageRankRecompute(w http.ResponseWriter, r *http.Re
 type adminEmbeddingRecomputeStatusResponse struct {
 	TotalDocs  int  `json:"total_docs"`
 	InProgress bool `json:"in_progress"`
-	// LastRunAt/Documents/Failed/DurationMs reflect the persisted
-	// cross-process status. No omitempty: 0 is a legitimate result (empty corpus).
+	// Documents/Failed always reflect the persisted cross-process status,
+	// live while InProgress is true (checkpointed once per batch -- see
+	// RunEmbeddingRecomputeJob's onBatchDone) and final once it settles --
+	// so a poller sees real, moving counts during a run, not just 0 until
+	// it finishes. No omitempty: 0 is a legitimate result (empty corpus).
+	Documents int `json:"documents"`
+	Failed    int `json:"failed"`
+	// LastRunAt/DurationMs describe the most recently COMPLETED run only --
+	// nil/0 while a run is still in progress or none has ever finished.
 	LastRunAt  *time.Time `json:"last_run_at,omitempty"`
-	Documents  int        `json:"documents"`
-	Failed     int        `json:"failed"`
 	DurationMs int64      `json:"duration_ms"`
 }
 
@@ -2271,11 +2285,11 @@ func (h *Handler) handleAdminEmbeddingsRecomputeStatus(w http.ResponseWriter, r 
 	}
 	status := application.LoadEmbeddingRecomputeStatus(r.Context(), h.settingsStore)
 	resp.InProgress = status.InProgress
+	resp.Documents = status.Documents
+	resp.Failed = status.Failed
 	if !status.LastRunAt.IsZero() {
 		lastRunAt := status.LastRunAt
 		resp.LastRunAt = &lastRunAt
-		resp.Documents = status.Documents
-		resp.Failed = status.Failed
 		resp.DurationMs = status.DurationMs
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -2292,10 +2306,11 @@ func (h *Handler) handleAdminEmbeddingsRecomputeStart(w http.ResponseWriter, r *
 		http.Error(w, "an embedding recompute is already in progress", http.StatusConflict)
 		return
 	}
-	v := h.opSettings.Get()
+	titleWeight := h.opSettings.Get().EmbeddingTitleWeight
+	concurrency := func() int { return h.opSettings.Get().EmbeddingRecomputeConcurrency }
 	go func() {
 		ctx := context.Background()
-		if _, err := application.RunEmbeddingRecomputeJobWithStatus(ctx, h.embeddingRepo, h.embedders, h.settingsStore, v.EmbeddingTitleWeight); err != nil {
+		if _, err := application.RunEmbeddingRecomputeJobWithStatus(ctx, h.embeddingRepo, h.embedders, h.settingsStore, titleWeight, "", concurrency); err != nil {
 			log.Printf("recomputing embeddings: %v", err)
 		}
 	}()

@@ -13,6 +13,7 @@ function baseSettings(operationalOverrides) {
       embedding_hash_enabled: true,
       embedding_search_weights: { hash: 1 },
       embedding_title_weight: 0.3,
+      embedding_recompute_concurrency: 4,
     }, operationalOverrides),
   };
 }
@@ -170,6 +171,31 @@ test('renderRecomputeStatus shows "Recomputing…" and disables the button while
   assert.equal(document.getElementById('embeddings-recompute-btn').disabled, true);
 });
 
+test('renderRecomputeStatus shows live progress (count and percentage) while in progress', () => {
+  const { renderRecomputeStatus } = loadFixture();
+  renderRecomputeStatus(baseEmbeddingStatus({ in_progress: true, total_docs: 200, documents: 50, failed: 0 }));
+  const progressText = document.getElementById('embeddings-recompute-progress').textContent;
+  assert.equal(progressText.includes('50 / 200'), true);
+  assert.equal(progressText.includes('25%'), true);
+  // No failures yet -- the "Failed so far" row shouldn't appear.
+  assert.equal(progressText.includes('Failed'), false);
+});
+
+test('renderRecomputeStatus shows a live failed count once any failures happen mid-run', () => {
+  const { renderRecomputeStatus } = loadFixture();
+  renderRecomputeStatus(baseEmbeddingStatus({ in_progress: true, total_docs: 200, documents: 50, failed: 3 }));
+  const progressText = document.getElementById('embeddings-recompute-progress').textContent;
+  assert.equal(progressText.includes('Failed so far'), true);
+  assert.equal(progressText.includes('3'), true);
+});
+
+test('renderRecomputeStatus clears the live progress display once a run finishes', () => {
+  const { renderRecomputeStatus } = loadFixture();
+  renderRecomputeStatus(baseEmbeddingStatus({ in_progress: true, total_docs: 200, documents: 50 }));
+  renderRecomputeStatus(baseEmbeddingStatus({ in_progress: false, last_run_at: '2026-01-02T03:04:05Z', documents: 200 }));
+  assert.equal(document.getElementById('embeddings-recompute-progress').textContent, '');
+});
+
 test('renderRecomputeStatus schedules exactly one poll while in progress, and clears it once done', () => {
   const originalSetTimeout = global.setTimeout;
   const originalClearTimeout = global.clearTimeout;
@@ -245,4 +271,70 @@ test('clicking Recompute embeddings reports the error and stops the button loadi
     'Could not start recompute: an embedding recompute is already in progress',
   );
   assert.equal(document.getElementById('embeddings-recompute-btn').disabled, false);
+});
+
+test('loadConcurrency populates the concurrency field from settings on page load', async () => {
+  loadFixture(async (url) => {
+    if (url === '/admin/api/settings') return { ok: true, json: async () => baseSettings({ embedding_recompute_concurrency: 7 }) };
+    if (url === '/admin/api/embeddings/endpoints') return { ok: true, json: async () => [] };
+    return { ok: true, json: async () => baseEmbeddingStatus() };
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('embeddings-recompute-concurrency').value, '7');
+});
+
+test('loadConcurrency reports the error message on a failed settings fetch', async () => {
+  loadFixture(async (url) => {
+    if (url === '/admin/api/settings') return { ok: false, status: 500, text: async () => 'settings down' };
+    if (url === '/admin/api/embeddings/endpoints') return { ok: true, json: async () => [] };
+    return { ok: true, json: async () => baseEmbeddingStatus() };
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(
+    document.getElementById('embeddings-recompute-concurrency-status').textContent,
+    'Could not load concurrency: settings down',
+  );
+});
+
+test('clicking the concurrency Save button re-fetches settings, applies the edited value, and posts it back', async () => {
+  loadFixture();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  let postedBody = null;
+  global.fetch = async (url, opts) => {
+    if (url === '/admin/api/settings' && opts && opts.method === 'POST') {
+      postedBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => postedBody };
+    }
+    if (url === '/admin/api/settings') return { ok: true, json: async () => baseSettings({ embedding_recompute_concurrency: 4 }) };
+    return { ok: true, json: async () => ({}) };
+  };
+  document.getElementById('embeddings-recompute-concurrency').value = '9';
+  document.getElementById('embeddings-recompute-concurrency-save').dispatchEvent(new window.Event('click'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(postedBody.operational.embedding_recompute_concurrency, 9);
+  assert.equal(
+    document.getElementById('embeddings-recompute-concurrency-status').textContent,
+    'Saved. Takes effect on the recompute’s next batch.',
+  );
+});
+
+test('clicking the concurrency Save button reports the error on a failed save', async () => {
+  loadFixture();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  global.fetch = async (url, opts) => {
+    if (url === '/admin/api/settings' && opts && opts.method === 'POST') {
+      return { ok: false, status: 500, text: async () => 'db down' };
+    }
+    if (url === '/admin/api/settings') return { ok: true, json: async () => baseSettings() };
+    return { ok: true, json: async () => ({}) };
+  };
+  document.getElementById('embeddings-recompute-concurrency').value = '9';
+  document.getElementById('embeddings-recompute-concurrency-save').dispatchEvent(new window.Event('click'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(
+    document.getElementById('embeddings-recompute-concurrency-status').textContent,
+    'Could not save: db down',
+  );
 });

@@ -26,11 +26,18 @@ Re-embeds every stored document's text against every enabled provider. It doesn'
 
 ## Recompute status and trigger
 
-"Recompute embeddings" starts the job and returns immediately -- a full-corpus recompute is a real per-document network round trip against every enabled provider, so it runs as a background job rather than blocking your tab. This page then polls status every couple seconds, showing "Recomputing...", corpus size, and, once done, documents recomputed/failed and duration. Since status is server-side, another admin's trigger shows up here too on the next poll. A second recompute can't start while one runs -- the button is disabled and the server rejects a duplicate.
+"Recompute embeddings" starts the job and returns immediately -- a full-corpus recompute is a real per-document network round trip against every enabled provider, so it runs as a background job rather than blocking your tab. This page then polls status every couple seconds, showing "Recomputing...", corpus size, a live progress count, and, once done, documents recomputed/failed and duration. Since status is server-side, another admin's trigger shows up here too on the next poll. A second recompute can't start while one runs -- the button is disabled and the server rejects a duplicate.
+
+While a recompute is in progress, this page shows a running "N / total documents (X%)" count, updated as each batch of documents finishes -- not just a frozen 0 until the whole run completes. If any documents have failed so far, a "Failed so far" count appears alongside it. Progress is checkpointed server-side after every batch, so if this admin-server instance restarts mid-run (a redeploy, a crash), the next instance to start resumes automatically from that checkpoint rather than starting the whole corpus over -- the run's Documents/Failed counts stay cumulative across the interruption.
+
+## Concurrency
+
+How many documents a recompute processes at once, rather than one at a time. Each in-flight document still pays its own real Embed HTTP round trip per enabled provider, so raising this mainly overlaps network latency rather than adding real load beyond what an endpoint's own rate limit already allows through -- safe to raise freely for a provider with a configured rate limit; raise cautiously for one without, since concurrency alone is then the only throttle. Defaults to 4. Edit the number and click Save; it applies live, taking effect on a running recompute's very next batch, with no restart or new trigger needed.
 
 > **Worth knowing:**
 > - "Active for search" can differ from "Enabled providers" -- a provider needs both enabled AND a positive weight to influence results.
 > - Recompute is corpus-wide and can take real time on a large corpus; there's no per-provider or per-document recompute here.
+> - Concurrency is saved through the same settings store as the Settings page's other fields, just surfaced here since it's specific to this job.
 
 ---
 ← [PageRank](pagerank.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [HTTP embedding endpoints](embedding-endpoints.md) →
