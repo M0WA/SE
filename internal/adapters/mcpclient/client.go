@@ -26,10 +26,20 @@ import (
 const connectTimeout = 10 * time.Second
 
 // callTimeout bounds a single CallTool round-trip -- the ceiling a server's
-// own tool logic can never exceed. 10s measured too tight for
-// cmd/mcp-sandbox's run_go (a cold "go run" recompiling stdlib took ~12s on
-// se.mo-sys.de); 60s matches httpchat's own chat-completion timeout.
-const callTimeout = 60 * time.Second
+// own tool logic can never exceed, independent of whatever -timeout an
+// admin sets on that server's own MCPServer row (that flag bounds the
+// sandboxed PROCESS; this bounds mcpclient's own wait for mcp-sandbox's
+// response, and used to cut the call off first regardless). 10s measured
+// too tight for cmd/mcp-sandbox's run_go (a cold "go run" recompiling
+// stdlib took ~12s on se.mo-sys.de); 60s was too tight in turn for the
+// "Image analyst" default agent's easyocr call (a genuinely uncached,
+// multi-minute model download every time, confirmed live: a real chat
+// turn hit this ceiling and surfaced as an in-app tool error -- or a raw
+// gateway timeout if nginx's own proxy_read_timeout, also too short by
+// default, cut the whole request off first). 5 minutes leaves real room
+// for that case; a still-broken/hung server just takes longer to report
+// as broken, an acceptable trade against failing a legitimately slow one.
+const callTimeout = 5 * time.Minute
 
 // implementationName/Version identify this client to every server it
 // connects to, per the MCP handshake.

@@ -37,3 +37,9 @@ npm install && npm test   # internal/adapters/restapi/*.js
 ```
 
 See `CLAUDE.md` for the branch/PR/release workflow and doc-sync rules.
+
+`cmd/e2e-check` is a manual, dev-host-only smoke test against a real deployed
+instance (default `se.mo-sys.de`) -- never wired into CI, never packaged. Run
+by hand after a release: `go run ./cmd/e2e-check -host <host> -creds <path>`
+(see `cmd/e2e-check/credentials.example.json` for the credentials file shape;
+never commit a real one).

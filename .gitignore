@@ -2,3 +2,7 @@
 *.db
 .claude/
 /node_modules/
+# Real e2e-check credentials -- see cmd/e2e-check/credentials.example.json
+# for the shape to copy. Never commit real admin credentials for any
+# deployment.
+/cmd/e2e-check/credentials.json

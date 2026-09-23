@@ -39,6 +39,19 @@ crawl-server (`127.0.0.1:8082`) is an internal API only admin-server talks
 to (via `CRAWL_SERVER_URL`). Never add it to the nginx config or otherwise
 expose it on a public listener.
 
+## Timeouts
+
+Both proxied blocks set `proxy_read_timeout 300s;`, not nginx's own 60s
+default: a `/chat` turn can legitimately take longer than that (a single
+slow MCP tool call, e.g. the "Image analyst" default agent's first,
+uncached `easyocr` model download, plus completion time across however
+many of `maxHookFollowUpRounds`' rounds actually need one). Left at the
+default, a real chat turn hit this and surfaced as a raw 504 instead of
+an answer or a graceful in-app tool error -- confirmed live. Keep this in
+sync with `internal/adapters/mcpclient`'s own `callTimeout` (also 5
+minutes) if either changes; nginx's own timeout should never be shorter,
+or it cuts a legitimately-still-working request off first.
+
 ## Install
 
 ```sh
