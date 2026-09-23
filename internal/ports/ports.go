@@ -216,9 +216,9 @@ var ErrUserNotFound = errors.New("user not found")
 // already used by a different row (case-sensitive, unique).
 var ErrUsernameTaken = errors.New("username already taken")
 
-// UserStore persists DB-backed regular-user accounts -- see domain.User's
-// doc comment for how these differ from the admin account. A list of many,
-// like MCPServerStore, CRUD over IDs.
+// UserStore persists every account (domain.User), admin and regular alike
+// -- see domain.User's doc comment. A list of many, like MCPServerStore,
+// CRUD over IDs.
 type UserStore interface {
 	ListUsers(ctx context.Context) ([]domain.User, error)
 	GetUser(ctx context.Context, id string) (domain.User, error)

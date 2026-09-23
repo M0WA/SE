@@ -29,7 +29,7 @@ dpkg -i searchengine_<version>_amd64.deb
 
 ## 3. Expect the services to come up unconfigured
 
-Expected, not a bug. The shipped `searchengine.env` points at a local SQLite file with blank admin credentials, so admin sign-in fails closed until they're set.
+Expected, not a bug. The shipped `searchengine.env` points at a local SQLite file with no admin user yet, so admin sign-in fails closed until one is created (step 7).
 
 ```
 systemctl status searchengine-search searchengine-admin searchengine-crawl
@@ -50,16 +50,7 @@ DB_DRIVER=postgres
 DB_DSN=postgres://user:pass@dbhost:5432/searchengine?sslmode=require
 ```
 
-## 5. Set the admin username and password
-
-Until both are non-empty, `/admin` sign-in always refuses -- the most common reason a fresh install "looks broken."
-
-```
-ADMIN_USER=admin
-ADMIN_PASSWORD=<strong random password>
-```
-
-## 6. Set the optional hardening secrets
+## 5. Set the optional hardening secrets
 
 Recommended. Both default to blank/disabled if skipped.
 
@@ -68,7 +59,7 @@ CRAWL_INTERNAL_TOKEN=$(openssl rand -hex 32)
 SETTINGS_ENCRYPTION_KEY=$(openssl rand -hex 32)
 ```
 
-## 7. Restart and verify
+## 6. Restart and verify
 
 `EnvironmentFile` changes need a restart -- systemd doesn't hot-reload it.
 
@@ -79,6 +70,31 @@ curl -s http://127.0.0.1:8080/healthz
 curl -s http://127.0.0.1:8081/healthz
 curl -s http://127.0.0.1:8082/healthz
 ```
+
+## 7. Create the initial admin user
+
+There is no hardcoded admin account -- an admin is just a regular account
+(a `users` row) with its `is_admin` flag set, same as any other account
+`/admin/users` manages, and any number of accounts can hold it. Until at
+least one exists, `/admin` sign-in always refuses -- the most common reason
+a fresh install "looks broken." `packaging/create-admin.sh` seeds the
+first one directly against the database (there's no admin session yet to
+create it through the API); needs `apache2-utils` for `htpasswd` (bcrypt
+hashing) and, for Postgres, the `postgresql-client` package for `psql`:
+
+```
+apt-get install apache2-utils   # + postgresql-client if DB_DRIVER=postgres
+./packaging/create-admin.sh admin
+# prompts for a password (bcrypt-hashed locally, never logged), then
+# inserts a users row with is_admin=true using the DB_DRIVER/DB_DSN
+# already restarted-into in step 6
+```
+
+Run it again with a different username any time to add another admin --
+nothing about it is a one-time-only operation. Reset a forgotten admin
+password, or demote/promote an existing account, from `/admin/users` once
+at least one admin can sign in; `packaging/create-admin.sh` is only for
+when none can yet.
 
 ## 8. Install and configure nginx
 

@@ -193,6 +193,26 @@ instead of the repo root. Update it alongside `README.md` for the same
 triggers; it doesn't need the Binaries/Development sections `README.md`
 has, just the links.
 
+## Keep cmd/e2e-check up to date
+
+`cmd/e2e-check` (see its own doc comments, and the root `README.md`'s
+"Development" section for how to run it) is a manual, dev-host-only,
+never-CI-wired smoke test that logs into a real deployment and drives real
+chat/MCP/agent/search/account/admin traffic end to end. It is real
+verification, not a nice-to-have, and it goes stale exactly like
+`openapi.yaml`/the nginx config/the architecture doc/the user manual do if
+left alone. **Whenever a change adds, removes, or changes the behavior of a
+user-facing feature it's positioned to cover -- a chat/search/account/admin
+REST endpoint, an MCP server or agent capability, a login/session/role
+rule, a persistent-chat or file-attachment flow -- update `cmd/e2e-check` in
+the same change**: add a new check for new behavior, fix an existing one
+that now asserts something no longer true, or remove one for behavior that
+no longer exists. Treat a feature change that leaves `cmd/e2e-check`
+silently asserting the old behavior (or simply not covering the new one) as
+incomplete work, same as every other rule in this section. This doesn't
+replace the Go/JS unit test coverage bar below -- it's the live,
+cross-service layer neither of those reaches on their own.
+
 ## Before committing
 
 - `go build ./...`, `go vet ./...`, `gofmt -l .` must be clean.

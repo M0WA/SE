@@ -16,13 +16,17 @@ Free text when adding a user, read-only once the account exists. It can't change
 
 Required when adding a user (minimum 8 characters, capped at 72 bytes — bcrypt's hard limit, enforced here for a clear error instead of an opaque failure). When editing, leave blank to keep the current password, or type a new one to reset it. Stored only as a bcrypt hash, never shown again after saving — resetting here, not looking it up, is the only path back in for a forgotten password.
 
+## Admin
+
+A checkbox, unchecked by default. Checking it grants this account `/admin/*` access (everything this backend does) on top of every self-service feature it already has as a regular account — it's additive, never a trade-off. Any number of accounts can be admin at once. Unchecking it on the last remaining admin account, or deleting that account, is refused (400): there must always be at least one, or no one could reach this page to fix it.
+
 ## Personal prompt (custom_prompt)
 
 Free text, up to 4000 characters, injected as this user's own leading system message on every chat turn — in addition to, not instead of, the site-wide chat prompt and any active MCP server's prompt. Use it to give a user a standing instruction without changing chat behavior for everyone else. It's the same field the user can set themselves from their Account page, so anything you set here is just as visible and editable to them — not a private admin note. Leave empty for no per-user injection.
 
 ## Saving and deleting
 
-Save applies the form: on a new account it creates the user and opens their edit page; on an existing one it sends only fields that make sense to change (password only if typed, the prompt always, since the textarea is the single source of truth including clearing it to empty). Delete removes the account after a confirmation prompt and returns to the user list — no undo, same as every delete in this admin UI.
+Save applies the form: on a new account it creates the user and opens their edit page; on an existing one it sends only fields that make sense to change (password only if typed, the Admin flag and prompt always). Delete removes the account after a confirmation prompt and returns to the user list — no undo, same as every delete in this admin UI (except the last remaining admin account, which it refuses to remove).
 
 ---
 ← [Users](users.md) &nbsp;·&nbsp; [↑ Manual home](README.md)

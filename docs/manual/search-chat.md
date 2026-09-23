@@ -42,7 +42,7 @@ The strip above the transcript holds one tab per open conversation -- the + butt
 
 ## Pinning, renaming, and closing chats
 
-Each tab has its own pin button. An unpinned tab is session-only: closing or reloading the page discards it, and it can't attach files (see "Attaching files" below). Clicking the pin turns it into a persistent chat saved to your account -- it reloads automatically next time (most recently updated first), and it can now attach files. Clicking the pin again unpins it, deleting the saved chat and its attached files, though the tab stays open as a plain conversation. Requires a regular signed-in user account with the files feature configured; an admin session never sees a working pin.
+Each tab has its own pin button. An unpinned tab is session-only: closing or reloading the page discards it, and it can't attach files (see "Attaching files" below). Clicking the pin turns it into a persistent chat saved to your account -- it reloads automatically next time (most recently updated first), and it can now attach files. Clicking the pin again unpins it, deleting the saved chat and its attached files, though the tab stays open as a plain conversation. Requires a signed-in account (any account -- admin included, since every account is a real one now) with the files feature configured.
 
 Click a tab's own name to rename it, but only while it's already active -- clicking a background tab's name switches to it instead. A pinned tab's rename saves immediately; an unpinned tab's title is session-only, same as its history.
 
@@ -50,7 +50,7 @@ The × on a tab closes it. For an unpinned tab this discards it with no confirma
 
 ## Attaching files
 
-The paperclip button uploads a file for the model to read during this conversation -- it doesn't inject the contents into your message; the model discovers and reads it via its file-access tools the next time it looks. Attached files (and any the model produces via write_file) show up as small boxes below the transcript with a download link and a × to delete immediately, no confirmation needed. Only a pinned tab can attach files -- the paperclip is disabled (with a tooltip explaining why) until you pin the tab. Requires a regular signed-in user account with the files feature configured; an admin session, or a deployment without it, shows no file boxes.
+The paperclip button uploads a file for the model to read during this conversation -- it doesn't inject the contents into your message; the model discovers and reads it via its file-access tools the next time it looks. Attached files (and any the model produces via write_file) show up as small boxes below the transcript with a download link and a × to delete immediately, no confirmation needed. Only a pinned tab can attach files -- the paperclip is disabled (with a tooltip explaining why) until you pin the tab. Requires a signed-in account with the files feature configured; a deployment without that feature shows no file boxes.
 
 ## Citations and tool results
 

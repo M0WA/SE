@@ -24,6 +24,7 @@ function baseUser(overrides) {
   return Object.assign({
     id: 'user_alice',
     username: 'alice',
+    is_admin: false,
     custom_prompt: '',
     created_at: '2026-01-02T03:04:05Z',
     updated_at: '2026-01-02T03:04:05Z',
@@ -51,7 +52,7 @@ test.afterEach(async () => {
 test('load() applies the fetched user to the form and reveals it', async () => {
   loadFixture('user_alice', async (url) => {
     assert.equal(url, '/admin/api/users/user_alice');
-    return { ok: true, json: async () => baseUser({ custom_prompt: 'Be terse.' }) };
+    return { ok: true, json: async () => baseUser({ custom_prompt: 'Be terse.', is_admin: true }) };
   });
   await flush();
   assert.equal(document.getElementById('user-title').textContent, 'alice');
@@ -59,6 +60,7 @@ test('load() applies the fetched user to the form and reveals it', async () => {
   assert.equal(document.getElementById('user-username').value, 'alice');
   assert.equal(document.getElementById('user-username').disabled, true);
   assert.equal(document.getElementById('user-password').value, '');
+  assert.equal(document.getElementById('user-is-admin').checked, true);
   assert.equal(document.getElementById('user-custom-prompt').value, 'Be terse.');
   assert.equal(document.getElementById('user-delete-btn').hidden, false);
   const meta = document.getElementById('user-meta').textContent;
@@ -95,16 +97,18 @@ test('"new" mode shows an empty form without loading or fetching, and hides dele
   assert.equal(document.getElementById('user-delete-btn').hidden, true);
 });
 
-test('requestBody in "new" mode includes username and password', async () => {
+test('requestBody in "new" mode includes username, password, and is_admin', async () => {
   loadFixture('new');
   await flush();
   document.getElementById('user-username').value = 'newuser';
   document.getElementById('user-password').value = 'a-strong-password';
+  document.getElementById('user-is-admin').checked = true;
   document.getElementById('user-custom-prompt').value = 'Answer briefly.';
   const { requestBody } = require('./admin_user.js');
   const body = requestBody();
   assert.equal(body.username, 'newuser');
   assert.equal(body.password, 'a-strong-password');
+  assert.equal(body.is_admin, true);
   assert.equal(body.custom_prompt, 'Answer briefly.');
 });
 

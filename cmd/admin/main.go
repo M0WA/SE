@@ -10,6 +10,7 @@ import (
 	"searchengine/internal/adapters/mcpclient"
 	"searchengine/internal/adapters/restapi"
 	"searchengine/internal/adapters/settingscrypto"
+	"searchengine/internal/adapters/sqlrepo"
 	"searchengine/internal/application"
 	"searchengine/internal/bootstrap"
 	"searchengine/internal/domain"
@@ -67,11 +68,7 @@ func main() {
 		log.Printf("seeding default agents: %v", err)
 	}
 
-	adminUser := bootstrap.GetEnv("ADMIN_USER", "")
-	adminPass := bootstrap.GetEnv("ADMIN_PASSWORD", "")
-	if adminUser == "" || adminPass == "" {
-		log.Print("ADMIN_USER/ADMIN_PASSWORD not set: /crawl and /admin will refuse all sign-ins")
-	}
+	warnIfNoAdminUser(ctx, repo)
 
 	crawlInternalToken := bootstrap.GetEnv("CRAWL_INTERNAL_TOKEN", "")
 	jobs := crawlclient.New(bootstrap.GetEnv("CRAWL_SERVER_URL", "http://127.0.0.1:8082"), crawlInternalToken)
@@ -98,12 +95,31 @@ func main() {
 		Health:                repo,
 		Sessions:              repo,
 		DBDriver:              driver,
-		AdminUser:             adminUser,
-		AdminPass:             adminPass,
 		SettingsEncryptionKey: settingsEncryptionKey,
 	})
 
 	addr := bootstrap.GetEnv("ADMIN_LISTEN_ADDR", "127.0.0.1:8081")
 	log.Printf("Admin server running on %s (DB: %s)", addr, driver)
 	log.Fatal(http.ListenAndServe(addr, handler.RoutesAdmin()))
+}
+
+// warnIfNoAdminUser is a best-effort, non-fatal startup check (same spirit
+// as SeedDefaultAgents' own log-and-continue on error): there is no
+// hardcoded admin account to fall back on any more, so a fresh install (or
+// one migrated from before this User.IsAdmin flag existed) with zero
+// IsAdmin=true rows has /admin and /login refusing every sign-in until
+// packaging/create-admin.sh seeds the first one. A query error here is
+// logged and otherwise ignored -- it isn't this check's job to fail startup.
+func warnIfNoAdminUser(ctx context.Context, repo *sqlrepo.Repository) {
+	users, err := repo.ListUsers(ctx)
+	if err != nil {
+		log.Printf("checking for an admin user: %v", err)
+		return
+	}
+	for _, u := range users {
+		if u.IsAdmin {
+			return
+		}
+	}
+	log.Print("no admin user exists yet: /crawl and /admin will refuse all sign-ins until one is created -- run packaging/create-admin.sh")
 }

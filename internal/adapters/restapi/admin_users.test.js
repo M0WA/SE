@@ -11,6 +11,7 @@ function baseUser(overrides) {
   return Object.assign({
     id: 'user_alice',
     username: 'alice',
+    is_admin: false,
     custom_prompt: '',
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
@@ -49,6 +50,13 @@ test('renderUsers builds a row per user with its fields', () => {
   assert.equal(text.includes('alice'), true);
   assert.equal(text.includes('bob'), true);
   assert.equal(document.getElementById('users-status').textContent, '');
+});
+
+test('renderUsers shows "yes" for an admin row and "no" for a non-admin row', () => {
+  const { renderUsers } = loadFixture();
+  renderUsers([baseUser({ is_admin: true }), baseUser({ id: 'user_bob', username: 'bob', is_admin: false })]);
+  const cells = [...document.querySelectorAll('#users-table tbody tr')].map((tr) => tr.children[1].textContent);
+  assert.deepEqual(cells, ['yes', 'no']);
 });
 
 test('renderUsers renders an "Edit" link to the per-user subpage', () => {

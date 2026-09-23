@@ -77,20 +77,15 @@ func (s *fileTokenStore) resolve(token string) (userID, chatID string, ok bool) 
 }
 
 // fileAccessUserID resolves the caller's user ID for a /account/api/files
-// request, from either a role=user session cookie or an "Authorization:
-// Bearer <token>" header (cmd/mcp-files calling back for that turn).
-// tokenChatID is set only for the bearer path -- the pinned chat that
-// token was minted for; a cookie caller resolves chat scope from the
-// request itself instead. errStatus is 0 on success, 403 if the session is
-// role=admin (no domain.User row to own a file), 401 if unauthenticated.
+// request, from either a session cookie (any role -- every session belongs
+// to a real domain.User row) or an "Authorization: Bearer <token>" header
+// (cmd/mcp-files calling back for that turn). tokenChatID is set only for
+// the bearer path -- the pinned chat that token was minted for; a cookie
+// caller resolves chat scope from the request itself instead. errStatus is
+// 0 on success, 401 if neither resolved.
 func (h *Handler) fileAccessUserID(r *http.Request) (userID, tokenChatID string, errStatus int) {
-	if role, uid, sessionOK := h.sessionRoleFor(r); sessionOK {
-		if role == domain.RoleUser && uid != "" {
-			return uid, "", 0
-		}
-		if role == domain.RoleAdmin {
-			return "", "", http.StatusForbidden
-		}
+	if _, uid, sessionOK := h.sessionRoleFor(r); sessionOK && uid != "" {
+		return uid, "", 0
 	}
 	if h.fileTokens != nil {
 		if token, hasBearer := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); hasBearer && token != "" {
@@ -109,11 +104,7 @@ func (h *Handler) requireFileAccess(w http.ResponseWriter, r *http.Request) (use
 	if status == 0 {
 		return userID, tokenChatID, true
 	}
-	msg := "authentication required"
-	if status == http.StatusForbidden {
-		msg = "this feature is not available for the admin account"
-	}
-	http.Error(w, msg, status)
+	http.Error(w, "authentication required", status)
 	return "", "", false
 }
 

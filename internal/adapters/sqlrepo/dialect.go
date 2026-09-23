@@ -206,13 +206,14 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			role TEXT NOT NULL DEFAULT 'admin', user_id TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
-		// users lists DB-backed regular-user accounts (domain.User) --
-		// distinct from the single hardcoded admin account, never a row
-		// here. username is unique at the DB layer, not just
+		// users lists every account (domain.User) -- there is no separate
+		// hardcoded admin account; is_admin marks which rows also get
+		// /admin/* access. username is unique at the DB layer, not just
 		// checked-then-inserted at the application layer, to close that race.
 		`CREATE TABLE IF NOT EXISTS users (
 			id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE,
-			password_hash TEXT NOT NULL, custom_prompt TEXT NOT NULL DEFAULT '',
+			password_hash TEXT NOT NULL, is_admin BOOLEAN NOT NULL DEFAULT false,
+			custom_prompt TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 		)`,
 		// user_mcp_servers is mcp_servers' per-user sibling -- same
@@ -447,7 +448,8 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 		// See the sqlite dialect's users comment.
 		`CREATE TABLE IF NOT EXISTS users (
 			id VARCHAR(20) PRIMARY KEY, username VARCHAR(255) NOT NULL UNIQUE,
-			password_hash VARCHAR(255) NOT NULL, custom_prompt TEXT NOT NULL DEFAULT '',
+			password_hash VARCHAR(255) NOT NULL, is_admin BOOLEAN NOT NULL DEFAULT false,
+			custom_prompt TEXT NOT NULL DEFAULT '',
 			created_at VARCHAR(64) NOT NULL, updated_at VARCHAR(64) NOT NULL
 		) ENGINE=InnoDB`,
 		// See the sqlite dialect's user_mcp_servers comment.
@@ -661,7 +663,8 @@ func (postgresDialect) CreateSchemaSQL() []string {
 		// See the sqlite dialect's users comment.
 		`CREATE TABLE IF NOT EXISTS users (
 			id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE,
-			password_hash TEXT NOT NULL, custom_prompt TEXT NOT NULL DEFAULT '',
+			password_hash TEXT NOT NULL, is_admin BOOLEAN NOT NULL DEFAULT false,
+			custom_prompt TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 		)`,
 		// See the sqlite dialect's user_mcp_servers comment.

@@ -73,12 +73,12 @@ func toToolCallResultResponses(results []domain.ToolCallResult) []toolCallResult
 }
 
 // userCustomPromptFor resolves the session's custom chat prompt for
-// injection into ChatOptions -- empty for an admin session, unconfigured
+// injection into ChatOptions -- empty for no session, unconfigured
 // h.users, or any lookup error. Best-effort and silent by design: a
 // personalization nicety should never fail an otherwise-working turn.
 func (h *Handler) userCustomPromptFor(r *http.Request) string {
-	role, userID, ok := h.sessionRoleFor(r)
-	if !ok || role != domain.RoleUser || userID == "" || h.users == nil {
+	_, userID, ok := h.sessionRoleFor(r)
+	if !ok || userID == "" || h.users == nil {
 		return ""
 	}
 	u, err := h.users.GetUser(r.Context(), userID)
@@ -157,10 +157,7 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role, userID, _ := h.sessionRoleFor(r)
-	if role != domain.RoleUser {
-		userID = ""
-	}
+	_, userID, _ := h.sessionRoleFor(r)
 	result, err := h.chat.Chat(r.Context(), req.Messages, application.ChatOptions{
 		WebSearch: req.WebSearch, UserCustomPrompt: h.userCustomPromptFor(r),
 		UserAgent: h.userAgentForMCPFetch(), AgentID: req.AgentID,

@@ -1157,10 +1157,13 @@
     runSearch(query, sortSelect.value);
   });
 
-  // loadSession asks which role the session has and shows exactly one of #admin-link/#account-
-  // link -- both start hidden, so any failure leaves both hidden rather than risk showing the
-  // admin link to a non-admin. Non-critical: failures are swallowed silently, unlike
-  // runSearch/sendChatMessage, which surface errors since those are direct user actions.
+  // loadSession asks which role the session has and shows #admin-link/#account-link
+  // accordingly -- both start hidden, so any failure leaves both hidden rather than risk
+  // showing the admin link to a non-admin. An admin account gets both: admin rights are
+  // additive on top of full self-service, never a trade-off, so #account-link and persisted
+  // chats work the same for every signed-in account. Non-critical: failures are swallowed
+  // silently, unlike runSearch/sendChatMessage, which surface errors since those are direct
+  // user actions.
   async function loadSession() {
     try {
       const resp = await fetch('/session');
@@ -1168,7 +1171,8 @@
       const data = await resp.json();
       if (data.role === 'admin') {
         adminLink.hidden = false;
-      } else if (data.role === 'user') {
+      }
+      if (data.role === 'admin' || data.role === 'user') {
         accountLink.hidden = false;
         loadPersistedChats();
       }
