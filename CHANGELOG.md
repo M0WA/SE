@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.71 - 2026-09-23
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* feat: e2e-check mcp connectivity checks also verify real functionality by @M0WA in https://github.com/M0WA/SE/pull/286
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.70...v4.13.71
+
+
 ## v4.13.70 - 2026-09-23
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
