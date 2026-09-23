@@ -39,6 +39,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -741,7 +742,7 @@ func (c *client) buildAgentChecks() []check {
 	return checks
 }
 
-// --- mcp servers (all mcp: every configured server, connectivity only) ---
+// --- mcp servers (all mcp: every configured server, connectivity AND functionality) ---
 
 type mcpServerResponse struct {
 	ID        string   `json:"id"`
@@ -751,22 +752,54 @@ type mcpServerResponse struct {
 	Args      []string `json:"args"`
 	BaseURL   string   `json:"base_url"`
 	Enabled   bool     `json:"enabled"`
+	// GatedByWebSearch mirrors domain.MCPServer's own field: this
+	// server's tools are only offered to the model on a turn where
+	// web_search=true (see ChatOptions.WebSearch) -- checkToolFunctions
+	// needs to know this to actually offer the tools it's about to ask
+	// the model to call, not just discover them.
+	GatedByWebSearch bool `json:"gated_by_web_search"`
+}
+
+type mcpServerToolInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 type mcpServerTestResponse struct {
-	Tools []struct {
-		Name string `json:"name"`
-	} `json:"tools"`
-	Error string `json:"error,omitempty"`
+	Tools []mcpServerToolInfo `json:"tools"`
+	Error string              `json:"error,omitempty"`
+}
+
+// listServerTools calls the same /admin/api/mcp-servers/test endpoint
+// the "List tools" button on a server's own edit page uses -- a real
+// connect + list-tools round trip against s's OWN stored config (id set,
+// api_key blank falls back to the stored key -- see
+// resolveCandidateMCPServerAPIKey's own doc comment).
+func (c *client) listServerTools(s mcpServerResponse) ([]mcpServerToolInfo, error) {
+	var out mcpServerTestResponse
+	_, err := c.postJSON("/admin/api/mcp-servers/test", map[string]any{
+		"id": s.ID, "name": s.Name, "transport": s.Transport,
+		"command": s.Command, "args": s.Args, "base_url": s.BaseURL, "api_key": "",
+	}, &out)
+	if err != nil {
+		return nil, err
+	}
+	if out.Error != "" {
+		return nil, errors.New(out.Error)
+	}
+	if len(out.Tools) == 0 {
+		return nil, fmt.Errorf("connected but listed zero tools")
+	}
+	return out.Tools, nil
 }
 
 // buildMCPConnectivityChecks lists every admin-configured MCP server
-// (whatever this deployment actually has, not a fixed set of names) and
-// probes each enabled one via the same /admin/api/mcp-servers/test
-// endpoint the "List tools" button on its own edit page uses -- a real
-// connect + list-tools round trip, independent of the chat-flow checks
-// above (which only prove a tool is reachable THROUGH a full turn, not
-// that every configured server is individually healthy).
+// (whatever this deployment actually has, not a fixed set of names) and,
+// for each enabled one, emits two checks: connectivity (can it be
+// reached and does it list tools at all) and functionality (does
+// actually CALLING one of those tools, through a real chat turn, work).
+// Connectivity alone -- the old behavior -- can't tell a genuinely
+// broken tool handler from a healthy one; only a real call can.
 func (c *client) buildMCPConnectivityChecks() []check {
 	var servers []mcpServerResponse
 	if _, err := c.getJSON("/admin/api/mcp-servers", &servers); err != nil {
@@ -775,34 +808,134 @@ func (c *client) buildMCPConnectivityChecks() []check {
 	if len(servers) == 0 {
 		return []check{{"mcp servers: list", func() error { return skip("no MCP servers configured on this deployment") }}}
 	}
-	checks := make([]check, 0, len(servers))
+	checks := make([]check, 0, len(servers)*2)
 	for _, s := range servers {
 		s := s
+		var tools []mcpServerToolInfo
 		checks = append(checks, check{
 			name: fmt.Sprintf("mcp connectivity: %s", s.Name),
 			run: func() error {
 				if !s.Enabled {
 					return skip("disabled")
 				}
-				var out mcpServerTestResponse
-				_, err := c.postJSON("/admin/api/mcp-servers/test", map[string]any{
-					"id": s.ID, "name": s.Name, "transport": s.Transport,
-					"command": s.Command, "args": s.Args, "base_url": s.BaseURL, "api_key": "",
-				}, &out)
+				discovered, err := c.listServerTools(s)
 				if err != nil {
 					return err
 				}
-				if out.Error != "" {
-					return fmt.Errorf("%s", out.Error)
-				}
-				if len(out.Tools) == 0 {
-					return fmt.Errorf("connected but listed zero tools")
-				}
+				tools = discovered // handed to the functionality check below
 				return nil
+			},
+		})
+		checks = append(checks, check{
+			name: fmt.Sprintf("mcp functionality: %s", s.Name),
+			run: func() error {
+				if !s.Enabled {
+					return skip("disabled")
+				}
+				if len(tools) == 0 {
+					return skip("connectivity check didn't discover any tools to call")
+				}
+				return c.checkToolFunctions(s.Name, s.GatedByWebSearch, tools)
 			},
 		})
 	}
 	return checks
+}
+
+// mutatingToolNameSubstrings flags a tool name as likely to have a real,
+// possibly hard-to-clean-up side effect (creating/deleting a resource,
+// installing a package) -- checkToolFunctions skips calling these
+// generically and prefers a read-only-looking one instead, since it has
+// no specific knowledge of what an arbitrary third-party server's own
+// tools actually do.
+var mutatingToolNameSubstrings = []string{"write", "delete", "remove", "clear", "install", "create", "update", "set"}
+
+func looksMutating(name string) bool {
+	lower := strings.ToLower(name)
+	for _, s := range mutatingToolNameSubstrings {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// authRelatedErrorSubstrings mark a tool error as likely caused by this
+// check itself running under an admin session (which has no domain.User
+// row -- see account_files.go's own doc comment -- so a user-scoped tool
+// like mcp-files' has nothing to authenticate with here) rather than a
+// real regression. Treated as a skip, not a failure, when matched.
+var authRelatedErrorSubstrings = []string{"unauthorized", "authentication", "chat_id", "no active", "not configured", "signed-in", "signed in", "no signed"}
+
+func looksAuthRelated(errMsg string) bool {
+	lower := strings.ToLower(errMsg)
+	for _, s := range authRelatedErrorSubstrings {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkToolFunctions actually CALLS one of a server's own discovered
+// tools through a real chat turn -- proving the tool's handler genuinely
+// works, not just that the server is reachable and describes tools it
+// might not actually be able to run. Picks the first tool whose name
+// doesn't look mutating (see looksMutating); with only mutating-looking
+// names to choose from, still calls the first one rather than skipping
+// entirely, since even a "write" tool failing outright is worth knowing
+// about.
+func (c *client) checkToolFunctions(serverName string, gatedByWebSearch bool, tools []mcpServerToolInfo) error {
+	chosen := tools[0]
+	for _, t := range tools {
+		if !looksMutating(t.Name) {
+			chosen = t
+			break
+		}
+	}
+	names := make([]string, len(tools))
+	ownTool := make(map[string]bool, len(tools))
+	for i, t := range tools {
+		names[i] = t.Name
+		ownTool[t.Name] = true
+	}
+	// The prompt suggests a specific tool, but the assertion below accepts
+	// ANY of this server's own tools being called -- a tool needing a
+	// parameter the model can't reasonably invent (e.g. web_fetch's own
+	// URL, with nothing yet fetched to fetch) is a real, expected reason
+	// for the model to reasonably call a different one of the SAME
+	// server's tools instead (confirmed live: asked for "web_fetch",
+	// the model called "web_search" first, which is the more sensible
+	// choice with no URL in hand yet) -- that's still a genuine,
+	// successful functional call to this server, not a failure.
+	prompt := fmt.Sprintf(
+		"You have access to an MCP server named %q whose tools include: %v. "+
+			"Call the %q tool (or, if that one specifically doesn't make sense without more context, "+
+			"whichever of this server's own tools listed above does) with reasonable arguments and "+
+			"report what it returns.",
+		serverName, names, chosen.Name)
+	out, err := c.chatOnce(prompt, chatOptions{webSearch: gatedByWebSearch})
+	if err != nil {
+		return err
+	}
+	var called *string
+	for _, tr := range out.ToolResults {
+		if !ownTool[tr.ToolName] {
+			continue
+		}
+		name := tr.ToolName
+		called = &name
+		if tr.Err != "" {
+			if looksAuthRelated(tr.Err) {
+				return skip(fmt.Sprintf("tool %q errored in a way consistent with this admin session having no user context (%s), not necessarily a real bug -- see the file-based servers' own dedicated user-session checks for a fully authenticated functional test", tr.ToolName, tr.Err))
+			}
+			return fmt.Errorf("tool %q returned an error: %s", tr.ToolName, tr.Err)
+		}
+	}
+	if called == nil {
+		return fmt.Errorf("expected the model to call one of %v, but no matching tool_results entry came back (got %d other tool call(s))", names, len(out.ToolResults))
+	}
+	return nil
 }
 
 // --- admin CRUD smoke tests (scratch rows, created and deleted within the same check) ---
