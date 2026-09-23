@@ -180,6 +180,9 @@ func (r *Repository) migrate(ctx context.Context) error {
 	if err := r.migrateUploadedFileColumns(ctx); err != nil {
 		return err
 	}
+	if err := r.ensureUploadedFilesChatIDIndex(ctx); err != nil {
+		return err
+	}
 	if err := r.ensureHostIndex(ctx); err != nil {
 		return err
 	}
@@ -474,6 +477,20 @@ func (r *Repository) ensureCrawledAtIndex(ctx context.Context) error {
 // pre-existing table from before the column was added.
 func (r *Repository) ensureDocumentAliasHostIndex(ctx context.Context) error {
 	return r.ensureIndex(ctx, "document_aliases", "idx_document_aliases_host", "host")
+}
+
+// ensureUploadedFilesChatIDIndex creates uploaded_files(chat_id)'s index
+// only after migrateUploadedFileColumns guarantees that column exists --
+// the exact same "building it via the static CreateSchemaSQL() list would
+// fail against a pre-existing table from before the column was added" gap
+// ensureDocumentAliasHostIndex's own doc comment already describes, and a
+// real one: it once did live there, and crashed every one of this
+// deployment's binaries at startup against the pre-existing uploaded_files
+// table on se.mo-sys.de's production Postgres DB ("column \"chat_id\" does
+// not exist") the moment chat_id stopped being a brand-new column on a
+// brand-new table (SQLite/CI's own fresh-DB-every-time never hit this).
+func (r *Repository) ensureUploadedFilesChatIDIndex(ctx context.Context) error {
+	return r.ensureIndex(ctx, "uploaded_files", "idx_uploaded_files_chat_id", "chat_id")
 }
 
 // ensureIndex creates a single-column index on table(column) if it doesn't

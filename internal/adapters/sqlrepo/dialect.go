@@ -292,8 +292,11 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			size INTEGER NOT NULL DEFAULT 0, data BLOB NOT NULL,
 			created_at TEXT NOT NULL
 		)`,
+		// idx_uploaded_files_chat_id is deliberately NOT listed here --
+		// see ensureUploadedFilesChatIDIndex's own doc comment for why a
+		// column added via a later ALTER TABLE can never have its index
+		// created unconditionally in this same static list.
 		`CREATE INDEX IF NOT EXISTS idx_uploaded_files_user_id ON uploaded_files(user_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_uploaded_files_chat_id ON uploaded_files(chat_id)`,
 	}
 }
 
@@ -499,8 +502,9 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
 			FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
 		) ENGINE=InnoDB`,
+		// idx_uploaded_files_chat_id is deliberately NOT listed here --
+		// see ensureUploadedFilesChatIDIndex's own doc comment.
 		`CREATE INDEX idx_uploaded_files_user_id ON uploaded_files(user_id)`,
-		`CREATE INDEX idx_uploaded_files_chat_id ON uploaded_files(chat_id)`,
 	}
 }
 
@@ -703,8 +707,9 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			size INT NOT NULL DEFAULT 0, data BYTEA NOT NULL,
 			created_at TEXT NOT NULL
 		)`,
+		// idx_uploaded_files_chat_id is deliberately NOT listed here --
+		// see ensureUploadedFilesChatIDIndex's own doc comment.
 		`CREATE INDEX IF NOT EXISTS idx_uploaded_files_user_id ON uploaded_files(user_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_uploaded_files_chat_id ON uploaded_files(chat_id)`,
 	}
 }
 
