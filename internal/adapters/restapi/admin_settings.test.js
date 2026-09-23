@@ -28,6 +28,7 @@ const FULL_SETTINGS = {
     content_dedup_interval_minutes: 120,
     default_top_k: 10,
     semantic_candidate_pool_size: 200,
+    semantic_rescore_cap: 500,
     ann_search_enabled: true,
     embedding_hash_enabled: true,
     embedding_search_weights: { hash: 1 },
@@ -306,6 +307,28 @@ test('saveSettings posts an unchecked url-alias-www-enabled box as false', async
   };
   await saveSettings();
   assert.equal(gotBody.operational.url_alias_www_enabled, false);
+});
+
+test('applySettings fills the semantic-rescore-cap field from the response', () => {
+  const { applySettings } = loadFixture();
+  applySettings(FULL_SETTINGS);
+  assert.equal(document.getElementById('semantic-rescore-cap').value, '500');
+});
+
+test('saveSettings posts the edited semantic-rescore-cap field', async () => {
+  const { saveSettings } = loadFixture();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  document.getElementById('semantic-rescore-cap').value = '750';
+  let gotBody;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/settings')) {
+      gotBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => FULL_SETTINGS };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  await saveSettings();
+  assert.equal(gotBody.operational.semantic_rescore_cap, 750);
 });
 
 test('applySettings fills the content-dedup fields from the response', () => {

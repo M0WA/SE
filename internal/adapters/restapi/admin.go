@@ -631,11 +631,13 @@ type operationalValues struct {
 	CrawlDelayMs              int    `json:"crawl_delay_ms"`
 	MaxResponseKB             int    `json:"max_response_kb"`
 	SemanticCandidatePoolSize int    `json:"semantic_candidate_pool_size"`
-	DBMaxOpenConns            int    `json:"db_max_open_conns"`
-	DBMaxIdleConns            int    `json:"db_max_idle_conns"`
-	DBConnMaxLifetimeMinutes  int    `json:"db_conn_max_lifetime_minutes"`
-	FuzzyMatchEnabled         bool   `json:"fuzzy_match_enabled"`
-	FuzzyMaxEditDistance      int    `json:"fuzzy_max_edit_distance"`
+	// SemanticRescoreCap mirrors the same-named domain.OperationalSettingsValues field.
+	SemanticRescoreCap       int  `json:"semantic_rescore_cap"`
+	DBMaxOpenConns           int  `json:"db_max_open_conns"`
+	DBMaxIdleConns           int  `json:"db_max_idle_conns"`
+	DBConnMaxLifetimeMinutes int  `json:"db_conn_max_lifetime_minutes"`
+	FuzzyMatchEnabled        bool `json:"fuzzy_match_enabled"`
+	FuzzyMaxEditDistance     int  `json:"fuzzy_max_edit_distance"`
 	// PageRankRecomputeIntervalMinutes is how often cmd/crawl's ticker
 	// recomputes PageRank -- see domain.OperationalSettingsValues.
 	PageRankRecomputeIntervalMinutes int `json:"pagerank_recompute_interval_minutes"`
@@ -692,6 +694,7 @@ func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 		CrawlDelayMs:                     v.CrawlDelayMs,
 		MaxResponseKB:                    v.MaxResponseBytes / 1024,
 		SemanticCandidatePoolSize:        v.SemanticCandidatePoolSize,
+		SemanticRescoreCap:               v.SemanticRescoreCap,
 		DBMaxOpenConns:                   v.DBMaxOpenConns,
 		DBMaxIdleConns:                   v.DBMaxIdleConns,
 		DBConnMaxLifetimeMinutes:         int(v.DBConnMaxLifetime / time.Minute),
@@ -727,6 +730,7 @@ func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 		CrawlDelayMs:                     o.CrawlDelayMs,
 		MaxResponseBytes:                 o.MaxResponseKB * 1024,
 		SemanticCandidatePoolSize:        o.SemanticCandidatePoolSize,
+		SemanticRescoreCap:               o.SemanticRescoreCap,
 		DBMaxOpenConns:                   o.DBMaxOpenConns,
 		DBMaxIdleConns:                   o.DBMaxIdleConns,
 		DBConnMaxLifetime:                time.Duration(o.DBConnMaxLifetimeMinutes) * time.Minute,

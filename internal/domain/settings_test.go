@@ -97,6 +97,22 @@ func TestOperationalSettings_SetPositiveSemanticCandidatePoolSizeIsPreserved(t *
 	}
 }
 
+func TestOperationalSettings_SetZeroSemanticRescoreCapFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{SemanticRescoreCap: 0})
+	if v := s.Get(); v.SemanticRescoreCap != 500 {
+		t.Errorf("expected a zero SemanticRescoreCap to fall back to the default, got %d", v.SemanticRescoreCap)
+	}
+}
+
+func TestOperationalSettings_SetPositiveSemanticRescoreCapIsPreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{SemanticRescoreCap: 1000})
+	if v := s.Get(); v.SemanticRescoreCap != 1000 {
+		t.Errorf("expected SemanticRescoreCap=1000 to be preserved, got %d", v.SemanticRescoreCap)
+	}
+}
+
 func TestOperationalSettings_SetZeroDBPoolFieldsFallBackToDefaults(t *testing.T) {
 	s := domain.DefaultOperationalSettings()
 	s.Set(domain.OperationalSettingsValues{DBMaxOpenConns: 0, DBMaxIdleConns: 0, DBConnMaxLifetime: 0})
@@ -206,6 +222,7 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 		CrawlDelayMs:                     250,
 		MaxResponseBytes:                 5 * 1024 * 1024,
 		SemanticCandidatePoolSize:        200,
+		SemanticRescoreCap:               500,
 		DBMaxOpenConns:                   25,
 		DBMaxIdleConns:                   25,
 		DBConnMaxLifetime:                5 * time.Minute,

@@ -20,6 +20,7 @@
   const contentDedupIntervalEl = document.getElementById('content-dedup-interval');
   const defaultTopKEl = document.getElementById('default-top-k');
   const semanticPoolSizeEl = document.getElementById('semantic-pool-size');
+  const semanticRescoreCapEl = document.getElementById('semantic-rescore-cap');
   const annSearchEnabledEl = document.getElementById('ann-search-enabled');
   const embeddingHashEnabledEl = document.getElementById('embedding-hash-enabled');
   const embeddingSearchWeightsEl = document.getElementById('embedding-search-weights');
@@ -167,6 +168,7 @@
     contentDedupIntervalEl.value = s.operational.content_dedup_interval_minutes;
     defaultTopKEl.value = s.operational.default_top_k;
     semanticPoolSizeEl.value = s.operational.semantic_candidate_pool_size;
+    semanticRescoreCapEl.value = s.operational.semantic_rescore_cap;
     annSearchEnabledEl.checked = s.operational.ann_search_enabled;
     embeddingHashEnabledEl.checked = s.operational.embedding_hash_enabled;
     // Unlike the fields above, 0 here is real and meaningful (title blending disabled -- see
@@ -224,6 +226,7 @@
         content_dedup_interval_minutes: Number.parseInt(contentDedupIntervalEl.value, 10),
         default_top_k: Number.parseInt(defaultTopKEl.value, 10),
         semantic_candidate_pool_size: Number.parseInt(semanticPoolSizeEl.value, 10),
+        semantic_rescore_cap: Number.parseInt(semanticRescoreCapEl.value, 10),
         ann_search_enabled: annSearchEnabledEl.checked,
         embedding_hash_enabled: embeddingHashEnabledEl.checked,
         embedding_search_weights: collectEmbeddingSearchWeights(),

@@ -28,7 +28,11 @@ The number of results returned when a search request doesn't specify its own cou
 
 ## Search: Semantic candidate pool size
 
-Bounds how many documents get scored for semantic similarity per search, regardless of corpus size — default 200. Every BM25 match is always scored in full; this only limits how many additional documents are sampled (or, with ANN on, retrieved via nearest-neighbor) to catch keyword-free semantic matches. Raising it improves recall at the cost of more work per search — on a corpus of millions, this is what keeps semantic scoring fast.
+Bounds how many documents get scored for semantic similarity per search, regardless of corpus size — default 200. Every BM25 match is always scored on keywords in full; this only limits how many *additional* documents are sampled (or, with ANN on, retrieved via nearest-neighbor) to catch keyword-free semantic matches. Raising it improves recall at the cost of more work per search — on a corpus of millions, this is what keeps semantic scoring fast.
+
+## Search: Semantic rescore cap
+
+Of a query's BM25 keyword matches, the most this many (ranked by BM25 score) also get a semantic similarity score — default 500. A common query term matching a large fraction of the corpus (a frequent word across a large crawled site) would otherwise fetch and score every single match's embedding, making that one search very slow. Every BM25 match is still scored and ranked on keywords regardless of this cap — a match just outside it can still rank purely on keyword relevance, it just contributes nothing to the semantic side of that search's blended score. Raise it if semantic re-ranking feels shallow for very common query terms; lower it if those same common-term searches are slow.
 
 ## Search: Use ANN search when available
 

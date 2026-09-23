@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 
 	"searchengine/internal/domain"
@@ -88,6 +89,35 @@ func (s *hybridSearchService) fetchPostings(ctx context.Context, uniqueTerms []s
 	return postingsByTerm, scoringTerm, correctedTerms, nil
 }
 
+// capBM25HitIDsForRescore bounds how many BM25 hits get a semantic score
+// fetched, keeping the top-scoring `limit` by the same BM25 formula ranking
+// uses -- a query term matching a large fraction of the corpus (a common
+// word across a large crawled site) would otherwise force EmbeddingsForDocs
+// to fetch and deserialize every single hit's embedding. BM25-only ranking
+// is unaffected: bm25PerDoc/candidateIDs still hold every hit, so a
+// document cut here is still scored and ranked on keyword relevance --
+// it just contributes 0 to the semantic side, same as any other candidate
+// missing an embedding for a given provider.
+func capBM25HitIDsForRescore(ids []string, bm25PerDoc map[string][]domain.PostingStats, k1, b float64, limit int) []string {
+	if limit <= 0 || len(ids) <= limit {
+		return ids
+	}
+	type scoredID struct {
+		id    string
+		score float64
+	}
+	scored := make([]scoredID, len(ids))
+	for i, id := range ids {
+		scored[i] = scoredID{id: id, score: domain.BM25ScoreDocument(bm25PerDoc[id], k1, b)}
+	}
+	sort.Slice(scored, func(i, j int) bool { return scored[i].score > scored[j].score })
+	out := make([]string, limit)
+	for i := 0; i < limit; i++ {
+		out[i] = scored[i].id
+	}
+	return out
+}
+
 func (s *hybridSearchService) Search(ctx context.Context, query string, opts ports.SearchQuery) ([]domain.HybridResult, error) {
 	parsed := domain.ParseQuery(query)
 	if parsed.Empty() {
@@ -156,6 +186,12 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 		return nil, embedErrs[0]
 	}
 
+	// Fetched here (not down by CombineScores below, where it's also used)
+	// so k1/b are available to cap the semantic-rescore candidate set below
+	// with the exact same BM25 formula final ranking uses.
+	alpha, k1, b := s.settings.Get()
+	pageRankWeight := s.settings.PageRankWeight()
+
 	totalDocs, avgDocLen := s.corpusStats.Get()
 	bm25PerDoc := make(map[string][]domain.PostingStats)
 	// bm25TermsPerDoc parallels bm25PerDoc index-for-index -- PostingStats
@@ -186,6 +222,12 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 	// every BM25 hit plus a fixed-size sample, so a purely semantic match
 	// can still surface without a full scan.
 	bm25HitIDs := mapKeys(bm25PerDoc)
+	// A term matching a large fraction of the corpus would otherwise force
+	// every single hit's embedding to be fetched and deserialized -- keep
+	// only the top-scoring SemanticRescoreCap by BM25 alone. BM25-only
+	// ranking is unaffected: bm25PerDoc/candidateIDs below still hold every
+	// hit regardless of this cap.
+	bm25HitIDs = capBM25HitIDsForRescore(bm25HitIDs, bm25PerDoc, k1, b, opValues.SemanticRescoreCap)
 	// A site:/-site: host may exist only as a document_aliases row now --
 	// expand both lists with the resolved canonical host so the filter
 	// still matches, without touching SiteAllowed itself.
@@ -225,38 +267,67 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 	for id := range bm25PerDoc {
 		candidateIDs[id] = true
 	}
+	// Each active provider's embedding fetch is an independent round trip
+	// (EmbeddingsForDocs plus an ANN/sample fill) -- run them concurrently
+	// rather than paying each provider's latency sequentially, same as the
+	// postings/query-embedding fetch above. Results are merged into
+	// embeddings/candidateIDs only after every goroutine finishes, since
+	// both are plain maps, not safe for concurrent writes.
+	type providerFetchResult struct {
+		provider   string
+		embeddings map[string]domain.EmbeddedVector
+		err        error
+	}
+	resultsCh := make(chan providerFetchResult, len(active))
+	var fetchWG sync.WaitGroup
+	fetchWG.Add(len(active))
 	for provider := range active {
-		providerEmbeddings, err := s.repo.EmbeddingsForDocs(ctx, bm25HitIDs, provider)
-		if err != nil {
-			return nil, err
-		}
-		// Fill the rest of this provider's pool via pgvector ANN when
-		// available, else fall back to bounded brute-force sampling. Every
-		// provider's candidate IDs are unioned below.
-		var sampled map[string]domain.EmbeddedVector
-		if opValues.ANNSearchEnabled {
-			annMatches, ok, annErr := s.repo.TopSemanticMatches(ctx, queryVecs[provider], poolSize, provider)
-			if annErr != nil {
-				return nil, annErr
+		provider := provider
+		go func() {
+			defer fetchWG.Done()
+			providerEmbeddings, err := s.repo.EmbeddingsForDocs(ctx, bm25HitIDs, provider)
+			if err != nil {
+				resultsCh <- providerFetchResult{provider: provider, err: err}
+				return
 			}
-			if ok {
-				sampled = annMatches
+			// Fill the rest of this provider's pool via pgvector ANN when
+			// available, else fall back to bounded brute-force sampling. Every
+			// provider's candidate IDs are unioned below.
+			var sampled map[string]domain.EmbeddedVector
+			if opValues.ANNSearchEnabled {
+				annMatches, ok, annErr := s.repo.TopSemanticMatches(ctx, queryVecs[provider], poolSize, provider)
+				if annErr != nil {
+					resultsCh <- providerFetchResult{provider: provider, err: annErr}
+					return
+				}
+				if ok {
+					sampled = annMatches
+				}
 			}
-		}
-		if sampled == nil {
-			var sampleErr error
-			sampled, sampleErr = s.repo.SampleEmbeddings(ctx, poolSize, provider)
-			if sampleErr != nil {
-				return nil, sampleErr
+			if sampled == nil {
+				var sampleErr error
+				sampled, sampleErr = s.repo.SampleEmbeddings(ctx, poolSize, provider)
+				if sampleErr != nil {
+					resultsCh <- providerFetchResult{provider: provider, err: sampleErr}
+					return
+				}
 			}
-		}
-		for id, vec := range sampled {
-			if _, ok := providerEmbeddings[id]; !ok {
-				providerEmbeddings[id] = vec
+			for id, vec := range sampled {
+				if _, ok := providerEmbeddings[id]; !ok {
+					providerEmbeddings[id] = vec
+				}
 			}
+			resultsCh <- providerFetchResult{provider: provider, embeddings: providerEmbeddings}
+		}()
+	}
+	fetchWG.Wait()
+	close(resultsCh)
+	for res := range resultsCh {
+		if res.err != nil {
+			return nil, res.err
 		}
-		embeddings[provider] = providerEmbeddings
-		for id := range providerEmbeddings {
+		embeddings[res.provider] = res.embeddings
+		for id := range res.embeddings {
 			candidateIDs[id] = true
 		}
 	}
@@ -315,9 +386,6 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 			}
 		}
 	}
-
-	alpha, k1, b := s.settings.Get()
-	pageRankWeight := s.settings.PageRankWeight()
 
 	candidates := make([]domain.HybridResult, 0, len(candidateIDs))
 	for id := range candidateIDs {
