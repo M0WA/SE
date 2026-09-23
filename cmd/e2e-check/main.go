@@ -845,6 +845,19 @@ func (c *client) buildMCPConnectivityChecks() []check {
 				if !s.Enabled {
 					return skip("disabled")
 				}
+				// cmd/mcp-vision's own tools (vision_similarity/vision_caption)
+				// always require a real, previously attached image's file_id --
+				// unlike mcp-files' read_file_base64/list_files, there's no
+				// zero-context call of its own this generic check (no attached
+				// file, no specific agent/prompt) could ever reasonably trigger.
+				// checkImageVision below is the real, fully-attached functional
+				// test for this server; this one would either 404 fetching a
+				// guessed file_id or (as reasonably observed live) have the
+				// model call a DIFFERENT server's tool (e.g. list_files)
+				// instead of guessing -- neither is a regression.
+				if s.Name == "vision" {
+					return skip("vision's own tools all require a real attached image -- see checkImageVision for the real functional test")
+				}
 				if len(tools) == 0 {
 					return skip("connectivity check didn't discover any tools to call")
 				}
@@ -874,11 +887,15 @@ func looksMutating(name string) bool {
 }
 
 // authRelatedErrorSubstrings mark a tool error as likely caused by this
-// check itself running under an admin session (which has no domain.User
-// row -- see account_files.go's own doc comment -- so a user-scoped tool
-// like mcp-files' has nothing to authenticate with here) rather than a
-// real regression. Treated as a skip, not a failure, when matched.
-var authRelatedErrorSubstrings = []string{"unauthorized", "authentication", "chat_id", "no active", "not configured", "signed-in", "signed in", "no signed"}
+// generic check's own lack of realistic context -- running under an admin
+// session (which has no domain.User row -- see account_files.go's own doc
+// comment -- so a user-scoped tool like mcp-files' has nothing to
+// authenticate with here), or calling a tool that needs a real prior
+// attachment (e.g. vision_caption/vision_similarity's file_id, which this
+// check never attaches -- see the file-based servers' own dedicated
+// user-session checks for that) -- rather than a real regression. Treated
+// as a skip, not a failure, when matched.
+var authRelatedErrorSubstrings = []string{"unauthorized", "authentication", "chat_id", "no active", "not configured", "signed-in", "signed in", "no signed", "file not found"}
 
 func looksAuthRelated(errMsg string) bool {
 	lower := strings.ToLower(errMsg)
