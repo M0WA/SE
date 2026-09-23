@@ -12,13 +12,10 @@ import (
 // packFloat32sLE and unpackFloat32sLE are a self-contained (no dependency on
 // sqlrepo's own production code) little-endian packed-binary codec for
 // []float32, deliberately kept local to this benchmark file rather than
-// calling into sqlrepo's internals -- so BenchmarkEmbeddingCodec measures
-// the same "JSON vs packed binary" trade-off regardless of whether
-// documents.embedding has actually been switched over yet, letting this
-// exact benchmark run unchanged before and after that schema/encoding
-// change (see repository.go's SaveDocument/scanEmbeddingRows and
-// dialect.go's documents.embedding column for the real, equivalent
-// production codec once the optimization lands).
+// calling into sqlrepo's internals -- so this JSON-vs-packed-binary
+// comparison stays stable even if the production codec (EncodeEmbedding/
+// DecodeEmbedding in embedding_codec.go, the codec documents.embedding
+// actually uses today) changes shape later.
 func packFloat32sLE(vec []float32) []byte {
 	buf := make([]byte, len(vec)*4)
 	for i, v := range vec {
@@ -52,10 +49,9 @@ func randomEmbedding(rng *rand.Rand, dims int) []float32 {
 // larger-corpus benchmark convention, e.g. BenchmarkDocumentFetch/
 // BenchmarkPostingsFetch's corpusSize). Dimensionality is 128, this
 // codebase's actual embedder default (hashembed.New(128), see
-// cmd/search/main.go/cmd/admin/main.go/cmd/crawl/main.go) -- not the 384
-// this optimization's original proposal assumed (that number describes a
-// different, unrelated real-world embedding model's dimensionality, not
-// anything actually configured in this codebase).
+// cmd/search/main.go/cmd/admin/main.go/cmd/crawl/main.go) -- not the
+// higher dimensionality of some real-world embedding models, which this
+// codebase doesn't use.
 //
 // This isolates the pure codec/format cost (reflection-driven JSON token
 // scanning and strconv per float vs. a fixed 4-byte store/load per float);

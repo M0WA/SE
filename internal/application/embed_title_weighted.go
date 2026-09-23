@@ -8,12 +8,9 @@ import (
 )
 
 // embedTitleWeighted computes a document's embedding as a weighted
-// combination of its title's and body's embeddings, rather than one Embed
-// call against a concatenated string. embed is caller-supplied so each
-// call site can rate-limit-pace the up-to-two calls this can issue.
-// Falls back to a single Embed call when there's nothing real to combine
-// (empty title/body, or titleWeight at 0 or 1) -- so the common case costs
-// exactly the one call this always used to cost.
+// combination of its title's and body's embeddings, rather than one call
+// against a concatenated string. Falls back to a single Embed call when
+// there's nothing to combine (empty title/body, or titleWeight 0 or 1).
 func embedTitleWeighted(ctx context.Context, embed func(context.Context, string) ([]float32, error), title, text string, titleWeight float64) ([]float32, error) {
 	title = strings.TrimSpace(title)
 	text = strings.TrimSpace(text)

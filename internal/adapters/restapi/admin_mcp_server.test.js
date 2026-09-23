@@ -8,10 +8,8 @@ const { teardownDOM, requireFresh } = require('./dom_helper.test_util');
 
 const SERVER_HTML = fs.readFileSync(path.join(__dirname, 'admin_mcp_server.html'), 'utf8');
 
-// admin_mcp_server.js reads its server id (or the literal "new") from
-// window.location.pathname at load time, so it needs a jsdom instance
-// constructed with a specific URL, same reasoning as
-// admin_user.test.js's setupUserDOM.
+// Reads server id (or "new") from window.location.pathname at load time, so needs a jsdom
+// instance with a specific URL -- same as admin_user.test.js's setupUserDOM.
 function setupServerDOM(id) {
   const dom = new JSDOM(SERVER_HTML, { url: 'http://localhost/admin/mcp-servers/' + encodeURIComponent(id) });
   global.window = dom.window;
@@ -256,10 +254,9 @@ test('clicking Delete re-enables the button and alerts on failure', async () => 
   assert.equal(alertMsg, 'Could not delete: in use');
 });
 
-// urlSplitFetch routes GET (load) and POST (list tools) calls to their own
-// implementations, so a test can control each response independently --
-// loadFixture's own default fetchImpl answers every URL identically, which
-// isn't enough once a test cares about the /test probe's own response.
+// urlSplitFetch routes GET (load) and POST (list tools) to separate implementations, since
+// loadFixture's default fetchImpl answers every URL identically -- not enough once a test cares
+// about the /test probe's response.
 function urlSplitFetch(loadImpl, testImpl) {
   return async (url, opts) => {
     if (url.includes('/admin/api/mcp-servers/test')) return testImpl();

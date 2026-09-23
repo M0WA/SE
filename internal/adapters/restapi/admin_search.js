@@ -1,8 +1,6 @@
-  // DEBUG_TOP_K asks the debug endpoint for far more matches than the
-  // public search page's own default_top_k operational setting would (that
-  // setting governs end-user search UX, not this diagnostic tool) --
-  // DEBUG_PAGE_SIZE then paginates the already-fetched results client-side,
-  // the same one-fetch/paginate-locally pattern the Jobs detail table uses.
+  // DEBUG_TOP_K asks for far more matches than default_top_k (which governs end-user UX, not
+  // this diagnostic tool) -- DEBUG_PAGE_SIZE then paginates the fetched results client-side,
+  // same as the Jobs detail table.
   const DEBUG_TOP_K = 5000;
   const DEBUG_PAGE_SIZE = 50;
   let debugResults = [];

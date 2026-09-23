@@ -11,11 +11,9 @@ import (
 )
 
 // requireDockerTests skips real-Docker-dependent tests unless
-// SE_DOCKER_TESTS=1 is set -- same convention as
-// internal/adapters/browserfetcher's requireBrowserTests: these tests
-// spawn real containers (pulling python:3-slim/golang:1-alpine on first
-// run) rather than a fast, hermetic unit test, and not every dev/CI
-// environment has (or should be assumed to have) a usable Docker daemon.
+// SE_DOCKER_TESTS=1 is set (same convention as browserfetcher's
+// requireBrowserTests) -- these spawn real containers, and not every
+// dev/CI environment has a usable Docker daemon.
 func requireDockerTests(t *testing.T) {
 	t.Helper()
 	if os.Getenv("SE_DOCKER_TESTS") == "" {
@@ -72,12 +70,10 @@ func TestRun_Go_CapturesStdout(t *testing.T) {
 	}
 }
 
-// TestRun_MissingImageIsPulledWithoutContaminatingOutput is the direct
-// regression test for a real bug found via CI on a cold runner: without
-// ensureImage, `docker run` auto-pulls a missing image and its progress
-// log lands in the container's own captured stderr, and the pull time
-// eats into Limits.Timeout -- both reproduced here by force-removing the
-// image first.
+// TestRun_MissingImageIsPulledWithoutContaminatingOutput regression-tests a
+// real CI bug: without ensureImage, `docker run` auto-pulls a missing image
+// and its progress log leaks into stderr, and pull time eats into
+// Limits.Timeout -- reproduced by force-removing the image first.
 func TestRun_MissingImageIsPulledWithoutContaminatingOutput(t *testing.T) {
 	requireDockerTests(t)
 	const image = "python:3-slim"
@@ -136,11 +132,9 @@ func TestRun_NetworkAllowedWhenRequested(t *testing.T) {
 	}
 }
 
-// TestRun_PythonPackagesInstalledWhenNetworkEnabled proves RunOptions.
-// Packages actually reaches a real "pip install --target=..." before the
-// script runs, and that the installed package is importable via the
-// PYTHONPATH the install script sets -- "six" is a tiny, pure-Python,
-// dependency-free package, chosen only so this test stays fast.
+// TestRun_PythonPackagesInstalledWhenNetworkEnabled proves
+// RunOptions.Packages reaches a real "pip install --target=..." and the
+// package is importable via PYTHONPATH -- "six" is tiny and dependency-free.
 func TestRun_PythonPackagesInstalledWhenNetworkEnabled(t *testing.T) {
 	requireDockerTests(t)
 	r := New(Limits{Timeout: 30 * time.Second})
@@ -156,12 +150,9 @@ func TestRun_PythonPackagesInstalledWhenNetworkEnabled(t *testing.T) {
 	}
 }
 
-// TestRun_PackagesIgnoredWithoutNetwork proves Packages has no effect at
-// all (no install attempted, plain argv used) when Network is false --
-// mirrors DNS/HostNetwork's own "meaningless without Network" convention.
-// The package would need network to install, so if this silently tried
-// anyway it would hang/fail confusingly rather than just running the code
-// as if Packages were never set.
+// TestRun_PackagesIgnoredWithoutNetwork proves Packages has no effect (no
+// install attempted) when Network is false -- mirrors DNS/HostNetwork's
+// own "meaningless without Network" convention.
 func TestRun_PackagesIgnoredWithoutNetwork(t *testing.T) {
 	requireDockerTests(t)
 	r := New(Limits{})
@@ -178,9 +169,8 @@ func TestRun_PackagesIgnoredWithoutNetwork(t *testing.T) {
 }
 
 // TestRun_GoModulesInstalledWhenNetworkEnabled proves RunOptions.Packages
-// for Go actually reaches a real "go get" (against a throwaway go.mod in
-// /tmp) before "go run" -- rsc.io/quote is the Go project's own canonical
-// minimal test module, chosen only for how small and stable it is.
+// for Go reaches a real "go get" (against a throwaway go.mod) before "go
+// run" -- rsc.io/quote is Go's own small, stable canonical test module.
 func TestRun_GoModulesInstalledWhenNetworkEnabled(t *testing.T) {
 	requireDockerTests(t)
 	r := New(Limits{Timeout: 60 * time.Second})
@@ -204,12 +194,9 @@ func main() { fmt.Println(quote.Hello()) }
 	}
 }
 
-// TestRun_CustomDNSServerAppliedToContainer proves Limits.DNS actually
-// reaches the container as a real --dns flag, not just plumbed-through-
-// but-unused -- read back via /etc/resolv.conf from inside the sandbox
-// itself, the same "prove it with real Docker behavior" bar
-// TestRun_CustomMemoryLimitEnforced/TestRun_CustomPidsLimitEnforced use for
-// their own Limits fields.
+// TestRun_CustomDNSServerAppliedToContainer proves Limits.DNS reaches the
+// container as a real --dns flag, read back via /etc/resolv.conf from
+// inside the sandbox.
 func TestRun_CustomDNSServerAppliedToContainer(t *testing.T) {
 	requireDockerTests(t)
 	r := New(Limits{DNS: []string{"8.8.8.8", "1.1.1.1"}})
@@ -226,22 +213,14 @@ func TestRun_CustomDNSServerAppliedToContainer(t *testing.T) {
 }
 
 // TestRun_HostNetworkSharesHostsNetworkNamespace proves Limits.HostNetwork
-// actually reaches the container as a real --network host flag, not just
-// plumbed-through-but-unused. Deliberately does NOT assert on
-// /etc/resolv.conf content (e.g. "must/must not contain Docker's own
-// 127.0.0.11 embedded DNS server") -- that turned out to be a Docker
-// version/daemon-config-dependent emergent behavior, not a stable
-// contract: on this environment's Docker, even the DEFAULT bridge network
-// already forwards the host's own real upstream DNS servers directly,
-// with no 127.0.0.11 indirection at all, contradicting what was assumed
-// (and briefly asserted here) based on se.mo-sys.de's own older Docker
-// version and generic Docker documentation. Instead this asserts the one
-// thing --network host actually, definitionally means: the container
-// shares the host's network namespace outright, so it sees every one of
-// the host's own network interfaces (loopback plus every real interface,
-// likely several) -- strictly more than a bridge-networked container's
-// fixed two (loopback + one veth pair), regardless of Docker version or
-// DNS daemon configuration.
+// reaches the container as a real --network host flag. Deliberately does
+// NOT assert on /etc/resolv.conf content -- that turned out to be a Docker
+// version/daemon-config-dependent behavior, not a stable contract (this
+// environment's default bridge already forwards real upstream DNS with no
+// 127.0.0.11 indirection). Instead asserts what --network host actually
+// means: the container shares the host's network namespace, seeing every
+// real host interface -- strictly more than a bridge container's fixed two
+// (loopback + one veth pair).
 func TestRun_HostNetworkSharesHostsNetworkNamespace(t *testing.T) {
 	requireDockerTests(t)
 	countInterfaces := "import socket\nprint(len(socket.if_nameindex()))"
@@ -272,8 +251,7 @@ func TestRun_HostNetworkSharesHostsNetworkNamespace(t *testing.T) {
 }
 
 // TestRun_HostNetworkAllowsRealFetch proves a --network host container
-// still genuinely reaches the internet, same bar
-// TestRun_NetworkAllowedWhenRequested holds bridge networking to.
+// still reaches the internet, same bar as bridge networking.
 func TestRun_HostNetworkAllowsRealFetch(t *testing.T) {
 	requireDockerTests(t)
 	r := New(Limits{HostNetwork: true})
@@ -351,10 +329,8 @@ func TestRun_TimeoutCleansUpTheContainer(t *testing.T) {
 	if !res.TimedOut {
 		t.Fatalf("expected TimedOut, got %+v", res)
 	}
-	// The essential non-regression check for Run's own explicit "docker rm
-	// -f" cleanup: a timed-out container must not linger, since
-	// exec.CommandContext killing the `docker run` CLI process does NOT by
-	// itself stop the container it launched (see Run's own comment).
+	// A timed-out container must not linger: killing the `docker run` CLI
+	// process does NOT by itself stop the container (see Run's own comment).
 	out, err := exec.Command("docker", "ps", "-a", "--filter", "name=se-sandbox-", "--format", "{{.Names}}").CombinedOutput()
 	if err != nil {
 		t.Fatalf("listing containers: %v: %s", err, out)
@@ -425,10 +401,8 @@ func TestRun_UnsupportedLanguage(t *testing.T) {
 
 func TestRun_DockerNotOnPATH(t *testing.T) {
 	requireDockerTests(t)
-	// Empties PATH for the duration of this test so exec.CommandContext's
-	// "docker" lookup fails the same way it would on a host that never
-	// installed Docker at all -- proves this surfaces as Run's ordinary
-	// error return, not a panic or a hang.
+	// Empties PATH so the "docker" lookup fails like a host with no Docker
+	// installed -- proves this surfaces as an ordinary error, not a panic.
 	t.Setenv("PATH", t.TempDir())
 	r := New(Limits{})
 	_, err := r.Run(context.Background(), RunOptions{Language: Python, Code: "print(1)"})
@@ -439,11 +413,8 @@ func TestRun_DockerNotOnPATH(t *testing.T) {
 
 // TestLimitedBuffer_Write covers every branch directly and
 // deterministically -- real subprocess output arrives in whatever chunks
-// the OS pipe happens to deliver, which isn't a reliable way to exercise
-// the "already full" branch specifically (see
-// TestRun_OutputTruncatedAcrossMultipleWrites, which covers the
-// through-Run integration but can't guarantee the exact Write call
-// pattern).
+// the OS pipe delivers, not a reliable way to exercise the "already full"
+// branch specifically.
 func TestLimitedBuffer_Write(t *testing.T) {
 	var w limitedBuffer
 	w.limit = 10

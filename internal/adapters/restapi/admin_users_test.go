@@ -27,10 +27,8 @@ type fakeUserStore struct {
 	createErr error
 	updateErr error
 	deleteErr error
-	// getCount counts GetUser calls -- used by chat_test.go's
-	// TestHandleChat_AdminRoleNeverLooksUpAPerUserPrompt to prove a
-	// role=admin session never even attempts a per-user prompt lookup, not
-	// just that the result is empty.
+	// getCount counts GetUser calls -- used by chat_test.go to prove a
+	// role=admin session never even attempts a per-user prompt lookup.
 	getCount int
 }
 
@@ -106,8 +104,7 @@ func (f *fakeUserStore) DeleteUser(ctx context.Context, id string) error {
 }
 
 // testUserPassword/testUserPasswordHash are shared across this file's
-// tests -- bcrypt hashing is deliberately slow, so this is computed once
-// rather than per test.
+// tests -- bcrypt hashing is deliberately slow, so it's computed once.
 const testUserPassword = "correct-horse-battery"
 
 var testUserPasswordHash = mustBcryptHash(testUserPassword)
@@ -125,20 +122,17 @@ func newTestUser(id, username string) domain.User {
 	return domain.User{ID: id, Username: username, PasswordHash: testUserPasswordHash, CreatedAt: now, UpdatedAt: now}
 }
 
-// adminAuthedHandlerWithUsers builds a Handler with both the hardcoded
-// admin account and a fakeUserStore wired in, logged in as the ADMIN (role
-// domain.RoleAdmin) -- the CRUD handler tests below need admin access to
-// manage users. See userAuthedHandler for a session logged in as one of
-// the DB-backed users instead, used by the role-enforcement tests.
+// adminAuthedHandlerWithUsers builds a Handler with the hardcoded admin
+// and a fakeUserStore wired in, logged in as admin, for the CRUD tests
+// below. See userAuthedHandler for a DB-backed user session instead.
 func adminAuthedHandlerWithUsers(t *testing.T, store ports.UserStore) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
 	return adminAuthedHandlerFromConfig(t, restapi.Config{Users: store})
 }
 
-// userAuthedHandler logs in as u (a domain.User whose PasswordHash is
-// testUserPasswordHash, i.e. testUserPassword) via a real POST /login,
-// proving the DB-backed-account login path works end to end, not just
-// that authenticatedRole would theoretically accept it.
+// userAuthedHandler logs in as u via a real POST /login, proving the
+// DB-backed-account login path works end to end, not just that
+// authenticatedRole would theoretically accept it.
 func userAuthedHandler(t *testing.T, store *fakeUserStore, u domain.User) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
 	h := restapi.New(restapi.Config{
@@ -160,9 +154,8 @@ func userAuthedHandler(t *testing.T, store *fakeUserStore, u domain.User) (*rest
 
 // --- Role enforcement: the core security boundary this feature adds ---
 
-// TestRoleEnforcement_AdminSessionReachesBothRouteSets is the most
-// important regression check in this file: introducing regular-user
-// accounts must not narrow the hardcoded admin's own access at all.
+// TestRoleEnforcement_AdminSessionReachesBothRouteSets is the key
+// regression check: regular-user accounts must not narrow admin access.
 func TestRoleEnforcement_AdminSessionReachesBothRouteSets(t *testing.T) {
 	store := &fakeUserStore{}
 	h, cookie := adminAuthedHandlerWithUsers(t, store)
@@ -263,10 +256,8 @@ func TestHandleLogin_DBUserWrongPasswordFails(t *testing.T) {
 }
 
 // TestHandleLogin_UserLookupErrorFailsClosed proves a genuine store error
-// (not ports.ErrUserNotFound) during the DB-user lookup still fails the
-// login attempt (401, same as any other mismatch) rather than erroring out
-// differently or panicking -- authenticatedRole logs it but must never let
-// a lookup failure become an authentication success.
+// during the DB-user lookup still fails login (401) rather than panicking
+// -- authenticatedRole must never let a lookup failure become a success.
 func TestHandleLogin_UserLookupErrorFailsClosed(t *testing.T) {
 	store := &fakeUserStore{getErr: errors.New("db unavailable")}
 	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass, Users: store})
@@ -292,10 +283,8 @@ func TestHandleLogin_UnknownUsernameFails(t *testing.T) {
 }
 
 // TestHandleLogin_NoUsersConfiguredStillAllowsAdmin proves a Handler with
-// no Users store at all (h.users == nil, e.g. crawl-server, or admin-server
-// before this feature) still authenticates the hardcoded admin exactly as
-// before -- the DB-user fallback path must never be reached, let alone
-// panic, when there's no store to reach.
+// h.users == nil (e.g. crawl-server) still authenticates the hardcoded
+// admin as before -- the DB-user fallback path must never panic when unset.
 func TestHandleLogin_NoUsersConfiguredStillAllowsAdmin(t *testing.T) {
 	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
@@ -409,8 +398,7 @@ func TestHandleAdminUsers_CreateShortPasswordRejected(t *testing.T) {
 }
 
 // TestHandleAdminUsers_CreateTooLongPasswordRejected proves a password over
-// bcrypt's own 72-byte hard limit gets a clear 400, not an opaque 500 from
-// bcrypt.GenerateFromPassword's own ErrPasswordTooLong.
+// bcrypt's 72-byte limit gets a clean 400, not an opaque 500.
 func TestHandleAdminUsers_CreateTooLongPasswordRejected(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithUsers(t, &fakeUserStore{})
 	body, _ := json.Marshal(map[string]string{"username": "dave", "password": strings.Repeat("a", 73)})
@@ -423,10 +411,8 @@ func TestHandleAdminUsers_CreateTooLongPasswordRejected(t *testing.T) {
 	}
 }
 
-// TestHandleAdminUsers_CreateReservedAdminUsernameRejected proves a
-// regular-user account can never be created with the same username as the
-// hardcoded admin -- see handleCreateUser's doc comment for why this
-// ambiguity is rejected outright rather than resolved by a precedence rule.
+// TestHandleAdminUsers_CreateReservedAdminUsernameRejected proves a user
+// can't be created with the hardcoded admin's own username.
 func TestHandleAdminUsers_CreateReservedAdminUsernameRejected(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithUsers(t, &fakeUserStore{})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": "a-long-enough-password"})
@@ -791,9 +777,8 @@ func TestHandleAdminUsers_CreateTooLongCustomPromptRejected(t *testing.T) {
 }
 
 // TestHandleAdminUpdateUser_CustomPromptOnlyLeavesPasswordUnchanged proves
-// the admin can edit just the custom prompt without resetting the
-// password -- updateUserRequest's pointer fields mean an omitted password
-// is left alone, not rejected as missing/too-short.
+// the admin can edit just the custom prompt -- an omitted password is left
+// alone, not rejected as missing/too-short.
 func TestHandleAdminUpdateUser_CustomPromptOnlyLeavesPasswordUnchanged(t *testing.T) {
 	u := newTestUser("user1", "alice")
 	originalHash := u.PasswordHash
@@ -816,9 +801,7 @@ func TestHandleAdminUpdateUser_CustomPromptOnlyLeavesPasswordUnchanged(t *testin
 }
 
 // TestHandleAdminUpdateUser_CustomPromptClearedToEmpty proves an explicit
-// empty string actually clears the prompt (distinct from omitting the
-// field entirely, which leaves it unchanged) -- the same pointer-field
-// distinction updateAccountRequest (account.go) relies on.
+// empty string clears the prompt, unlike omitting the field entirely.
 func TestHandleAdminUpdateUser_CustomPromptClearedToEmpty(t *testing.T) {
 	u := newTestUser("user1", "alice")
 	u.CustomPrompt = "Old prompt."

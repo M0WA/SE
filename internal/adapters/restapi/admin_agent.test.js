@@ -8,10 +8,9 @@ const { teardownDOM, requireFresh } = require('./dom_helper.test_util');
 
 const AGENT_HTML = fs.readFileSync(path.join(__dirname, 'admin_agent.html'), 'utf8');
 
-// admin_agent.js reads its agent id (or the literal "new") from
-// window.location.pathname at load time, so it needs a jsdom instance
-// constructed with a specific URL, same reasoning as
-// admin_mcp_server.test.js's setupServerDOM.
+// admin_agent.js reads its agent id (or "new") from window.location.pathname at load time, so
+// this needs a jsdom instance built with a specific URL -- same as admin_mcp_server.test.js's
+// setupServerDOM.
 function setupAgentDOM(id) {
   const dom = new JSDOM(AGENT_HTML, { url: 'http://localhost/admin/agents/' + encodeURIComponent(id) });
   global.window = dom.window;
@@ -38,10 +37,8 @@ const MCP_SERVERS = [
   { id: 'mcp2', name: 'datetime' },
 ];
 
-// urlSplitFetch routes a GET on the agent itself vs. the global MCP server
-// catalog fetch (used to populate the checkbox list) to their own
-// implementations -- mirrors admin_mcp_server.test.js's own helper for the
-// same "one fixture, two distinct endpoints" reason.
+// urlSplitFetch routes the agent GET vs. the MCP catalog GET to separate implementations --
+// mirrors admin_mcp_server.test.js's helper for the same "one fixture, two endpoints" reason.
 function urlSplitFetch(agentImpl, mcpServersImpl) {
   return async (url) => {
     if (url.includes('/admin/api/mcp-servers')) return mcpServersImpl();

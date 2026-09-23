@@ -8,17 +8,14 @@ const { teardownDOM, requireFresh } = require('./dom_helper.test_util');
 
 const RESULT_HTML = fs.readFileSync(path.join(__dirname, 'admin_search_result.html'), 'utf8');
 
-// setupWithQuery mirrors dom_helper.test_util's setupDOM, but this page reads
-// window.location.search at load time (doc_id/q/sort come from the URL, not
-// the DOM) -- setupDOM's fixed 'http://localhost/' has no query string, so
-// this builds its own jsdom instance with one instead.
+// setupWithQuery mirrors setupDOM, but this page reads doc_id/q/sort from window.location.search
+// at load time -- setupDOM's fixed URL has no query string, so this builds its own jsdom instance
+// with one.
 function setupWithQuery(qs) {
   const dom = new JSDOM(RESULT_HTML, { url: 'http://localhost/admin/search/result' + (qs ? '?' + qs : '') });
   global.window = dom.window;
   global.document = dom.window.document;
-  // Node's own getter-only global `navigator` (since Node 21) rejects a
-  // plain assignment in strict mode -- see dom_helper.test_util.js's
-  // setupDOM for the same fix.
+  // navigator is getter-only since Node 21; assignment throws -- see dom_helper.test_util.js's fix.
   Object.defineProperty(global, 'navigator', {
     value: dom.window.navigator, configurable: true, writable: true,
   });

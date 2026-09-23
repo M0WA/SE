@@ -17,24 +17,19 @@ type ScheduledCrawl struct {
 	Cookie        string
 	BasicAuthUser string
 	BasicAuthPass string
-	// LinkScope overrides the Tuning page's global default for how far
-	// this crawl follows discovered links -- "" (domain.LinkScopeDefault)
-	// means "use the global default"; LinkScopeHost/LinkScopeDomain/
-	// LinkScopeAny choose explicitly. See ports.CrawlOptions.LinkScope
-	// (the same field, carried through by application.scheduledCrawlOptions).
+	// LinkScope overrides the Tuning page's global default -- ""
+	// (LinkScopeDefault) means use the global default; see
+	// ports.CrawlOptions.LinkScope.
 	LinkScope string
 	// AllowedDomains/BlockedDomains/FollowIndexedDomains mirror
-	// ports.CrawlOptions' fields of the same name -- see their doc comments
-	// there for the exact allow/block precedence.
+	// ports.CrawlOptions' fields -- see its doc comment for precedence.
 	AllowedDomains       []string
 	BlockedDomains       []string
 	FollowIndexedDomains bool
 	UseSitemap           bool
 	// FetchTimeoutSeconds, MinTextLength, CrawlDelayMs, MaxResponseKB and
-	// PrioritizeUnindexed mirror ports.CrawlOptions' per-crawl overrides --
-	// a scheduled crawl accepts every option a one-off crawl does (0 means
-	// "use whatever's configured on the Tuning page," same as a one-off
-	// crawl leaving these blank).
+	// PrioritizeUnindexed mirror ports.CrawlOptions' per-crawl overrides; 0
+	// means use the Tuning page's configured default.
 	FetchTimeoutSeconds int
 	MinTextLength       int
 	CrawlDelayMs        int
@@ -43,34 +38,25 @@ type ScheduledCrawl struct {
 	Recurring           bool
 	IntervalMinutes     int
 	// MaxRuns caps how many times a recurring schedule repeats before
-	// disabling itself, same as a non-recurring entry already disables
-	// after its one run -- 0 means unlimited (repeats forever until an
-	// admin disables or deletes it). Meaningless for a non-recurring entry,
-	// which already stops after run 1 regardless of this value.
+	// disabling itself. 0 means unlimited. Meaningless for a non-recurring
+	// entry, which always stops after run 1.
 	MaxRuns  int
 	RunCount int
-	// Renderer overrides the Tuning page's global default rendering mode
-	// for this crawl alone -- "" (domain.RendererDefault) means "use the
-	// global default"; RendererNone/RendererChromium/RendererFirefox
-	// choose explicitly. See ports.CrawlOptions.Renderer (the same field,
-	// carried through by application.scheduledCrawlOptions).
+	// Renderer overrides the Tuning page's global rendering mode for this
+	// crawl alone -- "" (RendererDefault) means use the global default; see
+	// ports.CrawlOptions.Renderer.
 	Renderer string
 	// Enabled is purely the admin's on/off toggle -- never flipped just
-	// because a triggered run hasn't finished (see InProgress); only
-	// changes on a genuine end state (toggle, one-off ran, MaxRuns reached).
+	// because a triggered run hasn't finished (see InProgress).
 	Enabled bool
 	// InProgress is true from trigger until the run's onDone callback
-	// clears it -- prevents a slow run from being double-triggered by the
-	// next tick, without (mis)using Enabled as that mutex.
+	// clears it -- prevents double-triggering by the next tick.
 	InProgress bool
-	// JobID is the domain.CrawlJob this schedule's current in-progress run
-	// created, "" whenever InProgress is false. Lets a crash-recovery pass
-	// at crawl-server startup tell "this schedule's job was just resumed
-	// and is genuinely still running" apart from "this schedule's
-	// InProgress flag is stale, its job is long gone" -- see
-	// ports.ScheduledCrawlStore.ResetStaleInProgress's doc comment for the
-	// production incident (two concurrent crawls of the same site) this
-	// distinction exists to prevent.
+	// JobID is the CrawlJob this schedule's current run created, "" when
+	// InProgress is false. Lets crash-recovery tell a resumed, still-running
+	// job apart from a stale InProgress flag -- see
+	// ResetStaleInProgress's doc comment for the incident this prevents
+	// (two concurrent crawls of the same site).
 	JobID     string
 	LastRunAt *time.Time
 	NextRunAt time.Time

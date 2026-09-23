@@ -203,11 +203,9 @@ test('loadRecomputeStatus reports the error message on a failed fetch', async ()
 test('clicking Recompute embeddings posts a start request and then polls for status', async () => {
   let postedURL = null;
   loadFixture();
-  // Let the module's own load-time loadConfig()/loadRecomputeStatus() settle
-  // against loadFixture's default fetch stub first -- otherwise it can
-  // resolve after the click below and clobber the status text it's about
-  // to set, since both write to the same element (see
-  // admin_pagerank.test.js's identical comment on its own poll test).
+  // Let load-time loadConfig()/loadRecomputeStatus() settle against the fetch stub first --
+  // otherwise it can resolve after the click and clobber the status text, since both write the
+  // same element (see admin_pagerank.test.js).
   await new Promise((resolve) => setTimeout(resolve, 0));
   global.fetch = async (url, opts) => {
     if (url === '/admin/api/embeddings/recompute' && opts && opts.method === 'POST') {

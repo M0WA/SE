@@ -7,10 +7,8 @@ const { setupDOM, teardownDOM, requireFresh } = require('./dom_helper.test_util'
 
 const DATABASE_HTML = fs.readFileSync(path.join(__dirname, 'admin_database.html'), 'utf8');
 
-// fetchImpl is installed *before* requireFresh, because admin_database.js
-// calls load() itself at module load time -- setting global.fetch after
-// requiring the module would race the module's own auto-triggered call
-// instead of controlling it.
+// fetchImpl is installed before requireFresh, since admin_database.js calls load() at module-load
+// time -- setting it after would race the module's own auto-triggered call.
 function loadFixture(fetchImpl) {
   setupDOM(DATABASE_HTML);
   const adminHelpers = requireFresh('./admin.js');

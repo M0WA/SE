@@ -13,13 +13,10 @@ import (
 	"searchengine/internal/ports"
 )
 
-// newTestFetcher builds a Fetcher exactly like httpfetcher.New, except with
-// the production SSRF guard (netguard.Transport, see New's doc comment)
-// swapped back out for the plain default transport. Every other test in
-// this file fetches from an httptest.Server, which listens on a loopback
-// address -- the guard is verified against separately, in
-// TestFetcher_Fetch_BlocksLoopbackTarget, and every other test needs the
-// unguarded transport to reach its own local test server at all.
+// newTestFetcher builds a Fetcher like httpfetcher.New but with the
+// production SSRF guard swapped for the plain default transport, so tests
+// can reach their own httptest.Server (loopback); the guard itself is
+// verified separately in TestFetcher_Fetch_BlocksLoopbackTarget.
 func newTestFetcher(settings *domain.OperationalSettings) *httpfetcher.Fetcher {
 	f := httpfetcher.New(settings)
 	f.Client.Transport = http.DefaultTransport
@@ -142,10 +139,7 @@ func TestFetcher_FetchWithOptions_UsesSettingsTimeout(t *testing.T) {
 }
 
 // TestFetcher_FetchWithOptions_PerRequestTimeoutOverridesSettings proves a
-// positive opts.FetchTimeoutSeconds wins over the global setting: a
-// generous global timeout alone would let the slow handler succeed, but a
-// tight per-request override (expressed in whole seconds, the smallest
-// unit FetchTimeoutSeconds carries) must still time it out first.
+// positive opts.FetchTimeoutSeconds wins over a generous global setting.
 func TestFetcher_FetchWithOptions_PerRequestTimeoutOverridesSettings(t *testing.T) {
 	blockUntilTimeout := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

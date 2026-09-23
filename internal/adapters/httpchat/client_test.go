@@ -13,9 +13,8 @@ import (
 	"searchengine/internal/domain"
 )
 
-// erroringBody is an io.ReadCloser whose Read always fails, so a test can
-// exercise Complete's "reading response body" error branch without a real
-// network fault.
+// erroringBody is an io.ReadCloser whose Read always fails, exercising
+// Complete's "reading response body" error branch without a real fault.
 type erroringBody struct{}
 
 func (erroringBody) Read(p []byte) (int, error) { return 0, errors.New("simulated read failure") }
@@ -449,14 +448,10 @@ func TestComplete_NilHTTPClient(t *testing.T) {
 }
 
 // TestComplete_BlocksCloudMetadataEndpoint and
-// TestModelMaxContextTokens_BlocksCloudMetadataEndpoint prove the
-// netguard.ConfiguredEndpointURLAllowed pre-request check (see
-// checkEndpointURL) rejects a BaseURL pointing at the cloud metadata
-// address before ever making the request -- the one class of admin-
-// configured endpoint with no legitimate self-hosted use case (unlike an
-// ordinary private-network address, which a self-hosted deployment
-// legitimately uses -- see TestComplete_Success and friends' use of
-// httptest.NewServer, which listens on loopback).
+// TestModelMaxContextTokens_BlocksCloudMetadataEndpoint prove
+// checkEndpointURL rejects a BaseURL pointing at the cloud metadata
+// address before making the request -- the one endpoint class with no
+// legitimate self-hosted use (unlike an ordinary private address).
 func TestComplete_BlocksCloudMetadataEndpoint(t *testing.T) {
 	c := httpchat.New()
 	endpoint := domain.ChatEndpoint{BaseURL: "http://169.254.169.254", Model: "m"}
@@ -485,9 +480,8 @@ func TestModelMaxContextTokens_BlocksCloudMetadataEndpoint(t *testing.T) {
 }
 
 // TestComplete_SendsToolsAndToolChoiceWhenToolsNonEmpty proves Complete
-// sends the OpenAI-compatible "tools"/"tool_choice" request fields, in the
-// {"type":"function","function":{name,description,parameters}} wire shape,
-// exactly when tools is non-empty.
+// sends "tools"/"tool_choice" in the OpenAI-compatible wire shape exactly
+// when tools is non-empty.
 func TestComplete_SendsToolsAndToolChoiceWhenToolsNonEmpty(t *testing.T) {
 	var gotBody map[string]interface{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -525,10 +519,8 @@ func TestComplete_SendsToolsAndToolChoiceWhenToolsNonEmpty(t *testing.T) {
 }
 
 // TestComplete_OmitsToolsAndToolChoiceWhenToolsEmpty proves Complete omits
-// both the "tools" and "tool_choice" request fields entirely for a nil/
-// empty tools list -- required for compatibility with an OpenAI-compatible
-// endpoint that isn't configured for tool-calling at all (some reject an
-// empty tools array or a tool_choice with nothing to choose from).
+// both fields entirely for a nil/empty tools list -- some OpenAI-compatible
+// servers reject an empty tools array or an empty tool_choice.
 func TestComplete_OmitsToolsAndToolChoiceWhenToolsEmpty(t *testing.T) {
 	var gotBody map[string]interface{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -555,11 +547,9 @@ func TestComplete_OmitsToolsAndToolChoiceWhenToolsEmpty(t *testing.T) {
 	}
 }
 
-// TestComplete_ParsesToolCallsFromResponse proves a response carrying
-// tool_calls (the OpenAI-compatible {id, type, function:{name, arguments}}
-// wire shape) is parsed into domain.ToolCall correctly -- arguments stays
-// the raw JSON-encoded string exactly as the endpoint sent it, not
-// re-parsed.
+// TestComplete_ParsesToolCallsFromResponse proves a tool_calls response is
+// parsed into domain.ToolCall correctly -- arguments stays the raw
+// JSON-encoded string, not re-parsed.
 func TestComplete_ParsesToolCallsFromResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -598,11 +588,8 @@ func TestComplete_ParsesToolCallsFromResponse(t *testing.T) {
 }
 
 // TestComplete_SendsToolCallsAndToolCallIDOnFollowUpMessages proves a
-// domain.ChatMessage carrying ToolCalls (an assistant's own prior tool-call
-// turn) or ToolCallID (a tool-result turn answering one) round-trips onto
-// the wire in the nested {id,type,function:{name,arguments}} shape and the
-// flat tool_call_id field respectively -- the shape ChatService.Chat's
-// follow-up loop re-sends on the next completion call.
+// ChatMessage's ToolCalls/ToolCallID round-trip onto the wire in the
+// nested function shape and flat tool_call_id field respectively.
 func TestComplete_SendsToolCallsAndToolCallIDOnFollowUpMessages(t *testing.T) {
 	var gotBody map[string]interface{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

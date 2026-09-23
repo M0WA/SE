@@ -8,18 +8,14 @@ const { teardownDOM, requireFresh } = require('./dom_helper.test_util');
 
 const SCHEDULE_HTML = fs.readFileSync(path.join(__dirname, 'admin_schedule.html'), 'utf8');
 
-// admin_schedule.js reads its schedule id from window.location.pathname at
-// load time, so (unlike most other pages) it needs a jsdom instance
-// constructed with a specific URL rather than dom_helper.test_util's fixed
-// 'http://localhost/' -- built locally here rather than by changing that
-// shared helper (other pages' tests rely on its current, simpler signature).
+// admin_schedule.js reads its schedule id from window.location.pathname at load time, so it
+// needs a jsdom instance with a specific URL, not dom_helper.test_util's fixed 'http://localhost/'
+// -- built locally rather than changing that shared helper.
 function setupScheduleDOM(scheduleID) {
   const dom = new JSDOM(SCHEDULE_HTML, { url: 'http://localhost/admin/schedule/' + encodeURIComponent(scheduleID) });
   global.window = dom.window;
   global.document = dom.window.document;
-  // Node's own getter-only global `navigator` (since Node 21) rejects a
-  // plain assignment in strict mode -- see dom_helper.test_util.js's
-  // setupDOM for the same fix.
+  // navigator is getter-only since Node 21; assignment throws -- see dom_helper.test_util.js's fix.
   Object.defineProperty(global, 'navigator', {
     value: dom.window.navigator, configurable: true, writable: true,
   });
@@ -88,11 +84,9 @@ test('load() applies the fetched schedule to the form and reveals it', async () 
   assert.equal(meta.includes('Runs so far: 3'), true);
 });
 
-// The server never echoes a stored credential's real value back (see
-// scheduledCrawlResponse) -- these tests prove the form reflects that:
-// blank fields, a placeholder noting a credential is already set, and the
-// "remove" checkboxes only enabled (and never pre-checked) when there's
-// something to remove.
+// The server never echoes a stored credential (see scheduledCrawlResponse) -- these tests prove
+// the form reflects that: blank fields, a placeholder noting one is set, and "remove" checkboxes
+// enabled (never pre-checked) only when there's something to remove.
 test('load() never populates credential fields, even when the schedule has them', async () => {
   loadFixture('sched-1', async () => ({ ok: true, json: async () => baseSchedule() }));
   await flush();
@@ -286,10 +280,9 @@ test('clicking Delete does nothing when the confirm dialog is declined', async (
   assert.equal(deleteCalled, false);
 });
 
-// The success path's window.location.href assignment prints a harmless
-// "Not implemented: navigation" jsdom console error (real navigation isn't
-// supported) -- same jsdom limitation admin.test.js's wireSignOut test
-// notes; it doesn't fail this test, only the redirect itself isn't asserted.
+// window.location.href on success prints a harmless jsdom "Not implemented: navigation" error
+// (real navigation unsupported) -- same limitation admin.test.js's wireSignOut notes; the
+// redirect itself just isn't asserted.
 test('clicking Delete removes the schedule when confirmed', async () => {
   let deletedURL = null;
   loadFixture('sched-1', async () => ({ ok: true, json: async () => baseSchedule() }));

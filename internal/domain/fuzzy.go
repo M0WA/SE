@@ -1,10 +1,8 @@
 package domain
 
-// levenshtein computes the classic edit distance between a and b: the
-// minimum number of single-character insertions, deletions, or
-// substitutions needed to turn a into b. Pure, DB-agnostic, no external
-// dependency -- brute-force Wagner-Fischer DP is more than fast enough at
-// the vocabulary sizes this runs against (see NearestTerm).
+// levenshtein computes the classic edit distance between a and b. Pure,
+// no external dependency -- brute-force Wagner-Fischer DP is fast enough
+// at the vocabulary sizes this runs against (see NearestTerm).
 func levenshtein(a, b string) int {
 	ra, rb := []rune(a), []rune(b)
 	if len(ra) == 0 {
@@ -14,9 +12,7 @@ func levenshtein(a, b string) int {
 		return len(ra)
 	}
 
-	// Two-row rolling DP: prev/cur hold the edit distance between a
-	// prefix of a and a prefix of b, one row of the classic matrix at a
-	// time, rather than the full O(len(a)*len(b)) matrix.
+	// Two-row rolling DP instead of the full O(len(a)*len(b)) matrix.
 	prev := make([]int, len(rb)+1)
 	cur := make([]int, len(rb)+1)
 	for j := range prev {
@@ -47,10 +43,8 @@ func levenshtein(a, b string) int {
 }
 
 // NearestTerm searches vocabulary for the closest term to target within
-// maxDistance Levenshtein edits, for substituting a zero-hit query term
-// into BM25 scoring. Ties go to the more frequent term (see
-// moreFrequent). target itself is never returned (correcting it to
-// itself would be a no-op).
+// maxDistance Levenshtein edits, to substitute for a zero-hit query term in
+// BM25 scoring. Ties go to the more frequent term. target is never returned.
 func NearestTerm(target string, vocabulary []TermStat, maxDistance int) (term string, distance int, found bool) {
 	if maxDistance <= 0 {
 		return "", 0, false
@@ -61,11 +55,8 @@ func NearestTerm(target string, vocabulary []TermStat, maxDistance int) (term st
 		if v.Term == target {
 			continue
 		}
-		// A cheap lower bound on Levenshtein distance is the difference in
-		// length -- skip the full DP whenever that alone already rules the
-		// term out (guaranteed distance > maxDistance), rather than running
-		// Wagner-Fischer for every vocabulary entry regardless of how
-		// obviously distant it is.
+		// Length difference is a cheap lower bound -- skip the full DP
+		// when it alone already rules the term out.
 		if lenDiff := len(v.Term) - len(target); lenDiff > maxDistance || -lenDiff > maxDistance {
 			continue
 		}
@@ -85,10 +76,8 @@ func NearestTerm(target string, vocabulary []TermStat, maxDistance int) (term st
 	return best.Term, bestDist, true
 }
 
-// moreFrequent reports whether candidate should be preferred over current
-// as the more frequent term: higher TotalFreq wins, ties broken by higher
-// DocFreq, final tie broken lexicographically for a fully deterministic
-// choice regardless of vocabulary iteration order.
+// moreFrequent prefers higher TotalFreq, then higher DocFreq, then
+// lexicographic order, for a deterministic choice.
 func moreFrequent(candidate, current TermStat) bool {
 	if candidate.TotalFreq != current.TotalFreq {
 		return candidate.TotalFreq > current.TotalFreq

@@ -1,16 +1,13 @@
 // Package httpembed implements ports.EmbeddingProvider by calling an
-// OpenAI-compatible embeddings HTTP endpoint (a local inference server or a
-// hosted API), so a deployment can opt into a real trained model without
-// this binary taking on an ML runtime dependency. See domain.
-// OperationalSettingsValues.EmbeddingProvider for how a deployment opts in.
+// OpenAI-compatible embeddings HTTP endpoint, so a deployment can opt into
+// a real trained model without this binary taking on an ML runtime
+// dependency (see domain.OperationalSettingsValues.EmbeddingProvider).
 //
-// BaseURL/TokenizeURL are admin-configured, so every outbound call this
-// package makes goes through netguard's more permissive
-// AllowedConfiguredEndpointIP policy (see checkEndpointURL and New's
-// client) -- private/loopback addresses stay allowed, since a self-hosted
-// embeddings backend commonly lives on exactly those, but the cloud
-// metadata address and a few other classes with no legitimate use here
-// are still blocked. Mirrors httpchat's identical SSRF guard exactly.
+// BaseURL/TokenizeURL are admin-configured, so every call goes through
+// netguard's more permissive AllowedConfiguredEndpointIP policy (see
+// checkEndpointURL): private/loopback stays allowed (a self-hosted backend
+// commonly lives there), but cloud metadata and a few other classes are
+// still blocked. Mirrors httpchat's identical SSRF guard.
 package httpembed
 
 import (
@@ -46,11 +43,10 @@ const bearerPrefix = "Bearer "
 // misbehaving or malicious endpoint, not a real limit in practice.
 const maxResponseBytes = 1 << 20
 
-// defaultDimensions matches hashembed's own default, used only when Config
-// leaves Dimensions unset (<=0) -- callers driven by
-// domain.OperationalSettingsValues never hit this, since Set already
-// defaults EmbeddingHTTPDimensions itself, but a directly-constructed
-// Embedder (e.g. in a test) still gets a sane, non-zero value.
+// defaultDimensions matches hashembed's default, used only when Config
+// leaves Dimensions unset -- domain.OperationalSettingsValues-driven
+// callers never hit this (Set already defaults it), but a directly
+// constructed Embedder (e.g. in a test) still gets a sane value.
 const defaultDimensions = 128
 
 // maxTokenizeSplitDepth bounds how many times fitChunkToTokenBudget
@@ -59,39 +55,30 @@ const defaultDimensions = 128
 // (possibly still slightly over-budget) chunk rather than recursing forever.
 const maxTokenizeSplitDepth = 4
 
-// rateLimitMaxRetries bounds how many times Embed/ListModels retries a
-// rate-limited response before giving up -- otherwise a persistently
-// throttled call could stall a caller like RunEmbeddingRecomputeJob, which
-// needs to eventually move on rather than block the corpus on one document.
+// rateLimitMaxRetries bounds Embed/ListModels' retries on a rate-limited
+// response -- otherwise a persistently throttled call could stall a caller
+// like RunEmbeddingRecomputeJob on one document forever.
 const rateLimitMaxRetries = 5
 
 // rateLimitInitialBackoff/rateLimitMaxBackoff bound the exponential
-// backoff used after a 429 -- IONOS's AI Model Hub rate-limit guidance
-// (docs.ionos.com/cloud/ai/ai-model-hub/how-tos/rate-limits) calls for
-// exponential backoff there specifically because 429 carries no
-// server-given delay (unlike 529 -- see retryDelay below).
+// backoff after a 429, per IONOS's AI Model Hub rate-limit guidance --
+// 429 carries no server-given delay, unlike 529 (see retryDelay below).
 const (
 	rateLimitInitialBackoff = 500 * time.Millisecond
 	rateLimitMaxBackoff     = 30 * time.Second
 )
 
-// statusOverloaded is IONOS's "the platform overall is overloaded"
-// status -- distinct from the contract-specific 429, and the one case
-// that does carry a Retry-After the client is expected to honor exactly
-// rather than backing off on its own schedule. Not a named constant in
-// net/http (529 isn't part of the standard HTTP status registry).
+// statusOverloaded is IONOS's "platform overloaded" status -- distinct
+// from 429, and the one case that carries a Retry-After to honor exactly
+// rather than backing off on our own schedule. Not in net/http (not a
+// standard status).
 const statusOverloaded = 529
 
-// checkEndpointURL rejects a BaseURL/TokenizeURL-derived request URL that
-// resolves to an address netguard.AllowedConfiguredEndpointIP blocks
-// (link-local -- covering every cloud provider's metadata service --
-// multicast, or unspecified). BaseURL/TokenizeURL are admin-configured,
-// trusted the same way any other stored config is, but this still guards a
-// real self-hosted deployment against ever pointing its embeddings
-// endpoint at its own cloud metadata endpoint, whether by admin mistake or
-// a compromised admin session -- mirrors httpchat's identically-named
-// helper exactly (see that package for the full rationale and its
-// TestComplete_BlocksCloudMetadataEndpoint-style regression test).
+// checkEndpointURL rejects a BaseURL/TokenizeURL-derived URL that
+// netguard.AllowedConfiguredEndpointIP blocks (link-local, e.g. cloud
+// metadata; multicast; unspecified). Guards against ever pointing the
+// embeddings endpoint at its own cloud metadata service, by admin mistake
+// or a compromised session -- mirrors httpchat's identically-named helper.
 func checkEndpointURL(rawURL string) error {
 	if !netguard.ConfiguredEndpointURLAllowed(rawURL) {
 		return fmt.Errorf("httpembed: endpoint URL is not allowed: %s", rawURL)
@@ -123,9 +110,8 @@ func retryDelay(resp *http.Response, backoff time.Duration) time.Duration {
 	return backoff
 }
 
-// waitForRetry blocks for wait, or returns ctx's error if it's cancelled
-// first -- shared by Embed/ListModels' retry loops so a long backoff
-// never outlives the caller's own context.
+// waitForRetry blocks for wait, or returns ctx's error if cancelled first
+// -- shared by Embed/ListModels so a long backoff never outlives ctx.
 func waitForRetry(ctx context.Context, wait time.Duration) error {
 	select {
 	case <-ctx.Done():
@@ -136,19 +122,17 @@ func waitForRetry(ctx context.Context, wait time.Duration) error {
 }
 
 // rateLimiter paces real HTTP requests against one configured endpoint
-// (see Config.RateLimitPerSecond) so their combined rate -- across every
-// chunk of every document, not just once per Embed call -- respects the
-// endpoint's requests-per-second cap. The zero value is ready to use.
+// (Config.RateLimitPerSecond) so their combined rate, across every chunk
+// of every document, respects the endpoint's requests-per-second cap.
 type rateLimiter struct {
 	mu   sync.Mutex
 	next time.Time
 }
 
-// wait blocks until this call's reserved slot arrives, or returns early if
-// ctx is cancelled (the HTTP call then just fails fast against the same
-// context). ratePerSecond <= 0 disables pacing. Each call atomically
-// reserves the next slot before sleeping outside the lock, so concurrent
-// callers queue up correctly spaced rather than racing on "last call time".
+// wait blocks until this call's reserved slot arrives, or returns early on
+// ctx cancellation. ratePerSecond <= 0 disables pacing. Each call
+// atomically reserves the next slot before sleeping outside the lock, so
+// concurrent callers queue up correctly spaced.
 func (r *rateLimiter) wait(ctx context.Context, ratePerSecond float64) {
 	if ratePerSecond <= 0 {
 		return
@@ -191,18 +175,14 @@ type Config struct {
 	// downstream cosine-similarity calculation. <=0 falls back to
 	// defaultDimensions.
 	Dimensions int
-	// RateLimitMaxRetries/RateLimitInitialBackoff override
-	// rateLimitMaxRetries/rateLimitInitialBackoff -- a test-only hook so
-	// the retry-on-429/529 behavior can be exercised without a real test
-	// waiting out multi-second production backoff delays. Production
-	// callers should leave both at their zero value.
+	// RateLimitMaxRetries/RateLimitInitialBackoff override the package
+	// defaults -- a test-only hook to exercise 429/529 retry behavior
+	// without waiting out real backoff delays. Leave zero in production.
 	RateLimitMaxRetries     int
 	RateLimitInitialBackoff time.Duration
 	// ChunkSizeTokens and TokenizeURL mirror domain.EmbeddingHTTPEndpoint's
-	// same-named fields -- see that type's doc comments for the full
-	// rationale. 0/"" (the zero value) disables chunking entirely,
-	// preserving this package's original single-call-per-Embed behavior
-	// exactly.
+	// same-named fields. Zero value disables chunking, preserving the
+	// original single-call-per-Embed behavior.
 	ChunkSizeTokens int
 	TokenizeURL     string
 	// RateLimitPerSecond mirrors domain.EmbeddingHTTPEndpoint's same-named
@@ -220,22 +200,18 @@ type Embedder struct {
 	model   string
 	dims    int
 	// client's Transport routes every dial through
-	// netguard.ConfiguredEndpointDialContext (see New()), so even a
-	// redirect hop or a DNS answer that changes between check and connect
-	// can't land the connection on a blocked address -- checkEndpointURL's
-	// calls at each request site are the pre-request layer of the same
-	// belt-and-suspenders guard httpchat uses (see that package's
-	// defaultHTTPClient/checkEndpointURL for the full rationale).
+	// netguard.ConfiguredEndpointDialContext, so a redirect hop or a
+	// changed DNS answer can't land on a blocked address --
+	// checkEndpointURL's per-request calls are the pre-request layer of
+	// the same belt-and-suspenders guard httpchat uses.
 	client              *http.Client
 	rateLimitMaxRetries int
 	rateLimitBackoff    time.Duration
 	chunkSizeTokens     int
 	tokenizeURL         string
-	// rateLimitPerSecond is Config.RateLimitPerSecond, read by rate.wait
-	// on every real HTTP request embedChunk/countTokens make (see their
-	// own call sites) -- rate itself is always non-nil (New constructs
-	// it unconditionally), so a <=0 rateLimitPerSecond just means every
-	// rate.wait call is a no-op, not that rate is absent.
+	// rateLimitPerSecond is Config.RateLimitPerSecond, read by rate.wait on
+	// every real request. rate is always non-nil; <=0 just makes rate.wait
+	// a no-op.
 	rateLimitPerSecond float64
 	rate               *rateLimiter
 }
@@ -305,15 +281,13 @@ func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	return combineVectors(vecs), nil
 }
 
-// embedChunk calls the configured embeddings endpoint for one chunk of
-// text (or the whole text, when chunking is disabled) and returns its
-// vector. Any failure (network, non-2xx, malformed JSON, size mismatch)
-// returns a clear wrapped error, never a mis-sized vector. A 429/529 is
-// retried with backoff up to rateLimitMaxRetries times.
+// embedChunk calls the configured embeddings endpoint for one chunk (or
+// the whole text, if chunking is disabled) and returns its vector. Any
+// failure returns a clear wrapped error, never a mis-sized vector. A
+// 429/529 is retried with backoff up to rateLimitMaxRetries times.
 func (e *Embedder) embedChunk(ctx context.Context, text string) ([]float32, error) {
-	// Paced once per chunk, before the first attempt only -- a retried
-	// attempt (429/529) is already paced by embedChunk's own exponential
-	// backoff below, so pacing it again here would double-wait.
+	// Paced once, before the first attempt only -- a retry is already
+	// paced by the backoff below, so pacing again would double-wait.
 	e.rate.wait(ctx, e.rateLimitPerSecond)
 
 	reqBody, err := json.Marshal(embeddingRequest{Input: text, Model: e.model})
@@ -340,11 +314,10 @@ func (e *Embedder) embedChunk(ctx context.Context, text string) ([]float32, erro
 	}
 }
 
-// embedOnce makes a single attempt against the embeddings endpoint.
-// resp is non-nil whenever a real HTTP response was received (even a
-// non-2xx one), so Embed's retry loop can inspect its status/headers;
-// it's nil only for a request-building or network-level failure, which
-// Embed never retries.
+// embedOnce makes a single attempt against the embeddings endpoint. resp
+// is non-nil whenever a real HTTP response was received (even non-2xx), so
+// the retry loop can inspect it; nil only for a build/network failure,
+// which is never retried.
 func (e *Embedder) embedOnce(ctx context.Context, reqBody []byte) ([]float32, *http.Response, error) {
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
@@ -391,11 +364,10 @@ func (e *Embedder) embedOnce(ctx context.Context, reqBody []byte) ([]float32, *h
 }
 
 // chunkText splits text into pieces each estimated (or, with tokenizeURL
-// configured, confirmed) to be at or under e.chunkSizeTokens tokens.
-// Breaks on whitespace where possible; a single over-budget "word" (CJK
-// text, or a long URL/base64 blob) is split on rune boundaries instead (see
-// splitByRuneBudget). Returns text unchanged if chunking is disabled or it
-// already fits.
+// configured, confirmed) to fit e.chunkSizeTokens. Breaks on whitespace
+// where possible; an over-budget "word" (CJK, or a long URL/base64 blob)
+// is split on rune boundaries (splitByRuneBudget). Unchanged if chunking
+// is disabled or it already fits.
 func (e *Embedder) chunkText(ctx context.Context, text string) ([]string, error) {
 	if e.chunkSizeTokens <= 0 {
 		return []string{text}, nil
@@ -423,10 +395,9 @@ func (e *Embedder) chunkText(ctx context.Context, text string) ([]string, error)
 			flush()
 		}
 		if wRunes > charBudget {
-			// A single "word" with no whitespace to split on (CJK text, or
-			// a long URL/base64 blob) -- flush pending text first (this
-			// word starts its own chunk(s)), then split on rune boundaries
-			// so a multi-byte UTF-8 sequence is never severed.
+			// No whitespace to split on (CJK, or a long URL/base64 blob) --
+			// flush pending text first, then split on rune boundaries so a
+			// multi-byte UTF-8 sequence is never severed.
 			flush()
 			chunks = append(chunks, splitByRuneBudget(w, charBudget)...)
 			continue
@@ -439,11 +410,10 @@ func (e *Embedder) chunkText(ctx context.Context, text string) ([]string, error)
 	if e.tokenizeURL == "" {
 		return chunks, nil
 	}
-	// Exact mode: the character estimate above is only a starting point,
-	// deliberately conservative but not infallible (dense-script text like
-	// CJK tokenizes far denser than domain.ApproxCharsPerToken assumes) -- verify
-	// each chunk against the endpoint's own tokenizer and split further
-	// (never trim/discard) anything that measures over budget.
+	// Exact mode: the character estimate is conservative but not infallible
+	// (CJK tokenizes denser than domain.ApproxCharsPerToken assumes) --
+	// verify each chunk against the real tokenizer and split (never
+	// trim/discard) anything over budget.
 	verified := make([]string, 0, len(chunks))
 	for _, c := range chunks {
 		fitted, err := e.fitChunkToTokenBudget(ctx, c, 0)
@@ -456,11 +426,9 @@ func (e *Embedder) chunkText(ctx context.Context, text string) ([]string, error)
 }
 
 // fitChunkToTokenBudget ensures text fits e.chunkSizeTokens per
-// e.tokenizeURL's exact count, recursively halving and re-verifying when
-// it doesn't (never trimming/discarding, which would silently drop
-// content). Prefers splitting on words, falling back to rune count when
-// there's no whitespace left (CJK, or one oversized token). Bounded by
-// maxTokenizeSplitDepth so a pathological chunk can't recurse forever.
+// e.tokenizeURL's exact count, recursively halving when it doesn't (never
+// trimming/discarding). Prefers splitting on words, falling back to rune
+// count when there's no whitespace left. Bounded by maxTokenizeSplitDepth.
 func (e *Embedder) fitChunkToTokenBudget(ctx context.Context, text string, depth int) ([]string, error) {
 	count, err := e.countTokens(ctx, text)
 	if err != nil {
@@ -471,9 +439,8 @@ func (e *Embedder) fitChunkToTokenBudget(ctx context.Context, text string, depth
 	}
 	words := strings.Fields(text)
 	if len(words) < 2 {
-		// No whitespace left to split on (CJK, or an oversized token) --
-		// fall back to splitting by rune count in half, still bounded by
-		// maxTokenizeSplitDepth.
+		// No whitespace left (CJK, or an oversized token) -- split by rune
+		// count in half instead, still bounded by maxTokenizeSplitDepth.
 		runes := []rune(text)
 		if len(runes) < 2 {
 			return []string{text}, nil
@@ -523,21 +490,18 @@ func splitByRuneBudget(s string, maxRunes int) []string {
 	return pieces
 }
 
-// tokenizeRequest/tokenizeResponse mirror vLLM's own POST /tokenize
-// contract ({"model":..., "prompt": text} -> {"count": N, ...}) -- the one
-// HTTP embedding backend this package has confirmed exposes an equivalent
-// route (see domain.EmbeddingHTTPEndpoint.TokenizeURL's doc comment on
-// why this is explicit admin config, never auto-detected/guessed).
+// tokenizeRequest/tokenizeResponse mirror vLLM's POST /tokenize contract
+// ({"model":..., "prompt": text} -> {"count": N, ...}) -- the one backend
+// confirmed to expose this (see domain.EmbeddingHTTPEndpoint.TokenizeURL
+// on why it's explicit admin config, never auto-detected).
 type tokenizeRequest struct {
 	Model  string `json:"model,omitempty"`
 	Prompt string `json:"prompt"`
 }
 
-// Count is a pointer so a response missing the field entirely (a schema
-// mismatch on a misconfigured tokenize_url) is distinguishable from a
-// genuine count of 0 -- json.Unmarshal leaves it nil either way, but a
-// plain int would silently read as 0, which fitChunkToTokenBudget would
-// treat as "fits", the opposite of failing closed on a bad response.
+// Count is a pointer so a missing field (misconfigured tokenize_url) is
+// distinguishable from a genuine 0 -- a plain int would silently read as
+// 0, which fitChunkToTokenBudget would wrongly treat as "fits".
 type tokenizeResponse struct {
 	Count *int `json:"count"`
 }

@@ -31,8 +31,8 @@
   const runNowBtn = document.getElementById('schedule-run-now-btn');
   const deleteBtn = document.getElementById('schedule-delete-btn');
 
-  // linesToText/parseLines now live in admin.js, shared with every other
-  // page that has a one-value-per-line <textarea> field.
+  // linesToText/parseLines live in admin.js, shared with every page that
+  // has a one-value-per-line <textarea> field.
 
   function applySchedule(s) {
     titleEl.textContent = seedSummary(s.seed_urls);
@@ -53,13 +53,9 @@
     prioritizeUnindexedEl.checked = s.prioritize_unindexed;
     rendererEl.value = s.renderer || '';
     userAgentEl.value = s.user_agent || '';
-    // The server never echoes a stored cookie/basic-auth value back (see
-    // scheduledCrawlResponse) -- these fields always start blank, and
-    // saving with them left blank keeps whatever credential is already
-    // stored (see requestBody). has_cookie/has_basic_auth only drive the
-    // placeholder text and the "remove" checkboxes' availability, so the
-    // admin can see whether a credential is set without ever seeing its
-    // value.
+    // Server never echoes a stored cookie/basic-auth value (see scheduledCrawlResponse); fields
+    // start blank, and blank on save keeps the stored credential (see requestBody).
+    // has_cookie/has_basic_auth only drive the placeholder/remove-checkbox UI.
     cookieEl.value = '';
     cookieEl.placeholder = s.has_cookie ? '(unchanged — a cookie is already set)' : 'session=abc123';
     clearCookieEl.checked = false;
@@ -81,12 +77,9 @@
     form.hidden = false;
   }
 
-  // requestBody mirrors crawl.html's scheduledCrawlRequest construction --
-  // PATCH is a full replace for every field except the credential ones:
-  // cookie/basic_auth_user/basic_auth_pass left blank means "leave the
-  // stored credential unchanged" (see applySchedule's comment on why the
-  // form can't pre-fill them), and clear_cookie/clear_basic_auth are the
-  // explicit way to actually remove one.
+  // requestBody mirrors crawl.html's construction -- PATCH fully replaces every field except
+  // credentials: blank cookie/basic_auth_* means "leave unchanged" (see applySchedule), and
+  // clear_cookie/clear_basic_auth are the explicit way to remove one.
   function requestBody() {
     return {
       seed_urls: parseLines(seedURLsEl.value),

@@ -1,7 +1,5 @@
-// Package mcpclient implements ports.MCPToolProvider by connecting to
-// admin-configured domain.MCPServer rows as a real MCP (Model Context
-// Protocol) client, using the official
-// github.com/modelcontextprotocol/go-sdk.
+// Package mcpclient implements ports.MCPToolProvider, connecting to
+// admin-configured domain.MCPServer rows via github.com/modelcontextprotocol/go-sdk.
 package mcpclient
 
 import (
@@ -23,23 +21,14 @@ import (
 )
 
 // connectTimeout bounds how long connecting to (and initializing a session
-// with, and listing tools from) one configured server may take -- mirrors
-// hookrunner's own former default timeout, for the same "don't let one
-// misbehaving dependency hang a whole chat turn" reason.
+// with, and listing tools from) one configured server may take -- so one
+// misbehaving dependency can never hang a whole chat turn.
 const connectTimeout = 10 * time.Second
 
-// callTimeout bounds a single CallTool round-trip once connected -- the
-// outer ceiling a server's own tool logic (e.g. dockersandbox's
-// admin-configured Limits.Timeout, via an MCPServer row's -timeout Args)
-// can never exceed, since its context is derived from this one. 10s
-// turned out too tight for cmd/mcp-sandbox's run_go: even with its Docker
-// image already cached, "go run" recompiling the standard library from
-// scratch (no build cache persists across a fresh, ephemeral container)
-// measured ~12s on the real se.mo-sys.de deployment -- confirmed live,
-// not a hypothetical. 60s matches httpchat's own requestTimeout for a
-// chat completion call, so this stays within the same order of "how long
-// one step of a chat turn may reasonably take" this codebase already
-// accepts elsewhere.
+// callTimeout bounds a single CallTool round-trip -- the ceiling a server's
+// own tool logic can never exceed. 10s measured too tight for
+// cmd/mcp-sandbox's run_go (a cold "go run" recompiling stdlib took ~12s on
+// se.mo-sys.de); 60s matches httpchat's own chat-completion timeout.
 const callTimeout = 60 * time.Second
 
 // implementationName/Version identify this client to every server it
@@ -126,16 +115,10 @@ func connect(ctx context.Context, s domain.MCPServer, env map[string]string) (*s
 	var transport mcp.Transport
 	switch s.Transport {
 	case "stdio":
-		// Defense-in-depth, independent of ChatService.Chat's own filter
-		// (which already never lets a SelfService row reach here with
-		// "stdio" transport -- see its own doc comment): this package
-		// refuses to spawn a real local process for a personal server on
-		// its own terms too, rather than trusting a caller's filter to
-		// never regress. "stdio" execution is an admin-only trust tier
-		// (see domain.MCPServer.Command's own doc comment) -- a genuine,
-		// deliberate elevation for a row an admin configured, but one a
-		// regular user's own self-service row must never reach, however
-		// it got here.
+		// Defense-in-depth: "stdio" spawns a real local process, an
+		// admin-only trust tier (see domain.MCPServer.Command). Refuse it
+		// here for a self-service row too, rather than trusting
+		// ChatService.Chat's own filter alone to never regress.
 		if s.SelfService {
 			return nil, fmt.Errorf("mcpclient: refusing \"stdio\" transport for a self-service (non-admin) server (id=%q)", s.ID)
 		}
@@ -146,15 +129,10 @@ func connect(ctx context.Context, s domain.MCPServer, env map[string]string) (*s
 		}
 		transport = &mcp.CommandTransport{Command: cmd}
 	case "http":
-		// Same belt-and-suspenders guard as httpchat/httpembed's own
-		// admin-configured BaseURL (see netguard.ConfiguredEndpointURLAllowed's
-		// doc comment): a pre-flight check here, plus routing every dial
-		// (including a redirect hop) through ConfiguredEndpointTransport below,
-		// which is what actually closes the DNS-rebinding TOCTOU gap a
-		// pre-flight check alone can't. This server config is admin-trusted
-		// today, but per-user MCP servers (self-service, http-only) will reuse
-		// this same connect path, so the guard belongs here rather than at
-		// each caller.
+		// Same belt-and-suspenders SSRF guard as httpchat/httpembed: a
+		// pre-flight check here plus routing every dial through
+		// ConfiguredEndpointTransport below, which closes the
+		// DNS-rebinding TOCTOU gap a pre-flight check alone can't.
 		if !netguard.ConfiguredEndpointURLAllowed(s.BaseURL) {
 			return nil, fmt.Errorf("mcpclient: endpoint URL is not allowed: %s", s.BaseURL)
 		}
@@ -197,15 +175,12 @@ func (s *Session) CallTool(ctx context.Context, toolName, argumentsJSON string) 
 		return "", fmt.Errorf("mcpclient: no active tool named %q", toolName)
 	}
 
-	// SECURITY: argumentsJSON comes from the model's own OUTPUT, which can
-	// itself be influenced by untrusted web content when search context is
-	// enabled (indirect prompt injection, same as the former hookrunner's
-	// own security note). It is parsed as a plain JSON object and handed
-	// to the MCP session as structured arguments -- never interpolated
-	// into a shell command, a path, or a URL by this package; whatever
-	// the connected server's own tool handler does with each argument
-	// value is that server's responsibility, same trust boundary as any
-	// other admin-configured tool provider.
+	// SECURITY: argumentsJSON comes from the model's own output, which can be
+	// influenced by untrusted web content (indirect prompt injection). It's
+	// parsed as plain JSON and handed to the MCP session as structured
+	// arguments, never interpolated into a shell command, path, or URL here;
+	// the connected server's own handler is responsible for what it does
+	// with each value.
 	var args map[string]any
 	if argumentsJSON != "" {
 		if err := json.Unmarshal([]byte(argumentsJSON), &args); err != nil {
@@ -213,12 +188,8 @@ func (s *Session) CallTool(ctx context.Context, toolName, argumentsJSON string) 
 		}
 	}
 
-	// Every MCP tool call is logged the same way regardless of which
-	// server or tool it names -- there's nothing web_search/web_fetch-
-	// specific to single out now that they're MCP tools like any other
-	// (mcp-web, mcp-sandbox, mcp-files, or a third-party server an admin
-	// configures); one log line per call keeps every tool's usage visible
-	// in the same place, not just the built-in ones.
+	// Every MCP tool call is logged the same way regardless of server/tool,
+	// so usage stays visible in one place rather than just the built-ins.
 	callCtx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 	result, err := conn.session.CallTool(callCtx, &mcp.CallToolParams{Name: toolName, Arguments: args})
@@ -235,12 +206,9 @@ func (s *Session) CallTool(ctx context.Context, toolName, argumentsJSON string) 
 	return text, nil
 }
 
-// flattenContent joins every TextContent block in content into one string
-// -- the only content type the tools this codebase configures (mcp-web,
-// and any future first-party/third-party MCP server) are expected to
-// return; a non-text block (image/audio/embedded resource) is silently
-// skipped rather than erroring the whole call, since a chat turn can only
-// feed text back to the model anyway.
+// flattenContent joins every TextContent block into one string -- the only
+// content type this codebase's tools return; a non-text block is silently
+// skipped rather than erroring, since a chat turn can only feed text back.
 func flattenContent(content []mcp.Content) string {
 	var b strings.Builder
 	for _, c := range content {

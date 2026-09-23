@@ -2,11 +2,11 @@
 
 [← Manual home](README.md)
 
-This is the ordered install flow for a fresh Debian/Ubuntu host, for whoever is standing up a new deployment rather than using an existing one. Steps 1-2 and the underlying package/service setup are handled automatically by the `.deb`; everything from nginx onward is a manual step the package deliberately does not perform.
+The ordered install flow for a fresh Debian/Ubuntu host, for standing up a new deployment. Steps 1-2 are handled automatically by the `.deb`; everything from nginx onward is a manual step the package deliberately skips.
 
 ## 1. Install prerequisite OS packages
 
-The `.deb`'s `Depends` is just `libc6`; its `Recommends` pulls in the GTK/Cairo/NSS shared libraries Playwright's Chromium/Firefox rendering needs.
+The `.deb`'s `Depends` is just `libc6`; `Recommends` pulls in the GTK/Cairo/NSS libraries Playwright's Chromium/Firefox rendering needs.
 
 ```
 apt-get update && apt-get install ./searchengine_<version>_amd64.deb
@@ -18,18 +18,18 @@ Skip them with `--no-install-recommends` if crawls will only ever use the defaul
 
 ## 2. Install the .deb package
 
-Handled automatically by the package. `dpkg` installs the three binaries (`/usr/bin/searchengine-{search,admin,crawl}`), the three systemd units, and a template `/etc/searchengine/searchengine.env`.
+Handled by the package. `dpkg` installs the three binaries (`/usr/bin/searchengine-{search,admin,crawl}`), their systemd units, and a template `/etc/searchengine/searchengine.env`.
 
 ```
 dpkg -i searchengine_<version>_amd64.deb
 # postinst prints: "searchengine installed. Services: searchengine-search, searchengine-admin, searchengine-crawl"
 ```
 
-`postinst` creates a system user `searchengine` (no login shell, no home dir), chowns/chmods (`640`) `searchengine.env` to that user, creates `/var/lib/searchengine` and its `tmp` subdirectory (Playwright's `TMPDIR`), and enables/starts all three services.
+`postinst` creates a system user `searchengine` (no shell, no home dir), chmods `searchengine.env` to `640` for that user, creates `/var/lib/searchengine` and its `tmp` subdirectory (Playwright's `TMPDIR`), and enables/starts all three services.
 
 ## 3. Expect the services to come up unconfigured
 
-Expected, not a packaging bug. The shipped `searchengine.env` points at a local SQLite file and has blank admin credentials, so admin sign-in fails closed until they're set.
+Expected, not a bug. The shipped `searchengine.env` points at a local SQLite file with blank admin credentials, so admin sign-in fails closed until they're set.
 
 ```
 systemctl status searchengine-search searchengine-admin searchengine-crawl
@@ -38,7 +38,7 @@ journalctl -u searchengine-admin -n 50
 
 ## 4. Set the database driver and connection string
 
-Edit `/etc/searchengine/searchengine.env` (mode `640`, already owned by `searchengine:searchengine`). All three binaries share one database and ping it as part of `/healthz`.
+Edit `/etc/searchengine/searchengine.env` (mode `640`, already owned by `searchengine:searchengine`). All three binaries share one database, pinged as part of `/healthz`.
 
 ```
 # SQLite (default, already works out of the box):
@@ -52,7 +52,7 @@ DB_DSN=postgres://user:pass@dbhost:5432/searchengine?sslmode=require
 
 ## 5. Set the admin username and password
 
-Until both are non-empty, sign-in to `/admin` always refuses -- the single most common reason a fresh install "looks broken."
+Until both are non-empty, `/admin` sign-in always refuses -- the most common reason a fresh install "looks broken."
 
 ```
 ADMIN_USER=admin
@@ -70,7 +70,7 @@ SETTINGS_ENCRYPTION_KEY=$(openssl rand -hex 32)
 
 ## 7. Restart and verify
 
-`EnvironmentFile` changes need a restart -- systemd doesn't hot-reload them.
+`EnvironmentFile` changes need a restart -- systemd doesn't hot-reload it.
 
 ```
 systemctl restart searchengine-search searchengine-admin searchengine-crawl
@@ -82,7 +82,7 @@ curl -s http://127.0.0.1:8082/healthz
 
 ## 8. Install and configure nginx
 
-The `.deb` never touches nginx. All three services bind loopback-only by design; nginx is the only intended entry point. `packaging/nginx/searchengine.conf` is the tracked source of truth for the routing split -- see [packaging/nginx/README.md](https://github.com/M0WA/SE/blob/main/packaging/nginx/README.md) for the gotcha about `/admin` being a plain string-prefix match.
+The `.deb` never touches nginx. All three services bind loopback-only by design; nginx is the only intended entry point. `packaging/nginx/searchengine.conf` is the tracked source of truth for the routing split -- see [packaging/nginx/README.md](https://github.com/M0WA/SE/blob/main/packaging/nginx/README.md) for the `/admin` string-prefix-match gotcha.
 
 ```
 apt-get install nginx certbot python3-certbot-nginx
@@ -131,7 +131,7 @@ promtool check config /etc/prometheus/prometheus.yml
 
 ## 12. (Optional) Stand up SearXNG
 
-Docker-based, for the chat feature's live web search. See [packaging/searxng/README.md](https://github.com/M0WA/SE/blob/main/packaging/searxng/README.md). Includes `searchengine`, a custom SearXNG engine ([packaging/searxng-engine/README.md](https://github.com/M0WA/SE/blob/main/packaging/searxng-engine/README.md)) that folds this deployment's own indexed corpus into the blended results.
+Docker-based, for the chat feature's live web search. See [packaging/searxng/README.md](https://github.com/M0WA/SE/blob/main/packaging/searxng/README.md). Includes `searchengine`, a custom SearXNG engine ([packaging/searxng-engine/README.md](https://github.com/M0WA/SE/blob/main/packaging/searxng-engine/README.md)) folding this deployment's own indexed corpus into the blended results.
 
 ```
 apt-get install docker.io docker-compose
@@ -187,11 +187,11 @@ done
 
 ## 16. (Optional) Configure the built-in MCP tool servers
 
-The `.deb` already installs `/usr/bin/searchengine-mcp-{web,datetime,sandbox,files}` -- nothing to copy or chmod. None is a systemd service: search-server/admin-server spawn one on demand as a stdio subprocess whenever an MCP server row on the [MCP servers](mcp-servers.md) page points at it. `mcp-sandbox` additionally needs the `searchengine` service user in the host's `docker` group (`usermod -aG docker searchengine` then restart the services) -- a real, deliberate privilege elevation the package never grants automatically. See the [MCP servers](mcp-servers.md) page for what each built-in server does and how to add a row for it.
+The `.deb` already installs `/usr/bin/searchengine-mcp-{web,datetime,sandbox,files}` -- nothing to copy or chmod. None is a systemd service: search-server/admin-server spawn one on demand as a stdio subprocess whenever an MCP server row on [MCP servers](mcp-servers.md) points at it. `mcp-sandbox` additionally needs the `searchengine` user in the host's `docker` group (`usermod -aG docker searchengine`, then restart the services) -- a deliberate privilege elevation the package never grants automatically. See [MCP servers](mcp-servers.md) for what each built-in server does and how to add a row for it.
 
 ## 17. (Optional) Configure an embedding and chat inference backend
 
-The [Embedding endpoints](embedding-endpoint-detail.md) and [Chat settings](chat-settings.md) pages each point at a plain OpenAI-compatible HTTP endpoint -- any such API works, self-hosted or third-party. As a concrete reference, the project's own dev deployment points both at self-hosted [vLLM](https://github.com/vllm-project/vllm) processes on a separate GPU host:
+[Embedding endpoints](embedding-endpoint-detail.md) and [Chat settings](chat-settings.md) each point at a plain OpenAI-compatible HTTP endpoint -- any such API works, self-hosted or third-party. As a concrete reference, the project's own dev deployment points both at self-hosted [vLLM](https://github.com/vllm-project/vllm) processes on a separate GPU host:
 
 ```
 # Embeddings: Alibaba-NLP/gte-Qwen2-7B-instruct

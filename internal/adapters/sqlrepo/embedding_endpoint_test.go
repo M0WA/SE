@@ -240,9 +240,7 @@ func reopenSQLiteTestRepo(t *testing.T, dsn string) *sqlrepo.Repository {
 // single-HTTP-endpoint feature (flat EmbeddingHTTPBaseURL/Model/APIKey/
 // Dimensions/Enabled fields on OperationalSettingsValues, before those were
 // replaced by this table) must not silently lose that live config across
-// the upgrade -- see the migration's own doc comment for why this mirrors
-// the PR #60 precedent (protect an existing live config across a breaking
-// settings change).
+// the upgrade -- see the migration's own doc comment.
 func TestMigrateLegacyHTTPEmbeddingConfig_CreatesEndpointFromPreExistingSettings(t *testing.T) {
 	// The legacy shape is simulated as a raw JSON blob with the old field
 	// names -- domain.OperationalSettingsValues no longer has these fields

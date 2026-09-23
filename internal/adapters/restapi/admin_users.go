@@ -12,20 +12,16 @@ import (
 	"searchengine/internal/ports"
 )
 
-// minUserPasswordLength is enforced on both account creation and a
-// password reset -- a floor against a trivially guessable password, not a
-// full strength policy.
+// minUserPasswordLength is enforced on creation and reset -- a floor
+// against trivially guessable passwords, not a full strength policy.
 const minUserPasswordLength = 8
 
-// maxUserPasswordLength mirrors bcrypt.GenerateFromPassword's own hard
-// limit (bcrypt.ErrPasswordTooLong, >72 bytes) -- checked explicitly here
-// so a too-long password gets a clear 400 like every other validation
-// failure, rather than bcrypt's own error surfacing as an opaque 500.
+// maxUserPasswordLength mirrors bcrypt's own hard limit (>72 bytes) --
+// checked here so an over-long password gets a clean 400, not bcrypt's own 500.
 const maxUserPasswordLength = 72
 
-// msgUserNotFound is the shared 404 body for every user-lookup path
-// (get/update/delete), mirroring msgAgentNotFound/msgMCPServerNotFound in
-// admin.go.
+// msgUserNotFound is the shared 404 body for every user-lookup path,
+// mirroring msgAgentNotFound/msgMCPServerNotFound in admin.go.
 const msgUserNotFound = "user not found"
 
 // validateUserPassword enforces min/max length, shared by account
@@ -42,12 +38,9 @@ func validateUserPassword(w http.ResponseWriter, password string) bool {
 	return true
 }
 
-// userResponse is the wire shape for a domain.User -- PasswordHash is
-// NEVER included, on create, list, get, or update; there is no wire
-// representation of it at all. CustomPrompt is included here (unlike the
-// self-service accountResponse in account.go, which this mirrors) so the
-// admin-only per-user edit subpage (/admin/users/{id}) can view and change
-// it on a user's behalf, same as the user can themselves via /account.
+// userResponse is the wire shape for a domain.User -- PasswordHash is never
+// included anywhere. CustomPrompt is included, unlike accountResponse
+// (account.go), so the admin edit subpage can view/change it on a user's behalf.
 type userResponse struct {
 	ID           string    `json:"id"`
 	Username     string    `json:"username"`
@@ -60,10 +53,8 @@ func toUserResponse(u domain.User) userResponse {
 	return userResponse{ID: u.ID, Username: u.Username, CustomPrompt: u.CustomPrompt, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt}
 }
 
-// createUserRequest's CustomPrompt is optional and plain (not a pointer,
-// unlike updateUserRequest's) -- there's no "omitted vs explicitly empty"
-// ambiguity to preserve on a brand new row, an absent value is simply
-// empty either way.
+// createUserRequest's CustomPrompt is a plain string, not a pointer like
+// updateUserRequest's -- no "omitted vs explicitly empty" ambiguity on a new row.
 type createUserRequest struct {
 	Username     string `json:"username"`
 	Password     string `json:"password"`
@@ -71,13 +62,11 @@ type createUserRequest struct {
 }
 
 // updateUserRequest uses pointer fields for the same reason
-// updateAccountRequest (account.go) does: "omitted" (nil) and "explicitly
-// cleared to empty string" must be distinguishable for CustomPrompt, and a
-// present-but-invalid Password must be rejected (400), never silently
-// ignored. Username is never editable once created -- a User's ID is
-// minted from it at creation time (domain.NewUserID, same convention as
-// domain.NewMCPServerID); changing it afterward would orphan the original
-// ID a session's user_id/log lines still reference.
+// updateAccountRequest does: "omitted" vs "cleared to empty" must be
+// distinguishable for CustomPrompt, and an invalid Password is rejected
+// (400), never ignored. Username is never editable -- a User's ID is
+// minted from it at creation (domain.NewUserID), so renaming would orphan
+// the ID sessions/logs still reference.
 type updateUserRequest struct {
 	Password     *string `json:"password"`
 	CustomPrompt *string `json:"custom_prompt"`
@@ -114,11 +103,8 @@ func (h *Handler) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "username must not be empty", http.StatusBadRequest)
 		return
 	}
-	// A regular-user account sharing the hardcoded admin's own username
-	// would be ambiguous at login time (which of the two accounts did a
-	// submitted username/password pair mean?) -- reject it outright rather
-	// than define a precedence rule for something that should never
-	// legitimately happen.
+	// A user sharing the hardcoded admin's username would be ambiguous at
+	// login time -- reject it outright rather than define a precedence rule.
 	if h.adminUser != "" && username == h.adminUser {
 		http.Error(w, "username is reserved for the admin account", http.StatusBadRequest)
 		return
@@ -157,9 +143,8 @@ func (h *Handler) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, toUserResponse(u))
 }
 
-// handleAdminGetUser returns one user by ID (username, custom_prompt,
-// timestamps -- never the password), backing the admin-only per-user edit
-// subpage (/admin/users/{id}).
+// handleAdminGetUser returns one user by ID (never the password), backing
+// the admin per-user edit subpage.
 func (h *Handler) handleAdminGetUser(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.users != nil, "users") {
 		return
@@ -176,11 +161,9 @@ func (h *Handler) handleAdminGetUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toUserResponse(u))
 }
 
-// handleAdminUpdateUser lets the admin reset a user's password and/or
-// change their custom_prompt on their behalf (see updateUserRequest --
-// username is never editable). Loads the existing row first and only
-// changes whichever fields were actually present in the request; every
-// other field (Username, CreatedAt, ID) is passed through untouched.
+// handleAdminUpdateUser lets the admin reset a password and/or
+// custom_prompt on a user's behalf (username never editable). Loads the
+// existing row first and only changes fields present in the request.
 func (h *Handler) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.users != nil, "users") {
 		return

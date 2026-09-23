@@ -7,11 +7,8 @@ const { setupDOM, teardownDOM, requireFresh } = require('./dom_helper.test_util'
 
 const JOBS_HTML = fs.readFileSync(path.join(__dirname, 'admin_jobs.html'), 'utf8');
 
-// normalizedSVG round-trips raw through a detached element's innerHTML, so
-// it's compared against actual DOM output serialized the same way (jsdom,
-// like a real browser, re-serializes a self-closing SVG tag like
-// "<circle .../>" as an explicit "<circle ...></circle>" once parsed) --
-// comparing raw source strings directly would spuriously fail.
+// Compares SVGs via round-tripped innerHTML, since jsdom expands self-closing tags
+// (e.g. <circle/> -> <circle></circle>) -- raw string comparison would spuriously fail.
 function normalizedSVG(raw) {
   const el = document.createElement('div');
   el.innerHTML = raw;
@@ -27,10 +24,8 @@ function loadFixture() {
     if (url.includes('/admin/api/crawl/jobs')) return { ok: true, json: async () => [] };
     return { ok: true, json: async () => ({}) };
   };
-  // admin_jobs.js's own exports, plus admin.js's shared helpers (icon
-  // glyphs/SVGs, setIconLabel) it relies on as ambient globals -- same
-  // relationship as e.g. buildTable/getJSON, just not re-exported by this
-  // page's own module.exports.
+  // admin_jobs.js's own exports, plus admin.js's shared helpers it relies on as ambient globals
+  // -- same relationship as buildTable/getJSON, just not re-exported here.
   return Object.assign({}, adminHelpers, requireFresh('./admin_jobs.js'));
 }
 
@@ -84,10 +79,9 @@ test('formatSpeed computes pages/sec from the delta between two polls, not pages
 
 test('formatSpeed survives a job resuming after a restart: pages_crawled is a lifetime counter that can jump hugely between polls without inflating the rate, since the calculation never looks at started_at', () => {
   const { formatSpeed, updateJobSpeeds } = loadFixture();
-  // Simulate: job had accumulated 17979 pages before a crawl-server
-  // restart; started_at gets reset on resume (irrelevant here, since
-  // updateJobSpeeds never reads it), and two polls 2s apart see the
-  // lifetime counter continue climbing by a normal amount.
+  // Simulate: job had 17979 pages before a crawl-server restart; started_at resets on resume
+  // (irrelevant, updateJobSpeeds never reads it); two polls 2s apart see the lifetime counter
+  // climb normally.
   updateJobSpeeds([{ id: 'j1', pages_crawled: 17979 }], 1000);
   updateJobSpeeds([{ id: 'j1', pages_crawled: 17981 }], 3000);
   assert.equal(formatSpeed({ id: 'j1' }), '1.00/s');
@@ -315,9 +309,8 @@ test('clicking an inactive column header switches to it at its default direction
   return loadJobDetail('job-1').then(() => {
     const findHeader = () => Array.from(document.querySelectorAll('#job-detail-table th')).find((th) => th.textContent.startsWith('length'));
     findHeader().dispatchEvent(new window.Event('click'));
-    // The click re-renders the whole table (clear + rebuild), so the
-    // pre-click header/row elements are now detached -- re-query fresh
-    // ones from the rebuilt DOM rather than reusing stale references.
+    // The click rebuilds the whole table, detaching the pre-click elements -- re-query fresh
+    // ones rather than reusing stale references.
     const rows = Array.from(document.querySelectorAll('#job-detail-table tbody tr'));
     // doc_length defaults to descending on first click: 50 before 10.
     assert.equal(rows[0].querySelector('td').textContent, 'https://a/1');

@@ -58,7 +58,7 @@ func TestSeedDefaultAgents_NoOpWhenAnyAgentAlreadyExists(t *testing.T) {
 
 // TestSeedDefaultAgents_DeletingOneDefaultThenReseedingLeavesItDeleted is
 // the essential non-regression check: after deleting ONE seeded default
-// (leaving the other four in place), running SeedDefaultAgents again (e.g.
+// (leaving the other five in place), running SeedDefaultAgents again (e.g.
 // a process restart) must NOT bring it back -- an admin's delete has to
 // stick. This is exactly the behavior a naive per-row "INSERT ... ON
 // CONFLICT (id) DO NOTHING" would get wrong (it would resurrect that exact
@@ -69,7 +69,7 @@ func TestSeedDefaultAgents_NoOpWhenAnyAgentAlreadyExists(t *testing.T) {
 // Caveat this test deliberately does NOT cover: deleting EVERY seeded
 // default (down to zero rows) is indistinguishable from "a genuinely fresh
 // database" by the COUNT(*) == 0 check alone, so a restart after that would
-// re-seed all five. Accepted as an edge case too narrow to design around --
+// re-seed all six. Accepted as an edge case too narrow to design around --
 // see SeedDefaultAgents' own doc comment.
 func TestSeedDefaultAgents_DeletingOneDefaultThenReseedingLeavesItDeleted(t *testing.T) {
 	repo := newTestRepo(t)

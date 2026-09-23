@@ -4,21 +4,21 @@
 
 *`/account/files`*
 
-Files attached to your pinned chats, or that the model itself produced on your behalf via a write_file tool call during chat -- reachable from Your account, next to Your MCP servers. This page only ever lists and manages files; it has no upload form of its own -- see "Attaching files" below.
+Files attached to your pinned chats, or produced by the model via a write_file call during chat -- reachable from Your account. Lists and manages files only; there's no upload form here -- see "Attaching files" below.
 
 ![Your files](images/account-files.png)
 
 ## Attaching files
 
-Files are attached from the chat page itself, via a tab's own paperclip button (see [Search & Chat](search-chat.md)'s "Attaching files" section) -- and only a pinned (persistent) chat tab can attach a file at all. A file becomes available to the model the next time it looks, via the file-access tools (see mcp-files on the [MCP servers](mcp-servers.md) page) -- attaching doesn't inject the file's contents into your next message directly. Unpinning or closing a pinned chat deletes every file attached to it, so this list shrinks along with your pinned chats, not just when you delete a row directly.
+Files attach from a chat tab's paperclip button (see [Search & Chat](search-chat.md)'s "Attaching files") -- only a pinned tab can attach files. The model reads an attached file via its file-access tools (mcp-files, see [MCP servers](mcp-servers.md)) the next time it looks, rather than its contents being injected into your message. Unpinning or closing a pinned chat deletes its attached files too, so this list shrinks with your pinned chats, not just from direct deletes.
 
 ## Limits and ownership
 
-Capped at 5 MiB per file and 100 files per account, neither configurable by an admin. Every file is owned by, and only ever visible or downloadable by, you -- there's no admin view of anyone's uploaded files at all.
+Capped at 5 MiB per file and 100 files per account, not admin-configurable. Files are private -- only you can see or download them; there's no admin view of anyone's uploads.
 
 ## Downloading and deleting
 
-Each row has a Download link and a Delete link -- deleting has no confirmation prompt, so download anything worth keeping before removing it.
+Each row has Download and Delete links -- deleting has no confirmation prompt, so download anything worth keeping first.
 
 ---
 ← [Your MCP servers](account-mcp-servers.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Documents](documents.md) →

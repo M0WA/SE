@@ -180,10 +180,8 @@ test('setMode toggles the switch and swaps panel visibility in both directions',
   const status = document.getElementById('status');
   const resultsEl = document.getElementById('results');
 
-  // The page now defaults to chat mode on load (see the new
-  // 'defaults to chat mode on load' test below), so before any explicit
-  // setMode call here the switch is already checked and the chat panel
-  // already visible.
+  // The page defaults to chat mode on load, so before any setMode call the switch is already
+  // checked and the chat panel visible.
   assert.equal(modeSwitch.getAttribute('aria-checked'), 'true');
   assert.equal(chatPanel.hidden, false);
   assert.equal(chatOptions.hidden, false);
@@ -825,9 +823,8 @@ test('serializeTab/deserializeTab round trip a tab\'s title and history', () => 
   const json = serializeTab(tab);
   const parsed = deserializeTab(json);
   assert.equal(parsed.title, 'My chat');
-  // deserializeTab normalizes every entry with context_trimmed/tool_results
-  // defaults, even one (like the plain user turn here) that never had them
-  // in the first place.
+  // deserializeTab normalizes every entry with context_trimmed/tool_results defaults, even a
+  // plain user turn that never had them.
   assert.deepEqual(parsed.history, [
     { role: 'user', content: 'hi', context_trimmed: false, tool_results: [] },
     { role: 'assistant', content: 'hello', context_trimmed: true, tool_results: [{ tool_name: 'web_search', output: 'x' }] },
@@ -893,10 +890,8 @@ test('exportActiveTab builds a Blob and triggers/cleans up a download without th
   const { sendChatMessage, exportActiveTab } = loadFixture();
   let created = 0;
   let revoked = 0;
-  // index.js runs under plain Node (via require(), not inside jsdom's own
-  // window), so the Blob it constructs is Node's own global Blob, not
-  // window.Blob -- check its shape/type instead of an instanceof that
-  // would only hold true for a real browser <script> tag.
+  // index.js runs under plain Node (require(), not jsdom's window), so its Blob is Node's global
+  // Blob, not window.Blob -- check shape/type, not instanceof.
   global.URL.createObjectURL = (blob) => { created++; assert.equal(blob.type, 'application/json'); return 'blob:mock-url'; };
   global.URL.revokeObjectURL = () => { revoked++; };
   try {
@@ -926,9 +921,8 @@ test('clicking the tab-strip buttons wires new/fork/export/import to their own f
     // Export must not throw when wired through the real button click.
     document.getElementById('chat-tab-export').dispatchEvent(new window.Event('click'));
 
-    // Import opens the native file picker via the hidden input's own
-    // click() -- just prove the button is wired to trigger it, not the
-    // browser's file dialog itself (untestable in jsdom).
+    // Import opens the native file picker via the hidden input's click() -- just prove the
+    // button triggers it, not the file dialog itself (untestable in jsdom).
     let importInputClicked = false;
     document.getElementById('chat-tab-import-input').addEventListener('click', () => { importInputClicked = true; });
     document.getElementById('chat-tab-import').dispatchEvent(new window.Event('click'));
@@ -943,13 +937,9 @@ test('renderChatMessage scrolls #chat-messages so the new turn\'s own beginning 
   global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'hi there' }) });
   const { sendChatMessage } = loadFixture();
   const chatMessages = document.getElementById('chat-messages');
-  // jsdom never computes real layout, so offsetTop is always 0 by default --
-  // stub it to grow with each message's position (as a real stacked chat
-  // history would), so scrollTop actually moving to match the newest
-  // message's own offsetTop -- not chatMessages.scrollHeight, which would
-  // land on that message's *end* rather than its *beginning* -- proves the
-  // scroll call ran, and that a long answer is read starting from its first
-  // line rather than its last.
+  // jsdom never computes real layout, so offsetTop is always 0 -- stub it to grow per message,
+  // so scrollTop moving to match the newest message's offsetTop (not scrollHeight, which lands
+  // on the end) proves the scroll starts from the first line, not the last.
   Object.defineProperty(window.HTMLElement.prototype, 'offsetTop', {
     get() { return Array.from(chatMessages.children).indexOf(this) * 100; },
     configurable: true,
@@ -980,9 +970,8 @@ test('sendChatMessage on success appends both turns to history and renders the a
   assert.equal(gotURL, '/chat');
   assert.equal(gotOpts.method, 'POST');
   assert.equal(gotOpts.headers['Content-Type'], 'application/json');
-  // At the moment the request was sent, the active tab's history held only
-  // the user's just-appended turn -- the assistant's reply is pushed only
-  // afterward, once the response comes back.
+  // At request time the active tab's history held only the user's turn -- the assistant's reply
+  // is pushed only once the response comes back.
   assert.deepEqual(JSON.parse(gotOpts.body), { messages: [{ role: 'user', content: 'what is the answer?' }], web_search: true, agent_id: '', chat_id: '' });
 
   const history = activeTab().history;
@@ -1012,16 +1001,10 @@ test('toWireHistory strips tool_results/context_trimmed down to plain {role, con
   ]);
 });
 
-// TestBody_NeverGrowsUnboundedFromToolResults is the direct regression test
-// for a real, reported failure: a conversation with even a couple of
-// web_fetch tool calls could grow its own request body every subsequent
-// turn (each turn resending the full accumulated tool_results from every
-// prior turn, since tab.history keeps them for local tab-replay
-// rendering) until nginx's client_max_body_size rejected the request with
-// a 413 -- even though the fetched page content was never large enough on
-// its own to explain that. Sending only {role, content} (see
-// toWireHistory) keeps the request body bounded by the conversation's own
-// text, not by how many/how large the tool calls along the way were.
+// TestBody_NeverGrowsUnboundedFromToolResults is the regression test for a real bug: a couple of
+// web_fetch calls could grow the request body every turn (resending accumulated tool_results
+// kept for tab-replay) until nginx's client_max_body_size rejected it (413). Sending only
+// {role, content} (toWireHistory) bounds the body by conversation text, not tool-call size.
 test('sendChatMessage never sends tool_results in the request body, even after several tool-heavy turns', async () => {
   const hugeOutput = 'x'.repeat(200000); // larger than nginx's typical 1MB limit would allow many of, if resent every turn
   let lastBodyBytes = 0;
@@ -1039,9 +1022,8 @@ test('sendChatMessage never sends tool_results in the request body, even after s
   await sendChatMessage('q1');
   await sendChatMessage('q2');
   await sendChatMessage('q3');
-  // If tool_results were included, three turns' worth of hugeOutput would
-  // push this well past 500000 bytes; excluding them keeps it tiny
-  // regardless of how many tool-heavy turns preceded it.
+  // If tool_results were included, three turns of hugeOutput would push this past 500000 bytes;
+  // excluding them keeps it tiny regardless.
   assert.ok(lastBodyBytes < 1000, `expected a small request body excluding tool_results, got ${lastBodyBytes} bytes`);
 });
 
@@ -1132,11 +1114,8 @@ test('the attach file input uploads the chosen file and shows a confirmation sta
   const file = new window.File(['col1,col2\n1,2'], 'data.csv', { type: 'text/csv' });
   Object.defineProperty(input, 'files', { value: [file], configurable: true });
 
-  // A successful upload also triggers loadChatFiles' own follow-up GET to
-  // the SAME /account/api/files URL -- distinguish by method (opts.method
-  // is only set on the POST) rather than capturing whichever call runs
-  // last, same pattern the dedicated
-  // "a successful attach-upload reloads #chat-files" test below uses.
+  // A successful upload also triggers loadChatFiles' follow-up GET to the same URL --
+  // distinguish by method (opts.method is only set on POST), same pattern the test below uses.
   let gotURL, gotBody;
   global.fetch = async (url, opts) => {
     if (opts && opts.method === 'POST') {

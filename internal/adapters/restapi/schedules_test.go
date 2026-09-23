@@ -76,18 +76,16 @@ func (f *fakeScheduledCrawlStore) MarkScheduledCrawlRun(context.Context, string,
 	return nil
 }
 
-// RunScheduledCrawlNow records which ID(s) it was asked to run, so a test
-// can assert the handler called through with the right ID, and errors when
-// runNowErr is set -- ErrScheduledCrawlNotFound flows through respondOrNotFound
-// as a 404 like any other not-found error.
+// RunScheduledCrawlNow records which ID(s) it was asked to run, and errors
+// when runNowErr is set -- ErrScheduledCrawlNotFound flows through
+// respondOrNotFound as a 404 like any other not-found error.
 func (f *fakeScheduledCrawlStore) RunScheduledCrawlNow(_ context.Context, id string, _ time.Time) error {
 	f.runNowIDs = append(f.runNowIDs, id)
 	return f.runNowErr
 }
 
-// SetScheduledCrawlEnabled records the ID/value it was asked to set, so a
-// test can assert the handler called through correctly without touching
-// NextRunAt -- mirrors RunScheduledCrawlNow's recording pattern above.
+// SetScheduledCrawlEnabled records the ID/value it was asked to set,
+// mirroring RunScheduledCrawlNow's recording pattern above.
 func (f *fakeScheduledCrawlStore) SetScheduledCrawlEnabled(_ context.Context, id string, enabled bool) error {
 	f.setEnabledCalls++
 	f.setEnabledID = id
@@ -95,9 +93,9 @@ func (f *fakeScheduledCrawlStore) SetScheduledCrawlEnabled(_ context.Context, id
 	return f.setEnabledErr
 }
 
-// ResetStaleInProgress is never exercised by restapi's own handlers (it's
-// only called once at crawl-server startup, see cmd/crawl/main.go) -- kept
-// here purely to satisfy ports.ScheduledCrawlStore.
+// ResetStaleInProgress is never exercised by restapi's handlers (only
+// called once at crawl-server startup) -- kept to satisfy
+// ports.ScheduledCrawlStore.
 func (f *fakeScheduledCrawlStore) ResetStaleInProgress(context.Context) (int, error) {
 	return 0, nil
 }
@@ -219,9 +217,7 @@ func TestHandleAdminSchedules_PostCreatesRecurringCrawl(t *testing.T) {
 }
 
 // TestHandleAdminSchedules_PostCreatesOneOffCrawl proves a non-recurring
-// entry (the "just crawl this once" case -- see domain.ScheduledCrawl's doc
-// comment) needs no interval and is due immediately, not interval_minutes
-// from now.
+// entry needs no interval and is due immediately, not interval_minutes from now.
 func TestHandleAdminSchedules_PostCreatesOneOffCrawl(t *testing.T) {
 	store := &fakeScheduledCrawlStore{}
 	h, cookie := adminAuthedHandlerWithSchedules(t, store)
@@ -248,9 +244,8 @@ func TestHandleAdminSchedules_PostCreatesOneOffCrawl(t *testing.T) {
 }
 
 // TestHandleAdminSchedules_PostReusesExistingScheduleForSameDomain guards
-// against a real duplication bug: submitting the crawl form again for a
-// domain that already has a schedule must update that schedule in place,
-// not insert a second one racing it for the same site.
+// against a duplication bug: resubmitting the crawl form for an existing
+// domain must update that schedule in place, not insert a second one.
 func TestHandleAdminSchedules_PostReusesExistingScheduleForSameDomain(t *testing.T) {
 	store := &fakeScheduledCrawlStore{schedules: []domain.ScheduledCrawl{
 		{ID: "sched-1", SeedURLs: []string{"http://a.example/old-path"}, MaxPages: 10, Enabled: false},
@@ -330,9 +325,8 @@ func TestHandleAdminSchedules_PostEmptySeedURLs(t *testing.T) {
 }
 
 // TestHandleAdminSchedules_PostNoIntervalMeansOneOff proves omitting
-// interval_minutes entirely (the zero value) is a perfectly valid one-off
-// crawl -- there's no separate "recurring" flag to set, and no validation
-// error for leaving the interval blank.
+// interval_minutes (the zero value) is a valid one-off crawl -- no
+// separate "recurring" flag, no validation error.
 func TestHandleAdminSchedules_PostNoIntervalMeansOneOff(t *testing.T) {
 	store := &fakeScheduledCrawlStore{}
 	h, cookie := adminAuthedHandlerWithSchedules(t, store)
@@ -374,8 +368,7 @@ func TestHandleAdminSchedules_PostNegativeMaxRunsRejected(t *testing.T) {
 }
 
 // TestHandleAdminSchedules_PostMaxRunsPassesThrough proves an optional
-// MaxRuns cap on a recurring crawl is stored, and 0 (the default, omitted
-// here) means unlimited elsewhere.
+// MaxRuns cap is stored, and 0 (the default) means unlimited elsewhere.
 func TestHandleAdminSchedules_PostMaxRunsPassesThrough(t *testing.T) {
 	store := &fakeScheduledCrawlStore{}
 	h, cookie := adminAuthedHandlerWithSchedules(t, store)
@@ -415,8 +408,7 @@ func TestHandleAdminSchedules_PostRendererPassesThrough(t *testing.T) {
 }
 
 // TestHandleAdminSchedules_PostBlankRendererMeansInherit proves omitting
-// renderer entirely (the zero value) is valid -- it means "inherit the
-// Tuning page's global default," not an error.
+// renderer means "inherit the Tuning page's global default," not an error.
 func TestHandleAdminSchedules_PostBlankRendererMeansInherit(t *testing.T) {
 	store := &fakeScheduledCrawlStore{}
 	h, cookie := adminAuthedHandlerWithSchedules(t, store)
@@ -468,8 +460,7 @@ func TestHandleAdminSchedules_PostLinkScopePassesThrough(t *testing.T) {
 }
 
 // TestHandleAdminSchedules_PostBlankLinkScopeMeansInherit proves omitting
-// link_scope entirely (the zero value) is valid -- it means "inherit the
-// Tuning page's global default," not an error.
+// link_scope means "inherit the Tuning page's global default," not an error.
 func TestHandleAdminSchedules_PostBlankLinkScopeMeansInherit(t *testing.T) {
 	store := &fakeScheduledCrawlStore{}
 	h, cookie := adminAuthedHandlerWithSchedules(t, store)
@@ -487,9 +478,8 @@ func TestHandleAdminSchedules_PostBlankLinkScopeMeansInherit(t *testing.T) {
 }
 
 // TestHandleAdminSchedules_PostAllowBlockDomainsAndFollowIndexedPassThrough
-// proves the new per-crawl allow/block domain lists and FollowIndexedDomains
-// are stored as-is, mirroring the existing link_scope/renderer pass-through
-// tests.
+// proves the per-crawl allow/block domain lists and FollowIndexedDomains
+// are stored as-is, mirroring the link_scope/renderer pass-through tests.
 func TestHandleAdminSchedules_PostAllowBlockDomainsAndFollowIndexedPassThrough(t *testing.T) {
 	store := &fakeScheduledCrawlStore{}
 	h, cookie := adminAuthedHandlerWithSchedules(t, store)
@@ -519,8 +509,7 @@ func TestHandleAdminSchedules_PostAllowBlockDomainsAndFollowIndexedPassThrough(t
 }
 
 // TestHandleAdminSchedules_PostAllowBlockDomainsDefaultToEmpty proves
-// omitting the new fields entirely is valid -- no allow/block list and
-// FollowIndexedDomains false, not an error.
+// omitting the new fields is valid -- empty allow/block, FollowIndexedDomains false.
 func TestHandleAdminSchedules_PostAllowBlockDomainsDefaultToEmpty(t *testing.T) {
 	store := &fakeScheduledCrawlStore{}
 	h, cookie := adminAuthedHandlerWithSchedules(t, store)
@@ -667,10 +656,9 @@ func TestHandleAdminUpdateSchedule_GetServiceError(t *testing.T) {
 }
 
 // TestHandleAdminUpdateSchedule_BlankCredentialsPreserveExisting proves a
-// PATCH that leaves cookie/basic_auth_user/basic_auth_pass blank (the only
-// way the admin UI's edit form can submit them, since a GET response never
-// echoes their real value -- see scheduledCrawlResponse) keeps the
-// schedule's already-stored credentials rather than wiping them.
+// PATCH leaving cookie/basic_auth_user/basic_auth_pass blank (the only way
+// the edit form can submit them, since GET never echoes real values) keeps
+// the stored credentials rather than wiping them.
 func TestHandleAdminUpdateSchedule_BlankCredentialsPreserveExisting(t *testing.T) {
 	store := &fakeScheduledCrawlStore{schedules: []domain.ScheduledCrawl{{
 		ID: "sched-1", SeedURLs: []string{"http://a"},
@@ -696,9 +684,8 @@ func TestHandleAdminUpdateSchedule_BlankCredentialsPreserveExisting(t *testing.T
 	}
 }
 
-// TestHandleAdminUpdateSchedule_NonBlankCredentialsOverwrite proves the
-// preserve-on-blank behavior doesn't prevent an admin from actually
-// changing a credential -- a non-blank value in the request still wins.
+// TestHandleAdminUpdateSchedule_NonBlankCredentialsOverwrite proves
+// preserve-on-blank doesn't block an actual change -- a non-blank value wins.
 func TestHandleAdminUpdateSchedule_NonBlankCredentialsOverwrite(t *testing.T) {
 	store := &fakeScheduledCrawlStore{schedules: []domain.ScheduledCrawl{{
 		ID: "sched-1", SeedURLs: []string{"http://a"},
@@ -723,8 +710,8 @@ func TestHandleAdminUpdateSchedule_NonBlankCredentialsOverwrite(t *testing.T) {
 }
 
 // TestHandleAdminUpdateSchedule_ClearFlagsRemoveCredentials proves
-// clear_cookie/clear_basic_auth are the explicit way to actually remove a
-// stored credential, since a blank field alone means "leave unchanged."
+// clear_cookie/clear_basic_auth are the explicit way to remove a stored
+// credential, since a blank field alone means "leave unchanged."
 func TestHandleAdminUpdateSchedule_ClearFlagsRemoveCredentials(t *testing.T) {
 	store := &fakeScheduledCrawlStore{schedules: []domain.ScheduledCrawl{{
 		ID: "sched-1", SeedURLs: []string{"http://a"},
@@ -813,9 +800,9 @@ func TestHandleAdminGetSchedule_Success(t *testing.T) {
 	}
 }
 
-// TestHandleAdminGetSchedule_RedactsCredentials proves a stored Cookie/
-// BasicAuthUser/BasicAuthPass never appears in a GET response -- only the
-// has_cookie/has_basic_auth booleans do.
+// TestHandleAdminGetSchedule_RedactsCredentials proves stored
+// Cookie/BasicAuthUser/BasicAuthPass never appear in a GET response --
+// only the has_cookie/has_basic_auth booleans do.
 func TestHandleAdminGetSchedule_RedactsCredentials(t *testing.T) {
 	store := &fakeScheduledCrawlStore{schedules: []domain.ScheduledCrawl{
 		{ID: "sched-1", SeedURLs: []string{"http://a"}, Cookie: "session=secret", BasicAuthUser: "alice", BasicAuthPass: "hunter2"},
@@ -936,9 +923,8 @@ func TestHandleAdminRunScheduleNow_ServiceError(t *testing.T) {
 
 // TestHandleAdminRunScheduleNow_AlreadyInProgress proves the handler maps
 // ports.ErrScheduledCrawlInProgress to 409, distinct from the generic 500
-// TestHandleAdminRunScheduleNow_ServiceError covers -- see
-// RunScheduledCrawlNow's doc comment for why a genuinely-running schedule
-// must refuse a second concurrent trigger rather than 200'ing a no-op.
+// TestHandleAdminRunScheduleNow_ServiceError covers -- a genuinely-running
+// schedule must refuse a second trigger, not 200 a no-op.
 func TestHandleAdminRunScheduleNow_AlreadyInProgress(t *testing.T) {
 	store := &fakeScheduledCrawlStore{runNowErr: ports.ErrScheduledCrawlInProgress}
 	h, cookie := adminAuthedHandlerWithSchedules(t, store)

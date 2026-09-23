@@ -1,9 +1,7 @@
 'use strict';
-// admin_search.js wires its two forms' submit handlers directly at load
-// time -- unlike most other admin pages it has no named functions worth
-// exporting, so these tests exercise it the same way a browser would:
-// require the fixture, dispatch real 'submit' events, and assert on the
-// resulting DOM.
+// admin_search.js wires its two forms' submit handlers directly at load time, with no named
+// functions worth exporting -- these tests require the fixture, dispatch real 'submit' events,
+// and assert on the DOM.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');

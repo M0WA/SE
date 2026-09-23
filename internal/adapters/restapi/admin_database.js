@@ -40,11 +40,8 @@
   const clearSettingsBtn = document.getElementById('db-clear-settings-btn');
   const clearSettingsStatusEl = document.getElementById('db-clear-settings-status');
 
-  // clearContent/clearSettings share the same confirm-disable-post-reload
-  // shape as admin_domain.js's deleteAllInDomain -- both actions here are
-  // immediate and permanent, so a plain window.confirm() gate (not a
-  // second click, not a typed confirmation phrase) matches every other
-  // destructive action already in this admin UI.
+  // clearContent/clearSettings share admin_domain.js's confirm-disable-reload shape -- both are
+  // immediate/permanent, so a plain window.confirm() gate matches every other destructive action here.
   async function clearContent() {
     if (!window.confirm('Permanently delete every crawled document and crawl job? This cannot be undone.')) return;
     clearContentBtn.disabled = true;

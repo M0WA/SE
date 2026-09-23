@@ -31,23 +31,17 @@
   const adminLink = document.getElementById('admin-link');
   const accountLink = document.getElementById('account-link');
 
-  // tabs holds every open conversation this session -- forking a tab deep-
-  // copies its history into a new independent one, so answering in one
-  // never affects another. Session-only (in-memory): nothing here survives
-  // a reload, by design (Export/Import below is the deliberate escape
-  // hatch for anything worth keeping). activeTabId names which one is
-  // currently rendered into #chat-messages; nextTabId is a plain
-  // incrementing counter (not a timestamp), so tab ids stay small,
-  // readable, and deterministic in tests.
+  // tabs holds every open conversation this session -- forking deep-copies history into an
+  // independent tab. Session-only in-memory (Export/Import is the escape hatch to keep one).
+  // activeTabId is the rendered tab; nextTabId is a plain incrementing counter, not a timestamp,
+  // so ids stay small and deterministic in tests.
   let nextTabId = 1;
   function makeTab(overrides) {
     const id = nextTabId++;
     return {
       id: id, title: 'Chat ' + id, history: [], tokenUsage: null, agentId: '',
-      // persisted/chatId: whether this tab is pinned to a server-side
-      // domain.PersistedChat row (chatId is its id once pinned) -- only a
-      // persisted tab may attach files (see updateAttachAvailability) or
-      // survives a page reload (see loadPersistedChats).
+      // persisted/chatId: whether this tab is pinned to a server-side PersistedChat row -- only
+      // a persisted tab may attach files or survive a page reload.
       persisted: false, chatId: null,
       ...overrides,
     };
@@ -59,29 +53,23 @@
     return tabs.find((t) => t.id === activeTabId);
   }
 
-  // pinIconSVG returns the pin glyph for a tab's pin button -- filled
-  // (accent-tinted via .chat-tab-pin-active) once persisted, outline
-  // otherwise, same inline-SVG-over-Unicode-emoji reasoning as
-  // #chat-attach's own paperclip (see style.css's .chat-tab-close comment).
+  // pinIconSVG returns the pin glyph for a tab's pin button -- filled once persisted, outline
+  // otherwise, same inline-SVG-over-emoji reasoning as #chat-attach's paperclip.
   function pinIconSVG(filled) {
     return '<svg width="24" height="24" viewBox="0 0 24 24" fill="' + (filled ? 'currentColor' : 'none') +
       '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
       '<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>';
   }
 
-  // deriveTabTitle shortens a tab's first user message into a readable tab
-  // label -- only applied the moment a brand-new tab gets its first turn
-  // (see sendChatMessage), so a forked or imported tab's own inherited
-  // title is never overwritten.
+  // deriveTabTitle shortens a tab's first message into a tab label -- only applied on a
+  // brand-new tab's first turn, so a forked/imported tab's inherited title is never overwritten.
   function deriveTabTitle(content) {
     const trimmed = content.trim().replace(/\s+/g, ' ');
     return trimmed.length > 24 ? trimmed.slice(0, 24) + '…' : trimmed;
   }
 
-  // renderAgentSelectOptions populates the agent picker from every enabled
-  // agent (GET /agents already filters to just those), keeping the
-  // built-in "Default agent" option (empty value, falls back to
-  // ChatEndpoint.DefaultAgentID server-side) first.
+  // renderAgentSelectOptions populates the agent picker from every enabled agent, keeping
+  // "Default agent" (falls back to ChatEndpoint.DefaultAgentID server-side) first.
   function renderAgentSelectOptions(agents) {
     while (chatAgentSelect.options.length > 1) chatAgentSelect.remove(1);
     for (const a of agents) {
@@ -92,10 +80,8 @@
     }
   }
 
-  // loadAgentOptions fetches the picker's own options once on page load --
-  // best-effort, same convention as every other auxiliary fetch on this
-  // page: a failure just leaves the select at its built-in "Default agent"
-  // option rather than blocking the rest of the page.
+  // loadAgentOptions fetches the picker's options once on load -- best-effort: a failure just
+  // leaves "Default agent" selected rather than blocking the page.
   async function loadAgentOptions() {
     try {
       const resp = await fetch('/agents');
@@ -110,14 +96,10 @@
     activeTab().agentId = chatAgentSelect.value;
   });
 
-  // buildDonutSVG/buildDonutLegend render a per-turn token-usage chart from
-  // {label, value, color} segments -- a small, local duplicate of
-  // admin.js's own copy (see admin_chat_settings.js's context-budget
-  // preview) rather than a shared import: this is the public search page,
-  // served by search-server, and admin.js is only routed to admin-server
-  // paths (see packaging/nginx/searchengine.conf) -- pulling it in here
-  // would mean either a cross-server fetch or restructuring routing for a
-  // ~30-line helper, not worth it.
+  // buildDonutSVG/buildDonutLegend render a per-turn token-usage chart -- a small local
+  // duplicate of admin.js's copy, not a shared import: this public page is served by
+  // search-server, while admin.js only routes to admin-server (see searchengine.conf) -- not
+  // worth restructuring routing for a ~30-line helper.
   function buildDonutSVG(segments, opts) {
     opts = opts || {};
     const size = opts.size || 72;
@@ -165,10 +147,8 @@
       }
     }
 
-    // opts.centerText (e.g. a "42%" context-usage figure) sits in the
-    // ring's own hole -- only passed by renderTokenUsage's larger hover
-    // donut, never the 14px always-visible mini one, which is too small to
-    // hold legible text.
+    // opts.centerText (e.g. "42%") sits in the ring's hole -- only passed by the larger hover
+    // donut, never the 14px mini one, too small for legible text.
     if (opts.centerText) {
       const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       text.setAttribute('x', String(c));
@@ -200,12 +180,9 @@
     return list;
   }
 
-  // tokenUsageSegments turns the backend's flat token_usage breakdown into
-  // the {label, value, color} shape buildDonutSVG/buildDonutLegend expect
-  // -- a fixed split (global prompt, active agent's own prompt, active MCP
-  // server prompts, your own prompt, conversation history) shared by every
-  // turn, regardless of which pieces were actually nonzero this time.
-  // Accepts a falsy u (e.g. before any turn has completed) and returns the
+  // tokenUsageSegments turns the backend's flat token_usage breakdown into the shape
+  // buildDonutSVG/buildDonutLegend expect -- a fixed split (global/agent/MCP prompts, your
+  // prompt, history) shared by every turn. A falsy u (before any turn completes) returns the
   // same shape, all zeros.
   function tokenUsageSegments(u) {
     u = u || {};
@@ -218,16 +195,11 @@
     ];
   }
 
-  // renderTokenUsage updates the persistent token-usage summary shown next
-  // to the Web checkbox (see #chat-token-usage in index.html) -- unlike the
-  // old per-turn folded donut this replaces, it stays visible and up to
-  // date for the whole chat session, not just once a first answer sets it:
-  // a falsy tokenUsage (e.g. before any turn has completed) renders an
-  // empty/zero-value donut instead of hiding the badge, so the control's
-  // position on the toolbar row is stable from page load. The larger hover
-  // donut additionally gets a centered usage-percentage label once
-  // max_context_tokens is known; the always-visible mini donut does not
-  // (too small to hold legible text).
+  // renderTokenUsage updates the persistent token-usage summary next to the Web checkbox --
+  // unlike the old per-turn folded donut it replaces, it stays visible for the whole session: a
+  // falsy tokenUsage renders an empty/zero donut instead of hiding the badge, keeping the
+  // toolbar's layout stable from page load. The hover donut gets a centered percentage label
+  // once max_context_tokens is known; the mini one doesn't (too small for legible text).
   function renderTokenUsage(tokenUsage) {
     const u = tokenUsage || {};
     const total = (u.global_prompt_tokens || 0) + (u.tool_prompt_tokens || 0) +
@@ -245,10 +217,9 @@
     chatTokenUsageDonut.appendChild(buildDonutLegend(segments));
   }
 
-  // renderCorrectionNote shows a quiet, transparent note when the search
-  // service fuzzy-corrected a misspelled query term (see corrected_terms on
-  // each result) -- the displayed query itself is never silently rewritten,
-  // this just says which term(s) were substituted for scoring.
+  // renderCorrectionNote shows a quiet note when search fuzzy-corrected a misspelled term
+  // (corrected_terms) -- the displayed query is never silently rewritten, this just names the
+  // substituted term(s).
   function renderCorrectionNote(list) {
     const corrected = list[0]?.corrected_terms || [];
     if (corrected.length === 0) {
@@ -352,29 +323,23 @@
       const data = await resp.json();
       renderResults(query, data.results || []);
     } catch (err) {
-      // Ignored: any failure here (network error, refused connection,
-      // malformed JSON) is reported to the user the same way regardless of
-      // what err actually is -- there's no more specific message worth
-      // showing than "could not reach the server."
+      // Ignored: any failure (network error, refused connection, malformed JSON) is reported
+      // the same way -- no more specific message is worth showing than "could not reach the
+      // server."
       status.textContent = 'Search failed: could not reach the server.';
     }
   }
 
-  // escapeHTML neutralizes raw HTML in model output before any markdown
-  // transform runs, so renderMarkdown's innerHTML use below can never
-  // inject a tag/script the model happened to emit -- every markdown
-  // pattern is matched and replaced strictly *after* this, working only
-  // with already-inert text and the specific tags this function itself
-  // introduces.
+  // escapeHTML neutralizes raw HTML in model output before any markdown transform, so
+  // renderMarkdown's innerHTML use can never inject a model-emitted tag/script -- every markdown
+  // pattern runs strictly after this, on already-inert text.
   function escapeHTML(text) {
     return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
   }
 
-  // renderInline applies span-level markdown -- code spans first (each
-  // pulled out to a plain SPANn placeholder so nothing inside it is ever
-  // touched by the bold/italic/link patterns that follow, then restored
-  // verbatim at the end), to already-HTML-escaped text. Bold is matched
-  // before italic so **x** is never left as <em>*x</em>.
+  // renderInline applies span-level markdown to already-escaped text -- code spans are pulled
+  // to placeholders first (restored at the end) so bold/italic/link patterns never touch inside
+  // them. Bold is matched before italic so **x** never ends up as <em>*x</em>.
   function renderInline(text) {
     const codeSpans = [];
     text = text.replace(/`([^`\n]+)`/g, (_, code) => {
@@ -388,26 +353,16 @@
     return text;
   }
 
-  // renderMarkdown turns a chat model's plain-text-with-markdown answer
-  // into safe HTML: fenced code blocks are pulled out first (so nothing
-  // inside them is ever touched by inline/list/heading rules), then each
-  // remaining line is classified into a heading, a list item, or plain
-  // paragraph text, matching CommonMark closely enough for typical answers
-  // without pulling in a full parser for a chat bubble. Simplification
-  // accepted: a fence opened and closed on the same line (rare in
-  // practice) isn't specially recognized and renders as literal text
-  // instead of a code block.
+  // renderMarkdown turns a model's plain-text-with-markdown answer into safe HTML: fenced code
+  // blocks are pulled out first, then remaining lines are classified as heading/list-item/
+  // paragraph, matching CommonMark closely enough without a full parser. Known gap: a fence
+  // opened+closed on one line renders as literal text, not a code block.
   function renderMarkdown(raw) {
     const codeBlocks = [];
-    // `(?=([a-zA-Z0-9]*))\1` matches the same thing a bare `[a-zA-Z0-9]*`
-    // would (JS lacks atomic groups/possessive quantifiers), but pins its
-    // length instead of leaving it free for the engine to re-try shorter --
-    // on unterminated input (no closing fence anywhere) a plain
-    // `[a-zA-Z0-9]*` immediately followed by `[\s\S]*?` lets the two
-    // overlap, and re-trying every split between them against every ``` in
-    // the string is quadratic in the model's own answer length. Since the
-    // language tag can never itself contain a backtick, pinning it changes
-    // no match this regex would otherwise have found.
+    // `(?=([a-zA-Z0-9]*))\1` matches what `[a-zA-Z0-9]*` would (JS lacks atomic/possessive
+    // quantifiers) but pins its length, avoiding backtracking -- unterminated input otherwise
+    // lets it overlap with the following `[\s\S]*?` and re-try every split, quadratic in answer
+    // length. The language tag can't contain a backtick, so pinning changes no match.
     const text = escapeHTML(raw).replace(/```(?=([a-zA-Z0-9]*))\1\n?([\s\S]*?)```/g, (_, _tag, code) => {
       codeBlocks.push(code.replace(/\n$/, ''));
       return '\nBLOCKFENCE' + (codeBlocks.length - 1) + '\n';
@@ -465,15 +420,11 @@
     return html.join('');
   }
 
-  // firstArgumentValue extracts the first string value from a tool call's
-  // raw JSON Arguments object -- MCP tools can take multiple structured
-  // arguments (unlike the old single-parameter chat-hook convention), but
-  // web_search/web_fetch and most other simple tools still take exactly
-  // one, so this best-effort heuristic is what decides whether the fetch/
-  // search two-level rendering below applies at all: a tool whose
-  // Arguments has no string value (multi-argument, or genuinely empty)
-  // falls through to the generic single-level rendering instead of
-  // guessing wrong.
+  // firstArgumentValue extracts the first string value from a tool call's Arguments object --
+  // MCP tools can take multiple structured arguments, but simple tools like web_search/web_fetch
+  // take one, so this heuristic decides whether the fetch/search two-level rendering applies.
+  // No string value found falls through to generic single-level rendering instead of guessing
+  // wrong.
   function firstArgumentValue(argumentsJSON) {
     try {
       const parsed = JSON.parse(argumentsJSON || '');
@@ -488,11 +439,9 @@
     return '';
   }
 
-  // buildToolResponseFold builds the nested, closed-by-default <details>
-  // that holds a tool result's raw output/error -- shared by the fetch and
-  // search two-level renderings in renderChatMessage below. It reuses
-  // .chat-hook-result's own box/summary/pre styling by adding that class
-  // alongside .chat-hook-response, rather than duplicating those rules.
+  // buildToolResponseFold builds the nested, closed-by-default <details> holding a tool result's
+  // raw output/error -- shared by the fetch/search renderings below. Reuses .chat-hook-result's
+  // styling rather than duplicating it.
   function buildToolResponseFold(tr, summaryText) {
     const nested = document.createElement('details');
     nested.className = 'chat-hook-result chat-hook-response' + (tr.err ? ' chat-hook-result-error' : '');
@@ -505,25 +454,15 @@
     return nested;
   }
 
-  // renderChatMessage appends one message to #chat-messages for a
-  // {role, content} turn. User and assistant turns are told apart by
-  // alignment and a quiet tint (see .chat-msg-user/.chat-msg-assistant in
-  // style.css) rather than a "You:"/"Assistant:" label. The assistant's
-  // own text is rendered as markdown (renderMarkdown escapes it first, so
-  // this is safe against anything the model emits); a user's own typed
-  // text is shown as plain text -- markdown syntax they typed is not
-  // something they'd expect reinterpreted. contextTrimmed (assistant-only)
-  // surfaces the backend's context_trimmed flag: since the client resends
-  // a tab's whole history on every call and the backend silently drops the
-  // oldest messages to fit the endpoint's token budget, without this note a
-  // user would have no way to know this answer was generated without seeing
-  // the full conversation. toolResults (also assistant-only) is one entry
-  // per MCP tool call the model made this turn -- each rendered as its own
-  // folded <details>, closed by
-  // default, so a tool's raw output/error is available on demand without
-  // cluttering the answer itself. Token usage is NOT rendered here -- see
-  // renderTokenUsage, which keeps one persistent summary next to the Web
-  // checkbox instead of repeating it per turn.
+  // renderChatMessage appends one {role, content} turn to #chat-messages. User/assistant are
+  // told apart by alignment/tint, not a label. Assistant text is rendered as markdown (escaped
+  // first); user text is shown as plain text, since typed markdown isn't meant to be
+  // reinterpreted. contextTrimmed (assistant-only) surfaces the backend's context_trimmed flag --
+  // since the client resends full history but the backend silently drops the oldest messages to
+  // fit budget, without this note a user couldn't tell the answer was generated on a partial
+  // conversation. toolResults (assistant-only) is one closed-by-default <details> per MCP tool
+  // call, keeping raw output/error available without cluttering the answer. Token usage is NOT
+  // rendered here -- see renderTokenUsage's persistent summary instead.
   function renderChatMessage(role, content, contextTrimmed, toolResults) {
     const msg = document.createElement('div');
     msg.className = role === 'user' ? 'chat-msg chat-msg-user' : 'chat-msg chat-msg-assistant';
@@ -550,11 +489,9 @@
         const input = firstArgumentValue(tr.arguments);
 
         if (name === 'write_file' && !tr.err) {
-          // cmd/mcp-files' write_file tool returns {id, filename, size} as
-          // its JSON output -- render a real download link (pointing at
-          // /account/api/files/{id}, the same endpoint the Your files page
-          // itself links to) rather than only the raw JSON, so a produced
-          // artifact is immediately clickable in the transcript.
+          // write_file returns {id, filename, size} -- render a real download link
+          // (/account/api/files/{id}, same as the Your files page) rather than just raw JSON, so
+          // a produced artifact is immediately clickable.
           let parsed = null;
           try {
             parsed = JSON.parse(tr.output);
@@ -581,10 +518,8 @@
           details.appendChild(buildToolResponseFold(tr, 'Raw output'));
           msg.appendChild(details);
         } else if (name.includes('fetch') && input) {
-          // Two-level fold: the outer <details> is closed by default, same
-          // as every other tool result -- expanding it shows what was
-          // fetched via a real link, with the raw response/error tucked
-          // away in a further-nested, closed-by-default fold.
+          // Two-level fold: outer <details> closed by default like every tool result --
+          // expanding shows the fetched link, with raw response/error in a further-nested fold.
           const details = document.createElement('details');
           details.className = 'chat-hook-result' + (tr.err ? ' chat-hook-result-error' : '');
           const summary = document.createElement('summary');
@@ -604,10 +539,8 @@
           details.appendChild(buildToolResponseFold(tr, tr.err ? 'Error' : 'Response'));
           msg.appendChild(details);
         } else if (name.includes('search') && input) {
-          // Same closed-by-default outer fold, but the target is a query
-          // string (not a link), and -- best effort -- a parsed result
-          // list is shown directly once expanded, with the raw JSON still
-          // available in the nested fold for anyone who wants it.
+          // Same closed-by-default outer fold, but for a query string (not a link) -- a parsed
+          // result list shows once expanded, raw JSON still in the nested fold.
           const details = document.createElement('details');
           details.className = 'chat-hook-result' + (tr.err ? ' chat-hook-result-error' : '');
           const summary = document.createElement('summary');
@@ -647,10 +580,8 @@
           details.appendChild(buildToolResponseFold(tr, tr.err ? 'Error' : 'Raw output'));
           msg.appendChild(details);
         } else {
-          // Generic fallback: today's original single-level, closed-by-
-          // default rendering, unchanged -- used for any tool name that
-          // isn't fetch/search-shaped, and also when a fetch/search tool
-          // fired without a single string argument to show.
+          // Generic fallback: single-level, closed-by-default rendering, for any non-fetch/search
+          // tool or one without a single string argument.
           const details = document.createElement('details');
           details.className = 'chat-hook-result' + (tr.err ? ' chat-hook-result-error' : '');
           const summary = document.createElement('summary');
@@ -665,25 +596,17 @@
     }
 
     chatMessages.appendChild(msg);
-    // Scroll so the new turn's own beginning lands at the top of the
-    // visible area -- #chat-messages is a fixed-height, scrollable box (see
-    // style.css), so without this a long-running conversation would leave
-    // the just-added turn below the visible area until scrolled manually.
-    // Scrolling to msg's own top (rather than chatMessages.scrollHeight,
-    // which would land on the turn's *end*) means a long answer is always
-    // read starting from its first line, not its last.
+    // Scroll so the new turn's beginning lands at the top of #chat-messages (a fixed-height
+    // scrollable box) -- scrolling to msg's top, not chatMessages.scrollHeight (which lands on
+    // the end), means a long answer is always read from its first line.
     chatMessages.scrollTop = msg.offsetTop;
     return msg;
   }
 
-  // renderActiveTab fully re-renders #chat-messages from the active tab's
-  // own stored history -- unlike renderChatMessage (which only ever
-  // appends the newest turn during a live send), this replays every past
-  // turn, needed whenever the visible tab changes (switch/fork/new/import)
-  // since #chat-messages itself holds no state of its own between
-  // switches. Each stored assistant entry keeps its own context_trimmed/
-  // tool_results (see sendChatMessage), so switching back to a tab shows
-  // exactly what it showed before, tool-result folds included.
+  // renderActiveTab fully re-renders #chat-messages from the active tab's stored history,
+  // replaying every past turn -- needed on any tab switch, since #chat-messages holds no state
+  // between switches. Each entry keeps its own context_trimmed/tool_results, so switching back
+  // shows exactly what it showed before.
   function renderActiveTab() {
     clear(chatMessages);
     const tab = activeTab();
@@ -696,19 +619,14 @@
     }
     chatStatus.textContent = '';
     renderTokenUsage(tab.tokenUsage);
-    // Reflect this tab's own chosen agent in the picker -- falls back to
-    // "Default agent" (empty value) if the tab never had one selected, or
-    // if it named an agent this select has no matching option for (e.g.
-    // imported from another deployment, or since deleted).
+    // Reflect this tab's chosen agent in the picker -- falls back to "Default agent" if none was
+    // selected, or it names an agent with no matching option (e.g. imported, or since deleted).
     chatAgentSelect.value = tab.agentId || '';
   }
 
-  // renderTabs rebuilds the tab strip from `tabs` -- called after any
-  // change to the list itself or to which one is active. The close button
-  // is omitted entirely while only one tab remains, so there's always at
-  // least one conversation open; closing never needs a confirmation
-  // dialog since a closed tab's history was already exportable beforehand
-  // if it mattered.
+  // renderTabs rebuilds the tab strip from `tabs` -- called after any change to the list or
+  // active tab. The close button is omitted while only one tab remains, so at least one stays
+  // open; closing needs no confirmation, since history was already exportable beforehand.
   function renderTabs() {
     clear(chatTabList);
     for (const tab of tabs) {
@@ -721,9 +639,8 @@
       switchBtn.type = 'button';
       switchBtn.className = 'chat-tab-label';
       switchBtn.textContent = tab.title;
-      // Clicking the label switches to that tab -- unless it's already
-      // the active one, in which case switching would be a no-op, so
-      // that same click instead renames it (see renameTab).
+      // Clicking the label switches to that tab -- unless already active, where switching is a
+      // no-op, so the click renames it instead (renameTab).
       switchBtn.title = tab.id === activeTabId ? 'Rename "' + tab.title + '"' : tab.title;
       switchBtn.addEventListener('click', () => {
         if (tab.id === activeTabId) {
@@ -775,14 +692,10 @@
     return tab;
   }
 
-  // forkActiveTab deep-copies the active tab's history (each message
-  // object shallow-copied, so editing the fork's own tool_results array
-  // later can't ever mutate the source tab's) into a new, independent tab
-  // and switches to it -- the source conversation keeps going exactly as
-  // it was. A fork always starts unpinned/un-persisted (makeTab's own
-  // defaults), even when forking a pinned chat -- pinning it is a
-  // separate, deliberate action so a fork never silently starts sharing
-  // the source chat's saved files.
+  // forkActiveTab deep-copies the active tab's history (each message shallow-copied, so editing
+  // the fork's tool_results can't mutate the source) into a new tab and switches to it. A fork
+  // always starts unpinned, even from a pinned chat -- pinning is a separate action, so a fork
+  // never silently shares the source's saved files.
   function forkActiveTab() {
     const source = activeTab();
     const tab = makeTab({
@@ -799,11 +712,9 @@
     return tab;
   }
 
-  // renameTab prompts for a new title and applies it locally -- for a
-  // persisted tab, also resyncs the new title to the server immediately
-  // so the rename survives a reload (see resyncPersistedChat). An
-  // unpersisted tab's title is session-only, same as before pinning
-  // existed, so nothing is sent for it.
+  // renameTab prompts for a new title and applies it locally -- for a persisted tab, also
+  // resyncs it to the server so it survives a reload. An unpersisted tab's title is session-only;
+  // nothing is sent.
   function renameTab(id) {
     const tab = tabs.find((t) => t.id === id);
     if (!tab) return;
@@ -816,11 +727,9 @@
     resyncPersistedChat(tab);
   }
 
-  // resyncPersistedChat pushes tab's current title/agent/history to its
-  // own server-side row -- called after every turn and every rename of a
-  // persisted tab. Best-effort: a failed resync leaves the in-memory tab
-  // (and this session's view of it) correct regardless, and the next
-  // successful resync catches the server row back up.
+  // resyncPersistedChat pushes tab's title/agent/history to its server-side row -- called after
+  // every turn/rename of a persisted tab. Best-effort: a failed resync leaves the in-memory tab
+  // correct; the next successful one catches the server up.
   async function resyncPersistedChat(tab) {
     if (!tab.persisted || !tab.chatId) return;
     try {
@@ -834,9 +743,8 @@
     }
   }
 
-  // pinTab creates this tab's server-side PersistedChat row from its
-  // current in-memory state -- from that point on it survives a reload
-  // and may attach files (see updateAttachAvailability).
+  // pinTab creates this tab's server-side PersistedChat row -- from then on it survives a
+  // reload and may attach files.
   async function pinTab(tab) {
     try {
       const resp = await fetch('/account/api/chats', {
@@ -855,9 +763,8 @@
     }
   }
 
-  // unpinTab deletes this tab's server-side row (and every file attached
-  // to it -- see handleAccountDeleteChat's own cascade) but leaves the
-  // tab itself open, now back to a plain session-only conversation.
+  // unpinTab deletes this tab's server-side row (and every attached file, see
+  // handleAccountDeleteChat's cascade) but leaves the tab open, back to session-only.
   async function unpinTab(tab) {
     if (!tab.chatId) return;
     try {
@@ -882,13 +789,10 @@
     }
   }
 
-  // closeTab removes a tab from the strip. For a persisted (pinned) tab
-  // this first deletes its server-side row -- cascading to every file
-  // attached to it, see handleAccountDeleteChat -- before removing it
-  // locally; the tab is left in place (not removed) if that delete fails,
-  // so a chat is never silently orphaned server-side while looking closed
-  // in the UI. An unpersisted tab is simply discarded, exactly as before
-  // pinning existed.
+  // closeTab removes a tab from the strip. A persisted tab first deletes its server-side row
+  // (cascading to attached files) before removing it locally; the tab stays in place if that
+  // delete fails, so a chat is never silently orphaned server-side. An unpersisted tab is simply
+  // discarded.
   async function closeTab(id) {
     if (tabs.length <= 1) return;
     const tab = tabs.find((t) => t.id === id);
@@ -913,19 +817,16 @@
     renderTabs();
   }
 
-  // serializeTab/deserializeTab are the pure JSON shape Export/Import
-  // trade in -- kept separate from the DOM-triggering
-  // exportActiveTab/importTabFromJSON below so the format itself is
-  // testable without a real file download/upload round trip.
+  // serializeTab/deserializeTab are the pure JSON shape Export/Import trade in -- kept separate
+  // from the DOM-triggering functions below so the format is testable without a real file round
+  // trip.
   function serializeTab(tab) {
     return JSON.stringify({ title: tab.title, history: tab.history, agent_id: tab.agentId || '' }, null, 2);
   }
 
-  // deserializeTab validates and normalizes an imported chat export --
-  // tolerant of a hand-edited or partial file (drops any history entry
-  // that isn't a recognizable {role, content} turn, rather than rejecting
-  // the whole import over one bad entry) but throws on something that
-  // isn't a chat export at all (no history array).
+  // deserializeTab validates/normalizes an imported chat export -- tolerant of a hand-edited/
+  // partial file (drops unrecognizable entries rather than rejecting the whole import), but
+  // throws if there's no history array at all.
   function deserializeTab(jsonText) {
     const parsed = JSON.parse(jsonText);
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.history)) {
@@ -944,9 +845,8 @@
     return { title: title, history: history, agentId: agentId };
   }
 
-  // exportActiveTab downloads the active tab as a JSON file via a
-  // throwaway <a download> link -- the standard no-server-round-trip way
-  // to save browser-side data to disk.
+  // exportActiveTab downloads the active tab as JSON via a throwaway <a download> link -- the
+  // standard no-server-round-trip way to save browser data.
   function exportActiveTab() {
     const tab = activeTab();
     const blob = new Blob([serializeTab(tab)], { type: 'application/json' });
@@ -986,19 +886,11 @@
     }
   });
 
-  // uploadAttachedFile posts the chosen file to /account/api/files (the
-  // same self-service endpoint the Your files page uses) -- the file
-  // becomes available for the model to discover and read via the
-  // file-operations MCP server's own tools (list_files/read_file), the
-  // next time the model chooses to look, not injected into the outgoing
-  // message text itself. 404/503 here most likely means no signed-in
-  // regular-user account (an admin session has no files of its own -- see
-  // domain.UploadedFile's own doc comment) or the feature isn't
-  // configured on this deployment. Only a persisted (pinned) tab can
-  // reach this at all -- see updateAttachAvailability, which disables
-  // chatAttachBtn otherwise -- so the active tab always has a chatId here
-  // in practice; the backend rejects an upload with no chat_id regardless
-  // (defense in depth, not relied on as the only gate).
+  // uploadAttachedFile posts to /account/api/files (same endpoint as Your files) -- the model
+  // discovers/reads it via the file-operations MCP server's tools, not injected into the message
+  // text. 404/503 usually means no regular-user session or the feature isn't configured. Only a
+  // pinned tab can reach this (updateAttachAvailability disables the button otherwise); the
+  // backend also rejects an upload with no chat_id as defense in depth.
   async function uploadAttachedFile(file) {
     const tab = activeTab();
     const body = new FormData();
@@ -1023,13 +915,9 @@
     }
   });
 
-  // renderChatFileBox builds one box for #chat-files -- a real download
-  // link (never a JS-triggered download, so it works the same as any
-  // other link: open in a new tab, copy the address, etc.) plus a "×"
-  // button that deletes it outright, no confirmation dialog -- unlike
-  // the Your files page's own delete (a more deliberate settings-page
-  // action), this is meant as a quick, low-friction remove for a file
-  // just attached or produced in this same conversation.
+  // renderChatFileBox builds one box for #chat-files -- a real download link (works like any
+  // link: open in new tab, copy address) plus a "×" that deletes outright, no confirmation -- a
+  // quick, low-friction remove, unlike the Your files page's more deliberate delete.
   function renderChatFileBox(f) {
     const box = document.createElement('div');
     box.className = 'chat-file-box';
@@ -1050,26 +938,19 @@
     return box;
   }
 
-  // renderChatFiles fully replaces #chat-files' contents -- called after
-  // every load/upload/create/delete rather than patched incrementally,
-  // the same "small list, just re-render it" convention account_files.js
-  // uses for its own table. Hidden entirely (not just empty) when there
-  // are no files, so it never reserves visible space for nothing.
+  // renderChatFiles fully replaces #chat-files' contents after every load/upload/create/delete,
+  // same "small list, re-render it" convention as account_files.js. Hidden entirely (not just
+  // empty) when there are no files.
   function renderChatFiles(files) {
     clear(chatFiles);
     files.forEach((f) => chatFiles.appendChild(renderChatFileBox(f)));
     chatFiles.hidden = files.length === 0;
   }
 
-  // loadChatFiles is best-effort and silent on failure, same tolerance as
-  // loadSession -- a role=admin session (no files of its own) or
-  // Files not configured on this deployment both 404/503 here, and
-  // #chat-files should just stay empty/hidden rather than show an error
-  // for a feature this session was never going to have anyway. Scoped to
-  // the active tab's own chat_id -- an unpersisted tab has none, so it
-  // short-circuits to an empty (hidden) strip rather than fetching the
-  // account's *entire* unscoped file list (that unscoped view is what the
-  // Your files page itself is for, not a tab that was never pinned).
+  // loadChatFiles is best-effort and silent on failure (like loadSession) -- an admin session or
+  // unconfigured Files both 404/503, and #chat-files just stays hidden. Scoped to the active
+  // tab's chat_id -- an unpersisted tab has none, so it short-circuits to empty rather than
+  // fetching the account's entire file list (that's what Your files is for).
   async function loadChatFiles() {
     const tab = activeTab();
     if (!tab || !tab.persisted || !tab.chatId) {
@@ -1085,10 +966,8 @@
     }
   }
 
-  // updateAttachAvailability enables the attach button only for a
-  // persisted (pinned) tab -- see account_files.go's own chat_id
-  // requirement on upload: an unpinned tab has no chat_id to attach a
-  // file against.
+  // updateAttachAvailability enables the attach button only for a pinned tab -- account_files.go
+  // requires a chat_id on upload, and an unpinned tab has none.
   function updateAttachAvailability() {
     const tab = activeTab();
     const persisted = !!(tab && tab.persisted);
@@ -1097,25 +976,18 @@
     chatAttachBtn.setAttribute('aria-label', chatAttachBtn.title);
   }
 
-  // refreshTabFileState re-evaluates file-attachment availability and
-  // reloads the file strip for whichever tab is now active -- called
-  // after anything that changes the active tab or a tab's persisted
-  // state (switch/new/fork/close/import/pin/unpin).
+  // refreshTabFileState re-evaluates attach availability and reloads the file strip for the
+  // active tab -- called after anything that changes the active tab or its persisted state.
   function refreshTabFileState() {
     updateAttachAvailability();
     loadChatFiles();
   }
 
-  // loadPersistedChats reloads every one of this account's pinned chats
-  // on page load, replacing the single default empty tab with them (most
-  // recently updated first, same order ListChats itself returns) --
-  // called only for a confirmed role=user session (see loadSession).
-  // Leaves the default tab alone if the account has no pinned chats yet.
-  // A pinned chat's own history round-trips only {role, content} (see
-  // pinnedChatRequest's own doc comment) -- context_trimmed/tool_results
-  // are UI-only rendering metadata never sent to or stored by the
-  // server, so a reloaded turn's tool-result folds are simply not shown
-  // again, same as this tab starting a brand new one would look.
+  // loadPersistedChats reloads every pinned chat on page load, replacing the default empty tab
+  // (most-recently-updated first, per ListChats) -- only for a confirmed role=user session.
+  // Leaves the default tab alone if there are no pinned chats. History round-trips only
+  // {role, content}; context_trimmed/tool_results are UI-only and never stored, so a reloaded
+  // turn's tool-result folds simply don't reappear.
   async function loadPersistedChats() {
     try {
       const resp = await fetch('/account/api/chats');
@@ -1153,36 +1025,21 @@
     }
   }
 
-  // toWireHistory strips a tab's own client-side rendering metadata
-  // (context_trimmed/tool_results, kept in tab.history purely so
-  // renderActiveTab can faithfully replay a tab's folds after switching
-  // away and back -- see sendChatMessage/deserializeTab) down to the bare
-  // {role, content} pairs the backend actually reads (see
-  // domain.ChatMessage's own json tags -- anything else is silently
-  // ignored server-side anyway). Sending the untrimmed entries directly
-  // was a real bug: tool_results carries each web_fetch call's full,
-  // UNtruncated page text (application.maxHookOutputCharsForModel only
-  // caps what's fed back to the model internally, not what the HTTP
-  // response returns), so a conversation with even a few tool calls would
-  // resend that same large payload, growing every turn, until nginx's
-  // client_max_body_size rejected the request outright (413).
+  // toWireHistory strips client-side rendering metadata (context_trimmed/tool_results, kept
+  // only so renderActiveTab can replay folds) down to the {role, content} pairs the backend
+  // reads. Sending the untrimmed entries was a real bug: tool_results carries each web_fetch's
+  // full untruncated page text, so even a few tool calls made the resent payload grow every turn
+  // until nginx's client_max_body_size rejected it (413).
   function toWireHistory(history) {
     return history.map((m) => ({ role: m.role, content: m.content }));
   }
 
-  // sendChatMessage appends the user's turn to the active tab's own
-  // history, renders it immediately, then POSTs the full history to /chat
-  // -- see runSearch above for the same ok/non-ok/network-failure pattern
-  // this mirrors. web_search is read fresh from its checkbox on every
-  // call, so switching it mid-conversation only ever affects the question
-  // being asked right now, not history already answered under other
-  // settings. tab is captured once at the start (not re-read as
-  // activeTab() after the await) so a reply that arrives after the user
-  // has switched to a different tab still updates the RIGHT tab's stored
-  // history -- but only touches the visible DOM (chatMessages/chatStatus/
-  // the donut) when that tab is still the one on screen, so a slow
-  // background answer can never clobber whatever tab the user is looking
-  // at by then.
+  // sendChatMessage appends the user's turn, renders it, then POSTs full history to /chat --
+  // mirrors runSearch's ok/non-ok/network-failure pattern. web_search is read fresh each call,
+  // so toggling it mid-conversation only affects the current question. tab is captured once up
+  // front (not re-read after the await), so a late reply updates the RIGHT tab's history, but
+  // only touches the visible DOM if that tab is still on screen -- a slow background answer can
+  // never clobber whatever's currently shown.
   async function sendChatMessage(content) {
     const tab = activeTab();
     tab.history.push({ role: 'user', content });
@@ -1196,10 +1053,8 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: toWireHistory(tab.history), web_search: chatWebSearch.checked, agent_id: tab.agentId || '',
-          // chat_id, only for a pinned tab -- scopes this turn's own
-          // file-access token (see fileAccessTokenFor) to this chat, so
-          // the file-operations MCP server only ever sees this chat's
-          // own attached files during it.
+          // chat_id, only for a pinned tab -- scopes this turn's file-access token to this chat,
+          // so the file-operations MCP server only sees this chat's files.
           chat_id: tab.persisted ? (tab.chatId || '') : '',
         }),
       });
@@ -1221,19 +1076,15 @@
         chatStatus.textContent = '';
       }
     } catch (err) {
-      // err isn't inspected: this is a network-level failure (fetch itself
-      // rejected, e.g. offline), so there's no server response text to
-      // include the way the !resp.ok branch above does -- a generic message
-      // is all there is to show.
+      // err isn't inspected: a network-level failure has no server response text to include,
+      // unlike the !resp.ok branch -- a generic message is all there is.
       if (tab.id === activeTabId) chatStatus.textContent = 'Chat failed: could not reach the server.';
     }
   }
 
-  // setMode swaps the page between its two independent views. Only
-  // #correction-note has hidden-state of its own (renderCorrectionNote
-  // shows/hides it depending on whether the last search had a correction),
-  // so its prior state is saved and restored rather than forced open --
-  // everything else here is unconditionally shown/hidden together.
+  // setMode swaps between the two independent views. Only #correction-note has its own
+  // hidden-state (set by renderCorrectionNote), so it's saved/restored rather than forced open;
+  // everything else is unconditionally shown/hidden.
   let correctionNoteHiddenBeforeChat = true;
 
   function setMode(mode) {
@@ -1282,10 +1133,9 @@
     sendChatMessage(content);
   });
 
-  // chat-input is a <textarea> (multi-line input, so the user can compose a
-  // longer question) -- unlike a plain text <input>, a <textarea> never
-  // submits its form on Enter by itself, so this wires up the standard chat
-  // convention by hand: Enter alone sends, Shift+Enter inserts a newline.
+  // chat-input is a <textarea> (for multi-line questions) -- unlike <input>, it never submits
+  // on Enter by itself, so this wires the standard chat convention by hand: Enter sends,
+  // Shift+Enter newlines.
   chatInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -1307,17 +1157,10 @@
     runSearch(query, sortSelect.value);
   });
 
-  // loadSession asks the backend which role the current session has (an
-  // admin-only session vs. a regular self-service user) and shows exactly
-  // one of the two header icon links accordingly -- #admin-link and
-  // #account-link both start hidden in index.html, so any failure path
-  // here (network error, non-ok status) just leaves both hidden rather
-  // than risking showing the admin backend link to a non-admin session.
-  // This is a non-critical UI enhancement fetch (worst case: no icon link
-  // at all), so failures are swallowed silently, matching this file's
-  // existing tone for that kind of call (cf. runSearch/sendChatMessage,
-  // which surface errors because they're the user's actual action, vs. this
-  // one which isn't triggered by anything the user did).
+  // loadSession asks which role the session has and shows exactly one of #admin-link/#account-
+  // link -- both start hidden, so any failure leaves both hidden rather than risk showing the
+  // admin link to a non-admin. Non-critical: failures are swallowed silently, unlike
+  // runSearch/sendChatMessage, which surface errors since those are direct user actions.
   async function loadSession() {
     try {
       const resp = await fetch('/session');
@@ -1336,10 +1179,8 @@
 
   loadSession();
 
-  // Mirrors admin.js's wireSignOut -- this page doesn't load admin.js (it's
-  // the public site, not the admin backend), so the same few lines are
-  // inlined here rather than pulling in the whole admin script for one
-  // function.
+  // Mirrors admin.js's wireSignOut -- this page doesn't load admin.js (it's the public site), so
+  // the same few lines are inlined rather than pulling in the whole script for one function.
   document.getElementById('sign-out').addEventListener('click', async () => {
     try {
       await fetch('/logout', { method: 'POST' });

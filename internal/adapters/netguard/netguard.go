@@ -1,14 +1,10 @@
-// Package netguard is a shared SSRF guard for outbound fetches this app
-// makes to addresses it does not fully control. It has two policies:
-// AllowedIP for the crawler (crawled sites are untrusted and can redirect
-// to, or request, an internal address like a cloud metadata service, so
-// every private/reserved range is blocked), and the more permissive
-// AllowedConfiguredEndpointIP for admin-configured integration endpoints
-// (chat/embedding BaseURL) -- those legitimately, and commonly, point at a
-// self-hosted backend on a private network or even loopback, so only
-// classes of address with no legitimate self-hosted-integration use case
-// (link-local, which covers every cloud provider's 169.254.169.254-style
-// metadata service, plus multicast/unspecified) are blocked there.
+// Package netguard is a shared SSRF guard for outbound fetches to addresses
+// this app doesn't fully control. Two policies: AllowedIP for the crawler
+// (untrusted sites, so every private/reserved range is blocked), and the
+// more permissive AllowedConfiguredEndpointIP for admin-configured chat/
+// embedding endpoints (legitimately often private/loopback -- only
+// link-local, e.g. cloud metadata IPs, plus multicast/unspecified are
+// blocked there).
 package netguard
 
 import (
@@ -21,10 +17,8 @@ import (
 	"time"
 )
 
-// cgnatBlock is the IPv4 Carrier-Grade NAT range (RFC 6598) -- reserved for
-// ISP-internal use, not covered by net.IP.IsPrivate() (which only knows
-// RFC1918 + the IPv6 ULA range), but just as much an internal-network
-// address as 10.0.0.0/8 from this app's point of view.
+// cgnatBlock is the IPv4 Carrier-Grade NAT range (RFC 6598) -- ISP-internal,
+// not covered by net.IP.IsPrivate(), but just as internal as 10.0.0.0/8.
 var cgnatBlock = mustParseCIDR("100.64.0.0/10")
 
 func mustParseCIDR(s string) *net.IPNet {
@@ -59,14 +53,11 @@ func AllowedIP(ip net.IP) bool {
 	return true
 }
 
-// AllowedConfiguredEndpointIP reports whether ip is safe to connect to for
-// an admin-configured integration endpoint (a ChatEndpoint or
-// EmbeddingHTTPEndpoint BaseURL) -- see the package doc for why this is
-// deliberately more permissive than AllowedIP: loopback and
-// private/CGNAT ranges stay allowed since a self-hosted LLM/embedding
-// backend commonly lives on exactly those. Only link-local (unicast and
-// multicast -- this covers the 169.254.169.254 cloud metadata address),
-// other multicast, and unspecified addresses are blocked.
+// AllowedConfiguredEndpointIP is AllowedIP's more permissive counterpart for
+// an admin-configured endpoint (see package doc): loopback/private/CGNAT
+// stay allowed since a self-hosted backend commonly lives there. Only
+// link-local (covers cloud metadata IPs), other multicast, and unspecified
+// addresses are blocked.
 func AllowedConfiguredEndpointIP(ip net.IP) bool {
 	if ip == nil {
 		return false
@@ -96,12 +87,11 @@ func (e *blockedErr) Error() string {
 	return fmt.Sprintf("netguard: connection to %s is blocked (loopback/private/reserved address)", e.addr)
 }
 
-// SafeDialContext returns a DialContext for an *http.Transport that rejects
-// any connection to a loopback/private/reserved IP (AllowedIP's policy),
-// checked via the dialer's Control hook against the exact address about to
-// connect. That timing (post-DNS, pre-socket) closes both a
-// redirect-to-internal-URL bypass and DNS rebinding, which a pre-flight
-// hostname check can't.
+// SafeDialContext returns a DialContext rejecting any connection to a
+// loopback/private/reserved IP (AllowedIP's policy), checked post-DNS
+// pre-socket via the dialer's Control hook -- closes both a
+// redirect-to-internal-URL bypass and DNS rebinding, unlike a pre-flight
+// hostname check.
 func SafeDialContext() func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return safeDialContext(AllowedIP)
 }
@@ -135,10 +125,9 @@ func dialControl(allowed func(net.IP) bool) func(_, address string, _ syscall.Ra
 	}
 }
 
-// Transport is a ready-to-use *http.Transport that routes every dial
-// (initial connection and every redirect hop) through SafeDialContext.
-// Cloning http.DefaultTransport keeps its other tuning (idle connections,
-// TLS handshake timeout, etc.) rather than reinventing it.
+// Transport routes every dial (initial connection and redirect hops)
+// through SafeDialContext, cloning http.DefaultTransport to keep its other
+// tuning rather than reinventing it.
 func Transport() *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.DialContext = SafeDialContext()
@@ -156,27 +145,19 @@ func ConfiguredEndpointTransport() *http.Transport {
 
 // URLAllowed reports whether rawURL's scheme is http(s) and every IP its
 // host resolves to is allowed under AllowedIP's policy. Used where a
-// request never goes through an http.Transport at all -- e.g. the
-// headless-browser renderer's own request interception, which has no
-// dialer of its own to hook.
-//
-// This is a resolve-then-check, not a connect-time check, so it carries the
-// same DNS-rebinding TOCTOU gap as browserfetcher's Route handler -- neither
-// Chromium nor Firefox expose a dial-level hook, so this is the strongest
-// guard available at this layer.
+// request never goes through an http.Transport (e.g. browserfetcher's own
+// request interception, which has no dialer to hook) -- a resolve-then-check,
+// so it carries the same DNS-rebinding TOCTOU gap as that handler, since
+// neither Chromium nor Firefox expose a dial-level hook.
 func URLAllowed(rawURL string) bool {
 	return urlAllowed(rawURL, AllowedIP)
 }
 
-// ConfiguredEndpointURLAllowed is URLAllowed's counterpart for an
-// admin-configured integration endpoint, using
-// AllowedConfiguredEndpointIP's more permissive policy instead. httpchat
-// and httpembed check this immediately before building each request, as a
-// pre-flight barrier alongside ConfiguredEndpointTransport's connect-time
-// one (belt-and-suspenders against the exact same DNS-rebinding TOCTOU gap
-// URLAllowed's own doc notes -- a Transport-level check alone closes it,
-// but a pre-request check is also what a static SSRF analyzer can
-// recognize as a guard on the URL actually used to build the request).
+// ConfiguredEndpointURLAllowed is URLAllowed's counterpart using
+// AllowedConfiguredEndpointIP's more permissive policy. httpchat/httpembed
+// check this before building each request, a pre-flight barrier alongside
+// ConfiguredEndpointTransport's connect-time check (belt-and-suspenders
+// against the same TOCTOU gap, and recognizable to a static SSRF analyzer).
 func ConfiguredEndpointURLAllowed(rawURL string) bool {
 	return urlAllowed(rawURL, AllowedConfiguredEndpointIP)
 }

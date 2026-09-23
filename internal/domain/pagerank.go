@@ -5,50 +5,39 @@ import (
 	"time"
 )
 
-// PageRankDamping is the classic PageRank damping factor d: the
-// probability mass a page passes along its outbound links, versus (1-d)
-// distributed evenly across every page regardless of link structure.
+// PageRankDamping is the classic damping factor d: probability mass passed
+// along outbound links, vs (1-d) spread evenly across every page.
 const PageRankDamping = 0.85
 
-// PageRankMaxIterations bounds how many rounds PageRank ever runs, so a
-// pathological graph (or one that oscillates rather than settling) can't
-// loop forever -- convergence usually happens well before this in practice.
+// PageRankMaxIterations bounds rounds so a pathological graph can't loop
+// forever -- convergence usually happens well before this.
 const PageRankMaxIterations = 50
 
-// PageRankEpsilon is the convergence threshold: once the sum of every
-// node's absolute score change from one iteration to the next drops below
-// this, the scores are considered settled and iteration stops early.
+// PageRankEpsilon is the convergence threshold: once total absolute score
+// change per iteration drops below this, iteration stops early.
 const PageRankEpsilon = 1e-6
 
-// PageRankOrphanThreshold is the pagerank value below which a document is
-// treated as an "orphan" (functionally unlinked) for the admin Overview
-// page. Equals PageRankEpsilon: this small only happens once PageRank has
-// actually run and found no real incoming link weight, not merely because
-// it hasn't been recomputed yet (a never-recomputed doc sits at 1/N).
+// PageRankOrphanThreshold is the pagerank below which a document counts as
+// an "orphan" for the Overview page. Equals PageRankEpsilon: a
+// never-recomputed doc defaults to 1/N, well above this.
 const PageRankOrphanThreshold = 1e-6
 
-// PageRankHistogramBuckets is how many equal-width buckets
-// sqlrepo.Repository.PageRankHistogram divides the corpus's observed
-// [min, max] pagerank range into for the admin Overview page's
-// distribution histogram.
+// PageRankHistogramBuckets is how many equal-width buckets the corpus's
+// observed [min, max] pagerank range is divided into for the Overview
+// page's histogram.
 const PageRankHistogramBuckets = 10
 
-// PageRankRunInfo reports how a PageRank computation ran (iterations
-// taken, distance from full convergence, wall-clock duration) -- useful
-// diagnostics for the admin PageRank debug page. DurationMs is set by
-// application.RunPageRankJob (covers the whole job, not just the
-// in-memory iteration below), not by PageRank itself.
+// PageRankRunInfo reports how a PageRank computation ran (iterations,
+// convergence distance, duration) for the admin debug page. DurationMs is
+// set by RunPageRankJob (whole job), not PageRank itself.
 type PageRankRunInfo struct {
 	Iterations int     `json:"iterations,omitempty"`
 	FinalDelta float64 `json:"final_delta,omitempty"`
 	DurationMs int64   `json:"duration_ms,omitempty"`
 }
 
-// PageRankStatus is the persisted, cross-process-visible record of the
-// last PageRank recompute, so the admin debug page shows whether any
-// process is currently recomputing, and what the last run found. An
-// in-progress run leaves the other fields untouched, so a viewer sees
-// the previous result rather than a blank slate.
+// PageRankStatus is the persisted record of the last PageRank recompute.
+// An in-progress run leaves the other fields untouched.
 type PageRankStatus struct {
 	InProgress bool      `json:"in_progress"`
 	LastRunAt  time.Time `json:"last_run_at,omitempty"`
@@ -73,9 +62,8 @@ func PageRank(adjacency map[string][]string) (map[string]float64, PageRankRunInf
 		return map[string]float64{}, PageRankRunInfo{}
 	}
 
-	// Build a stable node-ID <-> dense integer index mapping once up
-	// front, so the whole iterative computation below can work with
-	// plain, index-addressed slices instead of string-keyed maps.
+	// Build a stable node-ID <-> dense index mapping once, so the
+	// iteration below uses index-addressed slices, not string-keyed maps.
 	id := make([]string, n)
 	idx := make(map[string]int, n)
 	i := 0
@@ -86,11 +74,9 @@ func PageRank(adjacency map[string][]string) (map[string]float64, PageRankRunInf
 	}
 
 	outdegree := make([]int32, n)
-	// incomingOffsets/incomingEdges together form a CSR-style flattened
-	// adjacency list: node v's contributors are
-	// incomingEdges[incomingOffsets[v]:incomingOffsets[v+1]]. Built with a
-	// single counting pass + single fill pass so it's one flat
-	// allocation rather than n growing []string slices.
+	// incomingOffsets/incomingEdges form a CSR-style flattened adjacency
+	// list: node v's contributors are incomingEdges[incomingOffsets[v]:
+	// incomingOffsets[v+1]]. One flat allocation, not n growing slices.
 	incomingCount := make([]int32, n)
 	for from, tos := range adjacency {
 		fi := idx[from]
@@ -125,10 +111,8 @@ func PageRank(adjacency map[string][]string) (map[string]float64, PageRankRunInf
 		scores[v] = init
 	}
 
-	// contribution[u] is what u passes along each of its outbound links
-	// this iteration -- computed once per node (not once per incoming
-	// edge) since every edge out of u carries the identical
-	// scores[u]/outdegree[u] share.
+	// contribution[u] is what u passes along each outbound link this
+	// iteration -- computed once per node, since every edge shares it.
 	contribution := make([]float64, n)
 	info := PageRankRunInfo{}
 	for iter := 0; iter < PageRankMaxIterations; iter++ {

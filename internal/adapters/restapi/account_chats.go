@@ -15,10 +15,8 @@ const (
 )
 
 // pinnedChatRequest is the wire shape POST/PATCH /account/api/chats accepts --
-// History reuses domain.ChatMessage's own JSON shape directly (the exact
-// array index.js's own tab.history already holds), so pinning or
-// resyncing a tab is a straight round trip of what the client already
-// has in memory, no reshaping needed on either side.
+// History reuses domain.ChatMessage's JSON shape directly, so syncing a tab
+// is a straight round trip of what index.js already holds in memory.
 type pinnedChatRequest struct {
 	Title   string               `json:"title"`
 	AgentID string               `json:"agent_id"`
@@ -87,9 +85,8 @@ func (h *Handler) handleAccountChats(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleAccountUpdateChat replaces one of the calling session's own pinned
-// chats' Title/AgentID/History -- used both for a plain rename (title
-// only changed) and for resyncing history after every turn.
+// handleAccountUpdateChat replaces a pinned chat's Title/AgentID/History --
+// used both for a plain rename and for resyncing history after each turn.
 func (h *Handler) handleAccountUpdateChat(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.chats != nil, accountChatsFeatureName) {
 		return
@@ -115,9 +112,8 @@ func (h *Handler) handleAccountUpdateChat(w http.ResponseWriter, r *http.Request
 	respondOrNotFound(w, err, ports.ErrChatNotFound, accountChatNotFound, toPinnedChatResponse(c))
 }
 
-// handleAccountDeleteChat unpins (removes) one of the calling session's
-// own chats -- cascades to delete every file attached to it (see the
-// chats table's own foreign key from uploaded_files).
+// handleAccountDeleteChat unpins one of the session's own chats -- cascades
+// to delete every file attached to it (uploaded_files' FK on chats).
 func (h *Handler) handleAccountDeleteChat(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.chats != nil, accountChatsFeatureName) {
 		return

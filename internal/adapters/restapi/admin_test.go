@@ -85,11 +85,9 @@ type fakeAdminRepo struct {
 	clearSettingsErr    error
 	clearSettingsCalled bool
 
-	// mu guards deletedIDs, written from handleAdminDeleteDomainDocuments'
-	// own background goroutine and read back from a test's polling
-	// goroutine -- unlike deletedID above (only ever touched synchronously
-	// by the single-document-delete tests), this needs real synchronization
-	// to be race-free.
+	// mu guards deletedIDs, written from the background goroutine and read
+	// back from a test's polling goroutine -- unlike deletedID above
+	// (touched synchronously), this needs real synchronization.
 	mu         sync.Mutex
 	deletedIDs []string
 }
@@ -210,8 +208,7 @@ func (f *fakeDebugSearch) Search(_ context.Context, _ string, opts ports.SearchQ
 
 // fakeEmbeddingProvider is a minimal ports.EmbeddingProvider a test can
 // inject via restapi.Config.NewEmbedder (see stubNewEmbedder) so
-// testEmbeddingConnectivity (the embedding endpoint connectivity-test
-// probe) never makes a real network call from the test suite.
+// testEmbeddingConnectivity never makes a real network call.
 type fakeEmbeddingProvider struct {
 	err error
 }
@@ -222,8 +219,7 @@ func (f fakeEmbeddingProvider) Embed(context.Context, string) ([]float32, error)
 func (f fakeEmbeddingProvider) Dimensions() int { return 1 }
 
 // stubNewEmbedder returns a restapi.Config.NewEmbedder that always hands
-// back a fakeEmbeddingProvider failing with err (nil for success),
-// regardless of the candidate endpoint config it's given.
+// back a fakeEmbeddingProvider failing with err (nil for success).
 func stubNewEmbedder(err error) func(domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider {
 	return func(domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider {
 		return fakeEmbeddingProvider{err: err}
@@ -231,11 +227,9 @@ func stubNewEmbedder(err error) func(domain.EmbeddingHTTPEndpoint) ports.Embeddi
 }
 
 // fakeEmbeddingProviderWithModels extends fakeEmbeddingProvider with
-// ListModels, satisfying restapi's unexported modelLister interface via
-// Go's structural typing -- used to exercise
-// handleAdminEmbeddingsModels' success and ListModels-error paths.
-// fakeEmbeddingProvider itself (no ListModels method) is what exercises
-// its "provider doesn't support listing models" branch.
+// ListModels, satisfying restapi's unexported modelLister interface --
+// exercises handleAdminEmbeddingsModels' success/error paths.
+// fakeEmbeddingProvider itself exercises the "no listing support" branch.
 type fakeEmbeddingProviderWithModels struct {
 	fakeEmbeddingProvider
 	models    []string
@@ -272,10 +266,8 @@ func adminAuthedHandlerWithOverrides(t *testing.T, admin ports.AdminRepository, 
 }
 
 // adminAuthedHandlerFromConfig builds a Handler from cfg (forcing in the
-// test admin credentials every other helper here hard-codes) and logs in,
-// for tests that need a Config field none of the narrower helpers expose
-// (e.g. NewEmbedder, to stub out handleAdminSettings' embedding-connectivity
-// probe).
+// test admin credentials) and logs in, for tests needing a Config field no
+// narrower helper exposes (e.g. NewEmbedder).
 func adminAuthedHandlerFromConfig(t *testing.T, cfg restapi.Config) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
 	cfg.AdminUser = testAdminUser
@@ -291,9 +283,9 @@ func adminAuthedHandlerFromConfig(t *testing.T, cfg restapi.Config) (*restapi.Ha
 	return h, rec.Result().Cookies()[0]
 }
 
-// adminAuthedHandlerWithOverviewDeps wires up the three dependencies
-// handleAdminOverviewMetrics reads from -- admin (required), jobs and
-// scheduledCrawls (each independently optional; see its own doc comment).
+// adminAuthedHandlerWithOverviewDeps wires the three dependencies
+// handleAdminOverviewMetrics reads: admin (required), jobs and
+// scheduledCrawls (each independently optional).
 func adminAuthedHandlerWithOverviewDeps(t *testing.T, admin ports.AdminRepository, jobs ports.CrawlJobService, scheduledCrawls ports.ScheduledCrawlStore) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
 	h := restapi.New(restapi.Config{
@@ -567,9 +559,8 @@ func TestHandleAdminVocabulary_ReportsMatchedCountSeparateFromVocabularySize(t *
 	}
 }
 
-// TestHandleAdminVocabulary_NonNumericLimitFallsBackToDefault proves
-// intQueryParam's parse-failure branch: a non-numeric ?limit= is treated
-// the same as an absent one, not a 400.
+// TestHandleAdminVocabulary_NonNumericLimitFallsBackToDefault proves a
+// non-numeric ?limit= is treated the same as an absent one, not a 400.
 func TestHandleAdminVocabulary_NonNumericLimitFallsBackToDefault(t *testing.T) {
 	repo := &fakeAdminRepo{vocabularySize: 1}
 	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
@@ -839,14 +830,10 @@ func TestHandleAdminDocumentsOverview_ServiceError(t *testing.T) {
 	}
 }
 
-// overviewMetricsTestResp mirrors handleAdminOverviewMetrics' JSON response
-// shape (the real adminOverviewMetrics type is unexported in package
-// restapi, unreachable from this restapi_test package). Named (rather than
-// anonymous, as it used to be) so checkOverviewTier1/checkOverviewTier2
-// below can take it as a parameter -- splitting
-// TestHandleAdminOverviewMetrics_Success's single long chain of assertions
-// into smaller, independently-scoped helper functions to keep each one's
-// cognitive complexity low.
+// overviewMetricsTestResp mirrors handleAdminOverviewMetrics' JSON
+// response shape (unexported in package restapi). Named so
+// checkOverviewTier1/checkOverviewTier2 below can take it as a parameter,
+// splitting one long assertion chain into smaller helpers.
 type overviewMetricsTestResp struct {
 	RunningCrawlJobs int `json:"running_crawl_jobs"`
 	QueuedCrawlJobs  int `json:"queued_crawl_jobs"`
@@ -891,8 +878,7 @@ type overviewMetricsTestResp struct {
 }
 
 // checkOverviewTier1 asserts the pure-aggregation fields (see
-// adminOverviewMetrics' own "Tier 1" comment): crawl job counts, schedule
-// health, and DB pool passthrough.
+// adminOverviewMetrics' "Tier 1" comment): job counts, schedule health, DB pool.
 func checkOverviewTier1(t *testing.T, resp overviewMetricsTestResp) {
 	t.Helper()
 	if resp.RunningCrawlJobs != 1 || resp.QueuedCrawlJobs != 1 {
@@ -911,9 +897,8 @@ func checkOverviewTier1(t *testing.T, resp overviewMetricsTestResp) {
 	}
 }
 
-// checkOverviewTier2 asserts the trend-chart fields, each backed by its own
-// AdminRepository aggregate query (see adminOverviewMetrics' own "Tier 2"
-// comment).
+// checkOverviewTier2 asserts the trend-chart fields, each backed by its
+// own AdminRepository aggregate query.
 func checkOverviewTier2(t *testing.T, resp overviewMetricsTestResp) {
 	t.Helper()
 	if len(resp.JobOutcomes) != 2 || resp.JobOutcomes[0].Status != "done" || resp.JobOutcomes[0].Count != 3 {
@@ -987,8 +972,8 @@ func TestHandleAdminOverviewMetrics_Success(t *testing.T) {
 	checkOverviewTier2(t, resp)
 
 	// CrawlJobOutcomes' lookback window is documented as 30 days
-	// (overviewJobOutcomeDays) -- assert the cutoff it actually received
-	// reflects that, not some other tier-2 query's window.
+	// (overviewJobOutcomeDays) -- assert the cutoff reflects that, not
+	// some other tier-2 query's window.
 	wantJobOutcomeSince := now.AddDate(0, 0, -30)
 	if admin.gotJobOutcomesSince.Sub(wantJobOutcomeSince).Abs() > time.Minute {
 		t.Errorf("expected CrawlJobOutcomes since ~%v, got %v", wantJobOutcomeSince, admin.gotJobOutcomesSince)
@@ -1018,9 +1003,8 @@ func TestHandleAdminOverviewMetrics_MethodNotAllowed(t *testing.T) {
 }
 
 // TestHandleAdminOverviewMetrics_JobsAndSchedulesNilDegradeGracefully proves
-// the endpoint still succeeds (with tier-1 crawl-job/schedule fields simply
-// zeroed) when h.jobs/h.scheduledCrawls aren't configured -- only h.admin is
-// required.
+// the endpoint still succeeds (tier-1 fields zeroed) when
+// h.jobs/h.scheduledCrawls aren't configured -- only h.admin is required.
 func TestHandleAdminOverviewMetrics_JobsAndSchedulesNilDegradeGracefully(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithOverviewDeps(t, &fakeAdminRepo{}, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview/metrics", nil)
@@ -1120,8 +1104,8 @@ func TestHandleAdminOverviewMetrics_PageRankHistogramError(t *testing.T) {
 }
 
 // TestHandleAdminOverviewMetrics_EmptyPageRankHistogramSkipsPercent proves
-// pagerank_orphan_percent stays 0 (rather than a NaN/divide-by-zero) for an
-// empty corpus, where PageRankHistogram reports totalDocs=0.
+// pagerank_orphan_percent stays 0, not NaN, for an empty corpus
+// (PageRankHistogram reports totalDocs=0).
 func TestHandleAdminOverviewMetrics_EmptyPageRankHistogramSkipsPercent(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithOverviewDeps(t, &fakeAdminRepo{}, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview/metrics", nil)
@@ -1256,9 +1240,8 @@ func TestHandleAdminPostings_Success(t *testing.T) {
 }
 
 // TestHandleAdminPostings_Limit verifies the ?limit= override reaches
-// PostingsForTerm, and that a missing/non-numeric value falls back to
-// defaultPostingsLimit -- the same convention as the vocabulary and
-// document-list endpoints' ?limit= handling.
+// PostingsForTerm, and a missing/non-numeric value falls back to
+// defaultPostingsLimit.
 func TestHandleAdminPostings_Limit(t *testing.T) {
 	repo := &fakeAdminRepo{postings: []domain.PostingStats{{DocID: "doc-0"}}}
 	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
@@ -1278,10 +1261,9 @@ func TestHandleAdminPostings_Limit(t *testing.T) {
 	}
 }
 
-// TestHandleAdminPostings_IncludesURLTitleAndSnippet verifies the
-// vocabulary term-detail view's enrichment: each posting's URL, title, and
-// a match excerpt (built from the fetched document's text), not just the
-// raw doc_id/term_freq/doc_length triple.
+// TestHandleAdminPostings_IncludesURLTitleAndSnippet verifies each
+// posting's URL, title, and match excerpt, not just the raw
+// doc_id/term_freq/doc_length triple.
 func TestHandleAdminPostings_IncludesURLTitleAndSnippet(t *testing.T) {
 	postings := []domain.PostingStats{{DocID: "doc-0", TermFreq: 3, DocLength: 10, DocFreq: 1}}
 	docs := map[string]domain.Document{
@@ -1381,9 +1363,8 @@ func TestHandleAdminSearch_Success(t *testing.T) {
 	}
 }
 
-// TestHandleAdminSearch_SurfacesCorrectedTerms verifies a fuzzy correction
-// made by the search service is passed through to the debug JSON response,
-// so the admin UI can show it.
+// TestHandleAdminSearch_SurfacesCorrectedTerms verifies a fuzzy
+// correction is passed through to the debug JSON response.
 func TestHandleAdminSearch_SurfacesCorrectedTerms(t *testing.T) {
 	results := []domain.HybridResult{{
 		DocID: "doc-0", URL: "http://a", Title: "A", BM25Score: 1.2, SemanticSim: 0.5, FinalScore: 0.9,
@@ -1414,9 +1395,8 @@ func TestHandleAdminSearch_SurfacesCorrectedTerms(t *testing.T) {
 }
 
 // TestHandleAdminSearch_SurfacesScoreBreakdown verifies the per-result
-// diagnostic fields the result-detail subpage depends on (normalized
-// scores, per-term BM25 breakdown, and the tuning parameters used) all
-// reach the wire response -- not just the three original score fields.
+// diagnostic fields the result-detail subpage needs (normalized scores,
+// per-term BM25 breakdown, tuning parameters) reach the wire response.
 func TestHandleAdminSearch_SurfacesScoreBreakdown(t *testing.T) {
 	results := []domain.HybridResult{{
 		DocID: "doc-0", URL: "http://a", Title: "A",
@@ -1661,10 +1641,9 @@ func TestHandleAdminDeleteDocument_ServiceError(t *testing.T) {
 	}
 }
 
-// waitForDeletedCount polls repo.DeletedIDs() until it reaches want entries
-// (handleAdminDeleteDomainDocuments' background goroutine runs
-// asynchronously, detached from the request that queued it) or fails the
-// test if it never does.
+// waitForDeletedCount polls repo.DeletedIDs() until it reaches want
+// entries (the delete goroutine runs detached from the request), or fails
+// the test if it never does.
 func waitForDeletedCount(t *testing.T, repo *fakeAdminRepo, want int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -1677,10 +1656,9 @@ func waitForDeletedCount(t *testing.T, repo *fakeAdminRepo, want int) {
 	t.Fatalf("timed out waiting for %d deletions, got %d: %v", want, len(repo.DeletedIDs()), repo.DeletedIDs())
 }
 
-// TestHandleAdminDeleteDomainDocuments_Success proves the core behavior:
-// the request returns immediately with the queued count, and every
-// document in the domain is deleted via a background goroutine that
-// outlives the request itself.
+// TestHandleAdminDeleteDomainDocuments_Success proves the request returns
+// immediately with the queued count, and every document is deleted via a
+// background goroutine that outlives the request.
 func TestHandleAdminDeleteDomainDocuments_Success(t *testing.T) {
 	repo := &fakeAdminRepo{docs: []domain.IndexedDocument{
 		{ID: "doc-1"}, {ID: "doc-2"}, {ID: "doc-3"},
@@ -1754,10 +1732,9 @@ func (r *erroringOnFirstDeleteRepo) DeleteDocument(ctx context.Context, id strin
 	return nil
 }
 
-// syncBuffer is a bytes.Buffer safe for one goroutine to write to (via
-// log.SetOutput) while another concurrently reads -- a plain bytes.Buffer
-// isn't safe for that, and the log line under test here is written by a
-// background goroutine the test itself doesn't otherwise synchronize with.
+// syncBuffer is a bytes.Buffer safe for one goroutine to write (via
+// log.SetOutput) while another reads -- needed since the log line under
+// test is written by an unsynchronized background goroutine.
 type syncBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -1782,9 +1759,8 @@ func (b *syncBuffer) Len() int {
 }
 
 // TestHandleAdminDeleteDomainDocuments_LogsQuoteTheDomainParam proves the
-// ?domain= value written to the log on a delete failure is quoted/escaped
-// (%q), not written out raw (%s) -- otherwise an embedded CR/LF would let
-// a caller forge what looks like a separate, fake log line.
+// ?domain= value logged on a delete failure is quoted/escaped (%q), not
+// raw (%s), so an embedded CR/LF can't forge a fake log line.
 func TestHandleAdminDeleteDomainDocuments_LogsQuoteTheDomainParam(t *testing.T) {
 	repo := &erroringOnFirstDeleteRepo{
 		fakeAdminRepo: &fakeAdminRepo{docs: []domain.IndexedDocument{{ID: "doc-1"}}},
@@ -1886,9 +1862,8 @@ func TestHandleAdminDeleteDomainDocuments_NoDocumentsQueuesNothing(t *testing.T)
 }
 
 // TestHandleAdminDeleteDomainDocuments_GetStillUsesListHandler proves the
-// two overlapping route registrations for "/admin/api/documents" (a
-// method-less GET-only handler, and this DELETE-specific one) route by
-// method rather than one shadowing the other.
+// two overlapping route registrations for "/admin/api/documents" route by
+// method, rather than one shadowing the other.
 func TestHandleAdminDeleteDomainDocuments_GetStillUsesListHandler(t *testing.T) {
 	repo := &fakeAdminRepo{docs: []domain.IndexedDocument{{ID: "doc-1", URL: "http://a"}}}
 	h, cookie := adminAuthedHandler(t, repo, &fakeDebugSearch{})
@@ -1987,9 +1962,9 @@ func TestHandleAdminSettings_PostUpdatesValues(t *testing.T) {
 	}
 }
 
-// TestHandleAdminSettings_FuzzyFieldsRoundTrip verifies the two new
-// admin-configurable fuzzy-matching knobs round-trip through the settings
-// JSON: GET reports whatever's currently set, and a POST updates both.
+// TestHandleAdminSettings_FuzzyFieldsRoundTrip verifies the two
+// fuzzy-matching knobs round-trip through settings JSON: GET reports
+// what's set, POST updates both.
 func TestHandleAdminSettings_FuzzyFieldsRoundTrip(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{FuzzyMatchEnabled: true, FuzzyMaxEditDistance: 2})
@@ -2054,9 +2029,8 @@ func TestHandleAdminSettings_FuzzyFieldsRoundTrip(t *testing.T) {
 }
 
 // TestHandleAdminSettings_PageRankFieldsRoundTrip mirrors
-// TestHandleAdminSettings_FuzzyFieldsRoundTrip for the two new PageRank
-// admin knobs: GET reports whatever's currently set, and a POST updates
-// both the tuning weight and the operational recompute interval.
+// TestHandleAdminSettings_FuzzyFieldsRoundTrip for the PageRank tuning
+// weight and operational recompute interval.
 func TestHandleAdminSettings_PageRankFieldsRoundTrip(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	settings.SetPageRankWeight(0.3)
@@ -2113,9 +2087,7 @@ func TestHandleAdminSettings_PageRankFieldsRoundTrip(t *testing.T) {
 }
 
 // TestHandleAdminSettings_DefaultRendererFieldRoundTrips mirrors
-// TestHandleAdminSettings_FuzzyFieldsRoundTrip for the new
-// default_renderer Tuning page knob: GET reports whatever's currently
-// set, and a POST updates it.
+// TestHandleAdminSettings_FuzzyFieldsRoundTrip for the default_renderer knob.
 func TestHandleAdminSettings_DefaultRendererFieldRoundTrips(t *testing.T) {
 	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{DefaultRenderer: domain.RendererChromium})
 	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, domain.NewTuningSettings(0.5, 1.2, 0.75), opSettings)
@@ -2160,9 +2132,7 @@ func TestHandleAdminSettings_DefaultRendererFieldRoundTrips(t *testing.T) {
 }
 
 // TestHandleAdminSettings_LinkScopeFieldRoundTrips mirrors
-// TestHandleAdminSettings_FuzzyFieldsRoundTrip for the new link_scope
-// Tuning page knob: GET reports whatever's currently set, and a POST
-// updates it.
+// TestHandleAdminSettings_FuzzyFieldsRoundTrip for the link_scope knob.
 func TestHandleAdminSettings_LinkScopeFieldRoundTrips(t *testing.T) {
 	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{LinkScope: domain.LinkScopeHost})
 	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, domain.NewTuningSettings(0.5, 1.2, 0.75), opSettings)
@@ -2207,9 +2177,7 @@ func TestHandleAdminSettings_LinkScopeFieldRoundTrips(t *testing.T) {
 }
 
 // TestHandleAdminSettings_ANNSearchEnabledFieldRoundTrips mirrors
-// TestHandleAdminSettings_FuzzyFieldsRoundTrip for the new
-// ann_search_enabled troubleshooting knob: GET reports whatever's
-// currently set, and a POST updates it.
+// TestHandleAdminSettings_FuzzyFieldsRoundTrip for the ann_search_enabled knob.
 func TestHandleAdminSettings_ANNSearchEnabledFieldRoundTrips(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{ANNSearchEnabled: true})
@@ -2268,9 +2236,8 @@ func TestHandleAdminSettings_ANNSearchEnabledFieldRoundTrips(t *testing.T) {
 }
 
 // TestHandleAdminSettings_MaxRetainedCrawlJobsFieldRoundTrips mirrors
-// TestHandleAdminSettings_ANNSearchEnabledFieldRoundTrips for the new
-// max_retained_crawl_jobs knob: GET reports whatever's currently set, and
-// a POST updates it.
+// TestHandleAdminSettings_ANNSearchEnabledFieldRoundTrips for the
+// max_retained_crawl_jobs knob.
 func TestHandleAdminSettings_MaxRetainedCrawlJobsFieldRoundTrips(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{MaxRetainedCrawlJobs: 200})
@@ -2330,8 +2297,7 @@ func TestHandleAdminSettings_MaxRetainedCrawlJobsFieldRoundTrips(t *testing.T) {
 
 // TestHandleAdminSettings_MaxConcurrentCrawlsFieldRoundTrips mirrors
 // TestHandleAdminSettings_MaxRetainedCrawlJobsFieldRoundTrips for the
-// max_concurrent_crawls knob: GET reports whatever's currently set, and a
-// POST updates it.
+// max_concurrent_crawls knob.
 func TestHandleAdminSettings_MaxConcurrentCrawlsFieldRoundTrips(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{MaxConcurrentCrawls: 3})
@@ -2391,8 +2357,7 @@ func TestHandleAdminSettings_MaxConcurrentCrawlsFieldRoundTrips(t *testing.T) {
 
 // TestHandleAdminSettings_MaxDocumentVersionsFieldRoundTrips mirrors
 // TestHandleAdminSettings_MaxRetainedCrawlJobsFieldRoundTrips for the
-// max_document_versions knob: GET reports whatever's currently set, and a
-// POST updates it.
+// max_document_versions knob.
 func TestHandleAdminSettings_MaxDocumentVersionsFieldRoundTrips(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{MaxDocumentVersions: 5})
@@ -2452,8 +2417,7 @@ func TestHandleAdminSettings_MaxDocumentVersionsFieldRoundTrips(t *testing.T) {
 
 // TestHandleAdminSettings_TitleWeightFieldRoundTrips mirrors
 // TestHandleAdminSettings_MaxDocumentVersionsFieldRoundTrips for the
-// title_weight knob: GET reports whatever's currently set, and a POST
-// updates it.
+// title_weight knob.
 func TestHandleAdminSettings_TitleWeightFieldRoundTrips(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{TitleWeight: 2})
@@ -2512,8 +2476,7 @@ func TestHandleAdminSettings_TitleWeightFieldRoundTrips(t *testing.T) {
 }
 
 // TestHandleAdminSettings_EmbeddingTitleWeightFieldRoundTrips mirrors
-// TestHandleAdminSettings_TitleWeightFieldRoundTrips for the title/body
-// embedding blend weight.
+// TestHandleAdminSettings_TitleWeightFieldRoundTrips for the title/body embedding blend weight.
 func TestHandleAdminSettings_EmbeddingTitleWeightFieldRoundTrips(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{EmbeddingTitleWeight: 0.2})
@@ -2559,10 +2522,8 @@ func TestHandleAdminSettings_EmbeddingTitleWeightFieldRoundTrips(t *testing.T) {
 }
 
 // TestHandleAdminSettings_URLAliasWWWEnabledFieldRoundTrips proves
-// url_alias_www_enabled round-trips through GET/POST like every other
-// operational field, and that a false value is actually applied (not just
-// left at Set's own default, since false is this field's zero value too --
-// see domain.OperationalSettingsValues.URLAliasWWWEnabled).
+// url_alias_www_enabled round-trips through GET/POST, and that false is
+// actually applied, not just left at Set's default (false is also its zero value).
 func TestHandleAdminSettings_URLAliasWWWEnabledFieldRoundTrips(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{URLAliasWWWEnabled: true})
@@ -2608,10 +2569,8 @@ func TestHandleAdminSettings_URLAliasWWWEnabledFieldRoundTrips(t *testing.T) {
 }
 
 // TestHandleAdminSettings_ContentDedupFieldsRoundTrip proves the 4
-// content-dedup operational fields round-trip through GET/POST like every
-// other operational field, and that content_dedup_enabled=false is actually
-// applied (not just left at Set's own default, since false is this field's
-// zero value too).
+// content-dedup fields round-trip through GET/POST, and that
+// content_dedup_enabled=false is actually applied, not left at Set's default.
 func TestHandleAdminSettings_ContentDedupFieldsRoundTrip(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
@@ -2667,9 +2626,8 @@ func TestHandleAdminSettings_ContentDedupFieldsRoundTrip(t *testing.T) {
 }
 
 // TestHandleAdminSettings_EmbeddingHashEnabledFieldRoundTrips proves
-// EmbeddingHashEnabled round-trips through GET/POST like every other
-// operational field, and that Set no longer forces it back to true (that
-// self-healing moved to a live-endpoint-list-aware check -- see
+// EmbeddingHashEnabled round-trips through GET/POST, and that Set no
+// longer forces it back to true (that self-healing moved to
 // domain.ReconcileActiveProvider).
 func TestHandleAdminSettings_EmbeddingHashEnabledFieldRoundTrips(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
@@ -2716,9 +2674,8 @@ func TestHandleAdminSettings_EmbeddingHashEnabledFieldRoundTrips(t *testing.T) {
 }
 
 // TestHandleAdminSettings_EmbeddingSearchWeightsReconciledAgainstNonexistentEndpoint
-// proves domain.ReconcileSearchWeights's self-healing is actually reachable
-// through the HTTP API: posting an embedding_search_weights entry naming an
-// endpoint that isn't configured (deleted, mistyped, or simply invented)
+// proves domain.ReconcileSearchWeights's self-healing is reachable through
+// the HTTP API: posting a weights entry naming an unconfigured endpoint
 // comes back as {hash: 1}.
 func TestHandleAdminSettings_EmbeddingSearchWeightsReconciledAgainstNonexistentEndpoint(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
@@ -2750,8 +2707,8 @@ func TestHandleAdminSettings_EmbeddingSearchWeightsReconciledAgainstNonexistentE
 }
 
 // TestHandleAdminSettings_EmbeddingSearchWeightsReconciliationPreservesEnabledEndpoint
-// proves the reconciliation doesn't clobber a genuinely valid, currently-
-// enabled endpoint's weight.
+// proves reconciliation doesn't clobber a genuinely valid, enabled
+// endpoint's weight.
 func TestHandleAdminSettings_EmbeddingSearchWeightsReconciliationPreservesEnabledEndpoint(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	opSettings := domain.DefaultOperationalSettings()
@@ -2806,10 +2763,8 @@ func postEmbeddingModels(t *testing.T, h *restapi.Handler, cookie *http.Cookie, 
 }
 
 // TestHandleAdminEmbeddingsModels_AlwaysAvailable proves this endpoint has
-// no "not configured" state -- unlike most admin endpoints, a Handler with
-// no OpSettings/Admin/etc. configured at all still serves it, since probing
-// a candidate config has no optional dependency to gate on (h.newEmbedder
-// is always set by New).
+// no "not configured" state -- a Handler with nothing else configured
+// still serves it, since h.newEmbedder is always set by New.
 func TestHandleAdminEmbeddingsModels_AlwaysAvailable(t *testing.T) {
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/embeddings/models", bytes.NewReader([]byte("{}")))
@@ -2850,8 +2805,8 @@ func TestHandleAdminEmbeddingsModels_InvalidJSON(t *testing.T) {
 }
 
 // TestHandleAdminEmbeddingsModels_BlankBaseURLReturnsEmptyWithoutCalling
-// proves the "only probe once the endpoint has actually been filled in"
-// rule is enforced server-side too, not just left to the frontend.
+// proves "only probe once filled in" is enforced server-side too, not
+// just left to the frontend.
 func TestHandleAdminEmbeddingsModels_BlankBaseURLReturnsEmptyWithoutCalling(t *testing.T) {
 	called := false
 	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
@@ -2935,10 +2890,9 @@ func postEmbeddingTest(t *testing.T, h *restapi.Handler, cookie *http.Cookie, bo
 }
 
 // TestHandleAdminEmbeddingsTest_AlwaysAvailable mirrors
-// TestHandleAdminEmbeddingsModels_AlwaysAvailable -- this endpoint has no
-// "not configured" state either. base_url is deliberately blank so this
-// never attempts a real network call even with the real
-// bootstrap.NewHTTPEmbedder (adminAuthedHandler sets no NewEmbedder stub).
+// TestHandleAdminEmbeddingsModels_AlwaysAvailable. base_url is
+// deliberately blank so this never attempts a real network call even with
+// the real bootstrap.NewHTTPEmbedder.
 func TestHandleAdminEmbeddingsTest_AlwaysAvailable(t *testing.T) {
 	h, cookie := adminAuthedHandler(t, &fakeAdminRepo{}, &fakeDebugSearch{})
 	code, testErr := postEmbeddingTest(t, h, cookie, map[string]interface{}{"base_url": ""})
@@ -2979,8 +2933,8 @@ func TestHandleAdminEmbeddingsTest_Success(t *testing.T) {
 }
 
 // TestHandleAdminEmbeddingsTest_Failure proves the probe's error is
-// surfaced in the response (still 200 -- a failed test is a reported
-// result, not a request error).
+// surfaced in the response (still 200 -- a failed test is a result, not a
+// request error).
 func TestHandleAdminEmbeddingsTest_Failure(t *testing.T) {
 	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
 		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, NewEmbedder: stubNewEmbedder(errors.New("connection refused")),
@@ -3016,13 +2970,10 @@ func TestHandleAdminEmbeddingsTest_BlankBaseURLSkipsProbe(t *testing.T) {
 }
 
 // TestHandleAdminEmbeddingsTest_FallsBackToStoredAPIKeyByID proves
-// resolveCandidateAPIKey's whole reason for existing: the endpoint edit
-// page never re-populates the API key field with an already-saved
-// endpoint's real value (see embeddingEndpointResponse), so testing it
-// without retyping the key must still probe with the real stored key, not
-// an empty one -- otherwise every saved endpoint would always fail "Test
-// connection" with an auth error regardless of whether its actual stored
-// credentials work.
+// resolveCandidateAPIKey's reason for existing: the edit page never
+// re-populates the API key field, so testing without retyping it must
+// still probe with the real stored key, not an empty one that would
+// always fail "Test connection" with an auth error.
 func TestHandleAdminEmbeddingsTest_FallsBackToStoredAPIKeyByID(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	if err := repo.CreateEmbeddingEndpoint(context.Background(), domain.EmbeddingHTTPEndpoint{
@@ -3053,9 +3004,8 @@ func TestHandleAdminEmbeddingsTest_FallsBackToStoredAPIKeyByID(t *testing.T) {
 }
 
 // TestHandleAdminEmbeddingsTest_TypedAPIKeyOverridesStored proves a
-// newly-typed key always wins over whatever's already stored -- an admin
-// actively changing the key (not just re-testing the existing one) must
-// probe with what they just typed.
+// newly-typed key always wins over what's stored -- an admin actively
+// changing the key must probe with what they just typed.
 func TestHandleAdminEmbeddingsTest_TypedAPIKeyOverridesStored(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	if err := repo.CreateEmbeddingEndpoint(context.Background(), domain.EmbeddingHTTPEndpoint{
@@ -3080,9 +3030,8 @@ func TestHandleAdminEmbeddingsTest_TypedAPIKeyOverridesStored(t *testing.T) {
 }
 
 // TestHandleAdminEmbeddingsTest_UnknownIDFallsBackToBlankAPIKey proves an
-// id naming an endpoint that no longer exists (deleted concurrently, or a
-// stale page) degrades to the same blank-key behavior as a brand new
-// endpoint, rather than erroring the request.
+// id naming an endpoint that no longer exists degrades to the same
+// blank-key behavior as a brand new one, rather than erroring.
 func TestHandleAdminEmbeddingsTest_UnknownIDFallsBackToBlankAPIKey(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	var gotAPIKey string
@@ -3111,8 +3060,7 @@ func TestHandleAdminEmbeddingsTest_UnknownIDFallsBackToBlankAPIKey(t *testing.T)
 
 // TestHandleAdminEmbeddingsModels_FallsBackToStoredAPIKeyByID mirrors
 // TestHandleAdminEmbeddingsTest_FallsBackToStoredAPIKeyByID for the "List
-// available models" probe, which needs the same fallback for the same
-// reason.
+// available models" probe.
 func TestHandleAdminEmbeddingsModels_FallsBackToStoredAPIKeyByID(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	if err := repo.CreateEmbeddingEndpoint(context.Background(), domain.EmbeddingHTTPEndpoint{
@@ -3247,8 +3195,8 @@ func TestHandleAdminEmbeddingEndpoints_CreateValidation(t *testing.T) {
 }
 
 // TestHandleAdminEmbeddingEndpoints_CreateThenList proves a created
-// endpoint's ID is minted from its name, it never echoes the API key back,
-// and it shows up in a subsequent list.
+// endpoint's ID is minted from its name, never echoes the API key, and
+// shows up in a subsequent list.
 func TestHandleAdminEmbeddingEndpoints_CreateThenList(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithEmbeddingEndpoints(t, repo)
@@ -3291,7 +3239,7 @@ func TestHandleAdminEmbeddingEndpoints_CreateThenList(t *testing.T) {
 }
 
 // TestHandleAdminEmbeddingEndpoints_CreateDedupesIDOnNameCollision proves
-// two endpoints created with the same name get distinct IDs, per
+// two endpoints with the same name get distinct IDs, per
 // domain.NewEmbeddingEndpointID's dedupe rule.
 func TestHandleAdminEmbeddingEndpoints_CreateDedupesIDOnNameCollision(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
@@ -3393,10 +3341,9 @@ func TestHandleAdminUpdateEmbeddingEndpoint_ReplacesEditableFields(t *testing.T)
 	}
 }
 
-// TestHandleAdminUpdateEmbeddingEndpoint_BlankAPIKeyPreservesExisting proves
-// a PATCH that leaves api_key blank (the normal case, since the edit form
-// never shows the real value) doesn't wipe out whatever key is already
-// configured.
+// TestHandleAdminUpdateEmbeddingEndpoint_BlankAPIKeyPreservesExisting
+// proves a PATCH leaving api_key blank (the edit form never shows the
+// real value) doesn't wipe the configured key.
 func TestHandleAdminUpdateEmbeddingEndpoint_BlankAPIKeyPreservesExisting(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithEmbeddingEndpoints(t, repo)
@@ -3517,10 +3464,9 @@ func TestHandleAdminDeleteEmbeddingEndpoint_NotConfigured(t *testing.T) {
 	}
 }
 
-// TestHandleAdminEmbeddingEndpoints_APIKeyEncryptedAtRest proves that when
-// SettingsEncryptionKey is configured, an endpoint's API key is persisted
-// encrypted (never the plaintext, anywhere in the stored row) -- mirroring
-// this codebase's existing settingscrypto precedent.
+// TestHandleAdminEmbeddingEndpoints_APIKeyEncryptedAtRest proves that with
+// SettingsEncryptionKey configured, the API key is persisted encrypted,
+// never plaintext in the stored row.
 func TestHandleAdminEmbeddingEndpoints_APIKeyEncryptedAtRest(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	key, err := settingscrypto.ParseKey(testSettingsEncryptionKey)
@@ -3559,8 +3505,8 @@ func TestHandleAdminEmbeddingEndpoints_APIKeyEncryptedAtRest(t *testing.T) {
 }
 
 // TestHandleAdminEmbeddingEndpoints_APIKeyPlaintextWithoutEncryptionKey
-// proves the opt-in, non-breaking default: with no SettingsEncryptionKey
-// configured, the API key is stored exactly as submitted.
+// proves the opt-in default: with no SettingsEncryptionKey, the API key is
+// stored exactly as submitted.
 func TestHandleAdminEmbeddingEndpoints_APIKeyPlaintextWithoutEncryptionKey(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithEmbeddingEndpoints(t, repo)
@@ -3792,8 +3738,7 @@ func TestHandleAdminSettings_PostPersistsToSettingsStore(t *testing.T) {
 }
 
 // testSettingsEncryptionKey is a syntactically valid 32-byte
-// settingscrypto key for tests -- its value doesn't matter beyond being
-// well-formed hex of the right length.
+// settingscrypto key -- its value doesn't matter beyond being well-formed.
 const testSettingsEncryptionKey = "00000000000000000000000000000000000000000000000000000000000000ab"
 
 func TestHandleAdminSettings_PostWithoutSettingsStoreStillSucceeds(t *testing.T) {
@@ -3825,9 +3770,7 @@ func (erroringSettingsStore) GetSetting(context.Context, string) (string, bool, 
 
 // TestHandleAdminSettings_PostSucceedsDespiteSettingsStoreSaveError proves
 // persistSetting's SaveSetting-error branch is logged and skipped, not
-// fatal: the in-process settings are still applied and the request still
-// succeeds even though this process's edit can't reach the shared store
-// for other processes to pick up.
+// fatal: in-process settings still apply and the request still succeeds.
 func TestHandleAdminSettings_PostSucceedsDespiteSettingsStoreSaveError(t *testing.T) {
 	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
 	h, cookie := adminAuthedHandlerWithSettingsStore(t, settings, domain.DefaultOperationalSettings(), nil, erroringSettingsStore{})
@@ -3883,10 +3826,9 @@ func TestHandleAdminOverrides_PostPersistsToSettingsStore(t *testing.T) {
 }
 
 // TestSyncSettings_PicksUpAdminPersistedValues proves the two ends of the
-// propagation path actually connect: what handleAdminSettings persists via
-// SaveSetting is exactly what bootstrap.SyncSettings' GetSetting-based load
-// later applies to a *different* TuningSettings instance -- simulating
-// another process's next poll picking up this admin edit.
+// propagation path connect: what handleAdminSettings persists via
+// SaveSetting is exactly what bootstrap.SyncSettings later applies to a
+// *different* TuningSettings instance, simulating another process's poll.
 func TestSyncSettings_PicksUpAdminPersistedValues(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	adminSettings := domain.NewTuningSettings(0.5, 1.2, 0.75)
@@ -3914,9 +3856,9 @@ func TestSyncSettings_PicksUpAdminPersistedValues(t *testing.T) {
 	}
 }
 
-// fakePageRankRepo mirrors application package's own test fake -- a
-// minimal ports.PageRankRepository the admin recompute handler tests can
-// inject errors into independently of fakeAdminRepo.
+// fakePageRankRepo mirrors application package's test fake -- a minimal
+// ports.PageRankRepository the recompute handler tests can inject errors
+// into independently of fakeAdminRepo.
 type fakePageRankRepo struct {
 	graph        map[string][]string
 	linkGraphErr error
@@ -4179,9 +4121,8 @@ func TestHandleAdminPageRankRecompute_MethodNotAllowed(t *testing.T) {
 }
 
 // adminAuthedHandlerWithPageRankAndSettingsStore adds a real SettingsStore
-// (see newSettingsStoreTestRepo) to adminAuthedHandlerWithPageRank's setup,
-// for the tests below that check domain.PageRankStatus actually persists
-// and round-trips through GET /admin/api/pagerank.
+// to adminAuthedHandlerWithPageRank's setup, for tests checking
+// domain.PageRankStatus persists and round-trips through GET.
 func adminAuthedHandlerWithPageRankAndSettingsStore(t *testing.T, pageRank ports.PageRankRepository, store ports.SettingsStore) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
 	h := restapi.New(restapi.Config{
@@ -4199,9 +4140,8 @@ func adminAuthedHandlerWithPageRankAndSettingsStore(t *testing.T, pageRank ports
 }
 
 // TestHandleAdminPageRankRecompute_PersistsStatusForGetToRead proves the
-// two handlers are actually wired together through the settings store --
-// POST /recompute's result is what a subsequent GET /pagerank reports,
-// not just what the POST response itself said.
+// two handlers are wired together through the settings store -- POST's
+// result is what a subsequent GET reports, not just the POST response.
 func TestHandleAdminPageRankRecompute_PersistsStatusForGetToRead(t *testing.T) {
 	store := newSettingsStoreTestRepo(t)
 	prRepo := &fakePageRankRepo{graph: map[string][]string{"a": {"b"}, "b": {"a"}}}
@@ -4250,11 +4190,9 @@ func TestHandleAdminPageRankRecompute_PersistsStatusForGetToRead(t *testing.T) {
 }
 
 // TestHandleAdminPageRankRecompute_EmptyGraphReportsRealZeroes guards
-// against a real bug: recomputing over an empty link graph legitimately
-// scores 0 documents in 0 iterations, and an earlier version of
-// adminPageRankResponse used `omitempty` on those int fields -- which
-// silently dropped the real zero the same way a genuinely-missing value
-// would, so the page showed "undefined" instead of 0.
+// against a real bug: an empty link graph legitimately scores 0 documents
+// in 0 iterations, and an earlier version's `omitempty` on those int
+// fields dropped the real zero, showing "undefined" instead of 0.
 func TestHandleAdminPageRankRecompute_EmptyGraphReportsRealZeroes(t *testing.T) {
 	store := newSettingsStoreTestRepo(t)
 	prRepo := &fakePageRankRepo{graph: map[string][]string{}}
@@ -4290,10 +4228,9 @@ func TestHandleAdminPageRankRecompute_EmptyGraphReportsRealZeroes(t *testing.T) 
 	}
 }
 
-// TestHandleAdminPageRank_NoStatusYetOmitsRecomputeFields proves a process
-// that's never recomputed (or has no SettingsStore configured) reports
-// recompute_in_progress=false and no last_recomputed_at, rather than a
-// misleading zero-value timestamp.
+// TestHandleAdminPageRank_NoStatusYetOmitsRecomputeFields proves a
+// process that's never recomputed reports recompute_in_progress=false and
+// no last_recomputed_at, not a misleading zero-value timestamp.
 func TestHandleAdminPageRank_NoStatusYetOmitsRecomputeFields(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithPageRank(t, &fakeAdminRepo{}, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/pagerank", nil)
@@ -4461,8 +4398,7 @@ func TestHandleAdminClearContent_MethodNotAllowed(t *testing.T) {
 }
 
 // TestHandleAdminClearSettings_Success proves both the DB clear and the
-// immediate in-memory reset of this process's own tuning/operational/
-// overrides settings happen on success.
+// immediate in-memory reset of this process's settings happen on success.
 func TestHandleAdminClearSettings_Success(t *testing.T) {
 	adminRepo := &fakeAdminRepo{}
 	h, cookie := adminAuthedHandler(t, adminRepo, &fakeDebugSearch{})
@@ -4511,11 +4447,10 @@ func TestHandleAdminClearSettings_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-// fakeEmbeddingRepo is a minimal ports.EmbeddingRepository for exercising
-// the embeddings-recompute admin handlers without a real DB. UpdateEmbedding
-// is called from handleAdminEmbeddingsRecomputeStart's background goroutine
-// while a test's own polling goroutine reads UpdatedCount, so writes go
-// through mu like fakeAdminRepo's deletedIDs does.
+// fakeEmbeddingRepo is a minimal ports.EmbeddingRepository for the
+// embeddings-recompute handler tests. UpdateEmbedding runs from the
+// background goroutine while a test polls UpdatedCount, so writes go
+// through mu like fakeAdminRepo's deletedIDs.
 type fakeEmbeddingRepo struct {
 	ids       []string
 	docs      map[string]domain.Document
@@ -4581,11 +4516,9 @@ func adminAuthedHandlerWithEmbedding(t *testing.T, embeddingRepo ports.Embedding
 }
 
 // waitForEmbeddingRecomputeDone polls store until
-// application.LoadEmbeddingRecomputeStatus reports a finished run --
-// handleAdminEmbeddingsRecomputeStart's background goroutine runs
-// asynchronously, detached from the request that queued it, exactly like
-// handleAdminDeleteDomainDocuments' (see waitForDeletedCount above) -- or
-// fails the test if it never does.
+// LoadEmbeddingRecomputeStatus reports a finished run -- the background
+// goroutine runs detached, like waitForDeletedCount above -- or fails the
+// test if it never does.
 func waitForEmbeddingRecomputeDone(t *testing.T, store ports.SettingsStore) domain.EmbeddingRecomputeStatus {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -4611,12 +4544,9 @@ func TestHandleAdminEmbeddingsRecomputeStatus_NotConfigured(t *testing.T) {
 	}
 }
 
-// TestHandleAdminEmbeddingsRecompute_MethodNotAllowed proves a third method
-// (neither of the two -- GET for status, POST for start -- separately
-// registered for this one path) is rejected. GET and POST are each their
-// own registered pattern for /admin/api/embeddings/recompute (see
-// handler.go), so net/http's own mux already 405s anything else without
-// ever reaching either handler's requireMethod check.
+// TestHandleAdminEmbeddingsRecompute_MethodNotAllowed proves a third
+// method (neither the GET-for-status nor POST-for-start pattern) is
+// rejected -- net/http's mux already 405s it without reaching either handler.
 func TestHandleAdminEmbeddingsRecompute_MethodNotAllowed(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithEmbedding(t, &fakeEmbeddingRepo{}, fakeEmbeddingProvider{}, nil)
 	req := httptest.NewRequest(http.MethodPut, "/admin/api/embeddings/recompute", nil)
@@ -4681,8 +4611,7 @@ func TestHandleAdminEmbeddingsRecomputeStart_NotConfigured(t *testing.T) {
 
 // TestHandleAdminEmbeddingsRecomputeStart_Success proves the request
 // returns immediately (202) and every document is recomputed via a
-// background goroutine that outlives the request itself, with the result
-// persisted for GET /admin/api/embeddings/recompute to read back.
+// background goroutine, with the result persisted for GET to read back.
 func TestHandleAdminEmbeddingsRecomputeStart_Success(t *testing.T) {
 	store := newSettingsStoreTestRepo(t)
 	repo := &fakeEmbeddingRepo{
@@ -4711,11 +4640,9 @@ func TestHandleAdminEmbeddingsRecomputeStart_Success(t *testing.T) {
 	}
 }
 
-// TestHandleAdminEmbeddingsRecomputeStart_AlreadyInProgress proves a second
-// trigger while one is already running is rejected (409) rather than
-// starting a redundant concurrent run -- the status is seeded directly
-// into the store rather than relying on a real in-flight goroutine, so the
-// test doesn't race against how fast the fake embedder finishes.
+// TestHandleAdminEmbeddingsRecomputeStart_AlreadyInProgress proves a
+// second trigger while one is running is rejected (409) -- status is
+// seeded directly into the store so the test doesn't race the fake embedder.
 func TestHandleAdminEmbeddingsRecomputeStart_AlreadyInProgress(t *testing.T) {
 	store := newSettingsStoreTestRepo(t)
 	inProgress, _ := json.Marshal(domain.EmbeddingRecomputeStatus{InProgress: true})
@@ -4733,10 +4660,9 @@ func TestHandleAdminEmbeddingsRecomputeStart_AlreadyInProgress(t *testing.T) {
 	}
 }
 
-// TestHandleAdminEmbeddingsRecomputeStart_JobErrorIsLoggedNotFatal proves a
-// background job error (e.g. AllDocumentIDs failing) is logged rather than
-// crashing the detached goroutine, and still clears in_progress back to
-// false -- see handleAdminEmbeddingsRecomputeStart's log.Printf branch.
+// TestHandleAdminEmbeddingsRecomputeStart_JobErrorIsLoggedNotFatal proves
+// a background job error is logged rather than crashing the goroutine,
+// and still clears in_progress back to false.
 func TestHandleAdminEmbeddingsRecomputeStart_JobErrorIsLoggedNotFatal(t *testing.T) {
 	store := newSettingsStoreTestRepo(t)
 	repo := &fakeEmbeddingRepo{allIDsErr: errors.New("db unavailable")}
@@ -4750,14 +4676,11 @@ func TestHandleAdminEmbeddingsRecomputeStart_JobErrorIsLoggedNotFatal(t *testing
 		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	// Can't use waitForEmbeddingRecomputeDone here: on this error path
-	// LastRunAt is deliberately never set (see
-	// RunEmbeddingRecomputeJobWithStatus), so that helper's condition
-	// would never be satisfied. Instead wait for the status key to exist
-	// (proving the goroutine's first, in-progress=true save already ran)
-	// and then read back false -- checking "found" rules out the
-	// zero-value default (also InProgress=false) racing this check before
-	// the goroutine has done anything at all.
+	// Can't use waitForEmbeddingRecomputeDone here: LastRunAt is
+	// deliberately never set on this error path, so that condition would
+	// never be satisfied. Instead wait for the status key to exist (the
+	// goroutine's first in-progress=true save), then read back false --
+	// checking "found" rules out the zero-value default racing this check.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		raw, found, err := store.GetSetting(context.Background(), ports.SettingsKeyEmbeddingRecomputeStatus)
@@ -4773,8 +4696,7 @@ func TestHandleAdminEmbeddingsRecomputeStart_JobErrorIsLoggedNotFatal(t *testing
 }
 
 // TestHandleAdminEmbeddingsRecompute_PersistsStatusForGetToRead mirrors
-// TestHandleAdminPageRankRecompute_PersistsStatusForGetToRead: proves the
-// two handlers are actually wired together through the settings store.
+// TestHandleAdminPageRankRecompute_PersistsStatusForGetToRead.
 func TestHandleAdminEmbeddingsRecompute_PersistsStatusForGetToRead(t *testing.T) {
 	store := newSettingsStoreTestRepo(t)
 	repo := &fakeEmbeddingRepo{ids: []string{"a"}, docs: map[string]domain.Document{"a": {ID: "a", Text: "hello"}}}
@@ -4817,8 +4739,8 @@ func TestHandleAdminEmbeddingsRecompute_PersistsStatusForGetToRead(t *testing.T)
 }
 
 // fakeContentDedupRepo backs the content-dedup admin handler tests --
-// AllDocumentFingerprints/MergeDocuments are the two ports.
-// ContentDedupRepository methods application.RunContentDedupJob calls.
+// AllDocumentFingerprints/MergeDocuments are the two
+// ports.ContentDedupRepository methods RunContentDedupJob calls.
 type fakeContentDedupRepo struct {
 	fingerprints    []domain.DocumentFingerprint
 	fingerprintsErr error
@@ -4913,9 +4835,8 @@ func TestHandleAdminContentDedupStatus_NotConfigured(t *testing.T) {
 }
 
 // TestHandleAdminContentDedup_MethodNotAllowed proves a third method
-// (neither GET for status nor POST for start, separately registered for
-// this one path -- see handler.go) is rejected by net/http's own mux before
-// ever reaching either handler's requireMethod check.
+// (neither GET-for-status nor POST-for-start) is rejected by net/http's
+// mux before reaching either handler.
 func TestHandleAdminContentDedup_MethodNotAllowed(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithContentDedup(t, &fakeContentDedupRepo{}, nil, nil)
 	req := httptest.NewRequest(http.MethodPut, "/admin/api/content-dedup", nil)
@@ -4963,9 +4884,8 @@ func TestHandleAdminContentDedupRecomputeStart_NotConfigured(t *testing.T) {
 }
 
 // TestHandleAdminContentDedupRecomputeStart_Success proves the request
-// returns immediately (202) and the job runs via a background goroutine
-// that outlives the request itself, with the result persisted for GET
-// /admin/api/content-dedup to read back.
+// returns immediately (202) and the job runs via a background goroutine,
+// with the result persisted for GET to read back.
 func TestHandleAdminContentDedupRecomputeStart_Success(t *testing.T) {
 	store := newSettingsStoreTestRepo(t)
 	repo := &fakeContentDedupRepo{
@@ -4995,8 +4915,7 @@ func TestHandleAdminContentDedupRecomputeStart_Success(t *testing.T) {
 }
 
 // TestHandleAdminContentDedupRecomputeStart_AlreadyInProgress proves a
-// second trigger while one is already running is rejected (409) rather
-// than starting a redundant concurrent run.
+// second trigger while one is already running is rejected (409).
 func TestHandleAdminContentDedupRecomputeStart_AlreadyInProgress(t *testing.T) {
 	store := newSettingsStoreTestRepo(t)
 	inProgress, _ := json.Marshal(domain.ContentDedupStatus{InProgress: true})
@@ -5015,14 +4934,11 @@ func TestHandleAdminContentDedupRecomputeStart_AlreadyInProgress(t *testing.T) {
 }
 
 // TestHandleAdminContentDedupRecomputeStart_LosesLockRaceToAnotherProcess
-// covers the gap the fast-path InProgress check above can't close: the
-// status flag it inspects synchronously said "not running" (nothing
-// seeded here), but by the time the spawned goroutine actually calls
-// RunContentDedupJobWithStatus, cmd/crawl's own scheduler has already
-// taken the real lock -- see ports.ErrContentDedupAlreadyRunning's doc
-// comment. Still 202 (the response was already decided before the race
-// could even happen); the real assertion is that the job never touches
-// fingerprints/merges or the persisted status once it loses that race.
+// covers the gap the fast-path InProgress check can't close: it
+// synchronously said "not running," but by the time the goroutine calls
+// RunContentDedupJobWithStatus, cmd/crawl's scheduler already took the
+// real lock (see ports.ErrContentDedupAlreadyRunning). Still 202; the real
+// assertion is the job never touches fingerprints/merges once it loses that race.
 func TestHandleAdminContentDedupRecomputeStart_LosesLockRaceToAnotherProcess(t *testing.T) {
 	store := newSettingsStoreTestRepo(t)
 	repo := &fakeContentDedupRepo{lockBusy: true}
@@ -5036,10 +4952,9 @@ func TestHandleAdminContentDedupRecomputeStart_LosesLockRaceToAnotherProcess(t *
 		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	// No positive "it's done" signal exists to poll for here (that's the
-	// whole point -- losing the lock race means nothing ever runs), so
-	// give the detached goroutine a brief, generous window to have acted
-	// if it were going to, then assert it didn't.
+	// No positive "it's done" signal exists here (losing the lock race
+	// means nothing ever runs), so give the goroutine a brief window to
+	// have acted, then assert it didn't.
 	time.Sleep(100 * time.Millisecond)
 	if repo.mergeCount() > 0 {
 		t.Error("expected no merges to be attempted after losing the lock race")
@@ -5049,10 +4964,9 @@ func TestHandleAdminContentDedupRecomputeStart_LosesLockRaceToAnotherProcess(t *
 	}
 }
 
-// TestHandleAdminContentDedupRecomputeStart_JobErrorIsLoggedNotFatal proves
-// a background job error (e.g. AllDocumentFingerprints failing) is logged
-// rather than crashing the detached goroutine, and still clears
-// in_progress back to false.
+// TestHandleAdminContentDedupRecomputeStart_JobErrorIsLoggedNotFatal
+// proves a background job error is logged rather than crashing the
+// goroutine, and still clears in_progress back to false.
 func TestHandleAdminContentDedupRecomputeStart_JobErrorIsLoggedNotFatal(t *testing.T) {
 	store := newSettingsStoreTestRepo(t)
 	repo := &fakeContentDedupRepo{fingerprintsErr: errors.New("db unavailable")}
@@ -5066,10 +4980,9 @@ func TestHandleAdminContentDedupRecomputeStart_JobErrorIsLoggedNotFatal(t *testi
 		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	// Can't use waitForContentDedupDone here: on this error path LastRunAt
-	// is deliberately never set (see RunContentDedupJobWithStatus), so
-	// that helper's condition would never be satisfied -- same reasoning
-	// as TestHandleAdminEmbeddingsRecomputeStart_JobErrorIsLoggedNotFatal.
+	// Can't use waitForContentDedupDone here: LastRunAt is deliberately
+	// never set on this error path, same reasoning as
+	// TestHandleAdminEmbeddingsRecomputeStart_JobErrorIsLoggedNotFatal.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		raw, found, err := store.GetSetting(context.Background(), ports.SettingsKeyContentDedupStatus)
@@ -5106,9 +5019,8 @@ func TestHandleAdminContentDedupAliasGroups_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-// TestHandleAdminContentDedupAliasGroups_Success proves the endpoint lists
-// merged groups (the "what actually got merged" transparency listing) and
-// forwards limit/offset to the repository for pagination.
+// TestHandleAdminContentDedupAliasGroups_Success proves the endpoint
+// lists merged groups and forwards limit/offset to the repository for pagination.
 func TestHandleAdminContentDedupAliasGroups_Success(t *testing.T) {
 	adminRepo := &fakeAdminRepo{
 		aliasGroups: []domain.DocumentAliasGroup{
@@ -5178,12 +5090,9 @@ type chatEndpointResp struct {
 }
 
 // fakeChatModelProber is a minimal ports.ChatCompleter fake implementing
-// only the optional ModelMaxContextTokens capability (see admin.go's
-// chatModelProber interface) -- Complete is never expected to be called by
-// anything exercised through these tests (the admin chat-endpoint PATCH
-// handler only ever probes, never completes), so it errors loudly if it
-// ever is, rather than silently returning something a test could mistake
-// for a real answer.
+// only the optional ModelMaxContextTokens capability -- Complete is never
+// expected to be called (the PATCH handler only probes), so it errors
+// loudly if it ever is, rather than returning something misleading.
 type fakeChatModelProber struct {
 	tokens int
 	ok     bool
@@ -5200,16 +5109,13 @@ func (f *fakeChatModelProber) ModelMaxContextTokens(ctx context.Context, endpoin
 	return f.tokens, f.ok, f.err
 }
 
-// adminAuthedHandlerWithChatEndpoints wires a fakeChatModelProber that
-// always reports "nothing detected" (ok=false) by default -- every
-// existing test using this helper predates auto-detection and expects
-// MaxContextTokens to simply stay 0 when omitted from a PATCH; without an
-// explicit fake here, Handler would default to a REAL bootstrap.
-// NewHTTPChatCompleter() (see New), and several of those existing tests
-// PATCH a real-looking base_url+model with max_context_tokens omitted,
-// which would otherwise make an actual outbound HTTP call from the test
-// suite. See adminAuthedHandlerWithChatEndpointsAndProber for tests that
-// need auto-detection to actually succeed.
+// adminAuthedHandlerWithChatEndpoints wires a fakeChatModelProber
+// reporting "nothing detected" (ok=false) by default -- older tests using
+// this helper predate auto-detection and expect MaxContextTokens to stay
+// 0; without this fake, Handler would default to a real
+// bootstrap.NewHTTPChatCompleter() and make an actual outbound HTTP call.
+// See adminAuthedHandlerWithChatEndpointsAndProber for tests needing
+// auto-detection to succeed.
 func adminAuthedHandlerWithChatEndpoints(t *testing.T, store ports.ChatEndpointStore) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
 	return adminAuthedHandlerWithChatEndpointsAndProber(t, store, &fakeChatModelProber{})
@@ -5271,8 +5177,7 @@ func TestHandleAdminChatEndpoint_MethodNotAllowed(t *testing.T) {
 }
 
 // TestHandleAdminChatEndpoint_GetDefaultsWhenNothingSaved proves a GET
-// never fails just because nothing's been saved yet -- same spirit as
-// /admin/api/settings always succeeding.
+// never fails just because nothing's been saved yet.
 func TestHandleAdminChatEndpoint_GetDefaultsWhenNothingSaved(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
@@ -5357,8 +5262,8 @@ func TestHandleAdminChatEndpoint_PatchCreatesNewConfig(t *testing.T) {
 }
 
 // TestHandleAdminChatEndpoint_PatchBlankAPIKeyPreservesExisting mirrors
-// TestHandleAdminUpdateEmbeddingEndpoint_BlankAPIKeyPreservesExisting's same
-// "blank api_key on update means unchanged" convention.
+// TestHandleAdminUpdateEmbeddingEndpoint_BlankAPIKeyPreservesExisting's
+// "blank means unchanged" convention.
 func TestHandleAdminChatEndpoint_PatchBlankAPIKeyPreservesExisting(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
@@ -5409,9 +5314,8 @@ func TestHandleAdminChatEndpoint_PatchClearAPIKeyRemovesIt(t *testing.T) {
 }
 
 // TestHandleAdminChatEndpoint_PatchNegativeMaxContextTokensRejected mirrors
-// TestHandleAdminEmbeddingEndpoints_CreateValidation's negative-chunk-size
-// case for the same reason: MaxContextTokens shares ChunkSizeTokens' "0
-// disables, negative is invalid" convention.
+// the negative-chunk-size case: MaxContextTokens shares ChunkSizeTokens'
+// "0 disables, negative invalid" convention.
 func TestHandleAdminChatEndpoint_PatchNegativeMaxContextTokensRejected(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
@@ -5424,9 +5328,8 @@ func TestHandleAdminChatEndpoint_PatchNegativeMaxContextTokensRejected(t *testin
 }
 
 // TestHandleAdminChatEndpoint_PatchNegativeWebSearchResultCountRejected
-// mirrors TestHandleAdminChatEndpoint_PatchNegativeMaxContextTokensRejected
-// for domain.ChatEndpoint.WebSearchResultCount, which shares the same "0
-// disables, negative is invalid" convention.
+// mirrors the MaxContextTokens case for WebSearchResultCount, same "0
+// disables, negative invalid" convention.
 func TestHandleAdminChatEndpoint_PatchNegativeWebSearchResultCountRejected(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
@@ -5438,9 +5341,8 @@ func TestHandleAdminChatEndpoint_PatchNegativeWebSearchResultCountRejected(t *te
 	}
 }
 
-// TestHandleAdminChatEndpoint_PatchWebSearchResultCountRoundTrips proves a
-// positive web_search_result_count is stored and echoed back as-is,
-// mirroring every other plain-passthrough field's own round-trip test.
+// TestHandleAdminChatEndpoint_PatchWebSearchResultCountRoundTrips proves
+// a positive web_search_result_count is stored and echoed back as-is.
 func TestHandleAdminChatEndpoint_PatchWebSearchResultCountRoundTrips(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
@@ -5493,10 +5395,9 @@ func TestHandleAdminChatEndpoint_PatchInvalidJSON(t *testing.T) {
 	}
 }
 
-// TestHandleAdminChatEndpoint_PatchLookupErrorPropagates proves a
-// PATCH's own preserve-the-existing-key lookup surfaces a real store
-// error (anything other than ports.ErrChatEndpointNotConfigured) as 500,
-// rather than silently treating it as "no prior key."
+// TestHandleAdminChatEndpoint_PatchLookupErrorPropagates proves a PATCH's
+// preserve-the-existing-key lookup surfaces a real store error as 500,
+// not silently treated as "no prior key."
 func TestHandleAdminChatEndpoint_PatchLookupErrorPropagates(t *testing.T) {
 	store := &fakeChatEndpointStore{getErr: errors.New("db unavailable")}
 	h, cookie := adminAuthedHandlerWithChatEndpoints(t, store)
@@ -5516,9 +5417,8 @@ func TestHandleAdminChatEndpoint_PatchStoreError(t *testing.T) {
 }
 
 // TestHandleAdminChatEndpoint_PatchSystemPromptRoundTrips proves
-// system_prompt round-trips through PATCH and a subsequent GET, and that a
-// PATCH omitting it clears it back to "" (unlike api_key, it has no
-// preserve-when-blank special case -- every PATCH is a full replace of it).
+// system_prompt round-trips through PATCH/GET, and omitting it on PATCH
+// clears it to "" -- unlike api_key, no preserve-when-blank special case.
 func TestHandleAdminChatEndpoint_PatchSystemPromptRoundTrips(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
@@ -5560,12 +5460,10 @@ func TestHandleAdminChatEndpoint_PatchSystemPromptRoundTrips(t *testing.T) {
 }
 
 // TestHandleAdminChatEndpoint_PatchAutoDetectsMaxContextTokens proves a
-// PATCH that omits (or sends 0 for) max_context_tokens self-heals it from
-// the configured model's own advertised context length, at
-// domain.AutoMaxContextTokens' reserve fraction, rather than leaving it at
-// the "disabled" zero value the old manual-only field would silently drift
-// to (see "Max conversation length has been cleared again" -- the bug this
-// feature exists to fix).
+// PATCH omitting (or sending 0 for) max_context_tokens self-heals it from
+// the model's advertised context length, at
+// domain.AutoMaxContextTokens' reserve fraction, rather than silently
+// drifting to the "disabled" zero value (the bug this feature fixes).
 func TestHandleAdminChatEndpoint_PatchAutoDetectsMaxContextTokens(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	prober := &fakeChatModelProber{tokens: 32768, ok: true}
@@ -5591,8 +5489,7 @@ func TestHandleAdminChatEndpoint_PatchAutoDetectsMaxContextTokens(t *testing.T) 
 
 // TestHandleAdminChatEndpoint_PatchExplicitMaxContextTokensSkipsDetection
 // proves an explicit positive value wins outright -- the prober is never
-// even consulted, matching every other admin-editable field's "explicit
-// value always wins" convention.
+// consulted, matching every field's "explicit value wins" convention.
 func TestHandleAdminChatEndpoint_PatchExplicitMaxContextTokensSkipsDetection(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	prober := &fakeChatModelProber{tokens: 32768, ok: true}
@@ -5616,10 +5513,9 @@ func TestHandleAdminChatEndpoint_PatchExplicitMaxContextTokensSkipsDetection(t *
 	}
 }
 
-// TestHandleAdminChatEndpoint_PatchDetectionFailureFallsBackToZero proves a
-// prober error (endpoint unreachable, wrong model name, etc.) is treated as
-// best-effort/non-fatal -- the PATCH still succeeds, just without an
-// auto-detected value, rather than failing the whole save.
+// TestHandleAdminChatEndpoint_PatchDetectionFailureFallsBackToZero proves
+// a prober error is treated as best-effort/non-fatal -- the PATCH still
+// succeeds, just without an auto-detected value.
 func TestHandleAdminChatEndpoint_PatchDetectionFailureFallsBackToZero(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	prober := &fakeChatModelProber{err: errors.New("connection refused")}
@@ -5641,15 +5537,11 @@ func TestHandleAdminChatEndpoint_PatchDetectionFailureFallsBackToZero(t *testing
 }
 
 // TestHandleAdminChatEndpoint_PatchNoProberConfiguredFallsBackToZero proves
-// a Handler wired with a ports.ChatCompleter that doesn't implement the
-// optional chatModelProber probing capability (the same
-// narrow-capability-interface pattern as modelLister -- see admin.go's
-// autoDetectMaxContextTokens type assertion) degrades to the pre-auto-detect
-// behavior instead of panicking. This deliberately does NOT pass a bare nil
-// prober: Handler.New() defaults a nil Config.ChatModelProber to a REAL
-// bootstrap.NewHTTPChatCompleter(), which would make this test issue an
-// actual outbound HTTP call -- exactly the risk this whole test file's fake
-// default prober exists to avoid.
+// a ports.ChatCompleter not implementing the optional chatModelProber
+// capability (same pattern as modelLister) degrades to pre-auto-detect
+// behavior, not a panic. Deliberately not a bare nil prober: New() would
+// default that to a real bootstrap.NewHTTPChatCompleter(), issuing an
+// actual HTTP call -- the risk this file's fake default prober avoids.
 func TestHandleAdminChatEndpoint_PatchNoProberConfiguredFallsBackToZero(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithChatEndpointsAndProber(t, repo, &fakeChatCompleter{answer: "unused"})
@@ -5753,9 +5645,8 @@ func TestHandleAdminMCPServers_CreateInvalidJSON(t *testing.T) {
 }
 
 // TestHandleAdminMCPServers_CreateValidation covers every
-// validateMCPServerRequest rejection branch: empty name, an unrecognized
-// transport, a stdio transport with no command, and an http transport with
-// no base_url.
+// validateMCPServerRequest rejection branch: empty name, unrecognized
+// transport, stdio with no command, http with no base_url.
 func TestHandleAdminMCPServers_CreateValidation(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithMCPServers(t, repo)
@@ -5823,9 +5714,8 @@ func TestHandleAdminMCPServers_CreateThenList(t *testing.T) {
 }
 
 // TestHandleAdminMCPServers_CreateLowercasesLocalName proves a "stdio"
-// ("local") server's Name is lowercased on create, while an "http" (remote)
-// server's Name is left exactly as typed -- see normalizeMCPServerName's
-// own doc comment.
+// server's Name is lowercased on create, while an "http" server's Name is
+// left exactly as typed -- see normalizeMCPServerName.
 func TestHandleAdminMCPServers_CreateLowercasesLocalName(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithMCPServers(t, repo)
@@ -5846,7 +5736,7 @@ func TestHandleAdminMCPServers_CreateLowercasesLocalName(t *testing.T) {
 }
 
 // TestHandleAdminMCPServers_CreateDedupesIDOnNameCollision proves two
-// servers created with the same name get distinct IDs, per
+// servers with the same name get distinct IDs, per
 // domain.NewMCPServerID's dedupe rule.
 func TestHandleAdminMCPServers_CreateDedupesIDOnNameCollision(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
@@ -6012,10 +5902,8 @@ func TestHandleAdminUpdateMCPServer_LowercasesLocalName(t *testing.T) {
 }
 
 // TestHandleAdminMCPServers_PromptAndGatedByWebSearchRoundTrip proves the
-// prompt/gated_by_web_search fields flow through create, get, and update
-// unchanged -- backed by fakeMCPServerStore (not the real sqlrepo-backed
-// newSettingsStoreTestRepo helper) so this test does not depend on the
-// sqlrepo mcp_servers table.
+// prompt/gated_by_web_search fields flow through create/get/update
+// unchanged -- backed by fakeMCPServerStore, not the real sqlrepo table.
 func TestHandleAdminMCPServers_PromptAndGatedByWebSearchRoundTrip(t *testing.T) {
 	store := &fakeMCPServerStore{}
 	h, cookie := adminAuthedHandlerWithMCPServers(t, store)
@@ -6060,9 +5948,8 @@ func TestHandleAdminMCPServers_PromptAndGatedByWebSearchRoundTrip(t *testing.T) 
 }
 
 // TestHandleAdminMCPServers_APIKeyWriteOnly proves the api_key/has_api_key
-// convention: a stored key is never echoed back, blank on update means
-// unchanged, and clear_api_key removes it explicitly -- mirrors
-// handleAdminUpdateEmbeddingEndpoint's own already-tested convention.
+// convention: never echoed back, blank on update means unchanged,
+// clear_api_key removes it -- mirrors handleAdminUpdateEmbeddingEndpoint.
 func TestHandleAdminMCPServers_APIKeyWriteOnly(t *testing.T) {
 	store := &fakeMCPServerStore{}
 	h, cookie := adminAuthedHandlerWithMCPServers(t, store)
@@ -6346,8 +6233,7 @@ func TestHandleAdminAgents_CreateThenList(t *testing.T) {
 }
 
 // TestHandleAdminAgents_CreateDedupesIDOnNameCollision proves two agents
-// created with the same name get distinct IDs, per domain.NewAgentID's
-// dedupe rule.
+// with the same name get distinct IDs, per domain.NewAgentID's dedupe rule.
 func TestHandleAdminAgents_CreateDedupesIDOnNameCollision(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithAgents(t, &fakeAgentStore{})
 
@@ -6586,16 +6472,12 @@ func postMCPServerTest(t *testing.T, h *restapi.Handler, cookie *http.Cookie, bo
 }
 
 // TestHandleAdminMCPServersTest_GETRoutesToGetByIDNotTheTestHandler proves
-// the routing quirk of registering "POST /admin/api/mcp-servers/test"
-// alongside "GET|PATCH|DELETE /admin/api/mcp-servers/{id}": since only
-// POST is registered for the literal "test" path, a GET on that same path
-// is served by the {id} pattern instead, treating "test" as an ordinary
-// (here, nonexistent) server id -- 404, not 405, and never reaches
-// handleAdminMCPServersTest at all. A real server whose minted id happens
-// to be "test" remains fully reachable by GET/PATCH/DELETE; only the
-// literal POST is reserved, the same "one reserved word" tradeoff
-// existingIDSet's "hash" reservation already makes for embedding
-// endpoints.
+// a routing quirk: only POST is registered for the literal "test" path, so
+// a GET on it falls to the "{id}" pattern instead, treating "test" as a
+// nonexistent server id -- 404, not 405, never reaching
+// handleAdminMCPServersTest. A real server minted with id "test" stays
+// reachable by GET/PATCH/DELETE; only POST is reserved, the same
+// tradeoff existingIDSet's "hash" reservation makes.
 func TestHandleAdminMCPServersTest_GETRoutesToGetByIDNotTheTestHandler(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
@@ -6637,10 +6519,9 @@ func TestHandleAdminMCPServersTest_InvalidTransport(t *testing.T) {
 }
 
 // TestHandleAdminMCPServersTest_BlankCommandOrBaseURLReturnsEmptyWithoutCalling
-// proves a still-being-filled-in form (transport chosen, but the
-// transport-specific field not typed yet) returns a plain empty result
-// rather than an error or a real connection attempt -- mirrors
-// handleAdminEmbeddingsModels' own blank-base_url short circuit.
+// proves a still-being-filled-in form returns an empty result, not an
+// error or real connection attempt -- mirrors
+// handleAdminEmbeddingsModels' blank-base_url short circuit.
 func TestHandleAdminMCPServersTest_BlankCommandOrBaseURLReturnsEmptyWithoutCalling(t *testing.T) {
 	provider := &fakeMCPToolProvider{tools: []domain.MCPTool{mcpTool("should_not_appear", "")}}
 	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
@@ -6690,11 +6571,9 @@ func TestHandleAdminMCPServersTest_Success(t *testing.T) {
 }
 
 // TestHandleAdminMCPServersTest_NoToolsIsSoftFailure proves a connection
-// that yields zero tools (a real connect failure OR a server that
-// legitimately exposes nothing -- mcpclient.Provider.Open can't tell the
-// two apart, see its own doc comment) is reported as a soft Error, not a
-// hard HTTP error, same convention as handleAdminEmbeddingsModels' own
-// ListModels failure.
+// yielding zero tools (a real failure or a server legitimately exposing
+// nothing -- Provider.Open can't tell them apart) is a soft Error, not a
+// hard HTTP error, same convention as handleAdminEmbeddingsModels.
 func TestHandleAdminMCPServersTest_NoToolsIsSoftFailure(t *testing.T) {
 	provider := &fakeMCPToolProvider{}
 	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
@@ -6710,9 +6589,8 @@ func TestHandleAdminMCPServersTest_NoToolsIsSoftFailure(t *testing.T) {
 }
 
 // TestHandleAdminMCPServersTest_FallsBackToStoredAPIKeyByID mirrors
-// TestHandleAdminEmbeddingsTest_FallsBackToStoredAPIKeyByID: testing an
-// already-saved server without retyping its key must still probe with the
-// real stored key, not an empty one.
+// TestHandleAdminEmbeddingsTest_FallsBackToStoredAPIKeyByID: testing a
+// saved server without retyping its key must still probe with the real key.
 func TestHandleAdminMCPServersTest_FallsBackToStoredAPIKeyByID(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	if err := repo.CreateMCPServer(context.Background(), domain.MCPServer{

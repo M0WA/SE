@@ -9,9 +9,8 @@ import (
 	"searchengine/internal/domain"
 )
 
-// stubChatStore is a minimal ports.ChatStore fake, local to this
-// white-box test file (account_files_test.go's own fakeChatStore lives in
-// the external restapi_test package and isn't reachable from here).
+// stubChatStore is a minimal ports.ChatStore fake for this white-box test
+// file (account_files_test.go's fakeChatStore lives in the external package).
 type stubChatStore struct {
 	chats   []domain.PersistedChat
 	listErr error
@@ -125,9 +124,8 @@ func TestFileTokenStore_ResolveUnknownTokenReportsFalse(t *testing.T) {
 	}
 }
 
-// TestFileTokenStore_ExpiredTokenReportsFalseAndIsForgotten proves
-// resolve's expiry branch, mirroring sessionStore's own
-// TestSessionStore_ExpiredSessionReportsInvalidAndIsForgotten (auth_internal_test.go).
+// TestFileTokenStore_ExpiredTokenReportsFalseAndIsForgotten mirrors
+// sessionStore's TestSessionStore_ExpiredSessionReportsInvalidAndIsForgotten.
 func TestFileTokenStore_ExpiredTokenReportsFalseAndIsForgotten(t *testing.T) {
 	s := newFileTokenStore()
 	token := "tok-expired"

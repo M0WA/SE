@@ -16,16 +16,13 @@ import (
 	"searchengine/internal/ports"
 )
 
-// fakeChatEndpointStore is a minimal ports.ChatEndpointStore fake mirroring
-// internal/application/chat_service_test.go's own fakeChatEndpointStore --
-// kept as a small local copy here since that one is unexported in a
-// different package.
+// fakeChatEndpointStore is a minimal ports.ChatEndpointStore fake, a local
+// copy of application/chat_service_test.go's unexported one.
 type fakeChatEndpointStore struct {
 	endpoint domain.ChatEndpoint
 	getErr   error
 	// setErr, when set, is what SetChatEndpoint returns instead of
-	// succeeding -- used by admin_test.go to exercise
-	// handleAdminChatEndpoint's PATCH store-error branch.
+	// succeeding -- exercises handleAdminChatEndpoint's PATCH error branch.
 	setErr error
 }
 
@@ -44,10 +41,8 @@ func (f *fakeChatEndpointStore) SetChatEndpoint(ctx context.Context, e domain.Ch
 	return nil
 }
 
-// fakeMCPServerStore is a minimal ports.MCPServerStore fake -- a small
-// local copy, same reasoning as fakeChatEndpointStore's own doc comment.
-// Shared by admin_test.go's MCP server CRUD handler tests and this file's
-// tool_results-in-a-chat-response tests.
+// fakeMCPServerStore is a minimal ports.MCPServerStore fake, shared by
+// admin_test.go's CRUD tests and this file's tool_results tests.
 type fakeMCPServerStore struct {
 	servers   []domain.MCPServer
 	listErr   error
@@ -97,12 +92,9 @@ func (f *fakeMCPServerStore) DeleteMCPServer(ctx context.Context, id string) err
 	return ports.ErrMCPServerNotFound
 }
 
-// fakeUserMCPServerStore is fakeMCPServerStore's per-user sibling -- same
-// real-behaving-fake shape, keyed by userID so two different owners' rows
-// never leak into each other's List/Update/Delete calls, same isolation
-// the real sqlrepo implementation's user_id-scoped SQL gives. Used by both
-// chat_test.go (ChatService integration through the handler) and
-// account_mcp_servers_test.go (the self-service CRUD handlers).
+// fakeUserMCPServerStore is fakeMCPServerStore's per-user sibling, keyed by
+// userID so two owners' rows never leak into each other's calls -- same
+// isolation the real sqlrepo's user_id-scoped SQL gives.
 type fakeUserMCPServerStore struct {
 	byUser    map[string][]domain.MCPServer
 	listErr   error
@@ -156,9 +148,8 @@ func (f *fakeUserMCPServerStore) DeleteUserMCPServer(ctx context.Context, userID
 	return ports.ErrUserMCPServerNotFound
 }
 
-// fakeAgentStore is a minimal ports.AgentStore fake -- a small local copy,
-// same reasoning as fakeMCPServerStore's own doc comment above. Used by
-// admin_test.go's agent CRUD handler tests.
+// fakeAgentStore is a minimal ports.AgentStore fake, used by admin_test.go's
+// agent CRUD handler tests.
 type fakeAgentStore struct {
 	agents    []domain.Agent
 	listErr   error
@@ -240,11 +231,9 @@ func (s *fakeMCPSession) Close() { s.closed = true }
 type fakeMCPToolProvider struct {
 	tools   []domain.MCPTool
 	session *fakeMCPSession
-	// openCount/openedServers record every Open call this provider has
-	// seen, in order -- openedServers holds only the LAST call's servers
-	// (every test that needs it only ever makes one relevant call), so a
-	// test can assert both "was Open even called" (openCount) and "with
-	// what config" (openedServers) without needing its own wrapper.
+	// openCount/openedServers record every Open call seen; openedServers
+	// holds only the last call's servers, letting a test assert both "was
+	// Open called" and "with what config".
 	openCount     int
 	openedServers []domain.MCPServer
 	openedEnv     map[string]string
@@ -266,15 +255,11 @@ func mcpTool(name, description string) domain.MCPTool {
 	return domain.MCPTool{Name: name, Description: description, InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)}
 }
 
-// fakeChatCompleter is a minimal ports.ChatCompleter fake.
-// responses, when non-empty, lets a test give a different response to each
-// successive call (e.g. a tool-call response, then a real final answer for
-// the hook follow-up round) -- mirrors
-// internal/application/chat_service_test.go's own fakeChatCompleter for the
-// same reason: ChatService.Chat's hook follow-up loop calls Complete more
-// than once per turn, and a fixed response that itself carries a tool call
-// would otherwise keep triggering every round. answer is a convenience for
-// the common case of a single plain-text response with no tool call.
+// fakeChatCompleter is a minimal ports.ChatCompleter fake. responses, when
+// non-empty, gives a different response to each successive call (e.g. a
+// tool call then a final answer, since ChatService.Chat's follow-up loop
+// calls Complete more than once). answer is a shortcut for a single
+// plain-text response with no tool call.
 type fakeChatCompleter struct {
 	answer    string
 	response  domain.ChatMessage
@@ -301,11 +286,9 @@ func (f *fakeChatCompleter) Complete(ctx context.Context, endpoint domain.ChatEn
 	return domain.ChatMessage{Role: domain.ChatRoleAssistant, Content: f.answer}, nil
 }
 
-// toolCallMessage/argsJSON mirror
-// internal/application/chat_service_test.go's own small helpers for
-// building a tool-call response and its arguments, kept as a small local
-// copy since that package's own helpers are unexported in a different
-// package.
+// toolCallMessage/argsJSON mirror application/chat_service_test.go's small
+// helpers for building a tool-call response, kept as a local copy since
+// they're unexported there.
 func toolCallMessage(id, name, argumentsJSON string) domain.ChatMessage {
 	return domain.ChatMessage{Role: domain.ChatRoleAssistant, ToolCalls: []domain.ToolCall{{ID: id, Name: name, Arguments: argumentsJSON}}}
 }
@@ -315,10 +298,9 @@ func argsJSON(propertyName, value string) string {
 	return string(b)
 }
 
-// chatAuthedHandler builds a Handler wired with chat (search-server-only,
-// via cfgChat) plus an admin account, and logs in for a valid session
-// cookie -- the same real-login pattern authedHandler/adminAuthedHandler use
-// elsewhere in this package.
+// chatAuthedHandler builds a Handler wired with chat (via cfgChat) plus an
+// admin account, logged in for a valid session cookie -- same pattern as
+// authedHandler/adminAuthedHandler elsewhere in this package.
 func chatAuthedHandler(t *testing.T, chat *application.ChatService) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
 	h := restapi.New(restapi.Config{
@@ -339,11 +321,9 @@ func chatAuthedHandler(t *testing.T, chat *application.ChatService) (*restapi.Ha
 	return h, cookies[0]
 }
 
-// chatAuthedHandlerWithUser mirrors chatAuthedHandler, but logs in as u (a
-// domain.User whose PasswordHash is testUserPasswordHash) via a real
-// POST /login instead of the hardcoded admin -- for tests proving
-// handleChat resolves the role=user session's own domain.User.CustomPrompt
-// into ChatOptions.
+// chatAuthedHandlerWithUser mirrors chatAuthedHandler, but logs in as u via
+// a real POST /login instead of the hardcoded admin -- for tests proving
+// handleChat resolves a role=user session's CustomPrompt into ChatOptions.
 func chatAuthedHandlerWithUser(t *testing.T, chat *application.ChatService, store ports.UserStore, u domain.User) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
 	h := restapi.New(restapi.Config{
@@ -386,14 +366,10 @@ func postChat(t *testing.T, h *restapi.Handler, cookie *http.Cookie, body interf
 	return rec
 }
 
-// TestHandleChat_MethodNotAllowed proves a non-POST request to /chat never
-// reaches handleChat's own requireMethod(..., http.MethodPost) check at all:
-// "/chat" is registered only as the method-specific "POST /chat" pattern, so
-// for any other method the mux's next-best match is RoutesSearch's "/"
-// catch-all (handleIndex), which 404s since the path isn't "/" -- not the
-// 405 requireMethod would produce if it were ever reached. Both are a
-// correct "you can't do that," just via different status codes; this test
-// documents the actual one a real client observes.
+// TestHandleChat_MethodNotAllowed proves a non-POST /chat never reaches
+// handleChat's requireMethod check: since "/chat" is registered only as
+// "POST /chat", the mux falls through to the "/" catch-all (handleIndex),
+// which 404s instead of the 405 requireMethod would give.
 func TestHandleChat_MethodNotAllowed(t *testing.T) {
 	svc := application.NewChatService(&fakeChatEndpointStore{}, &fakeChatCompleter{}, nil, nil, nil, nil)
 	h, cookie := chatAuthedHandler(t, svc)
@@ -509,10 +485,9 @@ func TestHandleChat_ServiceError(t *testing.T) {
 	}
 }
 
-// TestHandleChat_TokenUsageBreakdown proves token_usage's three components
-// (global prompt, tool prompts, history) are wired through from
-// application.TokenUsage to the wire response, each attributed to the
-// right piece rather than lumped into one total.
+// TestHandleChat_TokenUsageBreakdown proves token_usage's three
+// components (global prompt, tool prompts, history) reach the wire
+// response attributed correctly, not lumped into one total.
 func TestHandleChat_TokenUsageBreakdown(t *testing.T) {
 	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
 		{ID: "s1", Name: "web", Transport: "stdio", Command: "mcp-web", Enabled: true, Prompt: "Use the web_search tool when helpful."},
@@ -556,12 +531,9 @@ func TestHandleChat_TokenUsageBreakdown(t *testing.T) {
 	}
 }
 
-// TestHandleChat_UserCustomPromptReachesChatOptions proves a chat request
-// from a role=user session whose domain.User.CustomPrompt is non-empty
-// actually reaches application.ChatOptions -- verified end to end via the
-// response's token_usage.user_prompt_tokens, which is only nonzero when
-// ChatService.Chat actually injected opts.UserCustomPrompt as its own
-// leading system message.
+// TestHandleChat_UserCustomPromptReachesChatOptions proves a role=user
+// session's non-empty CustomPrompt reaches ChatOptions -- verified via
+// token_usage.user_prompt_tokens, nonzero only when actually injected.
 func TestHandleChat_UserCustomPromptReachesChatOptions(t *testing.T) {
 	store := &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}}
 	store.users[0].CustomPrompt = "Always answer in haiku."
@@ -588,13 +560,10 @@ func TestHandleChat_UserCustomPromptReachesChatOptions(t *testing.T) {
 	}
 }
 
-// TestHandleChat_UserIDReachesChatOptionsForPersonalMCPServers is the
-// regression test for a real bug: handleChat never actually set
-// application.ChatOptions.UserID at all, so a role=user session's own
-// self-service MCP servers (ports.UserMCPServerStore) were silently never
-// merged into any real chat turn despite the whole feature existing.
-// Proven here via provider.openedServers actually containing alice's own
-// personal server after a real /chat call as her.
+// TestHandleChat_UserIDReachesChatOptionsForPersonalMCPServers is a
+// regression test: handleChat once never set ChatOptions.UserID, so a
+// role=user session's own MCP servers were silently never merged into a
+// chat turn. Proven via provider.openedServers containing alice's server.
 func TestHandleChat_UserIDReachesChatOptionsForPersonalMCPServers(t *testing.T) {
 	store := &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}}
 	provider := &fakeMCPToolProvider{}
@@ -623,12 +592,9 @@ func TestHandleChat_UserIDReachesChatOptionsForPersonalMCPServers(t *testing.T) 
 }
 
 // TestHandleChat_FileAccessTokenReachesMCPEnv proves handleChat mints a
-// file-access token for a role=user session and passes it through
-// application.ChatOptions.FileAccessToken into ChatService.Chat's MCP env
-// map as SE_FILES_API_TOKEN -- see application.ChatService.Chat and
-// fileAccessTokenFor. See account_files_test.go's
-// TestHandleAccountFiles_BearerTokenAuth for the full round trip proving
-// that same token actually authenticates against /account/api/files.
+// file-access token for a role=user session and passes it into the MCP env
+// as SE_FILES_API_TOKEN. See TestHandleAccountFiles_BearerTokenAuth for
+// the full round trip proving that token actually authenticates.
 func TestHandleChat_FileAccessTokenReachesMCPEnv(t *testing.T) {
 	store := &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}}
 	provider := &fakeMCPToolProvider{}
@@ -650,10 +616,8 @@ func TestHandleChat_FileAccessTokenReachesMCPEnv(t *testing.T) {
 	}
 }
 
-// TestHandleChat_AdminRoleGetsNoFileAccessToken is
-// TestHandleChat_AdminRoleNeverLooksUpAPerUserPrompt's file-token sibling
-// -- an admin session has no domain.User row to own a file under, so no
-// token should ever be minted for one.
+// TestHandleChat_AdminRoleGetsNoFileAccessToken proves an admin session
+// (no domain.User row) never gets a file-access token minted.
 func TestHandleChat_AdminRoleGetsNoFileAccessToken(t *testing.T) {
 	provider := &fakeMCPToolProvider{}
 	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
@@ -687,10 +651,8 @@ func TestHandleChat_AdminRoleGetsNoFileAccessToken(t *testing.T) {
 }
 
 // TestHandleChat_UserAgentFromOpSettingsReachesMCPEnv proves handleChat
-// reads the live *domain.OperationalSettings' UserAgent (the same value
-// crawls use) and passes it through application.ChatOptions.UserAgent into
-// ChatService.Chat's MCP env map as WEB_FETCH_USER_AGENT -- see
-// application.ChatService.Chat and userAgentForMCPFetch.
+// reads the live OperationalSettings.UserAgent (same value crawls use) and
+// passes it into the MCP env as WEB_FETCH_USER_AGENT.
 func TestHandleChat_UserAgentFromOpSettingsReachesMCPEnv(t *testing.T) {
 	provider := &fakeMCPToolProvider{
 		tools:   []domain.MCPTool{mcpTool("web_search", "Search the web.")},
@@ -731,12 +693,9 @@ func TestHandleChat_UserAgentFromOpSettingsReachesMCPEnv(t *testing.T) {
 }
 
 // TestHandleChat_AgentIDFromRequestReachesChatOptions proves the request's
-// agent_id overrides the endpoint's own DefaultAgentID and actually
-// reaches application.ChatOptions -- verified end to end via the
-// response's token_usage.agent_prompt_tokens, which is only nonzero when
-// ChatService.Chat resolved and injected the requested agent's own
-// SystemPrompt (mirrors TestHandleChat_UserCustomPromptReachesChatOptions'
-// own verification style).
+// agent_id overrides DefaultAgentID and reaches ChatOptions -- verified via
+// token_usage.agent_prompt_tokens, nonzero only when the agent's
+// SystemPrompt was actually injected.
 func TestHandleChat_AgentIDFromRequestReachesChatOptions(t *testing.T) {
 	agents := &fakeAgentStore{agents: []domain.Agent{
 		{ID: "default_agent", SystemPrompt: "default specialization", Enabled: true},
@@ -774,10 +733,8 @@ type chatAgentResp struct {
 	Description string `json:"description"`
 }
 
-// chatAgentsAuthedHandler builds a Handler wired with agents (search-server
-// only) plus an admin account, and logs in for a valid session cookie --
-// mirrors chatAuthedHandler's own pattern, just for GET /agents instead of
-// POST /chat.
+// chatAgentsAuthedHandler mirrors chatAuthedHandler's pattern, for GET
+// /agents instead of POST /chat.
 func chatAgentsAuthedHandler(t *testing.T, agents ports.AgentStore) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
 	h := restapi.New(restapi.Config{
@@ -827,8 +784,7 @@ func TestHandleChatAgents_NilStoreReturnsEmptyList(t *testing.T) {
 }
 
 // TestHandleChatAgents_OnlyEnabledAgentsListed proves a disabled agent is
-// left out, and the response shape carries only id/name/description --
-// never mcp_server_ids/enabled/system_prompt.
+// left out, and the response carries only id/name/description.
 func TestHandleChatAgents_OnlyEnabledAgentsListed(t *testing.T) {
 	store := &fakeAgentStore{agents: []domain.Agent{
 		{ID: "researcher", Name: "Researcher", Description: "Digs up sources.", SystemPrompt: "secret prompt", Enabled: true},
@@ -898,11 +854,9 @@ func TestHandleChatAgents_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-// TestHandleChat_AdminRoleNeverLooksUpAPerUserPrompt proves a chat request
-// from a role=admin session (no associated domain.User at all) never even
-// attempts a per-user lookup, let alone injects anything -- checked via
-// fakeUserStore.getCount, not just an empty result, since an admin session
-// has no userID to look up in the first place.
+// TestHandleChat_AdminRoleNeverLooksUpAPerUserPrompt proves a role=admin
+// session never even attempts a per-user prompt lookup -- checked via
+// fakeUserStore.getCount, not just an empty result.
 func TestHandleChat_AdminRoleNeverLooksUpAPerUserPrompt(t *testing.T) {
 	store := &fakeUserStore{}
 	svc := application.NewChatService(
@@ -935,10 +889,8 @@ func TestHandleChat_AdminRoleNeverLooksUpAPerUserPrompt(t *testing.T) {
 	}
 }
 
-// TestHandleChat_UserRoleGetUserErrorStillCompletesChat proves a chat
-// request from a role=user session whose GetUser call errors still
-// completes the chat turn normally -- best-effort, non-fatal, same
-// convention as every other per-turn augmentation in ChatService.Chat.
+// TestHandleChat_UserRoleGetUserErrorStillCompletesChat proves a GetUser
+// error still completes the chat turn normally -- best-effort, non-fatal.
 func TestHandleChat_UserRoleGetUserErrorStillCompletesChat(t *testing.T) {
 	store := &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}}
 	svc := application.NewChatService(
@@ -1028,11 +980,9 @@ func TestHandleChat_ContextTrimmed_SetWhenOlderMessagesDropped(t *testing.T) {
 	}
 }
 
-// TestHandleChat_WebSearchOverrideTrue_ActivatesGatedServer proves the
-// web_search:true request override activates a GatedByWebSearch server end
-// to end through the real HTTP handler, even though the endpoint's own
-// default is off -- the "Web" toggle now only ever decides which servers'
-// tools are offered to the model, never performs a search itself.
+// TestHandleChat_WebSearchOverrideTrue_ActivatesGatedServer proves
+// web_search:true activates a GatedByWebSearch server even when the
+// endpoint's own default is off -- the toggle gates tools, never searches itself.
 func TestHandleChat_WebSearchOverrideTrue_ActivatesGatedServer(t *testing.T) {
 	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
 		{ID: "s1", Name: "web", Transport: "stdio", Command: "mcp-web", Enabled: true, GatedByWebSearch: true},
@@ -1061,8 +1011,7 @@ func TestHandleChat_WebSearchOverrideTrue_ActivatesGatedServer(t *testing.T) {
 }
 
 // TestHandleChat_WebSearchOverrideFalse_DeactivatesGatedServer is the
-// mirror case: web_search:false deactivates a GatedByWebSearch server even
-// though the endpoint's own default is on.
+// mirror case: web_search:false deactivates it even when the default is on.
 func TestHandleChat_WebSearchOverrideFalse_DeactivatesGatedServer(t *testing.T) {
 	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
 		{ID: "s1", Name: "web", Transport: "stdio", Command: "mcp-web", Enabled: true, GatedByWebSearch: true},
@@ -1088,9 +1037,7 @@ func TestHandleChat_WebSearchOverrideFalse_DeactivatesGatedServer(t *testing.T) 
 }
 
 // TestHandleChat_SuccessWithToolResults proves a matching MCP tool's
-// result reaches the wire response as tool_results, mirroring
-// application.ChatService.Chat's own tool-running behavior end to end
-// through the real HTTP handler.
+// result reaches the wire response as tool_results end to end.
 func TestHandleChat_SuccessWithToolResults(t *testing.T) {
 	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
 		{ID: "s1", Name: "web", Transport: "stdio", Command: "mcp-web", Enabled: true},
@@ -1133,9 +1080,8 @@ func TestHandleChat_SuccessWithToolResults(t *testing.T) {
 	}
 }
 
-// TestHandleChat_SuccessWithoutSources (further up this file) already
-// proves tool_results is omitted when nil; this proves it's omitted when
-// servers exist but the model simply doesn't call a tool this turn.
+// TestHandleChat_SuccessWithoutSources already proves tool_results is
+// omitted when nil; this proves it's also omitted when the model just doesn't call a tool.
 func TestHandleChat_NoToolResultsWhenNoToolCall(t *testing.T) {
 	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
 		{ID: "s1", Name: "web", Transport: "stdio", Command: "mcp-web", Enabled: true},

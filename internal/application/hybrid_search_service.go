@@ -11,10 +11,9 @@ import (
 
 type hybridSearchService struct {
 	repo ports.SQLRepository
-	// embedders holds one ports.EmbeddingProvider per currently-enabled
-	// provider -- mirrors sqlCrawlerService's identical field. Search
-	// embeds the query against every provider with a non-zero weight (see
-	// resolveProviderWeights), not just one.
+	// embedders holds one ports.EmbeddingProvider per enabled provider.
+	// Search embeds the query against every provider with a non-zero
+	// weight (see resolveProviderWeights), not just one.
 	embedders   map[string]ports.EmbeddingProvider
 	settings    *domain.TuningSettings
 	opSettings  *domain.OperationalSettings
@@ -28,10 +27,9 @@ func NewHybridSearchService(repo ports.SQLRepository, embedders map[string]ports
 }
 
 // resolveProviderWeights returns the provider->weight map this request
-// scores semantic similarity with: opts.ProviderWeights if supplied (fully
-// replacing the admin default, like opts.TopK), else
-// opValues.EmbeddingSearchWeights -- filtered to providers with a weight
-// > 0 and a live embedder. An empty result means pure BM25, not an error.
+// scores semantic similarity with: opts.ProviderWeights if supplied, else
+// opValues.EmbeddingSearchWeights -- filtered to weight > 0 with a live
+// embedder. Empty means pure BM25, not an error.
 func (s *hybridSearchService) resolveProviderWeights(opts ports.SearchQuery, opValues domain.OperationalSettingsValues) map[string]float64 {
 	weights := opValues.EmbeddingSearchWeights
 	if opts.ProviderWeights != nil {
@@ -46,11 +44,10 @@ func (s *hybridSearchService) resolveProviderWeights(opts ports.SearchQuery, opV
 	return active
 }
 
-// fetchPostings runs the BM25 side of a search: one batched postings
-// lookup across every unique term, plus (when FuzzyMatchEnabled) a
-// vocabulary fallback substituting a near-miss term for one with zero
-// hits. correctedTerms reports each substitution for the UI. Split out
-// from Search so it can run concurrently with the query embedding call.
+// fetchPostings runs BM25's side of a search: one batched postings lookup,
+// plus (when FuzzyMatchEnabled) a vocabulary fallback substituting a
+// near-miss term for one with zero hits. Split out so it can run
+// concurrently with query embedding.
 func (s *hybridSearchService) fetchPostings(ctx context.Context, uniqueTerms []string, opValues domain.OperationalSettingsValues) (postingsByTerm map[string][]domain.PostingStats, scoringTerm map[string]string, correctedTerms []domain.CorrectedTerm, err error) {
 	// One batched query across every unique query term (rather than one
 	// join query -- plus a separate doc-freq COUNT(*) query -- per term).
@@ -117,9 +114,8 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 	active := s.resolveProviderWeights(opts, opValues)
 
 	// BM25 postings and each provider's query embedding are independent
-	// until both feed the candidate pool below -- run them all concurrently
-	// (an HTTP embedder's Embed is a real network round trip) rather than
-	// paying that latency once per provider sequentially.
+	// until they feed the candidate pool below -- run concurrently rather
+	// than paying each embedder's network round trip sequentially.
 	var (
 		wg             sync.WaitGroup
 		postingsByTerm map[string][]domain.PostingStats
@@ -162,10 +158,9 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 
 	totalDocs, avgDocLen := s.corpusStats.Get()
 	bm25PerDoc := make(map[string][]domain.PostingStats)
-	// bm25TermsPerDoc parallels bm25PerDoc index-for-index (same doc, same
-	// append order) -- PostingStats itself carries no term label, so this is
-	// the only place that association exists, and it's needed later to
-	// build each topK result's domain.TermScore breakdown.
+	// bm25TermsPerDoc parallels bm25PerDoc index-for-index -- PostingStats
+	// carries no term label, so this is the only place that association
+	// exists, needed later for each result's TermScore breakdown.
 	bm25TermsPerDoc := make(map[string][]string)
 	for _, term := range uniqueTerms {
 		lookupTerm := term
@@ -180,22 +175,20 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 		}
 	}
 
-	// Computed once per Search call rather than inside every per-candidate
-	// cosine-similarity comparison below -- a query vector never changes
-	// across those comparisons within one request.
+	// Computed once here rather than inside every per-candidate
+	// cosine-similarity comparison -- the query vector never changes.
 	queryNorms := make(map[string]float64, len(queryVecs))
 	for provider, vec := range queryVecs {
 		queryNorms[provider] = domain.VectorNorm(vec)
 	}
 
-	// Score the semantic side against a bounded candidate set, not the
-	// whole corpus: every BM25 hit plus a fixed-size sample of the rest,
-	// so a purely semantic match can still be found without a full scan.
+	// Score the semantic side against a bounded set, not the whole corpus:
+	// every BM25 hit plus a fixed-size sample, so a purely semantic match
+	// can still surface without a full scan.
 	bm25HitIDs := mapKeys(bm25PerDoc)
-	// A site:/-site: host may only exist as a document_aliases row now (its
-	// content merged elsewhere), and SiteAllowed compares a candidate's own
-	// canonical host -- expand both lists with the resolved canonical host
-	// so the filter still matches, without touching SiteAllowed itself.
+	// A site:/-site: host may exist only as a document_aliases row now --
+	// expand both lists with the resolved canonical host so the filter
+	// still matches, without touching SiteAllowed itself.
 	expandAliasHosts := func(sites []string) ([]string, error) {
 		if len(sites) == 0 {
 			return sites, nil
@@ -213,10 +206,9 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 	if parsed.ExcludedSites, err = expandAliasHosts(parsed.ExcludedSites); err != nil {
 		return nil, err
 	}
-	// A site: filter must never depend on whether its matches happen to be
-	// a BM25 hit or land in the semantic sample below -- forcing them into
-	// the fetch set here guarantees every document on the requested site(s)
-	// is actually considered, not silently dropped by the pool bound.
+	// A site: filter must never depend on landing in the BM25/semantic
+	// pool -- forcing matches into the fetch set here guarantees every
+	// document on the requested site is considered.
 	if len(parsed.Sites) > 0 {
 		siteIDs, err := s.repo.DocumentIDsByHost(ctx, parsed.Sites)
 		if err != nil {
@@ -224,10 +216,9 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 		}
 		bm25HitIDs = append(bm25HitIDs, siteIDs...)
 	}
-	// embeddings is keyed [provider][docID] -- one independent vector space
-	// per active provider, since embeddings from different models can never
-	// be compared directly (only their independently-computed similarity
-	// scores can be blended -- see the scoring loop below).
+	// embeddings is keyed [provider][docID] -- one vector space per
+	// provider, since embeddings from different models can't be compared
+	// directly (only their similarity scores blend -- see below).
 	embeddings := make(map[string]map[string]domain.EmbeddedVector, len(active))
 	poolSize := opValues.SemanticCandidatePoolSize
 	candidateIDs := make(map[string]bool, len(bm25PerDoc))
@@ -239,11 +230,9 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 		if err != nil {
 			return nil, err
 		}
-		// Fill the rest of this provider's candidate pool via pgvector ANN
-		// when enabled and available for it, else fall back to the bounded
-		// brute-force SampleEmbeddings sample. Every provider's candidate
-		// IDs are unioned below, so a document need only surface in one
-		// provider's pool to be scored against all of them.
+		// Fill the rest of this provider's pool via pgvector ANN when
+		// available, else fall back to bounded brute-force sampling. Every
+		// provider's candidate IDs are unioned below.
 		var sampled map[string]domain.EmbeddedVector
 		if opValues.ANNSearchEnabled {
 			annMatches, ok, annErr := s.repo.TopSemanticMatches(ctx, queryVecs[provider], poolSize, provider)
@@ -278,14 +267,13 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 
 	// Constraint/blocked-term/domain filters and recency sort all need
 	// each candidate's full doc, which ranking otherwise wouldn't fetch
-	// until after truncating to topK -- so fetch and filter first when any
-	// of those apply, caching docs for reuse below. Recency sort fetches
-	// pre-ordered by crawled_at DESC, so recencyOrder needs no later sort.
+	// until after truncating to topK -- so fetch and filter first, caching
+	// docs for reuse below. Recency sort fetches pre-ordered, so
+	// recencyOrder needs no later sort.
 	docCache := make(map[string]domain.Document)
-	// docTokens caches each candidate's tokenized title+text (computed only
-	// when a term-based check needs it) and is reused by the boost step
-	// below, so a query with both term constraints and admin blocked/
-	// boosted terms doesn't tokenize the same document three times.
+	// docTokens caches each candidate's tokenized title+text (only when
+	// needed) and is reused by the boost step below, avoiding re-tokenizing
+	// the same document for constraints and blocked/boosted terms.
 	docTokens := make(map[string]map[string]bool)
 	needsTokens := len(parsed.Required) > 0 || len(parsed.ExcludedGroups) > 0 ||
 		len(overrides.BlockedTerms) > 0 || len(overrides.BoostedTerms) > 0
@@ -335,11 +323,9 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 	for id := range candidateIDs {
 		bm25 := domain.BM25ScoreDocument(bm25PerDoc[id], k1, b)
 		// Blend every active provider's cosine similarity by its weight,
-		// normalized to stay on the same [-1,1]-ish scale regardless of how
-		// many providers are active. A provider missing this candidate's
-		// embedding contributes 0 rather than being excluded -- self-heals
-		// once a recompute catches the document up. PageRank is joined
-		// redundantly onto every provider's row, so read it from any one.
+		// normalized to the same scale regardless of provider count. A
+		// provider missing this candidate's embedding contributes 0 rather
+		// than excluding it -- self-heals once a recompute catches up.
 		var semantic, totalWeight, pageRank float64
 		for provider, w := range active {
 			totalWeight += w
@@ -375,10 +361,9 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 			domain.SortByFinalScore(ranked)
 		}
 	}
-	// Blend in link authority: PageRankWeight defaults to 0 (ranking then
-	// identical to before PageRank existed). Each candidate's raw PageRank
-	// is normalized against this batch's max, then blended additively --
-	// 1 makes FinalScore driven entirely by normalized PageRank.
+	// Blend in link authority: PageRankWeight defaults to 0 (unchanged
+	// ranking). Each candidate's raw PageRank is normalized against this
+	// batch's max, then blended additively into FinalScore.
 	if pageRankWeight > 0 {
 		maxPageRank := 0.0
 		for i := range ranked {
@@ -396,11 +381,10 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 		}
 	}
 	if recency {
-		// Recency sort ignores BM25/semantic/final score entirely -- this
-		// overrides whatever order CombineScores/boosting produced above.
-		// recencyOrder already reflects idx_documents_crawled_at-backed
-		// ORDER BY crawled_at DESC from the fetch above, so reordering
-		// ranked to match it is just a lookup, not a sort.
+		// Recency sort ignores score entirely, overriding whatever
+		// CombineScores/boosting produced above. recencyOrder already
+		// reflects the ORDER BY crawled_at DESC fetch, so this is a
+		// lookup, not a re-sort.
 		byID := make(map[string]domain.HybridResult, len(ranked))
 		for _, r := range ranked {
 			byID[r.DocID] = r
@@ -418,10 +402,8 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 	}
 
 	// Hydrate the final topK results' URL/Title/Snippet in one batched
-	// fetch for whichever IDs docCache doesn't already hold (the common,
-	// unconstrained-query fast path never populates docCache at all, so
-	// this is where that path's only document fetch happens) instead of
-	// one DocumentByID round trip per result.
+	// fetch for IDs docCache doesn't already hold (the unconstrained-query
+	// fast path's only document fetch) instead of one round trip each.
 	missingIDs := make([]string, 0, len(ranked))
 	for i := range ranked {
 		if _, ok := docCache[ranked[i].DocID]; !ok {
@@ -437,9 +419,8 @@ func (s *hybridSearchService) Search(ctx context.Context, query string, opts por
 			docCache[id] = doc
 		}
 	}
-	// highlightTerms swaps in each fuzzy-corrected term's real spelling:
-	// the original never appears in any document's text (that's why it was
-	// corrected), so highlighting it would never find a match.
+	// highlightTerms swaps in each fuzzy-corrected term's real spelling --
+	// the original never appears in document text, so it'd never match.
 	highlightTerms := terms
 	if len(scoringTerm) > 0 {
 		highlightTerms = make([]string, len(terms))

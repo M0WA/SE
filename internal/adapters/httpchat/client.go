@@ -51,13 +51,11 @@ func defaultHTTPClient() *http.Client {
 	return &http.Client{Timeout: requestTimeout, Transport: netguard.ConfiguredEndpointTransport()}
 }
 
-// checkEndpointURL rejects a BaseURL-derived request URL that resolves to
-// an address netguard.AllowedConfiguredEndpointIP blocks (link-local --
-// covering every cloud provider's metadata service -- multicast, or
-// unspecified). endpoint.BaseURL is admin-configured, trusted the same way
-// any other stored config is, but this still guards a real self-hosted
-// deployment against ever pointing it at its own cloud metadata endpoint,
-// whether by admin mistake or a compromised admin session.
+// checkEndpointURL rejects a BaseURL-derived URL that
+// netguard.AllowedConfiguredEndpointIP blocks (link-local -- e.g. cloud
+// metadata services -- multicast, or unspecified). BaseURL is
+// admin-trusted, but this still guards against it ever pointing at a
+// cloud metadata endpoint, by mistake or a compromised admin session.
 func checkEndpointURL(rawURL string) error {
 	if !netguard.ConfiguredEndpointURLAllowed(rawURL) {
 		return fmt.Errorf("httpchat: endpoint URL is not allowed: %s", rawURL)
@@ -67,11 +65,10 @@ func checkEndpointURL(rawURL string) error {
 
 // wireChatMessage/wireToolCall/wireToolDef are this adapter's own wire
 // shapes for the OpenAI-compatible tool-calling convention -- kept separate
-// from domain.ChatMessage/ToolCall/ToolDef (Go-idiomatic, flat) because the
-// wire format nests a tool call's name/arguments under a "function" object
-// alongside a "type":"function" discriminator, which the domain layer has
-// no business knowing about. toWireMessages/fromWireMessage/toWireTools do
-// the translation.
+// from domain.ChatMessage/ToolCall/ToolDef since the wire format nests a
+// tool call's name/arguments under a "function" object the domain layer
+// has no business knowing about. toWireMessages/fromWireMessage/toWireTools
+// translate.
 type wireToolCallFunction struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
@@ -127,11 +124,9 @@ type wireToolDef struct {
 	Function wireFunctionDef `json:"function"`
 }
 
-// toWireTools returns nil (not an empty slice) for an empty tools list, so
-// json.Marshal's "tools,omitempty" on chatCompletionRequest actually omits
-// the field -- sending an empty tools array (or a tool_choice with no
-// tools) is rejected by some OpenAI-compatible servers, so a turn with no
-// active hooks must send neither field at all.
+// toWireTools returns nil, not an empty slice, for an empty tools list, so
+// "tools,omitempty" actually omits the field -- some OpenAI-compatible
+// servers reject an empty tools array or a tool_choice with no tools.
 func toWireTools(tools []domain.ToolDef) []wireToolDef {
 	if len(tools) == 0 {
 		return nil
@@ -156,12 +151,9 @@ type chatCompletionResponse struct {
 	} `json:"choices"`
 }
 
-// Complete POSTs {"model": endpoint.Model, "messages": messages, "tools":
-// tools (omitted when empty)} to strings.TrimRight(endpoint.BaseURL, "/") +
-// "/chat/completions", parses an OpenAI-compatible response body, and
-// returns the first choice's message (content and/or tool_calls -- see
-// ports.ChatCompleter). A non-2xx status or an empty choices array is an
-// error.
+// Complete POSTs to {BaseURL}/chat/completions, parses an
+// OpenAI-compatible response, and returns the first choice's message
+// (content and/or tool_calls). A non-2xx status or empty choices is an error.
 func (c *Client) Complete(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage, tools []domain.ToolDef) (domain.ChatMessage, error) {
 	reqPayload := chatCompletionRequest{Model: endpoint.Model, Messages: toWireMessages(messages), Tools: toWireTools(tools)}
 	if len(tools) > 0 {
@@ -223,19 +215,14 @@ type modelsListResponse struct {
 	Data []modelInfo `json:"data"`
 }
 
-// ModelMaxContextTokens GETs strings.TrimRight(endpoint.BaseURL, "/") +
-// "/models" (the OpenAI-compatible model-listing endpoint) and returns the
-// entry matching endpoint.Model's own advertised maximum context length,
-// as vLLM reports it via a "max_model_len" field on each entry -- used to
-// auto-fill ChatEndpoint.MaxContextTokens rather than requiring an admin to
-// hand-type (and keep in sync with the model's real limit) a number.
+// ModelMaxContextTokens GETs {BaseURL}/models and returns the entry
+// matching endpoint.Model's max context length, as vLLM reports via
+// "max_model_len" -- auto-fills ChatEndpoint.MaxContextTokens instead of
+// requiring an admin to hand-type it.
 //
-// ok is false, not an error, whenever the endpoint simply doesn't report
-// this (an OpenAI-compatible server that isn't vLLM, or one with no
-// matching/positive max_model_len) -- this is best-effort auto-detection,
-// never a hard requirement for chat to work. Falls back to the response's
-// first entry if none match endpoint.Model by exact ID (a server serving
-// exactly one model under a different alias still gets detected).
+// ok is false, not an error, when the endpoint just doesn't report this
+// (best-effort, never required for chat to work). Falls back to the
+// response's first entry if none match by exact ID.
 func (c *Client) ModelMaxContextTokens(ctx context.Context, endpoint domain.ChatEndpoint) (int, bool, error) {
 	url := strings.TrimRight(endpoint.BaseURL, "/") + "/models"
 	if err := checkEndpointURL(url); err != nil {

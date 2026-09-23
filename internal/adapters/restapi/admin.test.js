@@ -7,11 +7,8 @@ function load() {
   return requireFresh('./admin.js');
 }
 
-// normalizedSVG round-trips raw through a detached element's innerHTML, so
-// it's compared against actual DOM output serialized the same way (jsdom,
-// like a real browser, re-serializes a self-closing SVG tag like
-// "<circle .../>" as an explicit "<circle ...></circle>" once parsed) --
-// comparing raw source strings directly would spuriously fail.
+// Compares SVGs via round-tripped innerHTML, since jsdom expands self-closing tags
+// (e.g. <circle/> -> <circle></circle>) -- raw string comparison would spuriously fail.
 function normalizedSVG(raw) {
   const el = document.createElement('div');
   el.innerHTML = raw;
@@ -428,11 +425,9 @@ test('wireSignOut is a no-op when there is no #sign-out button', () => {
   assert.doesNotThrow(() => wireSignOut());
 });
 
-// wireSignOut's post-logout navigation (`window.location = '/'`) isn't
-// asserted here -- jsdom's window.location is a real (non-configurable)
-// Location object that can't be swapped for a spy, and actually navigating
-// jsdom itself is unsupported/noisy. The fetch call is this function's own
-// meaningful logic; the navigation is a one-line browser-API call.
+// Post-logout navigation isn't asserted -- jsdom's window.location is a real, non-configurable
+// Location object that can't be spied on, and real navigation is unsupported/noisy. The fetch
+// call is the meaningful logic here.
 test('wireSignOut posts to /logout on click', async () => {
   setupDOM('<!doctype html><html><body><button id="sign-out"></button></body></html>');
   const { wireSignOut } = load();
@@ -476,11 +471,9 @@ test('loadStats reports the error message on a failed fetch', async () => {
   assert.equal(document.getElementById('stats').textContent.includes('db down'), true);
 });
 
-// vocabFixture builds the vocabulary panel's full markup (search form,
-// page-size field, summary/table, and pager) -- every vocabulary test
-// below uses this same shape, since the panel's pieces (page-size field,
-// pager) are exercised together with the search form far more often than
-// any single piece needs to be tested in isolation.
+// vocabFixture builds the vocabulary panel's full markup (search form, page-size field,
+// summary/table, pager) -- every test below shares this shape, since these pieces are usually
+// exercised together.
 function vocabFixture() {
   setupDOM(
     '<!doctype html><html><body>' +

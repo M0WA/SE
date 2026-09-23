@@ -6,12 +6,9 @@
   const groupsTableEl = document.getElementById('dedup-groups-table');
   const groupsPagerEl = document.getElementById('dedup-groups-pager');
 
-  // pollTimer keeps polling GET /admin/api/content-dedup while a recompute
-  // is in progress -- triggered by ANY process (cmd/crawl's own ticker or
-  // post-crawl trigger, or another admin-server instance's "recompute now"
-  // click), not just this browser's own click below -- mirroring
-  // admin_embeddings.js's identical pollTimer for the same reason: this
-  // page should reflect real cross-process state.
+  // pollTimer keeps polling while a recompute is in progress, triggered by ANY process
+  // (cmd/crawl's ticker, another admin instance's click, etc.), not just this tab -- mirrors
+  // admin_embeddings.js's pollTimer so this page reflects real cross-process state.
   let pollTimer = null;
 
   function renderRecomputeStatus(s) {
@@ -44,11 +41,8 @@
     }
   }
 
-  // The recompute itself runs in the background on the server -- this click
-  // only starts it and switches to polling loadRecomputeStatus for the
-  // result, since a corpus-wide fingerprint scan (and, for the simhash
-  // method, pairwise banding comparisons) is a real, possibly long-running
-  // background job, not something to await inline.
+  // The recompute runs server-side in the background -- this click only starts it and switches
+  // to polling loadRecomputeStatus, since a corpus-wide scan can be a real, long-running job.
   recomputeBtn.addEventListener('click', async () => {
     setButtonLoading(recomputeBtn, true, 'Recomputing…');
     recomputeStatusEl.textContent = 'Starting…';
@@ -66,12 +60,9 @@
   const GROUPS_PAGE_SIZE = 20;
   let groupsPage = 0;
 
-  // Reason labels match domain.DocumentAliasReason* -- canonical_tag is
-  // ordinary crawl-time bookkeeping (no document was ever deleted or even
-  // created for that URL), while content_exact/content_simhash are actual
-  // content-dedup merges (a document row WAS deleted). Shown per alias
-  // (not per group) since a single canonical document can accumulate
-  // aliases from more than one source over time.
+  // Reason labels match domain.DocumentAliasReason* -- canonical_tag is ordinary crawl-time
+  // bookkeeping (nothing deleted); content_exact/content_simhash are real dedup merges (a
+  // document row WAS deleted). Shown per alias, since one canonical document can accumulate several.
   const ALIAS_REASON_LABELS = {
     canonical_tag: 'canonical tag',
     content_exact: 'exact-content merge',
@@ -138,9 +129,7 @@
   loadRecomputeStatus();
   loadGroups();
 
-  // Exports for the Node test runner only -- `typeof module` is undefined in
-  // a browser's <script> tag, so this is a no-op there. See
-  // admin_content_dedup.test.js.
+  // Node test-runner export only; no-op in a browser <script> tag.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       renderRecomputeStatus, loadRecomputeStatus, buildGroupsTable, renderGroupsPager, loadGroups,

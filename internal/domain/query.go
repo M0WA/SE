@@ -5,32 +5,26 @@ import (
 	"strings"
 )
 
-// The optional leading [+-] lets a sign attach directly to a quoted phrase
-// as one token (`-"exact phrase"`) -- without it, the plain \S+ alternative
-// would split that into two nonsensical tokens (`-"exact`, `phrase"`).
+// The optional leading [+-] lets a sign attach to a quoted phrase as one
+// token (`-"exact phrase"`), instead of splitting it in two.
 var queryTokenRe = regexp.MustCompile(`[+-]?"[^"]*"|\S+`)
 
 // sitePrefix is the "site:" operator prefix, matched case-insensitively
 // (e.g. "Site:Example.com" is equivalent to "site:example.com").
 const sitePrefix = "site:"
 
-// ParsedQuery is a search query broken into its structural pieces: plain
-// optional terms that just contribute to relevance ranking, required terms
-// (+word) and excluded terms (-word), required exact phrases ("quoted
-// text") and excluded ones (-"quoted text"), and site: filters restricting
-// results to (site:host) or away from (-site:host) one or more hosts.
+// ParsedQuery is a search query broken into structural pieces: optional
+// ranking terms, required (+word) and excluded (-word) terms, required/
+// excluded quoted phrases, and site:/-site: host filters.
 type ParsedQuery struct {
 	Optional []string
 	Required []string
-	// ExcludedGroups holds one group of sub-words per "-word" token that
-	// tokenized into more than one word (e.g. punctuation inside it, like
-	// "-well-known" or a stray non-word character). A document is excluded
-	// by a group only if ALL of that group's words are present -- an AND
-	// within the group, OR'd across groups -- so a single mangled or
-	// hyphenated exclusion token can't veto a document over just one of
-	// its sub-words, which could otherwise collide with an unrelated term
-	// the query is also searching for. A plain single-word exclusion is
-	// just a singleton group, so ordinary "-word" usage is unaffected.
+	// ExcludedGroups holds one sub-word group per "-word" token that
+	// tokenized into multiple words (e.g. "-well-known"). A document is
+	// excluded only if ALL of a group's words are present (AND within the
+	// group, OR across groups), so one hyphenated token can't veto a
+	// document over just one sub-word. Plain single-word exclusions are
+	// singleton groups.
 	ExcludedGroups  [][]string
 	Phrases         []string
 	ExcludedPhrases []string
@@ -39,10 +33,7 @@ type ParsedQuery struct {
 }
 
 // ParseQuery splits a raw query string into its structural pieces. Must run
-// on the raw string before Tokenize, which would strip the +/-/"/site:
-// syntax this depends on. Each token's leading +/- is stripped once into
-// `sign`, which the phrase/site: cases below key off directly rather than
-// re-deriving from `tok`.
+// before Tokenize, which would strip the +/-/"/site: syntax this depends on.
 func ParseQuery(raw string) ParsedQuery {
 	var parsed ParsedQuery
 	for _, tok := range queryTokenRe.FindAllString(raw, -1) {
@@ -85,9 +76,8 @@ func ParseQuery(raw string) ParsedQuery {
 }
 
 // AllTerms returns every word across optional, required, and phrase terms,
-// deduplicated -- for BM25 postings lookups and the semantic query
-// embedding. Excluded terms are never included: they should never boost
-// relevance or get highlighted.
+// deduplicated, for BM25 postings lookups and the semantic query embedding.
+// Excluded terms are never included.
 func (q ParsedQuery) AllTerms() []string {
 	seen := make(map[string]bool)
 	var out []string
@@ -112,8 +102,7 @@ func (q ParsedQuery) Empty() bool {
 	return len(q.AllTerms()) == 0
 }
 
-// HasConstraints reports whether this query has any required/excluded
-// terms, phrases, or site: filters that need per-document filtering,
+// HasConstraints reports whether this query needs per-document filtering
 // beyond ordinary relevance ranking.
 func (q ParsedQuery) HasConstraints() bool {
 	return len(q.Required) > 0 || len(q.ExcludedGroups) > 0 || len(q.Phrases) > 0 ||
@@ -121,9 +110,8 @@ func (q ParsedQuery) HasConstraints() bool {
 }
 
 // SiteAllowed reports whether doc's host satisfies this query's site:
-// filter(s). -site:host always wins over a positive site: filter. Matches
-// an exact host or any subdomain ("site:example.com" also matches
-// "www.example.com"). No filters at all allows every host.
+// filter(s). -site:host always wins over a positive filter. Matches an
+// exact host or any subdomain. No filters allows every host.
 func (q ParsedQuery) SiteAllowed(doc Document) bool {
 	host := HostOf(doc.URL)
 	for _, site := range q.ExcludedSites {
@@ -143,9 +131,8 @@ func (q ParsedQuery) SiteAllowed(doc Document) bool {
 }
 
 // Matches reports whether title/text satisfy this query's required/excluded
-// words and phrases -- a convenience wrapper around MatchesTokens for a
-// caller without pre-tokenized text (hybrid_search_service.go calls
-// MatchesTokens directly since it reuses those tokens for ranking too).
+// words and phrases -- a wrapper around MatchesTokens for callers without
+// pre-tokenized text.
 func (q ParsedQuery) Matches(title, text string) bool {
 	if !q.HasConstraints() {
 		return true
@@ -158,10 +145,8 @@ func (q ParsedQuery) Matches(title, text string) bool {
 }
 
 // MatchesTokens is Matches' counterpart for a caller that already
-// tokenized title+text. tokens is only consulted when required/excluded
-// words exist -- pass nil for a query known to be phrase-only. Phrase
-// checks are a literal, case-insensitive substring match (phrases aren't
-// positionally indexed).
+// tokenized title+text; pass nil tokens for a phrase-only query. Phrase
+// checks are a literal, case-insensitive substring match.
 func (q ParsedQuery) MatchesTokens(tokens map[string]bool, title, text string) bool {
 	if !q.HasConstraints() {
 		return true

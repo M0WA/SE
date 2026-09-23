@@ -20,29 +20,25 @@ type Fetcher interface {
 }
 
 // FetchOptions carries per-request credentials for sites that need a
-// session cookie or HTTP Basic auth to crawl, plus an optional UserAgent
-// override (falls back to the process's configured default when empty).
+// session cookie or HTTP Basic auth, plus an optional UserAgent override
+// (falls back to the process default when empty).
 type FetchOptions struct {
 	Cookie        string
 	BasicAuthUser string
 	BasicAuthPass string
 	UserAgent     string
 	// FetchTimeoutSeconds and MaxResponseBytes override the operational
-	// defaults (domain.OperationalSettingsValues' FetchTimeout/
-	// MaxResponseBytes) for this fetch alone when positive; zero means "use
-	// the global default," the same convention UserAgent's empty-string
-	// case already uses above.
+	// defaults for this fetch alone when positive; zero means use the
+	// global default, same convention as UserAgent's empty-string case.
 	FetchTimeoutSeconds int
 	MaxResponseBytes    int
 	// Renderer selects how this fetch is done: "" defers to the caller's
-	// default (typically the Tuning page's), RendererNone/Chromium/Firefox
-	// override it. Only application.RenderAwareFetcher consults this --
-	// httpfetcher.Fetcher ignores it, since it only ever does plain HTTP.
+	// default, RendererNone/Chromium/Firefox override it. Only
+	// RenderAwareFetcher consults this -- httpfetcher.Fetcher ignores it.
 	Renderer string
-	// NoRender forces the plain HTTP path regardless of Renderer or any
-	// configured default -- set by crawlLoop's own sitemap.xml fetch,
-	// which must never go through a real browser (its response is XML,
-	// not a page to render, and a browser's XML viewer would corrupt it).
+	// NoRender forces the plain HTTP path regardless of Renderer -- set by
+	// crawlLoop's sitemap.xml fetch, whose XML response a browser's viewer
+	// would corrupt.
 	NoRender bool
 }
 
@@ -53,10 +49,10 @@ type AuthFetcher interface {
 	FetchWithOptions(ctx context.Context, url string, opts FetchOptions) (string, error)
 }
 
-// Renderer executes a page in a real headless browser and returns its final
-// rendered HTML, for a site whose real content only exists after
-// client-side JS runs. Implemented per browser engine (Chromium, Firefox);
-// application.RenderAwareFetcher dispatches based on FetchOptions.Renderer.
+// Renderer executes a page in a real headless browser and returns its
+// rendered HTML, for a site whose content only exists after client-side JS
+// runs. Implemented per browser engine; RenderAwareFetcher dispatches on
+// FetchOptions.Renderer.
 type Renderer interface {
 	Render(ctx context.Context, url string, opts FetchOptions) (string, error)
 }
@@ -75,173 +71,129 @@ type EmbeddingProvider interface {
 type SQLRepository interface {
 	// SaveDocument upserts doc, archiving its previous content to
 	// document_versions first if changed (maxVersions bounds how many
-	// survive, pruning the oldest). titleWeight repeats the title in the
-	// indexed token stream ahead of the body. embeddings (one vector per
-	// enabled provider, keyed by provider ID) are upserted in the same write.
+	// survive). titleWeight repeats the title ahead of the body in the
+	// indexed token stream. embeddings are upserted in the same write.
 	SaveDocument(ctx context.Context, doc domain.Document, embeddings map[string][]float32, maxVersions, titleWeight int) error
 	// PostingsForTerms batch-fetches postings for every term in one query,
-	// so a multi-term search issues one round trip, not one per term.
-	// TotalDocs/AvgDocLen are left zero -- the caller fills them in from its
-	// own corpus-wide stats cache rather than refetching them per term.
+	// so a multi-term search issues one round trip. TotalDocs/AvgDocLen are
+	// left zero -- the caller fills them from its own stats cache.
 	PostingsForTerms(ctx context.Context, terms []string) (map[string][]domain.PostingStats, error)
 	CorpusStats(ctx context.Context) (totalDocs int, avgDocLen float64, err error)
-	// VocabularyStats reports the corpus's total distinct-term count, plus a
-	// limit/offset page of terms ordered by sortBy/sortDir (each falls back
-	// to a default on an unrecognized value) -- backs the admin vocabulary
-	// page. A non-empty search restricts the listing and matchedCount to a
-	// substring match; vocabSize always reflects the whole corpus.
+	// VocabularyStats reports the corpus's total distinct-term count plus a
+	// limit/offset page of terms ordered by sortBy/sortDir -- backs the
+	// admin vocabulary page. search restricts the listing/matchedCount.
 	VocabularyStats(ctx context.Context, limit, offset int, search, sortBy, sortDir string) (vocabSize, matchedCount int, terms []domain.TermStat, err error)
 	// AllTerms returns every distinct term with its doc/total frequency --
-	// the full vocabulary (unlike VocabularyStats' bounded listing), used by
-	// domain.VocabularyCache for fuzzy near-miss matching (domain.NearestTerm).
+	// the full vocabulary, used by VocabularyCache for fuzzy matching.
 	AllTerms(ctx context.Context) ([]domain.TermStat, error)
 	// EmbeddingsForDocs batch-fetches provider's embeddings for exactly the
-	// given doc IDs (typically a query's BM25-hit set), avoiding a
-	// full-corpus scan. Each result's norm (domain.EmbeddedVector) was
-	// precomputed at SaveDocument time, not recomputed per request.
+	// given doc IDs, avoiding a full-corpus scan. Each norm was precomputed
+	// at SaveDocument time.
 	EmbeddingsForDocs(ctx context.Context, ids []string, provider string) (map[string]domain.EmbeddedVector, error)
-	// SampleEmbeddings returns up to limit of provider's embeddings from
-	// across the corpus, so a purely semantic match (no BM25 hits at all)
-	// can still be found -- bounded regardless of how large the corpus is,
-	// unlike a full "every document" scan.
+	// SampleEmbeddings returns up to limit of provider's embeddings across
+	// the corpus, so a purely semantic match can still be found, bounded
+	// regardless of corpus size.
 	SampleEmbeddings(ctx context.Context, limit int, provider string) (map[string]domain.EmbeddedVector, error)
-	// TopSemanticMatches finds queryVec's nearest neighbors via Postgres
-	// pgvector's HNSW index, used instead of SampleEmbeddings when ANN is
-	// available for provider. ok is false when it isn't (caller falls back
-	// to SampleEmbeddings); a non-nil error is a real query fault.
+	// TopSemanticMatches finds queryVec's nearest neighbors via pgvector's
+	// HNSW index, used instead of SampleEmbeddings when ANN is available.
+	// ok is false when it isn't; a non-nil error is a real query fault.
 	TopSemanticMatches(ctx context.Context, queryVec []float32, limit int, provider string) (matches map[string]domain.EmbeddedVector, ok bool, err error)
-	// DocumentsByIDs batch-fetches documents for the given IDs in one
-	// round trip (a missing ID is simply absent from the result, not an
-	// error) -- the only document-lookup-by-ID this port exposes, since
-	// every caller either already has a batch of IDs or can trivially pass
-	// a single-element slice, avoiding a second, N+1-shaped method.
+	// DocumentsByIDs batch-fetches documents for the given IDs in one round
+	// trip (a missing ID is simply absent, not an error) -- the only
+	// lookup-by-ID this port exposes.
 	DocumentsByIDs(ctx context.Context, ids []string) (map[string]domain.Document, error)
 	// DocumentsByIDsSortedByCrawledAt is DocumentsByIDs' counterpart for the
-	// recency-sort path: same batched "WHERE id IN (...)" fetch, but ordered
-	// by crawled_at descending (ties broken by id ascending) directly in
-	// SQL -- backed by idx_documents_crawled_at -- so the caller never needs
-	// to sort the fetched candidates itself.
+	// recency-sort path, ordered by crawled_at descending in SQL so the
+	// caller never sorts candidates itself.
 	DocumentsByIDsSortedByCrawledAt(ctx context.Context, ids []string) ([]domain.Document, error)
-	// DocumentIDsByHost returns the IDs of every document whose host exactly
-	// matches one of hosts or is a subdomain of one -- forces a query's
-	// site: matches into the search candidate set, since they otherwise
-	// have no guarantee of appearing in the BM25-hit or semantic sample.
+	// DocumentIDsByHost returns IDs of every document whose host matches
+	// one of hosts (exact or subdomain) -- forces site: matches into the
+	// search candidate set.
 	DocumentIDsByHost(ctx context.Context, hosts []string) ([]string, error)
-	// ResolveAliasHosts returns the real documents.host of every canonical
-	// document reachable through an alias whose host matches hosts (same
-	// rule as DocumentIDsByHost) -- expands a site: host list before
-	// SiteAllowed filtering, which compares a candidate's own real host,
-	// not an alias host a user might type after a merge or www fold.
+	// ResolveAliasHosts returns the real host of every canonical document
+	// reachable through an alias matching hosts -- expands a site: filter
+	// before SiteAllowed, which checks a candidate's real host.
 	ResolveAliasHosts(ctx context.Context, hosts []string) ([]string, error)
 	// HostsIndexed reports, for each host, whether any document is already
-	// indexed for it (same matching rule as DocumentIDsByHost) -- used by
-	// FollowIndexedDomains to widen link scope without needing every ID.
+	// indexed for it -- used by FollowIndexedDomains to widen link scope.
 	HostsIndexed(ctx context.Context, hosts []string) (map[string]bool, error)
 	ListDocuments(ctx context.Context, limit int, host string) ([]domain.IndexedDocument, error)
 	DeleteDocument(ctx context.Context, docID string) error
 	// RecordDocumentAlias upserts one document_aliases row: aliasURL's
-	// content lives under canonicalID, not its own document row -- used for
-	// both a <link rel="canonical"> redirect and a content-dedup merge.
-	// canonicalID need not already exist in documents (a forward-declared
-	// alias resolves once that document is actually saved).
+	// content lives under canonicalID, not its own row -- used for both a
+	// canonical-tag redirect and a content-dedup merge. canonicalID need
+	// not already exist (a forward-declared alias resolves once saved).
 	RecordDocumentAlias(ctx context.Context, aliasURL, canonicalID, reason string) error
 }
 
-// PageRankRepository is the narrow port application.RunPageRankJob needs:
-// load the current link graph, then write back each document's fresh
-// score. cmd/crawl (periodic ticker + one run right after each crawl) is
-// the only caller.
+// PageRankRepository is the narrow port RunPageRankJob needs: load the
+// current link graph, then write back each document's fresh score.
+// cmd/crawl (periodic ticker + one run after each crawl) is the only caller.
 type PageRankRepository interface {
-	// LinkGraph loads the whole crawled link graph as an adjacency map (doc
-	// ID -> IDs it links to) in one query; a link to a never-crawled URL is
-	// simply omitted.
+	// LinkGraph loads the whole crawled link graph as an adjacency map in
+	// one query; a link to a never-crawled URL is simply omitted.
 	LinkGraph(ctx context.Context) (map[string][]string, error)
 	// UpdatePageRanks batch-writes each given ID's fresh score. A document
-	// absent from scores (no in/out links at all) is left untouched, not
-	// zeroed.
+	// absent from scores is left untouched, not zeroed.
 	UpdatePageRanks(ctx context.Context, scores map[string]float64) error
 }
 
-// ErrContentDedupAlreadyRunning is returned by
-// application.RunContentDedupJobWithStatus when
-// ContentDedupRepository.TryAcquireContentDedupLock lost the race to
-// another process's already-running call -- callers (the admin recompute
-// handler, the crawl-server scheduler) treat this as a normal, expected
-// outcome, not a real error.
+// ErrContentDedupAlreadyRunning is returned when
+// TryAcquireContentDedupLock lost the race to another process's
+// already-running call -- callers treat this as expected, not an error.
 var ErrContentDedupAlreadyRunning = errors.New("content dedup is already running")
 
-// ContentDedupRepository is the narrow port application.RunContentDedupJob
-// needs: read every document's fingerprint, then merge whatever duplicate
-// groups it finds. Two independent, unsynchronized callers can invoke this
-// against the same database: cmd/crawl's own ticker/on-crawl-complete
-// scheduler, and the admin-server's "recompute now" button -- two separate
-// OS processes, so TryAcquireContentDedupLock exists specifically to keep
-// them from ever running RunContentDedupJob at the same time (see its own
-// doc comment for what goes wrong if they do).
+// ContentDedupRepository is the narrow port RunContentDedupJob needs: read
+// every document's fingerprint, then merge duplicate groups. Two
+// unsynchronized processes (cmd/crawl's scheduler, admin-server's
+// "recompute now") can call this against the same DB, so
+// TryAcquireContentDedupLock exists to keep them from running at once.
 type ContentDedupRepository interface {
 	// AllDocumentFingerprints lists every document's id/url/host/
-	// content_hash/simhash/crawled_at in one query -- just enough to group
-	// duplicates, not the full domain.Document (wasted memory at this scale).
+	// content_hash/simhash/crawled_at in one query -- enough to group
+	// duplicates without loading the full domain.Document.
 	AllDocumentFingerprints(ctx context.Context) ([]domain.DocumentFingerprint, error)
 	// MergeDocuments folds every loserIDs document into canonicalID: each
-	// loser's own aliases are repointed (path compression), a fresh alias
-	// is recorded for its URL, and its document row is removed via the same
-	// cascade DeleteDocument uses. reason records why on each alias row.
+	// loser's aliases are repointed, a fresh alias recorded for its URL,
+	// and its row removed via DeleteDocument's cascade.
 	MergeDocuments(ctx context.Context, canonicalID string, loserIDs []string, reason string) error
-	// TryAcquireContentDedupLock atomically claims the single, DB-backed
-	// (so it works across processes, unlike an in-memory bool)
-	// content-dedup lock, returning true if this call got it. Without this,
-	// two concurrent RunContentDedupJob calls each compute their own
-	// duplicate groups from an independent snapshot of
-	// AllDocumentFingerprints; if one call's merge deletes a document the
-	// other call's snapshot still believes is a live canonical, that other
-	// call goes on to record a fresh document_aliases row pointing at an
-	// id that no longer exists in documents -- a dangling canonical the
-	// admin alias-groups page then displays with an empty URL (confirmed
-	// in production: exactly this pattern, traced to the admin-server
-	// recompute button firing while cmd/crawl's own scheduler was already
-	// mid-run). Must be paired with ReleaseContentDedupLock (defer it
-	// immediately after a successful acquire).
+	// TryAcquireContentDedupLock atomically claims the single DB-backed
+	// content-dedup lock, returning true if this call got it. Without it,
+	// two concurrent runs can each merge from a stale snapshot, one
+	// recording an alias pointing at an id the other already deleted -- a
+	// dangling canonical the admin alias-groups page then shows with an
+	// empty URL (confirmed in production). Pair with
+	// ReleaseContentDedupLock, deferred right after a successful acquire.
 	TryAcquireContentDedupLock(ctx context.Context) (bool, error)
-	// ReleaseContentDedupLock clears the lock TryAcquireContentDedupLock
-	// claimed. Idempotent: releasing an already-released lock is a no-op,
-	// not an error, so a deferred call after a failed/short-circuited run
-	// never itself needs error handling.
+	// ReleaseContentDedupLock clears the lock. Idempotent: releasing an
+	// already-released lock is a no-op, not an error.
 	ReleaseContentDedupLock(ctx context.Context) error
 }
 
 // EmbeddingRepository is the narrow slice of *sqlrepo.Repository
-// application.RunEmbeddingRecomputeJob needs: iterate every document ID,
-// fetch its stored Text, and overwrite just its embedding.
+// RunEmbeddingRecomputeJob needs: iterate every document ID, fetch its
+// stored Text, and overwrite just its embedding.
 type EmbeddingRepository interface {
-	// AllDocumentIDs lists every document ID in the corpus, ordered so
-	// repeated calls (and the batches RunEmbeddingRecomputeJob fetches
-	// against DocumentsByIDs) are stable and deterministic.
+	// AllDocumentIDs lists every document ID, ordered so repeated calls
+	// (and the batches fetched via DocumentsByIDs) are stable.
 	AllDocumentIDs(ctx context.Context) ([]string, error)
 	// DocumentsByIDs batch-fetches each document's URL/title/text -- see
-	// AdminRepository's identical method (implemented once, satisfying
-	// both narrow ports).
+	// AdminRepository's identical method (implemented once for both ports).
 	DocumentsByIDs(ctx context.Context, ids []string) (map[string]domain.Document, error)
-	// UpdateEmbedding overwrites one document's embedding for every provider
-	// in embeddings (and its ANN pgvector column, when enabled) -- unlike
-	// SaveDocument, never re-tokenizes text or touches postings/links/
-	// versions/pagerank, since only the vector changed.
+	// UpdateEmbedding overwrites one document's embedding for every
+	// provider in embeddings -- unlike SaveDocument, never re-tokenizes
+	// text or touches postings/links/versions/pagerank.
 	UpdateEmbedding(ctx context.Context, id string, embeddings map[string][]float32) error
 }
 
 // SessionStore backs the admin/search login system's session tokens, via a
-// shared "sessions" table so a login on one process (e.g. admin-server's
-// /login) is recognized by every process serving the site -- something an
-// in-memory store could never do across separate OS processes. A session
-// carries a role (domain.RoleAdmin or domain.RoleUser) and, for a
-// domain.RoleUser session, the domain.User.ID it belongs to (empty for
-// domain.RoleAdmin) -- set once at CreateSession time and resolved fresh by
-// ValidSession on every request, never derived from anything the client
-// sends (the se_session cookie itself stays an opaque random token).
+// shared "sessions" table so a login on one process is recognized by every
+// process serving the site. A session carries a role (RoleAdmin/RoleUser)
+// and, for RoleUser, the User.ID it belongs to -- resolved fresh by
+// ValidSession every request, never derived from the client's cookie.
 type SessionStore interface {
 	// CreateSession persists a freshly issued token, valid until expiresAt,
-	// with the given role and userID (userID is "" for a domain.RoleAdmin
-	// session).
+	// with the given role and userID ("" for a RoleAdmin session).
 	CreateSession(ctx context.Context, token string, expiresAt time.Time, role string, userID string) error
 	// ValidSession reports whether token names a session that hasn't
 	// expired yet and, if so, the role and userID it was created with.
@@ -260,8 +212,8 @@ var ErrUserNotFound = errors.New("user not found")
 var ErrUsernameTaken = errors.New("username already taken")
 
 // UserStore persists DB-backed regular-user accounts -- see domain.User's
-// doc comment for how these differ from the single hardcoded admin
-// account. A list of many, like MCPServerStore, CRUD over IDs.
+// doc comment for how these differ from the admin account. A list of many,
+// like MCPServerStore, CRUD over IDs.
 type UserStore interface {
 	ListUsers(ctx context.Context) ([]domain.User, error)
 	GetUser(ctx context.Context, id string) (domain.User, error)
@@ -270,8 +222,7 @@ type UserStore interface {
 	// CreateUser returns ErrUsernameTaken if u.Username is already in use.
 	CreateUser(ctx context.Context, u domain.User) error
 	// UpdateUser replaces u's stored fields wholesale (used for a password
-	// reset -- see restapi.handleAdminUpdateUser). Returns ErrUserNotFound
-	// if no row with u.ID exists.
+	// reset). Returns ErrUserNotFound if no row with u.ID exists.
 	UpdateUser(ctx context.Context, u domain.User) error
 	// DeleteUser returns ErrUserNotFound if no row with id exists.
 	DeleteUser(ctx context.Context, id string) error
@@ -279,9 +230,7 @@ type UserStore interface {
 
 // HealthChecker is a cheap liveness check for the shared database
 // connection, used only by GET /healthz. Ping must stay a plain connection
-// check (what sql.DB.PingContext already does) -- never a real query against
-// application tables -- so the endpoint stays safe for frequent automated
-// polling.
+// check, never a real query, so the endpoint stays safe for frequent polling.
 type HealthChecker interface {
 	Ping(ctx context.Context) error
 }
@@ -296,96 +245,74 @@ type AdminRepository interface {
 	DocumentVersions(ctx context.Context, docID string) ([]domain.DocumentVersion, error)
 	DocumentsOverview(ctx context.Context, topDomains int) (domain.DocumentsOverview, error)
 	// PostingsForTerm returns at most limit postings for term, ordered by
-	// term frequency descending, so a limited result still surfaces the
-	// strongest matches rather than an arbitrary subset.
+	// term frequency descending, surfacing the strongest matches.
 	PostingsForTerm(ctx context.Context, term string, limit int) ([]domain.PostingStats, error)
 	// DocumentsByIDs backs the vocabulary term-detail view: given
-	// PostingsForTerm's doc IDs, fetch each document's URL/title/text so a
-	// match excerpt can be built for it.
+	// PostingsForTerm's doc IDs, fetch URL/title/text to build an excerpt.
 	DocumentsByIDs(ctx context.Context, ids []string) (map[string]domain.Document, error)
 	DeleteDocument(ctx context.Context, docID string) error
-	// PageRankDistribution reports the min, max and average
-	// documents.pagerank value across the whole corpus -- the admin
-	// PageRank debug page's headline numbers. All three are 0 for an empty
-	// corpus.
+	// PageRankDistribution reports the min/max/average pagerank across the
+	// corpus -- the admin PageRank debug page's headline numbers.
 	PageRankDistribution(ctx context.Context) (min, max, avg float64, err error)
-	// TableRowCounts reports how many rows each of the schema's tables
-	// currently holds, keyed by table name -- the admin database
-	// diagnostics page's per-table breakdown.
+	// TableRowCounts reports each schema table's row count, keyed by name --
+	// the admin database diagnostics page's per-table breakdown.
 	TableRowCounts(ctx context.Context) (map[string]int64, error)
-	// PoolStats reports the live DB connection pool's current limits and
-	// usage (see sqlrepo.Repository.PoolStats) -- the admin database
-	// diagnostics page's connection-pool panel.
+	// PoolStats reports the live DB connection pool's limits and usage --
+	// the admin database diagnostics page's connection-pool panel.
 	PoolStats() sql.DBStats
 	// CrawlJobOutcomes reports how many crawl jobs created at or after
-	// since finished in each terminal status (done/failed/cancelled) --
-	// the admin Overview page's crawl-outcome donut. A job still queued or
-	// running is excluded (see domain.CrawlJobOutcomeCount).
+	// since finished in each terminal status -- the admin Overview page's
+	// crawl-outcome donut. A still queued/running job is excluded.
 	CrawlJobOutcomes(ctx context.Context, since time.Time) ([]domain.CrawlJobOutcomeCount, error)
-	// DailyFetchOutcomes reports, for each day at or after since, how many
-	// crawl_job_pages rows landed in each fetch outcome -- the admin
-	// Overview page's throughput/fetch-outcome stacked bar.
+	// DailyFetchOutcomes reports, per day since, how many crawl_job_pages
+	// rows landed in each fetch outcome -- the Overview page's stacked bar.
 	DailyFetchOutcomes(ctx context.Context, since time.Time) ([]domain.DailyFetchOutcome, error)
 	// DocumentsIndexedByDay reports how many documents' crawled_at falls on
-	// each day at or after since -- the admin Overview page's
-	// documents-indexed-over-time trend (DocumentsOverview's AgeBuckets
-	// reads the same column bucketed coarsely instead of day-by-day).
+	// each day since -- the Overview page's documents-indexed-over-time trend.
 	DocumentsIndexedByDay(ctx context.Context, since time.Time) ([]domain.DailyCount, error)
-	// DailyFetchDuration reports each day's mean crawl_job_pages.duration_ms
-	// at or after since -- the admin Overview page's fetch-duration trend.
+	// DailyFetchDuration reports each day's mean fetch duration since --
+	// the Overview page's fetch-duration trend.
 	DailyFetchDuration(ctx context.Context, since time.Time) ([]domain.DailyAvgDuration, error)
 	// PageRankHistogram buckets every document's pagerank into equal-width
-	// bins spanning the corpus's observed range, plus how many sit at or
-	// below the orphan threshold and the total doc count. All zero when empty.
+	// bins, plus how many sit at/below the orphan threshold and total docs.
 	PageRankHistogram(ctx context.Context) (buckets []domain.PageRankBucket, orphanCount, totalDocs int, err error)
 	// ListDocumentAliasGroups pages through every canonical document with
-	// at least one alias, read live from document_aliases (not a cached
-	// run) so the "what got merged" listing stays accurate over time.
+	// at least one alias, read live from document_aliases so the listing
+	// stays accurate over time.
 	ListDocumentAliasGroups(ctx context.Context, limit, offset int) (groups []domain.DocumentAliasGroup, total int, err error)
 	// ClearContent permanently deletes every crawled document (cascading to
-	// postings/links/document_versions/document_embeddings), every
-	// document_aliases row, and every crawl_jobs row (cascading to
-	// crawl_job_pages) -- everything the admin database page's "Clear
-	// content" button offers, and nothing else: every settings table
-	// (app_settings, chat_endpoint, embedding_http_endpoints,
-	// scheduled_crawls) is left untouched.
+	// postings/links/versions/embeddings), every document_aliases row, and
+	// every crawl_jobs row -- everything the "Clear content" button offers,
+	// leaving every settings table untouched.
 	ClearContent(ctx context.Context) error
-	// ClearSettings permanently deletes every row of every settings table
-	// (app_settings, chat_endpoint, embedding_http_endpoints,
-	// scheduled_crawls) -- everything the admin database page's "Clear
-	// settings" button offers; crawled content itself is left untouched.
-	// Deliberately does NOT reset any process's own in-memory settings:
-	// bootstrap.SyncSettings' loadSetting leaves a caller's existing value
-	// untouched whenever a key is missing, the same as a transient read
-	// error, so a later poll finding these rows gone can't tell "cleared on
-	// purpose" apart from "DB hiccup" -- treating both as "reset to
-	// defaults" would risk wiping live settings on a momentary blip. The
-	// caller handling this request resets its own in-memory settings
-	// immediately instead; other processes pick up the change once
-	// restarted.
+	// ClearSettings permanently deletes every row of every settings table --
+	// crawled content is untouched. Deliberately does NOT reset any
+	// process's own in-memory settings: bootstrap.SyncSettings can't tell
+	// "cleared on purpose" apart from a transient read error, so treating a
+	// missing key as "reset to defaults" would risk wiping live settings on
+	// a blip. The caller handling this request resets its own in-memory
+	// settings immediately; other processes pick it up on restart.
 	ClearSettings(ctx context.Context) error
 }
 
 // --- Primary (driving) ports ---
 
-// Search sort modes: SortRelevance (the default) orders by blended
-// BM25/semantic score; SortRecency orders strictly by crawl time, most
-// recently crawled first, ignoring relevance entirely. Any other (or empty)
-// value is treated as SortRelevance.
+// Search sort modes: SortRelevance (default) orders by blended BM25/
+// semantic score; SortRecency orders strictly by crawl time, newest first.
+// Any other/empty value is treated as SortRelevance.
 const (
 	SortRelevance = "relevance"
 	SortRecency   = "recency"
 )
 
-// SearchQuery bundles a search request's options beyond the raw query text
-// itself, so a new search-time option has one obvious place to live rather
-// than growing the Search method's parameter list.
+// SearchQuery bundles a search request's options beyond the raw query text,
+// so a new search-time option has one obvious place to live.
 type SearchQuery struct {
 	TopK int
 	Sort string
 	// ProviderWeights, when non-nil, fully replaces the admin default
 	// EmbeddingSearchWeights for this request only; an empty-but-non-nil
-	// map means pure BM25 (no semantic scoring), same as every weight <= 0.
+	// map means pure BM25.
 	ProviderWeights map[string]float64
 }
 
@@ -395,9 +322,8 @@ type SearchService interface {
 
 // CrawlOptions is a single crawl request: seed URLs and page budget, plus
 // optional credentials for sites needing a cookie or Basic auth.
-// RespectRobots defaults false; UserAgent overrides the process default for
-// this crawl only. UseSitemap, when set, also enqueues each seed's
-// /sitemap.xml URLs.
+// RespectRobots defaults false; UserAgent overrides the process default.
+// UseSitemap also enqueues each seed's /sitemap.xml URLs.
 type CrawlOptions struct {
 	SeedURLs      []string
 	MaxPages      int
@@ -406,36 +332,30 @@ type CrawlOptions struct {
 	BasicAuthPass string
 	RespectRobots bool
 	UserAgent     string
-	// LinkScope overrides the Tuning page's global link-following default
-	// for this crawl -- "" means "use the global default"; see domain.
-	// LinkScope* and crawlLoop's onDomain.
+	// LinkScope overrides the Tuning page's global default for this crawl --
+	// "" means use the global default; see domain.LinkScope*.
 	LinkScope string `json:"link_scope"`
 	// AllowedDomains/BlockedDomains are a per-crawl allow/block list on top
 	// of LinkScope: BlockedDomains always wins; AllowedDomains widens scope
-	// even where LinkScope would reject it. Both empty leaves LinkScope as
-	// the only check.
+	// even where LinkScope would reject it.
 	AllowedDomains []string `json:"allowed_domains,omitempty"`
 	BlockedDomains []string `json:"blocked_domains,omitempty"`
 	// FollowIndexedDomains additionally follows a link whose domain already
-	// has an indexed document, even where LinkScope/AllowedDomains wouldn't
-	// otherwise allow it -- BlockedDomains still overrides this.
+	// has an indexed document -- BlockedDomains still overrides this.
 	FollowIndexedDomains bool `json:"follow_indexed_domains,omitempty"`
 	UseSitemap           bool `json:"use_sitemap"`
 	// FetchTimeoutSeconds, MinTextLength, CrawlDelayMs and MaxResponseKB
-	// override the same-named operational defaults for this crawl alone
-	// when positive; zero means "use the global default."
+	// override the operational defaults for this crawl alone when
+	// positive; zero means use the global default.
 	FetchTimeoutSeconds int `json:"fetch_timeout_seconds"`
 	MinTextLength       int `json:"min_text_length"`
 	CrawlDelayMs        int `json:"crawl_delay_ms"`
 	MaxResponseKB       int `json:"max_response_kb"`
 	// PrioritizeUnindexed fetches not-yet-indexed URLs before already-
-	// indexed ones within the same MaxPages budget -- changes order, not
-	// coverage; already-indexed pages still get crawled once the rest are
-	// attempted.
+	// indexed ones within the same MaxPages budget -- changes order, not coverage.
 	PrioritizeUnindexed bool `json:"prioritize_unindexed"`
 	// Renderer overrides the Tuning page's global rendering mode for this
-	// crawl alone -- "" means "use the global default." See domain.
-	// Renderer* and ports.Renderer.
+	// crawl alone -- "" means use the global default. See domain.Renderer*.
 	Renderer string `json:"renderer"`
 }
 
@@ -451,22 +371,19 @@ type CrawlerService interface {
 var ErrCrawlJobNotFound = errors.New("crawl job not found")
 
 // CrawlJobService lets admin-server poll crawl-server's job progress, and
-// cancel one -- every job is started by crawl-server's own scheduler ticker
-// (see application.TriggerDueCrawls), never by admin-server directly, so
-// aside from CancelCrawlJob this is read-only.
+// cancel one -- every job is started by crawl-server's own scheduler
+// ticker, never by admin-server directly, so aside from CancelCrawlJob
+// this is read-only.
 type CrawlJobService interface {
 	ListCrawlJobs(ctx context.Context) ([]domain.CrawlJobSummary, error)
 	GetCrawlJob(ctx context.Context, jobID string) (domain.CrawlJob, error)
 	// CancelCrawlJob asks crawl-server to stop a queued or running job.
-	// Returns ports.ErrCrawlJobNotFound if no such job exists, and
-	// ErrCrawlJobNotRunning if it exists but already finished (done, failed,
-	// or already cancelled) -- there's nothing left to cancel.
+	// Returns ErrCrawlJobNotFound if unknown, ErrCrawlJobNotRunning if it
+	// already finished.
 	CancelCrawlJob(ctx context.Context, jobID string) error
-	// DeleteEndedCrawlJobs asks crawl-server to delete every job that's
-	// already finished (done, failed, or cancelled), leaving queued/running
-	// jobs untouched, and reports how many were removed -- the admin Jobs
-	// page's "Clear ended jobs" button, for trimming a long history down to
-	// what's still active without waiting for maxRetainedCrawlJobs eviction.
+	// DeleteEndedCrawlJobs asks crawl-server to delete every finished job,
+	// leaving queued/running ones untouched, and reports how many were
+	// removed -- the admin Jobs page's "Clear ended jobs" button.
 	DeleteEndedCrawlJobs(ctx context.Context) (int, error)
 }
 
@@ -478,8 +395,8 @@ var ErrCrawlJobNotRunning = errors.New("crawl job is not currently running")
 // CrawlJobStore is crawl-server's own persistence for crawl jobs and their
 // per-page history -- distinct from CrawlJobService, the network contract
 // admin-server's client uses. domain.CrawlJobStore (in-memory) satisfies
-// this for tests; sqlrepo.Repository's DB-backed one is what production
-// runs. Get returns domain.ErrCrawlJobNotFound if unretained.
+// this for tests; sqlrepo's DB-backed one runs in production. Get returns
+// domain.ErrCrawlJobNotFound if unretained.
 type CrawlJobStore interface {
 	Create(ctx context.Context, req domain.CrawlJobRequest) (domain.CrawlJob, error)
 	MarkRunning(ctx context.Context, id string) error
@@ -489,13 +406,12 @@ type CrawlJobStore interface {
 	MarkCancelled(ctx context.Context, id string) error
 	Get(ctx context.Context, id string) (domain.CrawlJob, error)
 	List(ctx context.Context) ([]domain.CrawlJobSummary, error)
-	// ListActive returns every job currently Queued or Running -- a cheap,
-	// targeted subset of List (never scans ended jobs) used to check for
-	// an already-active crawl of the same seed before starting a new one.
+	// ListActive returns every job currently Queued or Running -- a cheap
+	// subset of List used to check for an already-active crawl of the same
+	// seed before starting a new one.
 	ListActive(ctx context.Context) ([]domain.CrawlJobSummary, error)
-	// DeleteEndedCrawlJobs deletes every job in domain.CrawlJobDone,
-	// CrawlJobFailed, or CrawlJobCancelled status, leaving queued/running
-	// jobs untouched, and returns how many were removed.
+	// DeleteEndedCrawlJobs deletes every done/failed/cancelled job, leaving
+	// queued/running ones untouched, and returns how many were removed.
 	DeleteEndedCrawlJobs(ctx context.Context) (int, error)
 }
 
@@ -511,30 +427,25 @@ const (
 	SettingsKeyOperational = "operational"
 	SettingsKeyOverrides   = "overrides"
 	// SettingsKeyPageRankStatus holds a domain.PageRankStatus -- unlike the
-	// three above (admin-edited configuration, synced by
-	// bootstrap.SyncSettings' poll loop), this one is runtime status
-	// written by application.RunPageRankJobWithStatus, not admin input.
+	// three above, this is runtime status written by
+	// RunPageRankJobWithStatus, not admin input.
 	SettingsKeyPageRankStatus = "pagerank_status"
 	// SettingsKeyEmbeddingRecomputeStatus holds a
-	// domain.EmbeddingRecomputeStatus -- the same runtime-status pattern
-	// as SettingsKeyPageRankStatus, written by
-	// application.RunEmbeddingRecomputeJobWithStatus.
+	// domain.EmbeddingRecomputeStatus, same runtime-status pattern as
+	// SettingsKeyPageRankStatus.
 	SettingsKeyEmbeddingRecomputeStatus = "embedding_recompute_status"
 	// SettingsKeyEmbeddingEndpointsMigrated holds "true" once the one-time
-	// legacy-config migration has run -- distinct from "table has rows,"
-	// since deleting the migrated endpoint would otherwise make the
-	// migration wrongly re-run (resurrecting it) on the next restart.
+	// legacy-config migration has run -- distinct from "table has rows," so
+	// deleting the migrated endpoint doesn't make it wrongly re-run.
 	SettingsKeyEmbeddingEndpointsMigrated = "embedding_endpoints_migrated"
-	// SettingsKeyContentDedupStatus holds a domain.ContentDedupStatus --
-	// the same runtime-status pattern as SettingsKeyPageRankStatus, written
-	// by application.RunContentDedupJobWithStatus.
+	// SettingsKeyContentDedupStatus holds a domain.ContentDedupStatus, same
+	// runtime-status pattern as SettingsKeyPageRankStatus.
 	SettingsKeyContentDedupStatus = "content_dedup_status"
 )
 
 // SettingsStore persists the admin-configurable tuning/operational/ranking
 // settings blobs to the shared database, so every process reads the same
-// values instead of only the copy an admin edit happened to update in its
-// own in-memory instance.
+// values, not just the copy an admin edit updated in-memory.
 type SettingsStore interface {
 	SaveSetting(ctx context.Context, key, value string) error
 	GetSetting(ctx context.Context, key string) (value string, found bool, err error)
@@ -557,8 +468,7 @@ type ScheduledCrawlStore interface {
 	CreateScheduledCrawl(ctx context.Context, s domain.ScheduledCrawl) error
 	// GetScheduledCrawl returns one schedule by ID, or
 	// ErrScheduledCrawlNotFound if none exists -- used by the admin
-	// schedule-detail/edit subpage to load a single entry's current
-	// options without fetching every schedule.
+	// schedule-detail/edit subpage.
 	GetScheduledCrawl(ctx context.Context, id string) (domain.ScheduledCrawl, error)
 	ListScheduledCrawls(ctx context.Context) ([]domain.ScheduledCrawl, error)
 	UpdateScheduledCrawl(ctx context.Context, s domain.ScheduledCrawl) error
@@ -568,53 +478,38 @@ type ScheduledCrawlStore interface {
 	DueScheduledCrawls(ctx context.Context, now time.Time) ([]domain.ScheduledCrawl, error)
 	// MarkScheduledCrawlRun records a trigger/finish, advancing the next
 	// run and runCount; a one-off or MaxRuns-capped entry passes
-	// enabled=false. inProgress, separate from enabled, stays true for the
-	// run's duration so DueScheduledCrawls can't double-trigger a long crawl.
-	// jobID is the domain.CrawlJob this run created (set at trigger time,
-	// cleared to "" by onDone) -- see domain.ScheduledCrawl.JobID and
-	// ResetStaleInProgress below for why it's tracked.
+	// enabled=false. inProgress stays true for the run's duration so
+	// DueScheduledCrawls can't double-trigger a long crawl. jobID is the
+	// CrawlJob this run created (cleared to "" by onDone) -- see
+	// ScheduledCrawl.JobID/ResetStaleInProgress for why it's tracked.
 	MarkScheduledCrawlRun(ctx context.Context, id string, lastRunAt, nextRunAt time.Time, enabled, inProgress bool, runCount int, jobID string) error
 	// RunScheduledCrawlNow sets NextRunAt to now and re-enables if paused,
-	// leaving every other field untouched -- picked up by the next
-	// scheduler tick. Deliberately does NOT force-clear InProgress: a
-	// stale-after-crash InProgress is already self-healed once at
-	// crawl-server startup (see ResetStaleInProgress), so if InProgress is
-	// still true here it means a crawl for this schedule is genuinely
-	// running right now -- forcing NextRunAt=now regardless would let the
-	// ticker start a second concurrent crawl of the same site, and two
-	// crawlLoop goroutines racing to archive the same document's previous
-	// version via SaveDocument can violate document_versions' primary key
-	// (confirmed in production: two concurrent jobs for the same site,
-	// one crashed with a duplicate-key error -- and confirmed a second
-	// time, a subtler recurrence: ResetStaleInProgress used to clear
-	// InProgress unconditionally for every stuck-true row regardless of
-	// whether its job had actually stopped, including one a same-startup
-	// RecoverInterruptedCrawls pass had just resumed and was still
-	// genuinely running -- see ResetStaleInProgress's own doc comment).
-	// Returns ErrScheduledCrawlNotFound if unknown, ErrScheduledCrawlInProgress if
-	// a crawl is already running for it.
+	// leaving other fields untouched. Deliberately does NOT force-clear
+	// InProgress: if it's still true here (after ResetStaleInProgress
+	// already self-healed a stale one at startup), a crawl for this
+	// schedule is genuinely running, and forcing a second concurrent one
+	// caused two crawlLoop goroutines to violate document_versions'
+	// primary key archiving the same document (confirmed in production
+	// twice, the second time a subtler recurrence where
+	// ResetStaleInProgress cleared InProgress for a job
+	// RecoverInterruptedCrawls had just resumed -- see its own doc
+	// comment). Returns ErrScheduledCrawlNotFound if unknown,
+	// ErrScheduledCrawlInProgress if already running.
 	RunScheduledCrawlNow(ctx context.Context, id string, now time.Time) error
-	// SetScheduledCrawlEnabled flips only Enabled, leaving NextRunAt (and
-	// every other field) untouched -- unlike UpdateScheduledCrawl, which
-	// always reschedules (NextRunAt = interval from now) since it's meant
-	// for a genuine field edit from the schedule detail page. The admin
-	// Jobs list's plain pause/resume checkbox uses this instead, so
-	// toggling it doesn't reorder the list (sorted by NextRunAt) or push a
-	// paused-then-resumed crawl's next run further out than expected.
-	// Returns ErrScheduledCrawlNotFound if unknown.
+	// SetScheduledCrawlEnabled flips only Enabled, leaving NextRunAt
+	// untouched -- unlike UpdateScheduledCrawl, which always reschedules.
+	// The admin Jobs list's pause/resume checkbox uses this so toggling it
+	// doesn't reorder the list or push the next run out further. Returns
+	// ErrScheduledCrawlNotFound if unknown.
 	SetScheduledCrawlEnabled(ctx context.Context, id string, enabled bool) error
 	// ResetStaleInProgress clears a stuck-true InProgress flag -- run once
-	// at crawl-server startup, before anything queries DueScheduledCrawls,
-	// and always AFTER RecoverInterruptedCrawls (whose resumed jobs must
-	// already be reflected in crawl_jobs' status by the time this runs).
-	// A schedule is only cleared when its JobID doesn't correspond to a
-	// still-queued/running job -- one RecoverInterruptedCrawls just resumed
-	// is left untouched, since it really is still in progress. Clearing it
-	// anyway (the original, job-unaware version of this method) let the
-	// very next scheduler tick start a second, duplicate crawl of the same
-	// site while the resumed one was still running -- see
-	// RunScheduledCrawlNow's doc comment for the production incident this
-	// guards against. Returns how many rows were reset.
+	// at crawl-server startup, before DueScheduledCrawls, and always AFTER
+	// RecoverInterruptedCrawls. A schedule is only cleared when its JobID
+	// doesn't correspond to a still-queued/running job -- one
+	// RecoverInterruptedCrawls just resumed is left untouched, since
+	// clearing it unconditionally let the next tick start a duplicate
+	// crawl of the same site (see RunScheduledCrawlNow's doc comment for
+	// the incident). Returns how many rows were reset.
 	ResetStaleInProgress(ctx context.Context) (int, error)
 }
 
@@ -623,19 +518,15 @@ type ScheduledCrawlStore interface {
 var ErrEmbeddingEndpointNotFound = errors.New("embedding endpoint not found")
 
 // EmbeddingEndpointStore persists the admin-configured HTTP embedding
-// endpoints (domain.EmbeddingHTTPEndpoint) -- one row per endpoint, each
-// independently enabled and rate-limited, alongside the built-in hash
-// provider.
+// endpoints -- one row per endpoint, each independently enabled and
+// rate-limited, alongside the built-in hash provider.
 type EmbeddingEndpointStore interface {
 	CreateEmbeddingEndpoint(ctx context.Context, e domain.EmbeddingHTTPEndpoint) error
 	// GetEmbeddingEndpoint returns one endpoint by ID, or
-	// ErrEmbeddingEndpointNotFound if none exists -- used by the admin
-	// endpoint edit subpage to load a single entry's current config.
+	// ErrEmbeddingEndpointNotFound if none exists.
 	GetEmbeddingEndpoint(ctx context.Context, id string) (domain.EmbeddingHTTPEndpoint, error)
-	// ListEmbeddingEndpoints returns every configured endpoint, in no
-	// particular guaranteed order beyond what the implementation's query
-	// happens to return -- callers needing a stable order sort it
-	// themselves.
+	// ListEmbeddingEndpoints returns every configured endpoint in no
+	// guaranteed order -- callers needing stable order sort it themselves.
 	ListEmbeddingEndpoints(ctx context.Context) ([]domain.EmbeddingHTTPEndpoint, error)
 	UpdateEmbeddingEndpoint(ctx context.Context, e domain.EmbeddingHTTPEndpoint) error
 	DeleteEmbeddingEndpoint(ctx context.Context, id string) error
@@ -647,9 +538,8 @@ type EmbeddingEndpointStore interface {
 var ErrChatEndpointNotConfigured = errors.New("chat endpoint not configured")
 
 // ChatEndpointStore persists the single admin-configured domain.ChatEndpoint.
-// Unlike EmbeddingEndpointStore (a list of many blended endpoints), chat only
-// ever has ONE active configuration, so this is Get/Set on one row, not CRUD
-// on a collection.
+// Unlike EmbeddingEndpointStore, chat only ever has ONE active
+// configuration, so this is Get/Set on one row, not CRUD on a collection.
 type ChatEndpointStore interface {
 	// GetChatEndpoint returns ErrChatEndpointNotConfigured if never saved.
 	GetChatEndpoint(ctx context.Context) (domain.ChatEndpoint, error)
@@ -658,14 +548,11 @@ type ChatEndpointStore interface {
 }
 
 // ChatCompleter calls an OpenAI-compatible chat-completions endpoint,
-// optionally with a native "tools" list (see domain.ToolDef) -- tools is
-// nil/empty for a turn with no active MCP servers/tools, in which case the
-// implementation must omit the request's tools field entirely (never send
-// an empty array with a tool_choice), for compatibility with any
-// OpenAI-compatible endpoint that isn't configured for tool-calling at all.
-// The returned domain.ChatMessage's ToolCalls is set when (and only when)
-// the model chose to invoke one or more tools this turn instead of
-// answering directly -- Content is typically empty in that case.
+// optionally with a native "tools" list -- tools is nil/empty for a turn
+// with no active MCP tools, in which case the implementation must omit the
+// request's tools field entirely, for compatibility with endpoints not
+// configured for tool-calling. The returned ChatMessage's ToolCalls is set
+// only when the model chose to invoke tools instead of answering directly.
 type ChatCompleter interface {
 	Complete(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage, tools []domain.ToolDef) (domain.ChatMessage, error)
 }
@@ -676,8 +563,7 @@ type ChatCompleter interface {
 var ErrMCPServerNotFound = errors.New("mcp server not found")
 
 // MCPServerStore persists the admin-configured domain.MCPServer rows -- a
-// list of many, like EmbeddingEndpointStore, unlike the single-row
-// ChatEndpointStore above: an admin can define several servers over time.
+// list of many, like EmbeddingEndpointStore, unlike single-row ChatEndpointStore.
 type MCPServerStore interface {
 	ListMCPServers(ctx context.Context) ([]domain.MCPServer, error)
 	CreateMCPServer(ctx context.Context, s domain.MCPServer) error
@@ -693,16 +579,11 @@ type MCPServerStore interface {
 var ErrUserMCPServerNotFound = errors.New("user mcp server not found")
 
 // UserMCPServerStore persists per-user, self-service domain.MCPServer rows
-// -- same shape as MCPServerStore, but every row is owned by (scoped to,
-// and only ever visible/editable by) one userID, and IDs only need to be
-// unique within that owner's own rows, not globally (two different users
-// may each have a server they both happen to call "web-tools"). Unlike the
-// admin-configured global catalog, these are NEVER restricted by an
-// Agent's own MCPServerIDs scope -- see domain.Agent.AllowsServer's doc
-// comment -- and ChatService.Chat enforces "http" transport only for these
-// (see its own doc comment) since a "stdio" server grants arbitrary local
-// command execution on the server host, a trust tier this store's callers
-// (any authenticated user, not just admins) must never be handed.
+// -- same shape as MCPServerStore, but scoped to one userID, with IDs
+// unique only within that owner's rows, not globally. Never restricted by
+// an Agent's MCPServerIDs scope. ChatService.Chat enforces "http" transport
+// only for these, since "stdio" grants arbitrary local command execution, a
+// trust tier no non-admin user should be handed.
 type UserMCPServerStore interface {
 	ListUserMCPServers(ctx context.Context, userID string) ([]domain.MCPServer, error)
 	CreateUserMCPServer(ctx context.Context, userID string, s domain.MCPServer) error
@@ -715,69 +596,53 @@ type UserMCPServerStore interface {
 }
 
 // ErrFileNotFound is returned by FileStore's GetFile and DeleteFile when no
-// file with the given (ownerUserID, id) pair exists -- UserMCPServerStore's
-// sibling for uploaded files.
+// file with the given (ownerUserID, id) pair exists.
 var ErrFileNotFound = errors.New("file not found")
 
 // FileStore persists domain.UploadedFile rows -- every operation scoped by
-// ownerUserID, the same discipline UserMCPServerStore applies to personal
-// MCP servers, so one user can never list, read, or delete another's file
-// even if they somehow guessed its ID. Backs both the self-service
-// /account/api/files HTTP endpoints (restapi) and, through those same
-// endpoints over a short-lived per-turn bearer token, cmd/mcp-files'
-// list_files/read_file/write_file tools -- see
-// application.ChatOptions.FileAccessToken's doc comment for why
-// cmd/mcp-files calls back over HTTP rather than holding its own DB
-// connection (it would otherwise need the shared database's own
-// credentials handed to it, a much broader grant than "this one user's own
-// files").
+// ownerUserID, so one user can never list, read, or delete another's file.
+// Backs the self-service /account/api/files HTTP endpoints and, via a
+// short-lived per-turn bearer token, cmd/mcp-files' tools -- see
+// ChatOptions.FileAccessToken's doc comment for why cmd/mcp-files calls
+// back over HTTP rather than holding its own DB connection.
 type FileStore interface {
-	// ListFiles lists ownerUserID's own files, ordered by created_at
-	// descending (most recent upload first) -- metadata only, never the
-	// file content itself.
+	// ListFiles lists ownerUserID's own files, most recent upload first --
+	// metadata only, never file content.
 	ListFiles(ctx context.Context, ownerUserID string) ([]domain.UploadedFile, error)
 	// ListFilesForChat is ListFiles narrowed to one PersistedChat -- used
-	// for the in-chat file strip (and by cmd/mcp-files' list_files during
-	// a chat turn, scoped via the turn's own bearer token), unlike the
-	// Your files account page, which uses ListFiles' unscoped view.
+	// for the in-chat file strip and cmd/mcp-files' list_files.
 	ListFilesForChat(ctx context.Context, ownerUserID, chatID string) ([]domain.UploadedFile, error)
 	// SaveFile stores a new file owned by ownerUserID, attached to chatID
-	// (see domain.UploadedFile.ChatID -- required, since only a pinned
-	// chat may ever call this), and returns its fully-populated
-	// domain.UploadedFile (ID/Size/CreatedAt included) -- the caller never
-	// picks the ID.
+	// (required, since only a pinned chat may call this), and returns its
+	// fully-populated UploadedFile -- the caller never picks the ID.
 	SaveFile(ctx context.Context, ownerUserID, chatID, filename, contentType string, data []byte) (domain.UploadedFile, error)
 	// GetFile returns one of ownerUserID's own files, metadata and content
-	// together -- ErrFileNotFound if no file with (ownerUserID, id) exists.
+	// together -- ErrFileNotFound if it doesn't exist.
 	GetFile(ctx context.Context, ownerUserID, id string) (domain.UploadedFile, []byte, error)
 	// DeleteFile removes one of ownerUserID's own files -- ErrFileNotFound
-	// if no file with (ownerUserID, id) exists.
+	// if it doesn't exist.
 	DeleteFile(ctx context.Context, ownerUserID, id string) error
 }
 
 var ErrChatNotFound = errors.New("chat not found")
 
 // ChatStore persists domain.PersistedChat rows -- every operation scoped
-// by ownerUserID, the same discipline FileStore applies to uploaded files.
-// Backs the self-service /account/api/chats HTTP endpoints (restapi).
+// by ownerUserID, same discipline as FileStore. Backs the self-service
+// /account/api/chats HTTP endpoints.
 type ChatStore interface {
 	// ListChats lists ownerUserID's own pinned chats, most recently
-	// updated first -- the set reloaded automatically on the chat page.
+	// updated first -- reloaded automatically on the chat page.
 	ListChats(ctx context.Context, ownerUserID string) ([]domain.PersistedChat, error)
 	// CreateChat pins a new chat and returns its fully-populated
-	// domain.PersistedChat (ID/CreatedAt/UpdatedAt included) -- the caller
-	// never picks the ID.
+	// PersistedChat -- the caller never picks the ID.
 	CreateChat(ctx context.Context, c domain.PersistedChat) (domain.PersistedChat, error)
-	// UpdateChat replaces c's editable fields (Title/AgentID/History) and
-	// bumps UpdatedAt -- ErrChatNotFound if no chat with (c.OwnerUserID,
-	// c.ID) exists.
+	// UpdateChat replaces c's editable fields and bumps UpdatedAt --
+	// ErrChatNotFound if no chat with (c.OwnerUserID, c.ID) exists.
 	UpdateChat(ctx context.Context, c domain.PersistedChat) error
 	// DeleteChat removes one of ownerUserID's own pinned chats --
-	// ErrChatNotFound if no chat with (ownerUserID, id) exists. Also
-	// deletes every file attached to it (sqlrepo does this explicitly,
-	// not via the chats table's own "ON DELETE CASCADE" foreign key --
-	// see sqlrepo's dialect.go for why that alone isn't reliable across
-	// every dialect this package supports).
+	// ErrChatNotFound if it doesn't exist. Also deletes every file
+	// attached (sqlrepo does this explicitly, not via a foreign-key
+	// cascade -- see its dialect.go for why that isn't reliable everywhere).
 	DeleteChat(ctx context.Context, ownerUserID, id string) error
 }
 
@@ -798,38 +663,27 @@ type AgentStore interface {
 }
 
 // MCPToolProvider opens one session per chat turn, spanning tool discovery
-// through every follow-up round's tool calls -- MCP's own session-oriented
-// usage pattern (initialize once per connection, then reuse it), not a
-// fresh spawn+handshake per call. Open is best-effort per server: one that
-// fails to connect or list its tools is skipped (logged), never fails the
-// whole turn -- same convention ChatService.Chat already applies to a
-// ListMCPServers error. A tool name collision across two different active
-// servers is resolved by skipping (logging) the later one, never silently
-// misrouting a call to the wrong server.
+// through every follow-up round's tool calls -- MCP's session-oriented
+// usage pattern, not a fresh spawn+handshake per call. Open is best-effort
+// per server: one that fails to connect is skipped (logged), never fails
+// the whole turn. A tool name collision across servers is resolved by
+// skipping the later one, never misrouting a call.
 //
-// env carries ADMIN-CONFIGURED configuration (e.g. the endpoint's own
-// WebSearchBaseURL) as additional process environment variables for every
-// spawned "stdio"-transport server -- never anything derived from the
-// model's own output or a tool call's arguments, so this does not reopen
-// the injection surface CallTool's own arguments guard against: env is set
-// by ChatService.Chat from domain.ChatEndpoint fields the admin configured
-// ahead of time, not from a chat turn's content. A nil or empty map adds
-// nothing beyond the implementation's own base environment.
+// env carries ADMIN-CONFIGURED configuration (e.g. WebSearchBaseURL) as
+// process environment variables for every spawned stdio server -- never
+// anything derived from the model's output, so this doesn't reopen the
+// injection surface CallTool's arguments guard against.
 type MCPToolProvider interface {
 	Open(ctx context.Context, servers []domain.MCPServer, env map[string]string) (MCPSession, []domain.MCPTool)
 }
 
 // MCPSession is one chat turn's live connections to every active MCP
-// server, returned by MCPToolProvider.Open alongside the tools discovered
-// across all of them.
+// server, returned by MCPToolProvider.Open alongside the tools discovered.
 type MCPSession interface {
-	// CallTool invokes toolName (looked up among every tool discovered by
-	// the Open call that returned this session) against its originating
-	// server, with argumentsJSON as the model supplied it (a raw JSON
-	// object, NEVER shell-interpolated or otherwise reinterpreted -- see
-	// mcpclient's own security doc comment), returning the result content
-	// as text. Returns an error for an unknown toolName, a call that fails,
-	// or one that times out.
+	// CallTool invokes toolName against its originating server, with
+	// argumentsJSON as the model supplied it (raw JSON, NEVER
+	// shell-interpolated -- see mcpclient's security doc comment).
+	// Returns an error for an unknown tool, a failed call, or a timeout.
 	CallTool(ctx context.Context, toolName string, argumentsJSON string) (string, error)
 	// Close closes every underlying server connection this session opened.
 	// Safe to call even if Open connected to zero servers.

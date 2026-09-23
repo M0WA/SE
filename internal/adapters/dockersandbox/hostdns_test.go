@@ -29,11 +29,9 @@ func TestDetectHostDNSFromPaths_ParsesNameserverLines(t *testing.T) {
 }
 
 // TestDetectHostDNSFromPaths_PrefersFirstPathThatHasServers proves the
-// systemd-resolved-first preference: a real path list would put
-// /run/systemd/resolve/resolv.conf ahead of /etc/resolv.conf so the real
-// upstream servers win over the 127.0.0.53 stub -- this proves the
-// ordering/fallback mechanism generically, with two temp files standing
-// in for the two real paths.
+// ordering/fallback mechanism (real DNS detection puts systemd-resolved's
+// path first so real upstream servers win over the 127.0.0.53 stub), using
+// two temp files standing in for the two real paths.
 func TestDetectHostDNSFromPaths_PrefersFirstPathThatHasServers(t *testing.T) {
 	dir := t.TempDir()
 	first := writeResolvConf(t, dir, "first.conf", "nameserver 192.0.2.1\n")
@@ -60,9 +58,8 @@ func TestDetectHostDNSFromPaths_FallsBackWhenFirstPathMissing(t *testing.T) {
 }
 
 // TestDetectHostDNSFromPaths_FallsBackWhenFirstPathHasNoServers covers a
-// present-but-empty (or stub-only-with-no-nameserver-line) first file --
-// distinct from the missing-file case above, which is a different
-// underlying branch (os.IsNotExist vs. a zero-length parse result).
+// present-but-empty first file -- a different branch than the missing-file
+// case above (os.IsNotExist vs. a zero-length parse result).
 func TestDetectHostDNSFromPaths_FallsBackWhenFirstPathHasNoServers(t *testing.T) {
 	dir := t.TempDir()
 	first := writeResolvConf(t, dir, "first.conf", "search example.com\n")
@@ -85,8 +82,7 @@ func TestDetectHostDNSFromPaths_ErrorsWhenNoPathHasServers(t *testing.T) {
 }
 
 // TestDetectHostDNSFromPaths_PropagatesRealReadError covers a path that
-// exists but can't be read (permission denied) -- distinct from "doesn't
-// exist," which is silently skipped rather than treated as fatal.
+// exists but can't be read -- unlike "doesn't exist", which is skipped.
 func TestDetectHostDNSFromPaths_PropagatesRealReadError(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("skipping: running as root, which ignores file permissions")
@@ -107,10 +103,9 @@ func TestDetectHostDNSFromPaths_PropagatesRealReadError(t *testing.T) {
 }
 
 func TestDetectHostDNS_UsesRealPaths(t *testing.T) {
-	// A real, hermetic smoke test that the exported entry point delegates
-	// to detectHostDNSFromPaths with the real system paths -- this host's
-	// own /etc/resolv.conf (or systemd-resolved's) genuinely exists in any
-	// CI/dev environment this runs in, so this should always succeed.
+	// Smoke test: the exported entry point delegates to
+	// detectHostDNSFromPaths with real system paths, which should always
+	// resolve in any CI/dev environment.
 	got, err := DetectHostDNS()
 	if err != nil {
 		t.Fatalf("unexpected error detecting this host's own DNS servers: %v", err)

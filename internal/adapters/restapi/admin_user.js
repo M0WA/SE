@@ -40,12 +40,9 @@
     form.hidden = false;
   }
 
-  // requestBody omits password when it's blank in edit mode (blank means
-  // "keep the current password" -- see applyUser) but always includes it
-  // in new mode (required there, enforced by the field's own required
-  // attribute above). custom_prompt is always included -- the textarea is
-  // the single source of truth for it every save, including clearing it
-  // back to empty.
+  // requestBody omits password when blank in edit mode (blank = keep current, see applyUser),
+  // but always includes it in new mode (required there). custom_prompt is always sent, even
+  // cleared, since the textarea is its single source of truth.
   function requestBody() {
     const body = { custom_prompt: customPromptEl.value };
     if (isNew || passwordEl.value) {
@@ -104,9 +101,7 @@
   wireSignOut();
   load();
 
-  // Exports for the Node test runner only -- `typeof module` is undefined in
-  // a browser's <script> tag, so this is a no-op there. See
-  // admin_user.test.js.
+  // Node test-runner export only; no-op in a browser <script> tag.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { applyUser, requestBody, load };
   }

@@ -15,32 +15,22 @@ import (
 )
 
 // maxUploadedFileBytes bounds a single POST /account/api/files body -- files
-// here are meant for the model to inspect as text (see cmd/mcp-files'
-// read_file tool), not a general-purpose blob store, so this stays small
-// enough to keep well clear of maxChatMessageContentLength-scale content
-// once read back into a chat turn. maxFilesPerUser is a simple per-owner
-// cap against unbounded storage growth, the same tier of safety limit as
-// maxChatMessages -- neither is admin-configurable, both are meant to just
-// be generous enough that a real user never hits them by accident.
+// are for the model to read as text (see cmd/mcp-files' read_file), not a
+// blob store, so this stays well under chat-turn content sizes.
+// maxFilesPerUser is a simple per-owner cap against unbounded growth, same
+// tier as maxChatMessages -- neither is admin-configurable.
 const (
 	maxUploadedFileBytes = 5 * 1024 * 1024
 	maxFilesPerUser      = 100
 )
 
 // fileTokenStore is a small in-memory table of short-lived bearer tokens,
-// each scoped to exactly one userID -- minted once per chat turn (see
-// handleChat) and handed to cmd/mcp-files (via the SE_FILES_API_TOKEN env
-// var, see application.ChatOptions.FileAccessToken) so it can call back
-// into /account/api/files as that turn's own signed-in user, without ever
-// holding that user's real session cookie (a browser-only HttpOnly cookie
-// the backend has no legitimate way to read) or this deployment's shared
-// database credentials (a much broader grant than "this one user's own
-// files" -- see ports.FileStore's own doc comment). Deliberately NOT
-// backed by ports.SessionStore/a DB table: unlike a login, this token is
-// minted and consumed entirely within one process's lifetime (search-server
-// mints it, then spawns and talks to its own mcp-files subprocess), so it
-// never needs to be recognized by a different process the way a real
-// session does.
+// each scoped to one userID -- minted per chat turn and handed to
+// cmd/mcp-files (SE_FILES_API_TOKEN env var) so it can call back into
+// /account/api/files as that user, without ever holding their real session
+// cookie or this deployment's shared DB credentials. Deliberately not
+// backed by ports.SessionStore/a DB table: it's minted and consumed
+// entirely within one process's lifetime, unlike a real session.
 type fileTokenStore struct {
 	mu     sync.Mutex
 	tokens map[string]fileTokenRecord
@@ -52,19 +42,16 @@ type fileTokenRecord struct {
 	expiresAt time.Time
 }
 
-// fileTokenTTL is generous over mcpclient's own 60s callTimeout (a turn's
-// worth of read_file/write_file calls could span several follow-up rounds,
-// each subject to that same ceiling) without staying valid meaningfully
-// longer than one real chat turn ever takes.
+// fileTokenTTL comfortably outlasts mcpclient's 60s callTimeout across a
+// turn's follow-up rounds, without outliving one real chat turn.
 const fileTokenTTL = 10 * time.Minute
 
 func newFileTokenStore() *fileTokenStore {
 	return &fileTokenStore{tokens: make(map[string]fileTokenRecord)}
 }
 
-// issue mints a fresh token for userID scoped to chatID (the pinned chat
-// this turn belongs to, or "" for a turn with no pinned chat -- see
-// application.ChatOptions.PersistedChatID), valid for fileTokenTTL.
+// issue mints a fresh token for userID scoped to chatID ("" if this turn
+// has no pinned chat), valid for fileTokenTTL.
 func (s *fileTokenStore) issue(userID, chatID string) string {
 	token := randomToken()
 	s.mu.Lock()
@@ -73,10 +60,8 @@ func (s *fileTokenStore) issue(userID, chatID string) string {
 	return token
 }
 
-// resolve resolves token to the (userID, chatID) it was minted for,
-// ok=false if the token is unknown or has expired -- lazily evicting an
-// expired entry on the way out, same convention sessionStore.ValidSession
-// uses.
+// resolve returns the (userID, chatID) token was minted for, ok=false if
+// unknown/expired -- evicts an expired entry on the way out, like sessionStore.ValidSession.
 func (s *fileTokenStore) resolve(token string) (userID, chatID string, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -91,20 +76,13 @@ func (s *fileTokenStore) resolve(token string) (userID, chatID string, ok bool) 
 	return rec.userID, rec.chatID, true
 }
 
-// fileAccessUserID resolves the calling user's ID for a /account/api/files
-// request, from EITHER a normal role=user session cookie (a person
-// browsing their own /account/files or chat page) OR an "Authorization:
-// Bearer <token>" header validated against h.fileTokens (cmd/mcp-files
-// calling back on that turn's own user's behalf). tokenChatID is only ever
-// non-empty for the bearer-token path -- the one pinned chat that turn's
-// token was minted for (see fileTokenStore.issue); a session-cookie caller
-// resolves its own chat scope from the request itself instead (see
-// handleAccountFiles), since a browsing person isn't fixed to one chat the
-// way a single turn is. errStatus is 0 on success, or the HTTP status to
-// respond with on failure: 403 if a session exists but is role=admin
-// (mirrors requireRegularUserAuthAPI's own admin-forbidden behavior -- an
-// admin session has no domain.User row of its own to own a file under),
-// 401 if nothing identifies the caller at all.
+// fileAccessUserID resolves the caller's user ID for a /account/api/files
+// request, from either a role=user session cookie or an "Authorization:
+// Bearer <token>" header (cmd/mcp-files calling back for that turn).
+// tokenChatID is set only for the bearer path -- the pinned chat that
+// token was minted for; a cookie caller resolves chat scope from the
+// request itself instead. errStatus is 0 on success, 403 if the session is
+// role=admin (no domain.User row to own a file), 401 if unauthenticated.
 func (h *Handler) fileAccessUserID(r *http.Request) (userID, tokenChatID string, errStatus int) {
 	if role, uid, sessionOK := h.sessionRoleFor(r); sessionOK {
 		if role == domain.RoleUser && uid != "" {
@@ -125,8 +103,7 @@ func (h *Handler) fileAccessUserID(r *http.Request) (userID, tokenChatID string,
 }
 
 // requireFileAccess is fileAccessUserID plus writing the matching error
-// response on failure -- the "resolve or refuse" lines every
-// /account/api/files handler repeats.
+// response -- the "resolve or refuse" boilerplate every handler repeats.
 func (h *Handler) requireFileAccess(w http.ResponseWriter, r *http.Request) (userID, tokenChatID string, ok bool) {
 	userID, tokenChatID, status := h.fileAccessUserID(r)
 	if status == 0 {
@@ -159,11 +136,8 @@ func toFileResponse(f domain.UploadedFile) fileResponse {
 }
 
 // handleAccountFiles lists (GET) or uploads (POST) the calling user's own
-// files -- see fileAccessUserID for who may call this. A GET is scoped to
-// one PersistedChat's files when a chat_id is given (the token's own, for
-// a bearer-token caller, else the "chat_id" query param) -- unscoped
-// (every one of this user's files, across every chat) otherwise, the Your
-// files account page's own view.
+// files -- see fileAccessUserID for who may call. GET scopes to one chat
+// when chat_id is given (token's own, or the query param), else all files.
 func (h *Handler) handleAccountFiles(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.files != nil, "files") {
 		return
@@ -197,18 +171,12 @@ func (h *Handler) handleAccountFiles(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleUploadFile reads a multipart/form-data body's "file" field (the
-// plain HTML file-input encoding, and what cmd/mcp-files' write_file tool
-// also constructs server-side) and stores it, attached to a chat: for a
-// bearer-token caller (cmd/mcp-files) that's tokenChatID, fixed to that
-// turn's own pinned chat; for a session-cookie caller (a person attaching
-// a file from the chat page itself) it's the "chat_id" form field,
-// verified to be one of this user's own pinned chats -- only a pinned
-// chat may ever have files attached, so either way a missing/foreign
-// chat_id is rejected rather than silently uploading unattached. r.Body is
-// capped at maxUploadedFileBytes+1 BEFORE any multipart parsing touches
-// it, so an oversized upload is rejected as a plain read error rather than
-// being buffered into memory first.
+// handleUploadFile reads a multipart "file" field and stores it attached to
+// a chat: a bearer-token caller (cmd/mcp-files) gets tokenChatID; a
+// session-cookie caller supplies "chat_id", verified as one of this user's
+// own pinned chats -- a missing/foreign chat_id is rejected, never
+// silently uploaded unattached. r.Body is capped at maxUploadedFileBytes+1
+// before multipart parsing, so an oversized upload fails as a read error.
 func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request, userID, tokenChatID string) {
 	existing, err := h.files.ListFiles(r.Context(), userID)
 	if err != nil {
@@ -244,23 +212,17 @@ func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request, userI
 		return
 	}
 	defer file.Close()
-	// No separate "is data too big" check needed after this: r.Body is
-	// already wrapped in http.MaxBytesReader(maxUploadedFileBytes+1)
-	// above, and multipart encoding always adds some non-zero overhead
-	// (boundary markers, part headers) on top of the file's own content,
-	// so a successful ParseMultipartForm already guarantees len(data) here
-	// is strictly less than maxUploadedFileBytes+1.
+	// No separate size check needed: r.Body is already wrapped in
+	// http.MaxBytesReader(maxUploadedFileBytes+1) above, and multipart
+	// overhead guarantees len(data) here is under that bound.
 	data, err := io.ReadAll(file)
 	if err != nil {
 		http.Error(w, "reading upload", http.StatusInternalServerError)
 		return
 	}
-	// header.Filename is never empty here: net/http's own multipart form
-	// parsing (mime/multipart/formdata.go) routes a part with no/empty
-	// filename into r.MultipartForm.Value instead of .File, so a part
-	// that reaches here via a successful r.FormFile("file") above always
-	// carried a non-empty one (confirmed against net/http's own parser,
-	// not just reasoned about).
+	// header.Filename is never empty here: net/http's multipart parser
+	// routes a part with no filename into r.MultipartForm.Value instead of
+	// .File, so a successful r.FormFile("file") above guarantees one.
 	filename := header.Filename
 	contentType := header.Header.Get("Content-Type")
 	f, err := h.files.SaveFile(r.Context(), userID, chatID, filename, contentType, data)
@@ -271,12 +233,10 @@ func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request, userI
 	writeJSON(w, http.StatusCreated, toFileResponse(f))
 }
 
-// userOwnsChat reports whether chatID is one of userID's own pinned
-// chats -- the ownership check a session-cookie upload needs before
-// trusting a client-supplied chat_id (a bearer-token upload never needs
-// this: its chat_id comes from the token itself, already scoped to the
-// right owner when minted). false (including h.chats being unconfigured)
-// means "not this user's chat," never a crash.
+// userOwnsChat reports whether chatID is one of userID's own pinned chats
+// -- the check a session-cookie upload needs before trusting a
+// client-supplied chat_id (a bearer-token upload's chat_id is already
+// scoped by the token). false, including h.chats unconfigured, never a crash.
 func (h *Handler) userOwnsChat(ctx context.Context, userID, chatID string) bool {
 	if h.chats == nil {
 		return false

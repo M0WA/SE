@@ -1,11 +1,7 @@
-// Command mcp-web is a first-party MCP (Model Context Protocol) server
-// exposing "web_search" (proxies to a self-hosted SearXNG instance) and
-// "web_fetch" (fetches a URL's text content, guarded against SSRF) as
-// native tool-calling tools -- the replacement for the old
-// packaging/chat-hooks/web_search.sh/web_fetch.sh shell scripts, spawned
-// as a stdio subprocess by internal/adapters/mcpclient (see
-// domain.MCPServer's Transport="stdio" configuration) rather than run as a
-// systemd service.
+// Command mcp-web is a first-party MCP server exposing "web_search"
+// (proxies to a self-hosted SearXNG instance) and "web_fetch" (fetches a
+// URL's text, guarded against SSRF). Spawned as a stdio subprocess by
+// internal/adapters/mcpclient, not a systemd service.
 package main
 
 import (
@@ -31,10 +27,8 @@ import (
 // searchTimeout bounds a single SearXNG proxy call.
 const searchTimeout = 10 * time.Second
 
-// maxSearchResponseBytes caps how much of a SearXNG response is ever read
-// -- a safety bound against a misbehaving instance, mirrors
-// web_search.sh's own implicit trust in a fixed, admin-controlled local
-// instance while still not reading an unbounded body.
+// maxSearchResponseBytes caps how much of a SearXNG response is ever
+// read -- a safety bound against a misbehaving instance.
 const maxSearchResponseBytes = 1 << 20
 
 type searchArgs struct {
@@ -46,21 +40,13 @@ type fetchArgs struct {
 }
 
 func main() {
-	// WEB_SEARCH_BASE_URL is set unconditionally by mcpclient.Provider on
-	// every spawned "stdio" server -- see ports.MCPToolProvider's own doc
-	// comment -- sourced server-side from the SAME admin-configured
-	// domain.ChatEndpoint.WebSearchBaseURL the deterministic web-search
-	// context injection already uses, so the two never drift out of sync.
-	// Falls back to 127.0.0.1:8888 if somehow unset (e.g. invoked
-	// standalone for local testing), matching web_search.sh's own default.
+	// WEB_SEARCH_BASE_URL is set by mcpclient.Provider on every spawned
+	// stdio server, sourced from domain.ChatEndpoint.WebSearchBaseURL.
+	// Falls back to 127.0.0.1:8888 if unset (e.g. standalone testing).
 	searxBaseURL := bootstrap.GetEnv("WEB_SEARCH_BASE_URL", "http://127.0.0.1:8888")
-	// WEB_SEARCH_RESULT_COUNT/WEB_FETCH_USER_AGENT are set the same
-	// admin-configured-value-at-spawn-time way as WEB_SEARCH_BASE_URL
-	// above -- see domain.ChatEndpoint.WebSearchResultCount and
-	// application.ChatOptions.UserAgent for where each is sourced from.
-	// Both are optional: an unset/unparseable result count means "no cap"
-	// (0), and an unset user agent leaves fetcher's own configured default
-	// (domain.DefaultOperationalSettings().UserAgent) in place.
+	// WEB_SEARCH_RESULT_COUNT/WEB_FETCH_USER_AGENT are set the same way.
+	// Both optional: unset/unparseable result count means no cap (0), and
+	// an unset user agent leaves the fetcher's configured default in place.
 	resultCount, _ := strconv.Atoi(bootstrap.GetEnv("WEB_SEARCH_RESULT_COUNT", "0"))
 	userAgent := bootstrap.GetEnv("WEB_FETCH_USER_AGENT", "")
 	fetcher := httpfetcher.New(domain.DefaultOperationalSettings())
@@ -72,9 +58,8 @@ func main() {
 }
 
 // newServer builds the mcp.Server exposing "web_search"/"web_fetch",
-// factored out of main so a test can connect to it directly over an
-// in-memory transport (mcp.NewInMemoryTransports) instead of exercising it
-// only via a real stdio subprocess.
+// factored out of main so a test can connect via an in-memory transport
+// instead of a real stdio subprocess.
 func newServer(searxBaseURL string, resultCount int, userAgent string, fetcher *httpfetcher.Fetcher) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "mcp-web", Version: "1"}, nil)
 
@@ -118,13 +103,9 @@ func newServer(searxBaseURL string, resultCount int, userAgent string, fetcher *
 
 // webSearch proxies query to the configured SearXNG instance's JSON search
 // API (GET {base}/search?q=...&format=json over loopback -- see
-// packaging/searxng/README.md for how that instance is set up and why
-// search.formats must include json), returning the response body as text --
-// the model reads it directly, same as web_search.sh's raw stdout did. When
-// resultCount is positive, the response's own "results" array is truncated
-// to that many entries first (see capResults) -- SearXNG's JSON API has no
-// query parameter of its own for this, so it's done here rather than
-// requested of SearXNG itself.
+// packaging/searxng/README.md), returning the response body as text. When
+// resultCount is positive, "results" is truncated to that many entries
+// first (see capResults) -- SearXNG's API has no param for this itself.
 func webSearch(ctx context.Context, baseURL, query string, resultCount int) (string, error) {
 	u := strings.TrimRight(baseURL, "/") + "/search?" + url.Values{
 		"q":      {query},
@@ -153,10 +134,8 @@ func webSearch(ctx context.Context, baseURL, query string, resultCount int) (str
 }
 
 // capResults truncates body's top-level "results" array to at most
-// resultCount entries, returning body unmodified (as a string) when
-// resultCount isn't positive or body doesn't parse as the expected
-// SearXNG response shape -- malformed/unexpected JSON is passed through
-// as-is rather than failing the whole search over a cosmetic cap.
+// resultCount entries, returning body unmodified when resultCount isn't
+// positive or it doesn't parse as the expected shape.
 func capResults(body []byte, resultCount int) string {
 	if resultCount <= 0 {
 		return string(body)

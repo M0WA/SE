@@ -29,10 +29,10 @@ func main() {
 	corpusStats := domain.NewCorpusStatsCache(0, 1)
 	vocabulary := domain.NewVocabularyCache(nil)
 
-	// Each of these does its own independent blocking DB round-trip -- run
+	// Each does its own independent blocking DB round-trip -- run
 	// concurrently so startup latency is the slowest one, not their sum.
-	// Embedder construction below needs opSettings already synced, so it
-	// can't join this same batch.
+	// Embedder construction needs opSettings already synced, so it can't
+	// join this batch.
 	var wg sync.WaitGroup
 	wg.Add(3)
 	go func() {
@@ -50,18 +50,17 @@ func main() {
 	endpoints := bootstrap.LoadEmbeddingEndpoints(ctx, repo, settingsEncryptionKey)
 	embedders := bootstrap.NewEmbedders(opSettings.Get().EmbeddingHashEnabled, endpoints)
 	// Attempt to enable Postgres pgvector ANN search -- a no-op on
-	// SQLite/MySQL, never fatal even without the extension (falls back to
-	// SampleEmbeddings). Must run after embedders are constructed, since
-	// each provider's vector column is sized to its own Dimensions().
+	// SQLite/MySQL, never fatal (falls back to SampleEmbeddings). Must run
+	// after embedders are constructed, since each provider's vector
+	// column is sized to its own Dimensions().
 	repo.EnableANN(ctx, bootstrap.EmbedderDimensions(embedders))
 
 	searchSvc := application.NewHybridAsSearchService(repo, embedders, settings, opSettings, overrides, corpusStats, vocabulary)
 
-	// internalSearchAPIKey is unset (empty) by default, meaning the
-	// /search internal-key bypass doesn't exist at all -- see
-	// requireAuthAPIOrInternalKey's doc comment. An admin opts in by
-	// setting SEARCH_INTERNAL_API_KEY, letting a trusted local caller
-	// (e.g. a SearXNG engine plugin) call /search without a session.
+	// internalSearchAPIKey is unset by default, meaning the /search
+	// internal-key bypass doesn't exist at all. An admin opts in via
+	// SEARCH_INTERNAL_API_KEY, letting a trusted local caller (e.g. a
+	// SearXNG engine plugin) call /search without a session.
 	internalSearchAPIKey := bootstrap.GetEnv("SEARCH_INTERNAL_API_KEY", "")
 
 	handler := restapi.New(restapi.Config{

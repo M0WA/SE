@@ -74,8 +74,7 @@ func TestRoutesCrawlInternal_TokenConfigured_AcceptsCorrectToken(t *testing.T) {
 }
 
 // TestRoutesCrawlInternal_TokenConfigured_HealthzStaysOpen proves /healthz
-// is exempt from the token check -- monitoring shouldn't need a credential
-// to check liveness, same as every other Routes* mux in this codebase.
+// is exempt from the token check -- monitoring shouldn't need a credential.
 func TestRoutesCrawlInternal_TokenConfigured_HealthzStaysOpen(t *testing.T) {
 	h := restapi.New(restapi.Config{
 		Crawler: &fakeCrawler{}, CrawlJobs: domain.NewCrawlJobStore(),
@@ -90,12 +89,9 @@ func TestRoutesCrawlInternal_TokenConfigured_HealthzStaysOpen(t *testing.T) {
 }
 
 // erroringCrawlJobStore wraps a real ports.CrawlJobStore, letting a test
-// force any one method to fail (and counting how many times it was
-// called) while every other method still call through normally -- proves
-// both that TriggerCrawl/handleListCrawlJobs/handleGetCrawlJob surface a
-// store error as a 500 (or 400, for TriggerCrawl) rather than crashing,
-// and that runCrawlJob logs and continues past a store error mid-crawl
-// rather than losing already-crawled pages over it.
+// force one method to fail while others pass through -- proves handlers
+// surface a store error as 500/400 rather than crashing, and that
+// runCrawlJob logs and continues past a mid-crawl store error.
 type erroringCrawlJobStore struct {
 	ports.CrawlJobStore
 	createErr, markRunningErr, appendPageErr, markDoneErr, markFailedErr, getErr, listErr, listActiveErr, deleteEndedErr error
@@ -163,9 +159,8 @@ func (e *erroringCrawlJobStore) DeleteEndedCrawlJobs(ctx context.Context) (int, 
 }
 
 // startCrawl calls TriggerScheduledCrawl directly -- crawl-server's own
-// scheduler ticker is the only real caller now (there's no more
-// admin-facing "just start a crawl directly" HTTP path -- see
-// application.TriggerDueCrawls), so tests exercise the same entry point.
+// scheduler ticker is the only real caller now (no more admin-facing
+// "start a crawl directly" HTTP path), so tests exercise the same entry point.
 func startCrawl(t *testing.T, h *restapi.Handler, opts ports.CrawlOptions) string {
 	t.Helper()
 	jobID, err := h.TriggerScheduledCrawl(context.Background(), opts, nil)
@@ -179,11 +174,9 @@ func startCrawl(t *testing.T, h *restapi.Handler, opts ports.CrawlOptions) strin
 }
 
 // TestTriggerScheduledCrawl_RefusesWhenSeedAlreadyActive is the regression
-// test for the production incident this guard exists to prevent (see
-// sqlrepo.Repository.ResetStaleInProgress's own doc comment): a schedule's
-// own scheduled_crawls.in_progress bookkeeping getting out of sync (a
-// scheduler race, a code/schema transition) must never be the ONLY thing
-// stopping the same seed from being crawled twice at once.
+// test for the production incident this guard prevents (see
+// sqlrepo.Repository.ResetStaleInProgress): scheduled_crawls.in_progress
+// getting out of sync must never be the only thing stopping a double-crawl.
 func TestTriggerScheduledCrawl_RefusesWhenSeedAlreadyActive(t *testing.T) {
 	bc := newBlockingCrawler()
 	h := restapi.New(restapi.Config{Crawler: bc, CrawlJobs: domain.NewCrawlJobStore()})
@@ -205,8 +198,7 @@ func TestTriggerScheduledCrawl_RefusesWhenSeedAlreadyActive(t *testing.T) {
 }
 
 // TestTriggerScheduledCrawl_AllowsDifferentSeedWhileOneIsActive proves the
-// guard is scoped to overlapping seeds only, not "one crawl at a time"
-// globally.
+// guard is scoped to overlapping seeds only, not "one crawl at a time" globally.
 func TestTriggerScheduledCrawl_AllowsDifferentSeedWhileOneIsActive(t *testing.T) {
 	dispatch := &dispatchingCrawler{}
 	first := newBlockingCrawler()
@@ -230,9 +222,8 @@ func TestTriggerScheduledCrawl_AllowsDifferentSeedWhileOneIsActive(t *testing.T)
 }
 
 // TestTriggerScheduledCrawl_PropagatesActiveCheckError proves a ListActive
-// failure is surfaced as an error (so application.TriggerDueCrawls logs and
-// retries next tick) rather than silently proceeding to trigger a
-// duplicate.
+// failure surfaces as an error (logged and retried next tick), not a
+// silent proceed into a duplicate trigger.
 func TestTriggerScheduledCrawl_PropagatesActiveCheckError(t *testing.T) {
 	store := &erroringCrawlJobStore{CrawlJobStore: domain.NewCrawlJobStore(), listActiveErr: errors.New("db unavailable")}
 	h := restapi.New(restapi.Config{Crawler: &fakeCrawler{}, CrawlJobs: store})
@@ -243,9 +234,8 @@ func TestTriggerScheduledCrawl_PropagatesActiveCheckError(t *testing.T) {
 	}
 }
 
-// waitForJob polls GET /jobs/{id} through the real handler until the job
-// reaches a terminal status, since the crawl itself runs in a background
-// goroutine started by TriggerScheduledCrawl.
+// waitForJob polls GET /jobs/{id} until the job reaches a terminal
+// status, since the crawl runs in a background goroutine.
 func waitForJob(t *testing.T, h *restapi.Handler, jobID string) domain.CrawlJob {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -377,8 +367,7 @@ func TestHandleCrawlInternal_RecordsLinkScopeAndSitemapOptionsOnTheJob(t *testin
 }
 
 // TestHandleCrawlInternal_RecordsAllowBlockDomainsAndFollowIndexedOnTheJob
-// mirrors TestHandleCrawlInternal_RecordsLinkScopeAndSitemapOptionsOnTheJob
-// for the new allow/block domain lists and FollowIndexedDomains.
+// mirrors the sibling test for allow/block domain lists and FollowIndexedDomains.
 func TestHandleCrawlInternal_RecordsAllowBlockDomainsAndFollowIndexedOnTheJob(t *testing.T) {
 	fc := &fakeCrawler{count: 1}
 	h := newCrawlServerHandler(fc)
@@ -521,11 +510,10 @@ func TestHandleCrawlInternal_ConcurrentJobsAllComplete(t *testing.T) {
 }
 
 // blockingCrawler blocks until its context is cancelled (or released),
-// returning ctx.Err() -- the stand-in for a real crawl in flight when a
-// test needs to cancel a job while it's actually running (or still queued
-// behind maxConcurrentCrawls). started is closed the instant Crawl is
-// entered, so a test can tell "queued, never started" apart from "running,
-// then cancelled".
+// returning ctx.Err() -- a stand-in for a real crawl in flight, for tests
+// cancelling a job while running or still queued. started is closed the
+// instant Crawl is entered, so a test can tell "queued, never started"
+// apart from "running, then cancelled".
 type blockingCrawler struct {
 	started chan struct{}
 	release chan struct{}
@@ -545,10 +533,9 @@ func (b *blockingCrawler) Crawl(ctx context.Context, _ ports.CrawlOptions, _ fun
 	}
 }
 
-// TestCancelCrawlJob_StopsARunningJob proves cancelling a job that's
-// already fetching stops it promptly (via crawlLoop/the fetch's own
-// context, not just a flag runCrawlJob happens to check later) and records
-// it as cancelled, distinct from failed.
+// TestCancelCrawlJob_StopsARunningJob proves cancelling an already-fetching
+// job stops it promptly (via context, not a flag checked later) and
+// records it as cancelled, distinct from failed.
 func TestCancelCrawlJob_StopsARunningJob(t *testing.T) {
 	bc := newBlockingCrawler()
 	h := restapi.New(restapi.Config{Crawler: bc, CrawlJobs: domain.NewCrawlJobStore()})
@@ -570,13 +557,10 @@ func TestCancelCrawlJob_StopsARunningJob(t *testing.T) {
 	}
 }
 
-// TestCancelCrawlJob_StopsAQueuedJob proves a job cancelled before it ever
+// TestCancelCrawlJob_StopsAQueuedJob proves a job cancelled before it
 // acquires crawlSem never calls Crawl at all -- cancellation works on the
-// queue, not just on an already-running fetch. All of crawlSem's
-// concurrency slots (3 by default, see crawlConcurrencySemaphore in
-// crawl_internal.go -- Config.OpSettings is nil in this test, so that
-// default applies) are filled with jobs that never release, so one more
-// job queues behind crawlSem instead of running immediately.
+// queue too. All of crawlSem's slots (3 by default) are filled with jobs
+// that never release, so one more job queues instead of running immediately.
 func TestCancelCrawlJob_StopsAQueuedJob(t *testing.T) {
 	const maxConcurrentCrawlsForTest = 3
 	dispatch := &dispatchingCrawler{}
@@ -622,9 +606,8 @@ func TestCancelCrawlJob_StopsAQueuedJob(t *testing.T) {
 }
 
 // TestRunCrawlJob_RespectsConfiguredMaxConcurrentCrawls proves a
-// higher-than-default OperationalSettingsValues.MaxConcurrentCrawls is
-// honored: 5 blocking jobs all start concurrently (none queue), where the
-// old hard-coded 3 would have queued the last 2.
+// higher-than-default MaxConcurrentCrawls is honored: 5 blocking jobs all
+// start concurrently, where the old hard-coded 3 would have queued 2.
 func TestRunCrawlJob_RespectsConfiguredMaxConcurrentCrawls(t *testing.T) {
 	const limit = 5
 	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{MaxConcurrentCrawls: limit})
@@ -652,11 +635,9 @@ func TestRunCrawlJob_RespectsConfiguredMaxConcurrentCrawls(t *testing.T) {
 }
 
 // TestRunCrawlJob_MaxConcurrentCrawlsResizeAdmitsAlreadyQueuedJob proves
-// raising MaxConcurrentCrawls while a job is already queued behind the
-// old (smaller) limit still helps that job -- not just jobs that start
-// queuing afterward -- since crawlConcurrencySemaphore.acquire re-checks
-// the configured limit periodically rather than only once per queued
-// call.
+// raising MaxConcurrentCrawls while a job is already queued behind the old
+// limit still helps that job, since acquire re-checks the limit
+// periodically rather than once per queued call.
 func TestRunCrawlJob_MaxConcurrentCrawlsResizeAdmitsAlreadyQueuedJob(t *testing.T) {
 	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{MaxConcurrentCrawls: 2})
 	dispatch := &dispatchingCrawler{}
@@ -702,9 +683,8 @@ func TestRunCrawlJob_MaxConcurrentCrawlsResizeAdmitsAlreadyQueuedJob(t *testing.
 }
 
 // dispatchingCrawler hands out a queue of *blockingCrawler in FIFO order,
-// one per Crawl call -- lets a test control exactly which call gets which
-// controllable fake, needed when several jobs are in flight against
-// crawlSem at once.
+// one per Crawl call -- lets a test control which call gets which fake,
+// needed when several jobs are in flight against crawlSem at once.
 type dispatchingCrawler struct {
 	mu    sync.Mutex
 	queue []*blockingCrawler
@@ -752,9 +732,9 @@ func waitForJobStatus(t *testing.T, h *restapi.Handler, jobID string, want domai
 	return domain.CrawlJob{}
 }
 
-// TestCancelCrawlJob_UnknownJobReturnsFalse proves cancelling a job ID this
-// process never registered a cancel func for (never existed, or already
-// finished and was unregistered) is a clean no-op, not a panic.
+// TestCancelCrawlJob_UnknownJobReturnsFalse proves cancelling a job ID
+// never registered here (never existed, or already unregistered) is a
+// clean no-op, not a panic.
 func TestCancelCrawlJob_UnknownJobReturnsFalse(t *testing.T) {
 	h := newCrawlServerHandler(&fakeCrawler{})
 	if h.CancelCrawlJob("does-not-exist") {
@@ -772,9 +752,8 @@ func TestHandleCancelCrawlJob_NotFound(t *testing.T) {
 	}
 }
 
-// TestHandleCancelCrawlJob_AlreadyFinishedConflicts proves cancelling a job
-// that already reached a terminal status (nothing left to cancel) is a 409,
-// not silently a 200 or a 404 (it does exist).
+// TestHandleCancelCrawlJob_AlreadyFinishedConflicts proves cancelling a
+// job already at a terminal status is a 409, not a 200 or a 404.
 func TestHandleCancelCrawlJob_AlreadyFinishedConflicts(t *testing.T) {
 	h := newCrawlServerHandler(&fakeCrawler{count: 1})
 	jobID := startCrawl(t, h, ports.CrawlOptions{SeedURLs: []string{"http://a"}})
@@ -807,9 +786,8 @@ func TestHandleCancelCrawlJob_Success(t *testing.T) {
 	waitForJobStatus(t, h, jobID, domain.CrawlJobCancelled)
 }
 
-// pageEmittingFakeCrawler actually invokes onPage (unlike fakeCrawler,
-// which never does), for tests that need runCrawlJob's AppendPage call to
-// actually fire.
+// pageEmittingFakeCrawler actually invokes onPage (unlike fakeCrawler),
+// for tests that need runCrawlJob's AppendPage call to fire.
 type pageEmittingFakeCrawler struct{}
 
 func (pageEmittingFakeCrawler) Crawl(_ context.Context, _ ports.CrawlOptions, onPage func(domain.CrawlPageEvent)) (int, error) {
@@ -818,10 +796,9 @@ func (pageEmittingFakeCrawler) Crawl(_ context.Context, _ ports.CrawlOptions, on
 }
 
 // TestResumeCrawlJob_RunsUnderTheSameExistingJobID proves ResumeCrawlJob
-// (used by application.RecoverInterruptedCrawls) reuses the given job ID
-// rather than creating a new one -- a pre-existing job (simulating one
-// left "running" by a crawl-server restart) reaches CrawlJobDone under
-// its own ID, and no second job is ever created.
+// reuses the given job ID rather than creating a new one -- a pre-existing
+// job (simulating one left "running" by a restart) reaches CrawlJobDone
+// under its own ID, and no second job is created.
 func TestResumeCrawlJob_RunsUnderTheSameExistingJobID(t *testing.T) {
 	store := domain.NewCrawlJobStore()
 	existing, err := store.Create(context.Background(), domain.CrawlJobRequest{SeedURLs: []string{"http://a"}, MaxPages: 5})
@@ -854,10 +831,9 @@ func TestResumeCrawlJob_RunsUnderTheSameExistingJobID(t *testing.T) {
 	}
 }
 
-// TestTriggerScheduledCrawl_CallsOnDoneAfterSuccess proves the scheduler's
-// completion callback fires only once the job actually finishes (not the
-// instant it's started) -- application.TriggerDueCrawls relies on this to
-// correct a schedule's next_run_at to reflect the real finish time.
+// TestTriggerScheduledCrawl_CallsOnDoneAfterSuccess proves the completion
+// callback fires only once the job actually finishes, not the instant it
+// starts -- TriggerDueCrawls relies on this for the real finish time.
 func TestTriggerScheduledCrawl_CallsOnDoneAfterSuccess(t *testing.T) {
 	store := domain.NewCrawlJobStore()
 	h := restapi.New(restapi.Config{Crawler: &fakeCrawler{count: 3}, CrawlJobs: store})
@@ -884,9 +860,8 @@ func TestTriggerScheduledCrawl_CallsOnDoneAfterSuccess(t *testing.T) {
 }
 
 // TestTriggerScheduledCrawl_CallsOnDoneAfterFailure proves onDone fires
-// even when the crawl itself fails -- a schedule must still reschedule
-// (rather than getting stuck retrying every tick forever) when the site
-// it crawls starts erroring.
+// even when the crawl fails -- a schedule must still reschedule, not get
+// stuck retrying every tick, when the site it crawls starts erroring.
 func TestTriggerScheduledCrawl_CallsOnDoneAfterFailure(t *testing.T) {
 	store := domain.NewCrawlJobStore()
 	h := restapi.New(restapi.Config{Crawler: &fakeCrawler{err: errors.New("fetch failed")}, CrawlJobs: store})
@@ -962,11 +937,9 @@ func TestHandleGetCrawlJob_StoreErrorReturns500(t *testing.T) {
 	}
 }
 
-// TestRunCrawlJob_StoreErrorsAreLoggedNotFatal proves runCrawlJob's own
-// doc comment: a store failure on any single bookkeeping call (marking
-// running, appending a page, marking done) is logged and the crawl
-// continues to completion rather than losing already-crawled pages over
-// it.
+// TestRunCrawlJob_StoreErrorsAreLoggedNotFatal proves a store failure on
+// any bookkeeping call is logged and the crawl continues to completion,
+// not losing already-crawled pages.
 func TestRunCrawlJob_StoreErrorsAreLoggedNotFatal(t *testing.T) {
 	store := &erroringCrawlJobStore{
 		CrawlJobStore:  domain.NewCrawlJobStore(),
@@ -992,10 +965,9 @@ func TestRunCrawlJob_StoreErrorsAreLoggedNotFatal(t *testing.T) {
 	}
 }
 
-// TestRunCrawlJob_MarkDoneStoreErrorIsLoggedNotFatal exercises the
-// MarkDone-fails-on-an-otherwise-successful-crawl branch: logged, not
-// fatal -- the crawl goroutine still exits cleanly rather than panicking
-// or hanging.
+// TestRunCrawlJob_MarkDoneStoreErrorIsLoggedNotFatal exercises MarkDone
+// failing on an otherwise-successful crawl: logged, not fatal -- the
+// goroutine exits cleanly rather than panicking or hanging.
 func TestRunCrawlJob_MarkDoneStoreErrorIsLoggedNotFatal(t *testing.T) {
 	store := &erroringCrawlJobStore{CrawlJobStore: domain.NewCrawlJobStore(), markDoneErr: errors.New("mark done failed")}
 	h := restapi.New(restapi.Config{Crawler: &fakeCrawler{count: 1}, CrawlJobs: store})
@@ -1011,9 +983,8 @@ func TestRunCrawlJob_MarkDoneStoreErrorIsLoggedNotFatal(t *testing.T) {
 	}
 }
 
-// TestRunCrawlJob_MarkFailedStoreErrorIsLoggedNotFatal exercises the
-// MarkFailed-also-errors branch: a crawl that itself fails, on a store
-// that also fails to record the failure, must not panic or hang.
+// TestRunCrawlJob_MarkFailedStoreErrorIsLoggedNotFatal proves a crawl that
+// fails, on a store that also fails to record it, must not panic or hang.
 func TestRunCrawlJob_MarkFailedStoreErrorIsLoggedNotFatal(t *testing.T) {
 	store := &erroringCrawlJobStore{CrawlJobStore: domain.NewCrawlJobStore(), markFailedErr: errors.New("mark failed failed")}
 	h := restapi.New(restapi.Config{Crawler: &fakeCrawler{err: errors.New("crawl failed")}, CrawlJobs: store})

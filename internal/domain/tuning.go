@@ -10,9 +10,8 @@ type TuningSettings struct {
 	alpha float64
 	k1    float64
 	b     float64
-	// pageRankWeight blends normalized PageRank into FinalScore -- 0 (the
-	// default) means zero influence. Its own field/accessors rather than a
-	// fourth Get/Set argument, so the existing alpha/k1/b callers are untouched.
+	// pageRankWeight blends normalized PageRank into FinalScore; 0 (default)
+	// means no influence. Own field/accessors so alpha/k1/b callers are untouched.
 	pageRankWeight float64
 }
 
@@ -28,9 +27,8 @@ func (s *TuningSettings) Get() (alpha, k1, b float64) {
 	return s.alpha, s.k1, s.b
 }
 
-// Set updates the tuning parameters. Values are clamped to sane ranges
-// rather than rejected, since this is an admin convenience knob, not a
-// user-facing form that needs field-level validation errors.
+// Set updates the tuning parameters, clamped to sane ranges rather than
+// rejected -- an admin convenience knob, not a validated form.
 func (s *TuningSettings) Set(alpha, k1, b float64) {
 	alpha = clamp(alpha, 0, 1)
 	if k1 < 0 {
@@ -52,9 +50,8 @@ func (s *TuningSettings) PageRankWeight() float64 {
 	return s.pageRankWeight
 }
 
-// SetPageRankWeight updates the blend weight, clamped to [0,1] the same
-// way Set clamps alpha/b -- an admin convenience knob, not a validated
-// form field.
+// SetPageRankWeight updates the blend weight, clamped to [0,1] like Set
+// clamps alpha/b.
 func (s *TuningSettings) SetPageRankWeight(w float64) {
 	w = clamp(w, 0, 1)
 	s.mu.Lock()
@@ -63,9 +60,8 @@ func (s *TuningSettings) SetPageRankWeight(w float64) {
 }
 
 // TuningValues is a JSON-serializable snapshot of TuningSettings' fields,
-// for callers (the settings store, the admin API) that need to read or
-// write them as a single value rather than through the individual
-// Get()/Set()/PageRankWeight()/SetPageRankWeight() accessors.
+// for callers needing to read/write them as one value rather than through
+// the individual accessors.
 type TuningValues struct {
 	Alpha          float64 `json:"alpha"`
 	K1             float64 `json:"k1"`

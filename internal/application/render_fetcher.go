@@ -9,12 +9,10 @@ import (
 )
 
 // RenderAwareFetcher wraps a plain ports.AuthFetcher, routing
-// FetchWithOptions through a real (headless) browser when a renderer is
-// requested (opts.Renderer, or DefaultRenderer if empty); opts.NoRender
-// and the no-options Fetch always take the plain path. An unknown/
-// unavailable Renderers name errors rather than silently falling back to
-// plain HTTP, so a misconfigured admin setting fails loudly instead of
-// quietly serving unrendered content.
+// FetchWithOptions through a real headless browser when a renderer is
+// requested (opts.Renderer, or DefaultRenderer); opts.NoRender and Fetch
+// always take the plain path. An unknown/unavailable renderer name errors
+// rather than silently falling back to plain HTTP.
 type RenderAwareFetcher struct {
 	Base       ports.AuthFetcher
 	Renderers  map[string]ports.Renderer

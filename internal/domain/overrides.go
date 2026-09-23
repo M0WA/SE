@@ -7,10 +7,9 @@ import (
 )
 
 // RankingOverridesValues is a snapshot of every admin-configured ranking
-// override: specific words or domains blocked from results entirely, and
-// specific words or domains whose matching documents get a final-score
-// multiplier. Independent of TuningSettings' alpha/k1/b knobs (see that
-// type) -- these act after the BM25/semantic blend, not on it.
+// override: words/domains blocked entirely, and words/domains whose
+// matches get a final-score multiplier. Acts after the BM25/semantic
+// blend, independent of TuningSettings' alpha/k1/b knobs.
 type RankingOverridesValues struct {
 	BlockedTerms   []string
 	BoostedTerms   map[string]float64
@@ -18,10 +17,8 @@ type RankingOverridesValues struct {
 	BoostedDomains map[string]float64
 }
 
-// Blocked reports whether doc should be excluded from results entirely:
-// its URL's host is in BlockedDomains, or its title/text contains a
-// BlockedTerm. A convenience wrapper around BlockedTokens for a caller
-// that doesn't already have doc's tokens.
+// Blocked reports whether doc should be excluded entirely: its host is in
+// BlockedDomains, or its title/text contains a BlockedTerm.
 func (v RankingOverridesValues) Blocked(doc Document) bool {
 	return v.BlockedTokens(doc.URL, TokenSet(doc.Title, doc.Text))
 }
@@ -45,11 +42,8 @@ func (v RankingOverridesValues) BlockedTokens(url string, tokens map[string]bool
 	return false
 }
 
-// BoostFactor returns the multiplier to apply to doc's final score: 1.0
-// (no-op) if nothing matches, otherwise the product of every matching
-// BoostedDomains/BoostedTerms factor. A one-off convenience wrapper around
-// BoostFactorTokens -- see Blocked's doc comment for why
-// hybrid_search_service.go calls the Tokens form directly instead.
+// BoostFactor returns the multiplier for doc's final score: 1.0 if nothing
+// matches, otherwise the product of every matching Boosted*/Terms factor.
 func (v RankingOverridesValues) BoostFactor(doc Document) float64 {
 	return v.BoostFactorTokens(doc.URL, TokenSet(doc.Title, doc.Text))
 }
@@ -72,9 +66,7 @@ func (v RankingOverridesValues) BoostFactorTokens(url string, tokens map[string]
 }
 
 // TokenSet tokenizes title+text into a set for O(1) membership checks --
-// shared by Blocked/BoostFactor and ParsedQuery.Matches. A caller needing
-// several checks against the same document should call this once and
-// reuse it via the *Tokens-suffixed methods, rather than re-tokenizing.
+// shared by Blocked/BoostFactor and ParsedQuery.Matches.
 func TokenSet(title, text string) map[string]bool {
 	tokens := Tokenize(title + " " + text)
 	set := make(map[string]bool, len(tokens))
@@ -84,9 +76,8 @@ func TokenSet(title, text string) map[string]bool {
 	return set
 }
 
-// HostOf extracts the lowercased hostname from a URL, or "" if it does not
-// parse -- shared by ranking overrides (domain block/boost), site: filters,
-// and (from restapi) scheduled-crawl domain dedup.
+// HostOf extracts the lowercased hostname from a URL, or "" if it doesn't
+// parse -- shared by ranking overrides, site: filters, and crawl dedup.
 func HostOf(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -118,9 +109,8 @@ func (v RankingOverridesValues) clone() RankingOverridesValues {
 	return out
 }
 
-// appendIfNew appends item to out and marks it in seen, unless seen already
-// has it -- the ordered-dedupe idiom shared by normalizeTerms and
-// normalizeDomains below.
+// appendIfNew appends item unless seen already has it -- the ordered-dedupe
+// idiom shared below.
 func appendIfNew(out []string, seen map[string]bool, item string) []string {
 	if seen[item] {
 		return out
@@ -129,10 +119,9 @@ func appendIfNew(out []string, seen map[string]bool, item string) []string {
 	return append(out, item)
 }
 
-// normalizeTerms tokenizes every raw entry the same way document text is,
-// so a blocked/boosted word matches regardless of case/punctuation, and
-// dedupes the result. A multi-word entry ("New York") expands into each
-// of its tokens, matching if any one appears in a document.
+// normalizeTerms tokenizes every raw entry like document text, so matching
+// is case/punctuation-insensitive, and dedupes. A multi-word entry ("New
+// York") expands into each token.
 func normalizeTerms(raw []string) []string {
 	seen := make(map[string]bool)
 	var out []string
@@ -144,13 +133,9 @@ func normalizeTerms(raw []string) []string {
 	return out
 }
 
-// normalizeFactors is the shared shape behind normalizeTermFactors and
-// normalizeDomainFactors: entries with a non-positive factor are dropped --
-// a boost of zero or less isn't a boost, and silently omitting it is
-// simpler than rejecting the whole Set call, consistent with how
-// OperationalSettings substitutes rather than validates. keys maps one raw
-// map key to the (possibly several, possibly zero) normalized keys it
-// should be written under.
+// normalizeFactors is shared by normalizeTermFactors/normalizeDomainFactors:
+// entries with a non-positive factor are dropped rather than rejecting the
+// whole Set call. keys maps one raw key to its normalized key(s).
 func normalizeFactors(raw map[string]float64, keys func(string) []string) map[string]float64 {
 	if len(raw) == 0 {
 		return nil
@@ -175,9 +160,8 @@ func normalizeTermFactors(raw map[string]float64) map[string]float64 {
 	return normalizeFactors(raw, Tokenize)
 }
 
-// normalizeDomain lowercases a domain entry, accepting a full URL (e.g.
-// pasted from a browser bar) by extracting its host -- convenient since
-// the admin UI's field is documented as accepting domains or URLs.
+// normalizeDomain lowercases a domain entry, accepting a full URL by
+// extracting its host -- the admin UI field accepts either.
 func normalizeDomain(raw string) string {
 	raw = strings.ToLower(strings.TrimSpace(raw))
 	if raw == "" {
@@ -230,10 +214,8 @@ func DefaultRankingOverrides() *RankingOverrides {
 	return NewRankingOverrides(RankingOverridesValues{})
 }
 
-// Get returns the current values. A nil *RankingOverrides (e.g. a search
-// path that hasn't wired overrides in) returns the empty zero value --
-// nothing blocked or boosted -- rather than a zero-value struct, so
-// callers never need a separate nil check before reading.
+// Get returns the current values. A nil *RankingOverrides returns the
+// empty zero value, so callers never need a separate nil check.
 func (s *RankingOverrides) Get() RankingOverridesValues {
 	if s == nil {
 		return RankingOverridesValues{}
@@ -243,10 +225,8 @@ func (s *RankingOverrides) Get() RankingOverridesValues {
 	return s.v.clone()
 }
 
-// Set updates the overrides, normalizing every field (tokenizing words,
-// lowercasing/parsing domains, dropping non-positive boost factors)
-// rather than rejecting the update -- this is an admin convenience knob,
-// not a user-facing form that needs field-level validation errors.
+// Set updates the overrides, normalizing every field rather than rejecting
+// the update -- an admin convenience knob, not a validated form.
 func (s *RankingOverrides) Set(v RankingOverridesValues) {
 	if s == nil {
 		return

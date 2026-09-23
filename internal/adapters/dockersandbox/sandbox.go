@@ -1,16 +1,11 @@
 // Package dockersandbox runs a short-lived snippet of untrusted code
-// (Python or Go) inside a locked-down, ephemeral Docker container --
-// the execution backend for cmd/mcp-sandbox's "run_python"/"run_go" MCP
-// tools. Every invocation gets its own fresh container (no state carries
-// over between calls), a memory/CPU/process-count/wall-clock-time cap
-// (see Limits), no capabilities, a read-only root filesystem (a writable
-// tmpfs /tmp is provided for whatever a script/build genuinely needs to
-// write), and -- unless the caller opts in -- no network access at all.
-// The model only ever supplies the CODE that runs *inside* the container;
-// Limits is set once, by whoever constructs the Runner (an admin, via
-// cmd/mcp-sandbox's own startup flags -- never the model, and never
-// per-call), so there is no way for the sandboxed code to influence its
-// own confinement.
+// (Python or Go) inside a locked-down, ephemeral Docker container -- the
+// backend for cmd/mcp-sandbox's "run_python"/"run_go" MCP tools. Each call
+// gets a fresh container with a resource cap (see Limits), no capabilities,
+// a read-only root (writable tmpfs /tmp), and no network unless opted in.
+// The model only supplies the code that runs inside; Limits is fixed by
+// whoever constructs the Runner (admin startup flags, never the model or
+// per-call), so sandboxed code can never influence its own confinement.
 package dockersandbox
 
 import (
@@ -39,33 +34,26 @@ const (
 // carries no deadline either.
 const DefaultTimeout = 15 * time.Second
 
-// DefaultMemory, DefaultCPUs, and DefaultPidsLimit are Limits' own
-// zero-value fallbacks -- see NewRunner. DefaultMemory is 512m, not a
-// tighter number, because the Go compiler itself (not just the program it
-// builds) needs real headroom even for a trivial one-file "go run" with a
-// cold build cache -- 256m measured as reliably OOM-killing `go run`
-// before it ever got to executing the compiled program.
+// DefaultMemory/CPUs/PidsLimit are Limits' zero-value fallbacks. 512m, not
+// tighter, because the Go compiler itself needs headroom even for a
+// trivial "go run" with a cold cache -- 256m reliably OOM-killed it before
+// the program ever ran.
 const (
 	DefaultMemory    = "512m"
 	DefaultCPUs      = "1"
 	DefaultPidsLimit = "128"
 )
 
-// maxOutputBytes caps how much of stdout/stderr each is kept -- a runaway
-// print loop inside the sandbox must never be allowed to exhaust this
-// process's own memory, or blow up the tool result handed back to the
-// chat completion call. Not part of Limits: this bounds OUR OWN memory
-// use capturing output, not anything about the sandboxed container, so
-// there's no operational reason an admin would need to tune it.
+// maxOutputBytes caps how much of stdout/stderr is kept -- a runaway print
+// loop must never exhaust our own memory. Not part of Limits: this bounds
+// our own output capture, not the sandboxed container, so it's not
+// admin-tunable.
 const maxOutputBytes = 64 * 1024
 
-// Limits is the resource ceiling applied to EVERY sandboxed container a
-// Runner creates, regardless of language -- admin-configured once, at
-// process startup (see cmd/mcp-sandbox's own flags), never per-call: the
-// model supplies only the code that runs inside a container already built
-// to these limits, never the limits themselves. A zero Limits (Limits{})
-// is valid and resolves every field to its Default* constant -- see
-// NewRunner.
+// Limits is the resource ceiling applied to every sandboxed container a
+// Runner creates -- admin-configured once at process startup, never
+// per-call; the model supplies only the code, never the limits. A zero
+// Limits{} is valid and resolves every field to its Default* constant.
 type Limits struct {
 	// Memory is a Docker --memory value, e.g. "512m" or "1g". Also applied
 	// as --memory-swap (equal to Memory), so the container gets no swap
@@ -80,32 +68,19 @@ type Limits struct {
 	// Timeout bounds a single Run call's wall-clock time when ctx itself
 	// carries no deadline of its own. Zero means DefaultTimeout.
 	Timeout time.Duration
-	// DNS is zero or more Docker --dns values (nameserver IPs) applied to
-	// every container this Runner creates -- only meaningful when a call's
-	// RunOptions.Network is true (a --network none container does no DNS
-	// resolution at all, so this is harmlessly unused otherwise). Empty
-	// (the default) leaves Docker's own embedded DNS server (127.0.0.11,
-	// forwarding to whatever the Docker daemon itself is configured to
-	// use) in place -- see cmd/mcp-sandbox's -dns/-host-dns flags and
-	// DetectHostDNS for how an admin populates this.
+	// DNS is zero or more Docker --dns nameserver IPs, applied to every
+	// container -- only meaningful when RunOptions.Network is true. Empty
+	// leaves Docker's own embedded DNS (127.0.0.11) in place -- see
+	// cmd/mcp-sandbox's -dns/-host-dns flags and DetectHostDNS.
 	DNS []string
-	// HostNetwork, when true, runs a network-enabled container with
-	// Docker's --network host instead of the default bridge network --
-	// only meaningful when a call's RunOptions.Network is true. Sharing
-	// the host's own network namespace outright means DNS resolution
-	// "just works" via whatever the host itself already has configured,
-	// with no DNS/HostDNS setup needed at all (confirmed: a --network
-	// host container with no --dns flag reads the host's own real
-	// /etc/resolv.conf, including reaching a systemd-resolved stub at
-	// 127.0.0.53, which is genuinely unreachable from a bridge-networked
-	// container's own separate network namespace -- see DNS's own doc
-	// comment for why that stub otherwise needs working around at all).
-	// This is a MEANINGFULLY bigger privilege elevation than bridge
-	// networking, not just a DNS convenience: the sandboxed container can
-	// see and bind to the host's own network interfaces/ports directly,
-	// not just get outbound NAT'd access -- an admin opts into this
-	// explicitly (see cmd/mcp-sandbox's -host-network flag), it is never
-	// the default even when Network is true.
+	// HostNetwork runs with Docker's --network host instead of bridge --
+	// only meaningful when RunOptions.Network is true. DNS then "just
+	// works" via the host's real resolv.conf (a bridge container can't
+	// reach the host's systemd-resolved stub at 127.0.0.53, see DNS above).
+	// A meaningfully bigger elevation than a DNS convenience -- the
+	// container can bind the host's own network interfaces/ports directly
+	// -- so an admin opts in explicitly (-host-network flag), never the
+	// default even when Network is true.
 	HostNetwork bool
 }
 
@@ -135,16 +110,11 @@ type languageConfig struct {
 	image    string
 	filename string
 	argv     func(path string) []string
-	// installArgv builds the argv for a run that also installs packages
-	// before executing the code -- only ever called when both
-	// RunOptions.Network and len(RunOptions.Packages) are non-zero (see
-	// Run). packages become trailing positional arguments to a fixed `sh
-	// -c '<script>' sh` invocation, referenced inside the script only via
-	// "$@" -- never string-concatenated into the script text itself -- so
-	// a model-supplied package name can never break out of its own
-	// argument, however it's spelled (the same argv-safety property
-	// exec.Command already gives Code's own file, just extended to these
-	// dynamic trailing arguments too).
+	// installArgv builds the argv for a run that also installs packages --
+	// only called when Network and Packages are both non-empty (see Run).
+	// Packages become trailing args to a fixed `sh -c '<script>' sh`,
+	// referenced only via "$@", never string-concatenated, so a
+	// model-supplied package name can never break out of its argument.
 	installArgv func(path string, packages []string) []string
 	env         []string
 }
@@ -155,55 +125,37 @@ var languageConfigs = map[Language]languageConfig{
 		filename: "script.py",
 		argv:     func(path string) []string { return []string{"python3", path} },
 		// --target puts installed packages under the writable /tmp tmpfs
-		// (site-packages itself is under the read-only root); PYTHONPATH
-		// tells the interpreter where to find them. python:3-slim ships
-		// pip already, so no separate install step is needed for pip
-		// itself.
+		// (site-packages is read-only); PYTHONPATH points the interpreter
+		// there. python:3-slim already ships pip.
 		installArgv: func(path string, packages []string) []string {
 			script := `set -e; mkdir -p /tmp/pip-packages; pip install --quiet --no-cache-dir --target=/tmp/pip-packages "$@"; ` +
 				`PYTHONPATH=/tmp/pip-packages exec python3 ` + path
 			return append([]string{"sh", "-c", script, "sh"}, packages...)
 		},
-		// PYTHONDONTWRITEBYTECODE avoids Python even attempting a .pyc
-		// write under the read-only root (harmless either way -- it just
-		// silently skips caching -- but this makes the intent explicit).
-		// PYTHONUNBUFFERED ensures stdout is flushed as written rather
-		// than block-buffered, so a script killed by the timeout still
-		// has whatever it printed up to that point captured.
+		// PYTHONDONTWRITEBYTECODE: skip .pyc writes under the read-only root.
+		// PYTHONUNBUFFERED: flush stdout as written, so a timeout-killed
+		// script still has its output captured.
 		env: []string{"PYTHONDONTWRITEBYTECODE=1", "PYTHONUNBUFFERED=1"},
 	},
 	Go: {
 		image:    "golang:1-alpine",
 		filename: "main.go",
-		// "go run <file>" (naming the file, not a package path) runs a
-		// single standalone file with no go.mod required, as long as it
-		// imports only the standard library -- there is no module
-		// resolution step to need one for. An import beyond stdlib fails
-		// the same way it would with no network at all, UNLESS Packages
-		// is used too (see installArgv below): this is a documented scope
-		// limit (see cmd/mcp-sandbox's own tool description) that
-		// Packages, not Network alone, lifts.
+		// "go run <file>" needs no go.mod as long as it imports only
+		// stdlib; a non-stdlib import fails unless Packages is used too
+		// (see installArgv) -- a documented scope limit only Packages lifts.
 		argv: func(path string) []string { return []string{"go", "run", path} },
-		// The code file lives under the read-only /sandbox mount, which
-		// can't hold a go.mod -- copy it into a subdirectory of the
-		// writable /tmp (already GOCACHE/GOPATH/GOMODCACHE's own home, see
-		// env below) and init a throwaway module there instead of at
-		// /tmp's own top level: the Go toolchain deliberately refuses "go
-		// mod init"/"go get" directly in a bare system temp root (a real,
-		// observed "ignoring go.mod in system temp root /tmp" warning,
-		// followed by "go.mod file not found" -- ostensibly to stop a
-		// stray module accumulating there across unrelated runs, though
-		// this Runner's own workdir is already fresh and removed per
-		// call). Then "go get" each requested module and run from that
-		// subdirectory.
+		// /sandbox is read-only and can't hold a go.mod, so copy the code
+		// into a subdirectory of writable /tmp and init a throwaway module
+		// there (not at /tmp's own top level -- Go refuses "go mod
+		// init"/"go get" directly in a bare system temp root: an observed
+		// "ignoring go.mod in system temp root" warning). Then "go get"
+		// each requested module and run from that subdirectory.
 		installArgv: func(path string, packages []string) []string {
 			script := `set -e; mkdir -p /tmp/sandbox-mod; cp ` + path + ` /tmp/sandbox-mod/main.go; cd /tmp/sandbox-mod; go mod init sandbox >/dev/null 2>&1; go get "$@"; exec go run main.go`
 			return append([]string{"sh", "-c", script, "sh"}, packages...)
 		},
-		// GOCACHE/GOPATH/GOMODCACHE/HOME all need to point at the
-		// writable tmpfs /tmp -- go's own build/module caches try to
-		// write under $HOME by default, which fails outright under
-		// --read-only otherwise.
+		// GOCACHE/GOPATH/GOMODCACHE/HOME must point at writable /tmp -- Go's
+		// caches default to $HOME, which fails under --read-only otherwise.
 		env: []string{"HOME=/tmp", "GOCACHE=/tmp/go-cache", "GOPATH=/tmp/go-path", "GOMODCACHE=/tmp/go-mod"},
 	},
 }
@@ -212,29 +164,23 @@ var languageConfigs = map[Language]languageConfig{
 type RunOptions struct {
 	Language Language
 	Code     string
-	// Network, when true, gives the container real outbound network
-	// access. False (the default across this whole package) runs with
-	// --network none -- the sandboxed code can't reach anything, on the
-	// host or the internet, at all.
+	// Network, when true, gives the container real outbound network access.
+	// False (the default) runs with --network none -- no reachability at
+	// all, host or internet.
 	Network bool
 	// Packages is zero or more package/module names to install before
-	// running Code -- pip package names for Python, Go module import
-	// paths (optionally "@version") for Go. Only takes effect when
-	// Network is also true (installing needs a real network call);
-	// otherwise it's silently ignored, same as DNS/HostNetwork being
-	// meaningless without Network. Model-supplied, like Code itself --
-	// passed to pip/go as real argv elements (see languageConfig.
-	// installArgv), never through a shell string, so a package name can
-	// never inject an extra shell command.
+	// running Code (pip names, or Go import paths). Only takes effect when
+	// Network is also true; otherwise silently ignored. Model-supplied,
+	// passed to pip/go as real argv elements (see installArgv), never
+	// through a shell string, so it can never inject a shell command.
 	Packages []string
 }
 
-// Result is one sandboxed execution's outcome. A non-zero ExitCode or a
-// TimedOut run is NOT itself a Go error -- Run's error return is reserved
-// for genuine infrastructure failures (docker missing, permission denied,
-// couldn't create the sandbox workdir); the code under test simply
-// failing, panicking, or running long is ordinary, useful information the
-// caller (ultimately the model) should see and can act on.
+// Result is one sandboxed execution's outcome. A non-zero ExitCode or
+// TimedOut is NOT a Go error -- Run's error return is reserved for
+// infrastructure failures (docker missing, permission denied); the code
+// under test failing/panicking/running long is ordinary, useful
+// information the caller should see.
 type Result struct {
 	ExitCode int
 	TimedOut bool
@@ -274,23 +220,18 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 		return Result{}, fmt.Errorf("creating sandbox workdir: %w", err)
 	}
 	defer os.RemoveAll(dir)
-	// os.MkdirTemp's default mode (0700, owner-only) is unreachable from
-	// inside the container: --cap-drop ALL below strips CAP_DAC_OVERRIDE,
-	// so even the container's own root user (which otherwise maps
-	// 1-for-1 onto host root -- this host runs no user-namespace
-	// remapping) is subject to normal permission checks like anyone else,
-	// and host root != this process's own UID. 0o755 makes the directory
-	// itself traversable/listable by any UID; the code file's own 0o444
-	// below is what actually keeps it read-only.
+	// os.MkdirTemp's default 0700 is unreachable from inside the container:
+	// --cap-drop ALL strips CAP_DAC_OVERRIDE, so even container root is
+	// subject to normal permission checks, and host root != our own UID.
+	// 0o755 makes the dir traversable by any UID; the code file's own
+	// 0o444 below is what actually keeps it read-only.
 	if err := os.Chmod(dir, 0o755); err != nil {
 		return Result{}, fmt.Errorf("preparing sandbox workdir: %w", err)
 	}
 
 	codePath := filepath.Join(dir, cfg.filename)
-	// 0o444 (read-only, no write bit for anyone): the code file is only
-	// ever read by the container (mounted :ro below anyway, but this is
-	// defense in depth on the host side too), never modified after this
-	// process writes it.
+	// 0o444: the code file is only ever read (mounted :ro below too, but
+	// this is defense in depth on the host side), never modified after write.
 	if err := os.WriteFile(codePath, []byte(opts.Code), 0o444); err != nil {
 		return Result{}, fmt.Errorf("writing sandbox code: %w", err)
 	}
@@ -302,15 +243,9 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 		defer cancel()
 	}
 
-	// tmpfsSize is bumped well past the plain-code-path default (64m) when
-	// installing packages -- confirmed by a real "no space left on
-	// device" failure partway through compiling stdlib packages
-	// (reflect/bytes/sort/...) for a Go run pulling in just 3 small
-	// dependencies: GOCACHE's own compile-artifact footprint plus real
-	// downloaded module source together outgrow 64m fast, on top of
-	// whatever pip installs into /tmp/pip-packages for Python. Left at
-	// its established default otherwise, since every plain-code (no
-	// Packages) test already passes at 64m.
+	// tmpfsSize is bumped past the plain default (64m) when installing
+	// packages -- a real "no space left on device" failure was observed
+	// compiling stdlib for a Go run pulling in just 3 dependencies.
 	tmpfsSize := "64m"
 	if opts.Network && len(opts.Packages) > 0 {
 		tmpfsSize = "256m"
@@ -324,12 +259,9 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges:true",
 		"--read-only",
-		// exec is NOT docker's --tmpfs default (noexec is) -- Go's own
-		// build writes its compiled binary under $GOCACHE/$GOTMPDIR
-		// (pointed at /tmp below) and then runs it directly from there;
-		// Python never needs this, but the same mount serves both
-		// languages, so the option is always present rather than
-		// language-conditional.
+		// exec (not docker's noexec default): Go's build runs its compiled
+		// binary straight from $GOCACHE/$GOTMPDIR (/tmp). Python doesn't
+		// need it, but the same mount serves both languages.
 		"--tmpfs", "/tmp:rw,exec,size=" + tmpfsSize + ",mode=1777",
 		"-v", dir + ":/sandbox:ro",
 		"-w", "/sandbox",
@@ -362,13 +294,10 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 	cmd.Stderr = &stderr
 	runErr := cmd.Run()
 
-	// Best-effort cleanup, unconditionally: exec.CommandContext SIGKILLs
-	// the `docker run` CLI process on context expiry, but that does NOT
-	// reliably stop or remove the CONTAINER it launched -- the client and
-	// the container are independent from the daemon's point of view, and
-	// killing the former doesn't signal the latter. Using a fresh
-	// (never-canceled) context here is required: runCtx is already Done()
-	// by the time a timeout is what brought us here.
+	// Best-effort cleanup, unconditionally: killing the `docker run` CLI on
+	// context expiry does NOT reliably stop/remove the container it
+	// launched (client and container are independent to the daemon). A
+	// fresh context is required since runCtx may already be Done().
 	killCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	_ = exec.CommandContext(killCtx, "docker", "rm", "-f", name).Run()
 	cancel()
@@ -395,14 +324,11 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 // CODE's own wall-clock time, not one-time image setup).
 const imagePullTimeout = 5 * time.Minute
 
-// ensureImage makes sure image is present locally before a timed `docker
-// run` touches it. Without this, `docker run` auto-pulls a missing image
-// inline: the pull's own progress log lands directly in the container's
-// captured stdout/stderr (breaking the "captured output is exactly what
-// the code printed" contract), and the pull time is charged against
-// Limits.Timeout even though it has nothing to do with the code being
-// executed. "docker image inspect" is a fast local metadata check with no
-// network I/O, so the common case (image already cached) costs nothing.
+// ensureImage makes sure image is present before a timed `docker run`
+// touches it. Without this, an auto-pull's progress log would leak into
+// the container's captured stdout/stderr, and its time would count against
+// Limits.Timeout. "docker image inspect" is a fast local check, so the
+// common (cached) case costs nothing.
 func ensureImage(ctx context.Context, image string) error {
 	if err := exec.CommandContext(ctx, "docker", "image", "inspect", image).Run(); err == nil {
 		return nil
@@ -422,10 +348,8 @@ func ensureImage(ctx context.Context, image string) error {
 func randomHex(n int) string {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
-		// crypto/rand.Read practically never fails on any platform this
-		// runs on; falling back to a timestamp keeps names unique enough
-		// even in that vanishingly unlikely case, rather than panicking a
-		// whole chat turn over a naming collision risk.
+		// crypto/rand.Read practically never fails; a timestamp fallback
+		// keeps names unique enough rather than panicking over this.
 		return fmt.Sprintf("%x", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b)

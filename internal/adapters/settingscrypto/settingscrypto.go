@@ -1,9 +1,8 @@
-// Package settingscrypto encrypts the admin-configured embedding HTTP API
-// key before it's persisted to app_settings, decrypting it back only at
-// bootstrap.NewEmbedder. Unlike other secrets here it must stay usable as a
-// real Authorization header value, so it can't be hashed like a password --
-// encrypting at rest with a key that lives only in the env file (never the
-// DB) means DB-only access no longer yields the plaintext key.
+// Package settingscrypto encrypts the admin-configured embedding API key
+// before it's persisted to app_settings, decrypting it only at
+// bootstrap.NewEmbedder. It must stay usable as a real header value, so it
+// can't be hashed like a password -- the key lives only in the env file
+// (never the DB), so DB-only access alone can't recover the plaintext.
 package settingscrypto
 
 import (
@@ -18,21 +17,17 @@ import (
 	"strings"
 )
 
-// encPrefix marks a value Encrypt produced. Anything else -- including "",
-// and any value saved before this package existed, or by a deployment that
-// has never configured SETTINGS_ENCRYPTION_KEY -- is treated as
-// already-plaintext by Decrypt, so this stays backward compatible rather
-// than breaking on old data or an unconfigured key.
+// encPrefix marks a value Encrypt produced. Anything else (including a
+// pre-existing value, or an unconfigured key) is treated as already
+// plaintext by Decrypt, so old data never breaks.
 const encPrefix = "enc:v1:"
 
 // keyLen is 32 bytes: AES-256.
 const keyLen = 32
 
 // ParseKey decodes a hex-encoded 32-byte key, e.g. SETTINGS_ENCRYPTION_KEY
-// (generate one with `openssl rand -hex 32`). An empty hexKey returns a nil
-// key and no error -- encryption is opt-in, like CRAWL_INTERNAL_TOKEN
-// elsewhere. A non-empty hexKey that doesn't decode to 32 bytes is a real
-// error (almost certainly a typo), worth failing loudly on at startup.
+// (`openssl rand -hex 32`). Empty returns a nil key, no error -- encryption
+// is opt-in. A non-32-byte key is a real error, worth failing loudly on.
 func ParseKey(hexKey string) ([]byte, error) {
 	if hexKey == "" {
 		return nil, nil
@@ -47,11 +42,9 @@ func ParseKey(hexKey string) ([]byte, error) {
 	return key, nil
 }
 
-// Encrypt seals plaintext with key (AES-256-GCM, a random nonce prepended
-// to the ciphertext, the whole thing base64-encoded and prefixed with
-// encPrefix). A nil key (encryption not configured) or an empty plaintext
-// (nothing to protect) returns plaintext unchanged -- the non-breaking,
-// opt-in default this codebase's other defense-in-depth additions follow.
+// Encrypt seals plaintext with key (AES-256-GCM, random nonce prepended,
+// base64-encoded, prefixed with encPrefix). A nil key or empty plaintext
+// returns plaintext unchanged -- the non-breaking, opt-in default.
 func Encrypt(key []byte, plaintext string) (string, error) {
 	if key == nil || plaintext == "" {
 		return plaintext, nil
@@ -69,10 +62,9 @@ func Encrypt(key []byte, plaintext string) (string, error) {
 }
 
 // Decrypt reverses Encrypt. A value without encPrefix is returned unchanged
-// (predates this feature, or no key was ever configured -- all expected).
-// A value WITH the prefix but no usable key IS a real error: silently
-// returning ciphertext as the real API key would fail confusingly far from
-// this actual cause, so it's surfaced here instead.
+// (predates this feature, or no key configured). A value WITH the prefix
+// but no usable key is a real error, surfaced here rather than silently
+// returning ciphertext as the real API key.
 func Decrypt(key []byte, s string) (string, error) {
 	if !strings.HasPrefix(s, encPrefix) {
 		return s, nil

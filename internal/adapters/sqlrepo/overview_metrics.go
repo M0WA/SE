@@ -34,9 +34,9 @@ func (r *Repository) CrawlJobOutcomes(ctx context.Context, since time.Time) ([]d
 	return out, rows.Err()
 }
 
-// dayExpr extracts a "YYYY-MM-DD" date from column -- every timestamp
-// column here is RFC3339Nano text, so its first 10 characters already are
-// that date, and SUBSTR is portable across all three dialects.
+// dayExpr extracts "YYYY-MM-DD" from column -- every timestamp here is
+// RFC3339Nano text, so its first 10 chars are the date; SUBSTR is portable
+// across all three dialects.
 func dayExpr(column string) string {
 	return "SUBSTR(" + column + ", 1, 10)"
 }
@@ -91,9 +91,9 @@ func (r *Repository) DocumentsIndexedByDay(ctx context.Context, since time.Time)
 	return out, rows.Err()
 }
 
-// DailyFetchDuration reports each day's mean crawl_job_pages.duration_ms at
-// or after since. GROUP BY guarantees at least one row per returned day, so
-// AVG never scans a null-producing empty group here.
+// DailyFetchDuration reports each day's mean duration_ms at or after since.
+// GROUP BY guarantees a row per returned day, so AVG never hits an empty,
+// null-producing group.
 func (r *Repository) DailyFetchDuration(ctx context.Context, since time.Time) ([]domain.DailyAvgDuration, error) {
 	day := dayExpr("fetched_at")
 	query := r.ph(`SELECT `+day+` AS day, AVG(duration_ms) AS avg_ms FROM crawl_job_pages
@@ -117,20 +117,18 @@ func (r *Repository) DailyFetchDuration(ctx context.Context, since time.Time) ([
 	return out, rows.Err()
 }
 
-// formatPageRankBound renders one histogram bucket edge for its display
-// label -- scientific notation with 2 significant digits, since real
-// pagerank values (a probability distribution over every document) are
-// typically tiny fractions where a fixed-decimal format would just show
-// "0.00" for every bucket.
+// formatPageRankBound renders a histogram bucket edge for display --
+// scientific notation with 2 significant digits, since real pagerank
+// values are tiny fractions a fixed-decimal format would just show as "0.00".
 func formatPageRankBound(v float64) string {
 	return strconv.FormatFloat(v, 'e', 2, 64)
 }
 
 // PageRankHistogram buckets every document's pagerank into
-// domain.PageRankHistogramBuckets equal-width bins spanning the corpus's
-// own observed [min, max] range, alongside how many documents sit at or
-// below domain.PageRankOrphanThreshold and the corpus's total document
-// count. All zero for an empty corpus.
+// domain.PageRankHistogramBuckets equal-width bins over the corpus's
+// observed [min, max], plus how many sit at or below
+// domain.PageRankOrphanThreshold and the total document count. All zero
+// for an empty corpus.
 func (r *Repository) PageRankHistogram(ctx context.Context) ([]domain.PageRankBucket, int, int, error) {
 	var minV, maxV float64
 	var totalDocs int
@@ -147,9 +145,9 @@ func (r *Repository) PageRankHistogram(ctx context.Context) ([]domain.PageRankBu
 	const numBuckets = domain.PageRankHistogramBuckets
 	edges := make([]float64, numBuckets+1)
 	if maxV <= minV {
-		// Every document shares the same score (a single-document corpus,
-		// or PageRank never having run yet) -- one degenerate bucket
-		// covering that value rather than dividing a zero-width range.
+		// Every document shares the same score (single-document corpus, or
+		// PageRank never run) -- one degenerate bucket for that value, not
+		// a zero-width range.
 		for i := range edges {
 			edges[i] = minV
 		}
@@ -165,9 +163,9 @@ func (r *Repository) PageRankHistogram(ctx context.Context) ([]domain.PageRankBu
 	pos := 1
 	for i := 0; i < numBuckets; i++ {
 		lo, hi := edges[i], edges[i+1]
-		// The last bucket's upper bound is inclusive (<=) so the
-		// corpus-wide maximum itself lands somewhere, rather than being
-		// excluded by every bucket's otherwise half-open [lo, hi) range.
+		// The last bucket's upper bound is inclusive (<=) so the corpus
+		// max lands somewhere, not excluded by the otherwise half-open
+		// [lo, hi) range.
 		cmp := "<"
 		if i == numBuckets-1 {
 			cmp = "<="

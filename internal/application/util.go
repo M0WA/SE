@@ -9,8 +9,7 @@ import (
 )
 
 // mapKeys returns m's keys as a slice, in no particular order -- shared by
-// every call site in this package that only needs a map's key set as a
-// []string (e.g. to pass to a repository call taking a list of IDs/hosts).
+// call sites that just need a map's key set as a []string.
 func mapKeys[V any](m map[string]V) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -19,13 +18,11 @@ func mapKeys[V any](m map[string]V) []string {
 	return out
 }
 
-// loadJSONStatus reads a JSON-encoded status blob back from settings under
-// key -- shared by every background job's Load*Status function (pagerank,
-// embedding recompute, content dedup), which otherwise each hand-roll the
-// identical "nil settings / missing key / bad JSON -> zero value" shape. A
-// nil settings, store error, missing key, or bad value all just return the
-// zero value; "nothing to show yet" is never an error. what names the
-// status in the one log line a decode failure produces.
+// loadJSONStatus reads a JSON-encoded status blob from settings under key
+// -- shared by every background job's Load*Status function (pagerank,
+// embedding recompute, content dedup) instead of each hand-rolling the
+// same "missing/bad -> zero value" shape. what names the status in the
+// log line a decode failure produces.
 func loadJSONStatus[T any](ctx context.Context, settings ports.SettingsStore, key, what string) T {
 	var zero T
 	if settings == nil {

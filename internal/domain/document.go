@@ -14,10 +14,9 @@ type Document struct {
 	CrawledAt time.Time
 }
 
-// SearchResult is a single ranked result returned to the caller. BM25Score
-// and SemanticSim are the unblended components behind Score -- omitted
-// when a backend has no such breakdown. CorrectedTerms describes the
-// query, not this document, and is identical across every result of one search.
+// SearchResult is a single ranked result. BM25Score/SemanticSim are the
+// unblended components behind Score, omitted when a backend has no
+// breakdown. CorrectedTerms describes the query and repeats across results.
 type SearchResult struct {
 	URL            string          `json:"url"`
 	Title          string          `json:"title"`
@@ -28,10 +27,9 @@ type SearchResult struct {
 	CorrectedTerms []CorrectedTerm `json:"corrected_terms,omitempty"`
 }
 
-// IndexedDocument is a lightweight summary of a document held in the SQL
-// index, without its full text -- for admin/diagnostic listings. Version
-// counts up each time a re-crawl of the same URL changes its content;
-// CrawledAt is when this version was last (re-)confirmed.
+// IndexedDocument is a lightweight summary of a document in the SQL index,
+// without full text, for admin/diagnostic listings. Version counts up each
+// time a re-crawl changes content; CrawledAt is when last (re-)confirmed.
 type IndexedDocument struct {
 	ID            string
 	URL           string
@@ -43,10 +41,8 @@ type IndexedDocument struct {
 	InternalLinks int
 	ExternalLinks int
 	Backlinks     int
-	// PageRank is this document's current link-authority score
-	// (documents.pagerank), last written by application.RunPageRankJob --
-	// a neutral 1/N default before the first run ever computes it (see
-	// sqlrepo's backfillPageRank/SaveDocument), never a bare 0.
+	// PageRank is this document's link-authority score, last written by
+	// RunPageRankJob -- a neutral 1/N default before the first run, never 0.
 	PageRank float64
 }
 
@@ -74,29 +70,25 @@ type AgeBucket struct {
 }
 
 // VersionCount is how many documents currently sit at a given version
-// number -- version 1 was only ever crawled once; higher means it's been
-// re-crawled and changed that many times. Unaffected by
-// MaxDocumentVersions pruning -- the count keeps rising even once old
-// rows are pruned from document_versions.
+// number -- higher means more re-crawls changed it. Unaffected by
+// MaxDocumentVersions pruning; the count keeps rising even as old rows
+// are pruned.
 type VersionCount struct {
 	Version int
 	Count   int
 }
 
 // StoredVersionsCount is how many documents have exactly StoredVersions
-// rows actually retained (bounded by MaxDocumentVersions), distinct from
-// VersionCount: a document changed 20 times sits at version 20, but with
-// MaxDocumentVersions=3 only has 3 rows of history retained.
+// rows retained (bounded by MaxDocumentVersions), distinct from
+// VersionCount: a doc at version 20 may only have 3 history rows retained.
 type StoredVersionsCount struct {
 	StoredVersions int
 	DocCount       int
 }
 
 // DocumentsOverview is the aggregate data behind the admin Overview page's
-// summary panels: which domains hold the most pages, how recently the
-// index was last refreshed, how many distinct domains are indexed at all,
-// how documents are distributed across version numbers, and how many
-// versions of each document are actually retained in storage right now.
+// summary panels: top domains, index freshness, domain count, version
+// distribution, and how much history is actually retained.
 type DocumentsOverview struct {
 	TopDomains          []DomainSummary
 	AgeBuckets          []AgeBucket

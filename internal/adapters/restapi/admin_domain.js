@@ -19,9 +19,8 @@
   let allDocs = [];
   let domainFilterText = '';
 
-  // filterDocs mirrors the job-detail page's filterPages / crawl.html's
-  // filterJobs pattern: a case-insensitive regex matched against title and
-  // URL, with invalid patterns reported rather than thrown.
+  // filterDocs mirrors filterPages/filterJobs: case-insensitive regex against title and URL,
+  // invalid patterns reported not thrown.
   function filterDocs(docs, pattern) {
     return regexFilter(docs, pattern, filterErrorEl,
       (re, d) => re.test(d.title || '') || re.test(d.url || ''), 'Invalid pattern');
@@ -77,13 +76,9 @@
     }
   }
 
-  // pollDeleteProgress re-fetches this domain's document list every couple
-  // of seconds and re-renders from it -- the same view a manual reload
-  // would produce, just without one -- so the count and table visibly
-  // shrink as the background goroutine works through the queue. Stops once
-  // every page is gone, or once the remaining count holds steady for a
-  // few ticks in a row (some deletions failed and logged server-side
-  // rather than the batch stalling forever).
+  // pollDeleteProgress re-fetches and re-renders the document list every couple of seconds, so
+  // the count visibly shrinks as the background goroutine works. Stops once empty, or once the
+  // count holds steady for a few ticks (some deletions failed server-side).
   function pollDeleteProgress(initialCount) {
     stopDeleteProgressPolling();
     let lastRemaining = initialCount;
@@ -117,16 +112,11 @@
     }, 1500);
   }
 
-  // deleteAllInDomain fires one request and returns -- the server queues
-  // every page's removal in its own background goroutine (detached from
-  // this request, so it isn't tied to this tab staying open) and responds
-  // immediately, rather than this page driving N individual DELETE calls
-  // itself. That old approach was fetch() calls the browser would simply
-  // abort the moment the admin navigated away or closed the tab mid-batch,
-  // silently leaving the domain half-deleted with no way to know or
-  // resume -- leaving this page (or closing it) can never interrupt the
-  // removal now. Progress while staying on the page comes from
-  // pollDeleteProgress re-fetching the list, not from this response.
+  // deleteAllInDomain fires one request; the server queues every page's removal in a detached
+  // background goroutine and responds immediately, rather than this page driving N individual
+  // DELETE calls (the old approach, which the browser would abort mid-batch on navigate-away,
+  // silently leaving the domain half-deleted). Leaving this page can no longer interrupt the
+  // removal; progress comes from pollDeleteProgress re-fetching, not this response.
   async function deleteAllInDomain(count) {
     if (!window.confirm('Remove all ' + count + ' pages in this domain from the index?')) return;
     deleteAllBtn.disabled = true;
@@ -284,10 +274,8 @@
     renderTable(filterDocs(allDocs, domainFilterText));
   });
 
-  // Wired once here rather than inside renderDocs, which now re-runs on
-  // every delete-progress poll tick -- re-registering a listener there on
-  // each call would fire deleteAllInDomain once per accumulated listener
-  // per click.
+  // Wired once here, not inside renderDocs (which re-runs every poll tick) -- re-registering
+  // there would fire deleteAllInDomain once per accumulated listener per click.
   deleteAllBtn.addEventListener('click', () => deleteAllInDomain(allDocs.length));
 
   async function load() {

@@ -63,11 +63,8 @@ function flush() {
 }
 
 test.afterEach(async () => {
-  // applySettings kicks off loadEmbeddingSearchWeights as fire-and-forget
-  // (it doesn't block rendering the rest of the form on that fetch) --
-  // flush before tearing down so that pending promise settles against
-  // *this* test's own fetch mock/DOM, rather than rejecting asynchronously
-  // once the next test has already replaced both.
+  // applySettings kicks off loadEmbeddingSearchWeights fire-and-forget -- flush before teardown
+  // so that promise settles against this test's own mock/DOM, not the next test's.
   await flush();
   teardownDOM();
   delete global.fetch;
@@ -103,9 +100,8 @@ test('applySettings checks the hash-enabled box and populates the title weight',
   assert.equal(document.getElementById('embedding-title-weight').value, '0.3');
 });
 
-// applySettings shows 0 in the title-weight field, not a blank -- 0 here is
-// a real, meaningful "disabled" value (see the field's own doc comment in
-// admin.go) that must round-trip visibly.
+// applySettings shows 0 in the title-weight field, not blank -- 0 is a real, meaningful
+// "disabled" value (admin.go) that must round-trip visibly.
 test('applySettings shows a zero embedding title weight as "0", not blank', () => {
   const { applySettings } = loadFixture();
   const s = JSON.parse(JSON.stringify(FULL_SETTINGS));
@@ -209,11 +205,9 @@ test('loadEmbeddingSearchWeights defaults an unweighted enabled endpoint to 0', 
   assert.equal(document.getElementById(weightInputID('ionos')).value, '0');
 });
 
-// A weight naming a provider that's since been disabled or deleted is shown
-// anyway as a clearly-labeled, disabled (locked) input, so the form doesn't
-// silently drop it out from under an admin who hasn't saved yet -- the next
-// save still resolves this server-side via domain.ReconcileSearchWeights,
-// and collectEmbeddingSearchWeights never resubmits a disabled input.
+// A weight naming a since-disabled/deleted provider is shown anyway as a locked, labeled input,
+// so the form doesn't silently drop it -- the next save resolves it via
+// domain.ReconcileSearchWeights, and collectEmbeddingSearchWeights never resubmits it.
 test('loadEmbeddingSearchWeights keeps a no-longer-enabled provider visible as a locked, stale input', async () => {
   const { loadEmbeddingSearchWeights, collectEmbeddingSearchWeights, weightInputID } = loadFixture();
   await flush();

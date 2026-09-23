@@ -18,9 +18,8 @@ import (
 //go:embed index.html
 var indexHTML []byte
 
-// jsContentType is the Content-Type every embedded admin/public page script
-// is served with -- pulled out as a constant since serveStatic repeats it
-// once per script below.
+// jsContentType is the Content-Type every embedded page script is served
+// with, pulled out since serveStatic repeats it per script below.
 const jsContentType = "text/javascript; charset=utf-8"
 
 //go:embed crawl.html
@@ -114,9 +113,8 @@ var styleCSS []byte
 var adminJS []byte
 
 // Every other admin_*.js/*.js below is a page's own script, extracted from
-// what used to be an inline <script> block in its matching .html file --
-// admin.js above is the one shared-helpers file every admin page loads
-// alongside its own.
+// an inline <script> block in its .html file -- admin.js is the shared-helpers
+// file every admin page also loads.
 
 //go:embed admin_page.js
 var adminPageJS []byte
@@ -217,10 +215,9 @@ type Handler struct {
 	admin         ports.AdminRepository
 	pageRank      ports.PageRankRepository
 	embeddingRepo ports.EmbeddingRepository
-	// contentDedupRepo, when set (admin-server only, its own
-	// *sqlrepo.Repository -- same reasoning as pageRank/embeddingRepo
-	// above), backs the content-dedup admin page's status/recompute
-	// endpoints; without it, those endpoints report themselves unavailable.
+	// contentDedupRepo, when set (admin-server only), backs the
+	// content-dedup admin page's status/recompute endpoints; without it,
+	// those endpoints report unavailable.
 	contentDedupRepo ports.ContentDedupRepository
 	embedders        map[string]ports.EmbeddingProvider
 	settings         *domain.TuningSettings
@@ -229,60 +226,45 @@ type Handler struct {
 	settingsStore    ports.SettingsStore
 	scheduledCrawls  ports.ScheduledCrawlStore
 	// embeddingEndpoints backs the admin API's HTTP embedding endpoint CRUD
-	// (GET/POST/PATCH/DELETE /admin/api/embeddings/endpoints...) -- set on
-	// admin-server only, the same *sqlrepo.Repository ScheduledCrawls uses.
+	// -- set on admin-server only, same *sqlrepo.Repository as ScheduledCrawls.
 	embeddingEndpoints ports.EmbeddingEndpointStore
 	// chat backs the public POST /chat endpoint -- set on search-server
 	// only, nil (and 503-reporting) everywhere else.
 	chat *application.ChatService
-	// chatEndpoints backs the admin API's chat endpoint config CRUD
-	// (GET/PATCH /admin/api/chat-endpoint) -- set on admin-server only,
-	// the same *sqlrepo.Repository embeddingEndpoints/scheduledCrawls use.
+	// chatEndpoints backs the admin API's chat endpoint config CRUD -- set
+	// on admin-server only, same *sqlrepo.Repository as embeddingEndpoints.
 	chatEndpoints ports.ChatEndpointStore
-	// mcpServers backs the admin API's MCP server CRUD
-	// (GET/POST /admin/api/mcp-servers, GET/PATCH/DELETE
-	// /admin/api/mcp-servers/{id}) -- set on admin-server only, the same
-	// *sqlrepo.Repository chatEndpoints/embeddingEndpoints use.
+	// mcpServers backs the admin API's MCP server CRUD -- set on
+	// admin-server only, same *sqlrepo.Repository as chatEndpoints.
 	mcpServers ports.MCPServerStore
-	// mcpTools backs the admin API's "list tools" connectivity test
-	// (POST /admin/api/mcp-servers/test) -- set on admin-server only, the
-	// same mcpclient.Provider search-server's ChatService uses for real
-	// chat turns, just invoked here against a not-yet-saved candidate
-	// config instead.
+	// mcpTools backs the admin API's "list tools" connectivity test -- set
+	// on admin-server only, the same mcpclient.Provider ChatService uses,
+	// invoked here against a not-yet-saved candidate config.
 	mcpTools ports.MCPToolProvider
-	// agents backs the admin API's agent CRUD (GET/POST /admin/api/agents,
-	// GET/PATCH/DELETE /admin/api/agents/{id}) -- set on admin-server only,
-	// the same *sqlrepo.Repository chatEndpoints/mcpServers use.
+	// agents backs the admin API's agent CRUD -- set on admin-server only,
+	// same *sqlrepo.Repository as chatEndpoints/mcpServers.
 	agents ports.AgentStore
-	// users backs the admin API's regular-user-account CRUD (GET/POST
-	// /admin/api/users, PATCH/DELETE /admin/api/users/{id}) and
-	// handleLogin's DB-backed-account lookup on admin-server, PLUS (the
-	// same *sqlrepo.Repository) search-server's own self-service /account
-	// routes and handleChat's per-user custom-prompt lookup -- see
-	// account.go/chat.go's userCustomPromptFor. nil is valid (no
-	// regular-user accounts exist; login checks only the hardcoded admin,
-	// /account reports itself unavailable) for a Handler that never sets
-	// it, e.g. crawl-server.
-	// userMCPServers backs the self-service MCP server CRUD
-	// (/account/api/mcp-servers...) -- set on search-server only, the same
-	// *sqlrepo.Repository users uses. ChatService gets its own separate
-	// reference to the same store (wired directly in cmd/search's main, not
-	// through Handler) for merging a caller's own servers into a chat turn.
+	// users backs the admin API's user CRUD and handleLogin's DB-backed
+	// lookup on admin-server, plus search-server's /account routes and
+	// handleChat's per-user prompt lookup (see userCustomPromptFor). nil is
+	// valid (no user accounts; login checks only the admin) for a Handler
+	// that never sets it, e.g. crawl-server.
+	// userMCPServers backs the self-service MCP server CRUD -- set on
+	// search-server only, same *sqlrepo.Repository as users. ChatService
+	// holds its own separate reference (wired in cmd/search's main) for
+	// merging a caller's own servers into a chat turn.
 	userMCPServers ports.UserMCPServerStore
-	// files backs the self-service file upload/list/download/delete API
-	// (/account/api/files...) -- set on search-server only, the same
-	// *sqlrepo.Repository userMCPServers uses. fileTokens is always
-	// non-nil once New runs (unlike files, which is nil-safe/optional):
-	// minting a token costs nothing when files itself isn't configured,
-	// since requireConfigured on the /account/api/files handlers refuses
-	// the request before a token would ever be validated.
+	// files backs the self-service file API -- set on search-server only,
+	// same *sqlrepo.Repository as userMCPServers. fileTokens is always
+	// non-nil once New runs (unlike optional files): minting a token costs
+	// nothing when files isn't configured, since requireConfigured refuses
+	// the request first.
 	files      ports.FileStore
 	fileTokens *fileTokenStore
-	// chats backs the self-service pinned-chat CRUD (/account/api/chats...)
-	// -- set on search-server only, the same *sqlrepo.Repository files
-	// uses. Also consulted by handleUploadFile/fileAccessTokenFor to
-	// verify a client-supplied chat_id is actually one of the calling
-	// user's own pinned chats before trusting it.
+	// chats backs the self-service pinned-chat CRUD -- set on search-server
+	// only, same *sqlrepo.Repository as files. Also consulted by
+	// handleUploadFile/fileAccessTokenFor to verify a client-supplied
+	// chat_id before trusting it.
 	chats           ports.ChatStore
 	users           ports.UserStore
 	health          ports.HealthChecker
@@ -294,42 +276,32 @@ type Handler struct {
 	loginLimiter    *loginLimiter
 	// crawlInternalToken, when set, is the shared secret
 	// requireCrawlInternalToken checks RoutesCrawlInternal callers
-	// against -- see its doc comment. Meaningless on RoutesSearch/
-	// RoutesAdmin, which never use it.
+	// against. Meaningless on RoutesSearch/RoutesAdmin.
 	crawlInternalToken string
 	// settingsEncryptionKey, when set, is the key the embedding endpoint
-	// CRUD handlers encrypt each domain.EmbeddingHTTPEndpoint.APIKey with
-	// before persisting it -- see settingscrypto's package doc comment.
+	// CRUD handlers encrypt each APIKey with before persisting it.
 	settingsEncryptionKey []byte
-	// newEmbedder builds a throwaway ports.EmbeddingProvider from a given
-	// candidate endpoint config -- always bootstrap.NewHTTPEmbedder in
-	// production (see New), overridden by tests so testEmbeddingConnectivity
-	// never makes a real network call from the test suite.
+	// newEmbedder builds a throwaway ports.EmbeddingProvider from a
+	// candidate config -- bootstrap.NewHTTPEmbedder in production,
+	// overridden by tests so testEmbeddingConnectivity never calls the network.
 	newEmbedder func(domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider
-	// chatModelProber is the shared ports.ChatCompleter used to auto-detect
-	// a chat endpoint's own advertised max context length (see
-	// handleAdminChatEndpoint's PATCH branch) -- always
-	// bootstrap.NewHTTPChatCompleter() in production (see New), overridden
-	// by tests so that auto-detection never makes a real network call from
-	// the test suite. nil is valid (detection is skipped, same as any
-	// other best-effort failure) for a Handler that never sets it (e.g.
-	// crawl-server, which never serves chat-endpoint admin routes at all).
+	// chatModelProber auto-detects a chat endpoint's advertised max context
+	// length (see handleAdminChatEndpoint's PATCH branch) -- production
+	// uses bootstrap.NewHTTPChatCompleter(), tests override it to avoid a
+	// real call. nil is valid (detection skipped) for crawl-server, which
+	// never serves this route.
 	chatModelProber ports.ChatCompleter
 	// internalSearchAPIKey, when set, is an optional pre-shared key letting
-	// a trusted local caller (e.g. a SearXNG engine plugin querying this
-	// instance's own index as just another search engine) call /search
-	// without a browser session, via requireAuthAPIOrInternalKey -- see its
-	// doc comment. Empty by default, meaning the bypass does not exist at
-	// all: /search stays session-cookie-only, exactly as before this field
-	// existed.
+	// a trusted local caller (e.g. a SearXNG plugin) call /search without a
+	// browser session, via requireAuthAPIOrInternalKey. Empty by default,
+	// meaning the bypass doesn't exist: /search stays session-cookie-only.
 	internalSearchAPIKey string
 }
 
 // Config wires a Handler's dependencies. Crawler/CrawlJobs are used only
 // by crawl-server; Jobs only by admin-server. Most fields are optional:
 // without AdminUser/AdminPass, auth fails closed; without a given
-// repository/store, its admin endpoints report unavailable rather than
-// erroring. See each field's own comment for specifics.
+// repository/store, its endpoints report unavailable rather than erroring.
 type Config struct {
 	Search    ports.SearchService
 	Crawler   ports.CrawlerService
@@ -341,110 +313,87 @@ type Config struct {
 	// "force recalculation" button.
 	PageRank ports.PageRankRepository
 	// EmbeddingRepo, set on admin-server only, backs the Settings page's
-	// "recompute embeddings" button. Embedders (the same map
-	// bootstrap.NewEmbedders built at startup) is every enabled provider
-	// this recompute refreshes, not just whichever is active for search.
+	// "recompute embeddings" button. Embedders is every enabled provider
+	// this recompute refreshes, not just the one active for search.
 	EmbeddingRepo ports.EmbeddingRepository
 	Embedders     map[string]ports.EmbeddingProvider
 	// ContentDedupRepo, set on admin-server only, backs the content-dedup
 	// admin page's status display and "recompute now" button.
 	ContentDedupRepo ports.ContentDedupRepository
-	// NewEmbedder builds a throwaway ports.EmbeddingProvider from a given
-	// candidate endpoint config, used by the embedding endpoint CRUD
-	// handlers to test-probe a base URL/model/API key combination before
-	// it's saved (see testEmbeddingConnectivity). Defaults to
-	// bootstrap.NewHTTPEmbedder when nil -- tests override this to avoid a
-	// real network call.
+	// NewEmbedder builds a throwaway ports.EmbeddingProvider from a
+	// candidate config, used to test-probe a base URL/model/API key before
+	// saving (see testEmbeddingConnectivity). Defaults to
+	// bootstrap.NewHTTPEmbedder; tests override to avoid a real call.
 	NewEmbedder func(domain.EmbeddingHTTPEndpoint) ports.EmbeddingProvider
-	// ChatModelProber, when set, is used to auto-detect a chat endpoint's
-	// own advertised max context length when it's saved with
-	// MaxContextTokens left unset (see handleAdminChatEndpoint's PATCH
-	// branch) -- defaults to bootstrap.NewHTTPChatCompleter() when nil on
-	// admin-server; left nil (skipping auto-detection entirely, same as
-	// any other best-effort failure) on crawl-server, which never serves
-	// this route.
+	// ChatModelProber, when set, auto-detects a chat endpoint's max context
+	// length when saved with MaxContextTokens unset (see
+	// handleAdminChatEndpoint's PATCH branch) -- defaults to
+	// bootstrap.NewHTTPChatCompleter() on admin-server; left nil on
+	// crawl-server, which never serves this route.
 	ChatModelProber ports.ChatCompleter
 	Settings        *domain.TuningSettings
 	OpSettings      *domain.OperationalSettings
 	Overrides       *domain.RankingOverrides
 	SettingsStore   ports.SettingsStore
 	// ScheduledCrawls is set on admin-server only (backing the schedules
-	// admin API) -- crawl-server's own ticker talks to the same store
-	// directly, not through Handler.
+	// admin API) -- crawl-server's ticker talks to the same store directly.
 	ScheduledCrawls ports.ScheduledCrawlStore
 	// EmbeddingEndpoints is set on admin-server only, backing the HTTP
-	// embedding endpoint CRUD API -- the same *sqlrepo.Repository
-	// ScheduledCrawls uses.
+	// embedding endpoint CRUD API -- same *sqlrepo.Repository as ScheduledCrawls.
 	EmbeddingEndpoints ports.EmbeddingEndpointStore
 	// Chat is set on search-server only, backing the public POST /chat
 	// endpoint.
 	Chat *application.ChatService
 	// ChatEndpoints is set on admin-server only, backing the chat endpoint
-	// config CRUD API -- the same *sqlrepo.Repository EmbeddingEndpoints
-	// uses.
+	// config CRUD API -- same *sqlrepo.Repository as EmbeddingEndpoints.
 	ChatEndpoints ports.ChatEndpointStore
 	// MCPServers is set on admin-server only, backing the MCP server CRUD
-	// API -- the same *sqlrepo.Repository ChatEndpoints/EmbeddingEndpoints
-	// uses.
+	// API -- same *sqlrepo.Repository as ChatEndpoints/EmbeddingEndpoints.
 	MCPServers ports.MCPServerStore
 	// MCPTools is set on admin-server only, backing the "list tools"
-	// connectivity test (POST /admin/api/mcp-servers/test) -- the same
-	// mcpclient.Provider search-server's ChatService uses for real chat
-	// turns.
+	// connectivity test -- same mcpclient.Provider ChatService uses for
+	// real chat turns.
 	MCPTools ports.MCPToolProvider
 	// Agents is set on admin-server only, backing the agent CRUD API -- the
 	// same *sqlrepo.Repository ChatEndpoints/MCPServers uses.
 	Agents ports.AgentStore
-	// Users is set on admin-server (backing the regular-user-account CRUD
-	// API and handleLogin's DB-backed-account lookup) AND search-server
-	// (backing the self-service /account routes and handleChat's per-user
-	// custom-prompt lookup) -- the same *sqlrepo.Repository
-	// ChatEndpoints/MCPServers uses.
+	// Users is set on admin-server (user CRUD, handleLogin's DB-backed
+	// lookup) and search-server (/account routes, handleChat's per-user
+	// prompt lookup) -- same *sqlrepo.Repository as ChatEndpoints/MCPServers.
 	Users ports.UserStore
 	// UserMCPServers is set on search-server only, backing the self-service
-	// MCP server CRUD API (/account/api/mcp-servers...) -- the same
-	// *sqlrepo.Repository Users uses.
+	// MCP server CRUD API -- same *sqlrepo.Repository as Users.
 	UserMCPServers ports.UserMCPServerStore
-	// Files is set on search-server only, backing the self-service file
-	// upload/list/download/delete API (/account/api/files...) -- the same
-	// *sqlrepo.Repository UserMCPServers uses.
+	// Files is set on search-server only, backing the self-service file API
+	// -- same *sqlrepo.Repository as UserMCPServers.
 	Files ports.FileStore
-	// Chats is set on search-server only, backing the self-service pinned-
-	// chat CRUD API (/account/api/chats...) -- the same *sqlrepo.Repository
-	// Files uses.
+	// Chats is set on search-server only, backing the self-service
+	// pinned-chat CRUD API -- same *sqlrepo.Repository as Files.
 	Chats ports.ChatStore
 	// Health backs GET /healthz on every process; unset always reports
 	// healthy (no DB connection to check).
 	Health ports.HealthChecker
 	// Sessions, when set (every production process, via a shared
-	// "sessions" table), makes a login recognized by every process, not
-	// just the one that issued it.
+	// "sessions" table), makes a login recognized by every process.
 	Sessions ports.SessionStore
 	// OnCrawlComplete, set on crawl-server only, runs synchronously right
-	// after a crawl job finishes -- a caller wanting this to not delay the
-	// job's reported completion should spawn its own goroutine inside it.
+	// after a crawl finishes -- spawn your own goroutine inside it to avoid
+	// delaying the job's reported completion.
 	OnCrawlComplete func()
 	DBDriver        string
 	AdminUser       string
 	AdminPass       string
 	// CrawlInternalToken, when set, is the shared secret
-	// requireCrawlInternalToken enforces on RoutesCrawlInternal (checked
-	// against every caller's X-Internal-Token header) and
-	// internal/adapters/crawlclient.Client sends on every request --
-	// see requireCrawlInternalToken's doc comment for why this exists
-	// and why it's opt-in.
+	// requireCrawlInternalToken enforces on RoutesCrawlInternal, checked
+	// against X-Internal-Token; crawlclient.Client sends it on every request.
 	CrawlInternalToken string
 	// SettingsEncryptionKey, when set (see settingscrypto.ParseKey), is
-	// the key the embedding endpoint CRUD handlers encrypt each
-	// domain.EmbeddingHTTPEndpoint.APIKey with before persisting it.
-	// Meaningless on crawl-server/search-server, which never call those
-	// handlers.
+	// the key the embedding endpoint CRUD handlers encrypt each APIKey
+	// with before persisting it. Meaningless on crawl-server/search-server.
 	SettingsEncryptionKey []byte
 	// InternalSearchAPIKey, when set, lets a trusted local caller (e.g. a
-	// SearXNG engine plugin) call the public /search endpoint via the
-	// X-Internal-API-Key header instead of a session cookie -- see
-	// requireAuthAPIOrInternalKey's doc comment. Empty by default, meaning
-	// the bypass does not exist at all.
+	// SearXNG plugin) call /search via X-Internal-API-Key instead of a
+	// session cookie. Empty by default, meaning the bypass doesn't exist.
 	InternalSearchAPIKey string
 }
 
@@ -506,9 +455,9 @@ func New(cfg Config) *Handler {
 }
 
 // securityHeaders applies to every RoutesSearch/RoutesAdmin request -- a
-// defense-in-depth backstop alongside output escaping, not a substitute.
+// defense-in-depth backstop, not a substitute for output escaping.
 // script-src has no 'unsafe-inline' (all JS is external); style-src needs
-// it for inline style="" attributes plus Google Fonts' stylesheet link.
+// it for inline style="" attributes plus Google Fonts.
 var securityHeaders = map[string]string{
 	"Content-Security-Policy": "default-src 'self'; script-src 'self'; " +
 		"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
@@ -531,13 +480,11 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 
 // RoutesSearch serves the public-facing search site only (index page,
 // stylesheet, search API) -- the mux the internet-facing search-server
-// binary listens with. Index and search both require the same signed-in
-// session /admin and /login use; style.css and healthz stay open.
-// GET /agents lists every enabled agent for the chat page's own picker --
-// reachable by any signed-in session, unlike /admin/api/agents. /session,
-// /account, /account.js and /account/api back the self-service account
-// page a role=user session uses to change their password and set their
-// personal chat prompt -- see account.go.
+// binary listens with. Index and search require the same signed-in
+// session /admin and /login use; style.css and healthz stay open. GET
+// /agents is reachable by any signed-in session, unlike /admin/api/agents.
+// /session, /account, /account.js and /account/api back the self-service
+// account page -- see account.go.
 func (h *Handler) RoutesSearch() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.requireAuthPage(h.handleIndex))
@@ -562,8 +509,8 @@ func (h *Handler) RoutesSearch() http.Handler {
 	mux.HandleFunc("/account_files.js", h.handleAccountFilesJS)
 	// /account/api/files is deliberately NOT wrapped in
 	// requireRegularUserAuthAPI: cmd/mcp-files calls it with a bearer
-	// token, not a session cookie, so handleAccountFiles/handleAccountFile
-	// resolve and gate the caller themselves -- see fileAccessUserID.
+	// token, so handleAccountFiles/handleAccountFile gate it themselves --
+	// see fileAccessUserID.
 	mux.HandleFunc("/account/api/files", h.handleAccountFiles)
 	mux.HandleFunc("/account/api/files/{id}", h.handleAccountFile)
 	mux.HandleFunc("/account/api/chats", h.requireRegularUserAuthAPI(h.handleAccountChats))
@@ -574,8 +521,7 @@ func (h *Handler) RoutesSearch() http.Handler {
 }
 
 // RoutesAdmin serves login/session management plus every /admin and
-// /admin/api/* route -- the mux the admin-server binary listens with,
-// reachable only through a local nginx proxy, never directly.
+// /admin/api/* route -- reachable only through a local nginx proxy, never directly.
 func (h *Handler) RoutesAdmin() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/admin.js", h.handleAdminJS)
@@ -811,9 +757,8 @@ func (h *Handler) handleAdminCrawlJS(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveStatic answers a GET/HEAD request with a fixed, embedded payload --
-// the entirety of every static asset handler (HTML pages, style.css,
-// admin.js) except for how they're addressed and what content type/bytes
-// they serve.
+// every static asset handler (HTML pages, style.css, admin.js) differs
+// only in how it's addressed and what content type/bytes it serves.
 func serveStatic(w http.ResponseWriter, r *http.Request, contentType string, content []byte) {
 	if !requireGetOrHead(w, r) {
 		return
@@ -845,9 +790,8 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, searchResponse{Query: query, Results: results})
 }
 
-// parseSortParam reads the ?sort= query parameter, defaulting to
-// (and falling back to, for anything unrecognized) relevance ranking --
-// shared by the public /search and admin debug /admin/api/search endpoints.
+// parseSortParam reads ?sort=, defaulting/falling back to relevance
+// ranking -- shared by /search and /admin/api/search.
 func parseSortParam(r *http.Request) string {
 	if r.URL.Query().Get("sort") == ports.SortRecency {
 		return ports.SortRecency
@@ -856,10 +800,9 @@ func parseSortParam(r *http.Request) string {
 }
 
 // parseProviderWeightsParam reads ?semantic=, a comma-separated list of
-// "provider:weight" pairs (bare "provider" defaults to weight 1), e.g.
-// "semantic=hash:0.3,ionos:0.7", into a ProviderWeights override. Returns
-// nil (use the admin default) if absent; a malformed entry is skipped
-// individually rather than failing the whole request.
+// "provider:weight" pairs (bare "provider" defaults to weight 1), into a
+// ProviderWeights override. nil if absent; a malformed entry is skipped,
+// not a whole-request failure.
 func parseProviderWeightsParam(r *http.Request) map[string]float64 {
 	raw := r.URL.Query().Get("semantic")
 	if raw == "" {
@@ -894,8 +837,7 @@ type healthResponse struct {
 }
 
 // handleHealthz is a minimal, unauthenticated liveness endpoint (no
-// HealthChecker means always healthy; otherwise 503 on a failed DB ping),
-// registered identically on all three Routes* muxes.
+// HealthChecker means always healthy; otherwise 503 on a failed DB ping).
 func (h *Handler) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	if !requireGetOrHead(w, r) {
 		return

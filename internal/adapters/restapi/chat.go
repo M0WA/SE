@@ -10,9 +10,8 @@ import (
 	"searchengine/internal/ports"
 )
 
-// maxChatMessages/maxChatMessageContentLength bound a POST /chat request
-// body, so an unbounded or malicious client can't force an arbitrarily
-// large (or many, or huge) call out to the configured upstream chat model.
+// maxChatMessages/maxChatMessageContentLength bound a POST /chat body, so a
+// malicious client can't force an arbitrarily large call to the upstream model.
 const (
 	maxChatMessages             = 50
 	maxChatMessageContentLength = 4000
@@ -20,49 +19,34 @@ const (
 
 type chatRequest struct {
 	Messages []domain.ChatMessage `json:"messages"`
-	// WebSearch, when present, overrides the admin-configured default for
-	// this question only: it decides whether GatedByWebSearch MCP servers
-	// (e.g. a "web_search"/"web_fetch" tool) are active, not whether a
-	// search is performed directly -- omitted (nil) falls back to
-	// domain.ChatEndpoint.WebSearchEnabled, letting the chat UI's
-	// per-question toggle decide instead of a fixed global setting.
+	// WebSearch, when present, overrides the admin default for this
+	// question: it gates GatedByWebSearch MCP servers, not a direct search.
+	// Omitted (nil) falls back to domain.ChatEndpoint.WebSearchEnabled.
 	WebSearch *bool `json:"web_search,omitempty"`
 	// AgentID, when non-empty, overrides domain.ChatEndpoint.DefaultAgentID
-	// for this question only -- see application.ChatOptions.AgentID's doc
-	// comment. Empty (the default) means "use the endpoint's own default."
+	// for this question; empty means use the endpoint's own default.
 	AgentID string `json:"agent_id,omitempty"`
-	// ChatID, when non-empty, names the PersistedChat this turn belongs to
-	// (the active tab is pinned) -- see fileAccessTokenFor, which scopes
-	// this turn's file-access token to it so cmd/mcp-files' list_files/
-	// read_file/write_file only ever see this one chat's files. Ignored
-	// (treated as unscoped) unless it's actually one of this user's own
-	// pinned chats.
+	// ChatID, when non-empty, names the pinned PersistedChat this turn
+	// belongs to -- fileAccessTokenFor scopes the turn's file-access token
+	// to it. Ignored unless it's actually one of this user's own pinned chats.
 	ChatID string `json:"chat_id,omitempty"`
 }
 
 type chatResponse struct {
 	Answer string `json:"answer"`
-	// ContextTrimmed is true when one or more of the conversation's older
-	// messages were dropped server-side to fit the endpoint's configured
-	// token budget before this answer was generated -- omitted (so it reads
-	// as false) on the common case where nothing was trimmed.
+	// ContextTrimmed is true when older messages were dropped server-side
+	// to fit the token budget -- omitted (reads false) when nothing was trimmed.
 	ContextTrimmed bool `json:"context_trimmed,omitempty"`
 	// ToolResults carries one entry per tool call the model made this turn
-	// (see application.ChatResult.ToolResults) -- omitted entirely on the
-	// common case of no configured MCP servers or no tool call made.
+	// -- omitted when no MCP servers are configured or none was called.
 	ToolResults []toolCallResultResponse `json:"tool_results,omitempty"`
-	// TokenUsage is this turn's estimated context breakdown (see
-	// application.TokenUsage) -- always present, since every turn sends at
-	// least a history message, letting the chat UI show a token-usage
-	// diagram for every answer, not just ones with tool calls.
+	// TokenUsage is this turn's estimated context breakdown -- always
+	// present, so the chat UI can show it for every answer.
 	TokenUsage chatTokenUsageResponse `json:"token_usage"`
 }
 
-// chatTokenUsageResponse is the wire shape of application.TokenUsage -- kept
-// with identical field names/types/order so a plain type conversion
-// (chatTokenUsageResponse(result.TokenUsage), see handleChat) works; struct
-// tags don't affect convertibility, only field shape does, so this must stay
-// in lockstep with application.TokenUsage's own field list.
+// chatTokenUsageResponse mirrors application.TokenUsage's field
+// names/types/order exactly, so a plain type conversion works in handleChat.
 type chatTokenUsageResponse struct {
 	GlobalPromptTokens int `json:"global_prompt_tokens"`
 	UserPromptTokens   int `json:"user_prompt_tokens"`
@@ -80,26 +64,18 @@ type toolCallResultResponse struct {
 	Err       string `json:"err,omitempty"`
 }
 
-// toToolCallResultResponses' empty-input case naturally returns a
-// zero-length (non-nil) slice, which is fine: ToolResults' own
-// "omitempty" tag omits it from the JSON response either way, since
-// encoding/json's omitempty treats a zero-length slice as empty
-// regardless of nil-ness.
+// toToolCallResultResponses' empty-input case returns a zero-length
+// (non-nil) slice, which is fine: omitempty treats it as empty either way.
 func toToolCallResultResponses(results []domain.ToolCallResult) []toolCallResultResponse {
 	return mapSlice(results, func(r domain.ToolCallResult) toolCallResultResponse {
 		return toolCallResultResponse{ToolName: r.ToolName, Arguments: r.Arguments, Output: r.Output, Err: r.Err}
 	})
 }
 
-// userCustomPromptFor resolves the current session's per-user custom chat
-// prompt (domain.User.CustomPrompt), for injection into ChatOptions --
-// empty whenever there's nothing to inject: an admin session (no
-// associated domain.User row at all), h.users not configured, or a lookup
-// error/empty CustomPrompt. Every failure here is best-effort and silent by
-// design -- a per-user prompt is a nice-to-have personalization, never
-// something that should fail an otherwise-working chat turn. Uses the
-// single sessionRoleFor lookup already available rather than querying
-// h.sessions.ValidSession a second time.
+// userCustomPromptFor resolves the session's custom chat prompt for
+// injection into ChatOptions -- empty for an admin session, unconfigured
+// h.users, or any lookup error. Best-effort and silent by design: a
+// personalization nicety should never fail an otherwise-working turn.
 func (h *Handler) userCustomPromptFor(r *http.Request) string {
 	role, userID, ok := h.sessionRoleFor(r)
 	if !ok || role != domain.RoleUser || userID == "" || h.users == nil {
@@ -112,12 +88,9 @@ func (h *Handler) userCustomPromptFor(r *http.Request) string {
 	return u.CustomPrompt
 }
 
-// userAgentForMCPFetch reads the live-synced, admin-configured User-Agent
-// (the same *domain.OperationalSettings crawls already use) so the
-// first-party mcp-web server's "web_fetch" tool sends it instead of its own
-// hardcoded default -- see application.ChatOptions.UserAgent. Nil-safe:
-// h.opSettings is always wired by cmd/search's main, but this stays
-// defensive the same way every other h.<dependency> use in this file is.
+// userAgentForMCPFetch reads the admin-configured User-Agent (same
+// *domain.OperationalSettings crawls use) so mcp-web's "web_fetch" sends it
+// instead of its own default. Nil-safe, like every h.<dependency> here.
 func (h *Handler) userAgentForMCPFetch() string {
 	if h.opSettings == nil {
 		return ""
@@ -125,16 +98,11 @@ func (h *Handler) userAgentForMCPFetch() string {
 	return h.opSettings.Get().UserAgent
 }
 
-// fileAccessTokenFor mints a fresh, short-lived bearer token (see
-// fileTokenStore) for userID, letting cmd/mcp-files call back into
-// /account/api/files as this turn's own user -- empty whenever userID is
-// empty (an admin session, or h.files/h.fileTokens not configured), same
-// tolerance as userCustomPromptFor. chatID is baked into the token (see
-// fileTokenStore.issue) only once verified as one of userID's own pinned
-// chats (userOwnsChat) -- an unowned or nonexistent chatID is silently
-// dropped (an unscoped token, same as no chat pinned at all) rather than
-// trusted from the client as-is, since cmd/mcp-files' own file access
-// later trusts the token's chatID unconditionally.
+// fileAccessTokenFor mints a short-lived bearer token for userID, letting
+// cmd/mcp-files call back as this turn's user -- empty if userID is empty
+// or h.files/h.fileTokens aren't configured. chatID is baked in only once
+// verified via userOwnsChat; an unowned/nonexistent chatID is silently
+// dropped rather than trusted, since mcp-files trusts a token's chatID unconditionally.
 func (h *Handler) fileAccessTokenFor(ctx context.Context, userID, chatID string) string {
 	if userID == "" || h.fileTokens == nil {
 		return ""
@@ -145,11 +113,8 @@ func (h *Handler) fileAccessTokenFor(ctx context.Context, userID, chatID string)
 	return h.fileTokens.issue(userID, chatID)
 }
 
-// validateChatMessages checks that every client-supplied message obeys the
-// constraints documented on handleChat: a bounded message count, a bounded
-// per-message content length, only domain.ChatRoleUser/ChatRoleAssistant
-// roles, and no client-settable tool-call fields. Returns the same error
-// text handleChat previously reported inline for each violation.
+// validateChatMessages enforces handleChat's constraints: bounded message
+// count/length, only ChatRoleUser/ChatRoleAssistant, no tool-call fields.
 func validateChatMessages(messages []domain.ChatMessage) error {
 	if len(messages) == 0 {
 		return errors.New("messages must not be empty")
@@ -171,17 +136,11 @@ func validateChatMessages(messages []domain.ChatMessage) error {
 	return nil
 }
 
-// handleChat answers one chat turn against the search-server-only,
-// admin-configured chat endpoint (h.chat) -- see application.ChatService's
-// doc comment for the web-search-grounding behavior this delegates to. A
-// client-supplied message may only claim domain.ChatRoleUser or
-// domain.ChatRoleAssistant -- domain.ChatRoleSystem/ChatRoleTool are
-// reserved for server-injected context and tool results, never something a
-// client can inject to try to override the system prompt or fake a tool
-// call's outcome. A client-supplied message is also never allowed to carry
-// ToolCalls/ToolCallID -- those are populated only by ChatService itself
-// from a real model response/tool execution. See validateChatMessages for
-// the actual per-message checks.
+// handleChat answers one chat turn against the admin-configured chat
+// endpoint (h.chat). A client-supplied message may only claim
+// ChatRoleUser/ChatRoleAssistant -- RoleSystem/RoleTool are reserved for
+// server-injected context, never client-settable, and ToolCalls/ToolCallID
+// are populated only by ChatService itself. See validateChatMessages.
 func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
@@ -223,23 +182,17 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 }
 
 // publicAgentResponse is the minimal, browser-facing shape of a
-// domain.Agent -- deliberately narrower than admin.go's own agentResponse
-// (no mcp_server_ids/enabled): a signed-in chat user picking an agent only
-// needs enough to populate a dropdown, not the admin config surface.
+// domain.Agent -- narrower than admin.go's agentResponse (no
+// mcp_server_ids/enabled): just enough to populate a dropdown.
 type publicAgentResponse struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
 }
 
-// handleChatAgents lists every ENABLED agent for the chat page's own
-// picker (see index.js) -- unlike /admin/api/agents, this is reachable by
-// any signed-in session (role=admin or role=user), not just an admin one,
-// since picking an agent to talk to is a chat-page action, not an admin
-// one. Nil-safe like every other optional collaborator in this file: a
-// deployment with no agents wired (or none configured yet) just gets an
-// empty list, never an error -- there's nothing to fail over for a
-// supplementary picker.
+// handleChatAgents lists every enabled agent for the chat page's picker --
+// unlike /admin/api/agents, reachable by any signed-in session, not just
+// admin. Nil-safe: no agents configured just means an empty list, never an error.
 func (h *Handler) handleChatAgents(w http.ResponseWriter, r *http.Request) {
 	if !requireGetOrHead(w, r) {
 		return

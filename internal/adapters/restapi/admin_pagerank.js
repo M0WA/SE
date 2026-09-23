@@ -5,11 +5,9 @@
   const recomputeStatusEl = document.getElementById('recompute-status');
   const recomputeResultEl = document.getElementById('recompute-result');
 
-  // pollTimer keeps polling GET /admin/api/pagerank while a recompute is
-  // in progress -- triggered by ANY process (another admin's click, this
-  // browser's own click below, or cmd/crawl's periodic ticker/post-crawl
-  // trigger) -- so this page reflects the real cross-process state rather
-  // than only what this one browser tab happened to start.
+  // pollTimer keeps polling while a recompute is in progress, triggered by ANY process (another
+  // admin, this click, or cmd/crawl's ticker) -- so this page reflects real cross-process state,
+  // not just what this tab started.
   let pollTimer = null;
 
   function renderStats(s) {
@@ -51,11 +49,10 @@
     }
   }
 
-  // renderStats (via load(), below) owns recomputeBtn's loading state from
-  // here on -- it reflects recompute_in_progress from the server, which
-  // covers a recompute started by anything, not just this click -- so this
-  // handler only sets it eagerly for immediate feedback, and only clears it
-  // itself on a request-level error load() never gets a chance to correct.
+  // renderStats (via load()) owns recomputeBtn's loading state from here on, reflecting
+  // recompute_in_progress from the server (covers any trigger, not just this click) -- this
+  // handler only sets it eagerly for immediate feedback, clearing it itself only on an error
+  // load() never sees.
   recomputeBtn.addEventListener('click', async () => {
     setButtonLoading(recomputeBtn, true, 'Recomputing…');
     recomputeStatusEl.textContent = 'Recomputing…';

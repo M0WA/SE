@@ -9,10 +9,8 @@ import (
 	"searchengine/internal/ports"
 )
 
-// ContentDedupRunResult reports what a RunContentDedupJob call actually did
-// -- surfaced by the admin content-dedup page after a forced recompute,
-// where an admin explicitly wants to see the result of the run they just
-// triggered, not just whether it errored.
+// ContentDedupRunResult reports what a RunContentDedupJob call did --
+// surfaced by the admin content-dedup page after a forced recompute.
 type ContentDedupRunResult struct {
 	// GroupsFound is how many distinct groups of duplicate/near-duplicate
 	// documents were found and merged into one canonical document each.
@@ -21,10 +19,9 @@ type ContentDedupRunResult struct {
 	// documents removed across every group.
 	DocumentsMerged int
 	DurationMs      int64
-	// Merges reports each group's canonical document and its merged alias
-	// URLs, capped at maxReportedMerges -- only bounds what's reported
-	// here, not what's actually merged. The full listing is
-	// ports.AdminRepository.ListDocumentAliasGroups.
+	// Merges reports each group's canonical document and alias URLs,
+	// capped at maxReportedMerges -- bounds only what's reported, not
+	// what's merged (see ports.AdminRepository.ListDocumentAliasGroups).
 	Merges []MergeRecord
 }
 
@@ -42,28 +39,24 @@ type MergeRecord struct {
 // API's response body, not a limit on how many groups are actually merged.
 const maxReportedMerges = 200
 
-// simHashBandBits/simHashBandCount split each 64-bit SimHash64 fingerprint
-// into 4 non-overlapping 16-bit bands for LSH-style bucketing (see
-// groupBySimHash) -- two documents within a realistic Hamming distance are
-// guaranteed to share a band, so only band-colliding documents are ever
-// pairwise-compared, avoiding a full O(n^2) scan.
+// simHashBandBits/simHashBandCount split each 64-bit SimHash64 into 4
+// non-overlapping 16-bit bands for LSH bucketing (see groupBySimHash) --
+// documents within a realistic Hamming distance share a band, so only
+// band-colliding documents are pairwise-compared, avoiding O(n^2).
 const (
 	simHashBandBits  = 16
 	simHashBandCount = 4
 )
 
-// maxBandBucketSize caps how many documents within one band bucket are
-// ever pairwise-compared. A real near-duplicate corpus never gets close to
-// this in practice; a bucket that does hit it is logged and skipped rather
-// than compared at O(n^2) cost -- an accepted, documented simplification,
-// not a fully rigorous LSH scheme.
+// maxBandBucketSize caps how many documents in one band bucket are ever
+// pairwise-compared -- a bucket that hits it is logged and skipped rather
+// than compared at O(n^2) cost.
 const maxBandBucketSize = 2000
 
 // RunContentDedupJob scans every document's fingerprint, groups duplicates
 // per method ("exact": ContentHash match; "simhash": SimHash64 within
-// maxSimHashDistance), and merges each group via MergeDocuments. Called by
-// cmd/crawl's ticker, after each crawl completes, and on demand. Idempotent:
-// merged losers no longer exist as rows, so a later run never re-sees them.
+// maxSimHashDistance), and merges each group via MergeDocuments.
+// Idempotent: merged losers no longer exist as rows to re-see.
 func RunContentDedupJob(ctx context.Context, repo ports.ContentDedupRepository, method string, maxSimHashDistance int) (ContentDedupRunResult, error) {
 	start := time.Now()
 	fingerprints, err := repo.AllDocumentFingerprints(ctx)
@@ -112,15 +105,8 @@ func RunContentDedupJob(ctx context.Context, repo ports.ContentDedupRepository, 
 	return result, nil
 }
 
-// groupByExactHash groups fingerprints sharing an identical, non-empty
-// ContentHash -- O(n). A fingerprint with an empty ContentHash (a document
-// row saved before this feature existed, not yet caught up by the
-// migration backfill) is skipped rather than grouped with every other
-// empty-hash row.
 // groupsOfAtLeastTwo returns only byKey's groups with more than one member
-// -- a single fingerprint sharing its key with nothing else isn't a
-// duplicate. Shared by groupByExactHash (string keys) and groupBySimHash
-// (int union-find root keys) below.
+// -- a fingerprint sharing its key with nothing else isn't a duplicate.
 func groupsOfAtLeastTwo[K comparable](byKey map[K][]domain.DocumentFingerprint) [][]domain.DocumentFingerprint {
 	groups := make([][]domain.DocumentFingerprint, 0, len(byKey))
 	for _, g := range byKey {
@@ -131,6 +117,9 @@ func groupsOfAtLeastTwo[K comparable](byKey map[K][]domain.DocumentFingerprint) 
 	return groups
 }
 
+// groupByExactHash groups fingerprints sharing an identical, non-empty
+// ContentHash -- O(n). An empty ContentHash (a pre-migration row) is
+// skipped rather than grouped with every other empty-hash row.
 func groupByExactHash(fingerprints []domain.DocumentFingerprint) [][]domain.DocumentFingerprint {
 	byHash := make(map[string][]domain.DocumentFingerprint)
 	for _, f := range fingerprints {
@@ -144,8 +133,8 @@ func groupByExactHash(fingerprints []domain.DocumentFingerprint) [][]domain.Docu
 
 // groupBySimHash finds near-duplicate groups via 4-band LSH bucketing plus
 // union-find over pairs within maxSimHashDistance -- a document can join a
-// group via a chain of pairwise-close documents, not just direct distance
-// to every member; an accepted simplification for clustering, not a bug.
+// group via a chain of pairwise-close documents, not direct distance to
+// every member. Accepted simplification, not a bug.
 func groupBySimHash(fingerprints []domain.DocumentFingerprint, maxDistance int) [][]domain.DocumentFingerprint {
 	parent := make([]int, len(fingerprints))
 	for i := range parent {
@@ -215,10 +204,8 @@ func groupBySimHash(fingerprints []domain.DocumentFingerprint, maxDistance int) 
 }
 
 // chooseCanonical picks which document in a duplicate group survives:
-// shortest host wins. A www-vs-bare pair of the *same* domain is already
-// folded into one document before either is saved, so this really compares
-// genuinely different hosts (e.g. a mirror) with identical content. Ties
-// (equal length) fall back to whichever was crawled first.
+// shortest host wins (www-vs-bare is already folded before saving, so
+// this compares genuinely different hosts). Ties: crawled first wins.
 func chooseCanonical(group []domain.DocumentFingerprint) domain.DocumentFingerprint {
 	best := group[0]
 	for _, f := range group[1:] {
@@ -234,21 +221,17 @@ func chooseCanonical(group []domain.DocumentFingerprint) domain.DocumentFingerpr
 
 // RunContentDedupJobWithStatus wraps RunContentDedupJob, persisting a
 // domain.ContentDedupStatus so any process's admin page can show whether a
-// run (triggered by anything, anywhere) is in progress and what the last
-// one found. settings may be nil (bookkeeping then skipped). On error,
-// InProgress clears but the last successful run's fields are left as-is.
+// run is in progress and what the last one found. settings may be nil
+// (bookkeeping skipped). On error, InProgress clears but other fields are
+// left as-is.
 //
-// The status.InProgress bookkeeping above is display-only and, on its own,
-// race-prone (a plain read-then-write, not atomic) -- the actual mutual
-// exclusion is repo.TryAcquireContentDedupLock, a real conditional DB
-// UPDATE every process contends for. Returns
-// ports.ErrContentDedupAlreadyRunning, without touching status at all, if
-// this call loses that race -- production once had cmd/crawl's own
-// scheduler and the admin-server's "recompute now" button run this
-// concurrently, each merging from its own snapshot of
-// AllDocumentFingerprints, which left a document_aliases row pointing at a
-// canonical the other run's transaction had already deleted (see
-// ports.ContentDedupRepository's doc comment).
+// status.InProgress is display-only and race-prone on its own -- the real
+// mutual exclusion is repo.TryAcquireContentDedupLock, a conditional DB
+// UPDATE every process contends for. Loses that race: returns
+// ErrContentDedupAlreadyRunning untouched. This guards a real incident:
+// cmd/crawl's scheduler and the admin "recompute now" button once ran
+// concurrently, leaving a document_aliases row pointing at a canonical
+// the other run's transaction had already deleted.
 func RunContentDedupJobWithStatus(ctx context.Context, repo ports.ContentDedupRepository, settings ports.SettingsStore, method string, maxSimHashDistance int) (ContentDedupRunResult, error) {
 	acquired, err := repo.TryAcquireContentDedupLock(ctx)
 	if err != nil {

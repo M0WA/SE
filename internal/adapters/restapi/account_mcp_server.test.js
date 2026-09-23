@@ -8,9 +8,8 @@ const { teardownDOM, requireFresh } = require('./dom_helper.test_util');
 
 const SERVER_HTML = fs.readFileSync(path.join(__dirname, 'account_mcp_server.html'), 'utf8');
 
-// account_mcp_server.js reads its server id (or the literal "new") from
-// window.location.pathname at load time, same reasoning as
-// admin_mcp_server.test.js's own setupServerDOM.
+// Reads server id (or "new") from window.location.pathname at load time, same as
+// admin_mcp_server.test.js's setupServerDOM.
 function setupServerDOM(id) {
   const dom = new JSDOM(SERVER_HTML, { url: 'http://localhost/account/mcp-servers/' + encodeURIComponent(id) });
   global.window = dom.window;
@@ -36,10 +35,8 @@ function baseServer(overrides) {
   }, overrides);
 }
 
-// This page's own script intentionally does NOT load admin.js -- see
-// account_mcp_server.js's own comment -- so, unlike
-// admin_mcp_server.test.js's fixture, there's no admin.js global to assign
-// in first, and no admin-rail nav to assert on.
+// Doesn't load admin.js (see account_mcp_server.js) -- unlike admin_mcp_server.test.js's fixture,
+// no admin.js global or nav rail to assert on.
 function loadFixture(id, fetchImpl) {
   setupServerDOM(id || 'my_notes');
   global.fetch = fetchImpl || (async () => ({ ok: true, json: async () => baseServer() }));
