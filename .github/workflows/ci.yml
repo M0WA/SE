@@ -172,6 +172,11 @@ jobs:
     permissions:
       contents: read
     steps:
+      # Only for packaging/create-admin.sh below -- there is no ADMIN_USER/
+      # ADMIN_PASSWORD env-var admin any more, so seeding one for this smoke
+      # test means running that script against the same DB file, which
+      # needs it checked out (the .deb itself never ships it).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ matrix.artifact }}
@@ -179,13 +184,13 @@ jobs:
       - name: Install package
         run: |
           apt-get update
-          apt-get install -y curl
+          apt-get install -y curl apache2-utils sqlite3
           apt-get install -y ./pkg/*.deb
       - name: Smoke test
         run: |
           dpkg -s searchengine
           # The public search page now requires a signed-in session (the
-          # same admin account /admin uses) -- start admin-server alongside
+          # same account /admin uses) -- start admin-server alongside
           # search-server, sharing the same DB file, log in against it, and
           # reuse that session's cookie against search-server, the same way
           # a real deployment's shared "sessions" table lets one login work
@@ -193,9 +198,13 @@ jobs:
           DB_DRIVER=sqlite DB_DSN='file:/tmp/smoke.db?cache=shared' \
             timeout 5 /usr/bin/searchengine-search &
           DB_DRIVER=sqlite DB_DSN='file:/tmp/smoke.db?cache=shared' \
-            ADMIN_USER=smoke ADMIN_PASSWORD=smoke-password \
             timeout 5 /usr/bin/searchengine-admin &
           sleep 1
+          # No hardcoded admin any more -- seed one the same way a real
+          # deployment would, directly against the DB file both processes
+          # above already created the schema in.
+          DB_DRIVER=sqlite DB_DSN='file:/tmp/smoke.db?cache=shared' \
+            ./packaging/create-admin.sh smoke smoke-password
           curl -sf -c /tmp/smoke.jar -X POST -H 'Content-Type: application/json' \
             -d '{"username":"smoke","password":"smoke-password"}' \
             http://127.0.0.1:8081/login > /dev/null

@@ -53,7 +53,7 @@ Pure logic — every file imports only the Go standard library, with no SQL, HTT
 | `SQLRepository` | Broad relational-DB port: document save/versioning/embeddings, postings/corpus-stats/vocabulary lookups, alias resolution, ANN semantic search. | `sqlrepo` |
 | `PageRankRepository`, `ContentDedupRepository`, `EmbeddingRepository` | Narrow slices of `SQLRepository`, scoped to exactly what each background job needs. | `sqlrepo` |
 | `SessionStore` | Shared-DB login session tokens, each carrying a role (admin vs. regular user) and, for a regular user, which `User` it belongs to. | `sqlrepo` |
-| `UserStore` | CRUD for DB-backed regular-user accounts (distinct from the single hardcoded admin account) -- search-only access. Admin manages create/delete; each user self-serves their own password and personal chat prompt (`User.CustomPrompt`, injected into every turn) via search-server's `/account` page. | `sqlrepo` |
+| `UserStore` | CRUD for every DB-backed account -- there is no separate hardcoded admin account; `User.IsAdmin` is what additionally grants `/admin/*` access on top of the same self-service search/chat access every account gets. An admin manages create/delete/`IsAdmin`; each account self-serves its own password and personal chat prompt (`User.CustomPrompt`, injected into every turn) via search-server's `/account` page. | `sqlrepo` |
 | `HealthChecker` | Cheap DB liveness check backing `/healthz`. | `sqlrepo` |
 | `AdminRepository` | Read-mostly admin diagnostics port (stats, listings, time series, pool stats). | `sqlrepo` |
 | `SearchService` | Primary driving port for public search. | `internal/application` (hybrid search use case) |

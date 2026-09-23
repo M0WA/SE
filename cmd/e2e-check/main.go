@@ -927,7 +927,7 @@ func (c *client) checkToolFunctions(serverName string, gatedByWebSearch bool, to
 		called = &name
 		if tr.Err != "" {
 			if looksAuthRelated(tr.Err) {
-				return skip(fmt.Sprintf("tool %q errored in a way consistent with this admin session having no user context (%s), not necessarily a real bug -- see the file-based servers' own dedicated user-session checks for a fully authenticated functional test", tr.ToolName, tr.Err))
+				return skip(fmt.Sprintf("tool %q errored in a way consistent with this session lacking access this specific call needs (%s), not necessarily a real bug -- see the file-based servers' own dedicated user-session checks for a fully authenticated functional test", tr.ToolName, tr.Err))
 			}
 			return fmt.Errorf("tool %q returned an error: %s", tr.ToolName, tr.Err)
 		}

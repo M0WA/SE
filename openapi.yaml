@@ -44,10 +44,11 @@ tags:
     description: Session login/logout (shared, proxied to admin-server)
   - name: account
     description: >-
-      Self-service account management for a signed-in regular-user
-      (role=user) session -- password change and personal chat prompt
-      (search-server). Always 403 for the hardcoded admin account, which
-      has no underlying User row to act on.
+      Self-service account management for any signed-in session
+      (search-server) -- password change and personal chat prompt. Works
+      identically for role=admin and role=user: admin access is just an
+      is_admin flag on an ordinary User row, so an admin session always has
+      a real underlying User row to act on, same as any other account.
   - name: admin
     description: Admin diagnostics, tuning, and content management (admin-server)
   - name: crawl-internal
@@ -248,10 +249,6 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/AccountResponse" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "403":
-          description: The signed-in session is the hardcoded admin account, which has no User row to act on.
-          content:
-            text/plain: { schema: { type: string } }
         "503": { $ref: "#/components/responses/NotConfigured" }
     patch:
       tags: [account]
@@ -275,10 +272,6 @@ paths:
               schema: { $ref: "#/components/schemas/AccountResponse" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "403":
-          description: The signed-in session is the hardcoded admin account, which has no User row to act on.
-          content:
-            text/plain: { schema: { type: string } }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
   /account/api/mcp-servers:
@@ -301,10 +294,6 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/MCPServer" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "403":
-          description: The signed-in session is the hardcoded admin account, which has no User row to own MCP servers under.
-          content:
-            text/plain: { schema: { type: string } }
         "503": { $ref: "#/components/responses/NotConfigured" }
     post:
       tags: [account]
@@ -328,10 +317,6 @@ paths:
               schema: { $ref: "#/components/schemas/MCPServer" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "403":
-          description: The signed-in session is the hardcoded admin account, which has no User row to own MCP servers under.
-          content:
-            text/plain: { schema: { type: string } }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
   /account/api/mcp-servers/{id}:
@@ -524,10 +509,6 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/UploadedFile" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "403":
-          description: The signed-in session is the hardcoded admin account, which has no User row to own files under.
-          content:
-            text/plain: { schema: { type: string } }
         "503": { $ref: "#/components/responses/NotConfigured" }
     post:
       tags: [account]
@@ -564,10 +545,6 @@ paths:
               schema: { $ref: "#/components/schemas/UploadedFile" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "403":
-          description: The signed-in session is the hardcoded admin account, which has no User row to own files under.
-          content:
-            text/plain: { schema: { type: string } }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
   /account/api/files/{id}:
@@ -591,10 +568,6 @@ paths:
             application/octet-stream:
               schema: { type: string, format: binary }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "403":
-          description: The signed-in session is the hardcoded admin account, which has no User row to own files under.
-          content:
-            text/plain: { schema: { type: string } }
         "404": { $ref: "#/components/responses/NotFound" }
         "503": { $ref: "#/components/responses/NotConfigured" }
     delete:
@@ -612,10 +585,6 @@ paths:
             application/json:
               schema: { type: object, properties: { ok: { type: boolean } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "403":
-          description: The signed-in session is the hardcoded admin account, which has no User row to own files under.
-          content:
-            text/plain: { schema: { type: string } }
         "404": { $ref: "#/components/responses/NotFound" }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
@@ -1386,12 +1355,12 @@ paths:
   /admin/api/users:
     get:
       tags: [admin]
-      summary: List every regular-user account
+      summary: List every account
       description: >-
-        DB-backed regular-user accounts, entirely distinct from the single
-        hardcoded admin account (ADMIN_USER/ADMIN_PASSWORD env vars) --
-        see the User schema. Never includes a password or password hash in
-        the response, on this or any other endpoint here.
+        Every DB-backed account, admin and regular alike -- there is no
+        separate hardcoded admin account; see the User schema's is_admin
+        field. Never includes a password or password hash in the response,
+        on this or any other endpoint here.
       responses:
         "200":
           description: OK
@@ -1405,14 +1374,15 @@ paths:
         "503": { $ref: "#/components/responses/NotConfigured" }
     post:
       tags: [admin]
-      summary: Create a regular-user account
+      summary: Create an account
       description: >-
         The new account's id is minted server-side from username (see
         domain.NewUserID), deduped against every existing user id -- the
         response's id is the one to use for every subsequent PATCH/DELETE.
         password is hashed with bcrypt before storage and never echoed
-        back. username must not match the hardcoded admin's own username
-        (400) or an existing regular-user account's (409).
+        back. is_admin defaults to false; set it true to create another
+        admin account directly (any number may coexist). username must not
+        collide with an existing account's (409).
       requestBody:
         required: true
         content:
@@ -1452,13 +1422,15 @@ paths:
         "503": { $ref: "#/components/responses/NotConfigured" }
     patch:
       tags: [admin]
-      summary: Reset a regular-user account's password and/or edit their custom prompt
+      summary: Reset an account's password, admin flag, and/or custom prompt
       description: >-
-        Lets the admin change a user's password and/or personal
-        custom_prompt on their behalf (the same field they can edit via
-        /account/api) -- username is not editable once created. See
-        UpdateUserRequest's pointer-field semantics: omitted is unchanged,
-        an explicit empty string for custom_prompt clears it.
+        Lets an admin change another (or their own) account's password,
+        is_admin flag, and/or personal custom_prompt (the same field they
+        can edit via /account/api) -- username is not editable once
+        created. See UpdateUserRequest's pointer-field semantics: omitted
+        is unchanged, an explicit empty string for custom_prompt clears
+        it. Setting is_admin to false on the last remaining is_admin=true
+        account is rejected (400) rather than locking every admin route.
       parameters:
         - name: id
           in: path
@@ -1482,8 +1454,12 @@ paths:
         "503": { $ref: "#/components/responses/NotConfigured" }
     delete:
       tags: [admin]
-      summary: Delete a regular-user account
-      description: The account can no longer sign in once deleted; its session, if any, still expires on its own TTL.
+      summary: Delete an account
+      description: >-
+        The account can no longer sign in once deleted; its session, if
+        any, still expires on its own TTL. Deleting the last remaining
+        is_admin=true account is rejected (400) rather than locking every
+        admin route.
       parameters:
         - name: id
           in: path
@@ -1495,6 +1471,7 @@ paths:
           content:
             application/json:
               schema: { type: object, properties: { ok: { type: boolean } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -2659,11 +2636,12 @@ components:
         user_prompt_tokens:
           type: integer
           description: >-
-            Estimated size of the calling user's personal custom prompt (see
-            GET /account/api's custom_prompt), for a regular-user account
-            with one set (0 otherwise -- always 0 for the hardcoded admin
-            account). Injected as a leading system message, after the
-            global prompt and before any MCP server prompts.
+            Estimated size of the calling session's personal custom prompt
+            (see GET /account/api's custom_prompt), for any signed-in
+            account with one set -- admin included, since every account is
+            a real User row now (0 if unset, or no session). Injected as a
+            leading system message, after the global prompt and before any
+            MCP server prompts.
         agent_prompt_tokens:
           type: integer
           description: >-
@@ -3031,24 +3009,34 @@ components:
     User:
       type: object
       description: >-
-        A DB-backed regular-user account -- distinct from the single
-        hardcoded admin account (ADMIN_USER/ADMIN_PASSWORD), never a User
-        row. Its session role (admin vs. user), resolved from the
-        se_session cookie's own record and never client-settable, drives
-        every /admin/* route's 401/403: a User's session can use the
-        public search site but is refused (403) on every /admin/* route.
+        A DB-backed account -- the only kind there is; there is no separate
+        hardcoded admin account. Its session role (admin vs. user),
+        resolved from the se_session cookie's own record and never
+        client-settable, drives every /admin/* route's 401/403 and is
+        just this row's is_admin flag as of the moment it signed in: a
+        role=user session can use the public search site but is refused
+        (403) on every /admin/* route, while role=admin gets both that and
+        every self-service feature (see the account tag) an admin=false
+        account also gets -- admin access is additive, never a trade-off.
       properties:
         id:
           type: string
           description: Minted from username at creation (see domain.NewUserID) and never changed afterward.
         username: { type: string }
+        is_admin:
+          type: boolean
+          description: >-
+            Grants /admin/* access on top of every self-service feature
+            this account already has. Any number of accounts may have this
+            set; at least one must at all times (see PATCH/DELETE
+            /admin/api/users/{id}).
         custom_prompt:
           type: string
           description: >-
             Free text injected as this user's own leading system message
             on every chat turn they send (see POST /chat and
-            AccountResponse.custom_prompt) -- editable here by the admin
-            on the user's behalf, or by the user themselves via
+            AccountResponse.custom_prompt) -- editable here by an admin on
+            the account's behalf, or by the account itself via
             /account/api. Empty string when unset.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -3105,6 +3093,9 @@ components:
         password:
           type: string
           description: Plaintext, hashed with bcrypt before storage and never stored or returned as-is. 8-72 characters.
+        is_admin:
+          type: boolean
+          description: Optional, defaults to false. Same meaning as User.is_admin -- set true to create another admin account directly.
         custom_prompt:
           type: string
           description: Optional. Same meaning as User.custom_prompt -- may be set at creation time instead of left for a later PATCH.
@@ -3112,7 +3103,7 @@ components:
     UpdateUserRequest:
       type: object
       description: >-
-        Both fields are optional pointers, independently -- omitted means
+        All fields are optional pointers, independently -- omitted means
         "leave unchanged", which for custom_prompt is distinct from an
         explicit empty string (clears it back to empty). username is not
         editable through this endpoint.
@@ -3120,6 +3111,12 @@ components:
         password:
           type: string
           description: The account's new password (plaintext, hashed before storage). 8-72 characters. Omit to leave the current password unchanged.
+        is_admin:
+          type: boolean
+          description: >-
+            Same meaning as User.is_admin. Omit to leave unchanged; an
+            explicit false is rejected (400) if this is the last
+            remaining is_admin=true account.
         custom_prompt:
           type: string
           description: Same meaning as User.custom_prompt. Omit to leave unchanged; an explicit empty string clears it.
