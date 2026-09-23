@@ -265,22 +265,21 @@ func adminAuthedHandlerWithOverrides(t *testing.T, admin ports.AdminRepository, 
 	})
 }
 
-// adminAuthedHandlerFromConfig builds a Handler from cfg (forcing in the
-// test admin credentials) and logs in, for tests needing a Config field no
-// narrower helper exposes (e.g. NewEmbedder).
+// adminAuthedHandlerFromConfig builds a Handler from cfg and mints an
+// admin session via fakeAdminRoleSessionStore, for tests needing a Config
+// field no narrower helper exposes (e.g. NewEmbedder). This deliberately
+// does NOT do a real POST /login: cfg.Users is whatever the caller passed
+// (often nil, for a "not configured" test, or a fixture with exact
+// contents a CRUD test asserts against) and must reach the handler under
+// test untouched -- forcing in an extra admin row to make a real login
+// succeed would either fight a nil-Users test or pollute a fixture's
+// count. Real end-to-end admin login is covered separately (auth_test.go,
+// authedHandler in handler_test.go).
 func adminAuthedHandlerFromConfig(t *testing.T, cfg restapi.Config) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
-	cfg.AdminUser = testAdminUser
-	cfg.AdminPass = testAdminPass
+	cfg.Sessions = fakeAdminRoleSessionStore{}
 	h := restapi.New(cfg)
-	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
-	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("login failed: %d %s", rec.Code, rec.Body.String())
-	}
-	return h, rec.Result().Cookies()[0]
+	return h, &http.Cookie{Name: "se_session", Value: "admin-test-token"}
 }
 
 // adminAuthedHandlerWithOverviewDeps wires the three dependencies
@@ -290,7 +289,7 @@ func adminAuthedHandlerWithOverviewDeps(t *testing.T, admin ports.AdminRepositor
 	t.Helper()
 	h := restapi.New(restapi.Config{
 		Admin: admin, Jobs: jobs, ScheduledCrawls: scheduledCrawls, DBDriver: "pgx",
-		AdminUser: testAdminUser, AdminPass: testAdminPass,
+		Users: testAdminUsersStore(),
 	})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
@@ -303,7 +302,7 @@ func adminAuthedHandlerWithOverviewDeps(t *testing.T, admin ports.AdminRepositor
 }
 
 func TestHandleAdminPage_Unauthenticated_Redirects(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -313,7 +312,7 @@ func TestHandleAdminPage_Unauthenticated_Redirects(t *testing.T) {
 }
 
 func TestHandleAdminAPI_Unauthenticated_Returns401(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Users: testAdminUsersStore()})
 	for _, path := range []string{"/admin/api/stats", "/admin/api/vocabulary", "/admin/api/documents", "/admin/api/postings?term=x", "/admin/api/search?q=x", "/admin/api/settings", "/admin/api/overrides"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
@@ -1180,7 +1179,7 @@ func TestHandleAdminDomainPage_GetServesPage(t *testing.T) {
 }
 
 func TestHandleAdminDomainPage_Unauthenticated_Redirects(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodGet, "/admin/documents/example.com", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -1205,7 +1204,7 @@ func TestHandleAdminVocabularyTermPage_GetServesPage(t *testing.T) {
 }
 
 func TestHandleAdminVocabularyTermPage_Unauthenticated_Redirects(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodGet, "/admin/vocabulary/term?term=cats", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -1557,7 +1556,7 @@ func TestHandleAdminSearch_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHandleAdminSubpages_RequireAuth(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Users: testAdminUsersStore()})
 	for _, path := range []string{"/admin/documents", "/admin/crawl", "/admin/jobs", "/admin/settings", "/admin/search", "/admin/search/result"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
@@ -1610,7 +1609,7 @@ func TestHandleAdminDeleteDocument_NotFound(t *testing.T) {
 }
 
 func TestHandleAdminDeleteDocument_Unauthenticated(t *testing.T) {
-	h := restapi.New(restapi.Config{Admin: &fakeAdminRepo{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Admin: &fakeAdminRepo{}, Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodDelete, "/admin/api/documents/doc-3", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -1810,7 +1809,7 @@ func TestHandleAdminDeleteDomainDocuments_EmptyDomain(t *testing.T) {
 }
 
 func TestHandleAdminDeleteDomainDocuments_Unauthenticated(t *testing.T) {
-	h := restapi.New(restapi.Config{Admin: &fakeAdminRepo{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Admin: &fakeAdminRepo{}, Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodDelete, "/admin/api/documents?domain=example.com", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -3737,7 +3736,7 @@ func adminAuthedHandlerWithSettingsStore(t *testing.T, settings *domain.TuningSe
 	h := restapi.New(restapi.Config{
 		Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{},
 		Settings: settings, OpSettings: opSettings, Overrides: overrides, SettingsStore: store,
-		DBDriver: "sqlite", AdminUser: testAdminUser, AdminPass: testAdminPass,
+		DBDriver: "sqlite", Users: testAdminUsersStore(),
 		NewEmbedder: stubNewEmbedder(nil),
 	})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
@@ -3951,7 +3950,7 @@ func adminAuthedHandlerWithPageRank(t *testing.T, admin ports.AdminRepository, p
 	t.Helper()
 	h := restapi.New(restapi.Config{
 		Admin: admin, PageRank: pageRank, Settings: settings, OpSettings: opSettings, DBDriver: "pgx",
-		AdminUser: testAdminUser, AdminPass: testAdminPass,
+		Users: testAdminUsersStore(),
 	})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
@@ -3978,7 +3977,7 @@ func TestHandleAdminPageRankPage_GetServesPage(t *testing.T) {
 }
 
 func TestHandleAdminPageRankPage_Unauthenticated_Redirects(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodGet, "/admin/pagerank", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -4002,7 +4001,7 @@ func TestHandleAdminEmbeddingsPage_GetServesPage(t *testing.T) {
 }
 
 func TestHandleAdminEmbeddingsPage_Unauthenticated_Redirects(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodGet, "/admin/embeddings", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -4191,7 +4190,7 @@ func adminAuthedHandlerWithPageRankAndSettingsStore(t *testing.T, pageRank ports
 	t.Helper()
 	h := restapi.New(restapi.Config{
 		Admin: &fakeAdminRepo{}, PageRank: pageRank, SettingsStore: store,
-		DBDriver: "pgx", AdminUser: testAdminUser, AdminPass: testAdminPass,
+		DBDriver: "pgx", Users: testAdminUsersStore(),
 	})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
@@ -4331,7 +4330,7 @@ func TestHandleAdminDatabasePage_GetServesPage(t *testing.T) {
 }
 
 func TestHandleAdminDatabasePage_Unauthenticated_Redirects(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodGet, "/admin/database", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -4567,7 +4566,7 @@ func adminAuthedHandlerWithEmbedding(t *testing.T, embeddingRepo ports.Embedding
 		Admin: &fakeAdminRepo{}, EmbeddingRepo: embeddingRepo,
 		Embedders:     map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder},
 		SettingsStore: settingsStore,
-		DBDriver:      "pgx", AdminUser: testAdminUser, AdminPass: testAdminPass,
+		DBDriver:      "pgx", Users: testAdminUsersStore(),
 	})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
@@ -4628,7 +4627,7 @@ func TestHandleAdminEmbeddingsRecomputeStatus_NoRunYetReportsZeroValues(t *testi
 	h := restapi.New(restapi.Config{
 		Admin: adminRepo, EmbeddingRepo: repo,
 		Embedders: map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: fakeEmbeddingProvider{}},
-		DBDriver:  "pgx", AdminUser: testAdminUser, AdminPass: testAdminPass,
+		DBDriver:  "pgx", Users: testAdminUsersStore(),
 	})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	loginReq := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
@@ -4861,7 +4860,7 @@ func adminAuthedHandlerWithContentDedup(t *testing.T, repo ports.ContentDedupRep
 	h := restapi.New(restapi.Config{
 		Admin: &fakeAdminRepo{}, ContentDedupRepo: repo,
 		OpSettings: opSettings, SettingsStore: settingsStore,
-		DBDriver: "pgx", AdminUser: testAdminUser, AdminPass: testAdminPass,
+		DBDriver: "pgx", Users: testAdminUsersStore(),
 	})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))

@@ -106,7 +106,7 @@ func adminAuthedHandlerWithSchedules(t *testing.T, schedules ports.ScheduledCraw
 	t.Helper()
 	h := restapi.New(restapi.Config{
 		ScheduledCrawls: schedules, DBDriver: "pgx",
-		AdminUser: testAdminUser, AdminPass: testAdminPass,
+		Users: testAdminUsersStore(),
 	})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
@@ -171,7 +171,7 @@ func TestHandleAdminSchedules_NotConfigured(t *testing.T) {
 }
 
 func TestHandleAdminSchedules_Unauthenticated(t *testing.T) {
-	h := restapi.New(restapi.Config{ScheduledCrawls: &fakeScheduledCrawlStore{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{ScheduledCrawls: &fakeScheduledCrawlStore{}, Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/schedules", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -1020,7 +1020,7 @@ func TestHandleAdminSchedulePage_GetServesPage(t *testing.T) {
 }
 
 func TestHandleAdminSchedulePage_Unauthenticated_Redirects(t *testing.T) {
-	h := restapi.New(restapi.Config{ScheduledCrawls: &fakeScheduledCrawlStore{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{ScheduledCrawls: &fakeScheduledCrawlStore{}, Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodGet, "/admin/schedule/sched-1", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)

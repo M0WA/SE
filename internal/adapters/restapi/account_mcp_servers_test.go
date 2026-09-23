@@ -17,7 +17,6 @@ import (
 func accountMCPServersAuthedHandler(t *testing.T, userStore *fakeUserStore, mcpStore *fakeUserMCPServerStore, u domain.User) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
 	h := restapi.New(restapi.Config{
-		AdminUser: testAdminUser, AdminPass: testAdminPass,
 		Users: userStore, UserMCPServers: mcpStore,
 	})
 	body, _ := json.Marshal(map[string]string{"username": u.Username, "password": testUserPassword})
@@ -70,12 +69,12 @@ func TestHandleAccountMCPServers_Unauthenticated(t *testing.T) {
 	}
 }
 
-// TestHandleAccountMCPServers_AdminRoleForbidden proves a role=admin
-// session gets requireRegularUserAuthAPI's 403, same as the rest of /account/api.
-func TestHandleAccountMCPServers_AdminRoleForbidden(t *testing.T) {
+// TestHandleAccountMCPServers_AdminRoleAllowed proves an admin session (a
+// real User row with IsAdmin=true) can use self-service personal MCP
+// servers exactly like any other account -- same as the rest of /account/api.
+func TestHandleAccountMCPServers_AdminRoleAllowed(t *testing.T) {
 	h := restapi.New(restapi.Config{
-		AdminUser: testAdminUser, AdminPass: testAdminPass,
-		Users: &fakeUserStore{}, UserMCPServers: &fakeUserMCPServerStore{},
+		Users: testAdminUsersStore(), UserMCPServers: &fakeUserMCPServerStore{},
 	})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
@@ -90,8 +89,8 @@ func TestHandleAccountMCPServers_AdminRoleForbidden(t *testing.T) {
 	listReq.AddCookie(cookie)
 	listRec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(listRec, listReq)
-	if listRec.Code != http.StatusForbidden {
-		t.Errorf("expected 403 for an admin session, got %d", listRec.Code)
+	if listRec.Code != http.StatusOK {
+		t.Errorf("expected 200 for an admin session, got %d", listRec.Code)
 	}
 }
 
@@ -102,7 +101,7 @@ func TestHandleAccountMCPServers_AdminRoleForbidden(t *testing.T) {
 // only way to get a genuinely nil interface.
 func TestHandleAccountMCPServers_NotConfigured(t *testing.T) {
 	userStore := &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}}
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass, Users: userStore})
+	h := restapi.New(restapi.Config{Users: userStore})
 	loginBody, _ := json.Marshal(map[string]string{"username": "alice", "password": testUserPassword})
 	loginReq := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(loginBody))
 	loginRec := httptest.NewRecorder()
@@ -297,7 +296,7 @@ func TestHandleAccountUpdateMCPServer_StoreError(t *testing.T) {
 
 func TestHandleAccountDeleteMCPServer_NotConfigured(t *testing.T) {
 	userStore := &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}}
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass, Users: userStore})
+	h := restapi.New(restapi.Config{Users: userStore})
 	loginBody, _ := json.Marshal(map[string]string{"username": "alice", "password": testUserPassword})
 	loginReq := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(loginBody))
 	loginRec := httptest.NewRecorder()
@@ -362,7 +361,7 @@ func TestHandleAccountGetMCPServer_Success(t *testing.T) {
 
 func TestHandleAccountGetMCPServer_NotConfigured(t *testing.T) {
 	userStore := &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}}
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass, Users: userStore})
+	h := restapi.New(restapi.Config{Users: userStore})
 	loginBody, _ := json.Marshal(map[string]string{"username": "alice", "password": testUserPassword})
 	loginReq := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(loginBody))
 	loginRec := httptest.NewRecorder()
@@ -437,7 +436,7 @@ func TestHandleAccountUpdateMCPServer_ReplacesEditableFields(t *testing.T) {
 
 func TestHandleAccountUpdateMCPServer_NotConfigured(t *testing.T) {
 	userStore := &fakeUserStore{users: []domain.User{newTestUser("user1", "alice")}}
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass, Users: userStore})
+	h := restapi.New(restapi.Config{Users: userStore})
 	loginBody, _ := json.Marshal(map[string]string{"username": "alice", "password": testUserPassword})
 	loginReq := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(loginBody))
 	loginRec := httptest.NewRecorder()

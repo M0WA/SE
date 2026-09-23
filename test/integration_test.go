@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"searchengine/internal/adapters/crawlclient"
 	"searchengine/internal/adapters/hashembed"
 	"searchengine/internal/adapters/htmlparser"
@@ -93,13 +95,29 @@ func TestEndToEnd_CrawlThenSearch(t *testing.T) {
 	vocabulary := domain.NewVocabularyCache(nil)
 	searchSvc := application.NewHybridAsSearchService(repo, embedders, settings, opSettings, overrides, corpusStats, vocabulary)
 
+	// There is no separate hardcoded admin account any more -- login is
+	// entirely DB-backed, so the admin session this test drives through
+	// below needs a real users row, IsAdmin=true, seeded directly against
+	// the same repo the handler below is wired to.
+	adminPasswordHash, err := bcrypt.GenerateFromPassword([]byte("test-password"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("hashing admin password: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := repo.CreateUser(ctx, domain.User{
+		ID: "admin1", Username: "admin", PasswordHash: string(adminPasswordHash),
+		IsAdmin: true, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seeding admin user: %v", err)
+	}
+
 	// search-server and admin-server, standing in for the two separate
 	// production processes -- admin-server reaches crawl-server the same
 	// way it would in production: over HTTP, via crawlclient.
 	handler := restapi.New(restapi.Config{
 		Search: searchSvc, OpSettings: opSettings, Jobs: crawlclient.New(crawlServer.URL, ""),
 		ScheduledCrawls: repo,
-		AdminUser:       "admin", AdminPass: "test-password",
+		Users:           repo,
 	})
 	searchAPI := httptest.NewServer(handler.RoutesSearch())
 	defer searchAPI.Close()
