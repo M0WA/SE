@@ -214,6 +214,7 @@ func (r *Repository) backfillVectorColumn(ctx context.Context, provider string, 
 	}
 	updateSQL := r.ph(`UPDATE documents SET `+strings.Join(setClauses, ", ")+` WHERE id = %s`, positions...)
 
+	wantDims := bounds[shards]
 	for _, ie := range pending {
 		vec, err := DecodeEmbedding(ie.embBlob)
 		if err != nil {
@@ -221,6 +222,19 @@ func (r *Repository) backfillVectorColumn(ctx context.Context, provider string, 
 		}
 		if len(vec) == 0 {
 			continue // nothing meaningful to backfill for an empty embedding
+		}
+		if len(vec) != wantDims {
+			// A real, expected transitional state, not a bug: this row's
+			// stored document_embeddings blob predates a model/dimension
+			// change (see RunEmbeddingRecomputeJob) and hasn't been
+			// recomputed to the new provider's dims yet -- slicing it by
+			// the NEW bounds would either panic (shorter than expected) or
+			// silently drop data (longer). Leave its pgvector column(s)
+			// NULL for now; saveDocumentEmbeddings backfills it correctly
+			// once the recompute actually reaches this document and
+			// rewrites document_embeddings with a real wantDims-length
+			// vector.
+			continue
 		}
 		args := make([]interface{}, 0, shards+1)
 		for shard := 0; shard < shards; shard++ {
