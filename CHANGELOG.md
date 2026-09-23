@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.78 - 2026-09-23
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* fix: retry the generic MCP functionality check once before failing by @M0WA in https://github.com/M0WA/SE/pull/304
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.77...v4.13.78
+
+
 ## v4.13.77 - 2026-09-23
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
