@@ -136,6 +136,11 @@ type PageRankRepository interface {
 	// UpdatePageRanks batch-writes each given ID's fresh score. A document
 	// absent from scores is left untouched, not zeroed.
 	UpdatePageRanks(ctx context.Context, scores map[string]float64) error
+	// ResolvePendingLinks re-resolves a bounded batch of links whose target
+	// wasn't crawled yet when first saved, so LinkGraph's plain
+	// links(to_id) scan can pick up a target that's since been indexed.
+	// Best-effort from RunPageRankJob's side -- see its own call site.
+	ResolvePendingLinks(ctx context.Context) (int, error)
 }
 
 // ErrContentDedupAlreadyRunning is returned when

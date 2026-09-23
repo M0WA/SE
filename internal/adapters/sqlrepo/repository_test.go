@@ -1820,6 +1820,11 @@ func TestRepository_MethodsErrorOnClosedConnection(t *testing.T) {
 			t.Error("expected an error")
 		}
 	})
+	t.Run("ResolvePendingLinks", func(t *testing.T) {
+		if _, err := closedRepo(t).ResolvePendingLinks(ctx); err == nil {
+			t.Error("expected an error")
+		}
+	})
 	t.Run("UpdatePageRanks", func(t *testing.T) {
 		if err := closedRepo(t).UpdatePageRanks(ctx, map[string]float64{"doc-1": 0.5}); err == nil {
 			t.Error("expected an error")
@@ -3414,9 +3419,13 @@ func TestSaveDocument_ResavingChangedContentPreservesPageRank(t *testing.T) {
 }
 
 // TestRepository_LinkGraph verifies LinkGraph builds a doc-ID adjacency map
-// by joining links.to_url against documents.url -- a link whose target was
-// never crawled/indexed (no matching document row) is simply omitted,
-// since it has no document ID to report.
+// from links.to_id -- a link whose target was never crawled/indexed (no
+// matching document row) is simply omitted, since it has no document ID
+// to report. doc-a/doc-b are saved (and so insertLinksBatch first tries
+// to resolve their link) BEFORE doc-c exists, so to_id can't resolve at
+// insert time -- ResolvePendingLinks (called here the same way
+// RunPageRankJob calls it, right before LinkGraph) is what picks it up
+// once doc-c is later saved.
 func TestRepository_LinkGraph(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
@@ -3431,6 +3440,9 @@ func TestRepository_LinkGraph(t *testing.T) {
 		if err := repo.SaveDocument(ctx, d, map[string][]float32{domain.EmbeddingProviderHash: []float32{1}}, 100, 2); err != nil {
 			t.Fatalf("unexpected error saving %s: %v", d.ID, err)
 		}
+	}
+	if _, err := repo.ResolvePendingLinks(ctx); err != nil {
+		t.Fatalf("unexpected error resolving pending links: %v", err)
 	}
 
 	graph, err := repo.LinkGraph(ctx)
@@ -3452,7 +3464,9 @@ func TestRepository_LinkGraph(t *testing.T) {
 // URL that's since become an alias (rather than its own indexed document)
 // still contributes to the alias's canonical document's inbound link
 // count -- otherwise a merge would silently erase that PageRank
-// contribution the moment MergeDocuments runs.
+// contribution the moment MergeDocuments runs. The alias is recorded after
+// doc-a is saved, so to_id can't resolve at insert time either -- same as
+// TestRepository_LinkGraph, ResolvePendingLinks is what picks it up.
 func TestRepository_LinkGraph_ResolvesLinksThroughAliases(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
@@ -3469,6 +3483,9 @@ func TestRepository_LinkGraph_ResolvesLinksThroughAliases(t *testing.T) {
 	if err := repo.RecordDocumentAlias(ctx, "https://merged-away.example/", "doc-canonical", domain.DocumentAliasReasonContentExact); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if _, err := repo.ResolvePendingLinks(ctx); err != nil {
+		t.Fatalf("unexpected error resolving pending links: %v", err)
+	}
 
 	graph, err := repo.LinkGraph(ctx)
 	if err != nil {
@@ -3476,6 +3493,39 @@ func TestRepository_LinkGraph_ResolvesLinksThroughAliases(t *testing.T) {
 	}
 	if len(graph["doc-a"]) != 1 || graph["doc-a"][0] != "doc-canonical" {
 		t.Errorf("expected doc-a's link to the aliased URL resolved to doc-canonical, got %v", graph["doc-a"])
+	}
+}
+
+// TestRepository_LinkGraph_FiltersSelfLoopsThroughAliasResolution proves a
+// link between two DIFFERENT URLs can still resolve to a self-loop -- e.g.
+// an alternate URL of the same page that's since become an alias of doc-a
+// itself -- and LinkGraph filters that resolved self-loop rather than
+// reporting a document linking to itself. SaveDocument's own self-link
+// filter only catches an exact doc.URL match at insert time; this one only
+// becomes a self-loop once ResolvePendingLinks resolves the alias later,
+// so it's LinkGraph's own defensive filter (see its doc comment) being
+// exercised, not SaveDocument's.
+func TestRepository_LinkGraph_FiltersSelfLoopsThroughAliasResolution(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	doc := domain.Document{ID: "doc-a", URL: "https://a.example/", Title: "A", Text: "text",
+		Links: []string{"https://a.example/alt"}}
+	if err := repo.SaveDocument(ctx, doc, map[string][]float32{domain.EmbeddingProviderHash: []float32{1}}, 100, 2); err != nil {
+		t.Fatalf("unexpected error saving doc-a: %v", err)
+	}
+	if err := repo.RecordDocumentAlias(ctx, "https://a.example/alt", "doc-a", domain.DocumentAliasReasonContentExact); err != nil {
+		t.Fatalf("unexpected error recording alias: %v", err)
+	}
+	if _, err := repo.ResolvePendingLinks(ctx); err != nil {
+		t.Fatalf("unexpected error resolving pending links: %v", err)
+	}
+
+	graph, err := repo.LinkGraph(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if links, ok := graph["doc-a"]; ok {
+		t.Errorf("expected the alias-resolved self-loop to be filtered out, got doc-a -> %v", links)
 	}
 }
 
@@ -3491,6 +3541,287 @@ func TestRepository_LinkGraph_EmptyWhenNoLinks(t *testing.T) {
 	}
 	if len(graph) != 0 {
 		t.Errorf("expected an empty graph when nothing links to anything, got %v", graph)
+	}
+}
+
+// TestMigrateLinkColumns_PreExistingTableGetsToIDColumn proves a links
+// table predating to_id (the pre-this-change shape: just from_id/to_url/
+// to_host) gets it added, defaulted to ” for any pre-existing row, and
+// that re-running the migration (a second New() against the same
+// database, as every one of search/admin/crawl does independently at
+// startup) stays a no-op rather than erroring on the column already
+// existing.
+func TestMigrateLinkColumns_PreExistingTableGetsToIDColumn(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testmigratelinkcols%d?mode=memory&cache=shared", n)
+
+	pre, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open pre-migration DB: %v", err)
+	}
+	if _, err := pre.Exec(`CREATE TABLE links (
+		from_id TEXT NOT NULL, to_url TEXT NOT NULL, to_host TEXT NOT NULL,
+		PRIMARY KEY (from_id, to_url)
+	)`); err != nil {
+		t.Fatalf("failed to create legacy schema: %v", err)
+	}
+	if _, err := pre.Exec(`INSERT INTO links (from_id, to_url, to_host) VALUES ('doc-1', 'https://old.example/', 'old.example')`); err != nil {
+		t.Fatalf("failed to insert legacy row: %v", err)
+	}
+	t.Cleanup(func() { _ = pre.Close() })
+
+	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("expected New to migrate the legacy links table without error, got: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	var toID string
+	if err := pre.QueryRow(`SELECT to_id FROM links WHERE from_id = 'doc-1' AND to_url = 'https://old.example/'`).Scan(&toID); err != nil {
+		t.Fatalf("unexpected error querying migrated to_id: %v", err)
+	}
+	if toID != "" {
+		t.Errorf("expected the pre-existing row's to_id defaulted to '', got %q", toID)
+	}
+
+	// Idempotency: a second New() against the same already-migrated
+	// database (mirroring search/admin/crawl each migrating independently
+	// at startup) must not error on to_id already existing.
+	repo2, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("expected a second New() to be a no-op, got error: %v", err)
+	}
+	_ = repo2.Close()
+}
+
+// TestInsertLinksBatch_ResolvesToIDForExistingTarget proves a link saved
+// after its target already exists gets to_id resolved as part of the same
+// SaveDocument call, no ResolvePendingLinks pass needed.
+func TestInsertLinksBatch_ResolvesToIDForExistingTarget(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testinsertlinksexisting%d?mode=memory&cache=shared", n)
+	raw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open raw connection: %v", err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to create test repository: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	ctx := context.Background()
+	target := domain.Document{ID: "doc-target", URL: "https://target.example/", Title: "T", Text: "text"}
+	if err := repo.SaveDocument(ctx, target, map[string][]float32{domain.EmbeddingProviderHash: []float32{1}}, 100, 2); err != nil {
+		t.Fatalf("unexpected error saving target: %v", err)
+	}
+	source := domain.Document{ID: "doc-source", URL: "https://source.example/", Title: "S", Text: "text",
+		Links: []string{"https://target.example/"}}
+	if err := repo.SaveDocument(ctx, source, map[string][]float32{domain.EmbeddingProviderHash: []float32{1}}, 100, 2); err != nil {
+		t.Fatalf("unexpected error saving source: %v", err)
+	}
+
+	var toID string
+	if err := raw.QueryRow(`SELECT to_id FROM links WHERE from_id = 'doc-source' AND to_url = 'https://target.example/'`).Scan(&toID); err != nil {
+		t.Fatalf("unexpected error querying to_id: %v", err)
+	}
+	if toID != "doc-target" {
+		t.Errorf("expected to_id resolved to doc-target at insert time, got %q", toID)
+	}
+}
+
+// TestInsertLinksBatch_LeavesToIDEmptyForNotYetCrawledTarget proves a link
+// to a URL with no matching document (or alias) yet is inserted with
+// to_id = ” rather than erroring or being skipped -- the row still
+// exists (to be re-tried by ResolvePendingLinks later).
+func TestInsertLinksBatch_LeavesToIDEmptyForNotYetCrawledTarget(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testinsertlinksmissing%d?mode=memory&cache=shared", n)
+	raw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open raw connection: %v", err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to create test repository: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	ctx := context.Background()
+	source := domain.Document{ID: "doc-source", URL: "https://source.example/", Title: "S", Text: "text",
+		Links: []string{"https://nowhere.example/unindexed"}}
+	if err := repo.SaveDocument(ctx, source, map[string][]float32{domain.EmbeddingProviderHash: []float32{1}}, 100, 2); err != nil {
+		t.Fatalf("unexpected error saving source: %v", err)
+	}
+
+	var toID string
+	if err := raw.QueryRow(`SELECT to_id FROM links WHERE from_id = 'doc-source' AND to_url = 'https://nowhere.example/unindexed'`).Scan(&toID); err != nil {
+		t.Fatalf("unexpected error querying to_id: %v", err)
+	}
+	if toID != "" {
+		t.Errorf("expected to_id left empty for an unresolvable target, got %q", toID)
+	}
+}
+
+// TestInsertLinksBatch_ResolvesToIDThroughAlias proves a link to a URL
+// that's already a known alias (not its own indexed document) resolves
+// to_id to the alias's canonical document ID at insert time, the same way
+// LinkGraph's old join used to via document_aliases.canonical_id.
+func TestInsertLinksBatch_ResolvesToIDThroughAlias(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testinsertlinksalias%d?mode=memory&cache=shared", n)
+	raw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open raw connection: %v", err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to create test repository: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	ctx := context.Background()
+	canonical := domain.Document{ID: "doc-canonical", URL: "https://canonical.example/", Title: "C", Text: "text"}
+	if err := repo.SaveDocument(ctx, canonical, map[string][]float32{domain.EmbeddingProviderHash: []float32{1}}, 100, 2); err != nil {
+		t.Fatalf("unexpected error saving canonical: %v", err)
+	}
+	if err := repo.RecordDocumentAlias(ctx, "https://merged-away.example/", "doc-canonical", domain.DocumentAliasReasonContentExact); err != nil {
+		t.Fatalf("unexpected error recording alias: %v", err)
+	}
+
+	source := domain.Document{ID: "doc-source", URL: "https://source.example/", Title: "S", Text: "text",
+		Links: []string{"https://merged-away.example/"}}
+	if err := repo.SaveDocument(ctx, source, map[string][]float32{domain.EmbeddingProviderHash: []float32{1}}, 100, 2); err != nil {
+		t.Fatalf("unexpected error saving source: %v", err)
+	}
+
+	var toID string
+	if err := raw.QueryRow(`SELECT to_id FROM links WHERE from_id = 'doc-source' AND to_url = 'https://merged-away.example/'`).Scan(&toID); err != nil {
+		t.Fatalf("unexpected error querying to_id: %v", err)
+	}
+	if toID != "doc-canonical" {
+		t.Errorf("expected to_id resolved through the alias to doc-canonical, got %q", toID)
+	}
+}
+
+// TestResolvePendingLinks_ResolvesPreviouslyUnresolvedLinks proves a link
+// left with to_id = ” at insert time (its target wasn't crawled yet) gets
+// resolved once the target is later saved and ResolvePendingLinks runs --
+// the exact catch-up path RunPageRankJob relies on before every recompute.
+func TestResolvePendingLinks_ResolvesPreviouslyUnresolvedLinks(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testresolvepending%d?mode=memory&cache=shared", n)
+	raw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open raw connection: %v", err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to create test repository: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	ctx := context.Background()
+	source := domain.Document{ID: "doc-source", URL: "https://source.example/", Title: "S", Text: "text",
+		Links: []string{"https://target.example/"}}
+	if err := repo.SaveDocument(ctx, source, map[string][]float32{domain.EmbeddingProviderHash: []float32{1}}, 100, 2); err != nil {
+		t.Fatalf("unexpected error saving source: %v", err)
+	}
+
+	// Nothing to resolve yet -- the target doesn't exist.
+	resolved, err := repo.ResolvePendingLinks(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolved != 0 {
+		t.Errorf("expected 0 links resolved before the target exists, got %d", resolved)
+	}
+
+	target := domain.Document{ID: "doc-target", URL: "https://target.example/", Title: "T", Text: "text"}
+	if err := repo.SaveDocument(ctx, target, map[string][]float32{domain.EmbeddingProviderHash: []float32{1}}, 100, 2); err != nil {
+		t.Fatalf("unexpected error saving target: %v", err)
+	}
+
+	resolved, err = repo.ResolvePendingLinks(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolved != 1 {
+		t.Errorf("expected exactly 1 link resolved once its target exists, got %d", resolved)
+	}
+
+	var toID string
+	if err := raw.QueryRow(`SELECT to_id FROM links WHERE from_id = 'doc-source' AND to_url = 'https://target.example/'`).Scan(&toID); err != nil {
+		t.Fatalf("unexpected error querying to_id: %v", err)
+	}
+	if toID != "doc-target" {
+		t.Errorf("expected to_id resolved to doc-target, got %q", toID)
+	}
+}
+
+// TestResolvePendingLinks_RespectsBatchLimit proves ResolvePendingLinks
+// caps how many rows it resolves per call (pendingLinkResolveBatchSize,
+// currently 5000) rather than working through an unbounded backlog in one
+// go -- each call's cost stays predictable no matter how large the
+// not-yet-resolved backlog has grown, and a second call picks up the rest.
+func TestResolvePendingLinks_RespectsBatchLimit(t *testing.T) {
+	n := atomic.AddInt64(&dsnCounter, 1)
+	dsn := fmt.Sprintf("file:testresolvebatchlimit%d?mode=memory&cache=shared", n)
+	raw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to open raw connection: %v", err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+	repo, err := sqlrepo.New(context.Background(), "sqlite", dsn)
+	if err != nil {
+		t.Fatalf("failed to create test repository: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	const batchSize = 5000 // must match repository.go's pendingLinkResolveBatchSize
+	const total = batchSize + 5
+
+	// A real from_id document is unnecessary: SQLite doesn't enforce FKs
+	// without "PRAGMA foreign_keys = ON" (see chats.go's own comment on
+	// this), and this test only cares about to_id resolution, not links'
+	// from_id relationship.
+	for i := 0; i < total; i++ {
+		url := fmt.Sprintf("https://target.example/%d", i)
+		if _, err := raw.Exec(`INSERT INTO documents (id, url, title, text, doc_length, embedding) VALUES (?, ?, 'T', 'text', 1, '')`,
+			fmt.Sprintf("doc-target-%d", i), url); err != nil {
+			t.Fatalf("failed to insert target document %d: %v", i, err)
+		}
+		if _, err := raw.Exec(`INSERT INTO links (from_id, to_url, to_host, to_id) VALUES ('doc-source', ?, 'target.example', '')`, url); err != nil {
+			t.Fatalf("failed to insert pending link %d: %v", i, err)
+		}
+	}
+
+	resolved, err := repo.ResolvePendingLinks(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolved != batchSize {
+		t.Errorf("expected exactly %d links resolved (the batch cap), got %d", batchSize, resolved)
+	}
+
+	var remaining int
+	if err := raw.QueryRow(`SELECT COUNT(*) FROM links WHERE to_id = ''`).Scan(&remaining); err != nil {
+		t.Fatalf("unexpected error counting remaining unresolved links: %v", err)
+	}
+	if remaining != total-batchSize {
+		t.Errorf("expected %d links still unresolved after one bounded call, got %d", total-batchSize, remaining)
+	}
+
+	resolved2, err := repo.ResolvePendingLinks(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error on second call: %v", err)
+	}
+	if resolved2 != total-batchSize {
+		t.Errorf("expected the second call to resolve the remaining %d links, got %d", total-batchSize, resolved2)
 	}
 }
 

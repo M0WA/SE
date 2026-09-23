@@ -3881,6 +3881,10 @@ func (f *fakePageRankRepo) UpdatePageRanks(_ context.Context, scores map[string]
 	return nil
 }
 
+func (f *fakePageRankRepo) ResolvePendingLinks(context.Context) (int, error) {
+	return 0, nil
+}
+
 // adminAuthedHandlerWithPageRank mirrors adminAuthedHandlerWithOverrides,
 // adding the PageRank dependency the other helpers don't carry.
 func adminAuthedHandlerWithPageRank(t *testing.T, admin ports.AdminRepository, pageRank ports.PageRankRepository, settings *domain.TuningSettings, opSettings *domain.OperationalSettings) (*restapi.Handler, *http.Cookie) {
