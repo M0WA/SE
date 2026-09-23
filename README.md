@@ -16,7 +16,7 @@ also served as a site at https://m0wa.github.io/SE/.
 | `cmd/search` | Public. Search UI, chat UI, `/search` API. |
 | `cmd/admin` | Internal. Every admin settings page and `/admin/api/*`. |
 | `cmd/crawl` | Internal only. Runs crawls, tracks job state. |
-| `cmd/mcp-{web,datetime,sandbox,files}` | First-party MCP tool servers, spawned on demand as `stdio` subprocesses. |
+| `cmd/mcp-{web,datetime,sandbox,files,vision}` | First-party MCP tool servers, spawned on demand as `stdio` subprocesses. |
 
 ## Packaging
 

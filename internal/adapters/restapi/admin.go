@@ -1711,6 +1711,94 @@ func (h *Handler) handleAdminChatEndpoint(w http.ResponseWriter, r *http.Request
 	}
 }
 
+type chatVisionRequest struct {
+	SimilarityEnabled    bool   `json:"similarity_enabled"`
+	SimilarityProviderID string `json:"similarity_provider_id"`
+	CaptionEnabled       bool   `json:"caption_enabled"`
+	CaptionBaseURL       string `json:"caption_base_url"`
+	CaptionAPIKey        string `json:"caption_api_key"`
+	CaptionModel         string `json:"caption_model"`
+	// ClearCaptionAPIKey mirrors chatEndpointRequest.ClearAPIKey exactly --
+	// see its doc comment for the shared "blank means unchanged" convention.
+	ClearCaptionAPIKey bool `json:"clear_caption_api_key"`
+}
+
+type chatVisionResponse struct {
+	SimilarityEnabled    bool   `json:"similarity_enabled"`
+	SimilarityProviderID string `json:"similarity_provider_id"`
+	CaptionEnabled       bool   `json:"caption_enabled"`
+	CaptionBaseURL       string `json:"caption_base_url"`
+	// HasCaptionAPIKey mirrors chatEndpointResponse.HasAPIKey exactly --
+	// reports only whether a key is set, never its value.
+	HasCaptionAPIKey bool      `json:"has_caption_api_key"`
+	CaptionModel     string    `json:"caption_model"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+func toChatVisionResponse(v domain.ChatVisionSettings) chatVisionResponse {
+	return chatVisionResponse{
+		SimilarityEnabled: v.SimilarityEnabled, SimilarityProviderID: v.SimilarityProviderID,
+		CaptionEnabled: v.CaptionEnabled, CaptionBaseURL: v.CaptionBaseURL,
+		HasCaptionAPIKey: v.CaptionAPIKey != "", CaptionModel: v.CaptionModel,
+		UpdatedAt: v.UpdatedAt,
+	}
+}
+
+// defaultChatVisionResponse mirrors defaultChatEndpointResponse -- a
+// settings page GET should never fail just for being unconfigured.
+func defaultChatVisionResponse() chatVisionResponse {
+	return chatVisionResponse{}
+}
+
+// handleAdminChatVision is single-row CRUD for the chat vision settings
+// (GET current config, PATCH to upsert), mirroring handleAdminChatEndpoint's
+// style exactly.
+func (h *Handler) handleAdminChatVision(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.chatVision != nil, "chat vision settings") {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		v, err := h.chatVision.GetChatVisionSettings(r.Context())
+		if errors.Is(err, ports.ErrChatVisionSettingsNotConfigured) {
+			writeJSON(w, http.StatusOK, defaultChatVisionResponse())
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, toChatVisionResponse(v))
+	case http.MethodPatch:
+		req, ok := decodeJSON[chatVisionRequest](w, r)
+		if !ok {
+			return
+		}
+		apiKey := ""
+		existing, err := h.chatVision.GetChatVisionSettings(r.Context())
+		if err == nil {
+			apiKey = existing.CaptionAPIKey
+		} else if !errors.Is(err, ports.ErrChatVisionSettingsNotConfigured) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		apiKey = h.resolveUpdatedAPIKey(apiKey, req.CaptionAPIKey, req.ClearCaptionAPIKey)
+		v := domain.ChatVisionSettings{
+			SimilarityEnabled: req.SimilarityEnabled, SimilarityProviderID: req.SimilarityProviderID,
+			CaptionEnabled: req.CaptionEnabled, CaptionBaseURL: req.CaptionBaseURL,
+			CaptionAPIKey: apiKey, CaptionModel: req.CaptionModel,
+			UpdatedAt: time.Now().UTC(),
+		}
+		if err := h.chatVision.SetChatVisionSettings(r.Context(), v); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, toChatVisionResponse(v))
+	default:
+		http.Error(w, msgMethodNotAllowed, http.StatusMethodNotAllowed)
+	}
+}
+
 func (h *Handler) currentSettings() settingsResponse {
 	alpha, k1, b := h.settings.Get()
 	return settingsResponse{

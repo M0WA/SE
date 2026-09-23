@@ -10,6 +10,7 @@ type Dialect interface {
 	UpsertSettingSQL() string
 	UpsertDocumentAliasSQL() string
 	UpsertChatEndpointSQL() string
+	UpsertChatVisionSettingsSQL() string
 	// SeedContentDedupLockSQL atomically inserts content_dedup_lock's
 	// sentinel row (id=1, in_progress=false) if missing -- a
 	// SELECT-then-INSERT would race the same way CreateSchemaSQL's doc
@@ -56,6 +57,14 @@ func (sqliteDialect) UpsertChatEndpointSQL() string {
 	          web_search_result_count=excluded.web_search_result_count,
 	          system_prompt=excluded.system_prompt,
 	          default_agent_id=excluded.default_agent_id,
+	          updated_at=excluded.updated_at`
+}
+func (sqliteDialect) UpsertChatVisionSettingsSQL() string {
+	return `INSERT INTO chat_vision_settings (id, similarity_enabled, similarity_provider_id, caption_enabled, caption_base_url, caption_api_key, caption_model, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	        ON CONFLICT(id) DO UPDATE SET
+	          similarity_enabled=excluded.similarity_enabled, similarity_provider_id=excluded.similarity_provider_id,
+	          caption_enabled=excluded.caption_enabled, caption_base_url=excluded.caption_base_url,
+	          caption_api_key=excluded.caption_api_key, caption_model=excluded.caption_model,
 	          updated_at=excluded.updated_at`
 }
 func (sqliteDialect) SeedContentDedupLockSQL() string {
@@ -152,6 +161,25 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			web_search_result_count INTEGER NOT NULL DEFAULT 20,
 			system_prompt TEXT NOT NULL DEFAULT '',
 			default_agent_id TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL
+		)`,
+		// chat_vision_settings holds the single admin-configured
+		// domain.ChatVisionSettings row (id = chatVisionRowID) -- same
+		// sentinel-row shape as chat_endpoint, for the same reason (one
+		// active configuration). Deliberately its own table, not new
+		// columns on chat_endpoint or embedding_http_endpoints: both
+		// Similarity and Caption are independent of search's embedding
+		// endpoints and of the chat completion endpoint, even when
+		// Similarity ends up referencing the same underlying model as
+		// search (see domain.ChatVisionSettings.SimilarityProviderID).
+		`CREATE TABLE IF NOT EXISTS chat_vision_settings (
+			id TEXT PRIMARY KEY,
+			similarity_enabled BOOLEAN NOT NULL DEFAULT false,
+			similarity_provider_id TEXT NOT NULL DEFAULT '',
+			caption_enabled BOOLEAN NOT NULL DEFAULT false,
+			caption_base_url TEXT NOT NULL DEFAULT '',
+			caption_api_key TEXT NOT NULL DEFAULT '',
+			caption_model TEXT NOT NULL DEFAULT '',
 			updated_at TEXT NOT NULL
 		)`,
 		// mcp_servers lists admin-configured MCP server connections
@@ -312,6 +340,14 @@ func (mysqlDialect) UpsertChatEndpointSQL() string {
 	          default_agent_id=VALUES(default_agent_id),
 	          updated_at=VALUES(updated_at)`
 }
+func (mysqlDialect) UpsertChatVisionSettingsSQL() string {
+	return `INSERT INTO chat_vision_settings (id, similarity_enabled, similarity_provider_id, caption_enabled, caption_base_url, caption_api_key, caption_model, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	        ON DUPLICATE KEY UPDATE
+	          similarity_enabled=VALUES(similarity_enabled), similarity_provider_id=VALUES(similarity_provider_id),
+	          caption_enabled=VALUES(caption_enabled), caption_base_url=VALUES(caption_base_url),
+	          caption_api_key=VALUES(caption_api_key), caption_model=VALUES(caption_model),
+	          updated_at=VALUES(updated_at)`
+}
 func (mysqlDialect) SeedContentDedupLockSQL() string {
 	return `INSERT IGNORE INTO content_dedup_lock (id, in_progress) VALUES (1, false)`
 }
@@ -406,6 +442,17 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			web_search_result_count INT NOT NULL DEFAULT 20,
 			system_prompt TEXT NOT NULL,
 			default_agent_id TEXT NOT NULL,
+			updated_at VARCHAR(64) NOT NULL
+		) ENGINE=InnoDB`,
+		// See the sqlite dialect's chat_vision_settings comment.
+		`CREATE TABLE IF NOT EXISTS chat_vision_settings (
+			id VARCHAR(20) PRIMARY KEY,
+			similarity_enabled BOOLEAN NOT NULL DEFAULT false,
+			similarity_provider_id VARCHAR(20) NOT NULL DEFAULT '',
+			caption_enabled BOOLEAN NOT NULL DEFAULT false,
+			caption_base_url TEXT NOT NULL,
+			caption_api_key TEXT NOT NULL,
+			caption_model VARCHAR(255) NOT NULL,
 			updated_at VARCHAR(64) NOT NULL
 		) ENGINE=InnoDB`,
 		// See the sqlite dialect's mcp_servers comment.
@@ -534,6 +581,14 @@ func (postgresDialect) UpsertChatEndpointSQL() string {
 	          default_agent_id=EXCLUDED.default_agent_id,
 	          updated_at=EXCLUDED.updated_at`
 }
+func (postgresDialect) UpsertChatVisionSettingsSQL() string {
+	return `INSERT INTO chat_vision_settings (id, similarity_enabled, similarity_provider_id, caption_enabled, caption_base_url, caption_api_key, caption_model, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	        ON CONFLICT (id) DO UPDATE SET
+	          similarity_enabled=EXCLUDED.similarity_enabled, similarity_provider_id=EXCLUDED.similarity_provider_id,
+	          caption_enabled=EXCLUDED.caption_enabled, caption_base_url=EXCLUDED.caption_base_url,
+	          caption_api_key=EXCLUDED.caption_api_key, caption_model=EXCLUDED.caption_model,
+	          updated_at=EXCLUDED.updated_at`
+}
 func (postgresDialect) SeedContentDedupLockSQL() string {
 	return `INSERT INTO content_dedup_lock (id, in_progress) VALUES (1, false) ON CONFLICT (id) DO NOTHING`
 }
@@ -620,6 +675,17 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			web_search_result_count INT NOT NULL DEFAULT 20,
 			system_prompt TEXT NOT NULL DEFAULT '',
 			default_agent_id TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL
+		)`,
+		// See the sqlite dialect's chat_vision_settings comment.
+		`CREATE TABLE IF NOT EXISTS chat_vision_settings (
+			id TEXT PRIMARY KEY,
+			similarity_enabled BOOLEAN NOT NULL DEFAULT false,
+			similarity_provider_id TEXT NOT NULL DEFAULT '',
+			caption_enabled BOOLEAN NOT NULL DEFAULT false,
+			caption_base_url TEXT NOT NULL DEFAULT '',
+			caption_api_key TEXT NOT NULL DEFAULT '',
+			caption_model TEXT NOT NULL DEFAULT '',
 			updated_at TEXT NOT NULL
 		)`,
 		// See the sqlite dialect's mcp_servers comment.

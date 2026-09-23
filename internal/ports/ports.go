@@ -67,6 +67,25 @@ type EmbeddingProvider interface {
 	Dimensions() int
 }
 
+// SemanticMatcher is the narrow capability the vision-similarity handler
+// needs from SQLRepository -- pgvector ANN search from an already-computed
+// query vector, without the rest of SQLRepository's surface. Any
+// SQLRepository (e.g. *sqlrepo.Repository) satisfies this automatically.
+type SemanticMatcher interface {
+	TopSemanticMatches(ctx context.Context, queryVec []float32, limit int, provider string) (matches map[string]domain.EmbeddedVector, ok bool, err error)
+}
+
+// ImageEmbedder is an optional capability an EmbeddingProvider may
+// implement -- httpembed.Embedder does (against a vision-language model's
+// /v1/embeddings endpoint, using chat-completions-style image_url content
+// rather than the plain-text "input" field Embed uses), hashembed does
+// not. Checked via a type assertion at point of use (see restapi's
+// vision-similarity handler), same convention as restapi's own
+// modelLister/chatModelProber optional-capability interfaces.
+type ImageEmbedder interface {
+	EmbedImage(ctx context.Context, base64Data, mimeType string) ([]float32, error)
+}
+
 // SQLRepository is the port to the relational database.
 type SQLRepository interface {
 	// SaveDocument upserts doc, archiving its previous content to
@@ -555,6 +574,22 @@ type ChatEndpointStore interface {
 	GetChatEndpoint(ctx context.Context) (domain.ChatEndpoint, error)
 	// SetChatEndpoint upserts the single chat endpoint row.
 	SetChatEndpoint(ctx context.Context, e domain.ChatEndpoint) error
+}
+
+// ErrChatVisionSettingsNotConfigured is returned by ChatVisionStore.
+// GetChatVisionSettings when nothing has ever been saved.
+var ErrChatVisionSettingsNotConfigured = errors.New("chat vision settings not configured")
+
+// ChatVisionStore persists the single admin-configured
+// domain.ChatVisionSettings -- same single-row Get/Set shape as
+// ChatEndpointStore, for the same reason (one active configuration, not a
+// collection).
+type ChatVisionStore interface {
+	// GetChatVisionSettings returns ErrChatVisionSettingsNotConfigured if
+	// never saved.
+	GetChatVisionSettings(ctx context.Context) (domain.ChatVisionSettings, error)
+	// SetChatVisionSettings upserts the single settings row.
+	SetChatVisionSettings(ctx context.Context, v domain.ChatVisionSettings) error
 }
 
 // ChatCompleter calls an OpenAI-compatible chat-completions endpoint,

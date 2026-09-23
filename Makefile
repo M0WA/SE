@@ -2,7 +2,7 @@ BINARY      := searchengine
 PKG_VERSION := 1.0.0
 BUILD_DIR   := build
 DEB_DIR     := $(BUILD_DIR)/deb
-BINARIES    := search admin crawl mcp-web mcp-datetime mcp-sandbox mcp-files
+BINARIES    := search admin crawl mcp-web mcp-datetime mcp-sandbox mcp-files mcp-vision
 
 .PHONY: all build test test-race cover coverage-check lint clean deb run docker
 
@@ -16,6 +16,7 @@ build:
 	go build -o $(BUILD_DIR)/$(BINARY)-mcp-datetime ./cmd/mcp-datetime
 	go build -o $(BUILD_DIR)/$(BINARY)-mcp-sandbox ./cmd/mcp-sandbox
 	go build -o $(BUILD_DIR)/$(BINARY)-mcp-files ./cmd/mcp-files
+	go build -o $(BUILD_DIR)/$(BINARY)-mcp-vision ./cmd/mcp-vision
 
 run: build
 	./$(BUILD_DIR)/$(BINARY)-search

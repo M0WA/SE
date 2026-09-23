@@ -121,6 +121,66 @@
     <button id="save-chat-settings-btn" type="button">Save chat settings</button>
     <span id="chat-settings-status" class="error-text"></span>
   </section>
+
+  <section class="panel">
+    <h2>Vision</h2>
+    <p class="lede" style="margin: 0 0 1rem;">Lets the chat model make use of an image attached to a turn -- configured entirely separately from search's own embedding endpoint(s) and from the chat endpoint above, even when Similarity search ends up pointed at the same underlying model search itself uses.</p>
+
+    <h3>Similarity search</h3>
+    <div class="form-row form-row-check">
+      <label for="vision-similarity-enabled">
+        <span class="field-wrap" data-default="Off"><input id="vision-similarity-enabled" type="checkbox"></span>
+        Enabled
+      </label>
+      <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Lets the chat model's "vision_similarity" tool embed an attached image and vector-search it against this instance's own indexed documents -- "reverse image search into your own index."</span></button>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="vision-similarity-provider">Embedding provider</label>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Which configured HTTP embedding endpoint (Embeddings -> HTTP endpoints) to embed the image against and search with -- reuses that endpoint's own base URL/model/key, so keep it pointed at the same model search itself uses (Embeddings page) for the result to be meaningful. Enabling it here never changes whether it contributes to search's own blended score, and vice versa.</span></button>
+      </div>
+      <span class="field-wrap" data-default="(none)"><select id="vision-similarity-provider" class="field"><option value="">(none)</option></select></span>
+    </div>
+
+    <h3>Captioning</h3>
+    <div class="form-row form-row-check">
+      <label for="vision-caption-enabled">
+        <span class="field-wrap" data-default="Off"><input id="vision-caption-enabled" type="checkbox"></span>
+        Enabled
+      </label>
+      <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Lets the chat model's "vision_caption" tool describe an attached image (or answer a question about it) using a configured vision-language chat-completions endpoint -- a different capability from similarity search above (generation, not embedding/search), almost certainly a different model deployment.</span></button>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="vision-caption-base-url">Base URL</label>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">OpenAI-compatible chat-completions API base URL for a vision-language model, e.g. http://localhost:9000/v1 -- POSTed to &lt;base_url&gt;/chat/completions.</span></button>
+      </div>
+      <span class="field-wrap" data-default="(none)"><input id="vision-caption-base-url" class="field" type="text" placeholder="http://localhost:9000/v1"></span>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="vision-caption-model">Model</label>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Sent as the request's model field.</span></button>
+      </div>
+      <span class="field-wrap" data-default="(none)"><input id="vision-caption-model" class="field" type="text"></span>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="vision-caption-api-key">API key</label>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Sent as an Authorization: Bearer header. Optional for a local server. Leave blank when editing to keep the currently stored key.</span></button>
+      </div>
+      <input id="vision-caption-api-key" class="field" type="password" autocomplete="new-password" placeholder="Leave blank to keep the current key">
+    </div>
+    <div class="form-row form-row-check">
+      <label for="vision-clear-caption-api-key">
+        <input id="vision-clear-caption-api-key" type="checkbox">
+        Remove the stored API key
+      </label>
+    </div>
+
+    <button id="save-vision-settings-btn" type="button">Save vision settings</button>
+    <span id="vision-settings-status" class="error-text"></span>
+  </section>
 </main>
 </div>
 <script src="/admin.js"></script>

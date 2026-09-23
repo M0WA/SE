@@ -13,6 +13,16 @@
   const saveChatSettingsBtn = document.getElementById('save-chat-settings-btn');
   const chatTokenUsageEl = document.getElementById('chat-token-usage');
 
+  const visionSimilarityEnabledEl = document.getElementById('vision-similarity-enabled');
+  const visionSimilarityProviderEl = document.getElementById('vision-similarity-provider');
+  const visionCaptionEnabledEl = document.getElementById('vision-caption-enabled');
+  const visionCaptionBaseURLEl = document.getElementById('vision-caption-base-url');
+  const visionCaptionModelEl = document.getElementById('vision-caption-model');
+  const visionCaptionAPIKeyEl = document.getElementById('vision-caption-api-key');
+  const visionClearCaptionAPIKeyEl = document.getElementById('vision-clear-caption-api-key');
+  const saveVisionSettingsBtn = document.getElementById('save-vision-settings-btn');
+  const visionSettingsStatusEl = document.getElementById('vision-settings-status');
+
   // enabledServerPrompts is populated once by loadChatEndpoint, then re-rendered on every prompt
   // textarea change, so the split updates live without needing a save.
   let enabledServerPrompts = [];
@@ -141,11 +151,90 @@
 
   saveChatSettingsBtn.addEventListener('click', saveChatEndpoint);
 
+  // loadEmbeddingProviderOptions populates "Embedding provider" from every configured HTTP
+  // embedding endpoint, mirroring loadAgentOptions' pattern -- best-effort: a failure just leaves
+  // the built-in "(none)" option.
+  async function loadEmbeddingProviderOptions() {
+    while (visionSimilarityProviderEl.options.length > 1) visionSimilarityProviderEl.remove(1);
+    try {
+      const endpoints = await getJSON('/admin/api/embeddings/endpoints');
+      for (const e of endpoints) {
+        const opt = document.createElement('option');
+        opt.value = e.id;
+        opt.textContent = e.name + ' (' + e.id + ')';
+        visionSimilarityProviderEl.appendChild(opt);
+      }
+    } catch (err) {
+      // Leave just the "(none)" option in place.
+    }
+  }
+
+  // applyChatVision mirrors applyChatEndpoint's API-key masking convention exactly.
+  function applyChatVision(v) {
+    visionSimilarityEnabledEl.checked = !!v.similarity_enabled;
+    visionSimilarityProviderEl.value = v.similarity_provider_id || '';
+    visionCaptionEnabledEl.checked = !!v.caption_enabled;
+    visionCaptionBaseURLEl.value = v.caption_base_url || '';
+    visionCaptionModelEl.value = v.caption_model || '';
+    visionCaptionAPIKeyEl.value = '';
+    visionCaptionAPIKeyEl.placeholder = v.has_caption_api_key ? 'Leave blank to keep the current key' : '';
+    visionClearCaptionAPIKeyEl.checked = false;
+    visionClearCaptionAPIKeyEl.disabled = !v.has_caption_api_key;
+  }
+
+  // The chat-vision fetch and loadEmbeddingProviderOptions hit disjoint endpoints -- run
+  // concurrently, same reasoning as loadChatEndpoint. loadEmbeddingProviderOptions must finish
+  // before applyChatVision sets the select (Promise.allSettled guarantees this).
+  async function loadChatVision() {
+    const [visionResult] = await Promise.allSettled([
+      getJSON('/admin/api/chat-vision'),
+      loadEmbeddingProviderOptions(),
+    ]);
+    if (visionResult.status === 'fulfilled') {
+      applyChatVision(visionResult.value);
+    } else {
+      visionSettingsStatusEl.style.color = 'var(--accent)';
+      visionSettingsStatusEl.textContent = 'Could not load vision settings: ' + visionResult.reason.message;
+    }
+  }
+
+  async function saveChatVision() {
+    setButtonLoading(saveVisionSettingsBtn, true, 'Saving…');
+    visionSettingsStatusEl.textContent = '';
+    try {
+      await patchJSON('/admin/api/chat-vision', {
+        similarity_enabled: visionSimilarityEnabledEl.checked,
+        similarity_provider_id: visionSimilarityProviderEl.value,
+        caption_enabled: visionCaptionEnabledEl.checked,
+        caption_base_url: visionCaptionBaseURLEl.value,
+        caption_model: visionCaptionModelEl.value,
+        caption_api_key: visionCaptionAPIKeyEl.value,
+        clear_caption_api_key: visionClearCaptionAPIKeyEl.checked,
+      });
+      visionSettingsStatusEl.style.color = 'var(--ink-muted)';
+      visionSettingsStatusEl.textContent = 'Saved.';
+      // Re-fetch so the API-key field reflects the masked state, same post-save refresh as
+      // saveChatEndpoint.
+      await loadChatVision();
+    } catch (err) {
+      visionSettingsStatusEl.style.color = 'var(--accent)';
+      visionSettingsStatusEl.textContent = 'Could not save: ' + err.message;
+    } finally {
+      setButtonLoading(saveVisionSettingsBtn, false);
+    }
+  }
+
+  saveVisionSettingsBtn.addEventListener('click', saveChatVision);
+
   renderAdminNav();
   wireSignOut();
   loadChatEndpoint();
+  loadChatVision();
 
   // Node test-runner export only; no-op in a browser <script> tag.
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { applyChatEndpoint, loadChatEndpoint, saveChatEndpoint, renderTokenUsageDonut, loadAgentOptions };
+    module.exports = {
+      applyChatEndpoint, loadChatEndpoint, saveChatEndpoint, renderTokenUsageDonut, loadAgentOptions,
+      applyChatVision, loadChatVision, saveChatVision, loadEmbeddingProviderOptions,
+    };
   }

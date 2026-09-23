@@ -294,7 +294,15 @@ func (e *Embedder) embedChunk(ctx context.Context, text string) ([]float32, erro
 	if err != nil {
 		return nil, fmt.Errorf("httpembed: encoding request: %w", err)
 	}
+	return e.embedWithRetry(ctx, reqBody)
+}
 
+// embedWithRetry sends reqBody to the embeddings endpoint via embedOnce,
+// retrying a 429/529 with backoff up to rateLimitMaxRetries times -- the
+// retry loop shared by embedChunk (text, via embeddingRequest) and
+// EmbedImage (image content, via imageEmbeddingRequest); both request
+// shapes decode into the same embeddingResponse on success.
+func (e *Embedder) embedWithRetry(ctx context.Context, reqBody []byte) ([]float32, error) {
 	backoff := e.rateLimitBackoff
 	for attempt := 0; ; attempt++ {
 		vec, resp, err := e.embedOnce(ctx, reqBody)
@@ -312,6 +320,65 @@ func (e *Embedder) embedChunk(ctx context.Context, text string) ([]float32, erro
 			backoff = rateLimitMaxBackoff
 		}
 	}
+}
+
+// imageEmbeddingRequest is the chat-completions-style request shape a
+// vision-language embedding model expects for IMAGE input via this same
+// /v1/embeddings endpoint -- confirmed empirically against a real deployed
+// Qwen3-VL-Embedding-8B instance (vLLM's "pooling"/"embed" runner):
+// embeddingRequest's plain-text {"input": "..."} shape is rejected for an
+// image (a validation error naming "input" specifically), but a
+// chat-completions-style {"messages": [{"role": "user", "content":
+// [{"type": "image_url", "image_url": {"url": "data:..."}}]}]} body is
+// accepted and returns the exact same "data[0].embedding" shape Embed's
+// own embeddingResponse already parses, at the same configured dimension
+// as a text embed against the same model -- so an image and this
+// endpoint's text-embedded documents share one comparable vector space.
+type imageEmbeddingRequest struct {
+	Model    string                  `json:"model,omitempty"`
+	Messages []imageEmbeddingMessage `json:"messages"`
+}
+
+type imageEmbeddingMessage struct {
+	Role    string                  `json:"role"`
+	Content []imageEmbeddingContent `json:"content"`
+}
+
+type imageEmbeddingContent struct {
+	Type     string              `json:"type"`
+	ImageURL imageEmbeddingImage `json:"image_url"`
+}
+
+type imageEmbeddingImage struct {
+	URL string `json:"url"`
+}
+
+// EmbedImage calls the configured embeddings endpoint for a base64-encoded
+// image, implementing ports.ImageEmbedder -- see imageEmbeddingRequest's
+// doc comment for why this needs a different request shape than Embed's.
+// mimeType is embedded in the data URI (e.g. "image/png"); an empty one
+// falls back to "application/octet-stream", which the model's image
+// decoder still handles via content sniffing. Unlike Embed, there is no
+// chunking concept for a single image.
+func (e *Embedder) EmbedImage(ctx context.Context, base64Data, mimeType string) ([]float32, error) {
+	e.rate.wait(ctx, e.rateLimitPerSecond)
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	reqBody, err := json.Marshal(imageEmbeddingRequest{
+		Model: e.model,
+		Messages: []imageEmbeddingMessage{{
+			Role: "user",
+			Content: []imageEmbeddingContent{{
+				Type:     "image_url",
+				ImageURL: imageEmbeddingImage{URL: "data:" + mimeType + ";base64," + base64Data},
+			}},
+		}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("httpembed: encoding image request: %w", err)
+	}
+	return e.embedWithRetry(ctx, reqBody)
 }
 
 // embedOnce makes a single attempt against the embeddings endpoint. resp

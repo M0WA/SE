@@ -91,6 +91,7 @@ func main() {
 		ScheduledCrawls:       repo,
 		EmbeddingEndpoints:    repo,
 		ChatEndpoints:         repo,
+		ChatVision:            repo,
 		MCPServers:            repo,
 		MCPTools:              mcpclient.New(),
 		Agents:                repo,

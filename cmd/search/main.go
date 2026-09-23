@@ -62,6 +62,15 @@ func main() {
 	// SEARCH_INTERNAL_API_KEY, letting a trusted local caller (e.g. a
 	// SearXNG engine plugin) call /search without a session.
 	internalSearchAPIKey := bootstrap.GetEnv("SEARCH_INTERNAL_API_KEY", "")
+	// internalVisionAPIKey is the same bypass mechanism, deliberately a
+	// separate key/env var -- see restapi.Config.InternalVisionAPIKey's
+	// doc comment for why. Handed to ChatService too, so it can pass the
+	// identical value to cmd/mcp-vision as CHAT_VISION_INTERNAL_API_KEY.
+	internalVisionAPIKey := bootstrap.GetEnv("CHAT_VISION_INTERNAL_API_KEY", "")
+	// chatVision decrypts CaptionAPIKey live per chat turn -- see
+	// bootstrap.DecryptingChatVisionStore's doc comment for why this can't
+	// just be repo directly, unlike ChatEndpoints below.
+	chatVision := bootstrap.NewDecryptingChatVisionStore(repo, settingsEncryptionKey)
 
 	handler := restapi.New(restapi.Config{
 		Search:               searchSvc,
@@ -75,7 +84,9 @@ func main() {
 		Files:                repo,
 		Chats:                repo,
 		InternalSearchAPIKey: internalSearchAPIKey,
-		Chat:                 application.NewChatService(repo, httpchat.New(), repo, mcpclient.New(), repo, repo),
+		SemanticMatcher:      repo,
+		InternalVisionAPIKey: internalVisionAPIKey,
+		Chat:                 application.NewChatService(repo, httpchat.New(), repo, mcpclient.New(), repo, repo, chatVision, internalVisionAPIKey),
 	})
 
 	addr := bootstrap.GetEnv("SEARCH_LISTEN_ADDR", "127.0.0.1:8080")
