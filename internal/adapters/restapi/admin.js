@@ -383,7 +383,8 @@ function buildVocabTable(terms) {
     th.classList.add('sortable-th');
     th.tabIndex = 0;
     const active = vocabSortBy === col.key;
-    const sortIndicator = active ? (vocabSortDir === 'asc' ? ' ▲' : ' ▼') : '';
+    let sortIndicator = '';
+    if (active) sortIndicator = vocabSortDir === 'asc' ? ' ▲' : ' ▼';
     th.textContent = col.label + sortIndicator;
     const activate = () => {
       if (vocabSortBy === col.key) {

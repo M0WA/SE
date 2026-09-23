@@ -117,31 +117,45 @@ func BenchmarkSemanticCandidateLookup(b *testing.B) {
 			queryVec[j] = rng.Float32()
 		}
 
-		b.Run(fmt.Sprintf("Docs=%d/Fallback_SampleEmbeddings", n), func(b *testing.B) {
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				out, err := repo.SampleEmbeddings(ctx, poolSize, domain.EmbeddingProviderHash)
-				if err != nil {
-					b.Fatalf("SampleEmbeddings: %v", err)
-				}
-				if len(out) != poolSize {
-					b.Fatalf("expected %d embeddings, got %d", poolSize, len(out))
-				}
-			}
-		})
-
-		b.Run(fmt.Sprintf("Docs=%d/StandIn_BruteForceExactNN", n), func(b *testing.B) {
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				out := benchmarkBruteForceANN(queryVec, embeddings, poolSize)
-				if len(out) != poolSize {
-					b.Fatalf("expected %d embeddings, got %d", poolSize, len(out))
-				}
-			}
-		})
+		b.Run(fmt.Sprintf("Docs=%d/Fallback_SampleEmbeddings", n), benchmarkSampleEmbeddingsFallback(ctx, repo, poolSize))
+		b.Run(fmt.Sprintf("Docs=%d/StandIn_BruteForceExactNN", n), benchmarkBruteForceExactNNRun(queryVec, embeddings, poolSize))
 
 		repo.Close()
+	}
+}
+
+// benchmarkSampleEmbeddingsFallback returns a b.Run sub-benchmark measuring
+// the real SampleEmbeddings fallback -- extracted (alongside
+// benchmarkBruteForceExactNNRun below) so BenchmarkSemanticCandidateLookup
+// itself doesn't nest a closure's own loop/if inside its corpus-size loop,
+// which is what pushed its cognitive complexity over go:S3776's threshold.
+func benchmarkSampleEmbeddingsFallback(ctx context.Context, repo *sqlrepo.Repository, poolSize int) func(*testing.B) {
+	return func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			out, err := repo.SampleEmbeddings(ctx, poolSize, domain.EmbeddingProviderHash)
+			if err != nil {
+				b.Fatalf("SampleEmbeddings: %v", err)
+			}
+			if len(out) != poolSize {
+				b.Fatalf("expected %d embeddings, got %d", poolSize, len(out))
+			}
+		}
+	}
+}
+
+// benchmarkBruteForceExactNNRun mirrors benchmarkSampleEmbeddingsFallback
+// for the brute-force stand-in side (benchmarkBruteForceANN itself).
+func benchmarkBruteForceExactNNRun(queryVec []float32, embeddings map[string]domain.EmbeddedVector, poolSize int) func(*testing.B) {
+	return func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			out := benchmarkBruteForceANN(queryVec, embeddings, poolSize)
+			if len(out) != poolSize {
+				b.Fatalf("expected %d embeddings, got %d", poolSize, len(out))
+			}
+		}
 	}
 }

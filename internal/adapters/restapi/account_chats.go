@@ -52,7 +52,7 @@ func (h *Handler) handleAccountChats(w http.ResponseWriter, r *http.Request) {
 	}
 	_, userID, ok := h.sessionRoleFor(r)
 	if !ok || userID == "" {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
+		http.Error(w, authRequiredMsg, http.StatusUnauthorized)
 		return
 	}
 	switch r.Method {
@@ -93,7 +93,7 @@ func (h *Handler) handleAccountUpdateChat(w http.ResponseWriter, r *http.Request
 	}
 	_, userID, ok := h.sessionRoleFor(r)
 	if !ok || userID == "" {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
+		http.Error(w, authRequiredMsg, http.StatusUnauthorized)
 		return
 	}
 	req, ok := decodeJSON[pinnedChatRequest](w, r)
@@ -120,7 +120,7 @@ func (h *Handler) handleAccountDeleteChat(w http.ResponseWriter, r *http.Request
 	}
 	_, userID, ok := h.sessionRoleFor(r)
 	if !ok || userID == "" {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
+		http.Error(w, authRequiredMsg, http.StatusUnauthorized)
 		return
 	}
 	err := h.chats.DeleteChat(r.Context(), userID, r.PathValue("id"))

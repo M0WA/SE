@@ -28,8 +28,8 @@ usage() {
   exit 2
 }
 
-[ "$#" -ge 1 ] || usage
-[ "$#" -le 2 ] || usage
+[[ "$#" -ge 1 ]] || usage
+[[ "$#" -le 2 ]] || usage
 username=$1
 password=${2:-}
 
@@ -46,7 +46,7 @@ env_file="/etc/searchengine/searchengine.env"
 # otherwise get silently mangled by shell variable expansion on source.
 get_env_file_var() {
   local key="$1"
-  [ -f "$env_file" ] || return 0
+  [[ -f "$env_file" ]] || return 0
   grep -E "^${key}=" "$env_file" | tail -n1 | cut -d= -f2-
 }
 
@@ -55,23 +55,23 @@ get_env_file_var() {
 : "${DB_DSN:=$(get_env_file_var DB_DSN)}"
 : "${DB_DSN:=file:search.db?cache=shared}"
 
-if [ -z "$password" ]; then
+if [[ -z "$password" ]]; then
   read -r -s -p "Password for '$username': " password
   echo >&2
   read -r -s -p "Confirm password: " password_confirm
   echo >&2
-  [ "$password" = "$password_confirm" ] || { echo "error: passwords did not match." >&2; exit 1; }
+  [[ "$password" = "$password_confirm" ]] || { echo "error: passwords did not match." >&2; exit 1; }
 fi
 
 password_len=${#password}
 # Mirrors admin_users.go's minUserPasswordLength/maxUserPasswordLength
 # exactly -- a row created here must satisfy the same rule login enforces
 # on every other account, and 72 bytes is bcrypt's own hard limit.
-if [ "$password_len" -lt 8 ]; then
+if [[ "$password_len" -lt 8 ]]; then
   echo "error: password must be at least 8 characters." >&2
   exit 1
 fi
-if [ "$password_len" -gt 72 ]; then
+if [[ "$password_len" -gt 72 ]]; then
   echo "error: password must be at most 72 bytes." >&2
   exit 1
 fi
@@ -86,7 +86,8 @@ password_hash=$(htpasswd -nbBC 10 placeholder "$password" | cut -d: -f2-)
 unset password password_confirm
 
 sql_escape() {
-  printf '%s' "$1" | sed "s/'/''/g"
+  local value="$1"
+  printf '%s' "$value" | sed "s/'/''/g"
 }
 username_esc=$(sql_escape "$username")
 hash_esc=$(sql_escape "$password_hash")
@@ -100,7 +101,7 @@ now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 slug_id() {
   local slug
   slug=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g; s/^_+//; s/_+$//' | cut -c1-20)
-  if [ -z "$slug" ]; then
+  if [[ -z "$slug" ]]; then
     slug="user$(date +%s)"
     slug=${slug:0:20}
   fi
@@ -118,16 +119,16 @@ case "$DB_DRIVER" in
     # get the plain filesystem path sqlite3 takes directly.
     sqlite_path=${DB_DSN#file:}
     sqlite_path=${sqlite_path%%\?*}
-    db_query() { sqlite3 "$sqlite_path" "$1"; }
-    db_exec() { sqlite3 "$sqlite_path" "$1"; }
+    db_query() { local query="$1"; sqlite3 "$sqlite_path" "$query"; }
+    db_exec() { local query="$1"; sqlite3 "$sqlite_path" "$query"; }
     ;;
   postgres|pgx)
     command -v psql >/dev/null 2>&1 || {
       echo "error: psql not found -- install it (apt-get install postgresql-client) and re-run." >&2
       exit 1
     }
-    db_query() { psql "$DB_DSN" -tAc "$1"; }
-    db_exec() { psql "$DB_DSN" -c "$1" >/dev/null; }
+    db_query() { local query="$1"; psql "$DB_DSN" -tAc "$query"; }
+    db_exec() { local query="$1"; psql "$DB_DSN" -c "$query" >/dev/null; }
     ;;
   *)
     echo "error: unsupported DB_DRIVER '$DB_DRIVER' -- this script handles sqlite and postgres only." >&2
@@ -137,7 +138,7 @@ esac
 
 existing_id=$(db_query "SELECT id FROM users WHERE username = '$username_esc';" | tr -d '[:space:]')
 
-if [ -n "$existing_id" ]; then
+if [[ -n "$existing_id" ]]; then
   db_exec "UPDATE users SET password_hash = '$hash_esc', is_admin = true, updated_at = '$now' WHERE id = '$existing_id';"
   echo "Updated existing account '$username' (id=$existing_id): password reset, is_admin=true."
 else

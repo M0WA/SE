@@ -44,12 +44,21 @@ type ChatService struct {
 // config store, the completion client, the admin MCP server store/tool
 // provider (see mcp_tools.go), the agent store (see resolveAgent), and
 // the per-user MCP server store.
-func NewChatService(endpoints ports.ChatEndpointStore, completer ports.ChatCompleter, mcpServers ports.MCPServerStore, mcpTools ports.MCPToolProvider, agents ports.AgentStore, userMCPServers ports.UserMCPServerStore, visionSettings ports.ChatVisionStore, internalVisionAPIKey string) *ChatService {
+func NewChatService(endpoints ports.ChatEndpointStore, completer ports.ChatCompleter, mcpServers ports.MCPServerStore, mcpTools ports.MCPToolProvider, agents ports.AgentStore, userMCPServers ports.UserMCPServerStore, vision VisionConfig) *ChatService {
 	return &ChatService{
 		endpoints: endpoints, completer: completer, mcpServers: mcpServers, mcpTools: mcpTools,
 		agents: agents, userMCPServers: userMCPServers,
-		visionSettings: visionSettings, internalVisionAPIKey: internalVisionAPIKey,
+		visionSettings: vision.Settings, internalVisionAPIKey: vision.InternalAPIKey,
 	}
+}
+
+// VisionConfig bundles NewChatService's two cmd/mcp-vision-related
+// parameters into one -- keeps NewChatService's own parameter count under
+// the linter's threshold, and groups what's conceptually one concern
+// (everything cmd/mcp-vision needs) at the call site too.
+type VisionConfig struct {
+	Settings       ports.ChatVisionStore
+	InternalAPIKey string
 }
 
 // ChatOptions carries this turn's per-question overrides for Chat -- a

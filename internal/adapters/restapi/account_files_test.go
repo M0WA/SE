@@ -596,7 +596,7 @@ func TestHandleAccountFiles_BearerTokenAuth(t *testing.T) {
 			&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}},
 			&fakeChatCompleter{answer: "hi"},
 			&fakeMCPServerStore{servers: []domain.MCPServer{{ID: "files", Name: "files", Transport: "stdio", Command: "mcp-files", Enabled: true}}},
-			mcpProvider, nil, nil, nil, "",
+			mcpProvider, nil, nil, application.VisionConfig{},
 		),
 	})
 	body, _ := json.Marshal(map[string]string{"username": "alice", "password": testUserPassword})

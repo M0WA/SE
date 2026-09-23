@@ -231,7 +231,7 @@ func (f *fakeChatCompleter) Complete(ctx context.Context, endpoint domain.ChatEn
 }
 
 func TestChatService_EmptyHistory(t *testing.T) {
-	svc := NewChatService(&fakeChatEndpointStore{}, &fakeChatCompleter{}, nil, nil, nil, nil, nil, "")
+	svc := NewChatService(&fakeChatEndpointStore{}, &fakeChatCompleter{}, nil, nil, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 	_, err := svc.Chat(context.Background(), nil, ChatOptions{})
 	if err == nil {
 		t.Fatal("expected error for empty history, got nil")
@@ -241,7 +241,7 @@ func TestChatService_EmptyHistory(t *testing.T) {
 func TestChatService_NotConfigured(t *testing.T) {
 	wantErr := errors.New("boom")
 	endpoints := &fakeChatEndpointStore{getErr: wantErr}
-	svc := NewChatService(endpoints, &fakeChatCompleter{}, nil, nil, nil, nil, nil, "")
+	svc := NewChatService(endpoints, &fakeChatCompleter{}, nil, nil, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	_, err := svc.Chat(context.Background(), []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, ChatOptions{})
 	if !errors.Is(err, wantErr) {
@@ -251,7 +251,7 @@ func TestChatService_NotConfigured(t *testing.T) {
 
 func TestChatService_NotConfigured_ErrIsPreserved(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{getErr: ports.ErrChatEndpointNotConfigured}
-	svc := NewChatService(endpoints, &fakeChatCompleter{}, nil, nil, nil, nil, nil, "")
+	svc := NewChatService(endpoints, &fakeChatCompleter{}, nil, nil, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	_, err := svc.Chat(context.Background(), []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, ChatOptions{})
 	if !errors.Is(err, ports.ErrChatEndpointNotConfigured) {
@@ -261,7 +261,7 @@ func TestChatService_NotConfigured_ErrIsPreserved(t *testing.T) {
 
 func TestChatService_DisabledEndpoint(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: false}}
-	svc := NewChatService(endpoints, &fakeChatCompleter{}, nil, nil, nil, nil, nil, "")
+	svc := NewChatService(endpoints, &fakeChatCompleter{}, nil, nil, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	_, err := svc.Chat(context.Background(), []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, ChatOptions{})
 	if !errors.Is(err, ports.ErrChatEndpointNotConfigured) {
@@ -272,7 +272,7 @@ func TestChatService_DisabledEndpoint(t *testing.T) {
 func TestChatService_MaxContextTokens_Zero_NoTrimming(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, MaxContextTokens: 0}}
 	completer := &fakeChatCompleter{answer: "answer"}
-	svc := NewChatService(endpoints, completer, nil, nil, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, nil, nil, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{
 		{Role: domain.ChatRoleUser, Content: strings.Repeat("x", 100)},
@@ -296,7 +296,7 @@ func TestChatService_MaxContextTokens_TrimsOldestMessages(t *testing.T) {
 	// older 90-char (~30-token) message would blow past 15.
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, MaxContextTokens: 15}}
 	completer := &fakeChatCompleter{answer: "answer"}
-	svc := NewChatService(endpoints, completer, nil, nil, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, nil, nil, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{
 		{Role: domain.ChatRoleUser, Content: strings.Repeat("a", 90)},
@@ -320,7 +320,7 @@ func TestChatService_MaxContextTokens_KeepsAsManyRecentMessagesAsFit(t *testing.
 	// but not the oldest (another 30 tokens): 10+30=40 <= 40 < 70.
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, MaxContextTokens: 40}}
 	completer := &fakeChatCompleter{answer: "answer"}
-	svc := NewChatService(endpoints, completer, nil, nil, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, nil, nil, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{
 		{Role: domain.ChatRoleUser, Content: strings.Repeat("a", 90)},
@@ -338,7 +338,7 @@ func TestChatService_MaxContextTokens_KeepsAsManyRecentMessagesAsFit(t *testing.
 func TestChatService_MaxContextTokens_AlwaysKeepsNewestMessageEvenIfOversized(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, MaxContextTokens: 1}}
 	completer := &fakeChatCompleter{answer: "answer"}
-	svc := NewChatService(endpoints, completer, nil, nil, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, nil, nil, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: strings.Repeat("a", 300)}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -359,7 +359,7 @@ func TestChatService_MaxContextTokens_KeepsToolPromptSystemMessageIntact(t *test
 	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
 		{ID: "1", Name: "web", Transport: "stdio", Command: "web_search.sh", Enabled: true, Prompt: strings.Repeat("s", 60)},
 	}}
-	svc := NewChatService(endpoints, completer, servers, &fakeMCPToolProvider{}, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, &fakeMCPToolProvider{}, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{
 		{Role: domain.ChatRoleUser, Content: strings.Repeat("old", 30)},
@@ -399,7 +399,7 @@ func TestTrimToBudget_UnderBudget_ReturnsUnchanged(t *testing.T) {
 func TestChatService_CompleterError(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer := &fakeChatCompleter{err: errors.New("upstream 500")}
-	svc := NewChatService(endpoints, completer, nil, nil, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, nil, nil, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	_, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -414,7 +414,7 @@ func TestChatService_CompleterError(t *testing.T) {
 func TestChatService_SystemPromptAlone_SoleLeadingSystemMessage(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, SystemPrompt: "You are a pirate."}}
 	completer := &fakeChatCompleter{answer: "answer"}
-	svc := NewChatService(endpoints, completer, nil, nil, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, nil, nil, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -436,7 +436,7 @@ func TestChatService_SystemPromptAlone_SoleLeadingSystemMessage(t *testing.T) {
 func TestChatService_EmptySystemPrompt_NoLeadingPromptMessage(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, SystemPrompt: ""}}
 	completer := &fakeChatCompleter{answer: "answer"}
-	svc := NewChatService(endpoints, completer, nil, nil, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, nil, nil, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -477,7 +477,7 @@ func TestTrimToBudget_TwoLeadingSystemMessages_KeepsBothAndNewest(t *testing.T) 
 func TestChatService_MCPNil_ToolResultsEmpty(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer := &fakeChatCompleter{answer: "answer"}
-	svc := NewChatService(endpoints, completer, nil, nil, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, nil, nil, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -506,7 +506,7 @@ func TestChatService_MCPServersConfigured_ToolCallPopulatesToolResults(t *testin
 		tools:   []domain.MCPTool{mcpTool("web_search", "Search the web.")},
 		session: &fakeMCPSession{outputs: map[string]string{"web_search": "top result"}},
 	}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -551,7 +551,7 @@ func TestChatService_ToolFires_FeedsResultsBackForFinalAnswer(t *testing.T) {
 		tools:   []domain.MCPTool{mcpTool("web_search", "Search the web.")},
 		session: &fakeMCPSession{outputs: map[string]string{"web_search": `{"results":["go 1.26 release notes"]}`}},
 	}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "what's new in the latest go release?"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -605,7 +605,7 @@ func TestChatService_ToolRetries_SecondToolCallAlsoProcessed(t *testing.T) {
 		tools:   []domain.MCPTool{mcpTool("web_fetch", "Fetch a URL.")},
 		session: &fakeMCPSession{outputs: map[string]string{"web_fetch": "<empty/blocked page>"}},
 	}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "what does example.com say?"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -650,7 +650,7 @@ func TestChatService_ToolRetries_CappedAtMaxFollowUpRounds(t *testing.T) {
 		tools:   []domain.MCPTool{mcpTool("web_fetch", "Fetch a URL.")},
 		session: &fakeMCPSession{outputs: map[string]string{"web_fetch": "<empty/blocked page>"}},
 	}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "what does example.com say?"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -704,7 +704,7 @@ func TestChatService_ForceFinalAnswer_RescuesAnEmptyAnswerAfterCapIsHit(t *testi
 		tools:   []domain.MCPTool{mcpTool("web_search", "Search the web.")},
 		session: &fakeMCPSession{outputs: map[string]string{"web_search": "some results"}},
 	}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "when was the latest Go released?"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -743,7 +743,7 @@ func TestChatService_ForceFinalAnswer_NotTriggeredWhenAnswerIsNonEmpty(t *testin
 		tools:   []domain.MCPTool{mcpTool("web_search", "Search the web.")},
 		session: &fakeMCPSession{outputs: map[string]string{"web_search": "some results"}},
 	}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "when was the latest Go released?"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -776,7 +776,7 @@ func TestChatService_ForceFinalAnswer_FailureLeavesAnswerEmpty(t *testing.T) {
 		tools:   []domain.MCPTool{mcpTool("web_fetch", "Fetch a URL.")},
 		session: &fakeMCPSession{outputs: map[string]string{"web_fetch": "<empty/blocked page>"}},
 	}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "what does example.com say?"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -803,7 +803,7 @@ func TestChatService_ToolFollowUpCompletionErrors_FallsBackToOriginalAnswer(t *t
 		tools:   []domain.MCPTool{mcpTool("web_search", "Search the web.")},
 		session: &fakeMCPSession{outputs: map[string]string{"web_search": "results"}},
 	}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -861,7 +861,7 @@ func TestChatService_NoToolCall_OnlyOneCompletionCall(t *testing.T) {
 		{ID: "1", Name: "web", Transport: "stdio", Command: "mcp-web", Enabled: true},
 	}}
 	provider := &fakeMCPToolProvider{tools: []domain.MCPTool{mcpTool("web_search", "Search the web.")}}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -964,7 +964,7 @@ func TestChatService_ToolCallErrors_SurfacedAsResultErr(t *testing.T) {
 		tools:   []domain.MCPTool{mcpTool("web_fetch", "Fetch a URL.")},
 		session: &fakeMCPSession{errs: map[string]string{"web_fetch": "connection refused"}},
 	}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "what does example.com say?"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -1028,7 +1028,7 @@ func TestChatService_MCPServersListError_Swallowed(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer := &fakeChatCompleter{answer: "answer"}
 	servers := &fakeMCPServerStore{err: errors.New("db down")}
-	svc := NewChatService(endpoints, completer, servers, &fakeMCPToolProvider{}, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, &fakeMCPToolProvider{}, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -1055,7 +1055,7 @@ func TestChatService_GatedServer_InactiveWhenWebSearchOff(t *testing.T) {
 		tools:   []domain.MCPTool{mcpTool("web_search", "Search the web.")},
 		session: &fakeMCPSession{outputs: map[string]string{"web_search": "top result"}},
 	}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -1095,7 +1095,7 @@ func TestChatService_GatedServer_ActiveWhenWebSearchOn(t *testing.T) {
 		tools:   []domain.MCPTool{mcpTool("web_search", "Search the web.")},
 		session: &fakeMCPSession{outputs: map[string]string{"web_search": "top result"}},
 	}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -1138,7 +1138,7 @@ func TestChatService_GatedServer_PerQuestionOverrideActivates(t *testing.T) {
 		tools:   []domain.MCPTool{mcpTool("web_search", "Search the web.")},
 		session: &fakeMCPSession{outputs: map[string]string{"web_search": "top result"}},
 	}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	on := true
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
@@ -1169,7 +1169,7 @@ func TestChatService_UngatedServer_ActiveRegardlessOfWebSearch(t *testing.T) {
 			tools:   []domain.MCPTool{mcpTool("web_search", "Search the web.")},
 			session: &fakeMCPSession{outputs: map[string]string{"web_search": "top result"}},
 		}
-		svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+		svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 		history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 		result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -1204,7 +1204,7 @@ func TestChatService_TwoActiveServersWithPrompts_TwoSeparateLeadingSystemMessage
 		{ID: "1", Name: "first", Transport: "stdio", Command: "a", Enabled: true, Prompt: "First server prompt."},
 		{ID: "2", Name: "second", Transport: "stdio", Command: "b", Enabled: true, Prompt: "Second server prompt."},
 	}}
-	svc := NewChatService(endpoints, completer, servers, &fakeMCPToolProvider{}, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, &fakeMCPToolProvider{}, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -1240,7 +1240,7 @@ func TestChatService_UserCustomPrompt_InjectedBetweenGlobalPromptAndToolPrompts(
 	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
 		{ID: "1", Name: "first", Transport: "stdio", Command: "a", Enabled: true, Prompt: "First server prompt."},
 	}}
-	svc := NewChatService(endpoints, completer, servers, &fakeMCPToolProvider{}, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, &fakeMCPToolProvider{}, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{UserCustomPrompt: "Always answer in haiku."})
@@ -1275,7 +1275,7 @@ func TestChatService_UserCustomPrompt_InjectedBetweenGlobalPromptAndToolPrompts(
 func TestChatService_EmptyUserCustomPrompt_NoLeadingPromptMessage(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, SystemPrompt: "You are a pirate."}}
 	completer := &fakeChatCompleter{answer: "answer"}
-	svc := NewChatService(endpoints, completer, nil, nil, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, nil, nil, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{UserCustomPrompt: ""})
@@ -1306,7 +1306,7 @@ func TestChatService_Agent_InjectsSystemPromptBetweenUserPromptAndServerPrompts(
 	agents := &fakeAgentStore{agents: []domain.Agent{
 		{ID: "researcher", Name: "Researcher", SystemPrompt: "Dig up sources.", MCPServerIDs: []string{"1"}, Enabled: true},
 	}}
-	svc := NewChatService(endpoints, completer, servers, &fakeMCPToolProvider{}, agents, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, &fakeMCPToolProvider{}, agents, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{UserCustomPrompt: "Always answer in haiku."})
@@ -1339,7 +1339,7 @@ func TestChatService_Agent_PerQuestionOverridesEndpointDefault(t *testing.T) {
 		{ID: "researcher", SystemPrompt: "Dig up sources.", Enabled: true},
 		{ID: "summarizer", SystemPrompt: "Be concise.", Enabled: true},
 	}}
-	svc := NewChatService(endpoints, completer, nil, nil, agents, nil, nil, "")
+	svc := NewChatService(endpoints, completer, nil, nil, agents, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{AgentID: "summarizer"}); err != nil {
@@ -1358,7 +1358,7 @@ func TestChatService_Agent_DisabledAgentIsIgnored(t *testing.T) {
 	agents := &fakeAgentStore{agents: []domain.Agent{
 		{ID: "researcher", SystemPrompt: "Dig up sources.", Enabled: false},
 	}}
-	svc := NewChatService(endpoints, completer, nil, nil, agents, nil, nil, "")
+	svc := NewChatService(endpoints, completer, nil, nil, agents, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -1382,7 +1382,7 @@ func TestChatService_Agent_UnknownIDAndListErrorAreBestEffort(t *testing.T) {
 		endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, DefaultAgentID: "missing"}}
 		completer := &fakeChatCompleter{answer: "answer"}
 		agents := &fakeAgentStore{agents: []domain.Agent{{ID: "researcher", SystemPrompt: "x", Enabled: true}}}
-		svc := NewChatService(endpoints, completer, nil, nil, agents, nil, nil, "")
+		svc := NewChatService(endpoints, completer, nil, nil, agents, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 		history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 		if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -1395,7 +1395,7 @@ func TestChatService_Agent_UnknownIDAndListErrorAreBestEffort(t *testing.T) {
 		endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, DefaultAgentID: "researcher"}}
 		completer := &fakeChatCompleter{answer: "answer"}
 		agents := &fakeAgentStore{err: errors.New("db unavailable")}
-		svc := NewChatService(endpoints, completer, nil, nil, agents, nil, nil, "")
+		svc := NewChatService(endpoints, completer, nil, nil, agents, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 		history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 		if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -1407,7 +1407,7 @@ func TestChatService_Agent_UnknownIDAndListErrorAreBestEffort(t *testing.T) {
 	t.Run("blank id and nil store", func(t *testing.T) {
 		endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 		completer := &fakeChatCompleter{answer: "answer"}
-		svc := NewChatService(endpoints, completer, nil, nil, nil, nil, nil, "")
+		svc := NewChatService(endpoints, completer, nil, nil, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 		history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 		if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -1433,7 +1433,7 @@ func TestChatService_Agent_ScopesActiveMCPServersToAllowedList(t *testing.T) {
 		{ID: "researcher", Enabled: true, MCPServerIDs: []string{"web"}},
 	}}
 	provider := &fakeMCPToolProvider{}
-	svc := NewChatService(endpoints, completer, servers, provider, agents, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, agents, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -1460,7 +1460,7 @@ func TestChatService_Agent_EmptyScopeOnActiveAgentAllowsNoGlobalServers(t *testi
 	}}
 	agents := &fakeAgentStore{agents: []domain.Agent{{ID: "researcher", Enabled: true}}}
 	provider := &fakeMCPToolProvider{}
-	svc := NewChatService(endpoints, completer, servers, provider, agents, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, agents, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -1486,7 +1486,7 @@ func TestChatService_NoAgentActive_AllowsEveryGlobalServer(t *testing.T) {
 		{ID: "datetime", Name: "datetime", Transport: "stdio", Command: "b", Enabled: true},
 	}}
 	provider := &fakeMCPToolProvider{}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -1514,7 +1514,7 @@ func TestChatService_UserMCPServers_MergedRegardlessOfAgentScope(t *testing.T) {
 		"alice": {{ID: "personal", Name: "personal", Transport: "http", BaseURL: "http://example.test", Enabled: true}},
 	}}
 	provider := &fakeMCPToolProvider{}
-	svc := NewChatService(endpoints, completer, servers, provider, agents, userServers, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, agents, userServers, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{UserID: "alice"}); err != nil {
@@ -1550,7 +1550,7 @@ func TestChatService_UserMCPServers_TaggedSelfService(t *testing.T) {
 		"alice": {{ID: "personal", Name: "personal", Transport: "http", BaseURL: "http://example.test", Enabled: true}},
 	}}
 	provider := &fakeMCPToolProvider{}
-	svc := NewChatService(endpoints, completer, globalServers, provider, nil, userServers, nil, "")
+	svc := NewChatService(endpoints, completer, globalServers, provider, nil, userServers, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{UserID: "alice"}); err != nil {
@@ -1580,7 +1580,7 @@ func TestChatService_UserMCPServers_StdioTransportRejected(t *testing.T) {
 		"alice": {{ID: "sneaky", Name: "sneaky", Transport: "stdio", Command: "/bin/sh", Enabled: true}},
 	}}
 	provider := &fakeMCPToolProvider{}
-	svc := NewChatService(endpoints, completer, nil, provider, nil, userServers, nil, "")
+	svc := NewChatService(endpoints, completer, nil, provider, nil, userServers, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{UserID: "alice"}); err != nil {
@@ -1604,7 +1604,7 @@ func TestChatService_UserMCPServers_EmptyUserIDOrNilStoreAddsNothing(t *testing.
 
 	t.Run("empty UserID", func(t *testing.T) {
 		provider := &fakeMCPToolProvider{}
-		svc := NewChatService(endpoints, completer, nil, provider, nil, userServers, nil, "")
+		svc := NewChatService(endpoints, completer, nil, provider, nil, userServers, VisionConfig{Settings: nil, InternalAPIKey: ""})
 		history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 		if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -1616,7 +1616,7 @@ func TestChatService_UserMCPServers_EmptyUserIDOrNilStoreAddsNothing(t *testing.
 
 	t.Run("nil store", func(t *testing.T) {
 		provider := &fakeMCPToolProvider{}
-		svc := NewChatService(endpoints, completer, nil, provider, nil, nil, nil, "")
+		svc := NewChatService(endpoints, completer, nil, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 		history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 		if _, err := svc.Chat(context.Background(), history, ChatOptions{UserID: "alice"}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -1636,7 +1636,7 @@ func TestChatService_UserMCPServers_ListErrorIsBestEffort(t *testing.T) {
 	completer := &fakeChatCompleter{answer: "answer"}
 	userServers := &fakeUserMCPServerStore{err: errors.New("db exploded")}
 	provider := &fakeMCPToolProvider{}
-	svc := NewChatService(endpoints, completer, nil, provider, nil, userServers, nil, "")
+	svc := NewChatService(endpoints, completer, nil, provider, nil, userServers, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{UserID: "alice"})
@@ -1658,7 +1658,7 @@ func TestChatService_UserMCPServers_GatedByWebSearchHonored(t *testing.T) {
 		"alice": {{ID: "gated", Name: "gated", Transport: "http", BaseURL: "http://example.test", Enabled: true, GatedByWebSearch: true}},
 	}}
 	provider := &fakeMCPToolProvider{}
-	svc := NewChatService(endpoints, completer, nil, provider, nil, userServers, nil, "")
+	svc := NewChatService(endpoints, completer, nil, provider, nil, userServers, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{UserID: "alice"}); err != nil {
@@ -1681,7 +1681,7 @@ func TestChatService_EndpointSystemPrompt_InjectedWhenMCPServersInactiveOrNil(t 
 		servers := &fakeMCPServerStore{servers: []domain.MCPServer{
 			{ID: "1", Name: "web", Transport: "stdio", Command: "mcp-web", Enabled: true, Prompt: "server prompt", GatedByWebSearch: true},
 		}}
-		svc := NewChatService(endpoints, completer, servers, &fakeMCPToolProvider{}, nil, nil, nil, "")
+		svc := NewChatService(endpoints, completer, servers, &fakeMCPToolProvider{}, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 		history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 		if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -1695,7 +1695,7 @@ func TestChatService_EndpointSystemPrompt_InjectedWhenMCPServersInactiveOrNil(t 
 	t.Run("mcp nil", func(t *testing.T) {
 		endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, SystemPrompt: "You are a pirate."}}
 		completer := &fakeChatCompleter{answer: "answer"}
-		svc := NewChatService(endpoints, completer, nil, nil, nil, nil, nil, "")
+		svc := NewChatService(endpoints, completer, nil, nil, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 		history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 		if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -1720,7 +1720,7 @@ func TestChatService_TokenUsage_AttributesEachPieceCorrectly(t *testing.T) {
 	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
 		{ID: "1", Name: "web", Transport: "stdio", Command: "mcp-web", Enabled: true, Prompt: "Use the web_search tool when helpful."},
 	}}
-	svc := NewChatService(endpoints, completer, servers, &fakeMCPToolProvider{}, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, &fakeMCPToolProvider{}, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "what is a?"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -1749,7 +1749,7 @@ func TestChatService_TokenUsage_AttributesEachPieceCorrectly(t *testing.T) {
 func TestChatService_TokenUsage_ZeroWhenNothingConfigured(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer := &fakeChatCompleter{answer: "answer"}
-	svc := NewChatService(endpoints, completer, nil, nil, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, nil, nil, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -1782,7 +1782,7 @@ func TestChatService_ActiveServerWithEmptyPrompt_NoExtraSystemMessage(t *testing
 		tools:   []domain.MCPTool{mcpTool("web_search", "Search the web.")},
 		session: &fakeMCPSession{outputs: map[string]string{"web_search": "top result"}},
 	}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	result, err := svc.Chat(context.Background(), history, ChatOptions{})
@@ -1818,7 +1818,7 @@ func TestChatService_MCPEnv_CarriesEndpointWebSearchBaseURL(t *testing.T) {
 		tools:   []domain.MCPTool{mcpTool("web_search", "Search the web.")},
 		session: &fakeMCPSession{outputs: map[string]string{"web_search": "top result"}},
 	}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -1857,7 +1857,7 @@ func mcpEnvTestFixtures() (*fakeChatCompleter, *fakeMCPServerStore, *fakeMCPTool
 func TestChatService_MCPEnv_CarriesWebSearchResultCountWhenPositive(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchResultCount: 5}}
 	completer, servers, provider := mcpEnvTestFixtures()
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -1875,7 +1875,7 @@ func TestChatService_MCPEnv_CarriesWebSearchResultCountWhenPositive(t *testing.T
 func TestChatService_MCPEnv_OmitsWebSearchResultCountWhenZero(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true, WebSearchResultCount: 0}}
 	completer, servers, provider := mcpEnvTestFixtures()
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -1891,7 +1891,7 @@ func TestChatService_MCPEnv_OmitsWebSearchResultCountWhenZero(t *testing.T) {
 func TestChatService_MCPEnv_CarriesUserAgentWhenSet(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer, servers, provider := mcpEnvTestFixtures()
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{UserAgent: "custom-agent/1.0"}); err != nil {
@@ -1909,7 +1909,7 @@ func TestChatService_MCPEnv_CarriesUserAgentWhenSet(t *testing.T) {
 func TestChatService_MCPEnv_OmitsUserAgentWhenEmpty(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer, servers, provider := mcpEnvTestFixtures()
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -1926,7 +1926,7 @@ func TestChatService_MCPEnv_OmitsUserAgentWhenEmpty(t *testing.T) {
 func TestChatService_MCPEnv_CarriesFileAccessTokenWhenSet(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer, servers, provider := mcpEnvTestFixtures()
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{FileAccessToken: "tok-abc"}); err != nil {
@@ -1944,7 +1944,7 @@ func TestChatService_MCPEnv_CarriesFileAccessTokenWhenSet(t *testing.T) {
 func TestChatService_MCPEnv_OmitsFileAccessTokenWhenEmpty(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer, servers, provider := mcpEnvTestFixtures()
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -1979,7 +1979,7 @@ func TestChatService_MCPEnv_CarriesVisionSimilarityConfigWhenEnabled(t *testing.
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer, servers, provider := mcpEnvTestFixtures()
 	vision := &fakeChatVisionStore{settings: domain.ChatVisionSettings{SimilarityEnabled: true, SimilarityProviderID: "h200_gte_qwen2"}}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, vision, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: vision, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -1999,7 +1999,7 @@ func TestChatService_MCPEnv_OmitsVisionSimilarityConfigWhenDisabled(t *testing.T
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer, servers, provider := mcpEnvTestFixtures()
 	vision := &fakeChatVisionStore{settings: domain.ChatVisionSettings{SimilarityEnabled: false}}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, vision, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: vision, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -2019,7 +2019,7 @@ func TestChatService_MCPEnv_CarriesVisionCaptionConfigWhenEnabled(t *testing.T) 
 	vision := &fakeChatVisionStore{settings: domain.ChatVisionSettings{
 		CaptionEnabled: true, CaptionBaseURL: "http://vl.example/v1", CaptionAPIKey: "sk-vl", CaptionModel: "vl-chat",
 	}}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, vision, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: vision, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -2045,7 +2045,7 @@ func TestChatService_MCPEnv_OmitsVisionCaptionConfigWhenDisabled(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer, servers, provider := mcpEnvTestFixtures()
 	vision := &fakeChatVisionStore{settings: domain.ChatVisionSettings{CaptionEnabled: false}}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, vision, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: vision, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -2062,7 +2062,7 @@ func TestChatService_MCPEnv_OmitsVisionCaptionConfigWhenDisabled(t *testing.T) {
 func TestChatService_MCPEnv_NilVisionSettingsStoreIsANoop(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer, servers, provider := mcpEnvTestFixtures()
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -2082,7 +2082,7 @@ func TestChatService_MCPEnv_VisionSettingsStoreErrorIsANoop(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer, servers, provider := mcpEnvTestFixtures()
 	vision := &fakeChatVisionStore{err: errors.New("db unavailable")}
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, vision, "")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: vision, InternalAPIKey: ""})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {
@@ -2099,7 +2099,7 @@ func TestChatService_MCPEnv_VisionSettingsStoreErrorIsANoop(t *testing.T) {
 func TestChatService_MCPEnv_CarriesInternalVisionAPIKey(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer, servers, provider := mcpEnvTestFixtures()
-	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, nil, "internal-secret")
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: "internal-secret"})
 
 	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}
 	if _, err := svc.Chat(context.Background(), history, ChatOptions{}); err != nil {

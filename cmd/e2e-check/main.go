@@ -49,6 +49,20 @@ import (
 // they shouldn't fail the whole run the way a real error does.
 var errSkip = errors.New("skip")
 
+// REST paths/headers referenced from more than one check below -- named
+// once each so a route rename (or the header name) needs one edit, and so
+// SonarCloud's go:S1192 (repeated string literal) doesn't flag the
+// duplication across otherwise-independent checkX functions.
+const (
+	skipNoPinnedChat      = "no pinned chat (checkChatPin must have failed)"
+	pathLogin             = "/login"
+	pathAdminAgents       = "/admin/api/agents"
+	pathAdminMCPServers   = "/admin/api/mcp-servers"
+	pathAccountChats      = "/account/api/chats"
+	pathAccountMCPServers = "/account/api/mcp-servers"
+	headerContentType     = "Content-Type"
+)
+
 func main() {
 	host := flag.String("host", "se.mo-sys.de", "target deployment's hostname (no scheme)")
 	credsPath := flag.String("creds", "cmd/e2e-check/credentials.json", "path to a JSON credentials file for -host (see credentials.example.json)")
@@ -298,7 +312,7 @@ func (c *client) doJSONRaw(method, path string, in any) (int, []byte, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(headerContentType, "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return 0, nil, err
@@ -336,7 +350,7 @@ func (c *client) uploadFile(chatID, filename, contentType string, data []byte) (
 	}
 	part, err := w.CreatePart(map[string][]string{
 		"Content-Disposition": {fmt.Sprintf(`form-data; name="file"; filename=%q`, filename)},
-		"Content-Type":        {contentType},
+		headerContentType:     {contentType},
 	})
 	if err != nil {
 		return fileResponse{}, err
@@ -351,7 +365,7 @@ func (c *client) uploadFile(chatID, filename, contentType string, data []byte) (
 	if err != nil {
 		return fileResponse{}, err
 	}
-	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set(headerContentType, w.FormDataContentType())
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fileResponse{}, err
@@ -400,7 +414,7 @@ func (c *client) checkLogin(username, password string) func() error {
 		var out struct {
 			Redirect string `json:"redirect"`
 		}
-		_, err := c.postJSON("/login", map[string]string{
+		_, err := c.postJSON(pathLogin, map[string]string{
 			"username": username,
 			"password": password,
 		}, &out)
@@ -436,7 +450,7 @@ func (c *client) checkWrongPasswordRejected(adminUser string) func() error {
 		if err != nil {
 			return err
 		}
-		status, _, err := fresh.doJSONRaw(http.MethodPost, "/login", map[string]string{
+		status, _, err := fresh.doJSONRaw(http.MethodPost, pathLogin, map[string]string{
 			"username": adminUser,
 			"password": "definitely-not-the-real-password",
 		})
@@ -458,7 +472,7 @@ func (c *client) checkUnauthenticatedRejected() error {
 	if err != nil {
 		return err
 	}
-	status, _, err := fresh.getJSONRaw("/admin/api/agents")
+	status, _, err := fresh.getJSONRaw(pathAdminAgents)
 	if err != nil {
 		return err
 	}
@@ -473,7 +487,7 @@ func (c *client) checkUnauthenticatedRejected() error {
 // checkUnauthenticatedRejected, and must run after "user login" so the
 // shared session really is a role=user one at this point.
 func (c *client) checkUserForbiddenFromAdmin() error {
-	status, body, err := c.getJSONRaw("/admin/api/agents")
+	status, body, err := c.getJSONRaw(pathAdminAgents)
 	if err != nil {
 		return err
 	}
@@ -709,7 +723,7 @@ type agentResponse struct {
 // checkImageVision's job specifically.
 func (c *client) buildAgentChecks() []check {
 	var agents []agentResponse
-	if _, err := c.getJSON("/admin/api/agents", &agents); err != nil {
+	if _, err := c.getJSON(pathAdminAgents, &agents); err != nil {
 		return []check{{"agents: list", func() error { return err }}}
 	}
 	if len(agents) == 0 {
@@ -801,7 +815,7 @@ func (c *client) listServerTools(s mcpServerResponse) ([]mcpServerToolInfo, erro
 // broken tool handler from a healthy one; only a real call can.
 func (c *client) buildMCPConnectivityChecks() []check {
 	var servers []mcpServerResponse
-	if _, err := c.getJSON("/admin/api/mcp-servers", &servers); err != nil {
+	if _, err := c.getJSON(pathAdminMCPServers, &servers); err != nil {
 		return []check{{"mcp servers: list", func() error { return err }}}
 	}
 	if len(servers) == 0 {
@@ -950,7 +964,7 @@ const scratchName = "e2e-check-scratch"
 // in the list, then deletes it -- leaves no trace behind either way.
 func (c *client) checkAdminMCPServerCRUD() error {
 	var created mcpServerResponse
-	_, err := c.postJSON("/admin/api/mcp-servers", map[string]any{
+	_, err := c.postJSON(pathAdminMCPServers, map[string]any{
 		"name": scratchName, "transport": "http", "base_url": "http://127.0.0.1:1",
 		"enabled": false, "gated_by_web_search": false,
 	}, &created)
@@ -960,7 +974,7 @@ func (c *client) checkAdminMCPServerCRUD() error {
 	defer c.deleteRequest("/admin/api/mcp-servers/" + created.ID)
 
 	var servers []mcpServerResponse
-	if _, err := c.getJSON("/admin/api/mcp-servers", &servers); err != nil {
+	if _, err := c.getJSON(pathAdminMCPServers, &servers); err != nil {
 		return err
 	}
 	found := false
@@ -982,7 +996,7 @@ func (c *client) checkAdminMCPServerCRUD() error {
 // actually selectable in the meantime), confirms it's listed, deletes it.
 func (c *client) checkAdminAgentCRUD() error {
 	var created agentResponse
-	_, err := c.postJSON("/admin/api/agents", map[string]any{
+	_, err := c.postJSON(pathAdminAgents, map[string]any{
 		"name": scratchName, "description": "e2e-check scratch row", "system_prompt": "",
 		"mcp_server_ids": []string{}, "enabled": false,
 	}, &created)
@@ -992,7 +1006,7 @@ func (c *client) checkAdminAgentCRUD() error {
 	defer c.deleteRequest("/admin/api/agents/" + created.ID)
 
 	var agents []agentResponse
-	if _, err := c.getJSON("/admin/api/agents", &agents); err != nil {
+	if _, err := c.getJSON(pathAdminAgents, &agents); err != nil {
 		return err
 	}
 	found := false
@@ -1063,7 +1077,7 @@ type pinnedChatResponse struct {
 // (rename, fork, file attach/OCR, delete) to reuse.
 func (c *client) checkChatPin() error {
 	var out pinnedChatResponse
-	_, err := c.postJSON("/account/api/chats", map[string]any{
+	_, err := c.postJSON(pathAccountChats, map[string]any{
 		"title":    "e2e-check",
 		"agent_id": "",
 		"history":  []map[string]string{{"role": "user", "content": "e2e-check smoke test"}},
@@ -1083,10 +1097,10 @@ func (c *client) checkChatPin() error {
 // effect.
 func (c *client) checkChatRename() error {
 	if c.testChatID == "" {
-		return skip("no pinned chat (checkChatPin must have failed)")
+		return skip(skipNoPinnedChat)
 	}
 	var out pinnedChatResponse
-	_, err := c.patchJSON("/account/api/chats/"+c.testChatID, map[string]any{
+	_, err := c.patchJSON(pathAccountChats+"/"+c.testChatID, map[string]any{
 		"title":    "e2e-check (renamed)",
 		"agent_id": "",
 		"history":  []map[string]string{{"role": "user", "content": "e2e-check smoke test"}},
@@ -1107,10 +1121,10 @@ func (c *client) checkChatRename() error {
 // the two are genuinely independent rows, not aliases of one another.
 func (c *client) checkChatFork() error {
 	if c.testChatID == "" {
-		return skip("no pinned chat (checkChatPin must have failed)")
+		return skip(skipNoPinnedChat)
 	}
 	var list []pinnedChatResponse
-	if _, err := c.getJSON("/account/api/chats", &list); err != nil {
+	if _, err := c.getJSON(pathAccountChats, &list); err != nil {
 		return err
 	}
 	var source *pinnedChatResponse
@@ -1124,7 +1138,7 @@ func (c *client) checkChatFork() error {
 	}
 
 	var fork pinnedChatResponse
-	_, err := c.postJSON("/account/api/chats", map[string]any{
+	_, err := c.postJSON(pathAccountChats, map[string]any{
 		"title":    source.Title + " (fork)",
 		"agent_id": "",
 		"history":  source.History,
@@ -1139,13 +1153,13 @@ func (c *client) checkChatFork() error {
 
 	// Renaming the ORIGINAL must not affect the fork -- proves they're
 	// independent rows, not the same one under two names.
-	if _, err := c.patchJSON("/account/api/chats/"+c.testChatID, map[string]any{
+	if _, err := c.patchJSON(pathAccountChats+"/"+c.testChatID, map[string]any{
 		"title": "e2e-check (renamed again)", "agent_id": "", "history": source.History,
 	}, nil); err != nil {
 		return err
 	}
 	var listAfter []pinnedChatResponse
-	if _, err := c.getJSON("/account/api/chats", &listAfter); err != nil {
+	if _, err := c.getJSON(pathAccountChats, &listAfter); err != nil {
 		return err
 	}
 	for _, ch := range listAfter {
@@ -1163,7 +1177,7 @@ func (c *client) checkChatForkDelete() error {
 	if c.testForkChatID == "" {
 		return skip("no forked chat (checkChatFork must have failed or been skipped)")
 	}
-	_, err := c.deleteRequest("/account/api/chats/" + c.testForkChatID)
+	_, err := c.deleteRequest(pathAccountChats + "/" + c.testForkChatID)
 	return err
 }
 
@@ -1174,9 +1188,9 @@ func (c *client) checkChatForkDelete() error {
 // still accepts the call, not the cascade's own mechanics again.
 func (c *client) checkChatDelete() error {
 	if c.testChatID == "" {
-		return skip("no pinned chat (checkChatPin must have failed)")
+		return skip(skipNoPinnedChat)
 	}
-	_, err := c.deleteRequest("/account/api/chats/" + c.testChatID)
+	_, err := c.deleteRequest(pathAccountChats + "/" + c.testChatID)
 	return err
 }
 
@@ -1188,7 +1202,7 @@ func (c *client) checkChatDelete() error {
 // sandbox/datetime/web tools every other check exercises.
 func (c *client) checkFilesTool() error {
 	if c.testChatID == "" {
-		return skip("no pinned chat (checkChatPin must have failed)")
+		return skip(skipNoPinnedChat)
 	}
 	const marker = "E2E-CHECK-MARKER-4f8a1c"
 	if _, err := c.uploadFile(c.testChatID, "e2e-check.txt", "text/plain", []byte("the secret word is "+marker)); err != nil {
@@ -1267,7 +1281,7 @@ func testImagePNG() ([]byte, error) {
 // same convention as every other deployment-specific prerequisite here.
 func (c *client) checkImageVision() error {
 	if c.testChatID == "" {
-		return skip("no pinned chat (checkChatPin must have failed)")
+		return skip(skipNoPinnedChat)
 	}
 	var agents []agentResponse
 	if _, err := c.getJSON("/agents", &agents); err != nil {
@@ -1319,7 +1333,7 @@ func (c *client) checkImageVision() error {
 // execution is admin-only), then a real http-transport row is created,
 // listed, and deleted.
 func (c *client) checkAccountMCPServerCRUD() error {
-	status, _, err := c.doJSONRaw(http.MethodPost, "/account/api/mcp-servers", map[string]any{
+	status, _, err := c.doJSONRaw(http.MethodPost, pathAccountMCPServers, map[string]any{
 		"name": scratchName, "transport": "stdio", "command": "/bin/true",
 	})
 	if err != nil {
@@ -1332,7 +1346,7 @@ func (c *client) checkAccountMCPServerCRUD() error {
 	var created struct {
 		ID string `json:"id"`
 	}
-	if _, err := c.postJSON("/account/api/mcp-servers", map[string]any{
+	if _, err := c.postJSON(pathAccountMCPServers, map[string]any{
 		"name": scratchName, "transport": "http", "base_url": "http://127.0.0.1:1", "enabled": false,
 	}, &created); err != nil {
 		return err
@@ -1342,7 +1356,7 @@ func (c *client) checkAccountMCPServerCRUD() error {
 	var list []struct {
 		ID string `json:"id"`
 	}
-	if _, err := c.getJSON("/account/api/mcp-servers", &list); err != nil {
+	if _, err := c.getJSON(pathAccountMCPServers, &list); err != nil {
 		return err
 	}
 	found := false
@@ -1384,7 +1398,7 @@ func (c *client) checkAccountPasswordRoundTrip(username, originalPassword string
 			_ = restore()
 			return err
 		}
-		status, _, loginErr := fresh.doJSONRaw(http.MethodPost, "/login", map[string]string{
+		status, _, loginErr := fresh.doJSONRaw(http.MethodPost, pathLogin, map[string]string{
 			"username": username, "password": temp,
 		})
 		if restoreErr := restore(); restoreErr != nil {

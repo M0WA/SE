@@ -149,7 +149,7 @@ func TestVisionSimilarityTool_Success(t *testing.T) {
 	if gotBody.Base64 == "" {
 		t.Error("expected the image base64-encoded in the request")
 	}
-	if got := textContent(t, result); got == "" {
+	if textContent(t, result) == "" {
 		t.Error("expected the raw match JSON returned as the tool's text result")
 	}
 }

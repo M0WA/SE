@@ -57,13 +57,7 @@ type EmbeddingRecomputeResult struct {
 // switching later needs no second recompute. titleWeight blends each
 // title the same way sqlCrawlerService.Crawl does at crawl time.
 func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepository, embedders map[string]ports.EmbeddingProvider, titleWeight float64, resumeFromID string, concurrency func() int, onBatchDone func(lastID string, documents, failed int)) (EmbeddingRecomputeResult, error) {
-	var ids []string
-	var err error
-	if resumeFromID == "" {
-		ids, err = repo.AllDocumentIDs(ctx)
-	} else {
-		ids, err = repo.DocumentIDsAfter(ctx, resumeFromID)
-	}
+	ids, err := recomputeCandidateIDs(ctx, repo, resumeFromID)
 	if err != nil {
 		return EmbeddingRecomputeResult{}, err
 	}
@@ -80,63 +74,93 @@ func RunEmbeddingRecomputeJob(ctx context.Context, repo ports.EmbeddingRepositor
 			return EmbeddingRecomputeResult{}, err
 		}
 
-		n := 1
-		if concurrency != nil {
-			if c := concurrency(); c > 0 {
-				n = c
-			}
-		}
-		sem := make(chan struct{}, n)
-		var wg sync.WaitGroup
-		var mu sync.Mutex
-		for _, id := range batch {
-			doc, ok := docs[id]
-			if !ok {
-				// Deleted between the ID listing and this batch being
-				// fetched -- nothing to recompute.
-				continue
-			}
-			sem <- struct{}{}
-			wg.Add(1)
-			go func(id string, doc domain.Document) {
-				defer wg.Done()
-				defer func() { <-sem }()
-
-				embeddings := make(map[string][]float32, len(embedders))
-				var embedErr error
-				for provider, embedder := range embedders {
-					vec, err := embedTitleWeighted(ctx, embedder.Embed, doc.Title, doc.Text, titleWeight)
-					if err != nil {
-						log.Printf("recomputing %s embedding for %s: %v", provider, id, err)
-						embedErr = err
-						break
-					}
-					embeddings[provider] = vec
-				}
-				failed := embedErr != nil
-				if !failed {
-					if err := repo.UpdateEmbedding(ctx, id, embeddings); err != nil {
-						log.Printf("saving recomputed embedding for %s: %v", id, err)
-						failed = true
-					}
-				}
-
-				mu.Lock()
-				if failed {
-					result.Failed++
-				} else {
-					result.Documents++
-				}
-				mu.Unlock()
-			}(id, doc)
-		}
-		wg.Wait()
+		recomputeBatch(ctx, repo, embedders, titleWeight, batch, docs, batchConcurrency(concurrency), &result)
 
 		if onBatchDone != nil {
 			onBatchDone(batch[len(batch)-1], result.Documents, result.Failed)
 		}
 	}
 	return result, nil
+}
+
+// recomputeCandidateIDs resolves the ID list a run walks -- the full
+// corpus, or everything after a checkpoint, per resumeFromID's own doc
+// comment on RunEmbeddingRecomputeJob.
+func recomputeCandidateIDs(ctx context.Context, repo ports.EmbeddingRepository, resumeFromID string) ([]string, error) {
+	if resumeFromID == "" {
+		return repo.AllDocumentIDs(ctx)
+	}
+	return repo.DocumentIDsAfter(ctx, resumeFromID)
+}
+
+// batchConcurrency resolves concurrency fresh -- see RunEmbeddingRecomputeJob's
+// own doc comment for why this can't be captured once at job start -- and
+// defaults a nil/non-positive result to 1 (fully sequential).
+func batchConcurrency(concurrency func() int) int {
+	if concurrency == nil {
+		return 1
+	}
+	if c := concurrency(); c > 0 {
+		return c
+	}
+	return 1
+}
+
+// recomputeBatch processes batch's documents up to n at a time (a
+// semaphore-bounded goroutine per document), accumulating into result
+// (mutex-guarded, since goroutines write it concurrently) and blocking
+// until every document has been attempted before returning -- so the
+// caller's checkpoint reflects a truly finished batch, never a partial one.
+func recomputeBatch(ctx context.Context, repo ports.EmbeddingRepository, embedders map[string]ports.EmbeddingProvider, titleWeight float64, batch []string, docs map[string]domain.Document, n int, result *EmbeddingRecomputeResult) {
+	sem := make(chan struct{}, n)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for _, id := range batch {
+		doc, ok := docs[id]
+		if !ok {
+			// Deleted between the ID listing and this batch being
+			// fetched -- nothing to recompute.
+			continue
+		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(id string, doc domain.Document) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			failed := recomputeOneDocument(ctx, repo, embedders, titleWeight, id, doc)
+
+			mu.Lock()
+			if failed {
+				result.Failed++
+			} else {
+				result.Documents++
+			}
+			mu.Unlock()
+		}(id, doc)
+	}
+	wg.Wait()
+}
+
+// recomputeOneDocument re-embeds one document against every embedders
+// entry and writes the combined result back, reporting whether it
+// failed -- a single Embed/UpdateEmbedding error is logged and counted,
+// never fatal to the batch/run.
+func recomputeOneDocument(ctx context.Context, repo ports.EmbeddingRepository, embedders map[string]ports.EmbeddingProvider, titleWeight float64, id string, doc domain.Document) bool {
+	embeddings := make(map[string][]float32, len(embedders))
+	for provider, embedder := range embedders {
+		vec, err := embedTitleWeighted(ctx, embedder.Embed, doc.Title, doc.Text, titleWeight)
+		if err != nil {
+			log.Printf("recomputing %s embedding for %s: %v", provider, id, err)
+			return true
+		}
+		embeddings[provider] = vec
+	}
+	if err := repo.UpdateEmbedding(ctx, id, embeddings); err != nil {
+		log.Printf("saving recomputed embedding for %s: %v", id, err)
+		return true
+	}
+	return false
 }
 
 // RunEmbeddingRecomputeJobWithStatus wraps RunEmbeddingRecomputeJob,

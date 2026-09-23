@@ -24,9 +24,26 @@ const testFiles = fs
   .filter((f) => f.endsWith('.test.js'))
   .map((f) => path.relative(process.cwd(), path.join(restapiDir, f)));
 
+// Emits the usual human-readable spec+coverage-table report to stdout
+// (unchanged from before) AND an lcov file at build/coverage-js.lcov --
+// Node's own --test-reporter supports multiple reporters/destinations at
+// once, confirmed against the actual Node 24 CI uses (see this file's own
+// coverage-flag caveat above: don't assume a flag exists without
+// checking). The lcov file feeds SonarCloud's sonar.javascript.lcov.
+// reportPaths (see sonar-project.properties) -- gitignored, build-only
+// output, same as build/ everywhere else in this repo.
+const buildDir = path.join(__dirname, '..', 'build');
+fs.mkdirSync(buildDir, { recursive: true });
+const lcovPath = path.join(buildDir, 'coverage-js.lcov');
+
 const result = spawnSync(
   process.execPath,
-  ['--test', '--experimental-test-coverage', ...testFiles],
+  [
+    '--test', '--experimental-test-coverage',
+    '--test-reporter=spec', '--test-reporter-destination=stdout',
+    '--test-reporter=lcov', `--test-reporter-destination=${lcovPath}`,
+    ...testFiles,
+  ],
   { stdio: 'inherit' },
 );
 process.exit(result.status ?? 1);
