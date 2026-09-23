@@ -390,6 +390,84 @@ func TestEnableANN_ShardedProviderFindsDocumentSignalOnlyInSecondShard(t *testin
 	}
 }
 
+// TestEnableANN_ShardBackfillSkipsRowsNotYetRecomputedToNewDimensions is a
+// direct regression test for a real production incident: a provider's
+// model changes from a narrower to a wider (sharded) dimension while its
+// corpus-wide recompute is still in progress (or was interrupted, e.g. by
+// a service restart -- RunEmbeddingRecomputeJob has no persisted
+// per-document checkpoint) -- so most rows' document_embeddings.embedding
+// blob is still the OLD, narrower length when EnableANN next runs and
+// tries to backfill every row into the NEW, wider sharded columns.
+// backfillVectorColumn used to slice each row's stored vector using
+// bounds computed from the NEW expected dims regardless of the row's own
+// actual length, which panics with "slice bounds out of range" the
+// moment it hits any such not-yet-recomputed row (crash-looping all
+// three binaries in the real incident this reproduces). It must instead
+// skip such a row cleanly -- leaving its pgvector column(s) NULL until a
+// real recompute rewrites it with a matching-length vector -- while
+// still succeeding for every row that does match.
+func TestEnableANN_ShardBackfillSkipsRowsNotYetRecomputedToNewDimensions(t *testing.T) {
+	dsn := os.Getenv(testPostgresDSNEnv)
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN not set; skipping pgvector ANN test")
+	}
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	const provider = "qwen3_vl_transition"
+	const oldDims = 3584
+	const newDims = 4096
+
+	// Old model/dims still active -- a single, unsharded column (3584 <=
+	// pgvector's 4000-dim ceiling).
+	repo.EnableANN(ctx, map[string]int{provider: oldDims})
+	if !repo.ANNAvailable(provider) {
+		t.Skip("pgvector extension not available on this Postgres server; skipping ANN test")
+	}
+
+	// Saved under the OLD model -- this row's document_embeddings.embedding
+	// blob will still be oldDims-long even after the provider config below
+	// moves to newDims, exactly like a document the recompute job hasn't
+	// reached yet.
+	staleVec := make([]float32, oldDims)
+	staleVec[0] = 1
+	staleDoc := domain.Document{ID: "stale-doc", URL: "https://example.com/stale-doc", Title: "stale-doc", Text: "stale-doc"}
+	if err := repo.SaveDocument(ctx, staleDoc, map[string][]float32{provider: staleVec}, 100, 2); err != nil {
+		t.Fatalf("saving stale-doc under the old dims: %v", err)
+	}
+
+	// Simulates the next process restart picking up the new, wider,
+	// sharded model -- must not panic even though stale-doc's stored
+	// blob is still the old length.
+	repo.EnableANN(ctx, map[string]int{provider: newDims})
+	if !repo.ANNAvailable(provider) {
+		t.Fatal("expected ANN to remain available after the dimension change, despite one stale-length row")
+	}
+
+	// A document already recomputed to the new dims -- must still be
+	// correctly backfilled and found, proving the fix skips ONLY the
+	// mismatched row, not backfilling in general.
+	freshVec := make([]float32, newDims)
+	freshVec[0] = 1
+	freshDoc := domain.Document{ID: "fresh-doc", URL: "https://example.com/fresh-doc", Title: "fresh-doc", Text: "fresh-doc"}
+	if err := repo.SaveDocument(ctx, freshDoc, map[string][]float32{provider: freshVec}, 100, 2); err != nil {
+		t.Fatalf("saving fresh-doc under the new dims: %v", err)
+	}
+
+	matches, ok, err := repo.TopSemanticMatches(ctx, freshVec, 10, provider)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if _, found := matches["fresh-doc"]; !found {
+		t.Errorf("expected fresh-doc (already at the new dims) found via ANN, got %+v", matches)
+	}
+	if _, found := matches["stale-doc"]; found {
+		t.Errorf("expected stale-doc (still at the old dims, not yet recomputed) to be absent from ANN results rather than corrupting the search, got %+v", matches)
+	}
+}
+
 // pgVectorColumnCatalogTypeAndDims reads back both a column's pgvector
 // type name and its declared dimension count from Postgres's own catalog
 // -- pgVectorColumnCatalogType (above) only returns the type name, since
