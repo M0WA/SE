@@ -180,7 +180,7 @@ func (c *fakeChatStore) DeleteChat(ctx context.Context, ownerUserID, id string) 
 // seeds one pinned chat (testChatID) owned by u, since uploads require one.
 func filesAuthedHandler(t *testing.T, userStore *fakeUserStore, fileStore *fakeFileStore, u domain.User) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
-	cfg := restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass, Users: userStore}
+	cfg := restapi.Config{Users: userStore}
 	// fileStore is assigned only when non-nil: a nil *fakeFileStore in the
 	// ports.FileStore-typed field would be a non-nil interface wrapping a
 	// nil pointer (the typed-nil gotcha), passing Handler's nil check and
@@ -244,12 +244,13 @@ func TestHandleAccountFiles_Unauthenticated(t *testing.T) {
 	}
 }
 
-// TestHandleAccountFiles_AdminRoleForbidden proves a role=admin session
-// (no domain.User row of its own) gets 403, same as /account/api/mcp-servers.
-func TestHandleAccountFiles_AdminRoleForbidden(t *testing.T) {
+// TestHandleAccountFiles_AdminRoleAllowed proves an admin session (a real
+// User row with IsAdmin=true) can use self-service files exactly like any
+// other account, since being admin only adds /admin/* access on top --
+// same as /account/api/mcp-servers.
+func TestHandleAccountFiles_AdminRoleAllowed(t *testing.T) {
 	h := restapi.New(restapi.Config{
-		AdminUser: testAdminUser, AdminPass: testAdminPass,
-		Users: &fakeUserStore{}, Files: &fakeFileStore{},
+		Users: testAdminUsersStore(), Files: &fakeFileStore{},
 	})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
@@ -264,8 +265,8 @@ func TestHandleAccountFiles_AdminRoleForbidden(t *testing.T) {
 	req.AddCookie(cookie)
 	rec = httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("expected 403, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -587,7 +588,6 @@ func TestHandleAccountFiles_BearerTokenAuth(t *testing.T) {
 	fileStore := &fakeFileStore{}
 	mcpProvider := &fakeMCPToolProvider{}
 	h := restapi.New(restapi.Config{
-		AdminUser: testAdminUser, AdminPass: testAdminPass,
 		Users: userStore, Files: fileStore,
 		Chats: &fakeChatStore{byOwner: map[string][]domain.PersistedChat{
 			"u1": {{ID: testChatID, OwnerUserID: "u1", Title: "test chat"}},

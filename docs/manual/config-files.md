@@ -9,6 +9,7 @@ Every file this project's packaging touches or ships, and how it gets installed.
 | Repo path | Deployed path | Install | Configures |
 |---|---|---|---|
 | `packaging/searchengine.env` | `/etc/searchengine/searchengine.env` | Auto (`.deb` conffile, edits preserved across upgrades) | Runtime config for all three binaries -- see [Environment variables](environment-variables.md). |
+| `packaging/create-admin.sh` | n/a -- run directly from a repo checkout, never installed anywhere | Manual, not shipped in the `.deb` | Seeds the first `is_admin=true` account directly into the database. See [Installation](installation.md) step 7. |
 | `packaging/searchengine-{search,admin,crawl}.service` | `/lib/systemd/system/searchengine-*.service` | Auto | systemd units for the three binaries. |
 | `packaging/debian/{control,postinst,prerm}` | n/a -- become the `.deb`'s own metadata/maintainer scripts | Auto (build-time) | Package metadata, dependencies, install/removal behavior. |
 | `packaging/nginx/searchengine.conf` | `/etc/nginx/sites-available/searchengine` | Manual | nginx reverse-proxy routing split between search-server and admin-server. See [packaging/nginx/README.md](https://github.com/M0WA/SE/blob/main/packaging/nginx/README.md). |

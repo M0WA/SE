@@ -356,17 +356,22 @@ func (r *Repository) migrateSessionColumns(ctx context.Context) error {
 	return r.addColumnIfMissing(ctx, "sessions", existing, "user_id", "user_id TEXT NOT NULL DEFAULT ''")
 }
 
-// migrateUserColumns adds custom_prompt to a users table predating the
-// per-user custom chat prompt feature -- already live in production
-// without it, so this needs a non-destructive ALTER TABLE, not a fresh
-// CREATE TABLE. A pre-existing row defaults to custom_prompt="" --
-// correct, since no user could have set one before.
+// migrateUserColumns adds custom_prompt and is_admin to a users table
+// predating them -- already live in production without either, so this
+// needs a non-destructive ALTER TABLE, not a fresh CREATE TABLE. A
+// pre-existing row defaults to custom_prompt="" (correct, since no user
+// could have set one before) and is_admin=false (correct: before this
+// column existed, no User row could have been the hardcoded admin --
+// packaging/create-admin.sh seeds the first real is_admin=true row).
 func (r *Repository) migrateUserColumns(ctx context.Context) error {
 	existing, err := r.existingColumns(ctx, "users")
 	if err != nil {
 		return err
 	}
-	return r.addColumnIfMissing(ctx, "users", existing, "custom_prompt", "custom_prompt TEXT NOT NULL DEFAULT ''")
+	if err := r.addColumnIfMissing(ctx, "users", existing, "custom_prompt", "custom_prompt TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return r.addColumnIfMissing(ctx, "users", existing, "is_admin", "is_admin BOOLEAN NOT NULL DEFAULT false")
 }
 
 // migrateUploadedFileColumns adds chat_id (domain.UploadedFile.ChatID) to

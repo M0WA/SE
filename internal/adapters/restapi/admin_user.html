@@ -35,6 +35,13 @@
       </div>
       <input id="user-password" class="field" type="password" autocomplete="new-password" minlength="8">
     </div>
+    <div class="form-row form-row-check">
+      <label for="user-is-admin">
+        <input id="user-is-admin" type="checkbox">
+        Admin
+      </label>
+      <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Grants /admin access on top of every self-service feature this account already has -- never a trade-off. At least one account must stay admin; removing the last one is refused.</span></button>
+    </div>
     <div class="form-row">
       <div class="label-row">
         <label for="user-custom-prompt">Personal prompt</label>

@@ -25,7 +25,7 @@ type pinnedChatResp struct {
 
 func chatsAuthedHandler(t *testing.T, userStore *fakeUserStore, chatStore *fakeChatStore, u domain.User) (*restapi.Handler, *http.Cookie) {
 	t.Helper()
-	cfg := restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass, Users: userStore}
+	cfg := restapi.Config{Users: userStore}
 	if chatStore != nil {
 		cfg.Chats = chatStore
 	}

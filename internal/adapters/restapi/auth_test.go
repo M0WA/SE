@@ -11,7 +11,7 @@ import (
 )
 
 func TestHandleLogin_Success(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Users: testAdminUsersStore()})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass, "next": "/admin"})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
@@ -31,7 +31,7 @@ func TestHandleLogin_Success(t *testing.T) {
 }
 
 func TestHandleLogin_WrongPassword(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Users: testAdminUsersStore()})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": "wrong"})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
@@ -49,7 +49,7 @@ func TestHandleLogin_WrongPassword(t *testing.T) {
 // end-to-end behavior: enough failures lock out even a correct subsequent
 // attempt, with a 429 and a Retry-After header.
 func TestHandleLogin_LockoutAfterTooManyFailures(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Users: testAdminUsersStore()})
 	wrongBody, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": "wrong"})
 
 	for i := 0; i < 6; i++ { // past loginMaxAttempts (5)
@@ -60,7 +60,7 @@ func TestHandleLogin_LockoutAfterTooManyFailures(t *testing.T) {
 	}
 
 	// Even the *correct* credentials are now refused, since the lockout
-	// kicks in before checkCredentials is ever consulted.
+	// kicks in before authenticatedRole is ever consulted.
 	correctBody, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(correctBody))
 	req.Header.Set("X-Real-IP", "203.0.113.9")
@@ -81,7 +81,7 @@ func TestHandleLogin_LockoutAfterTooManyFailures(t *testing.T) {
 // TestHandleLogin_LockoutIsPerSource proves one source's lockout doesn't
 // block another -- a different client IP still gets a normal 401.
 func TestHandleLogin_LockoutIsPerSource(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Users: testAdminUsersStore()})
 	wrongBody, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": "wrong"})
 
 	for i := 0; i < 6; i++ {
@@ -114,7 +114,7 @@ func TestHandleLogin_NotConfigured(t *testing.T) {
 }
 
 func TestHandleLogin_RejectsOpenRedirect(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Users: testAdminUsersStore()})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass, "next": "https://evil.example/"})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
@@ -128,7 +128,7 @@ func TestHandleLogin_RejectsOpenRedirect(t *testing.T) {
 }
 
 func TestHandleLogin_InvalidJSON(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader([]byte("{not json")))
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -138,7 +138,7 @@ func TestHandleLogin_InvalidJSON(t *testing.T) {
 }
 
 func TestHandleLoginPage_HeadRequestAllowed(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodHead, "/login", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -151,7 +151,7 @@ func TestHandleLoginPage_HeadRequestAllowed(t *testing.T) {
 }
 
 func TestHandleLoginRoute_GetServesPage(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodGet, "/login?next=%2Fadmin", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -161,7 +161,7 @@ func TestHandleLoginRoute_GetServesPage(t *testing.T) {
 }
 
 func TestHandleLoginRoute_UnsupportedMethod(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodPut, "/login", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -203,7 +203,7 @@ func TestHandleLogout_ClearsSession(t *testing.T) {
 }
 
 func TestHandleLogout_WithoutSessionCookieStillSucceeds(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodPost, "/logout", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -213,7 +213,7 @@ func TestHandleLogout_WithoutSessionCookieStillSucceeds(t *testing.T) {
 }
 
 func TestHandleLogout_MethodNotAllowed(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodGet, "/logout", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)

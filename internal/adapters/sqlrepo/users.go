@@ -10,7 +10,7 @@ import (
 	"searchengine/internal/ports"
 )
 
-const userColumns = "id, username, password_hash, custom_prompt, created_at, updated_at"
+const userColumns = "id, username, password_hash, is_admin, custom_prompt, created_at, updated_at"
 
 // ListUsers lists every regular-user account, ordered by username for a
 // stable admin table order (mirrors ListMCPServers ordering by name).
@@ -64,8 +64,8 @@ func (r *Repository) GetUserByUsername(ctx context.Context, username string) (do
 // see dialect.go's users table -- a real constraint under concurrent
 // creates, not a check-then-insert race).
 func (r *Repository) CreateUser(ctx context.Context, u domain.User) error {
-	insertSQL := r.ph(`INSERT INTO users (`+userColumns+`) VALUES (%s, %s, %s, %s, %s, %s)`, 1, 2, 3, 4, 5, 6)
-	_, err := r.db.ExecContext(ctx, insertSQL, u.ID, u.Username, u.PasswordHash, u.CustomPrompt,
+	insertSQL := r.ph(`INSERT INTO users (`+userColumns+`) VALUES (%s, %s, %s, %s, %s, %s, %s)`, 1, 2, 3, 4, 5, 6, 7)
+	_, err := r.db.ExecContext(ctx, insertSQL, u.ID, u.Username, u.PasswordHash, u.IsAdmin, u.CustomPrompt,
 		u.CreatedAt.UTC().Format(crawledAtLayout), u.UpdatedAt.UTC().Format(crawledAtLayout))
 	if err != nil {
 		if isUniqueViolationError(err) {
@@ -82,8 +82,8 @@ func (r *Repository) CreateUser(ctx context.Context, u domain.User) error {
 // update -- both load-then-selectively-change (restapi.handleAdminUpdateUser
 // / handleAccount).
 func (r *Repository) UpdateUser(ctx context.Context, u domain.User) error {
-	updateSQL := r.ph(`UPDATE users SET username = %s, password_hash = %s, custom_prompt = %s, updated_at = %s WHERE id = %s`, 1, 2, 3, 4, 5)
-	res, err := r.db.ExecContext(ctx, updateSQL, u.Username, u.PasswordHash, u.CustomPrompt, u.UpdatedAt.UTC().Format(crawledAtLayout), u.ID)
+	updateSQL := r.ph(`UPDATE users SET username = %s, password_hash = %s, is_admin = %s, custom_prompt = %s, updated_at = %s WHERE id = %s`, 1, 2, 3, 4, 5, 6)
+	res, err := r.db.ExecContext(ctx, updateSQL, u.Username, u.PasswordHash, u.IsAdmin, u.CustomPrompt, u.UpdatedAt.UTC().Format(crawledAtLayout), u.ID)
 	if err != nil {
 		return fmt.Errorf("updating user (%s): %w", u.ID, err)
 	}
@@ -102,7 +102,7 @@ func (r *Repository) DeleteUser(ctx context.Context, id string) error {
 func scanUser(row scanner) (domain.User, error) {
 	var u domain.User
 	var createdAt, updatedAt string
-	if err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.CustomPrompt, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.IsAdmin, &u.CustomPrompt, &createdAt, &updatedAt); err != nil {
 		return domain.User{}, err
 	}
 	u.CreatedAt = parseCrawledAt(createdAt)

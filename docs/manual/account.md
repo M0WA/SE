@@ -4,7 +4,7 @@
 
 *`/account`*
 
-Self-service page for a regular-user (not admin) account to change its password and set a personal chat prompt, no admin needed. Reached from the gear/person icon on the public search/chat page.
+Self-service page for your own account to change its password and set a personal chat prompt, no admin needed -- works the same whether or not your account has admin rights, since being an admin only adds `/admin/*` access, it never takes self-service away. Reached from the gear/person icon on the public search/chat page.
 
 ![Your account](images/account.png)
 
@@ -19,9 +19,6 @@ Free text, up to 4000 characters, injected as your own leading system message on
 ## Your MCP servers and Your files
 
 Two links at the top of this page lead to your own personal tool servers and uploaded files -- see [Your MCP servers](account-mcp-servers.md) and [Your files](account-files.md).
-
-> **Worth knowing:**
-> - This page refuses the admin account with a 403 -- the hardcoded admin login has no `users` row here to change.
 
 ---
 ← [Search & Chat](search-chat.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Your MCP servers](account-mcp-servers.md) →

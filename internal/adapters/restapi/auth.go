@@ -85,28 +85,13 @@ func randomToken() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-// authConfigured reports whether an admin account exists. Until it does,
-// /login always refuses -- fails closed, never defaults to open access.
-func (h *Handler) authConfigured() bool {
-	return h.adminUser != "" && h.adminPass != ""
-}
-
-func (h *Handler) checkCredentials(user, pass string) bool {
-	if !h.authConfigured() {
-		return false
-	}
-	userOK := subtle.ConstantTimeCompare([]byte(user), []byte(h.adminUser)) == 1
-	passOK := subtle.ConstantTimeCompare([]byte(pass), []byte(h.adminPass)) == 1
-	return userOK && passOK
-}
-
 // sessionRoleFor resolves the caller's role and userID from the se_session
 // cookie via the server-side session record -- the cookie is just an
 // opaque token, so nothing the client sends can influence the role. ok is
-// false for no/unknown/expired cookie. userID is non-empty only for
-// domain.RoleUser (the hardcoded admin has no domain.User row). Every
-// caller goes through this one function so a request never looks up its
-// session twice.
+// false for no/unknown/expired cookie. userID is non-empty for any
+// authenticated session, admin included -- every session belongs to a real
+// domain.User row now. Every caller goes through this one function so a
+// request never looks up its session twice.
 func (h *Handler) sessionRoleFor(r *http.Request) (role string, userID string, ok bool) {
 	c, err := r.Cookie(sessionCookieName)
 	if err != nil {
@@ -178,42 +163,6 @@ func (h *Handler) requireAdminAuthAPI(next http.HandlerFunc) http.HandlerFunc {
 		}
 		if role != domain.RoleAdmin {
 			http.Error(w, "admin access required", http.StatusForbidden)
-			return
-		}
-		next(w, r)
-	}
-}
-
-// requireRegularUserAuthPage mirrors requireAdminAuthPage, gating a page
-// only domain.RoleUser should reach (e.g. /account -- admin has no
-// domain.User row to edit). Unauthenticated -> redirect to /login.
-// role == domain.RoleAdmin -> 403, not a redirect.
-func (h *Handler) requireRegularUserAuthPage(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		role, _, ok := h.sessionRoleFor(r)
-		if !ok {
-			http.Redirect(w, r, loginRedirectPath+url.QueryEscape(r.URL.Path), http.StatusSeeOther)
-			return
-		}
-		if role == domain.RoleAdmin {
-			http.Error(w, "this feature is not available for the admin account", http.StatusForbidden)
-			return
-		}
-		next(w, r)
-	}
-}
-
-// requireRegularUserAuthAPI gates /account/api: 401 if unauthenticated,
-// 403 if role == domain.RoleAdmin.
-func (h *Handler) requireRegularUserAuthAPI(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		role, _, ok := h.sessionRoleFor(r)
-		if !ok {
-			http.Error(w, authRequiredMsg, http.StatusUnauthorized)
-			return
-		}
-		if role == domain.RoleAdmin {
-			http.Error(w, "this feature is not available for the admin account", http.StatusForbidden)
 			return
 		}
 		next(w, r)
@@ -381,15 +330,13 @@ func clientIP(r *http.Request) string {
 // it never actually matches.
 var dummyPasswordHash, _ = bcrypt.GenerateFromPassword([]byte("dummy-password-for-timing-safety"), bcrypt.DefaultCost)
 
-// authenticatedRole checks user/pass against the hardcoded admin first,
-// then domain.User rows if configured -- returns the role and, for a
-// RoleUser match, the user's ID, or ok=false if neither matched. Every
+// authenticatedRole checks user/pass against domain.User rows -- there is
+// no separate hardcoded admin account to check first. Returns the role
+// (domain.RoleAdmin if the matched row has IsAdmin set, domain.RoleUser
+// otherwise) and the user's ID, or ok=false if nothing matched. Every
 // failure path does the same bcrypt work, so none is distinguishable by
 // response timing.
 func (h *Handler) authenticatedRole(ctx context.Context, user, pass string) (role string, userID string, ok bool) {
-	if h.checkCredentials(user, pass) {
-		return domain.RoleAdmin, "", true
-	}
 	if h.users == nil {
 		return "", "", false
 	}
@@ -403,6 +350,9 @@ func (h *Handler) authenticatedRole(ctx context.Context, user, pass string) (rol
 	}
 	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(pass)) != nil {
 		return "", "", false
+	}
+	if u.IsAdmin {
+		return domain.RoleAdmin, u.ID, true
 	}
 	return domain.RoleUser, u.ID, true
 }

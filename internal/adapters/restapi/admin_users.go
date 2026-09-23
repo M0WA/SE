@@ -44,13 +44,14 @@ func validateUserPassword(w http.ResponseWriter, password string) bool {
 type userResponse struct {
 	ID           string    `json:"id"`
 	Username     string    `json:"username"`
+	IsAdmin      bool      `json:"is_admin"`
 	CustomPrompt string    `json:"custom_prompt"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func toUserResponse(u domain.User) userResponse {
-	return userResponse{ID: u.ID, Username: u.Username, CustomPrompt: u.CustomPrompt, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt}
+	return userResponse{ID: u.ID, Username: u.Username, IsAdmin: u.IsAdmin, CustomPrompt: u.CustomPrompt, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt}
 }
 
 // createUserRequest's CustomPrompt is a plain string, not a pointer like
@@ -58,22 +59,24 @@ func toUserResponse(u domain.User) userResponse {
 type createUserRequest struct {
 	Username     string `json:"username"`
 	Password     string `json:"password"`
+	IsAdmin      bool   `json:"is_admin"`
 	CustomPrompt string `json:"custom_prompt"`
 }
 
 // updateUserRequest uses pointer fields for the same reason
-// updateAccountRequest does: "omitted" vs "cleared to empty" must be
-// distinguishable for CustomPrompt, and an invalid Password is rejected
-// (400), never ignored. Username is never editable -- a User's ID is
-// minted from it at creation (domain.NewUserID), so renaming would orphan
-// the ID sessions/logs still reference.
+// updateAccountRequest does: "omitted" vs "cleared to empty"/"cleared to
+// false" must be distinguishable for CustomPrompt/IsAdmin, and an invalid
+// Password is rejected (400), never ignored. Username is never editable --
+// a User's ID is minted from it at creation (domain.NewUserID), so
+// renaming would orphan the ID sessions/logs still reference.
 type updateUserRequest struct {
 	Password     *string `json:"password"`
+	IsAdmin      *bool   `json:"is_admin"`
 	CustomPrompt *string `json:"custom_prompt"`
 }
 
-// handleAdminUsers lists (GET) or creates (POST) regular-user accounts,
-// mirroring handleAdminMCPServers' style closely.
+// handleAdminUsers lists (GET) or creates (POST) accounts, admin and
+// regular alike, mirroring handleAdminMCPServers' style closely.
 func (h *Handler) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.users != nil, "users") {
 		return
@@ -103,12 +106,6 @@ func (h *Handler) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "username must not be empty", http.StatusBadRequest)
 		return
 	}
-	// A user sharing the hardcoded admin's username would be ambiguous at
-	// login time -- reject it outright rather than define a precedence rule.
-	if h.adminUser != "" && username == h.adminUser {
-		http.Error(w, "username is reserved for the admin account", http.StatusBadRequest)
-		return
-	}
 	if !validateUserPassword(w, req.Password) {
 		return
 	}
@@ -130,7 +127,7 @@ func (h *Handler) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	u := domain.User{
 		ID: domain.NewUserID(username, existingIDs), Username: username,
-		PasswordHash: string(hash), CustomPrompt: req.CustomPrompt, CreatedAt: now, UpdatedAt: now,
+		PasswordHash: string(hash), IsAdmin: req.IsAdmin, CustomPrompt: req.CustomPrompt, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := h.users.CreateUser(r.Context(), u); err != nil {
 		if errors.Is(err, ports.ErrUsernameTaken) {
@@ -161,9 +158,10 @@ func (h *Handler) handleAdminGetUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toUserResponse(u))
 }
 
-// handleAdminUpdateUser lets the admin reset a password and/or
-// custom_prompt on a user's behalf (username never editable). Loads the
-// existing row first and only changes fields present in the request.
+// handleAdminUpdateUser lets an admin reset another account's password,
+// is_admin flag, and/or custom_prompt on its behalf (username never
+// editable). Loads the existing row first and only changes fields present
+// in the request.
 func (h *Handler) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.users != nil, "users") {
 		return
@@ -205,6 +203,14 @@ func (h *Handler) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) 
 	if req.CustomPrompt != nil {
 		existing.CustomPrompt = *req.CustomPrompt
 	}
+	if req.IsAdmin != nil && existing.IsAdmin && !*req.IsAdmin {
+		if err := h.refuseIfLastAdmin(w, r); err != nil {
+			return
+		}
+	}
+	if req.IsAdmin != nil {
+		existing.IsAdmin = *req.IsAdmin
+	}
 	existing.UpdatedAt = time.Now().UTC()
 	err = h.users.UpdateUser(r.Context(), existing)
 	respondOrNotFound(w, err, ports.ErrUserNotFound, msgUserNotFound, toUserResponse(existing))
@@ -214,6 +220,49 @@ func (h *Handler) handleAdminDeleteUser(w http.ResponseWriter, r *http.Request) 
 	if !requireConfigured(w, h.users != nil, "users") {
 		return
 	}
-	err := h.users.DeleteUser(r.Context(), r.PathValue("id"))
+	id := r.PathValue("id")
+	existing, err := h.users.GetUser(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, ports.ErrUserNotFound) {
+			http.Error(w, msgUserNotFound, http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if existing.IsAdmin {
+		if err := h.refuseIfLastAdmin(w, r); err != nil {
+			return
+		}
+	}
+	err = h.users.DeleteUser(r.Context(), id)
 	respondOrNotFound(w, err, ports.ErrUserNotFound, msgUserNotFound, map[string]bool{"ok": true})
+}
+
+// refuseIfLastAdmin writes a 400 and returns a non-nil error if there is
+// currently only one IsAdmin=true row left -- called only once the caller
+// has already confirmed the row being demoted/deleted is itself an admin,
+// so "only one left" means "this would remove the last one": a demotion or
+// deletion that would otherwise lock every admin route (and this same
+// page) forever, with no admin session left to undo it from. Any other
+// error listing users is surfaced as 500 the same way the rest of this
+// file does.
+func (h *Handler) refuseIfLastAdmin(w http.ResponseWriter, r *http.Request) error {
+	users, err := h.users.ListUsers(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return err
+	}
+	admins := 0
+	for _, u := range users {
+		if u.IsAdmin {
+			admins++
+		}
+	}
+	if admins <= 1 {
+		err := errors.New("cannot remove the last remaining admin account")
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return err
+	}
+	return nil
 }

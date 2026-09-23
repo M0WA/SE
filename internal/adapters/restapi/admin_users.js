@@ -13,10 +13,11 @@
     }
     statusEl.textContent = '';
     const table = buildTable(
-      [{ label: 'username' }, { label: 'created' }, { label: '' }],
+      [{ label: 'username' }, { label: 'admin' }, { label: 'created' }, { label: '' }],
       users,
       (u) => [
         textCell(u.username),
+        textCell(u.is_admin ? 'yes' : 'no'),
         textCell(u.created_at ? new Date(u.created_at).toLocaleString() : ''),
         userActionsCell(u),
       ],

@@ -245,10 +245,11 @@ type Handler struct {
 	// same *sqlrepo.Repository as chatEndpoints/mcpServers.
 	agents ports.AgentStore
 	// users backs the admin API's user CRUD and handleLogin's DB-backed
-	// lookup on admin-server, plus search-server's /account routes and
+	// lookup on admin-server (the only login path -- there is no separate
+	// hardcoded admin account), plus search-server's /account routes and
 	// handleChat's per-user prompt lookup (see userCustomPromptFor). nil is
-	// valid (no user accounts; login checks only the admin) for a Handler
-	// that never sets it, e.g. crawl-server.
+	// valid (no accounts at all, so login always fails closed) for a
+	// Handler that never sets it, e.g. crawl-server.
 	// userMCPServers backs the self-service MCP server CRUD -- set on
 	// search-server only, same *sqlrepo.Repository as users. ChatService
 	// holds its own separate reference (wired in cmd/search's main) for
@@ -270,8 +271,6 @@ type Handler struct {
 	health          ports.HealthChecker
 	onCrawlComplete func()
 	dbDriver        string
-	adminUser       string
-	adminPass       string
 	sessions        ports.SessionStore
 	loginLimiter    *loginLimiter
 	// crawlInternalToken, when set, is the shared secret
@@ -300,8 +299,10 @@ type Handler struct {
 
 // Config wires a Handler's dependencies. Crawler/CrawlJobs are used only
 // by crawl-server; Jobs only by admin-server. Most fields are optional:
-// without AdminUser/AdminPass, auth fails closed; without a given
-// repository/store, its endpoints report unavailable rather than erroring.
+// without a given repository/store, its endpoints report unavailable
+// rather than erroring. Auth is entirely DB-backed (Users) -- without any
+// IsAdmin=true row, sign-in fails closed for /admin and /crawl; see
+// packaging/create-admin.sh for seeding the first one.
 type Config struct {
 	Search    ports.SearchService
 	Crawler   ports.CrawlerService
@@ -381,8 +382,6 @@ type Config struct {
 	// delaying the job's reported completion.
 	OnCrawlComplete func()
 	DBDriver        string
-	AdminUser       string
-	AdminPass       string
 	// CrawlInternalToken, when set, is the shared secret
 	// requireCrawlInternalToken enforces on RoutesCrawlInternal, checked
 	// against X-Internal-Token; crawlclient.Client sends it on every request.
@@ -442,8 +441,6 @@ func New(cfg Config) *Handler {
 		health:                cfg.Health,
 		onCrawlComplete:       cfg.OnCrawlComplete,
 		dbDriver:              cfg.DBDriver,
-		adminUser:             cfg.AdminUser,
-		adminPass:             cfg.AdminPass,
 		sessions:              sessions,
 		loginLimiter:          newLoginLimiter(),
 		crawlInternalToken:    cfg.CrawlInternalToken,
@@ -494,28 +491,28 @@ func (h *Handler) RoutesSearch() http.Handler {
 	mux.HandleFunc("POST /chat", h.requireAuthAPI(h.handleChat))
 	mux.HandleFunc("/agents", h.requireAuthAPI(h.handleChatAgents))
 	mux.HandleFunc("/session", h.requireAuthAPI(h.handleSession))
-	mux.HandleFunc("/account", h.requireRegularUserAuthPage(h.handleAccountPage))
+	mux.HandleFunc("/account", h.requireAuthPage(h.handleAccountPage))
 	mux.HandleFunc("/account.js", h.handleAccountJS)
-	mux.HandleFunc("/account/api", h.requireRegularUserAuthAPI(h.handleAccount))
-	mux.HandleFunc("/account/mcp-servers", h.requireRegularUserAuthPage(h.handleAccountMCPServersPage))
+	mux.HandleFunc("/account/api", h.requireAuthAPI(h.handleAccount))
+	mux.HandleFunc("/account/mcp-servers", h.requireAuthPage(h.handleAccountMCPServersPage))
 	mux.HandleFunc("/account_mcp_servers.js", h.handleAccountMCPServersJS)
-	mux.HandleFunc("/account/mcp-servers/{id}", h.requireRegularUserAuthPage(h.handleAccountMCPServerPage))
+	mux.HandleFunc("/account/mcp-servers/{id}", h.requireAuthPage(h.handleAccountMCPServerPage))
 	mux.HandleFunc("/account_mcp_server.js", h.handleAccountMCPServerJS)
-	mux.HandleFunc("/account/api/mcp-servers", h.requireRegularUserAuthAPI(h.handleAccountMCPServers))
-	mux.HandleFunc("GET /account/api/mcp-servers/{id}", h.requireRegularUserAuthAPI(h.handleAccountGetMCPServer))
-	mux.HandleFunc("PATCH /account/api/mcp-servers/{id}", h.requireRegularUserAuthAPI(h.handleAccountUpdateMCPServer))
-	mux.HandleFunc("DELETE /account/api/mcp-servers/{id}", h.requireRegularUserAuthAPI(h.handleAccountDeleteMCPServer))
-	mux.HandleFunc("/account/files", h.requireRegularUserAuthPage(h.handleAccountFilesPage))
+	mux.HandleFunc("/account/api/mcp-servers", h.requireAuthAPI(h.handleAccountMCPServers))
+	mux.HandleFunc("GET /account/api/mcp-servers/{id}", h.requireAuthAPI(h.handleAccountGetMCPServer))
+	mux.HandleFunc("PATCH /account/api/mcp-servers/{id}", h.requireAuthAPI(h.handleAccountUpdateMCPServer))
+	mux.HandleFunc("DELETE /account/api/mcp-servers/{id}", h.requireAuthAPI(h.handleAccountDeleteMCPServer))
+	mux.HandleFunc("/account/files", h.requireAuthPage(h.handleAccountFilesPage))
 	mux.HandleFunc("/account_files.js", h.handleAccountFilesJS)
-	// /account/api/files is deliberately NOT wrapped in
-	// requireRegularUserAuthAPI: cmd/mcp-files calls it with a bearer
-	// token, so handleAccountFiles/handleAccountFile gate it themselves --
-	// see fileAccessUserID.
+	// /account/api/files is deliberately NOT wrapped in requireAuthAPI:
+	// cmd/mcp-files calls it with a bearer token, so
+	// handleAccountFiles/handleAccountFile gate it themselves -- see
+	// fileAccessUserID.
 	mux.HandleFunc("/account/api/files", h.handleAccountFiles)
 	mux.HandleFunc("/account/api/files/{id}", h.handleAccountFile)
-	mux.HandleFunc("/account/api/chats", h.requireRegularUserAuthAPI(h.handleAccountChats))
-	mux.HandleFunc("PATCH /account/api/chats/{id}", h.requireRegularUserAuthAPI(h.handleAccountUpdateChat))
-	mux.HandleFunc("DELETE /account/api/chats/{id}", h.requireRegularUserAuthAPI(h.handleAccountDeleteChat))
+	mux.HandleFunc("/account/api/chats", h.requireAuthAPI(h.handleAccountChats))
+	mux.HandleFunc("PATCH /account/api/chats/{id}", h.requireAuthAPI(h.handleAccountUpdateChat))
+	mux.HandleFunc("DELETE /account/api/chats/{id}", h.requireAuthAPI(h.handleAccountDeleteChat))
 	mux.HandleFunc("/healthz", h.handleHealthz)
 	return withSecurityHeaders(mux)
 }

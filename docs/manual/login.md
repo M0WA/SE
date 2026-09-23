@@ -10,7 +10,7 @@ The gate in front of every admin page. Nobody reaches /admin, /crawl, or any /ad
 
 ## What you need
 
-You need the admin username and password set up for this server -- no self-registration or "forgot password" flow, so ask whoever installed the system if you lack credentials. If every combination fails, including ones you're sure are correct, the likely cause isn't a typo: no admin account has been configured yet, and sign-in fails closed rather than defaulting to open access until one is.
+You need an account set up for this server (username and password) -- no self-registration or "forgot password" flow, so ask an existing admin if you lack credentials, or see `packaging/create-admin.sh` if none exists yet. If every combination fails, including ones you're sure are correct, the likely cause isn't a typo: no admin account has been created yet, and sign-in fails closed rather than defaulting to open access until one is.
 
 ## Signing in
 

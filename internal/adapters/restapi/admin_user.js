@@ -8,6 +8,7 @@
   const usernameEl = document.getElementById('user-username');
   const passwordEl = document.getElementById('user-password');
   const passwordLabelEl = document.getElementById('user-password-label');
+  const isAdminEl = document.getElementById('user-is-admin');
   const customPromptEl = document.getElementById('user-custom-prompt');
   const saveBtn = document.getElementById('user-save-btn');
   const deleteBtn = document.getElementById('user-delete-btn');
@@ -35,16 +36,17 @@
     usernameEl.value = u.username;
     usernameEl.disabled = true;
     passwordEl.value = '';
+    isAdminEl.checked = !!u.is_admin;
     customPromptEl.value = u.custom_prompt || '';
 
     form.hidden = false;
   }
 
   // requestBody omits password when blank in edit mode (blank = keep current, see applyUser),
-  // but always includes it in new mode (required there). custom_prompt is always sent, even
-  // cleared, since the textarea is its single source of truth.
+  // but always includes it in new mode (required there). is_admin/custom_prompt are always
+  // sent, even cleared/unchecked, since their own form controls are the single source of truth.
   function requestBody() {
-    const body = { custom_prompt: customPromptEl.value };
+    const body = { is_admin: isAdminEl.checked, custom_prompt: customPromptEl.value };
     if (isNew || passwordEl.value) {
       body.password = passwordEl.value;
     }

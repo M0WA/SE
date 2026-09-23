@@ -1636,12 +1636,15 @@ test('sign-out posts to /logout on click', async () => {
   assert.equal(fetchedOpts.method, 'POST');
 });
 
-test('loadSession shows the admin link for an admin-role session', async () => {
-  global.fetch = async () => ({ ok: true, json: async () => ({ role: 'admin' }) });
+test('loadSession shows both the admin and account links for an admin-role session', async () => {
+  global.fetch = async (url) => {
+    if (url === '/session') return { ok: true, json: async () => ({ role: 'admin' }) };
+    return { ok: false, status: 404, text: async () => 'not found' };
+  };
   const { loadSession } = loadFixture();
   await loadSession();
   assert.equal(document.getElementById('admin-link').hidden, false);
-  assert.equal(document.getElementById('account-link').hidden, true);
+  assert.equal(document.getElementById('account-link').hidden, false);
 });
 
 test('loadSession shows the account link for a user-role session', async () => {
