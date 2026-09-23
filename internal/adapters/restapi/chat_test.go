@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"searchengine/internal/adapters/restapi"
 	"searchengine/internal/application"
@@ -305,7 +306,7 @@ func chatAuthedHandler(t *testing.T, chat *application.ChatService) (*restapi.Ha
 	t.Helper()
 	h := restapi.New(restapi.Config{
 		Search: &fakeSearch{}, Chat: chat,
-		AdminUser: testAdminUser, AdminPass: testAdminPass,
+		Users: testAdminUsersStore(),
 	})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
@@ -328,7 +329,6 @@ func chatAuthedHandlerWithUser(t *testing.T, chat *application.ChatService, stor
 	t.Helper()
 	h := restapi.New(restapi.Config{
 		Search: &fakeSearch{}, Chat: chat, Users: store,
-		AdminUser: testAdminUser, AdminPass: testAdminPass,
 	})
 	body, _ := json.Marshal(map[string]string{"username": u.Username, "password": testUserPassword})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
@@ -616,9 +616,10 @@ func TestHandleChat_FileAccessTokenReachesMCPEnv(t *testing.T) {
 	}
 }
 
-// TestHandleChat_AdminRoleGetsNoFileAccessToken proves an admin session
-// (no domain.User row) never gets a file-access token minted.
-func TestHandleChat_AdminRoleGetsNoFileAccessToken(t *testing.T) {
+// TestHandleChat_AdminRoleGetsFileAccessToken proves an admin session (a
+// real User row, same as any other account) gets a file-access token
+// minted exactly like a regular user's session would.
+func TestHandleChat_AdminRoleGetsFileAccessToken(t *testing.T) {
 	provider := &fakeMCPToolProvider{}
 	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
 		{ID: "1", Name: "files", Transport: "stdio", Command: "mcp-files", Enabled: true},
@@ -628,7 +629,7 @@ func TestHandleChat_AdminRoleGetsNoFileAccessToken(t *testing.T) {
 		&fakeChatCompleter{answer: "plain answer"}, servers, provider, nil, nil)
 	h := restapi.New(restapi.Config{
 		Search: &fakeSearch{}, Chat: svc,
-		AdminUser: testAdminUser, AdminPass: testAdminPass,
+		Users: testAdminUsersStore(),
 	})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
@@ -645,8 +646,8 @@ func TestHandleChat_AdminRoleGetsNoFileAccessToken(t *testing.T) {
 	if chatRec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", chatRec.Code, chatRec.Body.String())
 	}
-	if got, ok := provider.openedEnv["SE_FILES_API_TOKEN"]; ok {
-		t.Errorf("expected no SE_FILES_API_TOKEN for an admin session, got %q", got)
+	if got, ok := provider.openedEnv["SE_FILES_API_TOKEN"]; !ok || got == "" {
+		t.Errorf("expected a non-empty SE_FILES_API_TOKEN for an admin session, got ok=%v val=%q", ok, got)
 	}
 }
 
@@ -670,7 +671,7 @@ func TestHandleChat_UserAgentFromOpSettingsReachesMCPEnv(t *testing.T) {
 	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{UserAgent: "custom-agent/9.0"})
 	h := restapi.New(restapi.Config{
 		Search: &fakeSearch{}, Chat: svc, OpSettings: opSettings,
-		AdminUser: testAdminUser, AdminPass: testAdminPass,
+		Users: testAdminUsersStore(),
 	})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
@@ -739,7 +740,7 @@ func chatAgentsAuthedHandler(t *testing.T, agents ports.AgentStore) (*restapi.Ha
 	t.Helper()
 	h := restapi.New(restapi.Config{
 		Search: &fakeSearch{}, Agents: agents,
-		AdminUser: testAdminUser, AdminPass: testAdminPass,
+		Users: testAdminUsersStore(),
 	})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
@@ -756,7 +757,7 @@ func chatAgentsAuthedHandler(t *testing.T, agents ports.AgentStore) (*restapi.Ha
 }
 
 func TestHandleChatAgents_Unauthenticated(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodGet, "/agents", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
@@ -854,17 +855,19 @@ func TestHandleChatAgents_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-// TestHandleChat_AdminRoleNeverLooksUpAPerUserPrompt proves a role=admin
-// session never even attempts a per-user prompt lookup -- checked via
-// fakeUserStore.getCount, not just an empty result.
-func TestHandleChat_AdminRoleNeverLooksUpAPerUserPrompt(t *testing.T) {
-	store := &fakeUserStore{}
+// TestHandleChat_AdminRoleGetsItsOwnCustomPromptInjected proves a
+// role=admin session's own personal prompt is looked up and injected
+// exactly like a regular user's, since admin is a real User row now --
+// mirrors TestHandleChat_UserCustomPromptReachesChatOptions.
+func TestHandleChat_AdminRoleGetsItsOwnCustomPromptInjected(t *testing.T) {
+	admin := newTestAdminUser("admin1", testAdminUser)
+	admin.CustomPrompt = "Always answer in haiku."
+	store := &fakeUserStore{users: []domain.User{admin}}
 	svc := application.NewChatService(
 		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}},
 		&fakeChatCompleter{answer: "plain answer"}, nil, nil, nil, nil)
 	h := restapi.New(restapi.Config{
 		Search: &fakeSearch{}, Chat: svc, Users: store,
-		AdminUser: testAdminUser, AdminPass: testAdminPass,
 	})
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
 	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
@@ -881,11 +884,88 @@ func TestHandleChat_AdminRoleNeverLooksUpAPerUserPrompt(t *testing.T) {
 	if chatRec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", chatRec.Code, chatRec.Body.String())
 	}
-	if store.getCount != 0 {
-		t.Errorf("expected no GetUser calls for an admin session, got %d", store.getCount)
+	if store.getCount == 0 {
+		t.Errorf("expected handleChat to look up the admin's own User row for its custom prompt")
 	}
-	if strings.Contains(chatRec.Body.String(), `"user_prompt_tokens":1`) {
-		t.Errorf("expected no user prompt injected for an admin session, got %s", chatRec.Body.String())
+	var resp struct {
+		TokenUsage struct {
+			UserPromptTokens int `json:"user_prompt_tokens"`
+		} `json:"token_usage"`
+	}
+	if err := json.Unmarshal(chatRec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.TokenUsage.UserPromptTokens <= 0 {
+		t.Errorf("expected the admin's own custom prompt to be injected, got %+v", resp.TokenUsage)
+	}
+}
+
+// TestHandleChat_UsersNotConfiguredNoCustomPromptInjected proves an
+// authenticated session (real userID, via fakeUserRoleSessionStore) with
+// h.users == nil still completes the chat turn normally, just without a
+// custom prompt -- userCustomPromptFor's h.users==nil branch, best-effort
+// and silent by design.
+func TestHandleChat_UsersNotConfiguredNoCustomPromptInjected(t *testing.T) {
+	svc := application.NewChatService(
+		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}},
+		&fakeChatCompleter{answer: "plain answer"}, nil, nil, nil, nil)
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Chat: svc, Sessions: fakeUserRoleSessionStore{}})
+	cookie := &http.Cookie{Name: "se_session", Value: "anything"}
+	rec := postChat(t, h, cookie, map[string]interface{}{
+		"messages": []map[string]string{{"role": "user", "content": "hi"}},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		TokenUsage struct {
+			UserPromptTokens int `json:"user_prompt_tokens"`
+		} `json:"token_usage"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.TokenUsage.UserPromptTokens != 0 {
+		t.Errorf("expected no custom prompt injected when h.users is nil, got %+v", resp.TokenUsage)
+	}
+}
+
+// fakeEmptySessionUserIDStore treats every token as a valid role=user
+// session with an empty userID -- lets a test reach fileAccessTokenFor's
+// userID=="" branch, which a real login (always a real User row now, with
+// a real ID) could never produce. Mirrors fakeUserRoleSessionStore.
+type fakeEmptySessionUserIDStore struct{}
+
+func (fakeEmptySessionUserIDStore) CreateSession(context.Context, string, time.Time, string, string) error {
+	return nil
+}
+func (fakeEmptySessionUserIDStore) ValidSession(context.Context, string) (bool, string, string, error) {
+	return true, domain.RoleUser, "", nil
+}
+func (fakeEmptySessionUserIDStore) RevokeSession(context.Context, string) error { return nil }
+
+// TestHandleChat_EmptySessionUserIDGetsNoFileAccessToken proves
+// fileAccessTokenFor's userID=="" branch: an authenticated session that
+// somehow carries no userID gets no file-access token, rather than
+// panicking or minting one for an empty owner.
+func TestHandleChat_EmptySessionUserIDGetsNoFileAccessToken(t *testing.T) {
+	provider := &fakeMCPToolProvider{}
+	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
+		{ID: "1", Name: "files", Transport: "stdio", Command: "mcp-files", Enabled: true},
+	}}
+	svc := application.NewChatService(
+		&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}},
+		&fakeChatCompleter{answer: "plain answer"}, servers, provider, nil, nil)
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Chat: svc, Sessions: fakeEmptySessionUserIDStore{}})
+	cookie := &http.Cookie{Name: "se_session", Value: "anything"}
+	rec := postChat(t, h, cookie, map[string]interface{}{
+		"messages": []map[string]string{{"role": "user", "content": "hi"}},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got, ok := provider.openedEnv["SE_FILES_API_TOKEN"]; ok {
+		t.Errorf("expected no SE_FILES_API_TOKEN for a session with no userID, got %q", got)
 	}
 }
 

@@ -105,7 +105,7 @@ func authedHandler(t *testing.T, search *fakeSearch, jobs ports.CrawlJobService)
 	t.Helper()
 	h := restapi.New(restapi.Config{
 		Search: search, Jobs: jobs,
-		AdminUser: testAdminUser, AdminPass: testAdminPass,
+		Users: testAdminUsersStore(),
 	})
 
 	body, _ := json.Marshal(map[string]string{"username": testAdminUser, "password": testAdminPass})
@@ -141,7 +141,7 @@ func TestHandleIndex_Success(t *testing.T) {
 }
 
 func TestHandleIndex_Unauthenticated_Redirects(t *testing.T) {
-	h := restapi.New(restapi.Config{Search: &fakeSearch{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
@@ -291,7 +291,7 @@ func TestHandleSearch_Success(t *testing.T) {
 }
 
 func TestHandleSearch_Unauthenticated_Returns401(t *testing.T) {
-	h := restapi.New(restapi.Config{Search: &fakeSearch{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
@@ -306,7 +306,7 @@ func TestHandleSearch_Unauthenticated_Returns401(t *testing.T) {
 // plain requireAuthAPI: with InternalSearchAPIKey unset, no cookie/header
 // still gets a plain 401, as before this bypass existed.
 func TestHandleSearch_NoInternalKeyConfigured_StillRequiresSession(t *testing.T) {
-	h := restapi.New(restapi.Config{Search: &fakeSearch{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodGet, "/search?q=katzen", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
@@ -362,7 +362,7 @@ func TestHandleSearch_ValidSessionWithInternalKeyConfigured_StillWorks(t *testin
 	fs := &fakeSearch{results: []domain.SearchResult{{URL: "http://a", Score: 1}}}
 	h := restapi.New(restapi.Config{
 		Search: fs, Jobs: nil,
-		AdminUser: testAdminUser, AdminPass: testAdminPass,
+		Users:                testAdminUsersStore(),
 		InternalSearchAPIKey: "s3cret-key",
 	})
 
@@ -593,7 +593,7 @@ func TestHandleHealthz_SearchServer_HealthyWhenDBPingSucceeds(t *testing.T) {
 }
 
 func TestHandleHealthz_AdminServer_Unauthenticated(t *testing.T) {
-	h := restapi.New(restapi.Config{Search: &fakeSearch{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)
@@ -605,7 +605,7 @@ func TestHandleHealthz_AdminServer_Unauthenticated(t *testing.T) {
 
 func TestHandleHealthz_AdminServer_UnhealthyWhenDBPingFails(t *testing.T) {
 	h := restapi.New(restapi.Config{
-		Search: &fakeSearch{}, AdminUser: testAdminUser, AdminPass: testAdminPass,
+		Search: &fakeSearch{}, Users: testAdminUsersStore(),
 		Health: &fakeHealthChecker{err: errors.New("db unreachable")},
 	})
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
@@ -628,7 +628,7 @@ func TestHandleHealthz_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHandleAdminCrawlPage_Unauthenticated_Redirects(t *testing.T) {
-	h := restapi.New(restapi.Config{Search: &fakeSearch{}, AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{Search: &fakeSearch{}, Users: testAdminUsersStore()})
 	req := httptest.NewRequest(http.MethodGet, "/admin/crawl", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesAdmin().ServeHTTP(rec, req)

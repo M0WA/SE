@@ -20,7 +20,7 @@ import (
 // --- GET /session ---
 
 func TestHandleSession_Unauthenticated(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{})
 	req := httptest.NewRequest(http.MethodGet, "/session", nil)
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
@@ -94,7 +94,7 @@ func TestHandleSession_MethodNotAllowed(t *testing.T) {
 // --- requireRegularUserAuthPage/API gating (via /account, /account/api) ---
 
 func TestAccount_Unauthenticated_PageRedirectsAPIRefuses(t *testing.T) {
-	h := restapi.New(restapi.Config{AdminUser: testAdminUser, AdminPass: testAdminPass})
+	h := restapi.New(restapi.Config{})
 
 	req := httptest.NewRequest(http.MethodGet, "/account", nil)
 	rec := httptest.NewRecorder()
@@ -111,26 +111,35 @@ func TestAccount_Unauthenticated_PageRedirectsAPIRefuses(t *testing.T) {
 	}
 }
 
-func TestAccount_AdminRoleRefused(t *testing.T) {
+// TestAccount_AdminRoleReachesPageAndAPI proves an admin session can use
+// self-service /account exactly like any regular user session, since being
+// admin only adds /admin/* access on top -- it never takes self-service
+// away. authedHandler's admin login is a real User row now (IsAdmin=true),
+// so GET /account/api returns that row's own username.
+func TestAccount_AdminRoleReachesPageAndAPI(t *testing.T) {
 	h, cookie := authedHandler(t, &fakeSearch{}, &fakeJobService{})
 
 	req := httptest.NewRequest(http.MethodGet, "/account", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("expected 403 for /account as admin, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "not available for the admin account") {
-		t.Errorf("expected explanatory message, got %q", rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 for /account as admin, got %d: %s", rec.Code, rec.Body.String())
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/account/api", nil)
 	req.AddCookie(cookie)
 	rec = httptest.NewRecorder()
 	h.RoutesSearch().ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("expected 403 for /account/api as admin, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for /account/api as admin, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp accountResponseForTest
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.Username != testAdminUser {
+		t.Errorf("expected the admin's own username %q, got %+v", testAdminUser, resp)
 	}
 }
 
