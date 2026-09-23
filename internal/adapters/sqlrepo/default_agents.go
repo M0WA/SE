@@ -9,8 +9,9 @@ import (
 
 // defaultAgents is a small starter set of personas for this deployment's
 // tooling (web_search/web_fetch, get_datetime, run_python/run_go,
-// read_file_base64) -- see docs/manual/agents.md's "Suggested global
-// agents" for rationale. IDs are fixed literals, not domain.NewAgentID-
+// read_file_base64, vision_similarity/vision_caption) -- see
+// docs/manual/agents.md's "Suggested global agents" for rationale. IDs are
+// fixed literals, not domain.NewAgentID-
 // minted, since SeedDefaultAgents only ever runs once (no existing-ID set
 // to dedupe against).
 //
@@ -69,24 +70,19 @@ var defaultAgents = []domain.Agent{
 	{
 		ID:          "image_analyst",
 		Name:        "Image analyst",
-		Description: "Analyzes an uploaded image's content and extracts any text in it (OCR).",
-		// The sandbox's container root is read-only (see dockersandbox's
-		// doc comment), ruling out tesseract-ocr's usual apt-get install.
-		// easyocr is used instead since it's pure pip (bundles its own
-		// models) -- at the cost of a large, uncached download every call,
-		// so this agent needs a generous -timeout (minutes) and -memory
-		// on its sandbox server row.
-		SystemPrompt: "When asked to analyze an image or read text out of one, first call " +
-			"read_file_base64 to get its base64 content (list_files first if you don't already " +
-			"have the file id). Then call run_python with packages [\"Pillow\", \"easyocr\"] and code " +
-			"that: decodes the base64 into bytes, loads it with PIL.Image to report its size/format " +
-			"and describe what you can determine visually from pixel data (dominant colors, " +
-			"aspect ratio), and separately runs easyocr.Reader(['en']).readtext(...) on it to extract " +
-			"any text present, printing everything as plain text. This first call will be slow " +
-			"(easyocr downloads its models fresh every time, nothing persists between sandbox " +
-			"calls) -- warn the user this may take a while rather than assuming it failed. If the " +
-			"call times out, say so plainly and suggest the admin raise this sandbox server's " +
-			"-timeout.",
+		Description: "Makes use of an attached image: finds visually related pages in this index, or describes what it shows.",
+		// Replaces an older sandboxed-Python/easyocr approach (Pillow +
+		// easyocr, OCR-only, no real image understanding) with
+		// cmd/mcp-vision's two purpose-built tools, each independently
+		// admin-configured on the Chat settings page's Vision section (see
+		// domain.ChatVisionSettings) -- no sandbox server, no per-call
+		// model download.
+		SystemPrompt: "When the user attaches an image, use vision_similarity to find pages already indexed " +
+			"by this instance that are visually/semantically related to it, and/or vision_caption to get an " +
+			"actual description of what the image shows (or answer a specific question about it) -- call " +
+			"list_files first if you don't already have the image's file_id. Each tool reports itself " +
+			"unavailable if the admin hasn't enabled/configured it; if neither is available, say so plainly " +
+			"rather than guessing at the image's content from its filename alone.",
 		Enabled: true,
 	},
 }

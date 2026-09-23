@@ -4607,9 +4607,10 @@ func TestHandleAdminClearSettings_MethodNotAllowed(t *testing.T) {
 // background goroutine while a test polls UpdatedCount, so writes go
 // through mu like fakeAdminRepo's deletedIDs.
 type fakeEmbeddingRepo struct {
-	ids       []string
-	docs      map[string]domain.Document
-	allIDsErr error
+	ids               []string
+	docs              map[string]domain.Document
+	allIDsErr         error
+	documentsByIDsErr error
 
 	mu      sync.Mutex
 	updated map[string][]float32
@@ -4635,6 +4636,9 @@ func (r *fakeEmbeddingRepo) DocumentIDsAfter(_ context.Context, afterID string) 
 }
 
 func (r *fakeEmbeddingRepo) DocumentsByIDs(_ context.Context, ids []string) (map[string]domain.Document, error) {
+	if r.documentsByIDsErr != nil {
+		return nil, r.documentsByIDsErr
+	}
 	out := make(map[string]domain.Document)
 	for _, id := range ids {
 		if doc, ok := r.docs[id]; ok {

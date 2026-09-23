@@ -39,12 +39,12 @@ A fresh install seeds six ready-to-use starter agents the first time the agents 
 | This index | Prioritizes this deployment's own indexed documents over the open web. | Yes (web search/fetch) |
 | Current events | For "what's happening now" questions -- calls get_datetime first, then always searches rather than trusting training knowledge. | Yes (web search/fetch, plus the get_datetime MCP server if configured) |
 | Deep research | Slower and more thorough -- fetches and reads the top few results before answering, not just search snippets. | Yes (web search/fetch) |
-| Image analyst | Analyzes an uploaded image's content and extracts any text in it (OCR), via a sandboxed Python script using Pillow/easyocr. | Yes (a network-enabled sandbox MCP server, plus the files MCP server to read the uploaded image) |
+| Image analyst | Makes use of an attached image -- finds visually related pages in this index, or describes what it shows/answers a question about it. | Yes (the mcp-vision MCP server; either or both of its capabilities also need enabling on [Chat Settings](chat-settings.md)'s Vision section) |
 
 > **Worth knowing:**
 > - An empty MCP-server scope isn't "unrestricted" -- it gets no global tools at all. See agent-detail's MCP-servers section.
 > - Deleting an agent set as a chat endpoint's default doesn't clear that setting -- default_agent_id just stops matching, and turns fall back to no specialization.
-> - Image analyst needs its sandbox server configured with `-network` (for run_python's Pillow/easyocr installs) and generous `-timeout`/`-memory` -- easyocr re-downloads its models every call, which is slow. See [MCP server detail](mcp-server-detail.md)'s Command/Arguments section.
+> - Image analyst's two tools (vision_similarity/vision_caption) each independently report themselves unavailable if their own Vision setting isn't enabled/configured -- scoping the mcp-vision server alone isn't enough on its own.
 
 ---
 ← [MCP Server detail](mcp-server-detail.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Agent detail](agent-detail.md) →

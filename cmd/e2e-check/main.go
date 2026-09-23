@@ -129,9 +129,7 @@ func main() {
 			{"account: personal MCP server (http-only)", c.checkAccountMCPServerCRUD},
 			{"account: your files (unscoped listing)", c.checkAccountFilesUnscoped},
 			{"account: change password (round trip)", c.checkAccountPasswordRoundTrip(creds.TestUser, creds.TestUserPassword)},
-		}
-		if *includeSlow {
-			phase3 = append(phase3, check{"file attach + OCR (Image analyst agent)", c.checkImageOCR})
+			{"file attach + vision similarity (Image analyst agent)", c.checkImageVision},
 		}
 		phase3 = append(phase3,
 			check{"persistent chat: delete (cascades files)", c.checkChatDelete},
@@ -707,8 +705,8 @@ type agentResponse struct {
 // enabled agent, proving agent_id selection works for each of them
 // individually ("multi agent" coverage) rather than just one hand-picked
 // example. A plain "reply with PONG" prompt, no image attached, so this
-// never triggers the "Image analyst" agent's own OCR path -- that's
-// checkImageOCR's job specifically.
+// never triggers the "Image analyst" agent's own vision tools -- that's
+// checkImageVision's job specifically.
 func (c *client) buildAgentChecks() []check {
 	var agents []agentResponse
 	if _, err := c.getJSON("/admin/api/agents", &agents); err != nil {
@@ -1227,12 +1225,9 @@ func (c *client) checkAccountFilesUnscoped() error {
 }
 
 // testImagePNG is a small, real (not 1x1) PNG generated at startup -- a
-// 32x32 two-color checkerboard. It carries no real text (Go's stdlib
-// can't render a font without an external dependency), so this proves
-// the OCR PIPELINE completes rather than that its output is accurate --
-// which is exactly what the incident this check guards against needs:
-// the model calling read_file_base64 then run_python with easyocr
-// actually finishing within the (now 5-minute) timeout, not timing out.
+// 32x32 two-color checkerboard, real enough for checkImageVision's
+// vision_similarity call to actually embed and search with, not a
+// pipeline-completes-regardless 1x1 pixel.
 func testImagePNG() ([]byte, error) {
 	img := image.NewRGBA(image.Rect(0, 0, 32, 32))
 	for y := 0; y < 32; y++ {
@@ -1251,15 +1246,22 @@ func testImagePNG() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// checkImageOCR is the direct reproduction of a real reported incident:
-// attach a real image to a pinned chat, select the "Image analyst"
-// agent by name, and ask it to analyze/OCR the image -- exercising
-// read_file_base64 + run_python[easyocr] together, the exact slow,
-// always-uncached path mcpclient.callTimeout's old 60s ceiling (and
-// nginx's own old 60s default, and the agent's own once-empty
-// mcp_server_ids) used to break. Opt-in (-include-slow): even fixed,
-// this can take a couple of minutes the first time.
-func (c *client) checkImageOCR() error {
+// checkImageVision attaches a real image to a pinned chat, selects the
+// "Image analyst" agent by name, and asks it to find related content --
+// exercising cmd/mcp-vision's vision_similarity tool end to end (a real
+// image embed against the configured provider, then a real pgvector ANN
+// search). Replaces an older check reproducing a real incident in the
+// previous sandboxed-Python/easyocr approach (mcpclient.callTimeout's old
+// 60s ceiling breaking on easyocr's always-uncached multi-minute model
+// download) -- that whole approach is retired (see default_agents.go's
+// image_analyst entry), and the new tool is fast enough to run
+// unconditionally, no -include-slow gate needed.
+//
+// Skips gracefully (not a failure) if the agent isn't configured, or if
+// vision_similarity itself reports unconfigured (Chat settings -> Vision
+// -> Similarity search) -- both are legitimate per-deployment states, the
+// same convention as every other deployment-specific prerequisite here.
+func (c *client) checkImageVision() error {
 	if c.testChatID == "" {
 		return skip("no pinned chat (checkChatPin must have failed)")
 	}
@@ -1284,13 +1286,18 @@ func (c *client) checkImageOCR() error {
 		return err
 	}
 	out, err := c.chatOnce(
-		"Analyze the image named e2e-check.png and describe what you can determine about it.",
+		"Use vision_similarity to find pages related to the image named e2e-check.png, and tell me what you find.",
 		chatOptions{agentID: agentID, chatID: c.testChatID})
 	if err != nil {
 		return err
 	}
 	if len(out.ToolResults) == 0 {
-		return fmt.Errorf("expected read_file_base64/run_python to be called, got no tool_results -- check the agent's own mcp_server_ids isn't empty (see domain.Agent.MCPServerIDs' own doc comment: empty means NO tools, not all of them)")
+		return fmt.Errorf("expected vision_similarity to be called, got no tool_results -- check the agent's own mcp_server_ids isn't empty (see domain.Agent.MCPServerIDs' own doc comment: empty means NO tools, not all of them)")
+	}
+	for _, tr := range out.ToolResults {
+		if strings.Contains(tr.Err, "not configured") {
+			return skip("vision_similarity is not configured on this deployment (Chat settings -> Vision -> Similarity search)")
+		}
 	}
 	if err := checkNoToolErrors(out); err != nil {
 		return err

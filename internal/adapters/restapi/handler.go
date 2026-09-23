@@ -234,6 +234,18 @@ type Handler struct {
 	// chatEndpoints backs the admin API's chat endpoint config CRUD -- set
 	// on admin-server only, same *sqlrepo.Repository as embeddingEndpoints.
 	chatEndpoints ports.ChatEndpointStore
+	// chatVision backs the admin API's chat vision settings CRUD -- set on
+	// admin-server only, same *sqlrepo.Repository as chatEndpoints.
+	chatVision ports.ChatVisionStore
+	// semanticMatcher backs the internal vision-similarity endpoint (see
+	// handleVisionSimilarity) -- set on search-server only, same
+	// *sqlrepo.Repository as embeddingRepo.
+	semanticMatcher ports.SemanticMatcher
+	// internalVisionAPIKey gates the internal vision-similarity endpoint
+	// the same way internalSearchAPIKey gates /search -- a trusted local
+	// caller (cmd/mcp-vision, spawned per chat turn) presents it in place
+	// of a session cookie. Empty (the default) disables the endpoint.
+	internalVisionAPIKey string
 	// mcpServers backs the admin API's MCP server CRUD -- set on
 	// admin-server only, same *sqlrepo.Repository as chatEndpoints.
 	mcpServers ports.MCPServerStore
@@ -348,6 +360,9 @@ type Config struct {
 	// ChatEndpoints is set on admin-server only, backing the chat endpoint
 	// config CRUD API -- same *sqlrepo.Repository as EmbeddingEndpoints.
 	ChatEndpoints ports.ChatEndpointStore
+	// ChatVision is set on admin-server only, backing the chat vision
+	// settings CRUD API -- same *sqlrepo.Repository as ChatEndpoints.
+	ChatVision ports.ChatVisionStore
 	// MCPServers is set on admin-server only, backing the MCP server CRUD
 	// API -- same *sqlrepo.Repository as ChatEndpoints/EmbeddingEndpoints.
 	MCPServers ports.MCPServerStore
@@ -394,6 +409,17 @@ type Config struct {
 	// SearXNG plugin) call /search via X-Internal-API-Key instead of a
 	// session cookie. Empty by default, meaning the bypass doesn't exist.
 	InternalSearchAPIKey string
+	// SemanticMatcher backs the internal vision-similarity endpoint -- set
+	// on search-server only, same *sqlrepo.Repository as EmbeddingRepo.
+	SemanticMatcher ports.SemanticMatcher
+	// InternalVisionAPIKey, when set, lets cmd/mcp-vision (spawned per
+	// chat turn) call the internal vision-similarity endpoint via
+	// X-Internal-API-Key -- same mechanism as InternalSearchAPIKey, but a
+	// deliberately separate key/env var (CHAT_VISION_INTERNAL_API_KEY):
+	// least-privilege, so a SearXNG plugin's key can't also drive this,
+	// and vice versa. Empty by default, meaning the endpoint refuses
+	// every call.
+	InternalVisionAPIKey string
 }
 
 func New(cfg Config) *Handler {
@@ -430,6 +456,7 @@ func New(cfg Config) *Handler {
 		embeddingEndpoints:    cfg.EmbeddingEndpoints,
 		chat:                  cfg.Chat,
 		chatEndpoints:         cfg.ChatEndpoints,
+		chatVision:            cfg.ChatVision,
 		mcpServers:            cfg.MCPServers,
 		mcpTools:              cfg.MCPTools,
 		agents:                cfg.Agents,
@@ -448,6 +475,8 @@ func New(cfg Config) *Handler {
 		newEmbedder:           newEmbedder,
 		chatModelProber:       chatModelProber,
 		internalSearchAPIKey:  cfg.InternalSearchAPIKey,
+		semanticMatcher:       cfg.SemanticMatcher,
+		internalVisionAPIKey:  cfg.InternalVisionAPIKey,
 	}
 }
 
@@ -508,6 +537,10 @@ func (h *Handler) RoutesSearch() http.Handler {
 	// cmd/mcp-files calls it with a bearer token, so
 	// handleAccountFiles/handleAccountFile gate it themselves -- see
 	// fileAccessUserID.
+	// /search/api/vision-similarity is deliberately NOT wrapped in
+	// requireAuthAPI, same reasoning as /account/api/files: cmd/mcp-vision
+	// calls it with X-Internal-API-Key, self-gated inside the handler.
+	mux.HandleFunc("/search/api/vision-similarity", h.handleVisionSimilarity)
 	mux.HandleFunc("/account/api/files", h.handleAccountFiles)
 	mux.HandleFunc("/account/api/files/{id}", h.handleAccountFile)
 	mux.HandleFunc("/account/api/chats", h.requireAuthAPI(h.handleAccountChats))
@@ -587,6 +620,7 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("/admin/api/search", h.requireAdminAuthAPI(h.handleAdminSearch))
 	mux.HandleFunc("/admin/api/settings", h.requireAdminAuthAPI(h.handleAdminSettings))
 	mux.HandleFunc("/admin/api/chat-endpoint", h.requireAdminAuthAPI(h.handleAdminChatEndpoint))
+	mux.HandleFunc("/admin/api/chat-vision", h.requireAdminAuthAPI(h.handleAdminChatVision))
 	mux.HandleFunc("/admin/api/mcp-servers", h.requireAdminAuthAPI(h.handleAdminMCPServers))
 	mux.HandleFunc("POST /admin/api/mcp-servers/test", h.requireAdminAuthAPI(h.handleAdminMCPServersTest))
 	mux.HandleFunc("GET /admin/api/mcp-servers/{id}", h.requireAdminAuthAPI(h.handleAdminGetMCPServer))

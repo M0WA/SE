@@ -22,7 +22,19 @@ function baseChatEndpoint(overrides) {
   }, overrides);
 }
 
-function loadFixture(chatEndpoint, fetchImpl, mcpServers, agents) {
+function baseChatVision(overrides) {
+  return Object.assign({
+    similarity_enabled: false,
+    similarity_provider_id: '',
+    caption_enabled: false,
+    caption_base_url: '',
+    has_caption_api_key: false,
+    caption_model: '',
+    updated_at: '2026-01-02T03:04:05Z',
+  }, overrides);
+}
+
+function loadFixture(chatEndpoint, fetchImpl, mcpServers, agents, chatVision, embeddingEndpoints) {
   setupDOM(CHAT_SETTINGS_HTML);
   const adminHelpers = requireFresh('./admin.js');
   Object.assign(global, adminHelpers);
@@ -30,11 +42,17 @@ function loadFixture(chatEndpoint, fetchImpl, mcpServers, agents) {
     if (url.includes('/admin/api/chat-endpoint')) {
       return { ok: true, json: async () => chatEndpoint || baseChatEndpoint() };
     }
+    if (url.includes('/admin/api/chat-vision')) {
+      return { ok: true, json: async () => chatVision || baseChatVision() };
+    }
     if (url.includes('/admin/api/agents')) {
       return { ok: true, json: async () => agents || [] };
     }
     if (url.includes('/admin/api/mcp-servers')) {
       return { ok: true, json: async () => mcpServers || [] };
+    }
+    if (url.includes('/admin/api/embeddings/endpoints')) {
+      return { ok: true, json: async () => embeddingEndpoints || [] };
     }
     return { ok: true, json: async () => ({}) };
   });
@@ -331,6 +349,163 @@ test('clicking "Save chat settings" invokes saveChatEndpoint', async () => {
     return { ok: true, json: async () => baseChatEndpoint() };
   };
   document.getElementById('save-chat-settings-btn').dispatchEvent(new window.Event('click'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(patched, true);
+});
+
+test('loadEmbeddingProviderOptions populates the select with every endpoint, keeping "(none)" first', async () => {
+  loadFixture(undefined, undefined, undefined, undefined, undefined, [
+    { id: 'h200_gte_qwen2', name: 'H200 Qwen3-VL-Embedding' },
+    { id: 'ionos_bge_m3', name: 'IONOS bge-m3' },
+  ]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const select = document.getElementById('vision-similarity-provider');
+  const options = Array.from(select.options).map((o) => [o.value, o.textContent]);
+  assert.deepEqual(options, [
+    ['', '(none)'],
+    ['h200_gte_qwen2', 'H200 Qwen3-VL-Embedding (h200_gte_qwen2)'],
+    ['ionos_bge_m3', 'IONOS bge-m3 (ionos_bge_m3)'],
+  ]);
+});
+
+test('loadEmbeddingProviderOptions leaves just "(none)" on a failed fetch, without blocking the rest of the page', async () => {
+  loadFixture(baseChatEndpoint(), async (url) => {
+    if (url.includes('/admin/api/embeddings/endpoints')) return { ok: false, status: 500, text: async () => 'db down' };
+    if (url.includes('/admin/api/chat-endpoint')) return { ok: true, json: async () => baseChatEndpoint() };
+    if (url.includes('/admin/api/chat-vision')) return { ok: true, json: async () => baseChatVision() };
+    return { ok: true, json: async () => [] };
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const select = document.getElementById('vision-similarity-provider');
+  assert.equal(select.options.length, 1);
+  assert.equal(document.getElementById('chat-base-url').value, 'http://localhost:8000/v1');
+});
+
+test('loadChatVision populates every vision field from the GET response', async () => {
+  loadFixture(undefined, undefined, undefined, undefined, baseChatVision({
+    similarity_enabled: true, similarity_provider_id: 'h200_gte_qwen2',
+    caption_enabled: true, caption_base_url: 'http://vl.example/v1', has_caption_api_key: true, caption_model: 'vl-chat',
+  }), [{ id: 'h200_gte_qwen2', name: 'H200 Qwen3-VL-Embedding' }]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('vision-similarity-enabled').checked, true);
+  assert.equal(document.getElementById('vision-similarity-provider').value, 'h200_gte_qwen2');
+  assert.equal(document.getElementById('vision-caption-enabled').checked, true);
+  assert.equal(document.getElementById('vision-caption-base-url').value, 'http://vl.example/v1');
+  assert.equal(document.getElementById('vision-caption-model').value, 'vl-chat');
+});
+
+test('loadChatVision never populates the caption API key field, even when one is stored', async () => {
+  loadFixture(undefined, undefined, undefined, undefined, baseChatVision({ has_caption_api_key: true }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('vision-caption-api-key').value, '');
+  assert.equal(document.getElementById('vision-caption-api-key').placeholder, 'Leave blank to keep the current key');
+  assert.equal(document.getElementById('vision-clear-caption-api-key').disabled, false);
+});
+
+test('loadChatVision disables "remove stored key" when nothing is stored', async () => {
+  loadFixture(undefined, undefined, undefined, undefined, baseChatVision({ has_caption_api_key: false }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('vision-caption-api-key').placeholder, '');
+  assert.equal(document.getElementById('vision-clear-caption-api-key').disabled, true);
+});
+
+test('loadChatVision reports an error message on a failed fetch', async () => {
+  loadFixture(baseChatEndpoint(), async (url) => {
+    if (url.includes('/admin/api/chat-vision')) return { ok: false, status: 500, text: async () => 'chat vision down' };
+    if (url.includes('/admin/api/chat-endpoint')) return { ok: true, json: async () => baseChatEndpoint() };
+    return { ok: true, json: async () => [] };
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('vision-settings-status').textContent.includes('chat vision down'), true);
+});
+
+// Doesn't re-require the module mid-test (mirrors "saveChatEndpoint includes
+// the selected default_agent_id" above) -- loadEmbeddingProviderOptions()
+// clears the select synchronously at load, which would race a
+// requireFresh() and wipe the just-set provider value. Reuses the
+// original module's saveChatVision instead (global.fetch is still looked
+// up dynamically, so reassigning it still works).
+test('saveChatVision PATCHes every field', async () => {
+  const chatSvc = loadFixture(undefined, undefined, undefined, undefined, undefined, [{ id: 'h200_gte_qwen2', name: 'H200 Qwen3-VL-Embedding' }]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  document.getElementById('vision-similarity-enabled').checked = true;
+  document.getElementById('vision-similarity-provider').value = 'h200_gte_qwen2';
+  document.getElementById('vision-caption-enabled').checked = true;
+  document.getElementById('vision-caption-base-url').value = 'http://vl.example/v1';
+  document.getElementById('vision-caption-model').value = 'vl-chat';
+  document.getElementById('vision-caption-api-key').value = 'sk-new-key';
+
+  let gotURL, gotBody;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/chat-vision') && opts && opts.method === 'PATCH') {
+      gotURL = url;
+      gotBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => baseChatVision(gotBody) };
+    }
+    return { ok: true, json: async () => baseChatVision() };
+  };
+
+  await chatSvc.saveChatVision();
+
+  assert.equal(gotURL, '/admin/api/chat-vision');
+  assert.equal(gotBody.similarity_enabled, true);
+  assert.equal(gotBody.similarity_provider_id, 'h200_gte_qwen2');
+  assert.equal(gotBody.caption_enabled, true);
+  assert.equal(gotBody.caption_base_url, 'http://vl.example/v1');
+  assert.equal(gotBody.caption_model, 'vl-chat');
+  assert.equal(gotBody.caption_api_key, 'sk-new-key');
+  assert.equal(document.getElementById('vision-settings-status').textContent, 'Saved.');
+});
+
+test('saveChatVision sends clear_caption_api_key when the "remove stored key" box is checked', async () => {
+  loadFixture();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  document.getElementById('vision-clear-caption-api-key').checked = true;
+
+  let gotBody;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/chat-vision') && opts && opts.method === 'PATCH') {
+      gotBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => baseChatVision({ has_caption_api_key: false }) };
+    }
+    return { ok: true, json: async () => baseChatVision() };
+  };
+  const { saveChatVision } = requireFresh('./admin_chat_settings.js');
+  await saveChatVision();
+  assert.equal(gotBody.clear_caption_api_key, true);
+});
+
+test('saveChatVision shows an error message and re-enables the button on failure', async () => {
+  loadFixture();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  global.fetch = async (url) => {
+    if (url.includes('/admin/api/chat-vision')) {
+      return { ok: false, status: 500, text: async () => 'chat vision save failed' };
+    }
+    return { ok: true, json: async () => baseChatVision() };
+  };
+  const { saveChatVision } = requireFresh('./admin_chat_settings.js');
+  await saveChatVision();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const status = document.getElementById('vision-settings-status');
+  assert.equal(status.textContent.includes('chat vision save failed'), true);
+  assert.equal(document.getElementById('save-vision-settings-btn').disabled, false);
+});
+
+test('clicking "Save vision settings" invokes saveChatVision', async () => {
+  loadFixture();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  let patched = false;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/chat-vision') && opts && opts.method === 'PATCH') {
+      patched = true;
+      return { ok: true, json: async () => baseChatVision() };
+    }
+    return { ok: true, json: async () => baseChatVision() };
+  };
+  document.getElementById('save-vision-settings-btn').dispatchEvent(new window.Event('click'));
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(patched, true);
 });

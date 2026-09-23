@@ -3,7 +3,7 @@ flowchart LR
     Browser["Public users / browsers"]
     Nginx["nginx (80/443)"]
     subgraph GPUBox["gpu.mo-sys.de (H200 NVL, vLLM)"]
-      EmbedAPI["vLLM: gte-Qwen2-7B-instruct<br/>pooling/embed mode, :8000"]
+      EmbedAPI["vLLM: Qwen3-VL-Embedding-8B<br/>pooling/embed mode, :8000"]
       ChatAPI["vLLM: Qwen2.5-72B-Instruct-FP8<br/>chat/generate mode, :8001"]
     end
     SearXNG["SearXNG metasearch<br/>127.0.0.1:8888"]
@@ -20,11 +20,12 @@ flowchart LR
     MCPDatetime["cmd/mcp-datetime<br/>spawned stdio subprocess<br/>(not a service)"]
     MCPSandbox["cmd/mcp-sandbox<br/>spawned stdio subprocess<br/>(not a service)"]
     MCPFiles["cmd/mcp-files<br/>spawned stdio subprocess<br/>(not a service)"]
+    MCPVision["cmd/mcp-vision<br/>spawned stdio subprocess<br/>(not a service)"]
   end
 
   subgraph Core["Core: domain + ports + application"]
     Domain["internal/domain<br/>BM25, hybrid ranking, PageRank,<br/>tokenizer, fuzzy match, settings"]
-    Ports["internal/ports<br/>28 interfaces"]
+    Ports["internal/ports<br/>33 interfaces"]
     App["internal/application<br/>hybridSearchService, crawlLoop,<br/>*Job, ChatService, scheduler"]
   end
 
@@ -88,10 +89,13 @@ flowchart LR
   MCPClient -.->|"spawns as child process"| MCPDatetime
   MCPClient -.->|"spawns as child process"| MCPSandbox
   MCPClient -.->|"spawns as child process"| MCPFiles
+  MCPClient -.->|"spawns as child process"| MCPVision
   MCPWeb -->|"web_search tool"| SearXNG
   MCPSandbox --> DockerSandbox
   DockerSandbox -.->|"docker CLI"| Docker
   MCPFiles -->|"HTTP, per-turn bearer token<br/>/account/api/files"| Search
+  MCPVision -->|"HTTP, per-turn bearer token<br/>/account/api/files"| Search
+  MCPVision -->|"HTTP, X-Internal-API-Key<br/>/search/api/vision-similarity"| Search
 
   Nginx -.->|"stub_status via<br/>prometheus-nginx-exporter"| IONOSMon
   SQLRepo -.->|"postgres-exporter"| IONOSMon

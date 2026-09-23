@@ -1255,3 +1255,126 @@ func TestEmbedder_CountTokensMissingCountFieldReturnsError(t *testing.T) {
 		t.Errorf("expected the error to mention the missing count field, got: %v", err)
 	}
 }
+
+// TestEmbedder_EmbedImageSendsMessagesShapeNotPlainInput proves EmbedImage
+// sends the chat-completions-style {"messages": [...]} request shape
+// (confirmed empirically against a real deployed vision-language
+// embedding model -- see EmbedImage's own doc comment), not Embed's plain
+// {"input": "..."} shape, and that mimeType/base64Data land correctly in
+// the data URI.
+func TestEmbedder_EmbedImageSendsMessagesShapeNotPlainInput(t *testing.T) {
+	var gotBody map[string]interface{}
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{0.4, 0.5, 0.6}}},
+		})
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, APIKey: "secret-key", Model: "vl-embed", Dimensions: 3})
+	vec, err := e.EmbedImage(context.Background(), "QUJD", "image/png")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(vec) != 3 || vec[0] != 0.4 {
+		t.Errorf("unexpected vector: %v", vec)
+	}
+	if _, hasInput := gotBody["input"]; hasInput {
+		t.Errorf("expected no plain \"input\" field, got body: %v", gotBody)
+	}
+	if gotBody["model"] != "vl-embed" {
+		t.Errorf("expected model to be set, got body: %v", gotBody)
+	}
+	messages, ok := gotBody["messages"].([]interface{})
+	if !ok || len(messages) != 1 {
+		t.Fatalf("expected exactly one message, got body: %v", gotBody)
+	}
+	msg := messages[0].(map[string]interface{})
+	if msg["role"] != "user" {
+		t.Errorf("expected role user, got: %v", msg)
+	}
+	content := msg["content"].([]interface{})[0].(map[string]interface{})
+	if content["type"] != "image_url" {
+		t.Errorf("expected content type image_url, got: %v", content)
+	}
+	imageURL := content["image_url"].(map[string]interface{})["url"]
+	if imageURL != "data:image/png;base64,QUJD" {
+		t.Errorf("expected a data URI with the given mime type and base64 data, got: %v", imageURL)
+	}
+	if gotAuth != "Bearer secret-key" {
+		t.Errorf("expected Authorization header, got %q", gotAuth)
+	}
+}
+
+// TestEmbedder_EmbedImageEmptyMimeTypeFallsBackToOctetStream proves an
+// empty mimeType still produces a valid, decodable data URI rather than
+// "data:;base64,...".
+func TestEmbedder_EmbedImageEmptyMimeTypeFallsBackToOctetStream(t *testing.T) {
+	var gotBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1}}},
+		})
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 1})
+	if _, err := e.EmbedImage(context.Background(), "QUJD", ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	messages := gotBody["messages"].([]interface{})
+	content := messages[0].(map[string]interface{})["content"].([]interface{})[0].(map[string]interface{})
+	imageURL := content["image_url"].(map[string]interface{})["url"]
+	if imageURL != "data:application/octet-stream;base64,QUJD" {
+		t.Errorf("expected octet-stream fallback mime type, got: %v", imageURL)
+	}
+}
+
+// TestEmbedder_EmbedImageDimensionMismatchReturnsError proves EmbedImage
+// reuses the same dimension validation Embed does -- shares embedOnce.
+func TestEmbedder_EmbedImageDimensionMismatchReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1, 2, 3}}},
+		})
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 128})
+	_, err := e.EmbedImage(context.Background(), "QUJD", "image/png")
+	if err == nil {
+		t.Fatal("expected a dimension mismatch error")
+	}
+	if !containsAll(err.Error(), "128", "3") {
+		t.Errorf("expected error to mention both dimension counts, got: %v", err)
+	}
+}
+
+// TestEmbedder_EmbedImageRetries429ThenSucceeds proves EmbedImage shares
+// embedWithRetry with Embed -- a transient 429 is retried, not surfaced.
+func TestEmbedder_EmbedImageRetries429ThenSucceeds(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1}}},
+		})
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 1, RateLimitInitialBackoff: time.Millisecond})
+	if _, err := e.EmbedImage(context.Background(), "QUJD", "image/png"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("expected exactly 2 attempts (1 retry), got %d", calls)
+	}
+}

@@ -28,14 +28,28 @@ type ChatService struct {
 	// rows are never subject to an Agent's MCPServerIDs scope (see
 	// domain.Agent.AllowsServer) and are merged in unconditionally.
 	userMCPServers ports.UserMCPServerStore
+	// visionSettings backs cmd/mcp-vision's env-var configuration (see
+	// Chat's env-building block) -- nil-safe, same as mcpServers/mcpTools:
+	// unwired just means the vision tools stay unconfigured for this turn.
+	visionSettings ports.ChatVisionStore
+	// internalVisionAPIKey is handed to every spawned stdio server as
+	// CHAT_VISION_INTERNAL_API_KEY, letting cmd/mcp-vision authenticate
+	// its own call back into /search/api/vision-similarity -- see
+	// restapi.Handler.internalVisionAPIKey, which must hold the identical
+	// value for that call to succeed.
+	internalVisionAPIKey string
 }
 
 // NewChatService wires a ChatService from its collaborators: the endpoint
 // config store, the completion client, the admin MCP server store/tool
 // provider (see mcp_tools.go), the agent store (see resolveAgent), and
 // the per-user MCP server store.
-func NewChatService(endpoints ports.ChatEndpointStore, completer ports.ChatCompleter, mcpServers ports.MCPServerStore, mcpTools ports.MCPToolProvider, agents ports.AgentStore, userMCPServers ports.UserMCPServerStore) *ChatService {
-	return &ChatService{endpoints: endpoints, completer: completer, mcpServers: mcpServers, mcpTools: mcpTools, agents: agents, userMCPServers: userMCPServers}
+func NewChatService(endpoints ports.ChatEndpointStore, completer ports.ChatCompleter, mcpServers ports.MCPServerStore, mcpTools ports.MCPToolProvider, agents ports.AgentStore, userMCPServers ports.UserMCPServerStore, visionSettings ports.ChatVisionStore, internalVisionAPIKey string) *ChatService {
+	return &ChatService{
+		endpoints: endpoints, completer: completer, mcpServers: mcpServers, mcpTools: mcpTools,
+		agents: agents, userMCPServers: userMCPServers,
+		visionSettings: visionSettings, internalVisionAPIKey: internalVisionAPIKey,
+	}
 }
 
 // ChatOptions carries this turn's per-question overrides for Chat -- a
@@ -197,6 +211,7 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		if opts.FileAccessToken != "" {
 			env["SE_FILES_API_TOKEN"] = opts.FileAccessToken
 		}
+		s.addVisionEnv(ctx, env)
 		session, discoveredTools = s.mcpTools.Open(ctx, activeServers, env)
 		defer session.Close()
 	}
@@ -306,6 +321,35 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	}
 
 	return ChatResult{Answer: answer, ContextTrimmed: contextTrimmed, ToolResults: toolResults, TokenUsage: tokenUsage}, nil
+}
+
+// addVisionEnv adds cmd/mcp-vision's configuration to env, in place --
+// nil-safe (s.visionSettings unwired just means neither var is added, so
+// mcp-vision's own tools report themselves unconfigured, same convention
+// as every other optional MCP integration here). A store error is
+// logged and treated the same as "nothing configured," never fatal to
+// the turn -- mirrors every other best-effort lookup in this method.
+func (s *ChatService) addVisionEnv(ctx context.Context, env map[string]string) {
+	if s.internalVisionAPIKey != "" {
+		env["CHAT_VISION_INTERNAL_API_KEY"] = s.internalVisionAPIKey
+	}
+	if s.visionSettings == nil {
+		return
+	}
+	vs, err := s.visionSettings.GetChatVisionSettings(ctx)
+	if err != nil {
+		return
+	}
+	if vs.SimilarityEnabled {
+		env["VISION_SIMILARITY_ENABLED"] = "true"
+		env["VISION_SIMILARITY_PROVIDER_ID"] = vs.SimilarityProviderID
+	}
+	if vs.CaptionEnabled {
+		env["VISION_CAPTION_ENABLED"] = "true"
+		env["VISION_CAPTION_BASE_URL"] = vs.CaptionBaseURL
+		env["VISION_CAPTION_API_KEY"] = vs.CaptionAPIKey
+		env["VISION_CAPTION_MODEL"] = vs.CaptionModel
+	}
 }
 
 // resolveAgent looks up id (opts.AgentID or endpoint.DefaultAgentID) among

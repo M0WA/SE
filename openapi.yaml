@@ -110,6 +110,40 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /search/api/vision-similarity:
+    post:
+      tags: [search]
+      summary: Embed an image and find visually/semantically similar indexed documents
+      description: >-
+        Internal-only endpoint backing cmd/mcp-vision's "vision_similarity"
+        chat tool -- embeds the given image via the named provider (which
+        must support image embedding, e.g. httpembed.Embedder against a
+        vision-language model; the built-in hash provider doesn't) and
+        vector-searches this instance's own document_embeddings with the
+        result. Unlike other /search/api/* routes, this is NOT
+        session-cookie-gated (mirrors /account/api/files's bearer-token
+        path): it accepts "X-Internal-API-Key: <key>" in place of a
+        session, matching CHAT_VISION_INTERNAL_API_KEY -- a deliberately
+        separate key/env var from /search's own SEARCH_INTERNAL_API_KEY
+        (least-privilege: a SearXNG plugin's key can't also drive this, and
+        vice versa). Refuses every call (401) when that env var is unset.
+        Never called directly by a browser.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VisionSimilarityRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VisionSimilarityResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
   /chat:
     post:
       tags: [search]
@@ -1113,6 +1147,49 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ChatEndpoint" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "405": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/chat-vision:
+    get:
+      tags: [admin]
+      summary: Get the current chat vision settings
+      description: >-
+        Single-row Get/Set, same shape as /admin/api/chat-endpoint, for the
+        same reason (one active configuration). Deliberately independent of
+        both the chat endpoint above and search's own embedding endpoints
+        (/admin/api/embeddings/endpoints), even where Similarity ends up
+        referencing the same underlying model as search -- see
+        similarity_provider_id. Never fails just because nothing's been
+        saved yet.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatVisionSettings" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    patch:
+      tags: [admin]
+      summary: Upsert the chat vision settings
+      description: >-
+        Full replace, not a merge, for every field except caption_api_key:
+        since a GET/PATCH response never echoes the real key back (see
+        has_caption_api_key), leaving caption_api_key blank here preserves
+        whatever's already stored rather than clearing it --
+        clear_caption_api_key is the explicit way to actually remove it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChatVisionSettingsRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatVisionSettings" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "405": { $ref: "#/components/responses/BadRequest" }
         "503": { $ref: "#/components/responses/NotConfigured" }
@@ -2802,6 +2879,92 @@ components:
               type: boolean
               description: Whether an API key is stored for this endpoint -- its actual value is never returned.
             updated_at: { type: string, format: date-time }
+
+    ChatVisionSettingsOptions:
+      type: object
+      properties:
+        similarity_enabled:
+          type: boolean
+          description: Turns on cmd/mcp-vision's "vision_similarity" tool.
+        similarity_provider_id:
+          type: string
+          description: >-
+            Which EmbeddingHTTPEndpoint (by id, from
+            /admin/api/embeddings/endpoints) to embed an attached image
+            against and search document_embeddings with -- reuses that
+            endpoint's own base_url/model/api_key (the "same model as
+            search" part), while staying independent of
+            embedding_search_weights (enabling an endpoint here never
+            changes whether it contributes to search's own blended score,
+            and vice versa). The referenced provider must support image
+            embedding -- checked at call time, not here.
+        caption_enabled:
+          type: boolean
+          description: >-
+            Turns on cmd/mcp-vision's "vision_caption" tool -- a different
+            capability from similarity_enabled (generation, not
+            embedding/search), almost certainly a different model
+            deployment, so it gets its own full endpoint config below
+            rather than referencing an existing one.
+        caption_base_url:
+          type: string
+          description: "OpenAI-compatible chat-completions API base URL for a vision-language model -- POSTed to <base_url>/chat/completions."
+        caption_model:
+          type: string
+          description: Sent as the captioning request's model field.
+
+    ChatVisionSettingsRequest:
+      description: >-
+        The request shape for PATCH /admin/api/chat-vision. caption_api_key
+        is write-only -- a ChatVisionSettings response never echoes it back
+        (see its own has_caption_api_key). Leaving it blank means "keep
+        whatever is already stored," not "clear it" -- clear_caption_api_key
+        is the explicit way to actually remove it.
+      allOf:
+        - $ref: "#/components/schemas/ChatVisionSettingsOptions"
+        - type: object
+          properties:
+            caption_api_key: { type: string, description: "Sent as an Authorization: Bearer header for captioning; optional. Blank preserves the existing value unless clear_caption_api_key is set." }
+            clear_caption_api_key: { type: boolean, default: false, description: "Removes the stored key instead of preserving it when caption_api_key is left blank." }
+
+    ChatVisionSettings:
+      allOf:
+        - $ref: "#/components/schemas/ChatVisionSettingsOptions"
+        - type: object
+          properties:
+            has_caption_api_key:
+              type: boolean
+              description: Whether a captioning API key is stored -- its actual value is never returned.
+            updated_at: { type: string, format: date-time }
+
+    VisionSimilarityRequest:
+      type: object
+      required: [base64]
+      properties:
+        provider:
+          type: string
+          description: An EmbeddingHTTPEndpoint id supporting image embedding -- typically domain.ChatVisionSettings.SimilarityProviderID.
+        base64:
+          type: string
+          description: The image's raw bytes, base64-encoded.
+        mime_type:
+          type: string
+          description: "Embedded in the data URI sent to the embedding endpoint, e.g. \"image/png\". Empty falls back to \"application/octet-stream\"."
+        limit:
+          type: integer
+          description: How many matches to return. <=0 defaults to 5, clamped to a max of 20.
+
+    VisionSimilarityResponse:
+      type: object
+      properties:
+        matches:
+          type: array
+          items:
+            type: object
+            properties:
+              url: { type: string }
+              title: { type: string }
+              score: { type: number, description: "Cosine similarity [-1, 1] against the embedded image, highest first." }
 
     MCPServerOptions:
       type: object
