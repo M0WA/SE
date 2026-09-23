@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.66 - 2026-09-23
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* fix: raise web_search_result_count default; validation-based mcp-web prompt by @M0WA in https://github.com/M0WA/SE/pull/276
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.65...v4.13.66
+
+
 ## v4.13.65 - 2026-09-23
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
