@@ -2415,6 +2415,66 @@ func TestHandleAdminSettings_MaxDocumentVersionsFieldRoundTrips(t *testing.T) {
 	}
 }
 
+// TestHandleAdminSettings_SemanticRescoreCapFieldRoundTrips mirrors
+// TestHandleAdminSettings_MaxDocumentVersionsFieldRoundTrips for the
+// semantic_rescore_cap knob.
+func TestHandleAdminSettings_SemanticRescoreCapFieldRoundTrips(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{SemanticRescoreCap: 500})
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", getRec.Code)
+	}
+	var getResp struct {
+		Operational struct {
+			SemanticRescoreCap int `json:"semantic_rescore_cap"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decoding GET response: %v", err)
+	}
+	if getResp.Operational.SemanticRescoreCap != 500 {
+		t.Errorf("expected GET to report semantic_rescore_cap=500, got %+v", getResp.Operational)
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
+			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
+			"semantic_rescore_cap": 1000,
+		},
+	})
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	postReq.AddCookie(cookie)
+	postRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
+	}
+
+	if ov := opSettings.Get(); ov.SemanticRescoreCap != 1000 {
+		t.Errorf("expected semantic_rescore_cap=1000 to be applied, got %+v", ov)
+	}
+
+	var postResp struct {
+		Operational struct {
+			SemanticRescoreCap int `json:"semantic_rescore_cap"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(postRec.Body.Bytes(), &postResp); err != nil {
+		t.Fatalf("decoding POST response: %v", err)
+	}
+	if postResp.Operational.SemanticRescoreCap != 1000 {
+		t.Errorf("expected the POST response to echo back semantic_rescore_cap=1000, got %+v", postResp.Operational)
+	}
+}
+
 // TestHandleAdminSettings_TitleWeightFieldRoundTrips mirrors
 // TestHandleAdminSettings_MaxDocumentVersionsFieldRoundTrips for the
 // title_weight knob.

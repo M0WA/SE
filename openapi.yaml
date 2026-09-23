@@ -2221,6 +2221,16 @@ components:
             crawl_delay_ms: { type: integer }
             max_response_kb: { type: integer }
             semantic_candidate_pool_size: { type: integer }
+            semantic_rescore_cap:
+              type: integer
+              description: >-
+                Of a query's BM25 keyword matches, the most this many
+                (ranked by BM25 score) also get a semantic similarity score
+                fetched. Every BM25 match is still scored and ranked on
+                keywords regardless of this cap -- it only bounds how many
+                also get a semantic score, so a common query term matching
+                a large fraction of the corpus doesn't force every single
+                match's embedding to be fetched. Defaults 500.
             db_max_open_conns: { type: integer }
             db_max_idle_conns: { type: integer }
             db_conn_max_lifetime_minutes: { type: integer }

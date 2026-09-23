@@ -78,9 +78,16 @@
         <div class="form-row">
           <div class="label-row">
             <label for="semantic-pool-size">Semantic candidate pool size</label>
-            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Max documents scored for semantic similarity per search, regardless of corpus size (also the ANN top-K, when active). Every BM25 match is always scored too -- this only bounds how many additional documents get sampled for a purely semantic match.</span></button>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Max documents scored for semantic similarity per search, regardless of corpus size (also the ANN top-K, when active). Every BM25 match is always scored on keywords too -- this only bounds how many additional documents get sampled for a purely semantic match.</span></button>
           </div>
           <span class="field-wrap" data-default="200"><input id="semantic-pool-size" class="field" type="number" step="1" min="1" required></span>
+        </div>
+        <div class="form-row">
+          <div class="label-row">
+            <label for="semantic-rescore-cap">Semantic rescore cap</label>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Of a query's BM25 keyword matches, the most this many (ranked by BM25 score) also get a semantic similarity score fetched. A common query term matching a large fraction of the corpus would otherwise fetch and score every single match, making that one search very slow. Every BM25 match is still scored and ranked on keywords regardless of this cap -- a match just outside it can still rank purely on keyword relevance.</span></button>
+          </div>
+          <span class="field-wrap" data-default="500"><input id="semantic-rescore-cap" class="field" type="number" step="1" min="1" required></span>
         </div>
         <div class="form-row form-row-check">
           <label for="ann-search-enabled">

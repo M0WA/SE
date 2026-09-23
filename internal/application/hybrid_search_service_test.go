@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,6 +40,18 @@ type fakeSQLRepo struct {
 	// fetch and the query embedding call concurrently rather than one
 	// after the other.
 	postingsDelay time.Duration
+	// embeddingsForDocsDelay, when set, is slept inside EmbeddingsForDocs --
+	// used alongside a second active provider to prove Search fetches every
+	// provider's embeddings concurrently rather than one after the other.
+	embeddingsForDocsDelay time.Duration
+	// embeddingsForDocsErr, when set, is returned by every EmbeddingsForDocs
+	// call -- lets a test prove a real per-provider fetch failure still
+	// propagates as a Search error now that the per-provider fetch loop
+	// runs concurrently via goroutines/a channel rather than a plain loop.
+	embeddingsForDocsErr error
+	// sampleEmbeddingsErr mirrors embeddingsForDocsErr for the brute-force
+	// sample fallback's own error path inside that same goroutine.
+	sampleEmbeddingsErr error
 
 	// documentsByIDsCalls lets tests assert the N+1 fix actually took:
 	// DocumentsByIDs must be called at most once per Search() phase
@@ -101,7 +114,12 @@ type fakeSQLRepo struct {
 	// queried every provider EmbeddingSearchWeights actually names, in
 	// addition to a single-provider test asserting the one active provider
 	// (rather than a hardcoded value).
-	embeddingsForDocsProviders  []string
+	embeddingsForDocsProviders []string
+	// embeddingsForDocsIDs records, in call order, the ids slice each
+	// EmbeddingsForDocs call was made with -- lets a test assert the
+	// SemanticRescoreCap fix actually bounds this list rather than passing
+	// every BM25 hit through uncapped.
+	embeddingsForDocsIDs        [][]string
 	sampleEmbeddingsProviders   []string
 	topSemanticMatchesProviders []string
 
@@ -112,14 +130,22 @@ type fakeSQLRepo struct {
 	// independent per-provider similarity scores rather than reading the
 	// same vectors for every provider.
 	embeddingsByProvider map[string]map[string][]float32
+
+	// providerFetchMu guards every field EmbeddingsForDocs/SampleEmbeddings/
+	// TopSemanticMatches touch -- Search now runs one goroutine per active
+	// provider for these three, so a multi-provider test hits this fake
+	// concurrently, unlike every other method here.
+	providerFetchMu sync.Mutex
 }
 
 // TopSemanticMatches mimics ports.SQLRepository's ANN entry point: reports
 // unavailable (ok=false, nil error) unless the test explicitly configured
 // annOK, exactly like a repository whose EnableANN never succeeded.
 func (r *fakeSQLRepo) TopSemanticMatches(_ context.Context, _ []float32, _ int, provider string) (map[string]domain.EmbeddedVector, bool, error) {
+	r.providerFetchMu.Lock()
 	r.topSemanticMatchesCalls++
 	r.topSemanticMatchesProviders = append(r.topSemanticMatchesProviders, provider)
+	r.providerFetchMu.Unlock()
 	if r.annErr != nil {
 		return nil, false, r.annErr
 	}
@@ -162,7 +188,16 @@ func (r *fakeSQLRepo) AllTerms(context.Context) ([]domain.TermStat, error) {
 // norm is computed on the way out, standing in for a real repository's
 // precomputed norm_embedding column.
 func (r *fakeSQLRepo) EmbeddingsForDocs(_ context.Context, ids []string, provider string) (map[string]domain.EmbeddedVector, error) {
+	if r.embeddingsForDocsDelay > 0 {
+		time.Sleep(r.embeddingsForDocsDelay)
+	}
+	r.providerFetchMu.Lock()
 	r.embeddingsForDocsProviders = append(r.embeddingsForDocsProviders, provider)
+	r.embeddingsForDocsIDs = append(r.embeddingsForDocsIDs, append([]string(nil), ids...))
+	r.providerFetchMu.Unlock()
+	if r.embeddingsForDocsErr != nil {
+		return nil, r.embeddingsForDocsErr
+	}
 	src := r.embeddingsSource(provider)
 	out := make(map[string]domain.EmbeddedVector)
 	for _, id := range ids {
@@ -197,8 +232,13 @@ func (r *fakeSQLRepo) normFor(id string, v []float32) float64 {
 // SampleEmbeddings mimics a bounded "ORDER BY id LIMIT limit" query, so
 // tests exercising a small pool size can rely on a deterministic subset.
 func (r *fakeSQLRepo) SampleEmbeddings(_ context.Context, limit int, provider string) (map[string]domain.EmbeddedVector, error) {
+	r.providerFetchMu.Lock()
 	r.sampleEmbeddingsCalls++
 	r.sampleEmbeddingsProviders = append(r.sampleEmbeddingsProviders, provider)
+	r.providerFetchMu.Unlock()
+	if r.sampleEmbeddingsErr != nil {
+		return nil, r.sampleEmbeddingsErr
+	}
 	if limit <= 0 {
 		return map[string]domain.EmbeddedVector{}, nil
 	}
@@ -1140,6 +1180,64 @@ func TestHybridSearch_BM25HitsAlwaysScoredRegardlessOfPoolSize(t *testing.T) {
 	}
 }
 
+// TestHybridSearch_SemanticRescoreCapBoundsEmbeddingsForDocsIDs verifies the
+// fix for a query term matching a large fraction of the corpus (e.g. a
+// common word across many crawled pages) forcing every single hit's
+// embedding to be fetched: EmbeddingsForDocs must be called with at most
+// SemanticRescoreCap ids, kept in order of BM25 score, even when far more
+// documents match the term.
+func TestHybridSearch_SemanticRescoreCapBoundsEmbeddingsForDocsIDs(t *testing.T) {
+	postingStat := func(docID string, termFreq int) domain.PostingStats {
+		return domain.PostingStats{DocID: docID, TermFreq: termFreq, DocLength: 10, DocFreq: 6, TotalDocs: 6, AvgDocLen: 10}
+	}
+	repo := &fakeSQLRepo{
+		postings: map[string][]domain.PostingStats{
+			// Term frequency strictly decreases from "a" to "f", so BM25
+			// score does too -- "a","b","c" are the true top 3 by score.
+			"berlin": {
+				postingStat("a", 10), postingStat("b", 9), postingStat("c", 8),
+				postingStat("d", 3), postingStat("e", 2), postingStat("f", 1),
+			},
+		},
+		embeddings: map[string][]float32{
+			"a": {1, 0}, "b": {1, 0}, "c": {1, 0}, "d": {1, 0}, "e": {1, 0}, "f": {1, 0},
+		},
+		docs: map[string]domain.Document{
+			"a": {ID: "a", URL: "http://a"}, "b": {ID: "b", URL: "http://b"},
+			"c": {ID: "c", URL: "http://c"}, "d": {ID: "d", URL: "http://d"},
+			"e": {ID: "e", URL: "http://e"}, "f": {ID: "f", URL: "http://f"},
+		},
+	}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
+		SemanticRescoreCap: 3, EmbeddingSearchWeights: map[string]float64{domain.EmbeddingProviderHash: 1},
+	})
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), opSettings, nil, domain.NewCorpusStatsCache(6, 10), nil)
+
+	results, err := svc.Search(context.Background(), "berlin", ports.SearchQuery{TopK: 10})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(repo.embeddingsForDocsIDs) != 1 || len(repo.embeddingsForDocsIDs[0]) != 3 {
+		t.Fatalf("expected EmbeddingsForDocs called with exactly 3 (capped) ids, got %v", repo.embeddingsForDocsIDs)
+	}
+	gotIDs := make(map[string]bool, 3)
+	for _, id := range repo.embeddingsForDocsIDs[0] {
+		gotIDs[id] = true
+	}
+	for _, want := range []string{"a", "b", "c"} {
+		if !gotIDs[want] {
+			t.Errorf("expected the top-3-by-BM25-score ids (a,b,c) sent to EmbeddingsForDocs, got %v", repo.embeddingsForDocsIDs[0])
+		}
+	}
+	// BM25-only ranking is unaffected by the cap -- every hit, including
+	// those cut from the semantic-rescore set, is still scored and ranked
+	// on keyword relevance, and appears in results.
+	if len(results) != 6 {
+		t.Fatalf("expected all 6 BM25 hits to still be scored/ranked despite the semantic-rescore cap, got %d: %+v", len(results), results)
+	}
+}
+
 // TestHybridSearch_PostingsForTermsCalledOnceForMultiTermQuery verifies the
 // fix for the "one PostingsForTerm call per query term, per request"
 // problem: a multi-term query must issue exactly one batched
@@ -1195,6 +1293,85 @@ func TestHybridSearch_PostingsAndEmbeddingFetchedConcurrently(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > delay+delay/2 {
 		t.Errorf("expected the postings fetch and embedding call to run concurrently (~%v total), took %v -- looks sequential", delay, elapsed)
+	}
+}
+
+// TestHybridSearch_MultiProviderEmbeddingsForDocsFetchedConcurrently proves
+// each active provider's EmbeddingsForDocs (plus its ANN/sample fill) round
+// trip runs concurrently rather than one after the other: with 3 active
+// providers each artificially delayed, the whole Search call must take
+// roughly one delay's worth of time, not the sum of all three -- this
+// matters most once SemanticRescoreCap trims each fetch down to a fast
+// query, since paying that latency N times sequentially would otherwise
+// still dominate a search with many active providers.
+func TestHybridSearch_MultiProviderEmbeddingsForDocsFetchedConcurrently(t *testing.T) {
+	const delay = 50 * time.Millisecond
+	repo := &fakeSQLRepo{
+		postings: map[string][]domain.PostingStats{"widgets": {}},
+		docs: map[string]domain.Document{
+			"1": {ID: "1", URL: "http://a"},
+		},
+		embeddingsByProvider: map[string]map[string][]float32{
+			"p1": {"1": {1, 0}},
+			"p2": {"1": {1, 0}},
+			"p3": {"1": {1, 0}},
+		},
+		embeddingsForDocsDelay: delay,
+	}
+	embedders := map[string]ports.EmbeddingProvider{
+		"p1": &fakeEmbedder{vec: []float32{1, 0}},
+		"p2": &fakeEmbedder{vec: []float32{1, 0}},
+		"p3": &fakeEmbedder{vec: []float32{1, 0}},
+	}
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
+		EmbeddingSearchWeights: map[string]float64{"p1": 1, "p2": 1, "p3": 1},
+	})
+	svc := application.NewHybridSearchService(repo, embedders, domain.NewTuningSettings(0, domain.DefaultBM25K1, domain.DefaultBM25B), opSettings, nil, domain.NewCorpusStatsCache(1, 10), nil)
+
+	start := time.Now()
+	if _, err := svc.Search(context.Background(), "widgets", ports.SearchQuery{TopK: 10}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > delay+delay/2 {
+		t.Errorf("expected all 3 providers' EmbeddingsForDocs calls to run concurrently (~%v total), took %v -- looks sequential", delay, elapsed)
+	}
+}
+
+// TestHybridSearch_PropagatesEmbeddingsForDocsError proves a genuine
+// per-provider EmbeddingsForDocs failure still surfaces as a Search error
+// now that every active provider's fetch runs in its own goroutine --
+// collected off a channel after every goroutine finishes, rather than a
+// plain loop returning on the first error immediately.
+func TestHybridSearch_PropagatesEmbeddingsForDocsError(t *testing.T) {
+	repo := &fakeSQLRepo{
+		postings:             map[string][]domain.PostingStats{"widgets": {}},
+		embeddingsForDocsErr: errors.New("embeddings fetch failed"),
+	}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), nil, nil, nil, nil)
+
+	if _, err := svc.Search(context.Background(), "widgets", ports.SearchQuery{TopK: 10}); err == nil {
+		t.Fatal("expected the EmbeddingsForDocs failure to propagate as a search error")
+	}
+}
+
+// TestHybridSearch_PropagatesSampleEmbeddingsError mirrors
+// TestHybridSearch_PropagatesEmbeddingsForDocsError for the brute-force
+// sample fallback's own error path inside the same per-provider goroutine
+// (ANN disabled here so SampleEmbeddings is actually reached).
+func TestHybridSearch_PropagatesSampleEmbeddingsError(t *testing.T) {
+	repo := &fakeSQLRepo{
+		postings:            map[string][]domain.PostingStats{"widgets": {}},
+		sampleEmbeddingsErr: errors.New("sample fetch failed"),
+	}
+	embedder := &fakeEmbedder{vec: []float32{1, 0}}
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
+		ANNSearchEnabled: false, EmbeddingSearchWeights: map[string]float64{domain.EmbeddingProviderHash: 1},
+	})
+	svc := application.NewHybridSearchService(repo, map[string]ports.EmbeddingProvider{domain.EmbeddingProviderHash: embedder}, domain.NewTuningSettings(0.5, domain.DefaultBM25K1, domain.DefaultBM25B), opSettings, nil, nil, nil)
+
+	if _, err := svc.Search(context.Background(), "widgets", ports.SearchQuery{TopK: 10}); err == nil {
+		t.Fatal("expected the SampleEmbeddings failure to propagate as a search error")
 	}
 }
 

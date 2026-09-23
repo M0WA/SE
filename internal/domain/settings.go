@@ -22,6 +22,12 @@ type OperationalSettingsValues struct {
 	// score per search regardless of corpus size -- BM25 hits plus a
 	// bounded sample of the rest, so a purely semantic match can still be found.
 	SemanticCandidatePoolSize int
+	// SemanticRescoreCap bounds how many of a query's BM25 hits also get a
+	// semantic similarity score fetched -- the top-scoring N by BM25 alone.
+	// Every BM25 hit is still scored and ranked by keyword relevance
+	// regardless; this only stops a term matching a large fraction of the
+	// corpus from forcing every single hit's embedding to be fetched.
+	SemanticRescoreCap int
 	// DBMaxOpenConns/DBMaxIdleConns bound the SQL pool; DBConnMaxLifetime
 	// caps reuse. SQLite always clamps to 1 open connection regardless.
 	DBMaxOpenConns    int
@@ -114,6 +120,10 @@ const (
 	// defaultSemanticCandidatePoolSize keeps semantic scoring/ranking
 	// working over at most a few hundred candidates regardless of corpus size.
 	defaultSemanticCandidatePoolSize = 200
+	// defaultSemanticRescoreCap bounds how many BM25 hits get a semantic
+	// score fetched per search, regardless of how many documents a query
+	// term matches.
+	defaultSemanticRescoreCap = 500
 	// defaultDBMaxOpenConns/defaultDBMaxIdleConns/defaultDBConnMaxLifetime
 	// are sane defaults for a real pool; SQLite clamps to a single
 	// connection regardless (file-level write serialization).
@@ -170,6 +180,7 @@ func defaultOperationalSettings() OperationalSettingsValues {
 		CrawlDelayMs:                     defaultCrawlDelayMs,
 		MaxResponseBytes:                 defaultMaxResponseBytes,
 		SemanticCandidatePoolSize:        defaultSemanticCandidatePoolSize,
+		SemanticRescoreCap:               defaultSemanticRescoreCap,
 		DBMaxOpenConns:                   defaultDBMaxOpenConns,
 		DBMaxIdleConns:                   defaultDBMaxIdleConns,
 		DBConnMaxLifetime:                defaultDBConnMaxLifetime,
@@ -259,6 +270,9 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 	}
 	if v.SemanticCandidatePoolSize <= 0 {
 		v.SemanticCandidatePoolSize = d.SemanticCandidatePoolSize
+	}
+	if v.SemanticRescoreCap <= 0 {
+		v.SemanticRescoreCap = d.SemanticRescoreCap
 	}
 	if v.DBMaxOpenConns <= 0 {
 		v.DBMaxOpenConns = d.DBMaxOpenConns
