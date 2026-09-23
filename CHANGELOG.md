@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.68 - 2026-09-23
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* fix: cap BM25 hit set for semantic rescoring, parallelize per-provider fetch by @M0WA in https://github.com/M0WA/SE/pull/280
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.67...v4.13.68
+
+
 ## v4.13.67 - 2026-09-23
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
