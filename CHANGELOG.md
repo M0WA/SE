@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.75 - 2026-09-23
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* feat: let chat use an attached image via similarity search and captioning by @M0WA in https://github.com/M0WA/SE/pull/298
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.74...v4.13.75
+
+
 ## v4.13.74 - 2026-09-23
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
