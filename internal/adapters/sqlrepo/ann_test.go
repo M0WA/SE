@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -262,6 +263,159 @@ func TestEnableANN_SucceedsAboveVectorTypeDimensionLimit(t *testing.T) {
 	if _, found := matches["wide-doc"]; !found {
 		t.Errorf("expected wide-doc found via ANN at 3584 dimensions, got %+v", matches)
 	}
+}
+
+// TestEnableANN_ShardsProviderAbovePgvectorIndexLimit is the direct real
+// production case this was built for: Qwen3-VL-Embedding-8B's 4096
+// dimensions exceed pgvector's 4000-dim per-index ceiling (confirmed live
+// against a real deployment -- see the doc comments on vectorShardCount/
+// TopSemanticMatches), so a single halfvec(4096) column can never be
+// HNSW-indexed at all. This proves EnableANN instead creates two
+// halfvec(2048) columns/indexes and TopSemanticMatches still finds a real
+// document via the sharded search, with ANN reported available (not
+// silently falling back to brute-force the way an unhandled index-creation
+// failure would).
+func TestEnableANN_ShardsProviderAbovePgvectorIndexLimit(t *testing.T) {
+	dsn := os.Getenv(testPostgresDSNEnv)
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN not set; skipping pgvector ANN test")
+	}
+	repo, rawDB := newPostgresTestRepoAndRawDB(t, dsn)
+	ctx := context.Background()
+	const provider = "qwen3_vl"
+	const dims = 4096
+
+	repo.EnableANN(ctx, map[string]int{provider: dims})
+	if !repo.ANNAvailable(provider) {
+		t.Skip("pgvector extension not available on this Postgres server; skipping ANN test")
+	}
+
+	// Both shard columns must actually exist, each correctly sized to
+	// exactly half of 4096 -- not one full-size column (which pgvector
+	// would have refused to index) and not silently missing a shard.
+	for shard, wantDims := range map[int]int{0: 2048, 1: 2048} {
+		col := fmt.Sprintf("embedding_vector_%s_%d", provider, shard)
+		gotType, gotDims := pgVectorColumnCatalogTypeAndDims(t, rawDB, col)
+		if gotType != "halfvec" {
+			t.Errorf("shard %d: expected halfvec, got %q", shard, gotType)
+		}
+		if gotDims != wantDims {
+			t.Errorf("shard %d: expected %d dims, got %d", shard, wantDims, gotDims)
+		}
+	}
+
+	vec := make([]float32, dims)
+	vec[0] = 1      // concentrates entirely in shard 0's half
+	vec[dims-1] = 1 // and entirely in shard 1's half, so a naive
+	// single-shard search that ignored the other half
+	// would still coincidentally work -- see the
+	// dedicated one-half-only test below for a case
+	// that actually distinguishes "searches both
+	// shards" from "only searches shard 0."
+	doc := domain.Document{ID: "qwen3-doc", URL: "https://example.com/qwen3-doc", Title: "qwen3-doc", Text: "qwen3-doc"}
+	if err := repo.SaveDocument(ctx, doc, map[string][]float32{provider: vec}, 100, 2); err != nil {
+		t.Fatalf("saving document with a %d-dimension sharded vector: %v", dims, err)
+	}
+
+	matches, ok, err := repo.TopSemanticMatches(ctx, vec, 10, provider)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true once ANN is available at 4096 (sharded) dimensions")
+	}
+	got, found := matches["qwen3-doc"]
+	if !found {
+		t.Fatalf("expected qwen3-doc found via sharded ANN at 4096 dimensions, got %+v", matches)
+	}
+	// The vector scoring downstream reads must be the FULL, unsplit
+	// 4096-dim embedding -- proving sharding only changes which
+	// candidates ANN surfaces, never the precision of what's scored.
+	if len(got.Vector) != dims {
+		t.Errorf("expected the full %d-dim vector returned for exact rescoring, got %d dims", dims, len(got.Vector))
+	}
+}
+
+// TestEnableANN_ShardedProviderFindsDocumentSignalOnlyInSecondShard is the
+// test that actually distinguishes "searches every shard" from "only
+// searches the first one": the document's entire similarity signal lives
+// in shard 1 (the second half of the vector) and shard 0 is pure noise
+// unrelated to the query, so a search that only consulted shard 0's index
+// would never surface it. Also plants decoy documents whose signal lives
+// only in shard 0 to prove those don't crowd out the real match either.
+func TestEnableANN_ShardedProviderFindsDocumentSignalOnlyInSecondShard(t *testing.T) {
+	dsn := os.Getenv(testPostgresDSNEnv)
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN not set; skipping pgvector ANN test")
+	}
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	const provider = "qwen3_vl_split"
+	const dims = 4096
+	const half = dims / 2
+
+	repo.EnableANN(ctx, map[string]int{provider: dims})
+	if !repo.ANNAvailable(provider) {
+		t.Skip("pgvector extension not available on this Postgres server; skipping ANN test")
+	}
+
+	query := make([]float32, dims)
+	query[half] = 1 // query's signal lives entirely in shard 1
+
+	target := make([]float32, dims)
+	target[half] = 1 // matches the query, but only in shard 1 -- shard 0 is all zeros for both
+
+	docs := map[string][]float32{"target-doc": target}
+	for i := 0; i < 5; i++ {
+		decoy := make([]float32, dims)
+		decoy[i] = 1 // decoy signal lives only in shard 0, nowhere near the query
+		docs[fmt.Sprintf("decoy-doc-%d", i)] = decoy
+	}
+	for id, vec := range docs {
+		doc := domain.Document{ID: id, URL: "https://example.com/" + id, Title: id, Text: id}
+		if err := repo.SaveDocument(ctx, doc, map[string][]float32{provider: vec}, 100, 2); err != nil {
+			t.Fatalf("saving %s: %v", id, err)
+		}
+	}
+
+	matches, ok, err := repo.TopSemanticMatches(ctx, query, 10, provider)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if _, found := matches["target-doc"]; !found {
+		t.Errorf("expected target-doc found via shard 1's index even though shard 0 (searched independently) has no signal for it -- got %+v (only searching shard 0 would miss this entirely)", matches)
+	}
+}
+
+// pgVectorColumnCatalogTypeAndDims reads back both a column's pgvector
+// type name and its declared dimension count from Postgres's own catalog
+// -- pgVectorColumnCatalogType (above) only returns the type name, since
+// its callers only ever needed to confirm a halfvec migration happened,
+// not check a specific dimension count.
+func pgVectorColumnCatalogTypeAndDims(t *testing.T, rawDB *sql.DB, col string) (typeName string, dims int) {
+	t.Helper()
+	const q = `
+		SELECT format_type(a.atttypid, a.atttypmod)
+		FROM pg_attribute a
+		WHERE a.attrelid = 'documents'::regclass
+		  AND a.attname = $1
+		  AND NOT a.attisdropped`
+	var formatted string
+	if err := rawDB.QueryRowContext(context.Background(), q, col).Scan(&formatted); err != nil {
+		t.Fatalf("reading back catalog type for %s: %v", col, err)
+	}
+	open, closeParen := strings.IndexByte(formatted, '('), strings.LastIndexByte(formatted, ')')
+	if open < 0 || closeParen <= open {
+		t.Fatalf("unexpected catalog type format %q for %s", formatted, col)
+	}
+	n, err := strconv.Atoi(formatted[open+1 : closeParen])
+	if err != nil {
+		t.Fatalf("parsing dims from catalog type %q for %s: %v", formatted, col, err)
+	}
+	return formatted[:open], n
 }
 
 // TestEnableANN_MaintainsTwoProvidersOfDifferentDimensionsIndependently

@@ -993,9 +993,21 @@ func (r *Repository) saveDocumentEmbeddings(ctx context.Context, exec dbExecer, 
 			return fmt.Errorf("saving %s embedding: %w", provider, err)
 		}
 		if r.ann.isAvailable(provider) {
-			col := vectorColumnNameFor(provider)
-			vecSQL := r.ph(`UPDATE documents SET `+col+` = %s::halfvec WHERE id = %s`, 1, 2)
-			if _, err := exec.ExecContext(ctx, vecSQL, formatPgVectorLiteral(vec), docID); err != nil {
+			shards := r.ann.shardsFor(provider)
+			bounds := vectorShardBounds(len(vec), shards)
+			setClauses := make([]string, shards)
+			args := make([]interface{}, 0, shards+1)
+			for shard := 0; shard < shards; shard++ {
+				setClauses[shard] = vectorColumnNameFor(provider, shard, shards) + " = %s::halfvec"
+				args = append(args, formatPgVectorLiteral(vec[bounds[shard]:bounds[shard+1]]))
+			}
+			args = append(args, docID)
+			positions := make([]int, shards+1)
+			for i := range positions {
+				positions[i] = i + 1
+			}
+			vecSQL := r.ph(`UPDATE documents SET `+strings.Join(setClauses, ", ")+` WHERE id = %s`, positions...)
+			if _, err := exec.ExecContext(ctx, vecSQL, args...); err != nil {
 				return fmt.Errorf("saving %s embedding vector: %w", provider, err)
 			}
 		}

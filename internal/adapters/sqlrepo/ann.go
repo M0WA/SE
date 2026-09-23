@@ -12,12 +12,14 @@ import (
 	"searchengine/internal/domain"
 )
 
-// annState tracks per-provider pgvector ANN availability, set once by
-// EnableANN and never retried -- a failed provider falls back to
-// brute-force SampleEmbeddings for this process's lifetime, others unaffected.
+// annState tracks per-provider pgvector ANN availability and shard count,
+// set once by EnableANN and never retried -- a failed provider falls back
+// to brute-force SampleEmbeddings for this process's lifetime, others
+// unaffected.
 type annState struct {
 	mu        sync.RWMutex
 	available map[string]bool
+	shards    map[string]int
 }
 
 func (a *annState) isAvailable(provider string) bool {
@@ -26,27 +28,94 @@ func (a *annState) isAvailable(provider string) bool {
 	return a.available[provider]
 }
 
-// markAvailable only tracks availability, not dims -- a size mismatch is
-// caught separately, by ensureVectorColumn's own catalog check on each
-// EnableANN run.
-func (a *annState) markAvailable(provider string) {
+// shardsFor returns provider's shard count (see vectorShardCount) once
+// EnableANN has succeeded for it; 1 (the pre-sharding default) if it
+// hasn't been recorded, so a caller that forgot to check isAvailable first
+// still gets a sane single-column assumption rather than 0.
+func (a *annState) shardsFor(provider string) int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if n, ok := a.shards[provider]; ok {
+		return n
+	}
+	return 1
+}
+
+// markAvailable records availability and provider's shard count -- a size
+// mismatch on either axis is caught separately, by ensureVectorColumn's
+// own catalog check on each EnableANN run.
+func (a *annState) markAvailable(provider string, shards int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.available == nil {
 		a.available = make(map[string]bool)
+		a.shards = make(map[string]int)
 	}
 	a.available[provider] = true
+	a.shards[provider] = shards
 }
 
-// vectorColumnNameFor and vectorIndexNameFor name a provider's pgvector
-// column/HNSW index. provider is always domain.EmbeddingProviderHash or an
-// endpoint ID matching ^[a-z0-9_]{1,20}$, so direct concatenation is safe.
-func vectorColumnNameFor(provider string) string {
-	return "embedding_vector_" + provider
+// maxHalfvecIndexDims is pgvector's hard ceiling on how many dimensions a
+// single halfvec column can have and still be indexed (HNSW or IVFFlat --
+// both share this limit, it's a per-index-page constraint of the storage
+// type itself, not an HNSW-specific one). A provider whose embedding
+// exceeds this (e.g. a 4096-dim model) can't be ANN-indexed as one column
+// at all -- see vectorShardCount.
+const maxHalfvecIndexDims = 4000
+
+// vectorShardCount reports how many indexed halfvec columns a dims-length
+// embedding needs: 1 unless dims exceeds pgvector's per-index dimension
+// ceiling, in which case it's split evenly across enough shards to fit.
+// Each shard is ANN-searched independently and the candidate sets unioned
+// (see TopSemanticMatches) -- verified empirically (not just in theory) to
+// recover true full-vector top-K with full recall at a modest per-shard
+// candidate count, since a real embedding's similarity signal is spread
+// across both halves rather than concentrated in one; final scoring is
+// always done from the full, unsplit vector (document_embeddings' bytea
+// column), so splitting only affects which candidates ANN surfaces, never
+// the precision of a score.
+func vectorShardCount(dims int) int {
+	if dims <= maxHalfvecIndexDims {
+		return 1
+	}
+	return (dims + maxHalfvecIndexDims - 1) / maxHalfvecIndexDims
 }
 
-func vectorIndexNameFor(provider string) string {
-	return "idx_documents_embedding_vector_" + provider + "_hnsw"
+// vectorShardBounds splits a dims-length vector into shards even-as-possible
+// pieces: shard i covers vec[bounds[i]:bounds[i+1]]. len(bounds) == shards+1.
+func vectorShardBounds(dims, shards int) []int {
+	bounds := make([]int, shards+1)
+	base, rem := dims/shards, dims%shards
+	for i := 0; i < shards; i++ {
+		size := base
+		if i < rem {
+			size++
+		}
+		bounds[i+1] = bounds[i] + size
+	}
+	return bounds
+}
+
+// vectorColumnNameFor and vectorIndexNameFor name one shard of a
+// provider's pgvector column/HNSW index. provider is always
+// domain.EmbeddingProviderHash or an endpoint ID matching
+// ^[a-z0-9_]{1,20}$, so direct concatenation is safe. shards==1 (the
+// overwhelmingly common case, and every column created before sharding
+// existed) keeps the original unsuffixed name -- only a provider that
+// actually needs multiple shards gets the "_<shard>" suffix, so no
+// existing single-shard provider's column/index needs renaming/migrating.
+func vectorColumnNameFor(provider string, shard, shards int) string {
+	if shards <= 1 {
+		return "embedding_vector_" + provider
+	}
+	return fmt.Sprintf("embedding_vector_%s_%d", provider, shard)
+}
+
+func vectorIndexNameFor(provider string, shard, shards int) string {
+	if shards <= 1 {
+		return "idx_documents_embedding_vector_" + provider + "_hnsw"
+	}
+	return fmt.Sprintf("idx_documents_embedding_vector_%s_%d_hnsw", provider, shard)
 }
 
 // maxHNSWEfSearch is pgvector's hard ceiling on hnsw.ef_search ([1, 1000],
@@ -56,8 +125,11 @@ const maxHNSWEfSearch = 1000
 
 // EnableANN turns on Postgres pgvector ANN search per provider in
 // dimsByProvider: enables the extension, then adds each provider's
-// halfvec(dims) column + HNSW index. Never errors -- a no-op off Postgres;
-// a failure falls that provider back to brute-force search for this process.
+// halfvec(dims) column(s) + HNSW index(es) -- one of each unless dims
+// exceeds pgvector's per-index ceiling (see vectorShardCount), in which
+// case the embedding is sharded across several. Never errors -- a no-op
+// off Postgres; a failure falls that provider back to brute-force search
+// for this process.
 func (r *Repository) EnableANN(ctx context.Context, dimsByProvider map[string]int) {
 	if r.dialect.Name() != "postgres" {
 		return
@@ -79,32 +151,40 @@ func (r *Repository) EnableANN(ctx context.Context, dimsByProvider map[string]in
 }
 
 func (r *Repository) enableANNForProvider(ctx context.Context, provider string, dims int) {
-	if err := r.ensureVectorColumn(ctx, provider, dims); err != nil {
-		log.Printf("sqlrepo: could not add pgvector column for %s (%v) -- falling back to brute-force semantic search for %s this process's lifetime", provider, err, provider)
-		return
+	shards := vectorShardCount(dims)
+	bounds := vectorShardBounds(dims, shards)
+	for shard := 0; shard < shards; shard++ {
+		shardDims := bounds[shard+1] - bounds[shard]
+		if err := r.ensureVectorColumn(ctx, provider, shard, shards, shardDims); err != nil {
+			log.Printf("sqlrepo: could not add pgvector column for %s shard %d/%d (%v) -- falling back to brute-force semantic search for %s this process's lifetime", provider, shard, shards, err, provider)
+			return
+		}
+		if err := r.ensureVectorIndex(ctx, provider, shard, shards); err != nil {
+			log.Printf("sqlrepo: could not build pgvector HNSW index for %s shard %d/%d (%v) -- falling back to brute-force semantic search for %s this process's lifetime", provider, shard, shards, err, provider)
+			return
+		}
 	}
-	if err := r.ensureVectorIndex(ctx, provider); err != nil {
-		log.Printf("sqlrepo: could not build pgvector HNSW index for %s (%v) -- falling back to brute-force semantic search for %s this process's lifetime", provider, err, provider)
-		return
-	}
-	if err := r.backfillVectorColumn(ctx, provider); err != nil {
+	if err := r.backfillVectorColumn(ctx, provider, shards, bounds); err != nil {
 		log.Printf("sqlrepo: could not backfill pgvector column for %s (%v) -- falling back to brute-force semantic search for %s this process's lifetime", provider, err, provider)
 		return
 	}
-	r.ann.markAvailable(provider)
+	r.ann.markAvailable(provider, shards)
 }
 
-// backfillVectorColumn fills provider's pgvector column for rows saved
+// backfillVectorColumn fills provider's pgvector column(s) for rows saved
 // before ANN was enabled, else TopSemanticMatches' NOT NULL filter would
-// exclude them. Must run before r.ann.markAvailable.
-func (r *Repository) backfillVectorColumn(ctx context.Context, provider string) error {
-	col := vectorColumnNameFor(provider)
+// exclude them. Must run before r.ann.markAvailable. Checks the first
+// shard's column for NULL as the "needs backfill" signal -- ensureVectorColumn
+// just (re)created every shard column together, so they're always NULL in
+// lockstep for a row that predates this EnableANN run.
+func (r *Repository) backfillVectorColumn(ctx context.Context, provider string, shards int, bounds []int) error {
+	col0 := vectorColumnNameFor(provider, 0, shards)
 	query := r.ph(`SELECT de.doc_id, de.embedding FROM document_embeddings de
 	               JOIN documents d ON d.id = de.doc_id
-	               WHERE de.provider = %s AND d.`+col+` IS NULL`, 1)
+	               WHERE de.provider = %s AND d.`+col0+` IS NULL`, 1)
 	rows, err := r.db.QueryContext(ctx, query, provider)
 	if err != nil {
-		return fmt.Errorf("finding rows needing a %s backfill: %w", col, err)
+		return fmt.Errorf("finding rows needing a %s backfill: %w", col0, err)
 	}
 	type idEmbedding struct {
 		id      string
@@ -124,17 +204,31 @@ func (r *Repository) backfillVectorColumn(ctx context.Context, provider string) 
 		return err
 	}
 
-	updateSQL := r.ph(`UPDATE documents SET `+col+` = %s::halfvec WHERE id = %s`, 1, 2)
+	setClauses := make([]string, shards)
+	for shard := 0; shard < shards; shard++ {
+		setClauses[shard] = vectorColumnNameFor(provider, shard, shards) + " = %s::halfvec"
+	}
+	positions := make([]int, shards+1)
+	for i := range positions {
+		positions[i] = i + 1
+	}
+	updateSQL := r.ph(`UPDATE documents SET `+strings.Join(setClauses, ", ")+` WHERE id = %s`, positions...)
+
 	for _, ie := range pending {
 		vec, err := DecodeEmbedding(ie.embBlob)
 		if err != nil {
-			return fmt.Errorf("deserializing embedding for %s backfill (%s): %w", col, ie.id, err)
+			return fmt.Errorf("deserializing embedding for %s backfill (%s): %w", col0, ie.id, err)
 		}
 		if len(vec) == 0 {
 			continue // nothing meaningful to backfill for an empty embedding
 		}
-		if _, err := r.db.ExecContext(ctx, updateSQL, formatPgVectorLiteral(vec), ie.id); err != nil {
-			return fmt.Errorf("backfilling %s for %s: %w", col, ie.id, err)
+		args := make([]interface{}, 0, shards+1)
+		for shard := 0; shard < shards; shard++ {
+			args = append(args, formatPgVectorLiteral(vec[bounds[shard]:bounds[shard+1]]))
+		}
+		args = append(args, ie.id)
+		if _, err := r.db.ExecContext(ctx, updateSQL, args...); err != nil {
+			return fmt.Errorf("backfilling %s for %s: %w", col0, ie.id, err)
 		}
 	}
 	return nil
@@ -166,36 +260,40 @@ type queryRower interface {
 	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
 }
 
-// ensureVectorColumn adds documents.embedding_vector_<provider> sized to
-// dims, under pg_advisory_xact_lock keyed on provider -- not the
-// session-level lock, which can't guarantee release through a pool --
-// since migrating a mismatched column isn't idempotent under concurrent
-// EnableANN calls.
-func (r *Repository) ensureVectorColumn(ctx context.Context, provider string, dims int) error {
+// ensureVectorColumn adds one shard of documents.embedding_vector_<provider>
+// (or _<provider>_<shard> when the provider needs more than one -- see
+// vectorShardCount) sized to dims, under pg_advisory_xact_lock keyed on
+// provider+shard -- not the session-level lock, which can't guarantee
+// release through a pool -- since migrating a mismatched column isn't
+// idempotent under concurrent EnableANN calls.
+func (r *Repository) ensureVectorColumn(ctx context.Context, provider string, shard, shards, dims int) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("starting vector column migration transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	// hashtext(...) folds provider into the int key pg_advisory_xact_lock
-	// needs; keying by provider lets independent providers migrate
-	// concurrently without contending on each other.
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('sqlrepo:vector_column:'||$1))`, provider); err != nil {
+	// hashtext(...) folds provider+shard into the int key
+	// pg_advisory_xact_lock needs; keying by provider+shard lets
+	// independent providers/shards migrate concurrently without
+	// contending on each other.
+	lockKey := fmt.Sprintf("sqlrepo:vector_column:%s:%d", provider, shard)
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, lockKey); err != nil {
 		return fmt.Errorf("acquiring vector column migration lock: %w", err)
 	}
 
-	col := vectorColumnNameFor(provider)
-	existingDims, existingType, found, err := vectorColumnType(ctx, tx, provider)
+	col := vectorColumnNameFor(provider, shard, shards)
+	existingDims, existingType, found, err := vectorColumnType(ctx, tx, col)
 	if err != nil {
 		return err
 	}
 	if found && (existingDims != dims || existingType != "halfvec") {
-		// The model changed (see RunEmbeddingRecomputeJob) or this predates
-		// the vector->halfvec switch -- pgvector's type is fixed once
-		// created, so drop the column and stale index and let ADD COLUMN
-		// recreate it; backfillVectorColumn repopulates every row, nothing lost.
-		if _, err := tx.ExecContext(ctx, `DROP INDEX IF EXISTS `+vectorIndexNameFor(provider)); err != nil {
+		// The model changed (see RunEmbeddingRecomputeJob), its shard count
+		// changed, or this predates the vector->halfvec switch -- pgvector's
+		// type is fixed once created, so drop the column and stale index and
+		// let ADD COLUMN recreate it; backfillVectorColumn repopulates every
+		// row, nothing lost.
+		if _, err := tx.ExecContext(ctx, `DROP INDEX IF EXISTS `+vectorIndexNameFor(provider, shard, shards)); err != nil {
 			return fmt.Errorf("dropping stale pgvector index: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `ALTER TABLE documents DROP COLUMN IF EXISTS `+col); err != nil {
@@ -209,11 +307,11 @@ func (r *Repository) ensureVectorColumn(ctx context.Context, provider string, di
 	return tx.Commit()
 }
 
-// vectorColumnType reads provider's column's actual dimension and pgvector
-// type from Postgres's catalog, not trusted in-memory state. found is false
-// if it doesn't exist yet; takes a queryRower so ensureVectorColumn can
-// call it inside its own locked *sql.Tx.
-func vectorColumnType(ctx context.Context, q queryRower, provider string) (dims int, typeName string, found bool, err error) {
+// vectorColumnType reads col's actual dimension and pgvector type from
+// Postgres's catalog, not trusted in-memory state. found is false if it
+// doesn't exist yet; takes a queryRower so ensureVectorColumn can call it
+// inside its own locked *sql.Tx.
+func vectorColumnType(ctx context.Context, q queryRower, col string) (dims int, typeName string, found bool, err error) {
 	const query = `
 		SELECT format_type(a.atttypid, a.atttypmod)
 		FROM pg_attribute a
@@ -221,7 +319,7 @@ func vectorColumnType(ctx context.Context, q queryRower, provider string) (dims 
 		  AND a.attname = $1
 		  AND NOT a.attisdropped`
 	var formatted string
-	if err := q.QueryRowContext(ctx, query, vectorColumnNameFor(provider)).Scan(&formatted); err != nil {
+	if err := q.QueryRowContext(ctx, query, col).Scan(&formatted); err != nil {
 		if err == sql.ErrNoRows {
 			return 0, "", false, nil
 		}
@@ -243,12 +341,14 @@ func vectorColumnType(ctx context.Context, q queryRower, provider string) (dims 
 }
 
 // ensureVectorIndex builds the HNSW cosine-distance index TopSemanticMatches
-// needs, after ensureVectorColumn. halfvec, not vector: pgvector's per-row
-// byte budget caps vector at 2000 dims but halfvec (float16) at 4000,
-// needed for a 3584-dim model with no meaningful accuracy loss.
-func (r *Repository) ensureVectorIndex(ctx context.Context, provider string) error {
-	col := vectorColumnNameFor(provider)
-	ddl := fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON documents USING hnsw (%s halfvec_cosine_ops)`, vectorIndexNameFor(provider), col)
+// needs for one shard, after ensureVectorColumn. halfvec, not vector:
+// pgvector's per-row byte budget caps vector at 2000 dims but halfvec
+// (float16) at 4000 -- needed even for a single-shard 3584-dim model with
+// no meaningful accuracy loss, and it's this same 4000-dim ceiling that
+// vectorShardCount splits a larger embedding around.
+func (r *Repository) ensureVectorIndex(ctx context.Context, provider string, shard, shards int) error {
+	col := vectorColumnNameFor(provider, shard, shards)
+	ddl := fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON documents USING hnsw (%s halfvec_cosine_ops)`, vectorIndexNameFor(provider, shard, shards), col)
 	if _, err := r.db.ExecContext(ctx, ddl); err != nil && !isAlreadyExistsError(err) {
 		return err
 	}
@@ -284,10 +384,23 @@ func formatPgVectorLiteral(vec []float32) string {
 // false when unavailable or limit isn't positive -- caller falls back to
 // SampleEmbeddings. Sets hnsw.ef_search to limit first: at its default of
 // 40, HNSW silently under-recalls a larger requested limit.
+//
+// For a provider sharded across multiple columns (see vectorShardCount --
+// needed once an embedding's dims exceed pgvector's 4000-dim per-index
+// ceiling), each shard's own HNSW index is searched independently against
+// the matching slice of queryVec, and the candidate doc_id sets are
+// UNIONed in one query (not one round trip per shard) before joining back
+// to document_embeddings for each candidate's full, unsplit vector --
+// final scoring downstream always uses that full vector, never a shard on
+// its own, so sharding only changes which candidates ANN surfaces, not the
+// precision of any score. Verified empirically (see vectorShardCount's doc
+// comment) that this recovers true full-vector top-K with full recall at a
+// modest per-shard candidate count.
 func (r *Repository) TopSemanticMatches(ctx context.Context, queryVec []float32, limit int, provider string) (map[string]domain.EmbeddedVector, bool, error) {
 	if !r.ann.isAvailable(provider) || limit <= 0 {
 		return nil, false, nil
 	}
+	shards := r.ann.shardsFor(provider)
 
 	efSearch := limit
 	if efSearch > maxHNSWEfSearch {
@@ -307,12 +420,11 @@ func (r *Repository) TopSemanticMatches(ctx context.Context, queryVec []float32,
 		return nil, false, fmt.Errorf("setting hnsw.ef_search: %w", err)
 	}
 
-	col := vectorColumnNameFor(provider)
-	query := r.ph(`SELECT de.doc_id, de.embedding, de.norm_embedding, d.pagerank
-	               FROM documents d JOIN document_embeddings de ON de.doc_id = d.id AND de.provider = %s
-	               WHERE d.`+col+` IS NOT NULL
-	               ORDER BY d.`+col+` <=> %s::halfvec LIMIT %s`, 1, 2, 3)
-	rows, err := tx.QueryContext(ctx, query, provider, formatPgVectorLiteral(queryVec), limit)
+	query, args, err := topSemanticMatchesQuery(r, provider, shards, queryVec, limit)
+	if err != nil {
+		return nil, false, err
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, false, fmt.Errorf("querying ANN semantic matches: %w", err)
 	}
@@ -322,4 +434,40 @@ func (r *Repository) TopSemanticMatches(ctx context.Context, queryVec []float32,
 		return nil, false, err
 	}
 	return out, true, nil
+}
+
+// topSemanticMatchesQuery builds TopSemanticMatches' query for an
+// arbitrary shard count: a single shard is the original direct
+// "ORDER BY <col> <=> query LIMIT n" query unchanged; multiple shards
+// become a UNION of one such per-shard candidate-id subquery, joined back
+// to documents/document_embeddings for each candidate's full vector.
+func topSemanticMatchesQuery(r *Repository, provider string, shards int, queryVec []float32, limit int) (string, []interface{}, error) {
+	if shards <= 1 {
+		col := vectorColumnNameFor(provider, 0, 1)
+		query := r.ph(`SELECT de.doc_id, de.embedding, de.norm_embedding, d.pagerank
+		               FROM documents d JOIN document_embeddings de ON de.doc_id = d.id AND de.provider = %s
+		               WHERE d.`+col+` IS NOT NULL
+		               ORDER BY d.`+col+` <=> %s::halfvec LIMIT %s`, 1, 2, 3)
+		return query, []interface{}{provider, formatPgVectorLiteral(queryVec), limit}, nil
+	}
+
+	bounds := vectorShardBounds(len(queryVec), shards)
+	subqueries := make([]string, shards)
+	args := make([]interface{}, 0, shards+2)
+	pos := 1
+	for shard := 0; shard < shards; shard++ {
+		col := vectorColumnNameFor(provider, shard, shards)
+		subqueries[shard] = fmt.Sprintf(`(SELECT d.id AS doc_id FROM documents d WHERE d.%s IS NOT NULL ORDER BY d.%s <=> %s::halfvec LIMIT %s)`,
+			col, col, r.dialect.Placeholder(pos), r.dialect.Placeholder(pos+1))
+		args = append(args, formatPgVectorLiteral(queryVec[bounds[shard]:bounds[shard+1]]), limit)
+		pos += 2
+	}
+	query := fmt.Sprintf(`WITH candidates AS (%s)
+	SELECT de.doc_id, de.embedding, de.norm_embedding, d.pagerank
+	FROM (SELECT DISTINCT doc_id FROM candidates) c
+	JOIN documents d ON d.id = c.doc_id
+	JOIN document_embeddings de ON de.doc_id = d.id AND de.provider = %s`,
+		strings.Join(subqueries, " UNION "), r.dialect.Placeholder(pos))
+	args = append(args, provider)
+	return query, args, nil
 }
