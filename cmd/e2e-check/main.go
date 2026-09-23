@@ -944,6 +944,34 @@ func (c *client) checkToolFunctions(serverName string, gatedByWebSearch bool, to
 			"whichever of this server's own tools listed above does) with reasonable arguments and "+
 			"report what it returns.",
 		serverName, names, chosen.Name)
+
+	// One retry before failing: a model occasionally answers a loosely-
+	// worded "call one of your tools" instruction directly instead of
+	// actually calling anything (confirmed live -- this exact check has
+	// both passed and failed against an unchanged deployment back to
+	// back) -- sampling variance in an instruction-following prompt, not
+	// a reachability/functionality problem this check exists to catch.
+	// A real regression (the tool itself erroring) still fails on the
+	// FIRST attempt below, never retried.
+	const attempts = 2
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		err := c.attemptToolCall(prompt, gatedByWebSearch, ownTool, names)
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, errSkip) {
+			return err
+		}
+		lastErr = err
+	}
+	return lastErr
+}
+
+// attemptToolCall is checkToolFunctions' single try: one chat turn, then
+// classify what (if anything) came back. Split out so checkToolFunctions
+// can retry it without duplicating the classification logic.
+func (c *client) attemptToolCall(prompt string, gatedByWebSearch bool, ownTool map[string]bool, names []string) error {
 	out, err := c.chatOnce(prompt, chatOptions{webSearch: gatedByWebSearch})
 	if err != nil {
 		return err
