@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.87 - 2026-09-24
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* fix: rescue a turn ending on unfinished tool-call narration by @M0WA in https://github.com/M0WA/SE/pull/327
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.86...v4.13.87
+
+
 ## v4.13.86 - 2026-09-24
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
