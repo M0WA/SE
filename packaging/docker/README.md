@@ -89,6 +89,22 @@ VALUES ('admin', 'admin', '<bcrypt hash>', true, '', now(), now());
 "
 ```
 
+## Configuring a chat/embedding provider
+
+None of the four containers above run an inference model themselves --
+unlike the `.deb` reference deployment, which typically pairs with a
+dedicated self-hosted GPU host (see
+[Infrastructure options](../../docs/manual/infrastructure.md)), this
+compose file has no such piece at all. Once you're signed in as the admin
+account above, [Chat settings](../../docs/manual/chat-settings.md) and
+[Embedding endpoints](../../docs/manual/embedding-endpoints.md) both just
+need a plain OpenAI-compatible HTTP endpoint (Base URL/Model/API key) --
+either one you already self-host elsewhere, or a hosted provider you'd
+rather not run a GPU for at all. [IONOS AI Model
+Hub](../../docs/manual/infrastructure.md#hosted-ai-instead-of-self-hosting)
+is a concrete example of the latter: no infrastructure of your own to run
+alongside these four containers, just an API key.
+
 ## Publishing the image
 
 `.github/workflows/release.yml`'s `package-docker` job builds this same
