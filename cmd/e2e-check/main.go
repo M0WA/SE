@@ -1440,22 +1440,23 @@ func testImagePNG() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// checkImageVision attaches a real image to a pinned chat, selects the
-// "Image analyst" agent by name, and asks it to find related content --
-// exercising cmd/mcp-vision's vision_similarity tool end to end (a real
-// image embed against the configured provider, then a real pgvector ANN
-// search). Replaces an older check reproducing a real incident in the
-// previous sandboxed-Python/easyocr approach (mcpclient.callTimeout's old
-// 60s ceiling breaking on easyocr's always-uncached multi-minute model
-// download) -- that whole approach is retired (see default_agents.go's
-// image_analyst entry), and the new tool is fast enough to run
-// unconditionally, no -include-slow gate needed.
+// checkImageVision and checkVisionCaption both attach a real image to a
+// pinned chat, select the "Image analyst" agent by name, and ask it to
+// use one specific cmd/mcp-vision tool -- checkVisionTool is their shared
+// implementation, taking just what differs between the two: which tool,
+// what to ask for, and which Chat settings sub-page to point at in the
+// skip message. Replaces an older check reproducing a real incident in
+// the previous sandboxed-Python/easyocr approach (mcpclient.callTimeout's
+// old 60s ceiling breaking on easyocr's always-uncached multi-minute
+// model download) -- that whole approach is retired (see
+// default_agents.go's image_analyst entry), and the new tools are fast
+// enough to run unconditionally, no -include-slow gate needed.
 //
 // Skips gracefully (not a failure) if the agent isn't configured, or if
-// vision_similarity itself reports unconfigured (Chat settings -> Vision
-// -> Similarity search) -- both are legitimate per-deployment states, the
-// same convention as every other deployment-specific prerequisite here.
-func (c *client) checkImageVision() error {
+// the tool itself reports unconfigured (Chat settings -> Vision) -- both
+// are legitimate per-deployment states, the same convention as every
+// other deployment-specific prerequisite here.
+func (c *client) checkVisionTool(toolName, filename, question, settingsSubPage string) error {
 	if c.testChatID == "" {
 		return skip(skipNoPinnedChat)
 	}
@@ -1476,21 +1477,19 @@ func (c *client) checkImageVision() error {
 	if err != nil {
 		return err
 	}
-	if _, err := c.uploadFile(c.testChatID, "e2e-check.png", contentTypePNG, png); err != nil {
+	if _, err := c.uploadFile(c.testChatID, filename, contentTypePNG, png); err != nil {
 		return err
 	}
-	out, err := c.chatOnce(
-		"Use vision_similarity to find pages related to the image named e2e-check.png, and tell me what you find.",
-		chatOptions{agentID: agentID, chatID: c.testChatID})
+	out, err := c.chatOnce(question, chatOptions{agentID: agentID, chatID: c.testChatID})
 	if err != nil {
 		return err
 	}
 	if len(out.ToolResults) == 0 {
-		return fmt.Errorf("expected vision_similarity to be called, got no tool_results -- check the agent's own mcp_server_ids isn't empty (see domain.Agent.MCPServerIDs' own doc comment: empty means NO tools, not all of them)")
+		return fmt.Errorf("expected %s to be called, got no tool_results -- check the agent's own mcp_server_ids isn't empty (see domain.Agent.MCPServerIDs' own doc comment: empty means NO tools, not all of them)", toolName)
 	}
 	for _, tr := range out.ToolResults {
 		if strings.Contains(tr.Err, notConfiguredSubstring) {
-			return skip("vision_similarity is not configured on this deployment (Chat settings -> Vision -> Similarity search)")
+			return skip(fmt.Sprintf("%s is not configured on this deployment (Chat settings -> Vision -> %s)", toolName, settingsSubPage))
 		}
 	}
 	if err := checkNoToolErrors(out); err != nil {
@@ -1502,63 +1501,31 @@ func (c *client) checkImageVision() error {
 	return nil
 }
 
-// checkVisionCaption mirrors checkImageVision exactly, but forces
-// vision_caption instead of vision_similarity -- cmd/mcp-vision's OTHER
-// tool, calling a completely different, independently admin-configured
-// endpoint (Chat settings -> Vision -> Captioning: its own base URL,
-// model, API key) that shares no config, code path, or failure mode with
-// similarity search. Before this check existed, vision_caption had ZERO
-// end-to-end coverage anywhere in this suite -- buildMCPConnectivityChecks
-// explicitly skips the whole "vision" server (see its own doc comment),
-// and checkImageVision only ever exercises vision_similarity by name.
-// That gap is exactly how a real captioning outage (the configured
-// endpoint's API key silently expiring) reached production undetected --
-// this check exists so that class of failure surfaces here first instead.
+// checkImageVision exercises cmd/mcp-vision's vision_similarity tool end
+// to end (a real image embed against the configured provider, then a
+// real pgvector ANN search) -- see checkVisionTool's own doc comment.
+func (c *client) checkImageVision() error {
+	return c.checkVisionTool("vision_similarity", "e2e-check.png",
+		"Use vision_similarity to find pages related to the image named e2e-check.png, and tell me what you find.",
+		"Similarity search")
+}
+
+// checkVisionCaption exercises cmd/mcp-vision's OTHER tool,
+// vision_caption -- calling a completely different, independently
+// admin-configured endpoint (Chat settings -> Vision -> Captioning: its
+// own base URL, model, API key) that shares no config, code path, or
+// failure mode with similarity search. Before this check existed,
+// vision_caption had ZERO end-to-end coverage anywhere in this suite --
+// buildMCPConnectivityChecks explicitly skips the whole "vision" server
+// (see its own doc comment), and checkImageVision only ever exercises
+// vision_similarity by name. That gap is exactly how a real captioning
+// outage (the configured endpoint's API key silently expiring) reached
+// production undetected -- this check exists so that class of failure
+// surfaces here first instead.
 func (c *client) checkVisionCaption() error {
-	if c.testChatID == "" {
-		return skip(skipNoPinnedChat)
-	}
-	var agents []agentResponse
-	if _, err := c.getJSON("/agents", &agents); err != nil {
-		return err
-	}
-	var agentID string
-	for _, a := range agents {
-		if a.Name == "Image analyst" {
-			agentID = a.ID
-		}
-	}
-	if agentID == "" {
-		return skip(`no "Image analyst" agent configured on this deployment`)
-	}
-	png, err := testImagePNG()
-	if err != nil {
-		return err
-	}
-	if _, err := c.uploadFile(c.testChatID, "e2e-check-caption.png", contentTypePNG, png); err != nil {
-		return err
-	}
-	out, err := c.chatOnce(
+	return c.checkVisionTool("vision_caption", "e2e-check-caption.png",
 		"Use vision_caption to describe the image named e2e-check-caption.png.",
-		chatOptions{agentID: agentID, chatID: c.testChatID})
-	if err != nil {
-		return err
-	}
-	if len(out.ToolResults) == 0 {
-		return fmt.Errorf("expected vision_caption to be called, got no tool_results -- check the agent's own mcp_server_ids isn't empty (see domain.Agent.MCPServerIDs' own doc comment: empty means NO tools, not all of them)")
-	}
-	for _, tr := range out.ToolResults {
-		if strings.Contains(tr.Err, notConfiguredSubstring) {
-			return skip("vision_caption is not configured on this deployment (Chat settings -> Vision -> Captioning)")
-		}
-	}
-	if err := checkNoToolErrors(out); err != nil {
-		return err
-	}
-	if out.Answer == "" {
-		return fmt.Errorf("got an empty answer")
-	}
-	return nil
+		"Captioning")
 }
 
 // --- account self-service (personal MCP servers, password change) ---
