@@ -60,7 +60,14 @@ const (
 	pathAdminMCPServers   = "/admin/api/mcp-servers"
 	pathAccountChats      = "/account/api/chats"
 	pathAccountMCPServers = "/account/api/mcp-servers"
+	pathAccountFiles      = "/account/api/files"
 	headerContentType     = "Content-Type"
+	contentTypePNG        = "image/png"
+	// notConfiguredSubstring matches both authRelatedErrorSubstrings
+	// below and checkImageVision/checkVisionCaption's own "is this tool
+	// just unconfigured on this deployment" check -- the same literal,
+	// checked for the same reason, in three places.
+	notConfiguredSubstring = "not configured"
 )
 
 func main() {
@@ -365,7 +372,7 @@ func (c *client) uploadFile(chatID, filename, contentType string, data []byte) (
 	if err := w.Close(); err != nil {
 		return fileResponse{}, err
 	}
-	req, err := http.NewRequest(http.MethodPost, c.base+"/account/api/files", &buf)
+	req, err := http.NewRequest(http.MethodPost, c.base+pathAccountFiles, &buf)
 	if err != nil {
 		return fileResponse{}, err
 	}
@@ -978,7 +985,7 @@ func looksMutating(name string) bool {
 // check never attaches -- see the file-based servers' own dedicated
 // user-session checks for that) -- rather than a real regression. Treated
 // as a skip, not a failure, when matched.
-var authRelatedErrorSubstrings = []string{"unauthorized", "authentication", "chat_id", "no active", "not configured", "signed-in", "signed in", "no signed", "file not found"}
+var authRelatedErrorSubstrings = []string{"unauthorized", "authentication", "chat_id", "no active", notConfiguredSubstring, "signed-in", "signed in", "no signed", "file not found"}
 
 func looksAuthRelated(errMsg string) bool {
 	lower := strings.ToLower(errMsg)
@@ -1377,7 +1384,7 @@ func (c *client) checkWriteFile() error {
 	}
 
 	var list []fileResponse
-	if _, err := c.getJSON("/account/api/files", &list); err != nil {
+	if _, err := c.getJSON(pathAccountFiles, &list); err != nil {
 		return err
 	}
 	var createdID string
@@ -1401,7 +1408,7 @@ func (c *client) checkWriteFile() error {
 // checkFilesTool should appear, if that check ran first and succeeded).
 func (c *client) checkAccountFilesUnscoped() error {
 	var out []fileResponse
-	status, err := c.getJSON("/account/api/files", &out)
+	status, err := c.getJSON(pathAccountFiles, &out)
 	if err != nil {
 		return err
 	}
@@ -1469,7 +1476,7 @@ func (c *client) checkImageVision() error {
 	if err != nil {
 		return err
 	}
-	if _, err := c.uploadFile(c.testChatID, "e2e-check.png", "image/png", png); err != nil {
+	if _, err := c.uploadFile(c.testChatID, "e2e-check.png", contentTypePNG, png); err != nil {
 		return err
 	}
 	out, err := c.chatOnce(
@@ -1482,7 +1489,7 @@ func (c *client) checkImageVision() error {
 		return fmt.Errorf("expected vision_similarity to be called, got no tool_results -- check the agent's own mcp_server_ids isn't empty (see domain.Agent.MCPServerIDs' own doc comment: empty means NO tools, not all of them)")
 	}
 	for _, tr := range out.ToolResults {
-		if strings.Contains(tr.Err, "not configured") {
+		if strings.Contains(tr.Err, notConfiguredSubstring) {
 			return skip("vision_similarity is not configured on this deployment (Chat settings -> Vision -> Similarity search)")
 		}
 	}
@@ -1528,7 +1535,7 @@ func (c *client) checkVisionCaption() error {
 	if err != nil {
 		return err
 	}
-	if _, err := c.uploadFile(c.testChatID, "e2e-check-caption.png", "image/png", png); err != nil {
+	if _, err := c.uploadFile(c.testChatID, "e2e-check-caption.png", contentTypePNG, png); err != nil {
 		return err
 	}
 	out, err := c.chatOnce(
@@ -1541,7 +1548,7 @@ func (c *client) checkVisionCaption() error {
 		return fmt.Errorf("expected vision_caption to be called, got no tool_results -- check the agent's own mcp_server_ids isn't empty (see domain.Agent.MCPServerIDs' own doc comment: empty means NO tools, not all of them)")
 	}
 	for _, tr := range out.ToolResults {
-		if strings.Contains(tr.Err, "not configured") {
+		if strings.Contains(tr.Err, notConfiguredSubstring) {
 			return skip("vision_caption is not configured on this deployment (Chat settings -> Vision -> Captioning)")
 		}
 	}
