@@ -952,3 +952,84 @@ func TestRoutesAdmin_SetsSecurityHeaders(t *testing.T) {
 		t.Errorf("X-Frame-Options: expected DENY, got %q", got)
 	}
 }
+
+// TestHandleStaticAdminJS_ServesEveryRegisteredJSFile is one shared test
+// for every admin_*.js/index.js/login.js route -- each handler is a
+// one-line serveStatic(w, r, jsContentType, <embedded>) wrapper (see
+// handler.go's own long run of them), so asserting the same "200,
+// text/javascript" shape per path here is more honest than 20+ near-
+// identical copy-pasted TestHandleXJS_Success functions would be (and
+// avoids the exact go:S1192/duplicated-test-function smell SonarCloud
+// already flagged elsewhere in this repo). Unauthenticated on purpose:
+// none of these routes are wrapped in requireAdminAuthPage/AuthAPI --
+// they're public static assets, gated only by nginx's own path-prefix
+// routing in a real deployment (see packaging/nginx/README.md).
+func TestHandleStaticAdminJS_ServesEveryRegisteredJSFile(t *testing.T) {
+	h := restapi.New(restapi.Config{})
+
+	assertServesJS := func(t *testing.T, mux http.Handler, path string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d", rec.Code)
+		}
+		if ct := rec.Header().Get("Content-Type"); ct != "text/javascript; charset=utf-8" {
+			t.Errorf("expected text/javascript, got %q", ct)
+		}
+		if rec.Body.Len() == 0 {
+			t.Errorf("expected a non-empty body")
+		}
+	}
+
+	// /index.js is search-server's own route; every other admin_*.js/
+	// login.js lives on RoutesAdmin (see handler.go) -- both are public,
+	// unauthenticated static assets either way (see this test's own doc
+	// comment above).
+	t.Run("/index.js", func(t *testing.T) { assertServesJS(t, h.RoutesSearch(), "/index.js") })
+
+	adminJSPaths := []string{
+		"/login.js",
+		"/admin_page.js", "/admin_documents.js", "/admin_domain.js",
+		"/admin_vocabulary_term.js", "/admin_crawl.js", "/admin_schedule.js",
+		"/admin_jobs.js", "/admin_settings.js", "/admin_chat_settings.js",
+		"/admin_mcp_servers.js", "/admin_mcp_server.js", "/admin_agents.js",
+		"/admin_agent.js", "/admin_search.js", "/admin_search_result.js",
+		"/admin_pagerank.js", "/admin_embeddings.js", "/admin_embedding_endpoints.js",
+		"/admin_embedding_endpoint.js", "/admin_database.js", "/admin_content_dedup.js",
+	}
+	for _, path := range adminJSPaths {
+		t.Run(path, func(t *testing.T) { assertServesJS(t, h.RoutesAdmin(), path) })
+	}
+}
+
+// TestHandleStaticAdminPage_ServesEveryRegisteredHTMLShell mirrors
+// TestHandleStaticAdminJS_ServesEveryRegisteredJSFile for the admin-only
+// static HTML shells (each just serveStatic(w, r, contentTypeHTML,
+// <embedded>), the client-side JS above then fetching real data) -- these
+// ARE behind requireAdminAuthPage, hence the admin session.
+func TestHandleStaticAdminPage_ServesEveryRegisteredHTMLShell(t *testing.T) {
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{})
+	paths := []string{
+		"/admin/chat/settings", "/admin/mcp-servers", "/admin/mcp-servers/some-id",
+		"/admin/agents", "/admin/agents/some-id", "/admin/content_dedup",
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.AddCookie(cookie)
+			rec := httptest.NewRecorder()
+			h.RoutesAdmin().ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Errorf("expected 200, got %d", rec.Code)
+			}
+			if ct := rec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+				t.Errorf("expected text/html, got %q", ct)
+			}
+			if rec.Body.Len() == 0 {
+				t.Errorf("expected a non-empty body")
+			}
+		})
+	}
+}

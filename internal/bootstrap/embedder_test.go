@@ -3,6 +3,7 @@ package bootstrap_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -234,6 +235,61 @@ func TestDecryptEndpointAPIKeys_AppliesToEveryEndpoint(t *testing.T) {
 	out := bootstrap.DecryptEndpointAPIKeys(endpoints, nil)
 	if len(out) != 2 || out[0].APIKey != "sk-a" || out[1].APIKey != "sk-b" {
 		t.Errorf("expected both endpoints' keys passed through unchanged (nil key), got %+v", out)
+	}
+}
+
+// fakeEmbeddingEndpointStore backs TestLoadEmbeddingEndpoints_* below --
+// only ListEmbeddingEndpoints is exercised, the rest of
+// ports.EmbeddingEndpointStore is unused by LoadEmbeddingEndpoints itself.
+type fakeEmbeddingEndpointStore struct {
+	endpoints []domain.EmbeddingHTTPEndpoint
+	listErr   error
+}
+
+func (f *fakeEmbeddingEndpointStore) CreateEmbeddingEndpoint(context.Context, domain.EmbeddingHTTPEndpoint) error {
+	return nil
+}
+func (f *fakeEmbeddingEndpointStore) GetEmbeddingEndpoint(context.Context, string) (domain.EmbeddingHTTPEndpoint, error) {
+	return domain.EmbeddingHTTPEndpoint{}, nil
+}
+func (f *fakeEmbeddingEndpointStore) ListEmbeddingEndpoints(context.Context) ([]domain.EmbeddingHTTPEndpoint, error) {
+	return f.endpoints, f.listErr
+}
+func (f *fakeEmbeddingEndpointStore) UpdateEmbeddingEndpoint(context.Context, domain.EmbeddingHTTPEndpoint) error {
+	return nil
+}
+func (f *fakeEmbeddingEndpointStore) DeleteEmbeddingEndpoint(context.Context, string) error {
+	return nil
+}
+
+// TestLoadEmbeddingEndpoints_DecryptsEveryStoredEndpoint proves
+// LoadEmbeddingEndpoints is DecryptEndpointAPIKeys applied to whatever
+// ListEmbeddingEndpoints returns, not just a passthrough.
+func TestLoadEmbeddingEndpoints_DecryptsEveryStoredEndpoint(t *testing.T) {
+	key, err := settingscrypto.ParseKey(hex64())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	enc, err := settingscrypto.Encrypt(key, "sk-real")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	store := &fakeEmbeddingEndpointStore{endpoints: []domain.EmbeddingHTTPEndpoint{{ID: "a", APIKey: enc}}}
+
+	got := bootstrap.LoadEmbeddingEndpoints(context.Background(), store, key)
+	if len(got) != 1 || got[0].APIKey != "sk-real" {
+		t.Errorf("expected the stored endpoint back with its key decrypted, got %+v", got)
+	}
+}
+
+// TestLoadEmbeddingEndpoints_StoreErrorReturnsNilNotFatal proves a store
+// failure degrades to an empty embedder set rather than failing startup
+// -- matching every other best-effort SyncX call in this package.
+func TestLoadEmbeddingEndpoints_StoreErrorReturnsNilNotFatal(t *testing.T) {
+	store := &fakeEmbeddingEndpointStore{listErr: errors.New("db unavailable")}
+	got := bootstrap.LoadEmbeddingEndpoints(context.Background(), store, nil)
+	if got != nil {
+		t.Errorf("expected nil endpoints on a store error, got %+v", got)
 	}
 }
 

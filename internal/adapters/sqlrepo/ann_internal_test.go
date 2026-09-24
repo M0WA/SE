@@ -82,3 +82,40 @@ func TestVectorColumnNameFor_SuffixedPerShardWhenSharded(t *testing.T) {
 		t.Errorf("vectorIndexNameFor(qwen3_vl, 1, 2) = %q, want %q", got, want)
 	}
 }
+
+// TestFormatPgVectorLiteral_FormatsAsPgvectorArraySyntax proves the exact
+// "[v1,v2,...]" shape pgvector's own literal syntax requires -- no
+// spaces, values formatted with strconv's shortest round-trippable
+// representation.
+func TestFormatPgVectorLiteral_FormatsAsPgvectorArraySyntax(t *testing.T) {
+	if got, want := formatPgVectorLiteral([]float32{0.5, -1, 2.25}), "[0.5,-1,2.25]"; got != want {
+		t.Errorf("formatPgVectorLiteral(...) = %q, want %q", got, want)
+	}
+}
+
+func TestFormatPgVectorLiteral_EmptyVectorIsEmptyBrackets(t *testing.T) {
+	if got, want := formatPgVectorLiteral(nil), "[]"; got != want {
+		t.Errorf("formatPgVectorLiteral(nil) = %q, want %q", got, want)
+	}
+}
+
+// TestAnnState_ShardsForDefaultsToOneUntilMarkedAvailable proves a
+// provider EnableANN hasn't (yet, or ever) succeeded for gets the
+// pre-sharding single-column assumption rather than 0 -- see
+// annState.shardsFor's own doc comment for why that matters.
+func TestAnnState_ShardsForDefaultsToOneUntilMarkedAvailable(t *testing.T) {
+	var a annState
+	if got := a.shardsFor("never-marked"); got != 1 {
+		t.Errorf("shardsFor on a never-marked provider = %d, want 1", got)
+	}
+	a.markAvailable("qwen3_vl", 2)
+	if got := a.shardsFor("qwen3_vl"); got != 2 {
+		t.Errorf("shardsFor after markAvailable(qwen3_vl, 2) = %d, want 2", got)
+	}
+	if !a.isAvailable("qwen3_vl") {
+		t.Error("expected qwen3_vl to be available after markAvailable")
+	}
+	if a.isAvailable("never-marked") {
+		t.Error("expected a never-marked provider to stay unavailable")
+	}
+}

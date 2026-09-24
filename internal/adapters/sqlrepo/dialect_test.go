@@ -157,3 +157,19 @@ func TestAllDialects_UpsertDocumentAliasSQLNonEmpty(t *testing.T) {
 		}
 	}
 }
+
+func TestAllDialects_UpsertDocumentEmbeddingSQLNonEmpty(t *testing.T) {
+	for _, driver := range []string{"sqlite", "mysql", "postgres"} {
+		if sqlrepo.NewDialect(driver).UpsertDocumentEmbeddingSQL() == "" {
+			t.Errorf("expected an upsert-document-embedding statement for %s", driver)
+		}
+	}
+}
+
+func TestAllDialects_UpsertChatVisionSettingsSQLNonEmpty(t *testing.T) {
+	for _, driver := range []string{"sqlite", "mysql", "postgres"} {
+		if sqlrepo.NewDialect(driver).UpsertChatVisionSettingsSQL() == "" {
+			t.Errorf("expected an upsert-chat-vision-settings statement for %s", driver)
+		}
+	}
+}
