@@ -301,6 +301,36 @@ test('newChatTab adds and switches to a fresh, empty tab; the tab strip gains cl
   assert.equal(document.querySelectorAll('.chat-tab-close').length, 2);
 });
 
+test('newChatTab does not pin the new tab for a signed-out (anonymous) visitor', async () => {
+  let pinPosted = false;
+  global.fetch = async (url, opts) => {
+    if (url === '/account/api/chats' && opts?.method === 'POST') pinPosted = true;
+    return { ok: true, json: async () => ({ id: 'x' }) };
+  };
+  const { newChatTab } = loadFixture();
+  const tab = newChatTab();
+  assert.equal(tab.persisted, false);
+  assert.equal(pinPosted, false);
+});
+
+test('newChatTab pins the new tab immediately for a signed-in account', async () => {
+  global.fetch = async (url, opts) => {
+    if (url === '/session') return { ok: true, json: async () => ({ role: 'user' }) };
+    if (url === '/account/api/chats' && opts?.method === 'POST') {
+      return { ok: true, json: async () => ({ id: 'pinned-new-tab' }) };
+    }
+    if (url === '/account/api/chats') return { ok: true, json: async () => [] };
+    return { ok: true, json: async () => [] };
+  };
+  const { loadSession, newChatTab } = loadFixture();
+  await loadSession(); // establishes signedIn = true and auto-pins the initial default tab
+
+  const tab = newChatTab();
+  await new Promise((resolve) => setTimeout(resolve, 0)); // let newChatTab's fire-and-forget pinTab(tab) settle
+  assert.equal(tab.persisted, true);
+  assert.equal(tab.chatId, 'pinned-new-tab');
+});
+
 test('switchTab re-renders #chat-messages from the target tab\'s own stored history', async () => {
   global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'first answer' }) });
   const { sendChatMessage, newChatTab, switchTab, tabs } = loadFixture();
@@ -737,8 +767,11 @@ test('loadPersistedChats replaces the default tab with every pinned chat, most r
   assert.equal(activeTab().id, tabs[0].id);
 });
 
-test('loadPersistedChats leaves the default tab alone when the account has no pinned chats', async () => {
-  global.fetch = async (url) => {
+test('loadPersistedChats pins the default tab in place when the account has no pinned chats yet', async () => {
+  global.fetch = async (url, opts) => {
+    if (url === '/account/api/chats' && opts?.method === 'POST') {
+      return { ok: true, json: async () => ({ id: 'auto-pinned-id' }) };
+    }
     if (url === '/account/api/chats') return { ok: true, json: async () => [] };
     return { ok: true, json: async () => [] };
   };
@@ -746,7 +779,9 @@ test('loadPersistedChats leaves the default tab alone when the account has no pi
   const onlyId = tabs[0].id;
   await loadPersistedChats();
   assert.equal(tabs.length, 1);
-  assert.equal(tabs[0].id, onlyId);
+  assert.equal(tabs[0].id, onlyId, 'the same tab stays in place, now pinned, rather than being replaced');
+  assert.equal(tabs[0].persisted, true);
+  assert.equal(tabs[0].chatId, 'auto-pinned-id');
 });
 
 test('loadPersistedChats is silent and leaves the default tab alone on a non-ok or failed response', async () => {

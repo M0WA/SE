@@ -39,6 +39,9 @@
   // independent tab. Session-only in-memory (Export/Import is the escape hatch to keep one).
   // activeTabId is the rendered tab; nextTabId is a plain incrementing counter, not a timestamp,
   // so ids stay small and deterministic in tests.
+  // signedIn is set once loadSession() confirms an admin/user role -- gates auto-pinning a new
+  // chat tab (see newChatTab/loadPersistedChats), since pinning requires a real account.
+  let signedIn = false;
   let nextTabId = 1;
   function makeTab(overrides) {
     const id = nextTabId++;
@@ -717,6 +720,8 @@
     refreshTabFileState();
   }
 
+  // newChatTab starts a fresh tab and, for a signed-in account, pins it immediately -- chats are
+  // pinned by default now; unpinning is still a manual, explicit action via the pin button.
   function newChatTab() {
     const tab = makeTab();
     tabs.push(tab);
@@ -724,6 +729,7 @@
     renderTabs();
     renderActiveTab();
     refreshTabFileState();
+    if (signedIn) pinTab(tab);
     return tab;
   }
 
@@ -1095,15 +1101,19 @@
 
   // loadPersistedChats reloads every pinned chat on page load, replacing the default empty tab
   // (most-recently-updated first, per ListChats) -- only for a confirmed role=user session.
-  // Leaves the default tab alone if there are no pinned chats. History round-trips only
-  // {role, content}; context_trimmed/tool_results are UI-only and never stored, so a reloaded
-  // turn's tool-result folds simply don't reappear.
+  // Chats are pinned by default: with no existing pinned chats yet, the default tab is pinned in
+  // place instead of staying session-only. History round-trips only {role, content};
+  // context_trimmed/tool_results are UI-only and never stored, so a reloaded turn's tool-result
+  // folds simply don't reappear.
   async function loadPersistedChats() {
     try {
       const resp = await fetch('/account/api/chats');
       if (!resp.ok) return;
       const chats = await resp.json();
-      if (!Array.isArray(chats) || chats.length === 0) return;
+      if (!Array.isArray(chats) || chats.length === 0) {
+        await pinTab(tabs[0]);
+        return;
+      }
       tabs.length = 0;
       for (const c of chats) {
         tabs.push(makeTab({
@@ -1286,6 +1296,7 @@
       }
       if (data.role === 'admin' || data.role === 'user') {
         accountLink.hidden = false;
+        signedIn = true;
         loadPersistedChats();
       }
     } catch (err) {
