@@ -1,0 +1,87 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: searchengine
+      POSTGRES_PASSWORD: searchengine
+      POSTGRES_DB: searchengine
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    # Bound to loopback only, not the container's own network -- exists so
+    # packaging/create-admin.sh (needs a real psql/htpasswd on whatever
+    # machine runs it, neither present in the distroless app image) can
+    # reach this DB from the host. Never meant to be reachable beyond it.
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U searchengine -d searchengine"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  search:
+    image: ${SEARCHENGINE_IMAGE:-ghcr.io/m0wa/se:latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_DRIVER: pgx
+      DB_DSN: postgres://searchengine:searchengine@postgres:5432/searchengine?sslmode=disable
+      # The image's own default (127.0.0.1:8080) is unreachable from
+      # outside its own container's network namespace -- every service
+      # below needs the 0.0.0.0 override for its own *_LISTEN_ADDR the
+      # same reason.
+      SEARCH_LISTEN_ADDR: 0.0.0.0:8080
+      SETTINGS_ENCRYPTION_KEY: "${SETTINGS_ENCRYPTION_KEY:?generate with: openssl rand -hex 32}"
+      SEARCH_INTERNAL_API_KEY: ${SEARCH_INTERNAL_API_KEY:-}
+      CHAT_VISION_INTERNAL_API_KEY: ${CHAT_VISION_INTERNAL_API_KEY:-}
+    ports:
+      - "${SEARCH_HOST_PORT:-8080}:8080"
+    restart: unless-stopped
+
+  admin:
+    image: ${SEARCHENGINE_IMAGE:-ghcr.io/m0wa/se:latest}
+    entrypoint: ["/usr/bin/searchengine-admin"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      crawl:
+        condition: service_started
+    environment:
+      DB_DRIVER: pgx
+      DB_DSN: postgres://searchengine:searchengine@postgres:5432/searchengine?sslmode=disable
+      ADMIN_LISTEN_ADDR: 0.0.0.0:8081
+      # crawl-server's own compose service name resolves on this network --
+      # nothing like nginx's local-host-only proxy_pass assumption applies
+      # here (see packaging/docker/README.md for why this compose file
+      # doesn't try to reuse packaging/nginx/searchengine.conf as-is).
+      CRAWL_SERVER_URL: http://crawl:8082
+      CRAWL_INTERNAL_TOKEN: "${CRAWL_INTERNAL_TOKEN:?generate with: openssl rand -hex 32}"
+      SETTINGS_ENCRYPTION_KEY: "${SETTINGS_ENCRYPTION_KEY:?generate with: openssl rand -hex 32}"
+    # Never exposed on 0.0.0.0 on the host either -- admin-server has no
+    # business being reachable from outside this machine, same reasoning
+    # packaging/nginx/README.md gives for never routing it publicly.
+    ports:
+      - "127.0.0.1:${ADMIN_HOST_PORT:-8081}:8081"
+    restart: unless-stopped
+
+  crawl:
+    image: ${SEARCHENGINE_IMAGE:-ghcr.io/m0wa/se:latest}
+    entrypoint: ["/usr/bin/searchengine-crawl"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_DRIVER: pgx
+      DB_DSN: postgres://searchengine:searchengine@postgres:5432/searchengine?sslmode=disable
+      CRAWL_LISTEN_ADDR: 0.0.0.0:8082
+      CRAWL_INTERNAL_TOKEN: "${CRAWL_INTERNAL_TOKEN:?generate with: openssl rand -hex 32}"
+    # No ports: block at all -- crawl-server is reached only by admin-server
+    # over this compose network, exactly as CLAUDE.md's own architecture
+    # description requires ("never exposed by nginx" in the .deb topology;
+    # "never exposed to the host" here is the same rule for compose).
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

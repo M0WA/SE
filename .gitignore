@@ -6,3 +6,5 @@
 # for the shape to copy. Never commit real admin credentials for any
 # deployment.
 /cmd/e2e-check/credentials.json
+# Real docker-compose secrets -- see .env.example for the shape to copy.
+/.env

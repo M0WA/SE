@@ -15,7 +15,7 @@ created from `/admin/users` by an existing admin.
 
 | Name | Default | Used by | Description |
 |---|---|---|---|
-| `DB_DRIVER` | `"sqlite"` | search, admin, crawl | Selects the SQL backend driver (`sqlite`/`postgres`/`mysql`) used to open the shared database connection. |
+| `DB_DRIVER` | `"sqlite"` | search, admin, crawl | Selects the SQL backend driver (`sqlite`/`pgx`/`mysql`) used to open the shared database connection -- `pgx` for Postgres, the actual `database/sql` driver name `github.com/jackc/pgx/v5/stdlib` registers (not `postgres`, which fails with "unknown driver"). |
 | `DB_DSN` | `"file:search.db?cache=shared"` | search, admin, crawl | The data-source-name/connection string for the SQL database. |
 | `SETTINGS_ENCRYPTION_KEY` | none, empty (encryption disabled) | search, admin, crawl | Hex-encoded AES-256 key used to encrypt/decrypt sensitive stored settings (e.g. endpoint/MCP server API keys) at rest in the DB. |
 | `SEARCH_INTERNAL_API_KEY` | none, empty (bypass disabled) | search | Optional pre-shared key letting a trusted local caller call the public `/search` endpoint via an `X-Internal-API-Key` header instead of a browser session cookie. |

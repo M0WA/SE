@@ -131,7 +131,7 @@ case "$DB_DRIVER" in
     db_exec() { local query="$1"; psql "$DB_DSN" -c "$query" >/dev/null; }
     ;;
   *)
-    echo "error: unsupported DB_DRIVER '$DB_DRIVER' -- this script handles sqlite and postgres only." >&2
+    echo "error: unsupported DB_DRIVER '$DB_DRIVER' -- this script handles sqlite and postgres/pgx only." >&2
     exit 1
     ;;
 esac
