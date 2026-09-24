@@ -155,6 +155,8 @@ func main() {
 			{"account: change password (round trip)", c.checkAccountPasswordRoundTrip(creds.TestUser, creds.TestUserPassword)},
 			{"file attach + vision similarity (Image analyst agent)", c.checkImageVision},
 			{"file attach + vision caption (Image analyst agent)", c.checkVisionCaption},
+			{"image URL + vision similarity (Image analyst agent)", c.checkImageVisionByURL},
+			{"image URL + vision caption (Image analyst agent)", c.checkVisionCaptionByURL},
 		}
 		phase3 = append(phase3,
 			check{"persistent chat: delete (cascades files)", c.checkChatDelete},
@@ -1440,23 +1442,35 @@ func testImagePNG() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// checkImageVision and checkVisionCaption both attach a real image to a
-// pinned chat, select the "Image analyst" agent by name, and ask it to
-// use one specific cmd/mcp-vision tool -- checkVisionTool is their shared
-// implementation, taking just what differs between the two: which tool,
-// what to ask for, and which Chat settings sub-page to point at in the
-// skip message. Replaces an older check reproducing a real incident in
-// the previous sandboxed-Python/easyocr approach (mcpclient.callTimeout's
-// old 60s ceiling breaking on easyocr's always-uncached multi-minute
-// model download) -- that whole approach is retired (see
-// default_agents.go's image_analyst entry), and the new tools are fast
-// enough to run unconditionally, no -include-slow gate needed.
+// checkImageVision/checkVisionCaption (file_id path) and
+// checkImageVisionByURL/checkVisionCaptionByURL (image_url path) all
+// exercise one specific cmd/mcp-vision tool against the "Image analyst"
+// agent -- checkVisionTool is their shared implementation, taking just
+// what differs: which tool, what to ask for, which Chat settings sub-page
+// to point at in the skip message, and (imageURL) which of the two image
+// sources to use. An empty imageURL attaches a real image to the pinned
+// chat and asks about it by filename (the file_id path, resolved via
+// list_files); a non-empty one skips the attachment entirely and asks
+// about the URL directly, exercising mcp-vision's OTHER image source --
+// added after a real reported bug where pasting an external image URL in
+// chat did nothing useful (web_fetch fetched it and choked on its
+// image/* content-type, and neither vision tool could accept a URL at
+// all -- see cmd/mcp-vision's urlImageFetcher/imageSource), so a
+// regression in that path is caught here first, not by a user pasting a
+// link into chat.
+//
+// Replaces an older check reproducing a real incident in the previous
+// sandboxed-Python/easyocr approach (mcpclient.callTimeout's old 60s
+// ceiling breaking on easyocr's always-uncached multi-minute model
+// download) -- that whole approach is retired (see default_agents.go's
+// image_analyst entry), and the new tools are fast enough to run
+// unconditionally, no -include-slow gate needed.
 //
 // Skips gracefully (not a failure) if the agent isn't configured, or if
 // the tool itself reports unconfigured (Chat settings -> Vision) -- both
 // are legitimate per-deployment states, the same convention as every
 // other deployment-specific prerequisite here.
-func (c *client) checkVisionTool(toolName, filename, question, settingsSubPage string) error {
+func (c *client) checkVisionTool(toolName, filename, question, settingsSubPage, imageURL string) error {
 	if c.testChatID == "" {
 		return skip(skipNoPinnedChat)
 	}
@@ -1473,12 +1487,14 @@ func (c *client) checkVisionTool(toolName, filename, question, settingsSubPage s
 	if agentID == "" {
 		return skip(`no "Image analyst" agent configured on this deployment`)
 	}
-	png, err := testImagePNG()
-	if err != nil {
-		return err
-	}
-	if _, err := c.uploadFile(c.testChatID, filename, contentTypePNG, png); err != nil {
-		return err
+	if imageURL == "" {
+		png, err := testImagePNG()
+		if err != nil {
+			return err
+		}
+		if _, err := c.uploadFile(c.testChatID, filename, contentTypePNG, png); err != nil {
+			return err
+		}
 	}
 	out, err := c.chatOnce(question, chatOptions{agentID: agentID, chatID: c.testChatID})
 	if err != nil {
@@ -1507,7 +1523,7 @@ func (c *client) checkVisionTool(toolName, filename, question, settingsSubPage s
 func (c *client) checkImageVision() error {
 	return c.checkVisionTool("vision_similarity", "e2e-check.png",
 		"Use vision_similarity to find pages related to the image named e2e-check.png, and tell me what you find.",
-		"Similarity search")
+		"Similarity search", "")
 }
 
 // checkVisionCaption exercises cmd/mcp-vision's OTHER tool,
@@ -1525,7 +1541,32 @@ func (c *client) checkImageVision() error {
 func (c *client) checkVisionCaption() error {
 	return c.checkVisionTool("vision_caption", "e2e-check-caption.png",
 		"Use vision_caption to describe the image named e2e-check-caption.png.",
-		"Captioning")
+		"Captioning", "")
+}
+
+// testVisionImageURL is a small, stable, long-standing httpbin.org
+// endpoint that always returns a real PNG (a red square) -- used instead
+// of a file attachment for checkImageVisionByURL/checkVisionCaptionByURL,
+// so those checks exercise a real network fetch of a real third-party
+// image URL, not a synthetic loopback stand-in.
+const testVisionImageURL = "https://httpbin.org/image/png"
+
+// checkImageVisionByURL is checkImageVision's image_url counterpart --
+// see checkVisionTool's own doc comment for why this exists.
+func (c *client) checkImageVisionByURL() error {
+	return c.checkVisionTool("vision_similarity", "",
+		fmt.Sprintf("Use vision_similarity with image_url set to %s (not file_id -- there is no attached file) to find pages related to it, and tell me what you find.", testVisionImageURL),
+		"Similarity search", testVisionImageURL)
+}
+
+// checkVisionCaptionByURL is checkVisionCaption's image_url counterpart --
+// see checkVisionTool's own doc comment for why this exists. Reproduces
+// the exact user-reported bug this pair of checks was added to catch:
+// pasting an image URL into chat and asking what it shows.
+func (c *client) checkVisionCaptionByURL() error {
+	return c.checkVisionTool("vision_caption", "",
+		fmt.Sprintf("Use vision_caption with image_url set to %s (not file_id -- there is no attached file) to describe what the image shows.", testVisionImageURL),
+		"Captioning", testVisionImageURL)
 }
 
 // --- account self-service (personal MCP servers, password change) ---

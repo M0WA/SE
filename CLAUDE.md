@@ -403,6 +403,41 @@ path, not-configured/empty-input edge cases).
     change as working from unit tests alone if it touches anything a unit
     test can't see.
 
+## SonarCloud
+
+Analysis runs CI-based, not via SonarCloud's own "Automatic Analysis" GitHub
+App (which is deliberately disabled on this project — the two conflict if both
+run). `sonar-project.properties` (repo root) is the config `ci.yml`'s
+`SonarSource/sonarqube-scan-action` step reads; it feeds real Go coverage
+(`go test -coverprofile=build/coverage.out`) and real JS coverage
+(`scripts/js-test-coverage.js`'s lcov output) into the Quality Gate rather than
+leaving coverage/duplication conditions permanently green from having no data
+at all. "SonarCloud Code Analysis" is a required status check on `main`
+(alongside "Build, vet & test") — a PR cannot merge without it passing, same as
+any other required check, no bypass.
+
+**Coverage/duplication exclusions** (`sonar.coverage.exclusions`/
+`sonar.cpd.exclusions`) are not the bar being lowered — each one documents a
+specific, already-established reason a file/pattern structurally can't or
+shouldn't be held to the Quality Gate's coverage or duplication condition (a
+manual smoke tool never wired into CI, a wiring-only `main.go` entrypoint, a
+test file's own lines — `go test -coverprofile` never instruments the test
+file itself, only the package it tests, so a test file's new lines can never
+show as "covered" and would otherwise fail every PR that adds Go test code).
+See the properties file's own comments for the full, current list and
+reasoning per entry — keep both in sync with each other and with this
+paragraph's summary whenever the list changes.
+
+**False positives**: a real finding gets fixed, not suppressed. A finding
+confirmed to be a false positive for this codebase (e.g. `go:S2077` on
+`internal/adapters/sqlrepo`'s `r.ph()` placeholder-substitution idiom, which
+looks like dynamic SQL but only ever substitutes a fixed placeholder syntax,
+never user input) is resolved directly on the SonarCloud issue via its API
+(`do_transition` to `falsepositive`/`wontfix`, plus an `add_comment`
+explaining why) — never via a blanket rule/path exclusion for that rule, since
+an exclusion would also hide a real future SQL-injection bug landing in that
+same file.
+
 ## Deployment
 
 `se.mo-sys.de` is the dev/test deployment, not production — deploying there is
