@@ -26,6 +26,13 @@ COPY --from=build /out/searchengine-mcp-datetime /usr/bin/searchengine-mcp-datet
 COPY --from=build /out/searchengine-mcp-sandbox /usr/bin/searchengine-mcp-sandbox
 COPY --from=build /out/searchengine-mcp-files /usr/bin/searchengine-mcp-files
 COPY --from=build /out/searchengine-mcp-vision /usr/bin/searchengine-mcp-vision
+# This digest already IS the "nonroot" variant's content (uid/gid 65532
+# baked in -- confirmed via `docker inspect --format '{{.Config.User}}'`),
+# but that isn't visible from a bare digest reference alone -- an
+# explicit USER here is a no-op at runtime, just makes it statically
+# obvious (to SonarCloud's docker:S6471 and to a human reader) that this
+# never runs as root, without depending on the tag also pinned above.
+USER 65532:65532
 EXPOSE 8080
 # NOTE: a crawl-server run from this image can never use chromium/firefox
 # rendering (internal/adapters/browserfetcher) -- that needs a real
