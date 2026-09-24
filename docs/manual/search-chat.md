@@ -38,11 +38,11 @@ The "Default agent" dropdown lets you choose a specific agent to answer with, if
 
 ## Chat tabs: new, fork, export, import
 
-The strip above the transcript holds one tab per open conversation -- the + button starts a brand-new empty chat; the fork icon (⎇) deep-copies the current tab's full history into a new, independent tab, so you can branch a conversation without disturbing the original (a fork always starts unpinned, even from a pinned chat -- see "Pinning" below). The download icon (⬇) saves the active tab as JSON; the upload icon (⬆) loads one back as a new tab, still the only way to bring a conversation in from outside this account.
+The strip above the transcript holds one tab per open conversation -- the + button starts a brand-new chat, pinned immediately if you're signed in (see "Pinning" below); the fork icon (⎇) deep-copies the current tab's full history into a new, independent tab, so you can branch a conversation without disturbing the original (a fork always starts unpinned, even from a pinned chat, so branching never silently saves a copy you didn't ask for). The download icon (⬇) saves the active tab as JSON; the upload icon (⬆) loads one back as a new tab, still the only way to bring a conversation in from outside this account.
 
 ## Pinning, renaming, and closing chats
 
-Each tab has its own pin button. An unpinned tab is session-only: closing or reloading the page discards it, and it can't attach files (see "Attaching files" below). Clicking the pin turns it into a persistent chat saved to your account -- it reloads automatically next time (most recently updated first), and it can now attach files. Clicking the pin again unpins it, deleting the saved chat and its attached files, though the tab stays open as a plain conversation. Requires a signed-in account (any account -- admin included, since every account is a real one now) with the files feature configured.
+Each tab has its own pin button. An unpinned tab is session-only: closing or reloading the page discards it, and it can't attach files (see "Attaching files" below). A signed-in account's chats are pinned by default -- every new tab (though not a fork, see above) is saved to your account as soon as you create it, reloading automatically next time (most recently updated first) and able to attach files right away. Clicking the pin unpins a tab, deleting the saved chat and its attached files, though the tab stays open as a plain, session-only conversation; clicking it again re-pins it. An anonymous (signed-out) visitor's chats stay session-only regardless -- pinning requires a signed-in account (any account -- admin included, since every account is a real one now) with the files feature configured.
 
 Click a tab's own name to rename it, but only while it's already active -- clicking a background tab's name switches to it instead. A pinned tab's rename saves immediately; an unpinned tab's title is session-only, same as its history.
 
@@ -66,7 +66,7 @@ The header's top-right icons adapt to who's signed in: an admin sees a gear icon
 
 > **Worth knowing:**
 > - Combine search operators freely in one query, e.g. cats +shelter -kitten site:example.com -- there's no separate advanced-search form.
-> - Pin a chat tab to keep it past a page reload and attach files to it -- an unpinned tab is discarded on reload or close, so export it first if you might want it later.
+> - Signed in, a new chat tab is pinned (and attachable) automatically -- unpin it if you'd rather it stayed session-only; an unpinned tab (or any tab for a signed-out visitor) is discarded on reload or close, so export it first if you might want it later.
 > - If a search result's ranking looks off, open its Details fold to see whether keyword (bm25) or meaning-based (semantic) matching drove the score.
 
 ---
