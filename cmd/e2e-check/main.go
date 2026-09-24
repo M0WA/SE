@@ -186,6 +186,9 @@ func main() {
 			{"image URL + vision caption (Image analyst agent)", c.checkVisionCaptionByURL},
 			{"security: image_url SSRF (blocked address) rejected", c.checkImageURLSSRFRejected},
 		}
+		if *includeSlow {
+			phase3 = append(phase3, check{"sandbox MCP tool: file_ids reads an uploaded PDF", c.checkSandboxFilePDF})
+		}
 		phase3 = append(phase3,
 			check{"persistent chat: delete (cascades files)", c.checkChatDelete},
 			check{"persistent chat: delete fork", c.checkChatForkDelete},
@@ -1136,6 +1139,88 @@ func (c *client) checkSandboxSlow() error {
 		return fmt.Errorf("got an empty answer")
 	}
 	return checkNoToolErrors(out)
+}
+
+// buildMinimalPDF constructs the smallest valid single-page PDF containing one text string,
+// byte-for-byte precise xref offsets computed as it's built -- mirrors
+// internal/adapters/dockersandbox's own test helper, duplicated here rather than shared since a
+// cross-module import just for one small, self-contained fixture builder isn't worth the
+// coupling. Verified against both poppler's pdftotext and github.com/ledongthuc/pdf while this
+// was written.
+func buildMinimalPDF(text string) []byte {
+	contentStream := []byte(fmt.Sprintf("BT /F1 18 Tf 10 100 Td (%s) Tj ET", text))
+	objects := [][]byte{
+		[]byte("<< /Type /Catalog /Pages 2 0 R >>"),
+		[]byte("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		[]byte("<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> /MediaBox [0 0 300 144] /Contents 5 0 R >>"),
+		[]byte("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
+		append(append([]byte(fmt.Sprintf("<< /Length %d >>\nstream\n", len(contentStream))), contentStream...), []byte("\nendstream")...),
+	}
+
+	var out []byte
+	out = append(out, "%PDF-1.4\n"...)
+	offsets := make([]int, 0, len(objects))
+	for i, body := range objects {
+		offsets = append(offsets, len(out))
+		out = append(out, fmt.Sprintf("%d 0 obj\n", i+1)...)
+		out = append(out, body...)
+		out = append(out, "\nendobj\n"...)
+	}
+
+	xrefOffset := len(out)
+	n := len(objects) + 1
+	out = append(out, fmt.Sprintf("xref\n0 %d\n", n)...)
+	out = append(out, "0000000000 65535 f \n"...)
+	for _, off := range offsets {
+		out = append(out, fmt.Sprintf("%010d 00000 n \n", off)...)
+	}
+	out = append(out, "trailer\n"...)
+	out = append(out, fmt.Sprintf("<< /Size %d /Root 1 0 R >>\n", n)...)
+	out = append(out, "startxref\n"...)
+	out = append(out, fmt.Sprintf("%d\n", xrefOffset)...)
+	out = append(out, "%%EOF"...)
+	return out
+}
+
+// checkSandboxFilePDF proves mcp-sandbox's file_ids capability end-to-end with a real, non-text
+// file type: uploads a minimal PDF (built in-process above, not a checked-in binary fixture)
+// containing one known marker string, then asks the model to use run_python's file_ids +
+// packages ["pdfplumber"] to actually extract and report that marker. This is the general
+// mechanism (see internal/adapters/dockersandbox's RunOptions.Files and this package's own
+// mcp-sandbox doc comment) working end to end, not a bespoke PDF-only code path -- the same
+// approach covers a .docx, an image, or any other format the model reaches for. Opt-in
+// (-include-slow), same reasoning as checkSandboxSlow: installing pdfplumber's dependency chain
+// from a cold pip cache can take a while. Cleans up the uploaded file regardless of outcome.
+func (c *client) checkSandboxFilePDF() error {
+	if c.testChatID == "" {
+		return skip(skipNoPinnedChat)
+	}
+	const marker = "E2E-CHECK-PDF-MARKER-Q7ZT9"
+	uploaded, err := c.uploadFile(c.testChatID, "e2e-check.pdf", "application/pdf", buildMinimalPDF(marker))
+	if err != nil {
+		return err
+	}
+	defer c.deleteRequest("/account/api/files/" + uploaded.ID)
+
+	out, err := c.chatOnce(
+		fmt.Sprintf("List your files to find the one named %q, then use run_python with file_ids set to that "+
+			"file's own id and packages [\"pdfplumber\"] to open it and extract its text, then reply with only "+
+			"the exact marker string the PDF contains (it starts with \"E2E-CHECK-PDF-MARKER\"). This may take a "+
+			"while installing pdfplumber the first time -- please wait rather than giving up.", uploaded.Filename),
+		chatOptions{chatID: c.testChatID})
+	if err != nil {
+		return err
+	}
+	if len(out.ToolResults) == 0 {
+		return fmt.Errorf("expected list_files/run_python to be called, got no tool_results")
+	}
+	if err := checkNoToolErrors(out); err != nil {
+		return err
+	}
+	if !strings.Contains(out.Answer, marker) {
+		return fmt.Errorf("expected the answer to contain the PDF's own marker text %q, got %q", marker, out.Answer)
+	}
+	return nil
 }
 
 func checkNoToolErrors(out chatResponse) error {
