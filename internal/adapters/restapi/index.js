@@ -338,15 +338,43 @@
     return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
   }
 
+  // LATEX_MACROS translates the handful of LaTeX macros a model actually reaches for when
+  // answering an everyday arithmetic/algebra question (see normalizeMathDelimiters) into their
+  // plain-text/Unicode equivalent. Not an attempt at real math typesetting -- this chat has no
+  // LaTeX renderer -- just enough to keep a formula readable instead of showing raw backslashes.
+  const LATEX_MACROS = {
+    times: '×', cdot: '·', div: '÷', pm: '±', mp: '∓',
+    leq: '≤', le: '≤', geq: '≥', ge: '≥', neq: '≠', ne: '≠',
+    approx: '≈', infty: '∞', sum: '∑', int: '∫', partial: '∂',
+    alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', theta: 'θ',
+    lambda: 'λ', mu: 'μ', pi: 'π', sigma: 'σ', phi: 'φ', omega: 'ω',
+  };
+
+  // normalizeMathDelimiters converts LaTeX-style math a model emits (e.g. answering "what is
+  // 12.123 x 12.123?" as "\[ 12.123 \times 12.123 = 146.967129 \]") into plain readable text.
+  // Left alone, \( \) \[ \] and macros like \times just show up as literal backslashes/brackets
+  // in the message bubble, since this chat has no LaTeX typesetting. Strips the delimiters,
+  // simplifies \sqrt{}/\frac{}{}, translates LATEX_MACROS, and -- so no macro outside that table
+  // leaves a stray backslash behind -- drops the backslash off any other \word it finds too.
+  function normalizeMathDelimiters(text) {
+    text = text.replace(/\\\[|\\\]|\\\(|\\\)/g, '');
+    text = text.replace(/\\sqrt\{([^{}]*)\}/g, '√($1)');
+    text = text.replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, '($1)/($2)');
+    text = text.replace(/\\([a-zA-Z]+)/g, (_, name) => (name in LATEX_MACROS ? LATEX_MACROS[name] : name));
+    text = text.replace(/([_^])\{([^{}]*)\}/g, '$1$2');
+    return text;
+  }
+
   // renderInline applies span-level markdown to already-escaped text -- code spans are pulled
-  // to placeholders first (restored at the end) so bold/italic/link patterns never touch inside
-  // them. Bold is matched before italic so **x** never ends up as <em>*x</em>.
+  // to placeholders first (restored at the end) so bold/italic/link/math patterns never touch
+  // inside them. Bold is matched before italic so **x** never ends up as <em>*x</em>.
   function renderInline(text) {
     const codeSpans = [];
     text = text.replace(/`([^`\n]+)`/g, (_, code) => {
       codeSpans.push(code);
       return 'SPAN' + (codeSpans.length - 1) + 'END';
     });
+    text = normalizeMathDelimiters(text);
     text = text.replace(/\[([^\][]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
     text = text.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
     text = text.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
@@ -1207,7 +1235,7 @@
       pinIconSVG, updateAttachAvailability, refreshTabFileState,
       serializeTab, deserializeTab, exportActiveTab, importTabFromJSON,
       toWireHistory, sendChatMessage, setMode,
-      escapeHTML, renderInline, renderMarkdown,
+      escapeHTML, renderInline, renderMarkdown, normalizeMathDelimiters,
       buildDonutSVG, buildDonutLegend, tokenUsageSegments, renderTokenUsage,
       loadSession, renderAgentSelectOptions, loadAgentOptions,
       uploadAttachedFile, renderChatFiles, loadChatFiles, deleteChatFile,

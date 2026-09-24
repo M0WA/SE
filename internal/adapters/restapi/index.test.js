@@ -1693,6 +1693,28 @@ test('renderInline never interprets markdown syntax found inside a code span', (
   assert.equal(renderInline('`**not bold**`'), '<code>**not bold**</code>');
 });
 
+test('normalizeMathDelimiters strips LaTeX delimiters and translates common macros', () => {
+  const { normalizeMathDelimiters } = loadFixture();
+  assert.equal(normalizeMathDelimiters('\\( 12.123 \\times 12.123 \\)'), ' 12.123 × 12.123 ');
+  assert.equal(normalizeMathDelimiters('\\[ a \\leq b \\]'), ' a ≤ b ');
+  assert.equal(normalizeMathDelimiters('\\sqrt{2} + \\frac{1}{2}'), '√(2) + (1)/(2)');
+  assert.equal(normalizeMathDelimiters('x^{2} + a_{i}'), 'x^2 + a_i');
+});
+
+test('normalizeMathDelimiters drops the backslash off an unknown macro rather than leaving it stray', () => {
+  const { normalizeMathDelimiters } = loadFixture();
+  assert.equal(normalizeMathDelimiters('\\notarealmacro'), 'notarealmacro');
+});
+
+test('renderInline normalizes LaTeX math delimiters but never inside a code span', () => {
+  const { renderInline } = loadFixture();
+  assert.equal(
+    renderInline('The answer is \\( 12.123 \\times 12.123 = 146.967129 \\).'),
+    'The answer is  12.123 × 12.123 = 146.967129 .',
+  );
+  assert.equal(renderInline('`\\times`'), '<code>\\times</code>');
+});
+
 test('renderMarkdown escapes raw HTML in the model output before applying any markdown', () => {
   const { renderMarkdown } = loadFixture();
   assert.equal(renderMarkdown('<img src=x onerror=alert(1)>'), '<p>&lt;img src=x onerror=alert(1)&gt;</p>');
