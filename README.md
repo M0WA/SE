@@ -1,4 +1,4 @@
-# searchengine
+# SE - AI chatbot
 
 A self-hosted AI chatbot with search-engine features, written in Go: chat
 with a model that cites live web results and this instance's own crawled

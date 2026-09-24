@@ -995,6 +995,46 @@ button:focus-visible {
    "land on the new turn's own top line" behavior that used to rely on
    this box's own scrollTop. */
 
+/* .ksim-* ("KaTeX-simulating"): a small hand-rolled math renderer (see index.js's parseLatex/
+   renderLatexNodes), not a real LaTeX engine -- no external dependency, so no font/color to load
+   from anywhere, just nested <span>s styled to look like a radical/fraction. Uses --ink/--rule
+   like everything else, so it's correct in light and dark mode with no extra work.
+   .ksim-display (a \[ \] block) gets a bit more room than .ksim-inline (a \( \) span sitting in
+   running prose) -- 1.05em vs. the surrounding text's own size. */
+.ksim-inline, .ksim-display {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+
+.ksim-display {
+  display: inline-block;
+  font-size: 1.05em;
+}
+
+.ksim-sqrt {
+  display: inline-flex;
+  align-items: flex-start;
+}
+
+.ksim-sqrt-sign { padding-right: 0.05em; }
+
+.ksim-sqrt-body { border-top: 1.5px solid var(--ink); padding: 0 0.15em; }
+
+.ksim-frac {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  vertical-align: middle;
+  margin: 0 0.15em;
+  text-align: center;
+}
+
+.ksim-frac-num, .ksim-frac-den {
+  padding: 0 0.2em;
+  line-height: 1.3;
+}
+
+.ksim-frac-num { border-bottom: 1.5px solid var(--ink); }
+
 .chat-msg {
   padding: 0.85rem 0;
   border-bottom: 1px solid var(--rule);

@@ -346,9 +346,9 @@
   }
 
   // LATEX_MACROS translates the handful of LaTeX macros a model actually reaches for when
-  // answering an everyday arithmetic/algebra question (see normalizeMathDelimiters) into their
-  // plain-text/Unicode equivalent. Not an attempt at real math typesetting -- this chat has no
-  // LaTeX renderer -- just enough to keep a formula readable instead of showing raw backslashes.
+  // answering an everyday arithmetic/algebra question into their plain-text/Unicode equivalent --
+  // used both for a bare symbol macro (\times) and as the fallback when parseLatex/renderLatex
+  // below can't make sense of a math span at all.
   const LATEX_MACROS = {
     times: '×', cdot: '·', div: '÷', pm: '±', mp: '∓',
     leq: '≤', le: '≤', geq: '≥', ge: '≥', neq: '≠', ne: '≠',
@@ -357,18 +357,130 @@
     lambda: 'λ', mu: 'μ', pi: 'π', sigma: 'σ', phi: 'φ', omega: 'ω',
   };
 
-  // normalizeMathDelimiters converts LaTeX-style math a model emits (e.g. answering "what is
-  // 12.123 x 12.123?" as "\[ 12.123 \times 12.123 = 146.967129 \]") into plain readable text.
-  // Left alone, \( \) \[ \] and macros like \times just show up as literal backslashes/brackets
-  // in the message bubble, since this chat has no LaTeX typesetting. Strips the delimiters,
-  // simplifies \sqrt{}/\frac{}{}, translates LATEX_MACROS, and -- so no macro outside that table
-  // leaves a stray backslash behind -- drops the backslash off any other \word it finds too.
+  // parseLatex is a small recursive-descent parser for the subset of LaTeX a chat model
+  // realistically reaches for in an everyday arithmetic/algebra answer: symbol macros (\times),
+  // \sqrt{...}, \frac{...}{...}, and ^/_ (braced or single-character). No dependency on a real
+  // LaTeX engine (KaTeX/MathJax) -- this is a small hand-written parser producing real nested
+  // markup (a radical with an overline, a stacked fraction, real <sup>/<sub>), not a flat
+  // Unicode approximation. pos is {i: 0}, threaded through recursive calls so nested groups
+  // share one cursor. Stops at an unescaped "}" (the caller consumes it) or the end of the
+  // string. Malformed input (an unclosed brace, a \sqrt/\frac with no following "{") throws --
+  // renderMathSpan below catches that and falls back to the plain-text rendering for that one
+  // span, never the whole message.
+  function parseLatex(s, pos) {
+    const nodes = [];
+    let text = '';
+    const flush = () => { if (text) { nodes.push({ type: 'text', value: text }); text = ''; } };
+    while (pos.i < s.length && s[pos.i] !== '}') {
+      const c = s[pos.i];
+      if (c === '{') {
+        flush();
+        pos.i++;
+        const children = parseLatex(s, pos);
+        if (s[pos.i] !== '}') throw new Error('unclosed {');
+        pos.i++;
+        nodes.push({ type: 'group', children });
+      } else if (c === '\\') {
+        flush();
+        pos.i++;
+        const m = /^[a-zA-Z]+/.exec(s.slice(pos.i));
+        if (!m) {
+          text += c; // a lone backslash with no following letters -- keep it literal
+        } else {
+          pos.i += m[0].length;
+          if (m[0] === 'sqrt') {
+            nodes.push({ type: 'sqrt', arg: parseArg(s, pos) });
+          } else if (m[0] === 'frac') {
+            const num = parseArg(s, pos);
+            const den = parseArg(s, pos);
+            nodes.push({ type: 'frac', num, den });
+          } else {
+            nodes.push({ type: 'symbol', name: m[0] });
+          }
+        }
+      } else if (c === '^' || c === '_') {
+        flush();
+        pos.i++;
+        nodes.push({ type: c === '^' ? 'sup' : 'sub', arg: parseArg(s, pos) });
+      } else {
+        text += c;
+        pos.i++;
+      }
+    }
+    flush();
+    return nodes;
+  }
+
+  // parseArg consumes one macro argument: a braced group ("{...}", possibly empty) or, lacking
+  // one, a single literal character (covers "x^2"/"a_i" without braces). Throws on end-of-input
+  // with no argument at all (e.g. a trailing "\sqrt").
+  function parseArg(s, pos) {
+    if (s[pos.i] === '{') {
+      pos.i++;
+      const children = parseLatex(s, pos);
+      if (s[pos.i] !== '}') throw new Error('unclosed {');
+      pos.i++;
+      return children;
+    }
+    if (pos.i >= s.length) throw new Error('expected an argument');
+    const ch = s[pos.i];
+    pos.i++;
+    return [{ type: 'text', value: ch }];
+  }
+
+  // renderLatexNodes turns parseLatex's AST back into an HTML string -- text nodes are emitted
+  // as-is (the caller already ran escapeHTML over the whole message before any of this), macros
+  // not in LATEX_MACROS fall back to their bare name (same "never leave a stray backslash"
+  // reasoning the old flat renderer had).
+  function renderLatexNodes(nodes) {
+    return nodes.map(renderLatexNode).join('');
+  }
+  function renderLatexNode(node) {
+    switch (node.type) {
+      case 'text': return node.value;
+      case 'group': return renderLatexNodes(node.children);
+      case 'symbol': return node.name in LATEX_MACROS ? LATEX_MACROS[node.name] : node.name;
+      case 'sqrt': return '<span class="ksim-sqrt"><span class="ksim-sqrt-sign">√</span>' +
+        '<span class="ksim-sqrt-body">' + renderLatexNodes(node.arg) + '</span></span>';
+      case 'frac': return '<span class="ksim-frac"><span class="ksim-frac-num">' + renderLatexNodes(node.num) +
+        '</span><span class="ksim-frac-den">' + renderLatexNodes(node.den) + '</span></span>';
+      case 'sup': return '<sup>' + renderLatexNodes(node.arg) + '</sup>';
+      case 'sub': return '<sub>' + renderLatexNodes(node.arg) + '</sub>';
+      default: return '';
+    }
+  }
+
+  // flattenLatexMacrosOnly is renderMathSpan's fallback for a span parseLatex/renderLatexNodes
+  // couldn't make sense of -- the old flat approach, good enough to at least not show raw
+  // backslashes even when the structured render fails.
+  function flattenLatexMacrosOnly(s) {
+    return s.replace(/\\([a-zA-Z]+)/g, (_, name) => (name in LATEX_MACROS ? LATEX_MACROS[name] : name));
+  }
+
+  // renderMathSpan renders one math expression's own source (already stripped of its \( \)/\[ \]
+  // delimiters) into an HTML string, wrapped in wrapperClass. Falls back to
+  // flattenLatexMacrosOnly, never throws -- a model's occasional malformed LaTeX degrades to
+  // readable flattened text, not a broken message.
+  function renderMathSpan(src, wrapperClass) {
+    try {
+      const pos = { i: 0 };
+      const nodes = parseLatex(src, pos);
+      if (pos.i !== src.length) throw new Error('trailing unparsed input');
+      return '<span class="' + wrapperClass + '">' + renderLatexNodes(nodes) + '</span>';
+    } catch (err) {
+      return '<span class="' + wrapperClass + '">' + flattenLatexMacrosOnly(src) + '</span>';
+    }
+  }
+
+  // normalizeMathDelimiters finds \( ... \)/\[ ... \] spans in a model's answer (e.g. "what is
+  // 12.123 x 12.123?" answered as "\[ 12.123 \times 12.123 = 146.967129 \]") and renders each
+  // one via renderMathSpan -- \( \) don't nest, so matching non-greedily to the next closer is
+  // correct. Text outside any math span is left completely untouched (unlike the old
+  // whole-message flatten, a bare \alpha typed outside \(\)/\[\] is more likely something else
+  // entirely -- a path, a regex -- than intentional math, so it's not touched here).
   function normalizeMathDelimiters(text) {
-    text = text.replace(/\\\[|\\\]|\\\(|\\\)/g, '');
-    text = text.replace(/\\sqrt\{([^{}]*)\}/g, '√($1)');
-    text = text.replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, '($1)/($2)');
-    text = text.replace(/\\([a-zA-Z]+)/g, (_, name) => (name in LATEX_MACROS ? LATEX_MACROS[name] : name));
-    text = text.replace(/([_^])\{([^{}]*)\}/g, '$1$2');
+    text = text.replace(/\\\(([\s\S]*?)\\\)/g, (_, inner) => renderMathSpan(inner, 'ksim-inline'));
+    text = text.replace(/\\\[([\s\S]*?)\\\]/g, (_, inner) => renderMathSpan(inner, 'ksim-display'));
     return text;
   }
 
@@ -1328,6 +1440,7 @@
       serializeTab, deserializeTab, exportActiveTab, importTabFromJSON,
       toWireHistory, sendChatMessage, setMode,
       escapeHTML, renderInline, renderMarkdown, normalizeMathDelimiters,
+      parseLatex, renderLatexNodes, renderMathSpan, flattenLatexMacrosOnly,
       buildDonutSVG, buildDonutLegend, tokenUsageSegments, renderTokenUsage,
       loadSession, renderAgentSelectOptions, loadAgentOptions,
       uploadAttachedFile, renderChatFiles, loadChatFiles, deleteChatFile,
