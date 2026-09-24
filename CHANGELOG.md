@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.80 - 2026-09-24
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* test: cover the static-route handlers and several pure utility functions by @M0WA in https://github.com/M0WA/SE/pull/308
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.79...v4.13.80
+
+
 ## v4.13.79 - 2026-09-24
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
