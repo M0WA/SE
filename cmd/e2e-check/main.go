@@ -60,7 +60,14 @@ const (
 	pathAdminMCPServers   = "/admin/api/mcp-servers"
 	pathAccountChats      = "/account/api/chats"
 	pathAccountMCPServers = "/account/api/mcp-servers"
+	pathAccountFiles      = "/account/api/files"
 	headerContentType     = "Content-Type"
+	contentTypePNG        = "image/png"
+	// notConfiguredSubstring matches both authRelatedErrorSubstrings
+	// below and checkImageVision/checkVisionCaption's own "is this tool
+	// just unconfigured on this deployment" check -- the same literal,
+	// checked for the same reason, in three places.
+	notConfiguredSubstring = "not configured"
 )
 
 func main() {
@@ -101,8 +108,10 @@ func main() {
 		{"session role (admin)", c.checkSessionRole("admin")},
 		{"plain chat (no tools)", c.checkPlainChat},
 		{"web-search-gated chat", c.checkWebSearchChat},
+		{"mcp-web tool: web_fetch (forced, specific URL)", c.checkWebFetch},
 		{"always-on MCP tool (datetime)", c.checkDatetimeTool},
 		{"sandbox MCP tool (fast, no packages)", c.checkSandboxFast},
+		{"sandbox MCP tool (run_go)", c.checkGoSandbox},
 		{"search: plain query", c.checkSearchPlain},
 		{"search: site: operator", c.checkSearchSiteOperator},
 		{"search: sort order", c.checkSearchSort},
@@ -140,10 +149,12 @@ func main() {
 			{"persistent chat: rename", c.checkChatRename},
 			{"persistent chat: fork (independent copy)", c.checkChatFork},
 			{"mcp-files tool (attach + read)", c.checkFilesTool},
+			{"mcp-files tool: write_file", c.checkWriteFile},
 			{"account: personal MCP server (http-only)", c.checkAccountMCPServerCRUD},
 			{"account: your files (unscoped listing)", c.checkAccountFilesUnscoped},
 			{"account: change password (round trip)", c.checkAccountPasswordRoundTrip(creds.TestUser, creds.TestUserPassword)},
 			{"file attach + vision similarity (Image analyst agent)", c.checkImageVision},
+			{"file attach + vision caption (Image analyst agent)", c.checkVisionCaption},
 		}
 		phase3 = append(phase3,
 			check{"persistent chat: delete (cascades files)", c.checkChatDelete},
@@ -361,7 +372,7 @@ func (c *client) uploadFile(chatID, filename, contentType string, data []byte) (
 	if err := w.Close(); err != nil {
 		return fileResponse{}, err
 	}
-	req, err := http.NewRequest(http.MethodPost, c.base+"/account/api/files", &buf)
+	req, err := http.NewRequest(http.MethodPost, c.base+pathAccountFiles, &buf)
 	if err != nil {
 		return fileResponse{}, err
 	}
@@ -578,6 +589,42 @@ func (c *client) checkWebSearchChat() error {
 	return nil
 }
 
+// checkWebFetch forces web_fetch specifically (a known, stable URL
+// already in hand, so the model never has a reason to call web_search
+// first) -- checkWebSearchChat above accepts EITHER of mcp-web's two
+// tools, so it's never actually guaranteed to exercise web_fetch's own
+// httpfetcher round trip in particular; this pins that down
+// deterministically instead. example.com is IANA's own reserved-for-
+// documentation domain -- content has been stable for decades and it's
+// not expected to ever block/rate-limit a fetch the way a real site can.
+func (c *client) checkWebFetch() error {
+	out, err := c.chatOnce(
+		"Use web_fetch to fetch https://example.com/ and tell me the exact page title you see in its content.",
+		chatOptions{webSearch: true})
+	if err != nil {
+		return err
+	}
+	if out.Answer == "" {
+		return fmt.Errorf("got an empty answer")
+	}
+	found := false
+	for _, tr := range out.ToolResults {
+		if tr.ToolName == "web_fetch" {
+			found = true
+		}
+	}
+	if !found {
+		return fmt.Errorf("expected web_fetch specifically to be called (got tool_results: %+v), the model may have answered from training data instead of actually fetching", out.ToolResults)
+	}
+	if err := checkNoToolErrors(out); err != nil {
+		return err
+	}
+	if !strings.Contains(strings.ToLower(out.Answer), "example domain") {
+		return fmt.Errorf("expected the answer to reference example.com's real, stable page title (\"Example Domain\"), got %q -- web_fetch may have returned nothing usable", out.Answer)
+	}
+	return nil
+}
+
 // checkDatetimeTool proves a plain, always-on (not web-search-gated) MCP
 // server actually gets invoked and answers correctly -- mcp-datetime is
 // the cheapest possible real tool round trip (no network, no subprocess
@@ -593,6 +640,16 @@ func (c *client) checkDatetimeTool() error {
 	}
 	if len(out.ToolResults) == 0 {
 		return fmt.Errorf("expected the datetime tool to be called, got no tool_results -- either it's not configured as always-on (gated_by_web_search=false, enabled=true) or MCP wiring is broken")
+	}
+	if err := checkNoToolErrors(out); err != nil {
+		return err
+	}
+	// "20" rather than an exact year -- this check should keep working
+	// without an edit every January 1st, but still catches get_datetime
+	// returning garbage (a stale mock value, a parse error string, etc.)
+	// instead of a real current-century year.
+	if !strings.Contains(out.Answer, "20") {
+		return fmt.Errorf("expected a plausible current-century year in the answer, got %q", out.Answer)
 	}
 	return nil
 }
@@ -614,7 +671,40 @@ func (c *client) checkSandboxFast() error {
 	if len(out.ToolResults) == 0 {
 		return fmt.Errorf("expected run_python to be called, got no tool_results -- sandbox MCP server may not be configured as always-on")
 	}
-	return checkNoToolErrors(out)
+	if err := checkNoToolErrors(out); err != nil {
+		return err
+	}
+	if !strings.Contains(out.Answer, "42") {
+		return fmt.Errorf("expected the answer to contain the actual computed result (42), got %q -- run_python may have executed but returned something wrong", out.Answer)
+	}
+	return nil
+}
+
+// checkGoSandbox mirrors checkSandboxFast but forces run_go instead of
+// run_python -- cmd/mcp-sandbox's OTHER language, its own separate Docker
+// image/toolchain (see internal/adapters/dockersandbox), with no
+// coverage anywhere else in this suite before this check existed.
+func (c *client) checkGoSandbox() error {
+	out, err := c.chatOnce(
+		`Use run_go to run this exact program and tell me only the number it prints: `+
+			"package main\nimport \"fmt\"\nfunc main() { fmt.Println(6 * 7) }",
+		chatOptions{})
+	if err != nil {
+		return err
+	}
+	if out.Answer == "" {
+		return fmt.Errorf("got an empty answer")
+	}
+	if len(out.ToolResults) == 0 {
+		return fmt.Errorf("expected run_go to be called, got no tool_results")
+	}
+	if err := checkNoToolErrors(out); err != nil {
+		return err
+	}
+	if !strings.Contains(out.Answer, "42") {
+		return fmt.Errorf("expected the answer to contain the actual computed result (42), got %q -- run_go may have executed but returned something wrong", out.Answer)
+	}
+	return nil
 }
 
 // checkSandboxSlow deliberately reproduces the slow path a real incident
@@ -895,7 +985,7 @@ func looksMutating(name string) bool {
 // check never attaches -- see the file-based servers' own dedicated
 // user-session checks for that) -- rather than a real regression. Treated
 // as a skip, not a failure, when matched.
-var authRelatedErrorSubstrings = []string{"unauthorized", "authentication", "chat_id", "no active", "not configured", "signed-in", "signed in", "no signed", "file not found"}
+var authRelatedErrorSubstrings = []string{"unauthorized", "authentication", "chat_id", "no active", notConfiguredSubstring, "signed-in", "signed in", "no signed", "file not found"}
 
 func looksAuthRelated(errMsg string) bool {
 	lower := strings.ToLower(errMsg)
@@ -1267,13 +1357,58 @@ func (c *client) checkFilesTool() error {
 	return nil
 }
 
+// checkWriteFile proves mcp-files' write_file tool -- distinct from
+// list_files/read_file/read_file_base64, all exercised by checkFilesTool
+// above, and previously the one tool on this server with zero coverage
+// anywhere in this suite. Asks for a specific, checkable filename and
+// content, then confirms via the real REST listing (not just the model's
+// own say-so) that a file matching both actually exists, and cleans it up
+// afterward regardless of outcome.
+func (c *client) checkWriteFile() error {
+	if c.testChatID == "" {
+		return skip(skipNoPinnedChat)
+	}
+	const filename = "e2e-check-written.txt"
+	const marker = "E2E-CHECK-WRITE-MARKER-9b3d2a"
+	out, err := c.chatOnce(
+		fmt.Sprintf("Use write_file to create a file named exactly %q containing exactly this text: %s", filename, marker),
+		chatOptions{chatID: c.testChatID})
+	if err != nil {
+		return err
+	}
+	if len(out.ToolResults) == 0 {
+		return fmt.Errorf("expected write_file to be called, got no tool_results")
+	}
+	if err := checkNoToolErrors(out); err != nil {
+		return err
+	}
+
+	var list []fileResponse
+	if _, err := c.getJSON(pathAccountFiles, &list); err != nil {
+		return err
+	}
+	var createdID string
+	for _, f := range list {
+		if f.Filename == filename {
+			createdID = f.ID
+		}
+	}
+	if createdID != "" {
+		defer c.deleteRequest("/account/api/files/" + createdID)
+	}
+	if createdID == "" {
+		return fmt.Errorf("expected a file named %q to exist after write_file, got %+v", filename, list)
+	}
+	return nil
+}
+
 // checkAccountFilesUnscoped proves GET /account/api/files with no
 // chat_id (the "Your files" page's own view) lists files across every
 // chat, not just one -- structural only (the file uploaded by
 // checkFilesTool should appear, if that check ran first and succeeded).
 func (c *client) checkAccountFilesUnscoped() error {
 	var out []fileResponse
-	status, err := c.getJSON("/account/api/files", &out)
+	status, err := c.getJSON(pathAccountFiles, &out)
 	if err != nil {
 		return err
 	}
@@ -1305,22 +1440,23 @@ func testImagePNG() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// checkImageVision attaches a real image to a pinned chat, selects the
-// "Image analyst" agent by name, and asks it to find related content --
-// exercising cmd/mcp-vision's vision_similarity tool end to end (a real
-// image embed against the configured provider, then a real pgvector ANN
-// search). Replaces an older check reproducing a real incident in the
-// previous sandboxed-Python/easyocr approach (mcpclient.callTimeout's old
-// 60s ceiling breaking on easyocr's always-uncached multi-minute model
-// download) -- that whole approach is retired (see default_agents.go's
-// image_analyst entry), and the new tool is fast enough to run
-// unconditionally, no -include-slow gate needed.
+// checkImageVision and checkVisionCaption both attach a real image to a
+// pinned chat, select the "Image analyst" agent by name, and ask it to
+// use one specific cmd/mcp-vision tool -- checkVisionTool is their shared
+// implementation, taking just what differs between the two: which tool,
+// what to ask for, and which Chat settings sub-page to point at in the
+// skip message. Replaces an older check reproducing a real incident in
+// the previous sandboxed-Python/easyocr approach (mcpclient.callTimeout's
+// old 60s ceiling breaking on easyocr's always-uncached multi-minute
+// model download) -- that whole approach is retired (see
+// default_agents.go's image_analyst entry), and the new tools are fast
+// enough to run unconditionally, no -include-slow gate needed.
 //
 // Skips gracefully (not a failure) if the agent isn't configured, or if
-// vision_similarity itself reports unconfigured (Chat settings -> Vision
-// -> Similarity search) -- both are legitimate per-deployment states, the
-// same convention as every other deployment-specific prerequisite here.
-func (c *client) checkImageVision() error {
+// the tool itself reports unconfigured (Chat settings -> Vision) -- both
+// are legitimate per-deployment states, the same convention as every
+// other deployment-specific prerequisite here.
+func (c *client) checkVisionTool(toolName, filename, question, settingsSubPage string) error {
 	if c.testChatID == "" {
 		return skip(skipNoPinnedChat)
 	}
@@ -1341,21 +1477,19 @@ func (c *client) checkImageVision() error {
 	if err != nil {
 		return err
 	}
-	if _, err := c.uploadFile(c.testChatID, "e2e-check.png", "image/png", png); err != nil {
+	if _, err := c.uploadFile(c.testChatID, filename, contentTypePNG, png); err != nil {
 		return err
 	}
-	out, err := c.chatOnce(
-		"Use vision_similarity to find pages related to the image named e2e-check.png, and tell me what you find.",
-		chatOptions{agentID: agentID, chatID: c.testChatID})
+	out, err := c.chatOnce(question, chatOptions{agentID: agentID, chatID: c.testChatID})
 	if err != nil {
 		return err
 	}
 	if len(out.ToolResults) == 0 {
-		return fmt.Errorf("expected vision_similarity to be called, got no tool_results -- check the agent's own mcp_server_ids isn't empty (see domain.Agent.MCPServerIDs' own doc comment: empty means NO tools, not all of them)")
+		return fmt.Errorf("expected %s to be called, got no tool_results -- check the agent's own mcp_server_ids isn't empty (see domain.Agent.MCPServerIDs' own doc comment: empty means NO tools, not all of them)", toolName)
 	}
 	for _, tr := range out.ToolResults {
-		if strings.Contains(tr.Err, "not configured") {
-			return skip("vision_similarity is not configured on this deployment (Chat settings -> Vision -> Similarity search)")
+		if strings.Contains(tr.Err, notConfiguredSubstring) {
+			return skip(fmt.Sprintf("%s is not configured on this deployment (Chat settings -> Vision -> %s)", toolName, settingsSubPage))
 		}
 	}
 	if err := checkNoToolErrors(out); err != nil {
@@ -1365,6 +1499,33 @@ func (c *client) checkImageVision() error {
 		return fmt.Errorf("got an empty answer")
 	}
 	return nil
+}
+
+// checkImageVision exercises cmd/mcp-vision's vision_similarity tool end
+// to end (a real image embed against the configured provider, then a
+// real pgvector ANN search) -- see checkVisionTool's own doc comment.
+func (c *client) checkImageVision() error {
+	return c.checkVisionTool("vision_similarity", "e2e-check.png",
+		"Use vision_similarity to find pages related to the image named e2e-check.png, and tell me what you find.",
+		"Similarity search")
+}
+
+// checkVisionCaption exercises cmd/mcp-vision's OTHER tool,
+// vision_caption -- calling a completely different, independently
+// admin-configured endpoint (Chat settings -> Vision -> Captioning: its
+// own base URL, model, API key) that shares no config, code path, or
+// failure mode with similarity search. Before this check existed,
+// vision_caption had ZERO end-to-end coverage anywhere in this suite --
+// buildMCPConnectivityChecks explicitly skips the whole "vision" server
+// (see its own doc comment), and checkImageVision only ever exercises
+// vision_similarity by name. That gap is exactly how a real captioning
+// outage (the configured endpoint's API key silently expiring) reached
+// production undetected -- this check exists so that class of failure
+// surfaces here first instead.
+func (c *client) checkVisionCaption() error {
+	return c.checkVisionTool("vision_caption", "e2e-check-caption.png",
+		"Use vision_caption to describe the image named e2e-check-caption.png.",
+		"Captioning")
 }
 
 // --- account self-service (personal MCP servers, password change) ---
