@@ -21,8 +21,15 @@ import (
 // requestTimeout is the default HTTP client timeout used when Client is
 // constructed via New() with no HTTPClient override -- generous since chat
 // completions (unlike a short embeddings call) can genuinely take a while,
-// especially against a CPU-only local model.
-const requestTimeout = 60 * time.Second
+// especially against a CPU-only local model or a self-hosted GPU host
+// under concurrent load. Raised from an original 60s after a live report
+// of "context deadline exceeded (Client.Timeout exceeded while awaiting
+// headers)" against a self-hosted vLLM instance during a long, genuinely
+// slow generation (not a stuck/hung request) -- 60s was too tight for a
+// real answer, not just a degenerate one. See mcp-vision's own
+// captionCallTimeout for the same class of fix on the separate
+// vision-captioning HTTP call.
+const requestTimeout = 180 * time.Second
 
 // maxResponseBytes caps how much of the HTTP response body is ever read --
 // a safety bound against a misbehaving or malicious endpoint, not a real
