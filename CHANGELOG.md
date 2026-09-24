@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.81 - 2026-09-24
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* fix: restore the admin nav rail on 6 pages missing it, fix vLLM legend by @M0WA in https://github.com/M0WA/SE/pull/310
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.80...v4.13.81
+
+
 ## v4.13.80 - 2026-09-24
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
