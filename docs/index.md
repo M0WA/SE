@@ -1,4 +1,4 @@
-# searchengine docs
+# SE - AI chatbot docs
 
 A self-hosted AI chatbot with search-engine features, written in Go. Same
 documentation as the repo's own [README](https://github.com/M0WA/SE) and

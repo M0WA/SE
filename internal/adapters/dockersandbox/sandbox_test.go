@@ -391,6 +391,59 @@ func TestRun_OutputTruncatedPastMaxOutputBytes(t *testing.T) {
 	}
 }
 
+func TestRun_FilesAreReadableByCode(t *testing.T) {
+	requireDockerTests(t)
+	r := New(Limits{})
+	res, err := r.Run(context.Background(), RunOptions{
+		Language: Python,
+		Code:     "print(open('notes.txt').read())\n",
+		Files:    map[string][]byte{"notes.txt": []byte("hello from a mounted file")},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("expected a clean exit, got %+v", res)
+	}
+	if strings.TrimSpace(res.Stdout) != "hello from a mounted file" {
+		t.Errorf("expected the file's own content back, got %q", res.Stdout)
+	}
+}
+
+func TestRun_FilesAreReadOnly(t *testing.T) {
+	requireDockerTests(t)
+	r := New(Limits{})
+	res, err := r.Run(context.Background(), RunOptions{
+		Language: Python,
+		Code:     "open('notes.txt', 'w').write('nope')\n",
+		Files:    map[string][]byte{"notes.txt": []byte("original")},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.ExitCode == 0 {
+		t.Fatalf("expected a non-zero exit writing to a read-only mount, got %+v", res)
+	}
+}
+
+func TestRun_FilesPathTraversalStripsDirectoryComponents(t *testing.T) {
+	requireDockerTests(t)
+	r := New(Limits{})
+	res, err := r.Run(context.Background(), RunOptions{
+		Language: Python,
+		Code:     "import os\nprint(sorted(os.listdir('.')))\n",
+		Files:    map[string][]byte{"../../etc/evil.txt": []byte("x")},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// The traversal is stripped down to "evil.txt", landing inside the sandbox dir like any
+	// other input file -- never escaping upward, and never silently dropped either.
+	if !strings.Contains(res.Stdout, "evil.txt") {
+		t.Errorf("expected the sanitized filename \"evil.txt\" to appear in the sandbox dir, got %q", res.Stdout)
+	}
+}
+
 func TestRun_UnsupportedLanguage(t *testing.T) {
 	r := New(Limits{})
 	_, err := r.Run(context.Background(), RunOptions{Language: "ruby", Code: "puts 1"})

@@ -6,6 +6,7 @@ Everything about running and using searchengine: installing and configuring a de
 
 - **[Infrastructure options (IONOS)](infrastructure.md)** -- Infrastructure-agnostic: any host that can run a `.deb`, any Postgres/MySQL/SQLite database, any OpenAI-compatible inference endpoint.
 - **[Installation](installation.md)** -- The ordered install flow for a fresh Debian/Ubuntu host.
+- **[Docker Compose installation](docker-installation.md)** -- `docker compose up` alternative to the flow above -- same three binaries plus Postgres, in one command.
 - **[Environment variables](environment-variables.md)** -- All variables, read once at startup, typically from `/etc/searchengine/searchengine.env`.
 - **[Config files](config-files.md)** -- Every file this project's packaging touches or ships, and how it gets installed.
 
@@ -25,7 +26,7 @@ Everything about running and using searchengine: installing and configuring a de
 - **[Vocabulary term detail](vocabulary-term.md)** -- Shows exactly which indexed pages contain one specific term, how strongly, and with what context -- the postings list underlying BM25 ranking and typo/fuzzy correction.
 - **[Content Dedup](content-dedup.md)** -- Finds documents byte-identical or near-identical to another already-indexed one and merges each group into one canonical document.
 
-## Crawling
+## Index
 
 - **[Crawl](crawl.md)** -- Start a new crawl of a site, a one-off run or a repeating schedule.
 - **[Schedule detail](schedule-detail.md)** -- The edit view for one existing crawl schedule.

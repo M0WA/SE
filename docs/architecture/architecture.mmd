@@ -93,6 +93,7 @@ flowchart LR
   MCPWeb -->|"web_search tool"| SearXNG
   MCPSandbox --> DockerSandbox
   DockerSandbox -.->|"docker CLI"| Docker
+  MCPSandbox -->|"HTTP, per-turn bearer token<br/>/account/api/files (file_ids)"| Search
   MCPFiles -->|"HTTP, per-turn bearer token<br/>/account/api/files"| Search
   MCPVision -->|"HTTP, per-turn bearer token<br/>/account/api/files"| Search
   MCPVision -->|"HTTP, X-Internal-API-Key<br/>/search/api/vision-similarity"| Search

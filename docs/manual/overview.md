@@ -10,7 +10,7 @@ The page you land on right after signing in, and the top entry in the admin nav 
 
 ## The navigation rail
 
-Every admin page shares the same sidebar, grouped by intent rather than one flat menu: Content (Documents, Content dedup) for browsing and de-duplicating what's indexed; Crawling (Schedule, Jobs); Relevance (Search, PageRank, Embeddings) for ranking tuning; Chat (Settings, MCP servers, Agents); and System (Settings, Database, Users). Overview sits above all groups as a single top-level link. The current page is visually marked in the rail, so you always know where you are.
+Every admin page shares the same sidebar, grouped by intent rather than one flat menu: Content (Documents, Content dedup) for browsing and de-duplicating what's indexed; Index (Crawler, Jobs); Relevance (Search, PageRank, Embeddings) for ranking tuning; Chat (Settings, MCP servers, Agents); and System (Settings, Database, Users). Overview sits above all groups as a single top-level link. The current page is visually marked in the rail, so you always know where you are.
 
 ## Signing out
 

@@ -30,11 +30,18 @@
   const chatTokenUsageDonut = document.getElementById('chat-token-usage-donut');
   const adminLink = document.getElementById('admin-link');
   const accountLink = document.getElementById('account-link');
+  const filePreviewDialog = document.getElementById('file-preview-dialog');
+  const filePreviewTitle = document.getElementById('file-preview-title');
+  const filePreviewBody = document.getElementById('file-preview-body');
+  const filePreviewClose = document.getElementById('file-preview-close');
 
   // tabs holds every open conversation this session -- forking deep-copies history into an
   // independent tab. Session-only in-memory (Export/Import is the escape hatch to keep one).
   // activeTabId is the rendered tab; nextTabId is a plain incrementing counter, not a timestamp,
   // so ids stay small and deterministic in tests.
+  // signedIn is set once loadSession() confirms an admin/user role -- gates auto-pinning a new
+  // chat tab (see newChatTab/loadPersistedChats), since pinning requires a real account.
+  let signedIn = false;
   let nextTabId = 1;
   function makeTab(overrides) {
     const id = nextTabId++;
@@ -339,9 +346,9 @@
   }
 
   // LATEX_MACROS translates the handful of LaTeX macros a model actually reaches for when
-  // answering an everyday arithmetic/algebra question (see normalizeMathDelimiters) into their
-  // plain-text/Unicode equivalent. Not an attempt at real math typesetting -- this chat has no
-  // LaTeX renderer -- just enough to keep a formula readable instead of showing raw backslashes.
+  // answering an everyday arithmetic/algebra question into their plain-text/Unicode equivalent --
+  // used both for a bare symbol macro (\times) and as the fallback when parseLatex/renderLatex
+  // below can't make sense of a math span at all.
   const LATEX_MACROS = {
     times: '×', cdot: '·', div: '÷', pm: '±', mp: '∓',
     leq: '≤', le: '≤', geq: '≥', ge: '≥', neq: '≠', ne: '≠',
@@ -350,18 +357,130 @@
     lambda: 'λ', mu: 'μ', pi: 'π', sigma: 'σ', phi: 'φ', omega: 'ω',
   };
 
-  // normalizeMathDelimiters converts LaTeX-style math a model emits (e.g. answering "what is
-  // 12.123 x 12.123?" as "\[ 12.123 \times 12.123 = 146.967129 \]") into plain readable text.
-  // Left alone, \( \) \[ \] and macros like \times just show up as literal backslashes/brackets
-  // in the message bubble, since this chat has no LaTeX typesetting. Strips the delimiters,
-  // simplifies \sqrt{}/\frac{}{}, translates LATEX_MACROS, and -- so no macro outside that table
-  // leaves a stray backslash behind -- drops the backslash off any other \word it finds too.
+  // parseLatex is a small recursive-descent parser for the subset of LaTeX a chat model
+  // realistically reaches for in an everyday arithmetic/algebra answer: symbol macros (\times),
+  // \sqrt{...}, \frac{...}{...}, and ^/_ (braced or single-character). No dependency on a real
+  // LaTeX engine (KaTeX/MathJax) -- this is a small hand-written parser producing real nested
+  // markup (a radical with an overline, a stacked fraction, real <sup>/<sub>), not a flat
+  // Unicode approximation. pos is {i: 0}, threaded through recursive calls so nested groups
+  // share one cursor. Stops at an unescaped "}" (the caller consumes it) or the end of the
+  // string. Malformed input (an unclosed brace, a \sqrt/\frac with no following "{") throws --
+  // renderMathSpan below catches that and falls back to the plain-text rendering for that one
+  // span, never the whole message.
+  function parseLatex(s, pos) {
+    const nodes = [];
+    let text = '';
+    const flush = () => { if (text) { nodes.push({ type: 'text', value: text }); text = ''; } };
+    while (pos.i < s.length && s[pos.i] !== '}') {
+      const c = s[pos.i];
+      if (c === '{') {
+        flush();
+        pos.i++;
+        const children = parseLatex(s, pos);
+        if (s[pos.i] !== '}') throw new Error('unclosed {');
+        pos.i++;
+        nodes.push({ type: 'group', children });
+      } else if (c === '\\') {
+        flush();
+        pos.i++;
+        const m = /^[a-zA-Z]+/.exec(s.slice(pos.i));
+        if (!m) {
+          text += c; // a lone backslash with no following letters -- keep it literal
+        } else {
+          pos.i += m[0].length;
+          if (m[0] === 'sqrt') {
+            nodes.push({ type: 'sqrt', arg: parseArg(s, pos) });
+          } else if (m[0] === 'frac') {
+            const num = parseArg(s, pos);
+            const den = parseArg(s, pos);
+            nodes.push({ type: 'frac', num, den });
+          } else {
+            nodes.push({ type: 'symbol', name: m[0] });
+          }
+        }
+      } else if (c === '^' || c === '_') {
+        flush();
+        pos.i++;
+        nodes.push({ type: c === '^' ? 'sup' : 'sub', arg: parseArg(s, pos) });
+      } else {
+        text += c;
+        pos.i++;
+      }
+    }
+    flush();
+    return nodes;
+  }
+
+  // parseArg consumes one macro argument: a braced group ("{...}", possibly empty) or, lacking
+  // one, a single literal character (covers "x^2"/"a_i" without braces). Throws on end-of-input
+  // with no argument at all (e.g. a trailing "\sqrt").
+  function parseArg(s, pos) {
+    if (s[pos.i] === '{') {
+      pos.i++;
+      const children = parseLatex(s, pos);
+      if (s[pos.i] !== '}') throw new Error('unclosed {');
+      pos.i++;
+      return children;
+    }
+    if (pos.i >= s.length) throw new Error('expected an argument');
+    const ch = s[pos.i];
+    pos.i++;
+    return [{ type: 'text', value: ch }];
+  }
+
+  // renderLatexNodes turns parseLatex's AST back into an HTML string -- text nodes are emitted
+  // as-is (the caller already ran escapeHTML over the whole message before any of this), macros
+  // not in LATEX_MACROS fall back to their bare name (same "never leave a stray backslash"
+  // reasoning the old flat renderer had).
+  function renderLatexNodes(nodes) {
+    return nodes.map(renderLatexNode).join('');
+  }
+  function renderLatexNode(node) {
+    switch (node.type) {
+      case 'text': return node.value;
+      case 'group': return renderLatexNodes(node.children);
+      case 'symbol': return node.name in LATEX_MACROS ? LATEX_MACROS[node.name] : node.name;
+      case 'sqrt': return '<span class="ksim-sqrt"><span class="ksim-sqrt-sign">√</span>' +
+        '<span class="ksim-sqrt-body">' + renderLatexNodes(node.arg) + '</span></span>';
+      case 'frac': return '<span class="ksim-frac"><span class="ksim-frac-num">' + renderLatexNodes(node.num) +
+        '</span><span class="ksim-frac-den">' + renderLatexNodes(node.den) + '</span></span>';
+      case 'sup': return '<sup>' + renderLatexNodes(node.arg) + '</sup>';
+      case 'sub': return '<sub>' + renderLatexNodes(node.arg) + '</sub>';
+      default: return '';
+    }
+  }
+
+  // flattenLatexMacrosOnly is renderMathSpan's fallback for a span parseLatex/renderLatexNodes
+  // couldn't make sense of -- the old flat approach, good enough to at least not show raw
+  // backslashes even when the structured render fails.
+  function flattenLatexMacrosOnly(s) {
+    return s.replace(/\\([a-zA-Z]+)/g, (_, name) => (name in LATEX_MACROS ? LATEX_MACROS[name] : name));
+  }
+
+  // renderMathSpan renders one math expression's own source (already stripped of its \( \)/\[ \]
+  // delimiters) into an HTML string, wrapped in wrapperClass. Falls back to
+  // flattenLatexMacrosOnly, never throws -- a model's occasional malformed LaTeX degrades to
+  // readable flattened text, not a broken message.
+  function renderMathSpan(src, wrapperClass) {
+    try {
+      const pos = { i: 0 };
+      const nodes = parseLatex(src, pos);
+      if (pos.i !== src.length) throw new Error('trailing unparsed input');
+      return '<span class="' + wrapperClass + '">' + renderLatexNodes(nodes) + '</span>';
+    } catch (err) {
+      return '<span class="' + wrapperClass + '">' + flattenLatexMacrosOnly(src) + '</span>';
+    }
+  }
+
+  // normalizeMathDelimiters finds \( ... \)/\[ ... \] spans in a model's answer (e.g. "what is
+  // 12.123 x 12.123?" answered as "\[ 12.123 \times 12.123 = 146.967129 \]") and renders each
+  // one via renderMathSpan -- \( \) don't nest, so matching non-greedily to the next closer is
+  // correct. Text outside any math span is left completely untouched (unlike the old
+  // whole-message flatten, a bare \alpha typed outside \(\)/\[\] is more likely something else
+  // entirely -- a path, a regex -- than intentional math, so it's not touched here).
   function normalizeMathDelimiters(text) {
-    text = text.replace(/\\\[|\\\]|\\\(|\\\)/g, '');
-    text = text.replace(/\\sqrt\{([^{}]*)\}/g, '√($1)');
-    text = text.replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, '($1)/($2)');
-    text = text.replace(/\\([a-zA-Z]+)/g, (_, name) => (name in LATEX_MACROS ? LATEX_MACROS[name] : name));
-    text = text.replace(/([_^])\{([^{}]*)\}/g, '$1$2');
+    text = text.replace(/\\\(([\s\S]*?)\\\)/g, (_, inner) => renderMathSpan(inner, 'ksim-inline'));
+    text = text.replace(/\\\[([\s\S]*?)\\\]/g, (_, inner) => renderMathSpan(inner, 'ksim-display'));
     return text;
   }
 
@@ -625,10 +744,12 @@
     }
 
     chatMessages.appendChild(msg);
-    // Scroll so the new turn's beginning lands at the top of #chat-messages (a fixed-height
-    // scrollable box) -- scrolling to msg's top, not chatMessages.scrollHeight (which lands on
-    // the end), means a long answer is always read from its first line.
-    chatMessages.scrollTop = msg.offsetTop;
+    // Scroll the page so the new turn's beginning lands at the top of the viewport -- scrolling
+    // to msg's own top ({block: 'start'}), not its bottom/scrollIntoView()'s default (nearest,
+    // which can land on the end), means a long answer is always read from its first line.
+    // #chat-messages has no scroll/max-height of its own (see its CSS comment) -- the whole page
+    // is the only scrolling container, so this is the browser's own default scroll target.
+    msg.scrollIntoView({ block: 'start' });
     return msg;
   }
 
@@ -711,6 +832,8 @@
     refreshTabFileState();
   }
 
+  // newChatTab starts a fresh tab and, for a signed-in account, pins it immediately -- chats are
+  // pinned by default now; unpinning is still a manual, explicit action via the pin button.
   function newChatTab() {
     const tab = makeTab();
     tabs.push(tab);
@@ -718,6 +841,7 @@
     renderTabs();
     renderActiveTab();
     refreshTabFileState();
+    if (signedIn) pinTab(tab);
     return tab;
   }
 
@@ -944,9 +1068,76 @@
     }
   });
 
+  // viewIconSVG is the same eye glyph as admin.js's ICON_SVGS.view, duplicated locally rather
+  // than loading admin.js on this public page for one icon -- same reasoning as buildDonutSVG
+  // above. stroke="currentColor" keeps it matching the surrounding button's color/hover/focus.
+  function viewIconSVG() {
+    return '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+  }
+
+  // isPreviewableImage/isPreviewableText decide how viewChatFile renders a file's content --
+  // anything else (a PDF, a zip, ...) falls back to a plain "no preview" message plus its
+  // existing download link, rather than guessing at how to display it.
+  function isPreviewableImage(contentType) {
+    return /^image\//.test(contentType || '');
+  }
+  function isPreviewableText(contentType) {
+    return /^text\//.test(contentType || '') || /^application\/(json|javascript|xml|x-yaml|yaml)\b/.test(contentType || '');
+  }
+
+  // previewObjectURL tracks the last image preview's blob: URL so it can be revoked before the
+  // next preview creates a new one (or the dialog is closed) -- otherwise each view leaks memory.
+  let previewObjectURL = null;
+  function revokePreviewObjectURL() {
+    if (previewObjectURL) {
+      URL.revokeObjectURL(previewObjectURL);
+      previewObjectURL = null;
+    }
+  }
+
+  // viewChatFile opens #file-preview-dialog (a native <dialog>, so Escape-to-close and backdrop
+  // focus-trapping come for free) and fills it with the file's own content: text is fetched and
+  // shown in a <pre>, an image is shown inline, anything else gets a plain fallback message.
+  async function viewChatFile(f) {
+    filePreviewTitle.textContent = f.filename;
+    clear(filePreviewBody);
+    filePreviewBody.textContent = 'Loading…';
+    filePreviewDialog.showModal();
+    try {
+      const resp = await fetch('/account/api/files/' + encodeURIComponent(f.id));
+      if (!resp.ok) throw new Error(await resp.text() || resp.statusText);
+      clear(filePreviewBody);
+      if (isPreviewableImage(f.content_type)) {
+        revokePreviewObjectURL();
+        const blob = await resp.blob();
+        previewObjectURL = URL.createObjectURL(blob);
+        const img = document.createElement('img');
+        img.className = 'file-preview-image';
+        img.src = previewObjectURL;
+        img.alt = f.filename;
+        filePreviewBody.appendChild(img);
+      } else if (isPreviewableText(f.content_type)) {
+        const pre = document.createElement('pre');
+        pre.textContent = await resp.text();
+        filePreviewBody.appendChild(pre);
+      } else {
+        const p = document.createElement('p');
+        p.textContent = 'No preview available for this file type (' + (f.content_type || 'unknown') + '). Use the filename link to download it instead.';
+        filePreviewBody.appendChild(p);
+      }
+    } catch (err) {
+      clear(filePreviewBody);
+      filePreviewBody.textContent = 'Could not load file: ' + err.message;
+    }
+  }
+
+  filePreviewClose.addEventListener('click', () => filePreviewDialog.close());
+  filePreviewDialog.addEventListener('close', revokePreviewObjectURL);
+
   // renderChatFileBox builds one box for #chat-files -- a real download link (works like any
-  // link: open in new tab, copy address) plus a "×" that deletes outright, no confirmation -- a
-  // quick, low-friction remove, unlike the Your files page's more deliberate delete.
+  // link: open in new tab, copy address), a "view" icon that opens the content preview dialog,
+  // and a "×" that deletes outright, no confirmation -- a quick, low-friction remove, unlike the
+  // Your files page's more deliberate delete.
   function renderChatFileBox(f) {
     const box = document.createElement('div');
     box.className = 'chat-file-box';
@@ -956,6 +1147,14 @@
     link.textContent = f.filename;
     link.title = 'Download ' + f.filename;
     box.appendChild(link);
+    const viewBtn = document.createElement('button');
+    viewBtn.type = 'button';
+    viewBtn.className = 'chat-file-view';
+    viewBtn.innerHTML = viewIconSVG();
+    viewBtn.title = 'View ' + f.filename;
+    viewBtn.setAttribute('aria-label', 'View ' + f.filename);
+    viewBtn.addEventListener('click', () => viewChatFile(f));
+    box.appendChild(viewBtn);
     const closeBtn = document.createElement('button');
     closeBtn.type = 'button';
     closeBtn.className = 'chat-file-close';
@@ -1014,15 +1213,19 @@
 
   // loadPersistedChats reloads every pinned chat on page load, replacing the default empty tab
   // (most-recently-updated first, per ListChats) -- only for a confirmed role=user session.
-  // Leaves the default tab alone if there are no pinned chats. History round-trips only
-  // {role, content}; context_trimmed/tool_results are UI-only and never stored, so a reloaded
-  // turn's tool-result folds simply don't reappear.
+  // Chats are pinned by default: with no existing pinned chats yet, the default tab is pinned in
+  // place instead of staying session-only. History round-trips only {role, content};
+  // context_trimmed/tool_results are UI-only and never stored, so a reloaded turn's tool-result
+  // folds simply don't reappear.
   async function loadPersistedChats() {
     try {
       const resp = await fetch('/account/api/chats');
       if (!resp.ok) return;
       const chats = await resp.json();
-      if (!Array.isArray(chats) || chats.length === 0) return;
+      if (!Array.isArray(chats) || chats.length === 0) {
+        await pinTab(tabs[0]);
+        return;
+      }
       tabs.length = 0;
       for (const c of chats) {
         tabs.push(makeTab({
@@ -1205,6 +1408,7 @@
       }
       if (data.role === 'admin' || data.role === 'user') {
         accountLink.hidden = false;
+        signedIn = true;
         loadPersistedChats();
       }
     } catch (err) {
@@ -1236,6 +1440,7 @@
       serializeTab, deserializeTab, exportActiveTab, importTabFromJSON,
       toWireHistory, sendChatMessage, setMode,
       escapeHTML, renderInline, renderMarkdown, normalizeMathDelimiters,
+      parseLatex, renderLatexNodes, renderMathSpan, flattenLatexMacrosOnly,
       buildDonutSVG, buildDonutLegend, tokenUsageSegments, renderTokenUsage,
       loadSession, renderAgentSelectOptions, loadAgentOptions,
       uploadAttachedFile, renderChatFiles, loadChatFiles, deleteChatFile,

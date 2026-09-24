@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -26,9 +28,9 @@ func requireDockerTests(t *testing.T) {
 // over an in-memory transport, mirroring cmd/mcp-web/cmd/mcp-datetime's
 // own test helper -- exercises each tool exactly as a real chat turn
 // would, through CallTool, not by calling runInSandbox directly.
-func connectedTestServer(t *testing.T, runner *dockersandbox.Runner, network bool) *mcp.ClientSession {
+func connectedTestServer(t *testing.T, runner *dockersandbox.Runner, network bool, files *filesClient) *mcp.ClientSession {
 	t.Helper()
-	server := newServer(runner, network)
+	server := newServer(runner, network, files)
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1"}, nil)
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 
@@ -61,7 +63,7 @@ func textContent(t *testing.T, result *mcp.CallToolResult) string {
 
 func TestRunPythonTool_Success(t *testing.T) {
 	requireDockerTests(t)
-	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false)
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, nil)
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "run_python",
 		Arguments: map[string]any{"code": "print('hi')"},
@@ -83,7 +85,7 @@ func TestRunPythonTool_Success(t *testing.T) {
 
 func TestRunGoTool_Success(t *testing.T) {
 	requireDockerTests(t)
-	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false)
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, nil)
 	code := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"hi\")\n}\n"
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "run_go",
@@ -106,7 +108,7 @@ func TestRunGoTool_Success(t *testing.T) {
 
 func TestRunPythonTool_NonZeroExitIsNotAToolError(t *testing.T) {
 	requireDockerTests(t)
-	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false)
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, nil)
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "run_python",
 		Arguments: map[string]any{"code": "import sys\nsys.exit(3)\n"},
@@ -129,7 +131,7 @@ func TestRunPythonTool_NonZeroExitIsNotAToolError(t *testing.T) {
 func TestRunPythonTool_InfrastructureFailureIsToolError(t *testing.T) {
 	requireDockerTests(t)
 	t.Setenv("PATH", t.TempDir())
-	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false)
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, nil)
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "run_python",
 		Arguments: map[string]any{"code": "print(1)"},
@@ -144,7 +146,7 @@ func TestRunPythonTool_InfrastructureFailureIsToolError(t *testing.T) {
 
 func TestRunPythonTool_NetworkBlockedByDefault(t *testing.T) {
 	requireDockerTests(t)
-	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false)
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, nil)
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "run_python",
 		Arguments: map[string]any{"code": "import urllib.request\ntry:\n" +
@@ -167,7 +169,7 @@ func TestRunPythonTool_NetworkBlockedByDefault(t *testing.T) {
 
 func TestRunPythonTool_NetworkAllowedWhenServerConfiguredWithIt(t *testing.T) {
 	requireDockerTests(t)
-	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), true)
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), true, nil)
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "run_python",
 		Arguments: map[string]any{"code": "import urllib.request\n" +
@@ -193,7 +195,7 @@ func TestRunPythonTool_NetworkAllowedWhenServerConfiguredWithIt(t *testing.T) {
 func TestListTools_PackagesParamOnlyPresentWhenNetworkEnabled(t *testing.T) {
 	requireDockerTests(t)
 
-	withoutNetwork := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false)
+	withoutNetwork := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, nil)
 	listWithout, err := withoutNetwork.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("listing tools (no network): %v", err)
@@ -209,7 +211,7 @@ func TestListTools_PackagesParamOnlyPresentWhenNetworkEnabled(t *testing.T) {
 		}
 	}
 
-	withNetwork := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), true)
+	withNetwork := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), true, nil)
 	listWith, err := withNetwork.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("listing tools (with network): %v", err)
@@ -231,7 +233,7 @@ func TestListTools_PackagesParamOnlyPresentWhenNetworkEnabled(t *testing.T) {
 // Runner.Run directly).
 func TestRunPythonTool_PackagesInstalledEndToEnd(t *testing.T) {
 	requireDockerTests(t)
-	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{Timeout: 30 * time.Second}), true)
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{Timeout: 30 * time.Second}), true, nil)
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "run_python",
 		Arguments: map[string]any{
@@ -253,7 +255,7 @@ func TestRunPythonTool_PackagesInstalledEndToEnd(t *testing.T) {
 
 func TestRunPythonTool_TimeoutReported(t *testing.T) {
 	requireDockerTests(t)
-	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{Timeout: 2 * time.Second}), false)
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{Timeout: 2 * time.Second}), false, nil)
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "run_python",
 		Arguments: map[string]any{"code": "import time\ntime.sleep(30)\n"},
@@ -295,5 +297,160 @@ func TestSplitNonEmpty(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// fakeFilesServer simulates search-server's GET /account/api/files/{id} --
+// enough to exercise filesClient.fetch/resolveFiles without a real
+// search-server: checks the bearer token, sets Content-Disposition (the
+// real handler's own filename-carrying mechanism), and serves fixed bytes.
+func fakeFilesServer(t *testing.T, wantToken, filename string, data []byte) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+wantToken {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestFilesClient_Fetch_ReturnsFilenameFromContentDispositionAndData(t *testing.T) {
+	srv := fakeFilesServer(t, "tok123", "notes.txt", []byte("hello"))
+	fc := &filesClient{baseURL: srv.URL, token: "tok123", http: srv.Client()}
+
+	name, data, err := fc.fetch(context.Background(), "f1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if name != "notes.txt" || string(data) != "hello" {
+		t.Errorf("got (%q, %q), want (\"notes.txt\", \"hello\")", name, data)
+	}
+}
+
+func TestFilesClient_Fetch_NonOKStatusIsAnError(t *testing.T) {
+	srv := fakeFilesServer(t, "tok123", "notes.txt", []byte("hello"))
+	fc := &filesClient{baseURL: srv.URL, token: "wrong-token", http: srv.Client()}
+
+	if _, _, err := fc.fetch(context.Background(), "f1"); err == nil {
+		t.Fatal("expected an error for a 401 response")
+	}
+}
+
+func TestFilesClient_Fetch_FallsBackToFileIDWhenContentDispositionIsMissing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("hello"))
+	}))
+	t.Cleanup(srv.Close)
+	fc := &filesClient{baseURL: srv.URL, token: "tok123", http: srv.Client()}
+
+	name, data, err := fc.fetch(context.Background(), "f1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if name != "f1" || string(data) != "hello" {
+		t.Errorf("expected the fileID itself as a filename fallback, got (%q, %q)", name, data)
+	}
+}
+
+func TestFilesClient_Fetch_FileTooLargeIsAnError(t *testing.T) {
+	srv := fakeFilesServer(t, "tok123", "big.bin", make([]byte, maxSandboxInputFileBytes+1))
+	fc := &filesClient{baseURL: srv.URL, token: "tok123", http: srv.Client()}
+
+	if _, _, err := fc.fetch(context.Background(), "f1"); err == nil {
+		t.Fatal("expected an error for a file over maxSandboxInputFileBytes")
+	}
+}
+
+func TestResolveFiles_EmptyFileIDsIsANoOp(t *testing.T) {
+	got, err := resolveFiles(context.Background(), nil, nil)
+	if err != nil || got != nil {
+		t.Fatalf("expected (nil, nil) for no file_ids, got (%v, %v)", got, err)
+	}
+}
+
+func TestResolveFiles_NoTokenReturnsClearError(t *testing.T) {
+	_, err := resolveFiles(context.Background(), &filesClient{}, []string{"f1"})
+	if err == nil || err != errNoToken {
+		t.Fatalf("expected errNoToken, got %v", err)
+	}
+}
+
+func TestResolveFiles_NilFilesClientReturnsClearError(t *testing.T) {
+	_, err := resolveFiles(context.Background(), nil, []string{"f1"})
+	if err == nil || err != errNoToken {
+		t.Fatalf("expected errNoToken, got %v", err)
+	}
+}
+
+func TestResolveFiles_WrapsAFetchFailureWithTheOffendingFileID(t *testing.T) {
+	srv := fakeFilesServer(t, "tok123", "notes.txt", []byte("hello"))
+	fc := &filesClient{baseURL: srv.URL, token: "wrong-token", http: srv.Client()}
+
+	_, err := resolveFiles(context.Background(), fc, []string{"f1"})
+	if err == nil || !strings.Contains(err.Error(), `"f1"`) {
+		t.Fatalf("expected an error naming the offending file_id \"f1\", got %v", err)
+	}
+}
+
+func TestResolveFiles_FetchesEachRequestedFileKeyedByFilename(t *testing.T) {
+	srv := fakeFilesServer(t, "tok123", "input.csv", []byte("a,b\n1,2\n"))
+	fc := &filesClient{baseURL: srv.URL, token: "tok123", http: srv.Client()}
+
+	got, err := resolveFiles(context.Background(), fc, []string{"f1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(got["input.csv"]) != "a,b\n1,2\n" {
+		t.Errorf("unexpected resolved files: %v", got)
+	}
+}
+
+func TestRunPythonTool_FileIDsMakesAnUploadedFileReadable(t *testing.T) {
+	requireDockerTests(t)
+	srv := fakeFilesServer(t, "tok123", "input.csv", []byte("a,b\n1,2\n"))
+	fc := &filesClient{baseURL: srv.URL, token: "tok123", http: srv.Client()}
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, fc)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "run_python",
+		Arguments: map[string]any{"code": "print(open('input.csv').read())", "file_ids": []string{"f1"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success, got error result: %s", textContent(t, result))
+	}
+	var got runResult
+	if err := json.Unmarshal([]byte(textContent(t, result)), &got); err != nil {
+		t.Fatalf("decoding tool result: %v", err)
+	}
+	if got.ExitCode != 0 || strings.TrimSpace(got.Stdout) != "a,b\n1,2" {
+		t.Errorf("unexpected result: %+v", got)
+	}
+}
+
+func TestRunPythonTool_FileIDsWithoutASignedInUserIsAToolError(t *testing.T) {
+	// No docker needed: resolveFiles's no-token check fails before runInSandbox ever calls
+	// runner.Run, so this never actually touches Docker.
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, &filesClient{})
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "run_python",
+		Arguments: map[string]any{"code": "print('unused')", "file_ids": []string{"f1"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected a tool error for file_ids with no signed-in user")
+	}
+	if !strings.Contains(textContent(t, result), "no signed-in user") {
+		t.Errorf("expected a clear no-signed-in-user message, got %q", textContent(t, result))
 	}
 }

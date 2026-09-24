@@ -898,6 +898,78 @@ button:focus-visible {
   outline-offset: 1px;
 }
 
+/* .chat-file-view: same icon-button anatomy as .chat-file-close, an inline SVG instead of a
+   glyph since no monochrome Unicode character depicts "an eye" -- same reasoning as
+   .header-icon-button's Account/Sign out icons. */
+.chat-file-view {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-muted);
+  background: none;
+  border: none;
+  border-radius: 3px;
+  padding: 0.2rem;
+  cursor: pointer;
+}
+
+.chat-file-view svg { width: 1rem; height: 1rem; stroke: currentColor; }
+
+.chat-file-view:hover { color: var(--accent); background: var(--accent-soft); }
+
+.chat-file-view:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* .file-preview-dialog: a native <dialog> (showModal()/close()) for viewing one chat file's
+   content -- free backdrop, focus trapping, and Escape-to-close, so no hand-rolled overlay/focus
+   management is needed. ::backdrop dims the page behind it; the dialog itself follows the same
+   paper/ink/rule tokens as everything else. */
+.file-preview-dialog {
+  width: min(40rem, 90vw);
+  max-height: 80vh;
+  padding: 0;
+  border: 1px solid var(--rule-strong);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.file-preview-dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
+
+.file-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.7rem 0.9rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.file-preview-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-preview-body {
+  padding: 0.9rem;
+  overflow: auto;
+  max-height: calc(80vh - 3rem);
+}
+
+.file-preview-body pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.85rem;
+}
+
+.file-preview-image { max-width: 100%; display: block; }
+
 /* Chat panel -- #chat-tabs/#chat-messages/#chat-status/#chat-form/
    #chat-files stay in that order. #chat-files trails the input rather
    than sitting above it (like a normal chat compose box: new answers
@@ -915,11 +987,53 @@ button:focus-visible {
    .field/button already carry their own styling). Messages are told
    apart by alignment and a quiet tint rather than rounded speech-bubble
    shapes, the same restrained language .result already uses for its own
-   rows. */
-#chat-messages {
-  max-height: 50vh;
-  overflow-y: auto;
+   rows. #chat-messages deliberately has no max-height/overflow of its own
+   -- it used to be its own fixed-height scrolling box, which meant a tall
+   conversation showed two nested scrollbars (the box's and the page's).
+   It now just grows with its content, so the page itself is the only
+   thing that scrolls; see renderChatMessage's scrollIntoView call for the
+   "land on the new turn's own top line" behavior that used to rely on
+   this box's own scrollTop. */
+
+/* .ksim-* ("KaTeX-simulating"): a small hand-rolled math renderer (see index.js's parseLatex/
+   renderLatexNodes), not a real LaTeX engine -- no external dependency, so no font/color to load
+   from anywhere, just nested <span>s styled to look like a radical/fraction. Uses --ink/--rule
+   like everything else, so it's correct in light and dark mode with no extra work.
+   .ksim-display (a \[ \] block) gets a bit more room than .ksim-inline (a \( \) span sitting in
+   running prose) -- 1.05em vs. the surrounding text's own size. */
+.ksim-inline, .ksim-display {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
 }
+
+.ksim-display {
+  display: inline-block;
+  font-size: 1.05em;
+}
+
+.ksim-sqrt {
+  display: inline-flex;
+  align-items: flex-start;
+}
+
+.ksim-sqrt-sign { padding-right: 0.05em; }
+
+.ksim-sqrt-body { border-top: 1.5px solid var(--ink); padding: 0 0.15em; }
+
+.ksim-frac {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  vertical-align: middle;
+  margin: 0 0.15em;
+  text-align: center;
+}
+
+.ksim-frac-num, .ksim-frac-den {
+  padding: 0 0.2em;
+  line-height: 1.3;
+}
+
+.ksim-frac-num { border-bottom: 1.5px solid var(--ink); }
 
 .chat-msg {
   padding: 0.85rem 0;

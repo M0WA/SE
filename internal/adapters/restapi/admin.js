@@ -258,9 +258,9 @@ const ADMIN_NAV_GROUPS = [
     ],
   },
   {
-    label: 'Crawling',
+    label: 'Index',
     items: [
-      { label: 'Schedule', href: '/admin/crawl' },
+      { label: 'Crawler', href: '/admin/crawl' },
       { label: 'Jobs', href: '/admin/jobs' },
     ],
   },

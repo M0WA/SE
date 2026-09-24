@@ -301,6 +301,36 @@ test('newChatTab adds and switches to a fresh, empty tab; the tab strip gains cl
   assert.equal(document.querySelectorAll('.chat-tab-close').length, 2);
 });
 
+test('newChatTab does not pin the new tab for a signed-out (anonymous) visitor', async () => {
+  let pinPosted = false;
+  global.fetch = async (url, opts) => {
+    if (url === '/account/api/chats' && opts?.method === 'POST') pinPosted = true;
+    return { ok: true, json: async () => ({ id: 'x' }) };
+  };
+  const { newChatTab } = loadFixture();
+  const tab = newChatTab();
+  assert.equal(tab.persisted, false);
+  assert.equal(pinPosted, false);
+});
+
+test('newChatTab pins the new tab immediately for a signed-in account', async () => {
+  global.fetch = async (url, opts) => {
+    if (url === '/session') return { ok: true, json: async () => ({ role: 'user' }) };
+    if (url === '/account/api/chats' && opts?.method === 'POST') {
+      return { ok: true, json: async () => ({ id: 'pinned-new-tab' }) };
+    }
+    if (url === '/account/api/chats') return { ok: true, json: async () => [] };
+    return { ok: true, json: async () => [] };
+  };
+  const { loadSession, newChatTab } = loadFixture();
+  await loadSession(); // establishes signedIn = true and auto-pins the initial default tab
+
+  const tab = newChatTab();
+  await new Promise((resolve) => setTimeout(resolve, 0)); // let newChatTab's fire-and-forget pinTab(tab) settle
+  assert.equal(tab.persisted, true);
+  assert.equal(tab.chatId, 'pinned-new-tab');
+});
+
 test('switchTab re-renders #chat-messages from the target tab\'s own stored history', async () => {
   global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'first answer' }) });
   const { sendChatMessage, newChatTab, switchTab, tabs } = loadFixture();
@@ -737,8 +767,11 @@ test('loadPersistedChats replaces the default tab with every pinned chat, most r
   assert.equal(activeTab().id, tabs[0].id);
 });
 
-test('loadPersistedChats leaves the default tab alone when the account has no pinned chats', async () => {
-  global.fetch = async (url) => {
+test('loadPersistedChats pins the default tab in place when the account has no pinned chats yet', async () => {
+  global.fetch = async (url, opts) => {
+    if (url === '/account/api/chats' && opts?.method === 'POST') {
+      return { ok: true, json: async () => ({ id: 'auto-pinned-id' }) };
+    }
     if (url === '/account/api/chats') return { ok: true, json: async () => [] };
     return { ok: true, json: async () => [] };
   };
@@ -746,7 +779,9 @@ test('loadPersistedChats leaves the default tab alone when the account has no pi
   const onlyId = tabs[0].id;
   await loadPersistedChats();
   assert.equal(tabs.length, 1);
-  assert.equal(tabs[0].id, onlyId);
+  assert.equal(tabs[0].id, onlyId, 'the same tab stays in place, now pinned, rather than being replaced');
+  assert.equal(tabs[0].persisted, true);
+  assert.equal(tabs[0].chatId, 'auto-pinned-id');
 });
 
 test('loadPersistedChats is silent and leaves the default tab alone on a non-ok or failed response', async () => {
@@ -933,25 +968,25 @@ test('clicking the tab-strip buttons wires new/fork/export/import to their own f
   }
 });
 
-test('renderChatMessage scrolls #chat-messages so the new turn\'s own beginning is visible', async () => {
+test('renderChatMessage scrolls the new turn\'s own beginning into view', async () => {
   global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'hi there' }) });
   const { sendChatMessage } = loadFixture();
   const chatMessages = document.getElementById('chat-messages');
-  // jsdom never computes real layout, so offsetTop is always 0 -- stub it to grow per message,
-  // so scrollTop moving to match the newest message's offsetTop (not scrollHeight, which lands
-  // on the end) proves the scroll starts from the first line, not the last.
-  Object.defineProperty(window.HTMLElement.prototype, 'offsetTop', {
-    get() { return Array.from(chatMessages.children).indexOf(this) * 100; },
-    configurable: true,
-  });
+  const calls = [];
+  window.HTMLElement.prototype.scrollIntoView = function (opts) {
+    calls.push({ index: Array.from(chatMessages.children).indexOf(this), opts });
+  };
 
   await sendChatMessage('hello');
-  // Two turns appended (user, then assistant) land at indices 0 and 1; the
-  // assistant turn, appended last, is what the scroll should land on.
-  assert.equal(chatMessages.scrollTop, 100, 'expected scroll to the assistant turn\'s own top');
+  // Each of the two turns appended (user, then assistant) scrolls in turn, landing at indices 0
+  // and 1; the assistant turn, appended and scrolled to last, is what should end up visible.
+  assert.equal(calls.length, 2);
+  assert.equal(calls[calls.length - 1].index, 1, 'expected to scroll to the assistant turn\'s own top');
+  assert.deepEqual(calls[calls.length - 1].opts, { block: 'start' });
 
   await sendChatMessage('another question');
-  assert.equal(chatMessages.scrollTop, 300, 'expected scroll again to the newest assistant turn\'s own top');
+  assert.equal(calls.length, 4);
+  assert.equal(calls[calls.length - 1].index, 3, 'expected to scroll again to the newest assistant turn\'s own top');
 });
 
 test('sendChatMessage on success appends both turns to history and renders the answer', async () => {
@@ -1159,6 +1194,7 @@ test('renderChatFiles builds a box with a download link and a close button, hidd
   const link = chatFiles.querySelector('.chat-file-box a');
   assert.equal(link.textContent, 'notes.txt');
   assert.equal(link.getAttribute('href'), '/account/api/files/f1');
+  assert.notEqual(chatFiles.querySelector('.chat-file-view'), null);
   assert.notEqual(chatFiles.querySelector('.chat-file-close'), null);
 
   renderChatFiles([]);
@@ -1200,6 +1236,81 @@ test('a failed file delete shows a status message and leaves the box in place', 
 
   assert.equal(document.getElementById('chat-status').textContent.includes('db down'), true);
   assert.notEqual(chatFiles.querySelector('.chat-file-box'), null);
+});
+
+test('clicking a file box\'s view icon opens the preview dialog and shows a text file\'s content', async () => {
+  const { renderChatFiles } = loadFixture();
+  renderChatFiles([baseChatFile()]);
+  const chatFiles = document.getElementById('chat-files');
+  const dialog = document.getElementById('file-preview-dialog');
+
+  global.fetch = async (url) => {
+    assert.equal(url, '/account/api/files/f1');
+    return { ok: true, text: async () => 'hello from the file' };
+  };
+  chatFiles.querySelector('.chat-file-view').dispatchEvent(new window.Event('click'));
+  assert.equal(dialog.hasAttribute('open'), true, 'dialog opens synchronously via showModal()');
+  assert.equal(document.getElementById('file-preview-title').textContent, 'notes.txt');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const pre = document.getElementById('file-preview-body').querySelector('pre');
+  assert.notEqual(pre, null);
+  assert.equal(pre.textContent, 'hello from the file');
+});
+
+test('the preview dialog shows an image file inline via an object URL, revoked on close', async () => {
+  const { renderChatFiles } = loadFixture();
+  renderChatFiles([baseChatFile({ id: 'f2', filename: 'photo.png', content_type: 'image/png' })]);
+  const chatFiles = document.getElementById('chat-files');
+
+  let created = 0;
+  let revoked = 0;
+  global.URL.createObjectURL = () => { created++; return 'blob:mock-url'; };
+  global.URL.revokeObjectURL = () => { revoked++; };
+  try {
+    global.fetch = async () => ({ ok: true, blob: async () => ({ type: 'image/png' }) });
+    chatFiles.querySelector('.chat-file-view').dispatchEvent(new window.Event('click'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const img = document.getElementById('file-preview-body').querySelector('img');
+    assert.notEqual(img, null);
+    assert.equal(img.getAttribute('src'), 'blob:mock-url');
+    assert.equal(created, 1);
+
+    document.getElementById('file-preview-close').dispatchEvent(new window.Event('click'));
+    assert.equal(revoked, 1);
+  } finally {
+    delete global.URL.createObjectURL;
+    delete global.URL.revokeObjectURL;
+  }
+});
+
+test('the preview dialog falls back to a plain message for a non-previewable file type', async () => {
+  const { renderChatFiles } = loadFixture();
+  renderChatFiles([baseChatFile({ id: 'f3', filename: 'archive.zip', content_type: 'application/zip' })]);
+  const chatFiles = document.getElementById('chat-files');
+
+  global.fetch = async () => ({ ok: true, text: async () => 'should not be used' });
+  chatFiles.querySelector('.chat-file-view').dispatchEvent(new window.Event('click'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const body = document.getElementById('file-preview-body');
+  assert.equal(body.querySelector('pre'), null);
+  assert.equal(body.querySelector('img'), null);
+  assert.equal(body.textContent.includes('No preview available'), true);
+  assert.equal(body.textContent.includes('application/zip'), true);
+});
+
+test('the preview dialog shows an error message when the file fetch fails', async () => {
+  const { renderChatFiles } = loadFixture();
+  renderChatFiles([baseChatFile()]);
+  const chatFiles = document.getElementById('chat-files');
+
+  global.fetch = async () => ({ ok: false, status: 500, text: async () => 'db down' });
+  chatFiles.querySelector('.chat-file-view').dispatchEvent(new window.Event('click'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(document.getElementById('file-preview-body').textContent.includes('db down'), true);
 });
 
 test('loadChatFiles populates #chat-files from GET /account/api/files scoped to the active tab\'s chat_id', async () => {
@@ -1693,24 +1804,81 @@ test('renderInline never interprets markdown syntax found inside a code span', (
   assert.equal(renderInline('`**not bold**`'), '<code>**not bold**</code>');
 });
 
-test('normalizeMathDelimiters strips LaTeX delimiters and translates common macros', () => {
-  const { normalizeMathDelimiters } = loadFixture();
-  assert.equal(normalizeMathDelimiters('\\( 12.123 \\times 12.123 \\)'), ' 12.123 × 12.123 ');
-  assert.equal(normalizeMathDelimiters('\\[ a \\leq b \\]'), ' a ≤ b ');
-  assert.equal(normalizeMathDelimiters('\\sqrt{2} + \\frac{1}{2}'), '√(2) + (1)/(2)');
-  assert.equal(normalizeMathDelimiters('x^{2} + a_{i}'), 'x^2 + a_i');
+test('parseLatex builds an AST for symbols, sqrt, frac, sup, and sub, arbitrarily nested', () => {
+  const { parseLatex } = loadFixture();
+  assert.deepEqual(parseLatex('a \\times b', { i: 0 }), [
+    { type: 'text', value: 'a ' },
+    { type: 'symbol', name: 'times' },
+    { type: 'text', value: ' b' },
+  ]);
+  assert.deepEqual(parseLatex('\\frac{\\sqrt{2}}{2}', { i: 0 }), [
+    {
+      type: 'frac',
+      num: [{ type: 'sqrt', arg: [{ type: 'text', value: '2' }] }],
+      den: [{ type: 'text', value: '2' }],
+    },
+  ]);
+  assert.deepEqual(parseLatex('x^2 + a_{i}', { i: 0 }), [
+    { type: 'text', value: 'x' },
+    { type: 'sup', arg: [{ type: 'text', value: '2' }] },
+    { type: 'text', value: ' + a' },
+    { type: 'sub', arg: [{ type: 'text', value: 'i' }] },
+  ]);
 });
 
-test('normalizeMathDelimiters drops the backslash off an unknown macro rather than leaving it stray', () => {
+test('parseLatex throws on an unclosed brace or a macro missing its argument', () => {
+  const { parseLatex } = loadFixture();
+  assert.throws(() => parseLatex('\\frac{1}{2', { i: 0 }));
+  assert.throws(() => parseLatex('\\sqrt', { i: 0 }));
+});
+
+test('renderMathSpan renders a real nested radical/fraction/sup/sub, wrapped in the given class', () => {
+  const { renderMathSpan } = loadFixture();
+  assert.equal(
+    renderMathSpan('a \\times b', 'ksim-inline'),
+    '<span class="ksim-inline">a × b</span>',
+  );
+  assert.equal(
+    renderMathSpan('\\sqrt{2}', 'ksim-inline'),
+    '<span class="ksim-inline"><span class="ksim-sqrt"><span class="ksim-sqrt-sign">√</span><span class="ksim-sqrt-body">2</span></span></span>',
+  );
+  assert.equal(
+    renderMathSpan('\\frac{1}{2}', 'ksim-inline'),
+    '<span class="ksim-inline"><span class="ksim-frac"><span class="ksim-frac-num">1</span><span class="ksim-frac-den">2</span></span></span>',
+  );
+  assert.equal(renderMathSpan('x^{2}', 'ksim-inline'), '<span class="ksim-inline">x<sup>2</sup></span>');
+});
+
+test('renderMathSpan falls back to flattened text for a span it cannot parse, never throwing', () => {
+  const { renderMathSpan } = loadFixture();
+  // \frac{1}{2 is missing its closing brace -- parseLatex throws, and the fallback just drops
+  // \frac's own backslash (it isn't a known symbol macro) rather than reconstructing the fraction.
+  assert.equal(renderMathSpan('\\frac{1}{2', 'ksim-inline'), '<span class="ksim-inline">frac{1}{2</span>');
+});
+
+test('flattenLatexMacrosOnly drops the backslash off an unknown macro rather than leaving it stray', () => {
+  const { flattenLatexMacrosOnly } = loadFixture();
+  assert.equal(flattenLatexMacrosOnly('\\notarealmacro'), 'notarealmacro');
+});
+
+test('normalizeMathDelimiters renders \\( \\)/\\[ \\] spans, leaving surrounding text untouched', () => {
   const { normalizeMathDelimiters } = loadFixture();
-  assert.equal(normalizeMathDelimiters('\\notarealmacro'), 'notarealmacro');
+  assert.equal(
+    normalizeMathDelimiters('The answer is \\( 12.123 \\times 12.123 \\).'),
+    'The answer is <span class="ksim-inline"> 12.123 × 12.123 </span>.',
+  );
+  assert.equal(
+    normalizeMathDelimiters('\\[ a \\leq b \\]'),
+    '<span class="ksim-display"> a ≤ b </span>',
+  );
+  assert.equal(normalizeMathDelimiters('no math here, just a path like C:\\foo'), 'no math here, just a path like C:\\foo');
 });
 
 test('renderInline normalizes LaTeX math delimiters but never inside a code span', () => {
   const { renderInline } = loadFixture();
   assert.equal(
-    renderInline('The answer is \\( 12.123 \\times 12.123 = 146.967129 \\).'),
-    'The answer is  12.123 × 12.123 = 146.967129 .',
+    renderInline('The answer is \\( 12.123 \\times 12.123 \\).'),
+    'The answer is <span class="ksim-inline"> 12.123 × 12.123 </span>.',
   );
   assert.equal(renderInline('`\\times`'), '<code>\\times</code>');
 });
