@@ -253,6 +253,7 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 		FuzzyMatchEnabled:                true,
 		FuzzyMaxEditDistance:             2,
 		PageRankRecomputeIntervalMinutes: 60,
+		PageRankEnabled:                  true,
 		ANNSearchEnabled:                 true,
 		MaxRetainedCrawlJobs:             200,
 		MaxConcurrentCrawls:              3,
@@ -491,6 +492,20 @@ func TestOperationalSettings_SetContentDedupEnabledPassedThroughUnvalidated(t *t
 	s.Set(domain.OperationalSettingsValues{ContentDedupEnabled: false})
 	if v := s.Get(); v.ContentDedupEnabled {
 		t.Error("expected ContentDedupEnabled=false to be preserved, not defaulted back to true")
+	}
+}
+
+// TestOperationalSettings_SetPageRankEnabledPassedThroughUnvalidated mirrors
+// TestOperationalSettings_SetContentDedupEnabledPassedThroughUnvalidated --
+// PageRankEnabled is likewise simply passed through, no self-healing.
+func TestOperationalSettings_SetPageRankEnabledPassedThroughUnvalidated(t *testing.T) {
+	s := domain.NewOperationalSettings(domain.OperationalSettingsValues{PageRankEnabled: true})
+	if v := s.Get(); !v.PageRankEnabled {
+		t.Error("expected PageRankEnabled=true to be preserved")
+	}
+	s.Set(domain.OperationalSettingsValues{PageRankEnabled: false})
+	if v := s.Get(); v.PageRankEnabled {
+		t.Error("expected PageRankEnabled=false to be preserved, not defaulted back to true")
 	}
 }
 

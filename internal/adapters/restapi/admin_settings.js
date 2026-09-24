@@ -32,6 +32,7 @@
   const fuzzyEnabledEl = document.getElementById('fuzzy-enabled');
   const fuzzyMaxEditDistanceEl = document.getElementById('fuzzy-max-edit-distance');
   const pageRankWeightEl = document.getElementById('pagerank-weight');
+  const pageRankEnabledEl = document.getElementById('pagerank-enabled');
   const pageRankIntervalEl = document.getElementById('pagerank-interval');
   const sessionTTLEl = document.getElementById('session-ttl');
   const status = document.getElementById('settings-status');
@@ -182,6 +183,7 @@
     fuzzyEnabledEl.checked = s.operational.fuzzy_match_enabled;
     fuzzyMaxEditDistanceEl.value = s.operational.fuzzy_max_edit_distance;
     pageRankWeightEl.value = s.tuning.pagerank_weight;
+    pageRankEnabledEl.checked = s.operational.pagerank_enabled;
     pageRankIntervalEl.value = s.operational.pagerank_recompute_interval_minutes;
     sessionTTLEl.value = s.operational.session_ttl_hours;
     renderSettingsSummary(s);
@@ -237,6 +239,7 @@
         db_conn_max_lifetime_minutes: Number.parseInt(dbConnMaxLifetimeEl.value, 10),
         fuzzy_match_enabled: fuzzyEnabledEl.checked,
         fuzzy_max_edit_distance: Number.parseInt(fuzzyMaxEditDistanceEl.value, 10),
+        pagerank_enabled: pageRankEnabledEl.checked,
         pagerank_recompute_interval_minutes: Number.parseInt(pageRankIntervalEl.value, 10),
         session_ttl_hours: Number.parseInt(sessionTTLEl.value, 10),
       },

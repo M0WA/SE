@@ -54,6 +54,10 @@ Blends a document's title into its embedding vector as titleWeight × title-vect
 
 Controls how much link authority (PageRank) influences final ranking: 0 (default) means no effect; 1 means ranking is driven entirely by it, ignoring BM25/semantic score. Most deployments leave this at or near 0 unless well-linked pages should consistently outrank sparse ones regardless of keyword relevance — a blunt instrument, so raise it gradually and check real results after each change.
 
+## Link authority: Automatically recompute PageRank
+
+Turns off the background/post-crawl recompute below entirely when unchecked, leaving every document's PageRank at whatever it last was. Default on. Unlike Content dedup's own enabled toggle, this is never destructive to turn off and back on — recomputing only ever updates a score, never deletes a document — so there's no real downside to leaving it on unless you want full manual control over when a recompute happens. The [PageRank page](pagerank.md)'s own "Recompute now" button still works regardless of this setting.
+
 ## Link authority: Recompute interval
 
 How often, in minutes, the crawler recomputes PageRank from the current link graph in the background — default 60, with a 5-minute floor that can't be set lower, preventing an aggressive value from spinning in a tight loop. A recompute also always runs immediately after any crawl finishes, so this interval mainly matters for graph changes between crawls (e.g. deleting documents).

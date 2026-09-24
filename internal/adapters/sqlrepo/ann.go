@@ -8,9 +8,31 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"searchengine/internal/domain"
 )
+
+// annDDLTimeout bounds ensureVectorColumn's own transaction -- ALTER TABLE
+// ADD COLUMN is normally near-instant (metadata-only, no default value to
+// backfill), so this exists purely against lock contention, not real
+// migration work. A real incident: this exact ALTER TABLE competed for an
+// ACCESS EXCLUSIVE lock against an unrelated, long-running batch UPDATE (a
+// PageRank recompute) elsewhere in the same database and blocked for over
+// 15 minutes, taking the ENTIRE server down with it, since EnableANN runs
+// synchronously in main() before ListenAndServe. Every caller up the
+// chain already treats a failure here as non-fatal -- logged, falls back
+// to brute-force semantic search for this provider for the process's
+// lifetime (see enableANNForProvider) -- so timing out and moving on is
+// strictly better than hanging indefinitely; a later restart gets another
+// chance once whatever held the lock has cleared.
+//
+// Deliberately NOT applied to ensureVectorIndex's CREATE INDEX ... USING
+// hnsw below -- unlike this, that one does genuine, corpus-size-proportional
+// work (building the actual HNSW graph) on its first real run, so a short
+// timeout there would risk spuriously failing a legitimate slow build on
+// a large corpus rather than only catching lock contention.
+const annDDLTimeout = 15 * time.Second
 
 // annState tracks per-provider pgvector ANN availability and shard count,
 // set once by EnableANN and never retried -- a failed provider falls back
@@ -279,8 +301,12 @@ type queryRower interface {
 // vectorShardCount) sized to dims, under pg_advisory_xact_lock keyed on
 // provider+shard -- not the session-level lock, which can't guarantee
 // release through a pool -- since migrating a mismatched column isn't
-// idempotent under concurrent EnableANN calls.
+// idempotent under concurrent EnableANN calls. Bounded by annDDLTimeout --
+// see its own doc comment for why.
 func (r *Repository) ensureVectorColumn(ctx context.Context, provider string, shard, shards, dims int) error {
+	ctx, cancel := context.WithTimeout(ctx, annDDLTimeout)
+	defer cancel()
+
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("starting vector column migration transaction: %w", err)
