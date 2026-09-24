@@ -36,6 +36,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"searchengine/internal/adapters/netguard"
 	"searchengine/internal/bootstrap"
 )
 
@@ -50,6 +51,11 @@ const callTimeout = 20 * time.Second
 // callTimeout's loopback-call budget.
 const captionCallTimeout = 45 * time.Second
 
+// imageURLFetchTimeout bounds fetching an external image URL a user pasted
+// into chat -- a real network hop to an arbitrary third-party server,
+// unlike callTimeout's loopback-only budget.
+const imageURLFetchTimeout = 15 * time.Second
+
 // maxImageBytes caps how large an attached image this server will fetch
 // and forward -- every byte becomes a base64 char (1/3 inflation) plus
 // real network/inference cost on the receiving end; a much larger image
@@ -61,12 +67,14 @@ const maxImageBytes = 8 << 20
 const headerContentType = "Content-Type"
 
 type visionSimilarityArgs struct {
-	FileID string `json:"file_id" jsonschema:"the id of the attached image file to use, from list_files"`
-	Limit  int    `json:"limit,omitempty" jsonschema:"how many matches to return -- optional, defaults to 5"`
+	FileID   string `json:"file_id,omitempty" jsonschema:"the id of an attached image file to use, from list_files -- mutually exclusive with image_url"`
+	ImageURL string `json:"image_url,omitempty" jsonschema:"a public http(s) URL of an image to use instead of an attached file, e.g. one the user pasted in chat -- mutually exclusive with file_id"`
+	Limit    int    `json:"limit,omitempty" jsonschema:"how many matches to return -- optional, defaults to 5"`
 }
 
 type visionCaptionArgs struct {
-	FileID   string `json:"file_id" jsonschema:"the id of the attached image file to use, from list_files"`
+	FileID   string `json:"file_id,omitempty" jsonschema:"the id of an attached image file to use, from list_files -- mutually exclusive with image_url"`
+	ImageURL string `json:"image_url,omitempty" jsonschema:"a public http(s) URL of an image to use instead of an attached file, e.g. one the user pasted in chat -- mutually exclusive with file_id"`
 	Question string `json:"question,omitempty" jsonschema:"what to ask about the image -- optional, defaults to a general description"`
 }
 
@@ -79,26 +87,36 @@ func main() {
 	filesToken := bootstrap.GetEnv("SE_FILES_API_TOKEN", "")
 	files := &filesClient{baseURL: strings.TrimRight(*baseURL, "/"), token: filesToken, http: &http.Client{Timeout: callTimeout}}
 
+	// urlFetcher reaches arbitrary third-party servers a user's pasted URL
+	// names -- attacker-influenced input, unlike files' own trusted,
+	// already-uploaded account files -- so it goes through netguard's
+	// strict, crawler-grade AllowedIP policy (netguard.Transport()), never
+	// the permissive ConfiguredEndpoint* policy used for admin-configured
+	// backends.
+	urlFetcher := newURLImageFetcher(&http.Client{Timeout: imageURLFetchTimeout, Transport: netguard.Transport()})
+
 	// The VISION_* env vars below are set by application.ChatService's
 	// addVisionEnv, sourced from domain.ChatVisionSettings -- see its own
 	// doc comment. Each tool independently reports itself unconfigured
 	// (via its own Enabled flag) rather than failing the whole process,
 	// since an admin may enable only one of the two capabilities.
 	similarity := &similarityTool{
-		files:    files,
-		enabled:  bootstrap.GetEnv("VISION_SIMILARITY_ENABLED", "") == "true",
-		provider: bootstrap.GetEnv("VISION_SIMILARITY_PROVIDER_ID", ""),
-		baseURL:  strings.TrimRight(*baseURL, "/"),
-		apiKey:   bootstrap.GetEnv("CHAT_VISION_INTERNAL_API_KEY", ""),
-		http:     &http.Client{Timeout: callTimeout},
+		files:      files,
+		urlFetcher: urlFetcher,
+		enabled:    bootstrap.GetEnv("VISION_SIMILARITY_ENABLED", "") == "true",
+		provider:   bootstrap.GetEnv("VISION_SIMILARITY_PROVIDER_ID", ""),
+		baseURL:    strings.TrimRight(*baseURL, "/"),
+		apiKey:     bootstrap.GetEnv("CHAT_VISION_INTERNAL_API_KEY", ""),
+		http:       &http.Client{Timeout: callTimeout},
 	}
 	caption := &captionTool{
-		files:   files,
-		enabled: bootstrap.GetEnv("VISION_CAPTION_ENABLED", "") == "true",
-		baseURL: strings.TrimRight(bootstrap.GetEnv("VISION_CAPTION_BASE_URL", ""), "/"),
-		apiKey:  bootstrap.GetEnv("VISION_CAPTION_API_KEY", ""),
-		model:   bootstrap.GetEnv("VISION_CAPTION_MODEL", ""),
-		http:    &http.Client{Timeout: captionCallTimeout},
+		files:      files,
+		urlFetcher: urlFetcher,
+		enabled:    bootstrap.GetEnv("VISION_CAPTION_ENABLED", "") == "true",
+		baseURL:    strings.TrimRight(bootstrap.GetEnv("VISION_CAPTION_BASE_URL", ""), "/"),
+		apiKey:     bootstrap.GetEnv("VISION_CAPTION_API_KEY", ""),
+		model:      bootstrap.GetEnv("VISION_CAPTION_MODEL", ""),
+		http:       &http.Client{Timeout: captionCallTimeout},
 	}
 
 	server := newServer(similarity, caption)
@@ -116,22 +134,24 @@ func newServer(similarity *similarityTool, caption *captionTool) *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "vision_similarity",
 		Description: "Find documents in this instance's own search index that are visually/semantically " +
-			"similar to an attached image, by embedding the image against the same model search uses and " +
+			"similar to an image, by embedding the image against the same model search uses and " +
 			"vector-searching the index with it -- \"reverse image search into your own index.\" Use this " +
-			"when the user attaches an image and asks what it's related to, or wants to find pages about the " +
-			"same subject. Returns each match's URL, title, and similarity score. Reports itself unavailable " +
-			"if the admin hasn't enabled this on the Chat settings page.",
+			"when the user attaches an image (pass file_id) or pastes an image URL in chat (pass image_url) " +
+			"and asks what it's related to, or wants to find pages about the same subject. Returns each " +
+			"match's URL, title, and similarity score. Reports itself unavailable if the admin hasn't enabled " +
+			"this on the Chat settings page.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args visionSimilarityArgs) (*mcp.CallToolResult, any, error) {
 		return toolResult(similarity.run(ctx, args))
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "vision_caption",
-		Description: "Describe what's in an attached image (or answer a specific question about it) using a " +
-			"configured vision-language model. Use this when the user attaches an image and asks what it " +
-			"shows, or asks a question about its content -- you cannot see the image yourself, so this is the " +
-			"only way to actually know what it contains. Reports itself unavailable if the admin hasn't " +
-			"configured a captioning endpoint on the Chat settings page.",
+		Description: "Describe what's in an image (or answer a specific question about it) using a " +
+			"configured vision-language model. Use this when the user attaches an image (pass file_id) or " +
+			"pastes an image URL in chat (pass image_url) and asks what it shows, or asks a question about " +
+			"its content -- you cannot see the image yourself, so this is the only way to actually know what " +
+			"it contains. Reports itself unavailable if the admin hasn't configured a captioning endpoint on " +
+			"the Chat settings page.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args visionCaptionArgs) (*mcp.CallToolResult, any, error) {
 		return toolResult(caption.run(ctx, args))
 	})
@@ -203,17 +223,107 @@ func (c *filesClient) fetch(ctx context.Context, fileID string) (fetchedImage, e
 	return fetchedImage{data: body, contentType: resp.Header.Get(headerContentType), filename: filename}, nil
 }
 
+// urlImageFetcher fetches an arbitrary external image URL a user pasted
+// into chat -- unlike filesClient's already-uploaded, trusted account
+// files, this is attacker-influenced input, so every dial (including
+// redirect hops) goes through netguard's strict, crawler-grade AllowedIP
+// policy rather than the permissive ConfiguredEndpoint* policy admin-
+// configured backends get.
+type urlImageFetcher struct {
+	http *http.Client
+	// urlAllowed defaults to netguard.URLAllowed (set by newURLImageFetcher)
+	// -- overridable so a test can point at a loopback httptest server
+	// without netguard's real, always-blocks-loopback policy getting in the
+	// way, the same seam netguard itself uses (lookupIP) for the same
+	// reason.
+	urlAllowed func(string) bool
+}
+
+func newURLImageFetcher(client *http.Client) *urlImageFetcher {
+	return &urlImageFetcher{http: client, urlAllowed: netguard.URLAllowed}
+}
+
+func (f *urlImageFetcher) fetch(ctx context.Context, rawURL string) (fetchedImage, error) {
+	if rawURL == "" {
+		return fetchedImage{}, fmt.Errorf("image_url must not be empty")
+	}
+	if !f.urlAllowed(rawURL) {
+		return fetchedImage{}, fmt.Errorf("image_url is not allowed -- it must be a public http(s) URL")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return fetchedImage{}, fmt.Errorf("building request: %w", err)
+	}
+	resp, err := f.http.Do(req)
+	if err != nil {
+		return fetchedImage{}, fmt.Errorf("fetching image_url: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxImageBytes+1))
+	if err != nil {
+		return fetchedImage{}, fmt.Errorf("reading response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fetchedImage{}, fmt.Errorf("fetching image_url: server returned %d", resp.StatusCode)
+	}
+	if len(body) > maxImageBytes {
+		return fetchedImage{}, fmt.Errorf("image is larger than %d bytes -- resize/crop it first", maxImageBytes)
+	}
+	contentType := resp.Header.Get(headerContentType)
+	if !looksLikeImage(contentType) {
+		return fetchedImage{}, fmt.Errorf("image_url did not return an image (content-type %q)", contentType)
+	}
+	filename := rawURL
+	if idx := strings.LastIndex(rawURL, "/"); idx != -1 && idx+1 < len(rawURL) {
+		filename = rawURL[idx+1:]
+	}
+	return fetchedImage{data: body, contentType: contentType, filename: filename}, nil
+}
+
+// looksLikeImage accepts a real image/* content-type, and also an empty or
+// generic octet-stream one -- some servers (in particular CDNs serving a
+// bare image path) omit or genericize it, and the receiving
+// embedding/captioning endpoint is the real validator of whether the bytes
+// actually decode as an image.
+func looksLikeImage(contentType string) bool {
+	ct := strings.ToLower(strings.TrimSpace(contentType))
+	if ct == "" || strings.Contains(ct, "octet-stream") {
+		return true
+	}
+	return strings.HasPrefix(ct, "image/")
+}
+
+// imageSource resolves the image either tool operates on: args.FileID (an
+// already-uploaded account file, via files) or args.ImageURL (an arbitrary
+// external URL a user pasted in chat, via urlFetcher) -- exactly one of
+// the two must be given. Shared by similarityTool.run/captionTool.run so
+// this "which source, and the exactly-one-of rule" lives in one place.
+func imageSource(ctx context.Context, files *filesClient, urlFetcher *urlImageFetcher, fileID, imageURL string) (fetchedImage, error) {
+	switch {
+	case fileID != "" && imageURL != "":
+		return fetchedImage{}, fmt.Errorf("file_id and image_url are mutually exclusive -- pass only one")
+	case imageURL != "":
+		return urlFetcher.fetch(ctx, imageURL)
+	case fileID != "":
+		return files.fetch(ctx, fileID)
+	default:
+		return fetchedImage{}, fmt.Errorf("either file_id or image_url must be given")
+	}
+}
+
 // similarityTool implements vision_similarity: fetch the image, then call
 // search-server's own internal vision-similarity endpoint (which embeds
 // it and runs the ANN search) -- never touches an embedding endpoint or
 // the database directly.
 type similarityTool struct {
-	files    *filesClient
-	enabled  bool
-	provider string
-	baseURL  string
-	apiKey   string
-	http     *http.Client
+	files      *filesClient
+	urlFetcher *urlImageFetcher
+	enabled    bool
+	provider   string
+	baseURL    string
+	apiKey     string
+	http       *http.Client
 }
 
 type visionSimilarityRequest struct {
@@ -227,7 +337,7 @@ func (t *similarityTool) run(ctx context.Context, args visionSimilarityArgs) (st
 	if !t.enabled {
 		return "", fmt.Errorf("vision similarity is not configured -- an admin needs to enable it on the Chat settings page")
 	}
-	img, err := t.files.fetch(ctx, args.FileID)
+	img, err := imageSource(ctx, t.files, t.urlFetcher, args.FileID, args.ImageURL)
 	if err != nil {
 		return "", err
 	}
@@ -264,12 +374,13 @@ func (t *similarityTool) run(ctx context.Context, args visionSimilarityArgs) (st
 // same image_url content-block shape httpembed.Embedder.EmbedImage sends
 // for the (different) embedding case.
 type captionTool struct {
-	files   *filesClient
-	enabled bool
-	baseURL string
-	apiKey  string
-	model   string
-	http    *http.Client
+	files      *filesClient
+	urlFetcher *urlImageFetcher
+	enabled    bool
+	baseURL    string
+	apiKey     string
+	model      string
+	http       *http.Client
 }
 
 type captionMessage struct {
@@ -306,7 +417,7 @@ func (t *captionTool) run(ctx context.Context, args visionCaptionArgs) (string, 
 	if !t.enabled {
 		return "", fmt.Errorf("vision captioning is not configured -- an admin needs to set up a captioning endpoint on the Chat settings page")
 	}
-	img, err := t.files.fetch(ctx, args.FileID)
+	img, err := imageSource(ctx, t.files, t.urlFetcher, args.FileID, args.ImageURL)
 	if err != nil {
 		return "", err
 	}

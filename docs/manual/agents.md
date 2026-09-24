@@ -39,7 +39,7 @@ A fresh install seeds six ready-to-use starter agents the first time the agents 
 | This index | Prioritizes this deployment's own indexed documents over the open web. | Yes (web search/fetch) |
 | Current events | For "what's happening now" questions -- calls get_datetime first, then always searches rather than trusting training knowledge. | Yes (web search/fetch, plus the get_datetime MCP server if configured) |
 | Deep research | Slower and more thorough -- fetches and reads the top few results before answering, not just search snippets. | Yes (web search/fetch) |
-| Image analyst | Makes use of an attached image -- finds visually related pages in this index, or describes what it shows/answers a question about it. | Yes (the mcp-vision MCP server; either or both of its capabilities also need enabling on [Chat Settings](chat-settings.md)'s Vision section) |
+| Image analyst | Makes use of an attached image, or an image URL pasted in chat -- finds visually related pages in this index, or describes what it shows/answers a question about it. | Yes (the mcp-vision MCP server; either or both of its capabilities also need enabling on [Chat Settings](chat-settings.md)'s Vision section) |
 
 > **Worth knowing:**
 > - An empty MCP-server scope isn't "unrestricted" -- it gets no global tools at all. See agent-detail's MCP-servers section.

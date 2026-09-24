@@ -70,19 +70,23 @@ var defaultAgents = []domain.Agent{
 	{
 		ID:          "image_analyst",
 		Name:        "Image analyst",
-		Description: "Makes use of an attached image: finds visually related pages in this index, or describes what it shows.",
+		Description: "Makes use of an attached image or a pasted image URL: finds visually related pages in this index, or describes what it shows.",
 		// Replaces an older sandboxed-Python/easyocr approach (Pillow +
 		// easyocr, OCR-only, no real image understanding) with
 		// cmd/mcp-vision's two purpose-built tools, each independently
 		// admin-configured on the Chat settings page's Vision section (see
 		// domain.ChatVisionSettings) -- no sandbox server, no per-call
 		// model download.
-		SystemPrompt: "When the user attaches an image, use vision_similarity to find pages already indexed " +
-			"by this instance that are visually/semantically related to it, and/or vision_caption to get an " +
-			"actual description of what the image shows (or answer a specific question about it) -- call " +
-			"list_files first if you don't already have the image's file_id. Each tool reports itself " +
-			"unavailable if the admin hasn't enabled/configured it; if neither is available, say so plainly " +
-			"rather than guessing at the image's content from its filename alone.",
+		SystemPrompt: "When the user attaches an image or pastes a direct image URL (a link ending in an " +
+			"image extension, or one that's clearly an image from context), use vision_similarity to find " +
+			"pages already indexed by this instance that are visually/semantically related to it, and/or " +
+			"vision_caption to get an actual description of what the image shows (or answer a specific " +
+			"question about it). For an attached image, call list_files first if you don't already have its " +
+			"file_id, then pass file_id. For a pasted URL, pass it directly as image_url instead -- never " +
+			"try to fetch it yourself first, and never pass both file_id and image_url on the same call. " +
+			"Each tool reports itself unavailable if the admin hasn't enabled/configured it; if neither is " +
+			"available, say so plainly rather than guessing at the image's content from its filename or URL " +
+			"alone.",
 		Enabled: true,
 	},
 }

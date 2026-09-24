@@ -50,12 +50,19 @@ func testFilesClient(baseURL, token string) *filesClient {
 	return &filesClient{baseURL: baseURL, token: token, http: http.DefaultClient}
 }
 
+// testURLFetcher always allows -- netguard.URLAllowed would otherwise
+// reject every httptest server (they all listen on 127.0.0.1, which
+// AllowedIP's real policy blocks as loopback).
+func testURLFetcher() *urlImageFetcher {
+	return &urlImageFetcher{http: http.DefaultClient, urlAllowed: func(string) bool { return true }}
+}
+
 func disabledSimilarityTool() *similarityTool {
-	return &similarityTool{files: testFilesClient("http://unused.invalid", "tok-123"), enabled: false, http: http.DefaultClient}
+	return &similarityTool{files: testFilesClient("http://unused.invalid", "tok-123"), urlFetcher: testURLFetcher(), enabled: false, http: http.DefaultClient}
 }
 
 func disabledCaptionTool() *captionTool {
-	return &captionTool{files: testFilesClient("http://unused.invalid", "tok-123"), enabled: false, http: http.DefaultClient}
+	return &captionTool{files: testFilesClient("http://unused.invalid", "tok-123"), urlFetcher: testURLFetcher(), enabled: false, http: http.DefaultClient}
 }
 
 // --- vision_similarity ---
@@ -499,6 +506,302 @@ func TestVisionCaptionTool_BodyReadErrorIsToolError(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Fatal("expected an error result when the response body can't be fully read")
+	}
+}
+
+// --- vision_similarity / vision_caption via image_url ---
+
+func TestVisionSimilarityTool_ImageURLSuccess(t *testing.T) {
+	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte{0x89, 0x50, 0x4e, 0x47})
+	}))
+	defer imgSrv.Close()
+	var gotBody visionSimilarityRequest
+	simSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_, _ = w.Write([]byte(`{"matches":[]}`))
+	}))
+	defer simSrv.Close()
+
+	similarity := &similarityTool{
+		files: testFilesClient("http://unused.invalid", "tok-123"), urlFetcher: testURLFetcher(),
+		enabled: true, baseURL: simSrv.URL, http: http.DefaultClient,
+	}
+	cs := connectedTestServer(t, similarity, disabledCaptionTool())
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "vision_similarity", Arguments: map[string]any{"image_url": imgSrv.URL + "/photo.png"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", textContent(t, result))
+	}
+	if gotBody.MimeType != "image/png" || gotBody.Base64 == "" {
+		t.Errorf("unexpected request body: %+v", gotBody)
+	}
+}
+
+func TestVisionSimilarityTool_FileIDAndImageURLBothGivenIsToolError(t *testing.T) {
+	similarity := &similarityTool{
+		files: testFilesClient("http://unused.invalid", "tok-123"), urlFetcher: testURLFetcher(),
+		enabled: true, baseURL: "http://unused.invalid", http: http.DefaultClient,
+	}
+	cs := connectedTestServer(t, similarity, disabledCaptionTool())
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "vision_similarity", Arguments: map[string]any{"file_id": "f1", "image_url": "https://example.com/a.png"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected an error result when both file_id and image_url are given")
+	}
+}
+
+func TestVisionSimilarityTool_NeitherFileIDNorImageURLIsToolError(t *testing.T) {
+	similarity := &similarityTool{
+		files: testFilesClient("http://unused.invalid", "tok-123"), urlFetcher: testURLFetcher(),
+		enabled: true, baseURL: "http://unused.invalid", http: http.DefaultClient,
+	}
+	cs := connectedTestServer(t, similarity, disabledCaptionTool())
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "vision_similarity", Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected an error result when neither file_id nor image_url is given")
+	}
+}
+
+func TestVisionCaptionTool_ImageURLSuccess(t *testing.T) {
+	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write([]byte{0xff, 0xd8, 0xff})
+	}))
+	defer imgSrv.Close()
+	var gotBody captionRequest
+	capSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"a jpeg"}}]}`))
+	}))
+	defer capSrv.Close()
+
+	caption := &captionTool{
+		files: testFilesClient("http://unused.invalid", "tok-123"), urlFetcher: testURLFetcher(),
+		enabled: true, baseURL: capSrv.URL, http: http.DefaultClient,
+	}
+	cs := connectedTestServer(t, disabledSimilarityTool(), caption)
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "vision_caption", Arguments: map[string]any{"image_url": imgSrv.URL + "/photo.jpg"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", textContent(t, result))
+	}
+	if textContent(t, result) != "a jpeg" {
+		t.Errorf("unexpected caption: %q", textContent(t, result))
+	}
+	if gotBody.Messages[0].Content[1].ImageURL == nil {
+		t.Fatalf("expected an image_url content block, got %+v", gotBody.Messages[0].Content[1])
+	}
+}
+
+func TestVisionCaptionTool_ImageURLFetchErrorIsToolError(t *testing.T) {
+	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer imgSrv.Close()
+	caption := &captionTool{
+		files: testFilesClient("http://unused.invalid", "tok-123"), urlFetcher: testURLFetcher(),
+		enabled: true, baseURL: "http://unused.invalid", http: http.DefaultClient,
+	}
+	cs := connectedTestServer(t, disabledSimilarityTool(), caption)
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "vision_caption", Arguments: map[string]any{"image_url": imgSrv.URL},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected an error result when the image_url fetch fails")
+	}
+}
+
+// --- urlImageFetcher ---
+
+func TestURLImageFetcher_EmptyURLIsError(t *testing.T) {
+	f := testURLFetcher()
+	_, err := f.fetch(context.Background(), "")
+	if err == nil {
+		t.Fatal("expected an error for an empty image_url")
+	}
+}
+
+func TestURLImageFetcher_NotAllowedIsError(t *testing.T) {
+	f := &urlImageFetcher{http: http.DefaultClient, urlAllowed: func(string) bool { return false }}
+	_, err := f.fetch(context.Background(), "http://169.254.169.254/latest/meta-data/")
+	if err == nil {
+		t.Fatal("expected an error for a URL netguard disallows")
+	}
+}
+
+func TestURLImageFetcher_NewURLImageFetcherUsesNetguardURLAllowed(t *testing.T) {
+	f := newURLImageFetcher(http.DefaultClient)
+	// A loopback address is never allowed under netguard's real AllowedIP
+	// policy -- proves the constructor really wires netguard.URLAllowed in,
+	// not just testURLFetcher's always-true stub.
+	_, err := f.fetch(context.Background(), "http://127.0.0.1:1/x")
+	if err == nil {
+		t.Fatal("expected netguard to reject a loopback image_url")
+	}
+}
+
+func TestURLImageFetcher_NonOKStatusIsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "gone", http.StatusGone)
+	}))
+	defer srv.Close()
+	f := testURLFetcher()
+	_, err := f.fetch(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatal("expected an error for a non-200 response")
+	}
+}
+
+func TestURLImageFetcher_TooLargeIsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(make([]byte, maxImageBytes+1))
+	}))
+	defer srv.Close()
+	f := testURLFetcher()
+	_, err := f.fetch(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatal("expected an error for an oversized image")
+	}
+}
+
+func TestURLImageFetcher_NonImageContentTypeIsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html></html>"))
+	}))
+	defer srv.Close()
+	f := testURLFetcher()
+	_, err := f.fetch(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatal("expected an error for a non-image content-type")
+	}
+}
+
+// looksLikeImage's empty-content-type branch can't be exercised through a
+// real httptest round trip -- net/http always sniffs and sets some
+// Content-Type on an unset one before writing the response -- so it's
+// tested directly instead.
+func TestLooksLikeImage_EmptyContentTypeIsAccepted(t *testing.T) {
+	if !looksLikeImage("") {
+		t.Error("expected an empty content-type to be accepted")
+	}
+}
+
+func TestURLImageFetcher_OctetStreamContentTypeIsAccepted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write([]byte{0x89, 0x50, 0x4e, 0x47})
+	}))
+	defer srv.Close()
+	f := testURLFetcher()
+	if _, err := f.fetch(context.Background(), srv.URL); err != nil {
+		t.Fatalf("unexpected error for an octet-stream content-type: %v", err)
+	}
+}
+
+func TestURLImageFetcher_NetworkErrorIsError(t *testing.T) {
+	f := &urlImageFetcher{http: http.DefaultClient, urlAllowed: func(string) bool { return true }}
+	_, err := f.fetch(context.Background(), "http://127.0.0.1:1/x")
+	if err == nil {
+		t.Fatal("expected an error connecting to an unreachable address")
+	}
+}
+
+func TestURLImageFetcher_BodyReadErrorIsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hj, _ := w.(http.Hijacker)
+		conn, buf, err := hj.Hijack()
+		if err != nil {
+			t.Fatalf("failed to hijack connection: %v", err)
+		}
+		defer conn.Close()
+		buf.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort")
+		buf.Flush()
+	}))
+	defer srv.Close()
+	f := testURLFetcher()
+	_, err := f.fetch(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatal("expected an error when the response body can't be fully read")
+	}
+}
+
+func TestURLImageFetcher_FilenameDerivedFromURLPath(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte{1})
+	}))
+	defer srv.Close()
+	f := testURLFetcher()
+	img, err := f.fetch(context.Background(), srv.URL+"/some/path/photo.png")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if img.filename != "photo.png" {
+		t.Errorf("expected filename derived from the URL path, got %q", img.filename)
+	}
+}
+
+func TestURLImageFetcher_FilenameFallsBackToFullURLWithoutSlash(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte{1})
+	}))
+	defer srv.Close()
+	f := testURLFetcher()
+	img, err := f.fetch(context.Background(), srv.URL+"/")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if img.filename != srv.URL+"/" {
+		t.Errorf("expected the full URL as filename when nothing follows the trailing slash, got %q", img.filename)
+	}
+}
+
+func TestURLImageFetcher_InvalidRequestURLIsError(t *testing.T) {
+	f := &urlImageFetcher{http: http.DefaultClient, urlAllowed: func(string) bool { return true }}
+	_, err := f.fetch(context.Background(), "http://[::1]:namedport/x")
+	if err == nil {
+		t.Fatal("expected an error building a request against a malformed URL")
+	}
+}
+
+// --- imageSource ---
+
+func TestImageSource_NeitherGivenIsError(t *testing.T) {
+	_, err := imageSource(context.Background(), testFilesClient("http://unused.invalid", "tok-123"), testURLFetcher(), "", "")
+	if err == nil {
+		t.Fatal("expected an error when neither file_id nor image_url is given")
+	}
+}
+
+func TestImageSource_BothGivenIsError(t *testing.T) {
+	_, err := imageSource(context.Background(), testFilesClient("http://unused.invalid", "tok-123"), testURLFetcher(), "f1", "https://example.com/a.png")
+	if err == nil {
+		t.Fatal("expected an error when both file_id and image_url are given")
 	}
 }
 
