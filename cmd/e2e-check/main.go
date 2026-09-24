@@ -1021,7 +1021,7 @@ func (c *client) checkOutOfScopeHonesty() error {
 // ones: cheaper, and exercises validateChatMessages' other length check
 // just as directly.
 func (c *client) checkChatValidationBoundary() error {
-	const maxChatMessageContentLength = 4000 // must match chat.go's own unexported constant
+	const maxChatMessageContentLength = 32000 // must match chat.go's own unexported constant
 	overLong := strings.Repeat("x", maxChatMessageContentLength+1)
 	status, body, err := c.doJSONRaw(http.MethodPost, "/chat", map[string]any{
 		"messages": []map[string]string{{"role": "user", "content": overLong}},
