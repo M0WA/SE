@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.82 - 2026-09-24
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* feat: docker compose installation, published to GHCR on release by @M0WA in https://github.com/M0WA/SE/pull/312
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.81...v4.13.82
+
+
 ## v4.13.81 - 2026-09-24
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
