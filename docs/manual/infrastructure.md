@@ -23,6 +23,10 @@ curl https://inference.de-txl.ionos.com/v1/models \
   -H "Authorization: Bearer $IONOS_TOKEN"
 ```
 
+This reference deployment actually uses Model Hub for one capability that isn't a good fit for the self-hosted H200 above: [Chat settings](chat-settings.md)'s Vision -> Captioning endpoint, pointed at Model Hub with model `Qwen/Qwen3.5-397B-A17B` -- a vision-capable chat-completions model, distinct from the embedding-only models the self-hosted GPU serves. Vision -> Similarity search, by contrast, still reuses the self-hosted H200 embedding endpoint (see [Embedding endpoints](embedding-endpoints.md)), since that's the same model search's own ranking already depends on.
+
+[Embedding endpoints](embedding-endpoints.md) also lists a handful of other Model Hub models on this deployment, pre-staged as **disabled** rows (their Base URL/Model already filled in against Model Hub's endpoint, no API key set) -- convenience placeholders an admin can enable and add a key to, rather than creating a new endpoint from scratch, if search's active provider ever needs to change. This is deployment-specific data seeded directly into this instance's database, not something a fresh install gets automatically -- unlike the starter agents `internal/adapters/sqlrepo/default_agents.go` seeds for every install, there's no code-level default for a starter embedding-endpoint catalog.
+
 Calling that endpoint (listing/using models) works with any account token, including the contract's own main/owner user. **Managing** Model Hub access itself is a separate thing: the `accessAndManageAiModelHub` group privilege can only be held by a sub-user's group, never granted to (or by) the contract's main/owner user -- attempting it from the owner account fails even though the owner can call the inference endpoint above just fine. `ionosctl` has no command group for Model Hub as of this writing, and neither `ionosctl compute group create` nor `update` exposes a flag for this specific privilege, so setting it needs a raw Cloud API call:
 
 ```
