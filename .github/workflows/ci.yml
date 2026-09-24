@@ -198,11 +198,42 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: pkg
+      # Caches the resolved .deb files this step downloads (not the
+      # package index -- that's a separate, much smaller Dir::Cache::
+      # /var/lib/apt/lists, and re-fetching it isn't what's ever
+      # actually failed here), so a repeat run doesn't need the network
+      # for the same package again at all. Real incident this exists
+      # for: security.ubuntu.com's package index and its actual pool/
+      # file storage went briefly inconsistent (index listed a package
+      # version the pool 404'd on) and failed this job -- a transient
+      # upstream mirror problem outside this repo's control, hit
+      # multiple times in one evening. A static key (no date/hash
+      # component) is deliberate: this is a smoke test proving the .deb
+      # installs cleanly, not a security-currency check on these
+      # OS-level dependencies, so there's no real downside to a cache
+      # that only grows/refreshes opportunistically (a version bump in
+      # Install package's own apt-get install line still fetches fresh,
+      # since apt always prefers a newer available version over a
+      # stale cached one).
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /var/cache/apt/archives
+          key: apt-archives-${{ matrix.distro }}-v1
       - name: Install package
         run: |
-          apt-get update
-          apt-get install -y curl apache2-utils sqlite3
-          apt-get install -y ./pkg/*.deb
+          # Retried once with a short backoff, belt-and-suspenders
+          # alongside the cache above: a cold cache (this job's very
+          # first run, or a package version bump) still hits the
+          # network, and a mirror inconsistency often clears within
+          # seconds -- cheaper than a full job re-run for that case.
+          for attempt in 1 2; do
+            apt-get update && \
+              apt-get install -y curl apache2-utils sqlite3 && \
+              apt-get install -y ./pkg/*.deb && break
+            if [ "$attempt" = 2 ]; then exit 1; fi
+            echo "apt-get install failed, retrying in 10s (attempt $attempt/2)..."
+            sleep 10
+          done
       - name: Smoke test
         run: |
           dpkg -s searchengine
