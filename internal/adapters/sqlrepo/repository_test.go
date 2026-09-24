@@ -273,6 +273,30 @@ func TestSaveDocument_ThenRetrieveEverywhere(t *testing.T) {
 	assertDocumentListingAndSearch(t, repo, ctx, doc)
 }
 
+// TestSaveDocument_PreparingEmbeddingUpsertStatementErrorPropagates proves
+// SaveDocument's upfront warm-up of saveDocumentEmbeddings' shared
+// prepared statement (see prepareUpsertEmbeddingStmt's own doc comment
+// for why this must happen before BeginTx) surfaces a real failure
+// there as its own wrapped error, rather than the deadlock a lazy
+// first-prepare from inside an open transaction would risk under
+// SQLite's single-connection pool.
+func TestSaveDocument_PreparingEmbeddingUpsertStatementErrorPropagates(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	// Never having called SaveDocument/UpdateEmbedding yet, the shared
+	// statement's sync.Once hasn't fired -- closing the DB now forces
+	// its first-ever preparation attempt (triggered by the SaveDocument
+	// call below) to fail.
+	if err := repo.Close(); err != nil {
+		t.Fatalf("closing repo: %v", err)
+	}
+	doc := domain.Document{ID: "doc-1", URL: "http://a", Title: "Cats", Text: "Cats are great pets indeed"}
+	err := repo.SaveDocument(ctx, doc, map[string][]float32{domain.EmbeddingProviderHash: {0.1, 0.2, 0.3}}, 100, 2)
+	if err == nil || !strings.Contains(err.Error(), "preparing embedding upsert statement") {
+		t.Errorf("expected a wrapped preparing-embedding-upsert-statement error, got %v", err)
+	}
+}
+
 // assertDocumentFetchable checks that a just-saved document comes back
 // unchanged from DocumentsByIDs, including a populated CrawledAt.
 func assertDocumentFetchable(t *testing.T, repo *sqlrepo.Repository, ctx context.Context, doc domain.Document) {
@@ -456,6 +480,25 @@ func TestUpdateEmbedding_UnknownIDIsNotAnError(t *testing.T) {
 	repo := newTestRepo(t)
 	if err := repo.UpdateEmbedding(context.Background(), "does-not-exist", map[string][]float32{domain.EmbeddingProviderHash: []float32{0.1}}); err != nil {
 		t.Errorf("expected updating a nonexistent document's embedding to be a harmless no-op, got: %v", err)
+	}
+}
+
+// TestUpdateEmbedding_PreparingEmbeddingUpsertStatementErrorPropagates
+// mirrors TestSaveDocument_PreparingEmbeddingUpsertStatementErrorPropagates
+// but through UpdateEmbedding's own call path instead -- unlike
+// SaveDocument, UpdateEmbedding has no warm-up of its own, so this is what
+// actually exercises saveDocumentEmbeddings' own prepareUpsertEmbeddingStmt
+// error check (SaveDocument's warm-up means its own call into
+// saveDocumentEmbeddings never sees that check fail -- the Once has
+// already resolved, successfully or not, by the time it gets there).
+func TestUpdateEmbedding_PreparingEmbeddingUpsertStatementErrorPropagates(t *testing.T) {
+	repo := newTestRepo(t)
+	if err := repo.Close(); err != nil {
+		t.Fatalf("closing repo: %v", err)
+	}
+	err := repo.UpdateEmbedding(context.Background(), "doc-1", map[string][]float32{domain.EmbeddingProviderHash: {0.1}})
+	if err == nil || !strings.Contains(err.Error(), "preparing embedding upsert statement") {
+		t.Errorf("expected a wrapped preparing-embedding-upsert-statement error, got %v", err)
 	}
 }
 

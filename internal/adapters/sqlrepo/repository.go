@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"searchengine/internal/domain"
@@ -37,6 +38,33 @@ type Repository struct {
 	// available for this process -- see EnableANN/ANNAvailable/
 	// TopSemanticMatches in ann.go.
 	ann annState
+
+	// upsertEmbeddingStmt is saveDocumentEmbeddings' own prepared
+	// statement -- its fixed 4-placeholder shape (see
+	// Dialect.UpsertDocumentEmbeddingSQL) never changes for this
+	// Repository's lifetime, and it's this codebase's single hottest
+	// per-document write (once per crawled page, and again for every
+	// document a corpus-wide embedding recompute touches -- potentially
+	// the entire index, at whatever concurrency the admin has configured).
+	// Prepared lazily on first use, not eagerly in New/NewWithDB, since
+	// NewWithDB deliberately doesn't migrate the schema up front (see its
+	// own doc comment) -- preparing against a not-yet-created table would
+	// fail on SQLite. upsertEmbeddingStmtOnce makes that lazy init safe
+	// under the concurrent recompute goroutines that are this statement's
+	// main reason for existing.
+	upsertEmbeddingStmtOnce sync.Once
+	upsertEmbeddingStmt     *sql.Stmt
+	upsertEmbeddingStmtErr  error
+}
+
+// prepareUpsertEmbeddingStmt lazily prepares (once) and returns
+// saveDocumentEmbeddings' shared statement -- see upsertEmbeddingStmt's
+// own doc comment for why this is lazy rather than eager.
+func (r *Repository) prepareUpsertEmbeddingStmt(ctx context.Context) (*sql.Stmt, error) {
+	r.upsertEmbeddingStmtOnce.Do(func() {
+		r.upsertEmbeddingStmt, r.upsertEmbeddingStmtErr = r.db.PrepareContext(ctx, r.dialect.UpsertDocumentEmbeddingSQL())
+	})
+	return r.upsertEmbeddingStmt, r.upsertEmbeddingStmtErr
 }
 
 func New(ctx context.Context, driverName, dsn string) (*Repository, error) {
@@ -812,7 +840,17 @@ func (r *Repository) backfillPageRank(ctx context.Context) error {
 	return nil
 }
 
-func (r *Repository) Close() error { return r.db.Close() }
+// Close releases upsertEmbeddingStmt (never prepared -- and so nil -- if
+// this Repository's own saveDocumentEmbeddings was never actually called)
+// before closing the underlying connection pool.
+func (r *Repository) Close() error {
+	if r.upsertEmbeddingStmt != nil {
+		if err := r.upsertEmbeddingStmt.Close(); err != nil {
+			return fmt.Errorf("closing prepared embedding upsert statement: %w", err)
+		}
+	}
+	return r.db.Close()
+}
 
 // Ping confirms the database connection is alive, for GET /healthz -- a
 // plain connection check, not a query against any application table.
@@ -832,6 +870,18 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 	// crawled after the setting changes.
 	if titleWeight <= 0 {
 		titleWeight = 1
+	}
+	// Warms upsertEmbeddingStmt's lazy sync.Once BEFORE opening the
+	// transaction below, not after: preparing it needs its own pool
+	// connection, and SQLite's pool is capped at exactly one (see
+	// ConfigurePool) -- doing this instead from inside
+	// saveDocumentEmbeddings, while this function's own BeginTx already
+	// holds that one connection, deadlocks the first-ever call (confirmed
+	// live: go test -race hung a full 600s, goroutine dump showing
+	// Tx.awaitDone). Already-warm on every call after the first, so this
+	// is a no-op past construction's own very first SaveDocument.
+	if _, err := r.prepareUpsertEmbeddingStmt(ctx); err != nil {
+		return fmt.Errorf("preparing embedding upsert statement: %w", err)
 	}
 	tokens := domain.Tokenize(strings.Repeat(doc.Title+" ", titleWeight) + doc.Text)
 	// documents.embedding/norm_embedding are retired (vectors now live in
@@ -985,11 +1035,23 @@ type dbExecer interface {
 }
 
 func (r *Repository) saveDocumentEmbeddings(ctx context.Context, exec dbExecer, docID string, embeddings map[string][]float32) error {
-	upsertSQL := r.dialect.UpsertDocumentEmbeddingSQL()
+	upsertStmt, err := r.prepareUpsertEmbeddingStmt(ctx)
+	if err != nil {
+		return fmt.Errorf("preparing embedding upsert statement: %w", err)
+	}
+	// A transaction pins one specific connection, so a statement prepared
+	// against r.db (possibly a different pooled connection) can't be
+	// executed on it directly -- tx.StmtContext gives back an
+	// equivalent statement bound to this transaction instead, reusing
+	// upsertStmt's already-resolved query text rather than passing a bare
+	// SQL string through exec.ExecContext the way this loop used to.
+	if tx, ok := exec.(*sql.Tx); ok {
+		upsertStmt = tx.StmtContext(ctx, upsertStmt)
+	}
 	for provider, vec := range embeddings {
 		embBlob := EncodeEmbedding(vec)
 		norm := domain.VectorNorm(vec)
-		if _, err := exec.ExecContext(ctx, upsertSQL, docID, provider, embBlob, norm); err != nil {
+		if _, err := upsertStmt.ExecContext(ctx, docID, provider, embBlob, norm); err != nil {
 			return fmt.Errorf("saving %s embedding: %w", provider, err)
 		}
 		if r.ann.isAvailable(provider) {
