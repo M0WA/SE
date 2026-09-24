@@ -433,13 +433,37 @@ func TestHandleChat_MessageTooLong(t *testing.T) {
 	svc := application.NewChatService(&fakeChatEndpointStore{}, &fakeChatCompleter{}, nil, nil, nil, nil, application.VisionConfig{Settings: nil, InternalAPIKey: ""})
 	h, cookie := chatAuthedHandler(t, svc)
 	rec := postChat(t, h, cookie, map[string]interface{}{
-		"messages": []map[string]string{{"role": "user", "content": strings.Repeat("a", 4001)}},
+		"messages": []map[string]string{{"role": "user", "content": strings.Repeat("a", 32001)}},
 	})
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", rec.Code)
 	}
 	if !strings.Contains(rec.Body.String(), "message too long") {
 		t.Errorf("expected message-too-long error message, got %q", rec.Body.String())
+	}
+}
+
+// TestHandleChat_LongAssistantMessageIsExempt is the direct regression test
+// for a real, reported incident: the browser resends the FULL conversation
+// as {role, content} pairs on every turn (POST /chat is stateless per call),
+// so an earlier answer with a large code sample -- itself well within any
+// real model's own output limits -- made every SUBSEQUENT turn in that
+// conversation fail validation outright with "message too long," before
+// the server ever attempted a completion call. maxChatMessageContentLength
+// must bound only what a client actually AUTHORS (ChatRoleUser), never an
+// assistant turn being echoed back as context.
+func TestHandleChat_LongAssistantMessageIsExempt(t *testing.T) {
+	svc := application.NewChatService(&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}, &fakeChatCompleter{answer: "ok"}, nil, nil, nil, nil, application.VisionConfig{Settings: nil, InternalAPIKey: ""})
+	h, cookie := chatAuthedHandler(t, svc)
+	rec := postChat(t, h, cookie, map[string]interface{}{
+		"messages": []map[string]string{
+			{"role": "user", "content": "write me a long benchmark script"},
+			{"role": "assistant", "content": strings.Repeat("a", 32001)},
+			{"role": "user", "content": "now run it in a sandbox"},
+		},
+	})
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 (a long assistant message must not trip the length check), got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
