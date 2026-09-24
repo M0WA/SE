@@ -174,6 +174,16 @@ type RunOptions struct {
 	// passed to pip/go as real argv elements (see installArgv), never
 	// through a shell string, so it can never inject a shell command.
 	Packages []string
+	// Files is zero or more input files (real filename -> raw bytes) to
+	// make available to Code, independent of Network -- this is a
+	// filesystem mount, not a network capability, so it works the same
+	// whether or not the sandbox has outbound access. Written read-only
+	// into the same bind-mounted working directory as Code, so the model's
+	// own script just opens each by its ordinary filename. The caller
+	// (cmd/mcp-sandbox) is responsible for sanitizing where each byte
+	// slice actually came from; Run itself only guards against a filename
+	// escaping the sandbox directory (see filepath.Base below).
+	Files map[string][]byte
 }
 
 // Result is one sandboxed execution's outcome. A non-zero ExitCode or
@@ -234,6 +244,19 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 	// this is defense in depth on the host side), never modified after write.
 	if err := os.WriteFile(codePath, []byte(opts.Code), 0o444); err != nil {
 		return Result{}, fmt.Errorf("writing sandbox code: %w", err)
+	}
+
+	for name, data := range opts.Files {
+		// filepath.Base strips any directory component (e.g. "../../etc/passwd" -> "passwd"),
+		// so an input filename can never write outside dir -- the same defense-in-depth
+		// reasoning as codePath's own 0o444 above.
+		safeName := filepath.Base(name)
+		if safeName == "." || safeName == string(filepath.Separator) {
+			return Result{}, fmt.Errorf("dockersandbox: invalid input filename %q", name)
+		}
+		if err := os.WriteFile(filepath.Join(dir, safeName), data, 0o444); err != nil {
+			return Result{}, fmt.Errorf("writing sandbox input file %q: %w", safeName, err)
+		}
 	}
 
 	runCtx := ctx

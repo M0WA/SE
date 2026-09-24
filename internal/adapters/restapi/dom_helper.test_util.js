@@ -20,6 +20,20 @@ function setupDOM(html, url) {
   Object.defineProperty(global, 'navigator', {
     value: dom.window.navigator, configurable: true, writable: true,
   });
+
+  // jsdom implements neither <dialog>'s showModal()/close() nor Element.scrollIntoView() -- both
+  // are real, no-layout-required browser APIs a script here calls, so without a stub any test
+  // touching either throws "not a function" instead of exercising the code around it. Actually
+  // showing/scrolling still needs a real browser (see CLAUDE.md's screenshot recipe for that) --
+  // these just make the call safe, as a no-op a test can still override/spy on, the same way
+  // index.test.js already stubs offsetTop on window.HTMLElement.prototype.
+  dom.window.HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', ''); };
+  dom.window.HTMLDialogElement.prototype.close = function () {
+    this.removeAttribute('open');
+    this.dispatchEvent(new dom.window.Event('close'));
+  };
+  dom.window.HTMLElement.prototype.scrollIntoView = function () {};
+
   return dom;
 }
 

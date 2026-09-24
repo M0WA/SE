@@ -47,9 +47,13 @@ const callTimeout = 20 * time.Second
 
 // captionCallTimeout bounds a call to the (possibly remote, possibly
 // slower-to-respond) configured vision-language captioning endpoint --
-// generous, matching httpchat's own real-model-latency budget rather than
-// callTimeout's loopback-call budget.
-const captionCallTimeout = 45 * time.Second
+// generous, matching httpchat.requestTimeout's own real-model-latency
+// budget rather than callTimeout's loopback-call budget. Raised from an
+// original 45s (which didn't actually match httpchat's budget despite the
+// comment's claim) after a live report of "context deadline exceeded"
+// calling IONOS AI Model Hub's captioning endpoint -- a hosted provider,
+// not even under this deployment's own control, having a slow moment.
+const captionCallTimeout = 180 * time.Second
 
 // imageURLFetchTimeout bounds fetching an external image URL a user pasted
 // into chat -- a real network hop to an arbitrary third-party server,

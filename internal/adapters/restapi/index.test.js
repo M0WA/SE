@@ -968,25 +968,25 @@ test('clicking the tab-strip buttons wires new/fork/export/import to their own f
   }
 });
 
-test('renderChatMessage scrolls #chat-messages so the new turn\'s own beginning is visible', async () => {
+test('renderChatMessage scrolls the new turn\'s own beginning into view', async () => {
   global.fetch = async () => ({ ok: true, json: async () => ({ answer: 'hi there' }) });
   const { sendChatMessage } = loadFixture();
   const chatMessages = document.getElementById('chat-messages');
-  // jsdom never computes real layout, so offsetTop is always 0 -- stub it to grow per message,
-  // so scrollTop moving to match the newest message's offsetTop (not scrollHeight, which lands
-  // on the end) proves the scroll starts from the first line, not the last.
-  Object.defineProperty(window.HTMLElement.prototype, 'offsetTop', {
-    get() { return Array.from(chatMessages.children).indexOf(this) * 100; },
-    configurable: true,
-  });
+  const calls = [];
+  window.HTMLElement.prototype.scrollIntoView = function (opts) {
+    calls.push({ index: Array.from(chatMessages.children).indexOf(this), opts });
+  };
 
   await sendChatMessage('hello');
-  // Two turns appended (user, then assistant) land at indices 0 and 1; the
-  // assistant turn, appended last, is what the scroll should land on.
-  assert.equal(chatMessages.scrollTop, 100, 'expected scroll to the assistant turn\'s own top');
+  // Each of the two turns appended (user, then assistant) scrolls in turn, landing at indices 0
+  // and 1; the assistant turn, appended and scrolled to last, is what should end up visible.
+  assert.equal(calls.length, 2);
+  assert.equal(calls[calls.length - 1].index, 1, 'expected to scroll to the assistant turn\'s own top');
+  assert.deepEqual(calls[calls.length - 1].opts, { block: 'start' });
 
   await sendChatMessage('another question');
-  assert.equal(chatMessages.scrollTop, 300, 'expected scroll again to the newest assistant turn\'s own top');
+  assert.equal(calls.length, 4);
+  assert.equal(calls[calls.length - 1].index, 3, 'expected to scroll again to the newest assistant turn\'s own top');
 });
 
 test('sendChatMessage on success appends both turns to history and renders the answer', async () => {
@@ -1194,6 +1194,7 @@ test('renderChatFiles builds a box with a download link and a close button, hidd
   const link = chatFiles.querySelector('.chat-file-box a');
   assert.equal(link.textContent, 'notes.txt');
   assert.equal(link.getAttribute('href'), '/account/api/files/f1');
+  assert.notEqual(chatFiles.querySelector('.chat-file-view'), null);
   assert.notEqual(chatFiles.querySelector('.chat-file-close'), null);
 
   renderChatFiles([]);
@@ -1235,6 +1236,81 @@ test('a failed file delete shows a status message and leaves the box in place', 
 
   assert.equal(document.getElementById('chat-status').textContent.includes('db down'), true);
   assert.notEqual(chatFiles.querySelector('.chat-file-box'), null);
+});
+
+test('clicking a file box\'s view icon opens the preview dialog and shows a text file\'s content', async () => {
+  const { renderChatFiles } = loadFixture();
+  renderChatFiles([baseChatFile()]);
+  const chatFiles = document.getElementById('chat-files');
+  const dialog = document.getElementById('file-preview-dialog');
+
+  global.fetch = async (url) => {
+    assert.equal(url, '/account/api/files/f1');
+    return { ok: true, text: async () => 'hello from the file' };
+  };
+  chatFiles.querySelector('.chat-file-view').dispatchEvent(new window.Event('click'));
+  assert.equal(dialog.hasAttribute('open'), true, 'dialog opens synchronously via showModal()');
+  assert.equal(document.getElementById('file-preview-title').textContent, 'notes.txt');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const pre = document.getElementById('file-preview-body').querySelector('pre');
+  assert.notEqual(pre, null);
+  assert.equal(pre.textContent, 'hello from the file');
+});
+
+test('the preview dialog shows an image file inline via an object URL, revoked on close', async () => {
+  const { renderChatFiles } = loadFixture();
+  renderChatFiles([baseChatFile({ id: 'f2', filename: 'photo.png', content_type: 'image/png' })]);
+  const chatFiles = document.getElementById('chat-files');
+
+  let created = 0;
+  let revoked = 0;
+  global.URL.createObjectURL = () => { created++; return 'blob:mock-url'; };
+  global.URL.revokeObjectURL = () => { revoked++; };
+  try {
+    global.fetch = async () => ({ ok: true, blob: async () => ({ type: 'image/png' }) });
+    chatFiles.querySelector('.chat-file-view').dispatchEvent(new window.Event('click'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const img = document.getElementById('file-preview-body').querySelector('img');
+    assert.notEqual(img, null);
+    assert.equal(img.getAttribute('src'), 'blob:mock-url');
+    assert.equal(created, 1);
+
+    document.getElementById('file-preview-close').dispatchEvent(new window.Event('click'));
+    assert.equal(revoked, 1);
+  } finally {
+    delete global.URL.createObjectURL;
+    delete global.URL.revokeObjectURL;
+  }
+});
+
+test('the preview dialog falls back to a plain message for a non-previewable file type', async () => {
+  const { renderChatFiles } = loadFixture();
+  renderChatFiles([baseChatFile({ id: 'f3', filename: 'archive.zip', content_type: 'application/zip' })]);
+  const chatFiles = document.getElementById('chat-files');
+
+  global.fetch = async () => ({ ok: true, text: async () => 'should not be used' });
+  chatFiles.querySelector('.chat-file-view').dispatchEvent(new window.Event('click'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const body = document.getElementById('file-preview-body');
+  assert.equal(body.querySelector('pre'), null);
+  assert.equal(body.querySelector('img'), null);
+  assert.equal(body.textContent.includes('No preview available'), true);
+  assert.equal(body.textContent.includes('application/zip'), true);
+});
+
+test('the preview dialog shows an error message when the file fetch fails', async () => {
+  const { renderChatFiles } = loadFixture();
+  renderChatFiles([baseChatFile()]);
+  const chatFiles = document.getElementById('chat-files');
+
+  global.fetch = async () => ({ ok: false, status: 500, text: async () => 'db down' });
+  chatFiles.querySelector('.chat-file-view').dispatchEvent(new window.Event('click'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(document.getElementById('file-preview-body').textContent.includes('db down'), true);
 });
 
 test('loadChatFiles populates #chat-files from GET /account/api/files scoped to the active tab\'s chat_id', async () => {

@@ -86,7 +86,9 @@ func newServer(searxBaseURL string, resultCount int, userAgent string, fetcher *
 		Name: "web_fetch",
 		Description: "Fetch the text content of a specific URL. Use this when the user asks about a specific " +
 			"URL or its content, even if you feel confident or were given unrelated search results -- those " +
-			"are not the page itself.",
+			"are not the page itself. Never use this on this deployment's own /account/api/files/... URLs (an " +
+			"attached or model-created file's download link) -- those require a signed-in session this tool " +
+			"doesn't have and always fail with 401; use read_file or read_file_base64 for a file instead.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args fetchArgs) (*mcp.CallToolResult, any, error) {
 		text, err := fetcher.FetchWithOptions(ctx, args.URL, ports.FetchOptions{UserAgent: userAgent})
 		if err != nil {

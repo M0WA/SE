@@ -6,6 +6,7 @@ Everything about running and using searchengine: installing and configuring a de
 
 - **[Infrastructure options (IONOS)](infrastructure.md)** -- Infrastructure-agnostic: any host that can run a `.deb`, any Postgres/MySQL/SQLite database, any OpenAI-compatible inference endpoint.
 - **[Installation](installation.md)** -- The ordered install flow for a fresh Debian/Ubuntu host.
+- **[Docker Compose installation](docker-installation.md)** -- `docker compose up` alternative to the flow above -- same three binaries plus Postgres, in one command.
 - **[Environment variables](environment-variables.md)** -- All variables, read once at startup, typically from `/etc/searchengine/searchengine.env`.
 - **[Config files](config-files.md)** -- Every file this project's packaging touches or ships, and how it gets installed.
 
