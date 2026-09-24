@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.86 - 2026-09-24
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* test: broaden e2e-check with standard chatbot QA categories by @M0WA in https://github.com/M0WA/SE/pull/324
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.85...v4.13.86
+
+
 ## v4.13.85 - 2026-09-24
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
