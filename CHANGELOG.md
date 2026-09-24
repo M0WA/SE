@@ -1,5 +1,21 @@
 # Changelog
 
+## v4.13.85 - 2026-09-24
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Dependencies
+* chore(deps): Bump docker/metadata-action from 5.9.0 to 6.2.0 by @dependabot[bot] in https://github.com/M0WA/SE/pull/317
+* chore(deps): Bump docker/setup-buildx-action from 3.11.1 to 4.4.1 by @dependabot[bot] in https://github.com/M0WA/SE/pull/319
+* chore(deps): Bump docker/login-action from 3.6.0 to 4.6.0 by @dependabot[bot] in https://github.com/M0WA/SE/pull/318
+### Other Changes
+* feat: let vision_similarity/vision_caption accept a pasted image URL by @M0WA in https://github.com/M0WA/SE/pull/322
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.84...v4.13.85
+
+
 ## v4.13.84 - 2026-09-24
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
