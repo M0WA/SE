@@ -59,8 +59,11 @@ var errSkip = errors.New("skip")
 const (
 	skipNoPinnedChat      = "no pinned chat (checkChatPin must have failed)"
 	pathLogin             = "/login"
+	pathLogout            = "/logout"
+	pathSession           = "/session"
 	pathAdminAgents       = "/admin/api/agents"
 	pathAdminMCPServers   = "/admin/api/mcp-servers"
+	pathAdminUsers        = "/admin/api/users"
 	pathAccountChats      = "/account/api/chats"
 	pathAccountMCPServers = "/account/api/mcp-servers"
 	pathAccountFiles      = "/account/api/files"
@@ -118,6 +121,7 @@ func main() {
 		{"multi-turn: resumes topic after interruption", c.checkTopicSwitchAndResume},
 		{"multi-turn: graceful close (no spurious tools)", c.checkGracefulClose},
 		{"out-of-scope question: hedges instead of guessing", c.checkOutOfScopeHonesty},
+		{"chat: over-length message rejected", c.checkChatValidationBoundary},
 		{"always-on MCP tool (datetime)", c.checkDatetimeTool},
 		{"sandbox MCP tool (fast, no packages)", c.checkSandboxFast},
 		{"sandbox MCP tool (run_go)", c.checkGoSandbox},
@@ -139,11 +143,17 @@ func main() {
 	// smoke tests.
 	run(c.buildAgentChecks())
 	run(c.buildMCPConnectivityChecks())
+	run(c.buildAdminReadOnlyChecks())
 	run([]check{
 		{"admin CRUD: mcp server", c.checkAdminMCPServerCRUD},
 		{"admin CRUD: agent", c.checkAdminAgentCRUD},
+		{"admin CRUD: user", c.checkAdminUserCRUD},
+		{"admin: agent with empty mcp_server_ids gets no tools", c.checkAgentToolIsolation},
 		{"admin: embedding endpoints (list)", c.checkAdminEmbeddingEndpointsList},
 		{"admin: embeddings recompute status", c.checkAdminEmbeddingsRecomputeStatus},
+		// Last admin-session check on purpose -- see checkLogout's own doc
+		// comment for why.
+		{"auth: logout clears session", c.checkLogout},
 	})
 
 	// Phase 3: "user login" switches the one shared cookie jar over to
@@ -450,7 +460,7 @@ func (c *client) checkSessionRole(want string) func() error {
 		var out struct {
 			Role string `json:"role"`
 		}
-		status, err := c.getJSON("/session", &out)
+		status, err := c.getJSON(pathSession, &out)
 		if err != nil {
 			return err
 		}
@@ -516,6 +526,28 @@ func (c *client) checkUserForbiddenFromAdmin() error {
 	}
 	if status != http.StatusForbidden {
 		return fmt.Errorf("expected 403 for a regular user hitting an admin endpoint, got %d: %s", status, truncate(body, 200))
+	}
+	return nil
+}
+
+// checkLogout proves POST /logout actually revokes the session -- a
+// different code path from "wrong password"/"no cookie at all"
+// (checkWrongPasswordRejected/checkUnauthenticatedRejected above), and
+// had zero coverage in this suite despite being a real, user-facing
+// feature (every chat/search page's own logout button). Deliberately the
+// LAST admin-session check run: phase3 immediately re-authenticates as
+// the test user via its own "user login" check right after, so nothing
+// later is stranded without a session.
+func (c *client) checkLogout() error {
+	if _, err := c.postJSON(pathLogout, nil, nil); err != nil {
+		return err
+	}
+	status, body, err := c.getJSONRaw(pathSession)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusUnauthorized {
+		return fmt.Errorf("expected %d from %s after logout, got %d: %s", http.StatusUnauthorized, pathSession, status, truncate(body, 200))
 	}
 	return nil
 }
@@ -875,6 +907,28 @@ func (c *client) checkOutOfScopeHonesty() error {
 		strings.Contains(lower, "i'm not able") || strings.Contains(lower, "i am not able")
 	if !hedged {
 		return fmt.Errorf("expected the model to hedge/decline an unanswerable personal question rather than guess, got %q", out.Answer)
+	}
+	return nil
+}
+
+// checkChatValidationBoundary proves POST /chat's own request-size guard
+// (validateChatMessages' maxChatMessageContentLength, see chat.go) is
+// actually enforced live, not just in its own unit tests -- a real
+// DoS-shaped boundary with, until now, zero coverage from this suite.
+// Sends one clearly-too-long message rather than maxChatMessages+1 short
+// ones: cheaper, and exercises validateChatMessages' other length check
+// just as directly.
+func (c *client) checkChatValidationBoundary() error {
+	const maxChatMessageContentLength = 4000 // must match chat.go's own unexported constant
+	overLong := strings.Repeat("x", maxChatMessageContentLength+1)
+	status, body, err := c.doJSONRaw(http.MethodPost, "/chat", map[string]any{
+		"messages": []map[string]string{{"role": "user", "content": overLong}},
+	})
+	if err != nil {
+		return err
+	}
+	if status != http.StatusBadRequest {
+		return fmt.Errorf("expected 400 for an over-length chat message, got %d: %s", status, truncate(body, 200))
 	}
 	return nil
 }
@@ -1407,6 +1461,142 @@ func (c *client) checkAdminAgentCRUD() error {
 		return err
 	}
 	return nil
+}
+
+// checkAgentToolIsolation proves an agent with an EMPTY mcp_server_ids
+// list really gets NO global tools at all, not every configured server --
+// domain.Agent.MCPServerIDs' own doc comment calls this out explicitly as
+// a real gotcha an admin could otherwise assume the opposite of ("empty
+// means unrestricted"). Uses a question the always-on datetime server
+// would answer instantly if global tools leaked through despite the
+// empty scope. Unlike checkAdminAgentCRUD's scratch row, this one MUST
+// be created Enabled=true: ChatService.resolveAgent only honors an
+// agent_id when Enabled, silently falling back to "no agent active"
+// otherwise -- which would test the wrong thing entirely (the endpoint's
+// own default tool set, not this agent's scoped-to-nothing one). Briefly
+// visible to any signed-in user's agent picker for the few seconds this
+// check runs; scratchName ("e2e-check-scratch") makes that self-explanatory
+// if anyone notices, and it's deleted via defer regardless of outcome.
+func (c *client) checkAgentToolIsolation() error {
+	var created agentResponse
+	_, err := c.postJSON(pathAdminAgents, map[string]any{
+		"name": scratchName, "description": "e2e-check scratch row (no tools)", "system_prompt": "",
+		"mcp_server_ids": []string{}, "enabled": true,
+	}, &created)
+	if err != nil {
+		return err
+	}
+	defer c.deleteRequest(pathAdminAgents + "/" + created.ID)
+
+	out, err := c.chatOnce("Use your datetime tool to tell me the current UTC year.", chatOptions{agentID: created.ID})
+	if err != nil {
+		return err
+	}
+	if len(out.ToolResults) != 0 {
+		return fmt.Errorf("expected an agent with empty mcp_server_ids to have NO tools available, got tool_results: %+v", out.ToolResults)
+	}
+	if out.Answer == "" {
+		return fmt.Errorf("got an empty answer")
+	}
+	return nil
+}
+
+// userResponse mirrors admin_users.go's own wire shape for a domain.User
+// (PasswordHash never included).
+type userResponse struct {
+	ID           string `json:"id"`
+	Username     string `json:"username"`
+	IsAdmin      bool   `json:"is_admin"`
+	CustomPrompt string `json:"custom_prompt"`
+}
+
+// scratchUsername names the scratch account checkAdminUserCRUD creates
+// and always deletes -- distinct from scratchName (used for MCP
+// servers/agents) since a username has its own uniqueness/format rules.
+const scratchUsername = "e2e-check-scratch-user"
+
+// checkAdminUserCRUD creates a scratch, non-admin, never-logged-into user
+// (admin/users had zero e2e coverage despite being a core admin feature,
+// with the exact same CRUD shape MCP servers/agents already get), confirms
+// it's listed, patches its custom_prompt, then deletes it.
+func (c *client) checkAdminUserCRUD() error {
+	var created userResponse
+	_, err := c.postJSON(pathAdminUsers, map[string]any{
+		"username": scratchUsername, "password": "e2e-check-scratch-pw-1", "is_admin": false, "custom_prompt": "",
+	}, &created)
+	if err != nil {
+		return err
+	}
+	defer c.deleteRequest(pathAdminUsers + "/" + created.ID)
+
+	var users []userResponse
+	if _, err := c.getJSON(pathAdminUsers, &users); err != nil {
+		return err
+	}
+	found := false
+	for _, u := range users {
+		if u.ID == created.ID {
+			found = true
+		}
+	}
+	if !found {
+		return fmt.Errorf("created user %q not found in the list afterward", created.ID)
+	}
+
+	const updatedPrompt = "e2e-check updated prompt"
+	var patched userResponse
+	if _, err := c.patchJSON(pathAdminUsers+"/"+created.ID, map[string]any{"custom_prompt": updatedPrompt}, &patched); err != nil {
+		return err
+	}
+	if patched.CustomPrompt != updatedPrompt {
+		return fmt.Errorf("expected the patched custom_prompt to stick, got %q", patched.CustomPrompt)
+	}
+
+	if _, err := c.deleteRequest(pathAdminUsers + "/" + created.ID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// adminReadOnlyEndpoints lists admin GET endpoints backing a real admin
+// page's initial load -- checked as one flat list rather than one check
+// function each, since there's nothing more to assert about any of them
+// than "the page's own data source answers 200" (a live settings/corpus
+// mutation here would be exactly the kind of disruptive action
+// checkAdminEmbeddingEndpointsList/checkAdminEmbeddingsRecomputeStatus's
+// own doc comments already explain avoiding).
+var adminReadOnlyEndpoints = []struct {
+	label string
+	path  string
+}{
+	{"stats", "/admin/api/stats"},
+	{"overview metrics", "/admin/api/overview/metrics"},
+	{"documents overview", "/admin/api/documents/overview"},
+	{"domains", "/admin/api/domains"},
+	{"vocabulary", "/admin/api/vocabulary"},
+	{"settings", "/admin/api/settings"},
+	{"chat endpoint", "/admin/api/chat-endpoint"},
+	{"chat vision", "/admin/api/chat-vision"},
+}
+
+// buildAdminReadOnlyChecks turns adminReadOnlyEndpoints into one check
+// per entry, named "admin page data: <label>".
+func (c *client) buildAdminReadOnlyChecks() []check {
+	checks := make([]check, 0, len(adminReadOnlyEndpoints))
+	for _, e := range adminReadOnlyEndpoints {
+		e := e // no longer needed under Go 1.22+ loop semantics, kept for clarity
+		checks = append(checks, check{"admin page data: " + e.label, func() error {
+			status, body, err := c.getJSONRaw(e.path)
+			if err != nil {
+				return err
+			}
+			if status != http.StatusOK {
+				return fmt.Errorf("expected 200, got %d: %s", status, truncate(body, 200))
+			}
+			return nil
+		}})
+	}
+	return checks
 }
 
 // checkAdminEmbeddingEndpointsList is read-only (structural only): no
