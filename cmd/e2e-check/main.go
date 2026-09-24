@@ -32,6 +32,7 @@ package main
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -187,7 +188,13 @@ func main() {
 			{"security: image_url SSRF (blocked address) rejected", c.checkImageURLSSRFRejected},
 		}
 		if *includeSlow {
-			phase3 = append(phase3, check{"sandbox MCP tool: file_ids reads an uploaded PDF", c.checkSandboxFilePDF})
+			phase3 = append(phase3,
+				check{"sandbox MCP tool: file_ids reads an uploaded PDF", c.checkSandboxFilePDF},
+				check{"sandbox file_ids (python+go): PDF, formatted, embedded image, multi-page", c.checkSandboxFilePDFBothLanguages},
+				check{"sandbox file_ids (python+go): DOCX, formatted, embedded image", c.checkSandboxFileDOCXBothLanguages},
+				check{"sandbox file_ids (python+go): XLSX, formulas, embedded image", c.checkSandboxFileXLSXBothLanguages},
+				check{"sandbox file_ids (python+go): TXT", c.checkSandboxFileTXTBothLanguages},
+			)
 		}
 		phase3 = append(phase3,
 			check{"persistent chat: delete (cascades files)", c.checkChatDelete},
@@ -1221,6 +1228,363 @@ func (c *client) checkSandboxFilePDF() error {
 		return fmt.Errorf("expected the answer to contain the PDF's own marker text %q, got %q", marker, out.Answer)
 	}
 	return nil
+}
+
+//go:embed testdata/sample.pdf
+var sandboxFixturePDF []byte
+
+//go:embed testdata/sample.docx
+var sandboxFixtureDOCX []byte
+
+//go:embed testdata/sample.xlsx
+var sandboxFixtureXLSX []byte
+
+//go:embed testdata/sample.txt
+var sandboxFixtureTXT []byte
+
+const (
+	sandboxMarkerPDF  = "E2E-CHECK-PDF-MARKER-Q7ZT9"
+	sandboxMarkerDOCX = "E2E-CHECK-DOCX-MARKER-K4R8P"
+	sandboxMarkerXLSX = "E2E-CHECK-XLSX-MARKER-W9F2N"
+	sandboxMarkerTXT  = "E2E-CHECK-TXT-MARKER-J3V7L"
+)
+
+// sandboxPythonScriptPDF/DOCX/XLSX/TXT and sandboxGoScriptPDF/DOCX/XLSX/TXT are each a real,
+// already-verified-working script (against these exact fixture files, offline, before this
+// check existed) for checkSandboxFileFormat to hand the model verbatim -- see that function's
+// own doc comment for why this test gives the model an exact script rather than asking it to
+// write its own parser. The Go scripts are pure stdlib (archive/zip, encoding/xml, regexp) --
+// run_go has no go.mod, so a third-party import always fails to resolve regardless of -network.
+const (
+	sandboxPythonScriptPDF = `import pdfplumber
+with pdfplumber.open("sample.pdf") as pdf:
+    print("\n".join((p.extract_text() or "") for p in pdf.pages))
+    has_image = any(len(p.images) > 0 for p in pdf.pages)
+    print("IMAGE:" + ("yes" if has_image else "no"))
+`
+	sandboxPythonScriptDOCX = `import docx
+d = docx.Document("sample.docx")
+print("\n".join(p.text for p in d.paragraphs))
+print("\n".join(c.text for t in d.tables for r in t.rows for c in r.cells))
+print("IMAGE:" + ("yes" if len(d.inline_shapes) > 0 else "no"))
+`
+	sandboxPythonScriptXLSX = `import openpyxl
+wb = openpyxl.load_workbook("sample.xlsx")
+has_image = False
+for ws in wb.worksheets:
+    for row in ws.iter_rows():
+        for c in row:
+            if c.value is not None:
+                print(c.value)
+    if getattr(ws, "_images", None):
+        has_image = True
+print("IMAGE:" + ("yes" if has_image else "no"))
+`
+	sandboxPythonScriptTXT = `print(open("sample.txt").read())
+`
+
+	sandboxGoScriptPDF = `package main
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"regexp"
+	"strings"
+)
+
+func main() {
+	data, err := os.ReadFile("sample.pdf")
+	if err != nil {
+		panic(err)
+	}
+	streamRe := regexp.MustCompile(` + "`(?s)stream\\n(.*?)\\nendstream`" + `)
+	tjRe := regexp.MustCompile(` + "`\\(((?:[^()\\\\]|\\\\.)*)\\)\\s*Tj`" + `)
+	var out strings.Builder
+	for _, m := range streamRe.FindAllSubmatch(data, -1) {
+		for _, tm := range tjRe.FindAllSubmatch(m[1], -1) {
+			s := string(tm[1])
+			s = strings.ReplaceAll(s, ` + "`\\(`" + `, "(")
+			s = strings.ReplaceAll(s, ` + "`\\)`" + `, ")")
+			s = strings.ReplaceAll(s, ` + "`\\\\`" + `, ` + "`\\`" + `)
+			out.WriteString(s)
+			out.WriteByte('\n')
+		}
+	}
+	fmt.Print(out.String())
+	hasImage := bytes.Contains(data, []byte("/Subtype /Image"))
+	fmt.Println("IMAGE:" + map[bool]string{true: "yes", false: "no"}[hasImage])
+}
+`
+	sandboxGoScriptDOCX = `package main
+
+import (
+	"archive/zip"
+	"bytes"
+	"encoding/xml"
+	"fmt"
+	"io"
+	"strings"
+)
+
+func main() {
+	r, err := zip.OpenReader("sample.docx")
+	if err != nil {
+		panic(err)
+	}
+	defer r.Close()
+	var data []byte
+	for _, f := range r.File {
+		if f.Name == "word/document.xml" {
+			rc, err := f.Open()
+			if err != nil {
+				panic(err)
+			}
+			data, err = io.ReadAll(rc)
+			rc.Close()
+			if err != nil {
+				panic(err)
+			}
+		}
+	}
+	var out bytes.Buffer
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	inText := false
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			panic(err)
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if t.Name.Local == "t" {
+				inText = true
+			}
+		case xml.EndElement:
+			if t.Name.Local == "t" {
+				inText = false
+			} else if t.Name.Local == "p" || t.Name.Local == "tr" {
+				out.WriteByte('\n')
+			}
+		case xml.CharData:
+			if inText {
+				out.Write(t)
+			}
+		}
+	}
+	fmt.Print(out.String())
+	hasImage := false
+	for _, f := range r.File {
+		if strings.HasPrefix(f.Name, "word/media/") {
+			hasImage = true
+		}
+	}
+	fmt.Println("IMAGE:" + map[bool]string{true: "yes", false: "no"}[hasImage])
+}
+`
+	sandboxGoScriptXLSX = `package main
+
+import (
+	"archive/zip"
+	"bytes"
+	"encoding/xml"
+	"fmt"
+	"io"
+	"strconv"
+	"strings"
+)
+
+type sst struct {
+	SI []struct {
+		T string ` + "`xml:\"t\"`" + `
+	} ` + "`xml:\"si\"`" + `
+}
+
+func main() {
+	r, err := zip.OpenReader("sample.xlsx")
+	if err != nil {
+		panic(err)
+	}
+	defer r.Close()
+
+	var shared []string
+	var sheetFiles []*zip.File
+	for _, f := range r.File {
+		if f.Name == "xl/sharedStrings.xml" {
+			rc, _ := f.Open()
+			data, _ := io.ReadAll(rc)
+			rc.Close()
+			var s sst
+			if err := xml.Unmarshal(data, &s); err != nil {
+				panic(err)
+			}
+			for _, si := range s.SI {
+				shared = append(shared, si.T)
+			}
+		}
+		if strings.HasPrefix(f.Name, "xl/worksheets/sheet") {
+			sheetFiles = append(sheetFiles, f)
+		}
+	}
+
+	type cell struct {
+		T  string ` + "`xml:\"t,attr\"`" + `
+		V  string ` + "`xml:\"v\"`" + `
+		IS struct {
+			T string ` + "`xml:\"t\"`" + `
+		} ` + "`xml:\"is\"`" + `
+	}
+	type row struct {
+		C []cell ` + "`xml:\"c\"`" + `
+	}
+	type sheetData struct {
+		Row []row ` + "`xml:\"sheetData>row\"`" + `
+	}
+
+	var out bytes.Buffer
+	for _, f := range sheetFiles {
+		rc, err := f.Open()
+		if err != nil {
+			panic(err)
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			panic(err)
+		}
+		var sd sheetData
+		if err := xml.Unmarshal(data, &sd); err != nil {
+			panic(err)
+		}
+		for _, rw := range sd.Row {
+			for _, c := range rw.C {
+				val := c.V
+				if c.T == "s" {
+					if idx, err := strconv.Atoi(c.V); err == nil && idx >= 0 && idx < len(shared) {
+						val = shared[idx]
+					}
+				} else if c.T == "inlineStr" {
+					val = c.IS.T
+				}
+				if val != "" {
+					out.WriteString(val)
+					out.WriteByte('\n')
+				}
+			}
+		}
+	}
+	fmt.Print(out.String())
+	hasImage := false
+	for _, f := range r.File {
+		if strings.HasPrefix(f.Name, "xl/media/") {
+			hasImage = true
+		}
+	}
+	fmt.Println("IMAGE:" + map[bool]string{true: "yes", false: "no"}[hasImage])
+}
+`
+	sandboxGoScriptTXT = `package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	data, err := os.ReadFile("sample.txt")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Print(string(data))
+}
+`
+)
+
+// checkSandboxFileFormat proves mcp-sandbox's file_ids capability for one file format, in both
+// languages the sandbox supports (see cmd/mcp-sandbox's own doc comment on file_ids): uploads
+// fixtureData under filename, then drives two separate chat turns, each handing the model an
+// EXACT, already-verified-working script (see the sandboxPythonScript*/sandboxGoScript*
+// constants above) to run via file_ids -- not asking the model to write its own parser. This
+// isolates what's being tested to "does file_ids + the sandbox mount actually make the file's
+// bytes readable," not "can the model write a correct parser for this binary format from
+// scratch" -- a much less reliable thing to assert on, especially for Go's own pure-stdlib-only
+// PDF/XLSX parsing. requireImage additionally asserts the script's own "IMAGE:yes" line (every
+// fixture but the plain-text one embeds a real image -- see cmd/e2e-check/testdata's own
+// generation notes) -- proving the file_ids round trip preserves real embedded binary content,
+// not just text. Cleans up the uploaded file regardless of outcome.
+func (c *client) checkSandboxFileFormat(filename, contentType string, fixtureData []byte, marker string, requireImage bool, pyPackages []string, pyScript, goScript string) error {
+	if c.testChatID == "" {
+		return skip(skipNoPinnedChat)
+	}
+	uploaded, err := c.uploadFile(c.testChatID, filename, contentType, fixtureData)
+	if err != nil {
+		return err
+	}
+	defer c.deleteRequest("/account/api/files/" + uploaded.ID)
+
+	runWith := func(tool, packagesClause, script string) error {
+		prompt := fmt.Sprintf(
+			"Use %s with file_ids [%q]%s to run this exact script verbatim, then reply with only its stdout:\n\n%s",
+			tool, uploaded.ID, packagesClause, script)
+		out, err := c.chatOnce(prompt, chatOptions{chatID: c.testChatID})
+		if err != nil {
+			return err
+		}
+		if len(out.ToolResults) == 0 {
+			return fmt.Errorf("expected %s to be called, got no tool_results", tool)
+		}
+		if err := checkNoToolErrors(out); err != nil {
+			return err
+		}
+		if !strings.Contains(out.Answer, marker) {
+			return fmt.Errorf("expected the answer to contain the file's own marker text %q, got %q", marker, out.Answer)
+		}
+		if requireImage && !strings.Contains(out.Answer, "IMAGE:yes") {
+			return fmt.Errorf("expected the answer to confirm the file's embedded image was found (IMAGE:yes), got %q", out.Answer)
+		}
+		return nil
+	}
+
+	packagesClause := ""
+	if len(pyPackages) > 0 {
+		quoted := make([]string, len(pyPackages))
+		for i, p := range pyPackages {
+			quoted[i] = fmt.Sprintf("%q", p)
+		}
+		packagesClause = fmt.Sprintf(" and packages [%s]", strings.Join(quoted, ", "))
+	}
+	if err := runWith("run_python", packagesClause, pyScript); err != nil {
+		return fmt.Errorf("run_python: %w", err)
+	}
+	if err := runWith("run_go", "", goScript); err != nil {
+		return fmt.Errorf("run_go: %w", err)
+	}
+	return nil
+}
+
+func (c *client) checkSandboxFilePDFBothLanguages() error {
+	return c.checkSandboxFileFormat("sample.pdf", "application/pdf", sandboxFixturePDF, sandboxMarkerPDF, true,
+		[]string{"pdfplumber"}, sandboxPythonScriptPDF, sandboxGoScriptPDF)
+}
+
+func (c *client) checkSandboxFileDOCXBothLanguages() error {
+	return c.checkSandboxFileFormat("sample.docx",
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document", sandboxFixtureDOCX, sandboxMarkerDOCX, true,
+		[]string{"python-docx"}, sandboxPythonScriptDOCX, sandboxGoScriptDOCX)
+}
+
+func (c *client) checkSandboxFileXLSXBothLanguages() error {
+	return c.checkSandboxFileFormat("sample.xlsx",
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", sandboxFixtureXLSX, sandboxMarkerXLSX, true,
+		[]string{"openpyxl"}, sandboxPythonScriptXLSX, sandboxGoScriptXLSX)
+}
+
+func (c *client) checkSandboxFileTXTBothLanguages() error {
+	return c.checkSandboxFileFormat("sample.txt", "text/plain", sandboxFixtureTXT, sandboxMarkerTXT, false,
+		nil, sandboxPythonScriptTXT, sandboxGoScriptTXT)
 }
 
 func checkNoToolErrors(out chatResponse) error {
