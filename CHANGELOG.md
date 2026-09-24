@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.83 - 2026-09-24
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* fix: bundle recomputeBatch/recomputeOneDocument's shared params by @M0WA in https://github.com/M0WA/SE/pull/314
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.82...v4.13.83
+
+
 ## v4.13.82 - 2026-09-24
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
