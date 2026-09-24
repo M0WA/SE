@@ -460,6 +460,16 @@ func (r *Repository) TopSemanticMatches(ctx context.Context, queryVec []float32,
 		return nil, false, fmt.Errorf("setting hnsw.ef_search: %w", err)
 	}
 
+	// provider reaches here only after passing a map-membership check
+	// against the admin-configured embedder set at every caller
+	// (hybrid_search_service.go's resolveProviderWeights,
+	// restapi/vision_similarity.go's explicit h.embedders[req.Provider]
+	// check) -- never raw, unvalidated user input, and its format is
+	// separately constrained (see vectorColumnNameFor's own doc comment)
+	// even before that. A static SQL-injection scanner can't see either
+	// invariant and will flag topSemanticMatchesQuery's provider-derived
+	// column name below as tainted; verified false positive, dismissed
+	// with this reasoning on the corresponding CodeQL alert.
 	query, args, err := topSemanticMatchesQuery(r, provider, shards, queryVec, limit)
 	if err != nil {
 		return nil, false, err
