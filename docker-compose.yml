@@ -2,9 +2,16 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_USER: searchengine
-      POSTGRES_PASSWORD: searchengine
-      POSTGRES_DB: searchengine
+      # "searchengine"/"searchengine" is a fine default -- this DB is
+      # reachable only from this compose network plus loopback (see the
+      # ports: line below), never the network at large -- but every
+      # service's own DB_DSN below reads the same two vars rather than
+      # hardcoding the literal, so overriding either in .env (a real
+      # password, if this ever needs to be reachable more broadly)
+      # doesn't mean hunting down every place it's repeated.
+      POSTGRES_USER: ${POSTGRES_USER:-searchengine}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-searchengine}
+      POSTGRES_DB: ${POSTGRES_DB:-searchengine}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     # Bound to loopback only, not the container's own network -- exists so
@@ -14,7 +21,7 @@ services:
     ports:
       - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U searchengine -d searchengine"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-searchengine} -d ${POSTGRES_DB:-searchengine}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -27,7 +34,7 @@ services:
         condition: service_healthy
     environment:
       DB_DRIVER: pgx
-      DB_DSN: postgres://searchengine:searchengine@postgres:5432/searchengine?sslmode=disable
+      DB_DSN: postgres://${POSTGRES_USER:-searchengine}:${POSTGRES_PASSWORD:-searchengine}@postgres:5432/${POSTGRES_DB:-searchengine}?sslmode=disable
       # The image's own default (127.0.0.1:8080) is unreachable from
       # outside its own container's network namespace -- every service
       # below needs the 0.0.0.0 override for its own *_LISTEN_ADDR the
@@ -50,7 +57,7 @@ services:
         condition: service_started
     environment:
       DB_DRIVER: pgx
-      DB_DSN: postgres://searchengine:searchengine@postgres:5432/searchengine?sslmode=disable
+      DB_DSN: postgres://${POSTGRES_USER:-searchengine}:${POSTGRES_PASSWORD:-searchengine}@postgres:5432/${POSTGRES_DB:-searchengine}?sslmode=disable
       ADMIN_LISTEN_ADDR: 0.0.0.0:8081
       # crawl-server's own compose service name resolves on this network --
       # nothing like nginx's local-host-only proxy_pass assumption applies
@@ -74,7 +81,7 @@ services:
         condition: service_healthy
     environment:
       DB_DRIVER: pgx
-      DB_DSN: postgres://searchengine:searchengine@postgres:5432/searchengine?sslmode=disable
+      DB_DSN: postgres://${POSTGRES_USER:-searchengine}:${POSTGRES_PASSWORD:-searchengine}@postgres:5432/${POSTGRES_DB:-searchengine}?sslmode=disable
       CRAWL_LISTEN_ADDR: 0.0.0.0:8082
       CRAWL_INTERNAL_TOKEN: "${CRAWL_INTERNAL_TOKEN:?generate with: openssl rand -hex 32}"
     # No ports: block at all -- crawl-server is reached only by admin-server

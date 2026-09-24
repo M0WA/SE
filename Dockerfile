@@ -12,7 +12,12 @@ RUN CGO_ENABLED=0 go build -o /out/searchengine-search ./cmd/search && \
     CGO_ENABLED=0 go build -o /out/searchengine-mcp-files ./cmd/mcp-files && \
     CGO_ENABLED=0 go build -o /out/searchengine-mcp-vision ./cmd/mcp-vision
 
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+# The digest alone fully and unambiguously pins this image's exact
+# content (it was the "nonroot" tag's digest at time of pinning, per
+# gcr.io/distroless/static-debian12's own manifest -- runs as a non-root
+# user either way); a tag alongside a digest is redundant and SonarCloud's
+# docker:S8431 flags it.
+FROM gcr.io/distroless/static-debian12@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 COPY --from=build /out/searchengine-search /usr/bin/searchengine-search
 COPY --from=build /out/searchengine-admin /usr/bin/searchengine-admin
 COPY --from=build /out/searchengine-crawl /usr/bin/searchengine-crawl
