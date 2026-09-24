@@ -1804,24 +1804,81 @@ test('renderInline never interprets markdown syntax found inside a code span', (
   assert.equal(renderInline('`**not bold**`'), '<code>**not bold**</code>');
 });
 
-test('normalizeMathDelimiters strips LaTeX delimiters and translates common macros', () => {
-  const { normalizeMathDelimiters } = loadFixture();
-  assert.equal(normalizeMathDelimiters('\\( 12.123 \\times 12.123 \\)'), ' 12.123 × 12.123 ');
-  assert.equal(normalizeMathDelimiters('\\[ a \\leq b \\]'), ' a ≤ b ');
-  assert.equal(normalizeMathDelimiters('\\sqrt{2} + \\frac{1}{2}'), '√(2) + (1)/(2)');
-  assert.equal(normalizeMathDelimiters('x^{2} + a_{i}'), 'x^2 + a_i');
+test('parseLatex builds an AST for symbols, sqrt, frac, sup, and sub, arbitrarily nested', () => {
+  const { parseLatex } = loadFixture();
+  assert.deepEqual(parseLatex('a \\times b', { i: 0 }), [
+    { type: 'text', value: 'a ' },
+    { type: 'symbol', name: 'times' },
+    { type: 'text', value: ' b' },
+  ]);
+  assert.deepEqual(parseLatex('\\frac{\\sqrt{2}}{2}', { i: 0 }), [
+    {
+      type: 'frac',
+      num: [{ type: 'sqrt', arg: [{ type: 'text', value: '2' }] }],
+      den: [{ type: 'text', value: '2' }],
+    },
+  ]);
+  assert.deepEqual(parseLatex('x^2 + a_{i}', { i: 0 }), [
+    { type: 'text', value: 'x' },
+    { type: 'sup', arg: [{ type: 'text', value: '2' }] },
+    { type: 'text', value: ' + a' },
+    { type: 'sub', arg: [{ type: 'text', value: 'i' }] },
+  ]);
 });
 
-test('normalizeMathDelimiters drops the backslash off an unknown macro rather than leaving it stray', () => {
+test('parseLatex throws on an unclosed brace or a macro missing its argument', () => {
+  const { parseLatex } = loadFixture();
+  assert.throws(() => parseLatex('\\frac{1}{2', { i: 0 }));
+  assert.throws(() => parseLatex('\\sqrt', { i: 0 }));
+});
+
+test('renderMathSpan renders a real nested radical/fraction/sup/sub, wrapped in the given class', () => {
+  const { renderMathSpan } = loadFixture();
+  assert.equal(
+    renderMathSpan('a \\times b', 'ksim-inline'),
+    '<span class="ksim-inline">a × b</span>',
+  );
+  assert.equal(
+    renderMathSpan('\\sqrt{2}', 'ksim-inline'),
+    '<span class="ksim-inline"><span class="ksim-sqrt"><span class="ksim-sqrt-sign">√</span><span class="ksim-sqrt-body">2</span></span></span>',
+  );
+  assert.equal(
+    renderMathSpan('\\frac{1}{2}', 'ksim-inline'),
+    '<span class="ksim-inline"><span class="ksim-frac"><span class="ksim-frac-num">1</span><span class="ksim-frac-den">2</span></span></span>',
+  );
+  assert.equal(renderMathSpan('x^{2}', 'ksim-inline'), '<span class="ksim-inline">x<sup>2</sup></span>');
+});
+
+test('renderMathSpan falls back to flattened text for a span it cannot parse, never throwing', () => {
+  const { renderMathSpan } = loadFixture();
+  // \frac{1}{2 is missing its closing brace -- parseLatex throws, and the fallback just drops
+  // \frac's own backslash (it isn't a known symbol macro) rather than reconstructing the fraction.
+  assert.equal(renderMathSpan('\\frac{1}{2', 'ksim-inline'), '<span class="ksim-inline">frac{1}{2</span>');
+});
+
+test('flattenLatexMacrosOnly drops the backslash off an unknown macro rather than leaving it stray', () => {
+  const { flattenLatexMacrosOnly } = loadFixture();
+  assert.equal(flattenLatexMacrosOnly('\\notarealmacro'), 'notarealmacro');
+});
+
+test('normalizeMathDelimiters renders \\( \\)/\\[ \\] spans, leaving surrounding text untouched', () => {
   const { normalizeMathDelimiters } = loadFixture();
-  assert.equal(normalizeMathDelimiters('\\notarealmacro'), 'notarealmacro');
+  assert.equal(
+    normalizeMathDelimiters('The answer is \\( 12.123 \\times 12.123 \\).'),
+    'The answer is <span class="ksim-inline"> 12.123 × 12.123 </span>.',
+  );
+  assert.equal(
+    normalizeMathDelimiters('\\[ a \\leq b \\]'),
+    '<span class="ksim-display"> a ≤ b </span>',
+  );
+  assert.equal(normalizeMathDelimiters('no math here, just a path like C:\\foo'), 'no math here, just a path like C:\\foo');
 });
 
 test('renderInline normalizes LaTeX math delimiters but never inside a code span', () => {
   const { renderInline } = loadFixture();
   assert.equal(
-    renderInline('The answer is \\( 12.123 \\times 12.123 = 146.967129 \\).'),
-    'The answer is  12.123 × 12.123 = 146.967129 .',
+    renderInline('The answer is \\( 12.123 \\times 12.123 \\).'),
+    'The answer is <span class="ksim-inline"> 12.123 × 12.123 </span>.',
   );
   assert.equal(renderInline('`\\times`'), '<code>\\times</code>');
 });
