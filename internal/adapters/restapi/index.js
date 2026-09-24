@@ -30,6 +30,10 @@
   const chatTokenUsageDonut = document.getElementById('chat-token-usage-donut');
   const adminLink = document.getElementById('admin-link');
   const accountLink = document.getElementById('account-link');
+  const filePreviewDialog = document.getElementById('file-preview-dialog');
+  const filePreviewTitle = document.getElementById('file-preview-title');
+  const filePreviewBody = document.getElementById('file-preview-body');
+  const filePreviewClose = document.getElementById('file-preview-close');
 
   // tabs holds every open conversation this session -- forking deep-copies history into an
   // independent tab. Session-only in-memory (Export/Import is the escape hatch to keep one).
@@ -625,10 +629,12 @@
     }
 
     chatMessages.appendChild(msg);
-    // Scroll so the new turn's beginning lands at the top of #chat-messages (a fixed-height
-    // scrollable box) -- scrolling to msg's top, not chatMessages.scrollHeight (which lands on
-    // the end), means a long answer is always read from its first line.
-    chatMessages.scrollTop = msg.offsetTop;
+    // Scroll the page so the new turn's beginning lands at the top of the viewport -- scrolling
+    // to msg's own top ({block: 'start'}), not its bottom/scrollIntoView()'s default (nearest,
+    // which can land on the end), means a long answer is always read from its first line.
+    // #chat-messages has no scroll/max-height of its own (see its CSS comment) -- the whole page
+    // is the only scrolling container, so this is the browser's own default scroll target.
+    msg.scrollIntoView({ block: 'start' });
     return msg;
   }
 
@@ -944,9 +950,76 @@
     }
   });
 
+  // viewIconSVG is the same eye glyph as admin.js's ICON_SVGS.view, duplicated locally rather
+  // than loading admin.js on this public page for one icon -- same reasoning as buildDonutSVG
+  // above. stroke="currentColor" keeps it matching the surrounding button's color/hover/focus.
+  function viewIconSVG() {
+    return '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+  }
+
+  // isPreviewableImage/isPreviewableText decide how viewChatFile renders a file's content --
+  // anything else (a PDF, a zip, ...) falls back to a plain "no preview" message plus its
+  // existing download link, rather than guessing at how to display it.
+  function isPreviewableImage(contentType) {
+    return /^image\//.test(contentType || '');
+  }
+  function isPreviewableText(contentType) {
+    return /^text\//.test(contentType || '') || /^application\/(json|javascript|xml|x-yaml|yaml)\b/.test(contentType || '');
+  }
+
+  // previewObjectURL tracks the last image preview's blob: URL so it can be revoked before the
+  // next preview creates a new one (or the dialog is closed) -- otherwise each view leaks memory.
+  let previewObjectURL = null;
+  function revokePreviewObjectURL() {
+    if (previewObjectURL) {
+      URL.revokeObjectURL(previewObjectURL);
+      previewObjectURL = null;
+    }
+  }
+
+  // viewChatFile opens #file-preview-dialog (a native <dialog>, so Escape-to-close and backdrop
+  // focus-trapping come for free) and fills it with the file's own content: text is fetched and
+  // shown in a <pre>, an image is shown inline, anything else gets a plain fallback message.
+  async function viewChatFile(f) {
+    filePreviewTitle.textContent = f.filename;
+    clear(filePreviewBody);
+    filePreviewBody.textContent = 'Loading…';
+    filePreviewDialog.showModal();
+    try {
+      const resp = await fetch('/account/api/files/' + encodeURIComponent(f.id));
+      if (!resp.ok) throw new Error(await resp.text() || resp.statusText);
+      clear(filePreviewBody);
+      if (isPreviewableImage(f.content_type)) {
+        revokePreviewObjectURL();
+        const blob = await resp.blob();
+        previewObjectURL = URL.createObjectURL(blob);
+        const img = document.createElement('img');
+        img.className = 'file-preview-image';
+        img.src = previewObjectURL;
+        img.alt = f.filename;
+        filePreviewBody.appendChild(img);
+      } else if (isPreviewableText(f.content_type)) {
+        const pre = document.createElement('pre');
+        pre.textContent = await resp.text();
+        filePreviewBody.appendChild(pre);
+      } else {
+        const p = document.createElement('p');
+        p.textContent = 'No preview available for this file type (' + (f.content_type || 'unknown') + '). Use the filename link to download it instead.';
+        filePreviewBody.appendChild(p);
+      }
+    } catch (err) {
+      clear(filePreviewBody);
+      filePreviewBody.textContent = 'Could not load file: ' + err.message;
+    }
+  }
+
+  filePreviewClose.addEventListener('click', () => filePreviewDialog.close());
+  filePreviewDialog.addEventListener('close', revokePreviewObjectURL);
+
   // renderChatFileBox builds one box for #chat-files -- a real download link (works like any
-  // link: open in new tab, copy address) plus a "×" that deletes outright, no confirmation -- a
-  // quick, low-friction remove, unlike the Your files page's more deliberate delete.
+  // link: open in new tab, copy address), a "view" icon that opens the content preview dialog,
+  // and a "×" that deletes outright, no confirmation -- a quick, low-friction remove, unlike the
+  // Your files page's more deliberate delete.
   function renderChatFileBox(f) {
     const box = document.createElement('div');
     box.className = 'chat-file-box';
@@ -956,6 +1029,14 @@
     link.textContent = f.filename;
     link.title = 'Download ' + f.filename;
     box.appendChild(link);
+    const viewBtn = document.createElement('button');
+    viewBtn.type = 'button';
+    viewBtn.className = 'chat-file-view';
+    viewBtn.innerHTML = viewIconSVG();
+    viewBtn.title = 'View ' + f.filename;
+    viewBtn.setAttribute('aria-label', 'View ' + f.filename);
+    viewBtn.addEventListener('click', () => viewChatFile(f));
+    box.appendChild(viewBtn);
     const closeBtn = document.createElement('button');
     closeBtn.type = 'button';
     closeBtn.className = 'chat-file-close';
