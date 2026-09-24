@@ -1,5 +1,18 @@
 # Changelog
 
+## v4.13.89 - 2026-09-24
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* ci: cache verify-install's apt archives, retry once on failure by @M0WA in https://github.com/M0WA/SE/pull/334
+* test: add a curated open-port regression check to e2e-check by @M0WA in https://github.com/M0WA/SE/pull/335
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.88...v4.13.89
+
+
 ## v4.13.88 - 2026-09-24
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
