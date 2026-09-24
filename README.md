@@ -22,6 +22,7 @@ also served as a site at https://m0wa.github.io/SE/.
 
 | Directory | What it's for |
 |---|---|
+| [packaging/docker/](packaging/docker/README.md) | `docker compose up` -- an alternative to the `.deb` install below, same three binaries + Postgres in containers. Image published to `ghcr.io/m0wa/se` on every release. |
 | [packaging/nginx/](packaging/nginx/README.md) | Routes the binaries behind one public domain + TLS. |
 | [packaging/prometheus/](packaging/prometheus/README.md) | Host/nginx/Postgres metrics → IONOS monitoring. |
 | [packaging/prometheus-gpu/](packaging/prometheus-gpu/README.md) | Same, for the GPU inference host. |

@@ -4,6 +4,8 @@
 
 The ordered install flow for a fresh Debian/Ubuntu host, for standing up a new deployment. Steps 1-2 are handled automatically by the `.deb`; everything from nginx onward is a manual step the package deliberately skips.
 
+**Prefer containers?** [`docker compose up`](https://github.com/M0WA/SE/blob/main/packaging/docker/README.md) is a full alternative to this whole flow -- the same three binaries plus Postgres, in one command, image published to `ghcr.io/m0wa/se` on every release. It skips nginx/TLS/systemd entirely (bring your own reverse proxy if you want those), so it's a faster way to get a real, working instance up, at the cost of the rendering-capable-crawl and sandboxed-code-execution capabilities noted in that README.
+
 ## 1. Install prerequisite OS packages
 
 The `.deb`'s `Depends` is just `libc6`; `Recommends` pulls in the GTK/Cairo/NSS libraries Playwright's Chromium/Firefox rendering needs.
@@ -45,8 +47,12 @@ Edit `/etc/searchengine/searchengine.env` (mode `640`, already owned by `searche
 DB_DRIVER=sqlite
 DB_DSN=file:/var/lib/searchengine/search.db?cache=shared
 
-# Postgres (dev-deployment style):
-DB_DRIVER=postgres
+# Postgres (dev-deployment style) -- "pgx", the actual database/sql
+# driver name github.com/jackc/pgx/v5/stdlib registers, NOT "postgres"
+# (a bare `sql.Open("postgres", ...)` fails with "unknown driver"; the
+# dialect layer accepts either name, but only "pgx" actually opens a
+# connection):
+DB_DRIVER=pgx
 DB_DSN=postgres://user:pass@dbhost:5432/searchengine?sslmode=require
 ```
 
@@ -83,7 +89,7 @@ create it through the API); needs `apache2-utils` for `htpasswd` (bcrypt
 hashing) and, for Postgres, the `postgresql-client` package for `psql`:
 
 ```
-apt-get install apache2-utils   # + postgresql-client if DB_DRIVER=postgres
+apt-get install apache2-utils   # + postgresql-client if DB_DRIVER=pgx
 ./packaging/create-admin.sh admin
 # prompts for a password (bcrypt-hashed locally, never logged), then
 # inserts a users row with is_admin=true using the DB_DRIVER/DB_DSN

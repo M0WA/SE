@@ -37,7 +37,7 @@ See [Provisioning with ionosctl](#provisioning-with-ionosctl) below for creating
 
 ## Database
 
-A managed alternative to self-hosting: [IONOS DBaaS for PostgreSQL](https://cloud.ionos.de/managed/dbaas/postgresql) (`DB_DRIVER=postgres`) or [IONOS DBaaS for MariaDB](https://cloud.ionos.de/managed/dbaas/mariadb) (MySQL-compatible, `DB_DRIVER=mysql`) -- see [Environment variables](environment-variables.md). SQLite (the default, no external database) remains simplest for a small single-host deployment.
+A managed alternative to self-hosting: [IONOS DBaaS for PostgreSQL](https://cloud.ionos.de/managed/dbaas/postgresql) (`DB_DRIVER=pgx`) or [IONOS DBaaS for MariaDB](https://cloud.ionos.de/managed/dbaas/mariadb) (MySQL-compatible, `DB_DRIVER=mysql`) -- see [Environment variables](environment-variables.md). SQLite (the default, no external database) remains simplest for a small single-host deployment.
 
 ## Monitoring pipeline
 
