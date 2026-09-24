@@ -22,6 +22,7 @@ Click "Add endpoint" to open a blank configuration form on the detail page. With
 
 > **Worth knowing:**
 > - This table has no client-side search filter, unlike most other admin list pages -- fine for the realistic small number of embedding endpoints most installs configure.
+> - A **disabled** row you didn't create yourself isn't a bug -- some deployments (see [Infrastructure options](infrastructure.md#hosted-ai-instead-of-self-hosting)) pre-stage a few other hosted-provider models here as convenience placeholders, so switching providers later is enabling+keying one rather than starting from scratch. This is deployment-specific seeded data, not something every fresh install gets.
 
 ---
 ← [Embeddings](embeddings.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Embedding endpoint detail](embedding-endpoint-detail.md) →
