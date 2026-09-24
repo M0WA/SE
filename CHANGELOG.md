@@ -1,5 +1,19 @@
 # Changelog
 
+## v4.13.84 - 2026-09-24
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Dependencies
+* chore(deps): Bump distroless/static-debian12 from `afa5c87` to `d75cdd7` by @dependabot[bot] in https://github.com/M0WA/SE/pull/316
+### Other Changes
+* fix: cover every first-party MCP tool in e2e-check, not just some by @M0WA in https://github.com/M0WA/SE/pull/320
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.83...v4.13.84
+
+
 ## v4.13.83 - 2026-09-24
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
