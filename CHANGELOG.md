@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.79 - 2026-09-24
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* perf: use a prepared statement for the embedding upsert hot path by @M0WA in https://github.com/M0WA/SE/pull/306
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.78...v4.13.79
+
+
 ## v4.13.78 - 2026-09-23
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
