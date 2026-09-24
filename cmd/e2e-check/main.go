@@ -9,8 +9,10 @@
 // handling (a real client resends full history on every /chat call --
 // see chatOptions.history's own doc comment), prompt-injection resistance
 // against fetched content, persistent-chat/file lifecycle (including a
-// fork's independence), admin/account CRUD, and gateway/proxy timeout
-// misconfiguration -- the class of bug a mocked test never exercises.
+// fork's independence), admin/account CRUD, gateway/proxy timeout
+// misconfiguration, and unexpected public network exposure (a curated
+// port scan -- see checkNoUnexpectedOpenPorts) -- the class of bug a
+// mocked test never exercises.
 // Deliberately does NOT trigger a real crawl job: that mutates the live
 // index against a real seed URL with no clean undo, too invasive even as
 // an opt-in check.
@@ -39,10 +41,14 @@ import (
 	"image/png"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -96,6 +102,7 @@ func main() {
 	}
 	c := &client{
 		base: "https://" + *host,
+		host: *host,
 		http: &http.Client{Jar: jar, Timeout: *timeout},
 	}
 
@@ -130,6 +137,7 @@ func main() {
 		{"search: sort order", c.checkSearchSort},
 		{"security: wrong password rejected", c.checkWrongPasswordRejected(creds.AdminUser)},
 		{"security: unauthenticated request rejected", c.checkUnauthenticatedRejected},
+		{"security: no unexpected open ports", c.checkNoUnexpectedOpenPorts},
 	}
 	if *includeSlow {
 		phase1 = append(phase1, check{"sandbox MCP tool (package install)", c.checkSandboxSlow})
@@ -262,7 +270,11 @@ func loadCredentials(path string) (credentials, error) {
 // parallel, since they share this one session's state (and, after
 // "persistent chat: pin," chat IDs the later checks reuse).
 type client struct {
-	base           string
+	base string
+	// host is base's plain hostname (no scheme) -- kept separately for
+	// checks that need a raw TCP dial (checkNoUnexpectedOpenPorts) rather
+	// than going through http.
+	host           string
 	http           *http.Client
 	testChatID     string
 	testForkChatID string
@@ -276,7 +288,7 @@ func (c *client) freshClient() (*client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &client{base: c.base, http: &http.Client{Jar: jar, Timeout: c.http.Timeout}}, nil
+	return &client{base: c.base, host: c.host, http: &http.Client{Jar: jar, Timeout: c.http.Timeout}}, nil
 }
 
 func (c *client) getJSON(path string, out any) (int, error) {
@@ -511,6 +523,96 @@ func (c *client) checkUnauthenticatedRejected() error {
 	}
 	if status != http.StatusUnauthorized {
 		return fmt.Errorf("expected 401 for an unauthenticated request, got %d", status)
+	}
+	return nil
+}
+
+// portScanTimeout bounds each individual TCP connect attempt in
+// checkNoUnexpectedOpenPorts below -- short, since a closed port
+// normally refuses (RST) almost instantly; every probe runs concurrently
+// regardless, so this only bounds worst-case total wall time (a port
+// silently dropped rather than refused) not the typical case.
+const portScanTimeout = 3 * time.Second
+
+// baselineOpenPorts are the ports this deployment is expected to expose
+// publicly: SSH for admin access, plain HTTP (redirects to HTTPS), and
+// HTTPS for the actual service. Anything else in portsToProbe below
+// responding is a real finding, not routine noise -- the direct
+// regression test for a real incident: systemd-resolved's LLMNR
+// responder (port 5355) was found listening on 0.0.0.0, reachable from
+// the public internet, purely as an unexamined OS default with no
+// legitimate use case on a server -- nothing in this repo's own
+// packaging ever asked for it, and nothing here would have caught it
+// before a manual port scan happened to.
+var baselineOpenPorts = map[int]bool{22: true, 80: true, 443: true}
+
+// portsToProbe is a curated list of commonly-sensitive ports worth
+// checking are NOT reachable from the public internet -- database/cache
+// backends, remote-access protocols, and a few OS-default services with
+// a history of being left on unintentionally. Deliberately not an
+// exhaustive 1-65535 sweep: this is a routine post-release smoke check,
+// not a dedicated security scanner -- scanning every port would be slow
+// and isn't this tool's job.
+var portsToProbe = []int{
+	21, 23, 25, 111, 135, 139, 445, 465, 587, 993, 995,
+	1433, 2049, 3000, 3306, 3389, 5000, 5355, 5432, 5900, 5984, 6379,
+	7000, 8000, 8080, 8081, 8082, 8443, 8888, 9000, 9092, 9200, 11211, 27017, 28015,
+}
+
+// checkNoUnexpectedOpenPorts probes portsToProbe, plus baselineOpenPorts
+// itself (as a sanity check that the probe mechanism actually works --
+// see the 443 check below), concurrently against c.host, and fails if
+// anything outside baselineOpenPorts accepts a connection. A closed/
+// filtered/timed-out port is the expected, passing case for everything
+// not in baselineOpenPorts.
+func (c *client) checkNoUnexpectedOpenPorts() error {
+	ports := make([]int, 0, len(portsToProbe)+len(baselineOpenPorts))
+	ports = append(ports, portsToProbe...)
+	for p := range baselineOpenPorts {
+		ports = append(ports, p)
+	}
+
+	type probeResult struct {
+		port int
+		open bool
+	}
+	results := make(chan probeResult, len(ports))
+	var wg sync.WaitGroup
+	for _, port := range ports {
+		wg.Add(1)
+		go func(port int) {
+			defer wg.Done()
+			addr := net.JoinHostPort(c.host, strconv.Itoa(port))
+			conn, err := net.DialTimeout("tcp", addr, portScanTimeout)
+			if err == nil {
+				conn.Close()
+			}
+			results <- probeResult{port: port, open: err == nil}
+		}(port)
+	}
+	wg.Wait()
+	close(results)
+
+	var unexpected []int
+	sawHTTPS := false
+	for r := range results {
+		if !r.open {
+			continue
+		}
+		if baselineOpenPorts[r.port] {
+			if r.port == 443 {
+				sawHTTPS = true
+			}
+			continue
+		}
+		unexpected = append(unexpected, r.port)
+	}
+	if len(unexpected) > 0 {
+		sort.Ints(unexpected)
+		return fmt.Errorf("found unexpected open port(s) reachable from here: %v -- a real incident already caught this way: systemd-resolved's LLMNR responder (port 5355) was reachable from the public internet with no legitimate use case; investigate what's actually listening (ss -tulnp on the host) before assuming it's fine", unexpected)
+	}
+	if !sawHTTPS {
+		return fmt.Errorf("sanity check failed: port 443 (HTTPS) didn't respond to a probe from here either -- the port-probe mechanism itself may be broken (e.g. this runner's own outbound TCP is blocked), not evidence every other port is actually closed")
 	}
 	return nil
 }
