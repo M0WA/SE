@@ -17,7 +17,7 @@ RUN CGO_ENABLED=0 go build -o /out/searchengine-search ./cmd/search && \
 # gcr.io/distroless/static-debian12's own manifest -- runs as a non-root
 # user either way); a tag alongside a digest is redundant and SonarCloud's
 # docker:S8431 flags it.
-FROM gcr.io/distroless/static-debian12@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+FROM gcr.io/distroless/static-debian12@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2
 COPY --from=build /out/searchengine-search /usr/bin/searchengine-search
 COPY --from=build /out/searchengine-admin /usr/bin/searchengine-admin
 COPY --from=build /out/searchengine-crawl /usr/bin/searchengine-crawl
