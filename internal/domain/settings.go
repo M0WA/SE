@@ -44,6 +44,18 @@ type OperationalSettingsValues struct {
 	// PageRank, in addition to always doing so once a crawl completes.
 	// Clamped to a 5-minute minimum.
 	PageRankRecomputeIntervalMinutes int
+	// PageRankEnabled turns on runPageRankScheduler's periodic/post-crawl
+	// recompute. Defaults true. Disabling it leaves every document's
+	// PageRank at whatever it last was (a neutral 1/N default before any
+	// run has ever happened) -- it never resets or deletes anything, so
+	// unlike ContentDedupEnabled this is a cheap toggle, not a
+	// destructive-write guard. The admin PageRank page's own manual
+	// "Recompute now" trigger (handleAdminPageRankRecompute) is
+	// deliberately NOT gated by this -- an explicit admin action always
+	// runs regardless of whether the background scheduler is enabled,
+	// same convention as every other admin-triggered recompute in this
+	// codebase.
+	PageRankEnabled bool
 	// ANNSearchEnabled fills the semantic candidate pool via pgvector's ANN
 	// index rather than brute force. Defaults true; no effect where ANN
 	// isn't available.
@@ -204,6 +216,7 @@ func defaultOperationalSettings() OperationalSettingsValues {
 		FuzzyMatchEnabled:                true,
 		FuzzyMaxEditDistance:             defaultFuzzyMaxEditDistance,
 		PageRankRecomputeIntervalMinutes: defaultPageRankRecomputeIntervalMinutes,
+		PageRankEnabled:                  true,
 		ANNSearchEnabled:                 true,
 		MaxRetainedCrawlJobs:             defaultMaxRetainedCrawlJobs,
 		MaxConcurrentCrawls:              defaultMaxConcurrentCrawls,

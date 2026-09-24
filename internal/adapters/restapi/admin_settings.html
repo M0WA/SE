@@ -132,6 +132,13 @@
           </div>
           <span class="field-wrap" data-default="0"><input id="pagerank-weight" class="field" type="number" step="0.05" min="0" max="1" required></span>
         </div>
+        <div class="form-row form-row-check">
+          <label for="pagerank-enabled">
+            <span class="field-wrap" data-default="On"><input id="pagerank-enabled" type="checkbox"></span>
+            Automatically recompute PageRank
+          </label>
+          <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Turns off the background/post-crawl recompute below entirely, leaving every document's PageRank at whatever it last was. Never resets or deletes anything, so it's safe to turn off and back on at any time -- unlike Content dedup below, there's no destructive write to guard against. The PageRank page's own "Recompute now" button still works regardless of this setting.</span></button>
+        </div>
         <div class="form-row">
           <div class="label-row">
             <label for="pagerank-interval">Recompute interval</label>

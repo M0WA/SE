@@ -2291,6 +2291,13 @@ components:
             fuzzy_match_enabled: { type: boolean }
             fuzzy_max_edit_distance: { type: integer }
             pagerank_recompute_interval_minutes: { type: integer }
+            pagerank_enabled:
+              type: boolean
+              description: >-
+                Turns off the background/post-crawl PageRank recompute
+                entirely when false. Defaults true. Never applies to the
+                admin PageRank page's own manual "Recompute now" trigger,
+                which always runs regardless of this setting.
             ann_search_enabled: { type: boolean }
             max_retained_crawl_jobs: { type: integer }
             max_concurrent_crawls:

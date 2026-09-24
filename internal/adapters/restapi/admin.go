@@ -638,9 +638,10 @@ type operationalValues struct {
 	DBConnMaxLifetimeMinutes int  `json:"db_conn_max_lifetime_minutes"`
 	FuzzyMatchEnabled        bool `json:"fuzzy_match_enabled"`
 	FuzzyMaxEditDistance     int  `json:"fuzzy_max_edit_distance"`
-	// PageRankRecomputeIntervalMinutes is how often cmd/crawl's ticker
-	// recomputes PageRank -- see domain.OperationalSettingsValues.
-	PageRankRecomputeIntervalMinutes int `json:"pagerank_recompute_interval_minutes"`
+	// PageRankRecomputeIntervalMinutes/PageRankEnabled mirror the same-named
+	// domain.OperationalSettingsValues fields.
+	PageRankRecomputeIntervalMinutes int  `json:"pagerank_recompute_interval_minutes"`
+	PageRankEnabled                  bool `json:"pagerank_enabled"`
 	// ANNSearchEnabled forces the brute-force semantic fallback even when
 	// Postgres pgvector ANN is available, when false -- see
 	// domain.OperationalSettingsValues.
@@ -708,6 +709,7 @@ func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 		FuzzyMatchEnabled:                v.FuzzyMatchEnabled,
 		FuzzyMaxEditDistance:             v.FuzzyMaxEditDistance,
 		PageRankRecomputeIntervalMinutes: v.PageRankRecomputeIntervalMinutes,
+		PageRankEnabled:                  v.PageRankEnabled,
 		ANNSearchEnabled:                 v.ANNSearchEnabled,
 		MaxRetainedCrawlJobs:             v.MaxRetainedCrawlJobs,
 		MaxConcurrentCrawls:              v.MaxConcurrentCrawls,
@@ -745,6 +747,7 @@ func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 		FuzzyMatchEnabled:                o.FuzzyMatchEnabled,
 		FuzzyMaxEditDistance:             o.FuzzyMaxEditDistance,
 		PageRankRecomputeIntervalMinutes: o.PageRankRecomputeIntervalMinutes,
+		PageRankEnabled:                  o.PageRankEnabled,
 		ANNSearchEnabled:                 o.ANNSearchEnabled,
 		MaxRetainedCrawlJobs:             o.MaxRetainedCrawlJobs,
 		MaxConcurrentCrawls:              o.MaxConcurrentCrawls,

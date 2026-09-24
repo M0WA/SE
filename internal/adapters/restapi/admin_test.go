@@ -2776,6 +2776,54 @@ func TestHandleAdminSettings_ContentDedupFieldsRoundTrip(t *testing.T) {
 	}
 }
 
+// TestHandleAdminSettings_PageRankEnabledFieldRoundTrips mirrors
+// TestHandleAdminSettings_ContentDedupFieldsRoundTrip for PageRankEnabled --
+// proves it round-trips through GET/POST, and that false is actually
+// applied, not left at Set's default.
+func TestHandleAdminSettings_PageRankEnabledFieldRoundTrips(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{PageRankEnabled: true})
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", getRec.Code)
+	}
+	var getResp struct {
+		Operational struct {
+			PageRankEnabled bool `json:"pagerank_enabled"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decoding GET response: %v", err)
+	}
+	if !getResp.Operational.PageRankEnabled {
+		t.Errorf("expected GET to report pagerank_enabled=true, got %+v", getResp.Operational)
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
+			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
+			"pagerank_enabled": false, "pagerank_recompute_interval_minutes": 60,
+		},
+	})
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	postReq.AddCookie(cookie)
+	postRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
+	}
+	if ov := opSettings.Get(); ov.PageRankEnabled {
+		t.Errorf("expected pagerank_enabled=false to be applied, got %+v", ov)
+	}
+}
+
 // TestHandleAdminSettings_EmbeddingHashEnabledFieldRoundTrips proves
 // EmbeddingHashEnabled round-trips through GET/POST, and that Set no
 // longer forces it back to true (that self-healing moved to

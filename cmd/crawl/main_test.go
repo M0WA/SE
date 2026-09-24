@@ -5,7 +5,18 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"searchengine/internal/domain"
 )
+
+// pageRankEnabledSettings builds the minimal *domain.OperationalSettings
+// pageRankRecomputer.recompute now reads on every call (PageRankEnabled) --
+// every existing test below wants it enabled, so this is the shared
+// default; TestRecompute_DisabledSkipsEntirely below builds its own with
+// it false instead.
+func pageRankEnabledSettings() *domain.OperationalSettings {
+	return domain.NewOperationalSettings(domain.OperationalSettingsValues{PageRankEnabled: true})
+}
 
 // fakePageRankRepo is a minimal ports.PageRankRepository whose LinkGraph
 // call can be paused mid-flight: the first call blocks on release (once
@@ -49,7 +60,7 @@ func (f *fakePageRankRepo) ResolvePendingLinks(ctx context.Context) (int, error)
 // call runs through once and leaves running/pending clear.
 func TestRecomputeNormalRun(t *testing.T) {
 	repo := &fakePageRankRepo{}
-	p := &pageRankRecomputer{repo: repo}
+	p := &pageRankRecomputer{repo: repo, opSettings: pageRankEnabledSettings()}
 
 	p.recompute(context.Background())
 
@@ -76,7 +87,7 @@ func TestRecomputeCoalescesWhileRunning(t *testing.T) {
 		entered: make(chan struct{}, 2),
 		release: make(chan struct{}),
 	}
-	p := &pageRankRecomputer{repo: repo}
+	p := &pageRankRecomputer{repo: repo, opSettings: pageRankEnabledSettings()}
 
 	done := make(chan struct{})
 	go func() {
@@ -150,7 +161,7 @@ func TestRecomputeCoalescesWhileRunning(t *testing.T) {
 // recomputer stuck "running" forever.
 func TestRecomputeLogsAndContinuesOnError(t *testing.T) {
 	repo := &fakePageRankRepo{errFromCall: 1}
-	p := &pageRankRecomputer{repo: repo}
+	p := &pageRankRecomputer{repo: repo, opSettings: pageRankEnabledSettings()}
 
 	p.recompute(context.Background())
 
@@ -178,7 +189,7 @@ func TestRecomputeCoalescedPassLogsError(t *testing.T) {
 		release:     make(chan struct{}),
 		errFromCall: 2,
 	}
-	p := &pageRankRecomputer{repo: repo}
+	p := &pageRankRecomputer{repo: repo, opSettings: pageRankEnabledSettings()}
 
 	done := make(chan struct{})
 	go func() {
@@ -218,5 +229,28 @@ func TestRecomputeCoalescedPassLogsError(t *testing.T) {
 	}
 	if p.lastRun().IsZero() {
 		t.Fatal("last should still be set even when the coalesced pass errored")
+	}
+}
+
+// TestRecompute_DisabledSkipsEntirely proves PageRankEnabled=false makes
+// recompute() a no-op -- no LinkGraph call, no running/pending/last state
+// touched at all -- so every caller (the scheduler's initial run, its
+// ticker, and the post-crawl trigger in main()) is safe to call
+// unconditionally regardless of this setting, mirroring
+// contentDedupRecomputer.recompute's identical gate.
+func TestRecompute_DisabledSkipsEntirely(t *testing.T) {
+	repo := &fakePageRankRepo{}
+	p := &pageRankRecomputer{repo: repo, opSettings: domain.NewOperationalSettings(domain.OperationalSettingsValues{PageRankEnabled: false})}
+
+	p.recompute(context.Background())
+
+	if repo.calls != 0 {
+		t.Fatalf("LinkGraph calls = %d, want 0 -- a disabled recomputer must never touch the repository", repo.calls)
+	}
+	if p.running {
+		t.Fatal("running should stay false when disabled")
+	}
+	if !p.lastRun().IsZero() {
+		t.Fatal("last should stay zero when disabled -- nothing actually ran")
 	}
 }
