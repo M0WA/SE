@@ -25,7 +25,7 @@ Everything about running and using searchengine: installing and configuring a de
 - **[Vocabulary term detail](vocabulary-term.md)** -- Shows exactly which indexed pages contain one specific term, how strongly, and with what context -- the postings list underlying BM25 ranking and typo/fuzzy correction.
 - **[Content Dedup](content-dedup.md)** -- Finds documents byte-identical or near-identical to another already-indexed one and merges each group into one canonical document.
 
-## Crawling
+## Index
 
 - **[Crawl](crawl.md)** -- Start a new crawl of a site, a one-off run or a repeating schedule.
 - **[Schedule detail](schedule-detail.md)** -- The edit view for one existing crawl schedule.
