@@ -193,6 +193,9 @@ func TestSyncSettings_MissingBoolFieldInStoredBlobKeepsItsDefault(t *testing.T) 
 	if !got.ContentDedupEnabled {
 		t.Error("expected ContentDedupEnabled to keep its true default when absent from the stored blob, got false")
 	}
+	if !got.PageRankEnabled {
+		t.Error("expected PageRankEnabled to keep its true default when absent from the stored blob, got false")
+	}
 }
 
 func TestSyncSettings_AppliesStoredOverridesOnStartup(t *testing.T) {

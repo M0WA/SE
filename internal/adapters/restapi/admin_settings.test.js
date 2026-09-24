@@ -39,6 +39,7 @@ const FULL_SETTINGS = {
     db_conn_max_lifetime_minutes: 5,
     fuzzy_match_enabled: true,
     fuzzy_max_edit_distance: 2,
+    pagerank_enabled: true,
     pagerank_recompute_interval_minutes: 60,
     session_ttl_hours: 12,
   },
@@ -360,6 +361,28 @@ test('saveSettings posts the edited content-dedup fields', async () => {
   assert.equal(gotBody.operational.content_dedup_method, 'simhash');
   assert.equal(gotBody.operational.content_dedup_simhash_max_distance, 5);
   assert.equal(gotBody.operational.content_dedup_interval_minutes, 90);
+});
+
+test('applySettings fills the pagerank-enabled field from the response', () => {
+  const { applySettings } = loadFixture();
+  applySettings(FULL_SETTINGS);
+  assert.equal(document.getElementById('pagerank-enabled').checked, true);
+});
+
+test('saveSettings posts the edited pagerank-enabled field', async () => {
+  const { saveSettings } = loadFixture();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  document.getElementById('pagerank-enabled').checked = false;
+  let gotBody;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/settings')) {
+      gotBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => FULL_SETTINGS };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  await saveSettings();
+  assert.equal(gotBody.operational.pagerank_enabled, false);
 });
 
 test('applySettings fills the concurrent-crawls field', () => {
