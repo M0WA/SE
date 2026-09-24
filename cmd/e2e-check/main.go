@@ -121,6 +121,7 @@ func main() {
 		{"admin login", c.checkLogin(creds.AdminUser, creds.AdminPassword)},
 		{"session role (admin)", c.checkSessionRole("admin")},
 		{"plain chat (no tools)", c.checkPlainChat},
+		{"chat: math answer is numerically correct", c.checkMathChat},
 		{"web-search-gated chat", c.checkWebSearchChat},
 		{"mcp-web tool: web_fetch (forced, specific URL)", c.checkWebFetch},
 		{"mcp-web tool: web_fetch (404, honest failure)", c.checkFetchNotFoundHonesty},
@@ -725,6 +726,29 @@ func (c *client) checkPlainChat() error {
 	}
 	if out.Answer == "" {
 		return fmt.Errorf("got an empty answer")
+	}
+	return nil
+}
+
+// checkMathChat reproduces the live scenario that surfaced index.js's LaTeX-rendering bug ("what
+// is 12.123 x 12.123?" answered with the arithmetic wrapped in \( \)/\[ \] LaTeX delimiters,
+// which the chat page used to show as literal backslashes/brackets instead of readable math).
+// This is a REST-only client with no browser/DOM -- it can prove the backend/model pipeline
+// feeding that renderer still returns a correct answer, but it can never observe the actual
+// rendered HTML (parseLatex/renderMathSpan/normalizeMathDelimiters, unit-tested in
+// index.test.js) or which notation, if any, the model chooses to use -- that needs a real
+// browser (see CLAUDE.md's screenshot recipe). So this only asserts the one thing it honestly
+// can: the correct numeric result actually appears in the answer.
+func (c *client) checkMathChat() error {
+	out, err := c.chatOnce("What is 12.123 times 12.123? Show your work.", chatOptions{})
+	if err != nil {
+		return err
+	}
+	if out.Answer == "" {
+		return fmt.Errorf("got an empty answer")
+	}
+	if !strings.Contains(out.Answer, "146.9") {
+		return fmt.Errorf("expected the answer to contain the correct result (146.967...), got %q", out.Answer)
 	}
 	return nil
 }
