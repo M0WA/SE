@@ -311,13 +311,27 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 
 	answer := assistantMsg.Content
 
-	// answer is empty here if the loop ran out of rounds mid-tool-call or
-	// the model returned nothing despite tools being available -- even
-	// though currentMessages/toolResults still hold everything gathered.
+	// pendingToolCalls is true when the loop above exited with the model
+	// STILL requesting another tool call -- either maxHookFollowUpRounds
+	// was hit mid-tool-call, or a follow-up completion errored (the break
+	// inside the loop, which leaves assistantMsg on its pre-follow-up
+	// value, itself still carrying unresolved ToolCalls). In both cases
+	// assistantMsg.Content, even when non-empty, is at best a narration of
+	// an in-progress attempt ("I'll try a different search now") -- a real
+	// model very often emits exactly that alongside its next tool-call
+	// request, never a real final answer. Checking answer == "" alone
+	// missed this: a real, reported incident had the model narrate several
+	// failed attempts in a row, hit the round cap still mid-attempt, and
+	// have that last "I'll try X" narration returned to the user verbatim
+	// as if it were the answer, instead of the fallback below ever
+	// running -- since assistantMsg.Content wasn't literally "".
+	pendingToolCalls := len(assistantMsg.ToolCalls) > 0
+
 	// Force one last completion with NO tools offered, telling the model
-	// plainly to answer with what it has. Best-effort: failure just
-	// leaves answer empty.
-	if answer == "" && len(tools) > 0 {
+	// plainly to answer with what it has, whenever the answer so far is
+	// either empty OR just that kind of unfinished narration
+	// (pendingToolCalls). Best-effort: failure just leaves answer as-is.
+	if (answer == "" || pendingToolCalls) && len(tools) > 0 {
 		forceFinal := make([]domain.ChatMessage, 0, len(currentMessages)+1)
 		forceFinal = append(forceFinal, currentMessages...)
 		forceFinal = append(forceFinal, domain.ChatMessage{

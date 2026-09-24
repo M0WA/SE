@@ -181,6 +181,18 @@ func plainMessage(content string) domain.ChatMessage {
 	return domain.ChatMessage{Role: domain.ChatRoleAssistant, Content: content}
 }
 
+// narratedToolCallMessage is toolCallMessage's real-world counterpart: a
+// model that explains what it's about to try ("I'll search a different
+// way") in the SAME message as its next tool-call request, rather than
+// requesting the tool with no commentary at all -- something real
+// completions do often, that toolCallMessage's deliberately-empty
+// Content never modeled. See
+// TestChatService_ForceFinalAnswer_RescuesNarrationWithPendingToolCallAfterCapIsHit
+// for why that gap mattered.
+func narratedToolCallMessage(narration, id, name, argumentsJSON string) domain.ChatMessage {
+	return domain.ChatMessage{Role: domain.ChatRoleAssistant, Content: narration, ToolCalls: []domain.ToolCall{{ID: id, Name: name, Arguments: argumentsJSON}}}
+}
+
 // fakeChatCompleter is a minimal ports.ChatCompleter fake recording the
 // messages and tools it was called with, so a test can assert whether/what
 // got prepended or offered. calledWith/calledTools are the LAST call's
@@ -726,10 +738,63 @@ func TestChatService_ForceFinalAnswer_RescuesAnEmptyAnswerAfterCapIsHit(t *testi
 	}
 }
 
+// TestChatService_ForceFinalAnswer_RescuesNarrationWithPendingToolCallAfterCapIsHit
+// is the direct regression test for a real, reported failure distinct from
+// TestChatService_ForceFinalAnswer_RescuesAnEmptyAnswerAfterCapIsHit above:
+// a model that narrates each failed attempt ("I'll try a different search
+// engine now") in the SAME message as its next tool-call request, round
+// after round, until the round cap is hit -- leaving assistantMsg.Content
+// non-empty (that last narration) even though the turn never actually
+// produced a real answer. Checking answer == "" alone let that narration
+// reach the user verbatim as if it were the answer; this proves the
+// force-final-answer fallback now also fires whenever ToolCalls are still
+// pending, regardless of Content.
+func TestChatService_ForceFinalAnswer_RescuesNarrationWithPendingToolCallAfterCapIsHit(t *testing.T) {
+	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
+	responses := make([]domain.ChatMessage, 0, maxHookFollowUpRounds+2)
+	for i := 0; i < maxHookFollowUpRounds+1; i++ {
+		responses = append(responses, narratedToolCallMessage(
+			"I'll try a different search engine now.", "call", "web_search", argsJSON("query", "a picture of water")))
+	}
+	const wantAnswer = "I wasn't able to find an image of water -- this tool can only fetch text pages, not search for or return images."
+	responses = append(responses, plainMessage(wantAnswer))
+	completer := &fakeChatCompleter{responses: responses}
+	servers := &fakeMCPServerStore{servers: []domain.MCPServer{
+		{ID: "1", Name: "web", Transport: "stdio", Command: "mcp-web", Enabled: true},
+	}}
+	provider := &fakeMCPToolProvider{
+		tools:   []domain.MCPTool{mcpTool("web_search", "Search the web.")},
+		session: &fakeMCPSession{outputs: map[string]string{"web_search": "some results"}},
+	}
+	svc := NewChatService(endpoints, completer, servers, provider, nil, nil, VisionConfig{Settings: nil, InternalAPIKey: ""})
+
+	history := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "can you find a picture of water?"}}
+	result, err := svc.Chat(context.Background(), history, ChatOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Answer != wantAnswer {
+		t.Fatalf("expected the force-final call's real answer, not the last round's leftover narration, got %q", result.Answer)
+	}
+	wantCalls := maxHookFollowUpRounds + 2
+	if len(completer.allCalls) != wantCalls {
+		t.Fatalf("expected exactly %d completion calls (initial + %d rounds + 1 force-final), got %d", wantCalls, maxHookFollowUpRounds, len(completer.allCalls))
+	}
+	lastTools := completer.allTools[len(completer.allTools)-1]
+	if len(lastTools) != 0 {
+		t.Fatalf("expected the force-final call to offer no tools, got %v", lastTools)
+	}
+}
+
 // TestChatService_ForceFinalAnswer_NotTriggeredWhenAnswerIsNonEmpty proves
-// the force-final fallback is scoped exactly to the empty-answer case --
-// a turn that ends with a real (non-tool-call) answer, whether or not it
-// used the full round budget, never makes an extra completion call.
+// the force-final fallback does NOT fire for a turn that genuinely
+// finished -- a real (non-tool-call) answer with no ToolCalls pending,
+// whether or not it used the full round budget, never makes an extra
+// completion call. (Contrast
+// TestChatService_ForceFinalAnswer_RescuesNarrationWithPendingToolCallAfterCapIsHit
+// above, where Content is ALSO non-empty but ToolCalls is still pending --
+// that case must still trigger the fallback.)
 func TestChatService_ForceFinalAnswer_NotTriggeredWhenAnswerIsNonEmpty(t *testing.T) {
 	endpoints := &fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}
 	completer := &fakeChatCompleter{responses: []domain.ChatMessage{
