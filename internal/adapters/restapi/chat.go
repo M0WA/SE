@@ -10,11 +10,29 @@ import (
 	"searchengine/internal/ports"
 )
 
-// maxChatMessages/maxChatMessageContentLength bound a POST /chat body, so a
-// malicious client can't force an arbitrarily large call to the upstream model.
+// maxChatMessages bounds how many turns a single POST /chat body may
+// carry, so a malicious client can't force an arbitrarily large call to
+// the upstream model.
+//
+// maxChatMessageContentLength bounds only a ChatRoleUser message's own
+// length (see validateChatMessages) -- the length a client actually
+// AUTHORS. It deliberately does NOT apply to ChatRoleAssistant messages:
+// those are the client faithfully re-sending the server's own prior
+// answer as context, since POST /chat is stateless per call (chat_id
+// only scopes the file-access token -- see chatRequest.ChatID's own doc
+// comment; it never loads persisted history server-side). A real
+// incident: one answer with a large code sample exceeded the old,
+// uniformly-applied 4000-char cap, so the very next turn -- which had to
+// resend that answer as history -- was rejected outright with "message
+// too long" before the server ever attempted a completion call, let
+// alone the tool call the user had actually asked for. maxChatMessages
+// above remains the real bound on total request size/cost; a
+// deliberately larger value here just keeps the user-authored cap
+// closer to what a real single turn (e.g. a long pasted question) can
+// legitimately need.
 const (
 	maxChatMessages             = 50
-	maxChatMessageContentLength = 4000
+	maxChatMessageContentLength = 32000
 )
 
 type chatRequest struct {
@@ -114,7 +132,10 @@ func (h *Handler) fileAccessTokenFor(ctx context.Context, userID, chatID string)
 }
 
 // validateChatMessages enforces handleChat's constraints: bounded message
-// count/length, only ChatRoleUser/ChatRoleAssistant, no tool-call fields.
+// count, a ChatRoleUser message's own bounded length (see
+// maxChatMessageContentLength's own doc comment for why a
+// ChatRoleAssistant message is exempt), only ChatRoleUser/ChatRoleAssistant,
+// no tool-call fields.
 func validateChatMessages(messages []domain.ChatMessage) error {
 	if len(messages) == 0 {
 		return errors.New("messages must not be empty")
@@ -123,7 +144,7 @@ func validateChatMessages(messages []domain.ChatMessage) error {
 		return errors.New("too many messages")
 	}
 	for _, m := range messages {
-		if len(m.Content) > maxChatMessageContentLength {
+		if m.Role == domain.ChatRoleUser && len(m.Content) > maxChatMessageContentLength {
 			return errors.New("message too long")
 		}
 		if m.Role != domain.ChatRoleUser && m.Role != domain.ChatRoleAssistant {

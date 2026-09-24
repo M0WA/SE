@@ -848,10 +848,10 @@ button:focus-visible {
 .chat-tab-actions { display: flex; gap: 0.15rem; flex: none; }
 
 /* .chat-files: the strip of uploaded/model-created file boxes below
-   #chat-messages -- same box/label/close-button anatomy as .chat-tab
-   above (border, radius, small "×" close glyph), styled as its own class
-   rather than reused literally since a file box's label is a real
-   download link, not a tab-switch button. */
+   #chat-form (the input) -- same box/label/close-button anatomy as
+   .chat-tab above (border, radius, small "×" close glyph), styled as its
+   own class rather than reused literally since a file box's label is a
+   real download link, not a tab-switch button. */
 .chat-files {
   display: flex;
   flex-wrap: wrap;
@@ -898,20 +898,24 @@ button:focus-visible {
   outline-offset: 1px;
 }
 
-/* Chat panel -- #chat-tabs/#chat-messages/#chat-status/#chat-form stay in
-   that order (input last, like a normal chat compose box: new answers
-   grow the conversation above it, not below), but none carries a margin
-   of its own when empty -- with nothing rendered into #chat-messages yet
-   and #chat-status blank, only .mode-row's own margin-bottom, #chat-tabs'
-   own margin-bottom, and #chat-form's margin-top below separate the
-   toggle from the input, so a fresh conversation starts with the input
-   right where #search-form sits in search mode; the panel only grows
-   downward as messages/status actually get content. #chat-form inherits
-   the same flex/border-bottom treatment as #search-form for free (both
-   are plain <form> elements, and .field/button already carry their own
-   styling). Messages are told apart by alignment and a quiet tint rather
-   than rounded speech-bubble shapes, the same restrained language
-   .result already uses for its own rows. */
+/* Chat panel -- #chat-tabs/#chat-messages/#chat-status/#chat-form/
+   #chat-files stay in that order. #chat-files trails the input rather
+   than sitting above it (like a normal chat compose box: new answers
+   grow the conversation above the input, not below it) so an attached or
+   model-created file reads as attached to the compose box it came from,
+   not a detached strip floating above it. None of these carries a margin
+   of its own when empty -- with nothing rendered into #chat-messages
+   yet, #chat-status blank, and #chat-files hidden, only .mode-row's own
+   margin-bottom, #chat-tabs' own margin-bottom, and #chat-form's
+   margin-top below separate the toggle from the input, so a fresh
+   conversation starts with the input right where #search-form sits in
+   search mode; the panel only grows as messages/status/files actually
+   get content. #chat-form inherits the same flex/border-bottom treatment
+   as #search-form for free (both are plain <form> elements, and
+   .field/button already carry their own styling). Messages are told
+   apart by alignment and a quiet tint rather than rounded speech-bubble
+   shapes, the same restrained language .result already uses for its own
+   rows. */
 #chat-messages {
   max-height: 50vh;
   overflow-y: auto;
