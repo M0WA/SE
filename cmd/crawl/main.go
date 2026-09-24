@@ -40,9 +40,12 @@ const crawlJobPrunePollInterval = 5 * time.Minute
 // runPageRankScheduler recomputes PageRank once immediately, then again
 // whenever PageRankRecomputeIntervalMinutes has elapsed (a post-crawl
 // trigger also resets this timer). Runs the first recompute in the
-// background so a large corpus doesn't delay ListenAndServe.
+// background so a large corpus doesn't delay ListenAndServe. Gated inside
+// recompute by PageRankEnabled, mirroring runContentDedupScheduler, so
+// every caller (the initial run, the ticker, a post-crawl trigger) is
+// safe to call unconditionally.
 func runPageRankScheduler(ctx context.Context, repo ports.PageRankRepository, settingsStore ports.SettingsStore, opSettings *domain.OperationalSettings) *pageRankRecomputer {
-	pr := &pageRankRecomputer{repo: repo, settingsStore: settingsStore}
+	pr := &pageRankRecomputer{repo: repo, settingsStore: settingsStore, opSettings: opSettings}
 	go pr.recompute(ctx)
 
 	go func() {
@@ -68,6 +71,7 @@ func runPageRankScheduler(ctx context.Context, repo ports.PageRankRepository, se
 type pageRankRecomputer struct {
 	repo          ports.PageRankRepository
 	settingsStore ports.SettingsStore
+	opSettings    *domain.OperationalSettings
 	mu            sync.Mutex
 	last          time.Time
 	// running guards against two recompute()s overlapping -- a second call
@@ -82,6 +86,9 @@ type pageRankRecomputer struct {
 }
 
 func (p *pageRankRecomputer) recompute(ctx context.Context) {
+	if !p.opSettings.Get().PageRankEnabled {
+		return
+	}
 	p.mu.Lock()
 	if p.running {
 		p.pending = true
