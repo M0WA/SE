@@ -4,7 +4,7 @@
 
 The ordered install flow for a fresh Debian/Ubuntu host, for standing up a new deployment. Steps 1-2 are handled automatically by the `.deb`; everything from nginx onward is a manual step the package deliberately skips.
 
-**Prefer containers?** [`docker compose up`](https://github.com/M0WA/SE/blob/main/packaging/docker/README.md) is a full alternative to this whole flow -- the same three binaries plus Postgres, in one command, image published to `ghcr.io/m0wa/se` on every release. It skips nginx/TLS/systemd entirely (bring your own reverse proxy if you want those), so it's a faster way to get a real, working instance up, at the cost of the rendering-capable-crawl and sandboxed-code-execution capabilities noted in that README.
+**Prefer containers?** [Docker Compose installation](docker-installation.md) is a full alternative to this whole flow -- the same three binaries plus Postgres, in one command, image published to `ghcr.io/m0wa/se` on every release. It skips nginx/TLS/systemd entirely (bring your own reverse proxy if you want those), so it's a faster way to get a real, working instance up, at the cost of the rendering-capable-crawl and sandboxed-code-execution capabilities noted there.
 
 ## 1. Install prerequisite OS packages
 
@@ -241,4 +241,4 @@ curl -sk https://your.domain.example/healthz
 ```
 
 ---
-← [Infrastructure options (IONOS)](infrastructure.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Environment variables](environment-variables.md) →
+← [Infrastructure options (IONOS)](infrastructure.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Docker Compose installation](docker-installation.md) →

@@ -104,13 +104,22 @@ incomplete work, same as every other rule in this section.
 `docs/manual/` is the single reference for everything about running and
 using searchengine -- one markdown file per topic, not one giant page:
 
-- **Installation & configuration** (`installation.md`, `environment-
-  variables.md`, `config-files.md`, `infrastructure.md`) -- every
-  environment variable any binary reads (`bootstrap.GetEnv`/`os.Getenv`),
-  every config file under `packaging/` and its install/deploy path, and the
-  end-to-end installation checklist. **Whenever any of these changes -- a
-  new env var, a new or renamed config file, a new required install step --
-  update the matching page in the same change.**
+- **Installation & configuration** (`installation.md`, `docker-
+  installation.md`, `environment-variables.md`, `config-files.md`,
+  `infrastructure.md`) -- every environment variable any binary reads
+  (`bootstrap.GetEnv`/`os.Getenv`), every config file under `packaging/`
+  and its install/deploy path, and the end-to-end installation checklist,
+  for both the `.deb` and Docker Compose install paths. **Whenever any of
+  these changes -- a new env var, a new or renamed config file, a new
+  required install step -- update the matching page in the same change.**
+  `docker-installation.md` specifically is this manual's own walkthrough of
+  `packaging/docker/README.md`'s practical how-to content (quickstart,
+  seeding the admin account, configuring a provider) -- that README stays
+  the deeper, maintainer-facing reference (image internals, publishing,
+  why it doesn't reuse the nginx config), but whenever its quickstart
+  steps, required `.env` vars, or documented image capabilities change,
+  update `docker-installation.md` to match in the same change, same as
+  every other rule in this section.
 - **Every other page** -- one per admin settings page plus the public
   search/chat page and the self-service `/account*` pages, each
   screenshotted (`docs/manual/images/*.png`) and explained field by field
