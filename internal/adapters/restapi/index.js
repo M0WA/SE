@@ -189,17 +189,27 @@
 
   // tokenUsageSegments turns the backend's flat token_usage breakdown into the shape
   // buildDonutSVG/buildDonutLegend expect -- a fixed split (global/agent/MCP prompts, your
-  // prompt, history) shared by every turn. A falsy u (before any turn completes) returns the
+  // prompt, history) shared by every turn, plus a trailing "Free" segment for whatever's left of
+  // max_context_tokens. Without that segment, buildDonutSVG normalizes the ring to the SUM OF
+  // ITS OWN segments -- always a full circle of used-token colors, even a turn into a
+  // 200k-token window, which misleadingly reads as "context nearly full" from the very first
+  // message. Free is omitted (not zero-valued) when max_context_tokens isn't known yet, since
+  // there's no capacity to measure it against. A falsy u (before any turn completes) returns the
   // same shape, all zeros.
   function tokenUsageSegments(u) {
     u = u || {};
-    return [
+    const segments = [
       { label: 'Global prompt', value: u.global_prompt_tokens || 0, color: 'var(--chart-1)' },
       { label: 'Tool prompts', value: u.tool_prompt_tokens || 0, color: 'var(--chart-2)' },
       { label: 'Your prompt', value: u.user_prompt_tokens || 0, color: 'var(--chart-3)' },
       { label: 'Agent prompt', value: u.agent_prompt_tokens || 0, color: 'var(--chart-4)' },
       { label: 'Conversation history', value: u.history_tokens || 0, color: 'var(--ink-muted)' },
     ];
+    if (u.max_context_tokens) {
+      const used = segments.reduce((sum, s) => sum + s.value, 0);
+      segments.push({ label: 'Free', value: Math.max(0, u.max_context_tokens - used), color: 'var(--rule)' });
+    }
+    return segments;
   }
 
   // renderTokenUsage updates the persistent token-usage summary next to the Web checkbox --
