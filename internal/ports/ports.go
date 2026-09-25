@@ -280,6 +280,13 @@ type AdminRepository interface {
 	// PostingsForTerm's doc IDs, fetch URL/title/text to build an excerpt.
 	DocumentsByIDs(ctx context.Context, ids []string) (map[string]domain.Document, error)
 	DeleteDocument(ctx context.Context, docID string) error
+	// SaveDocumentOptionalVocabulary backs the admin Document-upload
+	// feature -- see ports.SQLRepository's identically-named method for
+	// its full doc comment. Duplicated here (not just left on
+	// SQLRepository alone) since restapi.Handler only ever carries the
+	// narrow ports each feature needs, never the full SQLRepository
+	// surface; *sqlrepo.Repository satisfies both automatically.
+	SaveDocumentOptionalVocabulary(ctx context.Context, doc domain.Document, embeddings map[string][]float32, maxVersions, titleWeight int, indexVocabulary bool) error
 	// PageRankDistribution reports the min/max/average pagerank across the
 	// corpus -- the admin PageRank debug page's headline numbers.
 	PageRankDistribution(ctx context.Context) (min, max, avg float64, err error)
@@ -442,6 +449,37 @@ type CrawlJobStore interface {
 	// DeleteEndedCrawlJobs deletes every done/failed/cancelled job, leaving
 	// queued/running ones untouched, and returns how many were removed.
 	DeleteEndedCrawlJobs(ctx context.Context) (int, error)
+}
+
+// DocumentJobStore persists Document-upload jobs and their raw bytes --
+// admin-server's own store (unlike CrawlJobStore, there's no separate
+// crawl-server network hop; a Document job is always local, synchronous
+// work). Method names are fully qualified (CreateDocumentJob, not Create)
+// since the same *sqlrepo.Repository also implements CrawlJobStore's own
+// bare Create/Get/List/Delete for a different table -- a single Go type
+// can't have two methods named Get with different signatures.
+// GetDocumentJob/GetDocumentJobData return domain.ErrDocumentJobNotFound if
+// unretained.
+type DocumentJobStore interface {
+	// CreateDocumentJob stores a new queued job plus its raw bytes,
+	// returning its assigned ID and CreatedAt -- the caller never picks
+	// either.
+	CreateDocumentJob(ctx context.Context, filename, contentType string, size int64, source domain.DocumentJobSource, indexVocabulary bool, data []byte) (domain.DocumentJob, error)
+	MarkDocumentJobRunning(ctx context.Context, id string) error
+	MarkDocumentJobDone(ctx context.Context, id, docID string) error
+	MarkDocumentJobFailed(ctx context.Context, id string, failErr error) error
+	GetDocumentJob(ctx context.Context, id string) (domain.DocumentJob, error)
+	// GetDocumentJobData returns id's raw uploaded/imported bytes and
+	// content type -- separate from GetDocumentJob so a list/detail view
+	// never has to pull a potentially large blob just to show metadata.
+	GetDocumentJobData(ctx context.Context, id string) ([]byte, string, error)
+	ListDocumentJobs(ctx context.Context) ([]domain.DocumentJob, error)
+	// DeleteDocumentJob removes the job, its stored bytes, and -- if it
+	// finished indexing one -- the resulting Document itself (postings,
+	// embeddings, links, versions all cascade with it, same as any other
+	// document delete). Used both by the admin UI and by cmd/e2e-check's
+	// own cleanup after each check.
+	DeleteDocumentJob(ctx context.Context, id string) error
 }
 
 // DebugSearchService exposes the raw, unblended hybrid search results

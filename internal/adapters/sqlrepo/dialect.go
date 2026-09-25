@@ -229,6 +229,21 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			fetched_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_crawl_job_pages_job_id ON crawl_job_pages(job_id)`,
+		// document_jobs is crawl_jobs' single-file sibling for the admin
+		// "Document" upload feature (see domain.DocumentJob) -- always
+		// exactly one file, so unlike crawl_jobs there's no per-page child
+		// table. data holds the raw uploaded/imported bytes inline, same
+		// convention as uploaded_files.data, so an image can be previewed
+		// and text content re-extracted without re-uploading. doc_id is the
+		// resulting documents.id once indexed, empty until then.
+		`CREATE TABLE IF NOT EXISTS document_jobs (
+			id TEXT PRIMARY KEY, filename TEXT NOT NULL, content_type TEXT NOT NULL DEFAULT '',
+			size INTEGER NOT NULL DEFAULT 0, data BLOB NOT NULL,
+			source TEXT NOT NULL DEFAULT 'upload', index_vocabulary BOOLEAN NOT NULL DEFAULT true,
+			status TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', doc_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_document_jobs_created_at ON document_jobs(created_at)`,
 		`CREATE TABLE IF NOT EXISTS sessions (
 			token TEXT PRIMARY KEY, expires_at TEXT NOT NULL,
 			role TEXT NOT NULL DEFAULT 'admin', user_id TEXT NOT NULL DEFAULT ''
@@ -487,6 +502,15 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			FOREIGN KEY (job_id) REFERENCES crawl_jobs(id) ON DELETE CASCADE
 		) ENGINE=InnoDB`,
 		`CREATE INDEX idx_crawl_job_pages_job_id ON crawl_job_pages(job_id)`,
+		// See the sqlite dialect's document_jobs comment.
+		`CREATE TABLE IF NOT EXISTS document_jobs (
+			id VARCHAR(64) PRIMARY KEY, filename VARCHAR(255) NOT NULL, content_type VARCHAR(255) NOT NULL DEFAULT '',
+			size INT NOT NULL DEFAULT 0, data LONGBLOB NOT NULL,
+			source VARCHAR(16) NOT NULL DEFAULT 'upload', index_vocabulary BOOLEAN NOT NULL DEFAULT true,
+			status VARCHAR(32) NOT NULL, error TEXT NOT NULL, doc_id VARCHAR(64) NOT NULL DEFAULT '',
+			created_at VARCHAR(64) NOT NULL, started_at VARCHAR(64), finished_at VARCHAR(64)
+		) ENGINE=InnoDB`,
+		`CREATE INDEX idx_document_jobs_created_at ON document_jobs(created_at)`,
 		`CREATE TABLE IF NOT EXISTS sessions (
 			token VARCHAR(64) PRIMARY KEY, expires_at VARCHAR(64) NOT NULL,
 			role VARCHAR(16) NOT NULL DEFAULT 'admin', user_id VARCHAR(20) NOT NULL DEFAULT ''
@@ -721,6 +745,15 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			fetched_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_crawl_job_pages_job_id ON crawl_job_pages(job_id)`,
+		// See the sqlite dialect's document_jobs comment.
+		`CREATE TABLE IF NOT EXISTS document_jobs (
+			id TEXT PRIMARY KEY, filename TEXT NOT NULL, content_type TEXT NOT NULL DEFAULT '',
+			size INT NOT NULL DEFAULT 0, data BYTEA NOT NULL,
+			source TEXT NOT NULL DEFAULT 'upload', index_vocabulary BOOLEAN NOT NULL DEFAULT true,
+			status TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', doc_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_document_jobs_created_at ON document_jobs(created_at)`,
 		`CREATE TABLE IF NOT EXISTS sessions (
 			token TEXT PRIMARY KEY, expires_at TEXT NOT NULL,
 			role TEXT NOT NULL DEFAULT 'admin', user_id TEXT NOT NULL DEFAULT ''

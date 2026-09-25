@@ -45,4 +45,4 @@ Click any term to open its detail page, showing exactly which documents contain 
 > - The domain/URL box takes a regex; the vocabulary box takes a plain substring, so regex syntax there is searched literally.
 
 ---
-← [Your files](account-files.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Domain detail](domain-detail.md) →
+← [Your files](account-files.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Document upload](document-upload.md) →

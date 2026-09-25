@@ -374,7 +374,7 @@ test('renderAdminNav renders Overview plus every group from ADMIN_NAV_GROUPS', (
   assert.equal(groups.length, ADMIN_NAV_GROUPS.length - 1);
   assert.equal(groups[0].querySelector('.rail-tab').textContent, 'Content');
   const contentLinks = Array.from(groups[0].querySelectorAll('a')).map((a) => a.textContent);
-  assert.deepEqual(contentLinks, ['Documents', 'Content dedup']);
+  assert.deepEqual(contentLinks, ['Documents', 'Upload', 'Content dedup']);
 });
 
 test('renderAdminNav includes a Chat group linking to the settings page\'s chat section', () => {

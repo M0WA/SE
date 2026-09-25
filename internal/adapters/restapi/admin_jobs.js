@@ -515,10 +515,58 @@
     }
   }
 
+  // --- Document uploads (see admin_document_upload.js -- a Document job is
+  // a single file, not a many-page crawl, so it gets its own small table
+  // here rather than being forced into the crawl-jobs table's
+  // seed/pages/speed columns, which don't apply to it.) ---
+  const documentJobsStatusEl = document.getElementById('document-jobs-status');
+  const documentJobsTableEl = document.getElementById('document-jobs-table');
+
+  function documentJobViewCell(job) {
+    const td = document.createElement('td');
+    td.className = 'actions';
+    const viewLink = document.createElement('a');
+    viewLink.className = 'text-button';
+    viewLink.href = '/admin/document-upload/' + encodeURIComponent(job.id);
+    setIconLabel(viewLink, 'view', 'View');
+    td.appendChild(viewLink);
+    return td;
+  }
+
+  function renderDocumentJobs(jobs) {
+    clear(documentJobsTableEl);
+    if (jobs.length === 0) {
+      documentJobsStatusEl.textContent = 'No documents uploaded yet.';
+      return;
+    }
+    documentJobsStatusEl.textContent = '';
+    const table = buildTable(
+      [{ label: 'filename' }, { label: 'content type' }, { label: 'status' }, { label: 'created' }, { label: '' }],
+      jobs,
+      (job) => [
+        textCell(job.filename),
+        textCell(job.content_type),
+        textCell(capitalize(job.status)),
+        textCell(formatTimestamp(job.created_at)),
+        documentJobViewCell(job),
+      ],
+    );
+    documentJobsTableEl.appendChild(table);
+  }
+
+  async function loadDocumentJobs() {
+    try {
+      renderDocumentJobs(await getJSON('/admin/api/document-jobs'));
+    } catch (err) {
+      documentJobsStatusEl.textContent = 'Could not load document uploads: ' + err.message;
+    }
+  }
+
   renderAdminNav();
   wireSignOut();
   loadCrawls();
   loadJobs();
+  loadDocumentJobs();
 
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
@@ -531,6 +579,7 @@
       JOB_DETAIL_COLUMNS, jobDetailDefaultDir, jobDetailSortValue,
       sortJobDetailPages, buildJobDetailTable, renderJobDetailTable,
       loadJobDetail,
+      documentJobViewCell, renderDocumentJobs, loadDocumentJobs,
     };
   }
 })();

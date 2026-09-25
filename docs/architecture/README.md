@@ -44,7 +44,7 @@ Pure logic — every file imports only the Go standard library, with no SQL, HTT
 
 ### Ports (`internal/ports`)
 
-33 interfaces defining pure contracts between the core and adapters; the package imports `database/sql` only for the `sql.DBStats` value type, performing no I/O itself.
+34 interfaces defining pure contracts between the core and adapters; the package imports `database/sql` only for the `sql.DBStats` value type, performing no I/O itself.
 
 | Port | Responsibility | Implemented by |
 |---|---|---|
@@ -57,11 +57,12 @@ Pure logic — every file imports only the Go standard library, with no SQL, HTT
 | `SessionStore` | Shared-DB login session tokens, each carrying a role (admin vs. regular user) and, for a regular user, which `User` it belongs to. | `sqlrepo` |
 | `UserStore` | CRUD for every DB-backed account -- there is no separate hardcoded admin account; `User.IsAdmin` is what additionally grants `/admin/*` access on top of the same self-service search/chat access every account gets. An admin manages create/delete/`IsAdmin`; each account self-serves its own password and personal chat prompt (`User.CustomPrompt`, injected into every turn) via search-server's `/account` page. | `sqlrepo` |
 | `HealthChecker` | Cheap DB liveness check backing `/healthz`. | `sqlrepo` |
-| `AdminRepository` | Read-mostly admin diagnostics port (stats, listings, time series, pool stats). | `sqlrepo` |
+| `AdminRepository` | Read-mostly admin diagnostics port (stats, listings, time series, pool stats); also carries `SaveDocumentOptionalVocabulary` (the Document-upload feature's own indexing entry point -- see `DocumentJobStore` below). | `sqlrepo` |
 | `SearchService` | Primary driving port for public search. | `internal/application` (hybrid search use case) |
 | `CrawlerService` | Executes an actual crawl with live per-page progress. | `internal/application` (crawl loop) |
 | `CrawlJobService` | Network contract admin-server uses to poll/control crawl-server's jobs. | HTTP client adapter (`crawlclient`) |
 | `CrawlJobStore` | crawl-server's own job/page-history persistence. | `domain.CrawlJobStore` (in-memory/test), `sqlrepo` (production) |
+| `DocumentJobStore` | admin-server's own persistence for Document-upload jobs (see `admin_document_jobs.go`) -- always local/synchronous, unlike `CrawlJobStore` there's no separate crawl-server network hop. Method names are fully qualified (`CreateDocumentJob`, not `Create`) since the same `*sqlrepo.Repository` also implements `CrawlJobStore`'s bare `Create`/`Get`/`List`/`Delete` for a different table. | `sqlrepo` |
 | `DebugSearchService` | Raw, unblended BM25/semantic/PageRank score breakdown for admin diagnostics. | `internal/application` |
 | `SettingsStore` | Generic key/value settings persistence shared by every process. | `sqlrepo` |
 | `ScheduledCrawlStore` | CRUD + scheduling operations on `ScheduledCrawl`, shared by admin CRUD and the crawl-server ticker. | `sqlrepo` |
@@ -98,13 +99,13 @@ Orchestration/use-case layer; verified to import only `internal/domain` and `int
 
 | Adapter | Responsibility |
 |---|---|
-| `sqlrepo` | SQL persistence layer shared by all three binaries (SQLite locally/CI, Postgres in the dev deployment); implements `SQLRepository`, `PageRankRepository`, `ContentDedupRepository`, `EmbeddingRepository`, `SemanticMatcher`, `SessionStore`, `AdminRepository`, `CrawlJobStore`, `SettingsStore`, `ScheduledCrawlStore`, `EmbeddingEndpointStore`, `ChatEndpointStore`, `ChatVisionStore`, `UserStore`, `FileStore`, `ChatStore`, and more. |
+| `sqlrepo` | SQL persistence layer shared by all three binaries (SQLite locally/CI, Postgres in the dev deployment); implements `SQLRepository`, `PageRankRepository`, `ContentDedupRepository`, `EmbeddingRepository`, `SemanticMatcher`, `SessionStore`, `AdminRepository`, `CrawlJobStore`, `DocumentJobStore`, `SettingsStore`, `ScheduledCrawlStore`, `EmbeddingEndpointStore`, `ChatEndpointStore`, `ChatVisionStore`, `UserStore`, `FileStore`, `ChatStore`, and more. |
 | `restapi` | HTTP handler layer for both the public search UI/API and the admin UI/API — routing, JSON REST endpoints, embedded static assets, auth/session and crawl-internal-token checks. |
 | `httpfetcher` | Default plain-HTTP page fetcher with timeout/UA/cookie/basic-auth support, routed through `netguard`. |
 | `browserfetcher` | Renders JS-heavy pages via a headless Chromium or Firefox browser over Playwright. |
 | `htmlparser` | Pure HTML title/text/link/canonical-URL extraction. |
 | `robots` | Fetches, caches, and evaluates robots.txt rules. |
-| `netguard` | Shared SSRF guard (custom `DialContext`), with two policies: a strict one (`AllowedIP`) blocking every private/reserved range, used by every outbound crawler fetch; and a permissive one (`AllowedConfiguredEndpointIP`) for admin-configured endpoints (`httpembed`/`httpchat`'s `BaseURL`/`TokenizeURL`) that only blocks link-local/multicast/unspecified addresses, since a self-hosted embeddings/chat backend legitimately lives on a private network or loopback. |
+| `netguard` | Shared SSRF guard (custom `DialContext`), with two policies: a strict one (`AllowedIP`) blocking every private/reserved range, used by every outbound crawler fetch; and a permissive one (`AllowedConfiguredEndpointIP`) for admin-configured endpoints (`httpembed`/`httpchat`'s `BaseURL`/`TokenizeURL`, and `restapi`'s Document-upload S3 import's `endpoint`) that only blocks link-local/multicast/unspecified addresses, since a self-hosted embeddings/chat backend (or an S3-compatible endpoint) legitimately lives on a private network or loopback. |
 | `hashembed` | Dependency-free fallback embedding provider via feature hashing. |
 | `httpembed` | Calls an OpenAI-compatible embeddings HTTP endpoint (e.g. IONOS AI Model Hub) with chunking and rate-limit-aware retry; outbound calls routed through `netguard`'s configured-endpoint policy. Also implements `ImageEmbedder` -- a chat-completions-style `image_url` content request against the same endpoint, for a vision-language embedding model. |
 | `httpchat` | Calls an OpenAI-compatible chat-completions endpoint; outbound calls routed through `netguard`'s configured-endpoint policy. |
@@ -128,7 +129,7 @@ At runtime, the three binaries coordinate almost entirely through the shared SQL
 
 ## Deployment
 
-The dev/test deployment (`se.mo-sys.de`) runs all three Go binaries as independent, hardened systemd services from one Debian package: `searchengine-search.service`, `searchengine-admin.service`, `searchengine-crawl.service` (each `NoNewPrivileges=true`, `ProtectSystem=strict`, `ProtectHome=true`, `Restart=on-failure`), sharing one system user (`searchengine`) and one `EnvironmentFile` (`/etc/searchengine/searchengine.env`) holding `DB_DRIVER`/`DB_DSN`, admin credentials, per-service listen addresses (loopback-only by default), `CRAWL_SERVER_URL`/`CRAWL_INTERNAL_TOKEN`, and `SETTINGS_ENCRYPTION_KEY`. `postinst` creates the user and starts all three services, but deliberately does **not** install or reload nginx config -- the tracked `packaging/nginx/searchengine.conf` can drift from the live `/etc/nginx/...` unless manually re-synced.
+The dev/test deployment (`se.mo-sys.de`) runs all three Go binaries as independent, hardened systemd services from one Debian package: `searchengine-search.service`, `searchengine-admin.service`, `searchengine-crawl.service` (each `NoNewPrivileges=true`, `ProtectSystem=strict`, `ProtectHome=true`, `Restart=on-failure`), sharing one system user (`searchengine`) and one `EnvironmentFile` (`/etc/searchengine/searchengine.env`) holding `DB_DRIVER`/`DB_DSN`, per-service listen addresses (loopback-only by default), `CRAWL_SERVER_URL`/`CRAWL_INTERNAL_TOKEN`, and `SETTINGS_ENCRYPTION_KEY` -- no admin credentials live here; the first admin account is a `users` row seeded via `packaging/create-admin.sh` (see `docs/manual/installation.md` step 7). `postinst` creates the user and starts all three services, but deliberately does **not** install or reload nginx config -- the tracked `packaging/nginx/searchengine.conf` can drift from the live `/etc/nginx/...` unless manually re-synced.
 
 nginx is the public entrypoint on 80/443, splitting traffic by path: `/login`, `/logout`, `/admin` (a plain string-prefix match, not path-segment-aware) route to admin-server (`127.0.0.1:8081`); everything else falls through to search-server (`127.0.0.1:8080`). crawl-server (`127.0.0.1:8082`) gets no location block and must never be exposed publicly. A separate, non-public block on `127.0.0.1:8090` exposes nginx's `stub_status` for scraping.
 

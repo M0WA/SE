@@ -161,7 +161,7 @@ func recomputeBatch(ctx context.Context, cfg recomputeJobConfig, batch []string,
 func recomputeOneDocument(ctx context.Context, cfg recomputeJobConfig, id string, doc domain.Document) bool {
 	embeddings := make(map[string][]float32, len(cfg.embedders))
 	for provider, embedder := range cfg.embedders {
-		vec, err := embedTitleWeighted(ctx, embedder.Embed, doc.Title, doc.Text, cfg.titleWeight)
+		vec, err := EmbedTitleWeighted(ctx, embedder.Embed, doc.Title, doc.Text, cfg.titleWeight)
 		if err != nil {
 			log.Printf("recomputing %s embedding for %s: %v", provider, id, err)
 			return true

@@ -22,6 +22,7 @@ function loadFixture() {
   global.fetch = async (url) => {
     if (url.includes('/admin/api/schedules')) return { ok: true, json: async () => [] };
     if (url.includes('/admin/api/crawl/jobs')) return { ok: true, json: async () => [] };
+    if (url.includes('/admin/api/document-jobs')) return { ok: true, json: async () => [] };
     return { ok: true, json: async () => ({}) };
   };
   // admin_jobs.js's own exports, plus admin.js's shared helpers it relies on as ambient globals
@@ -361,3 +362,38 @@ test('renderCrawls lists enabled as the first column and drops the repeats/links
   const firstRowCells = document.querySelectorAll('#crawls-table tbody tr')[0].children;
   assert.ok(firstRowCells[0].querySelector('input[type="checkbox"]'));
 });
+
+test('documentJobViewCell renders a single View link to the document detail page', () => {
+  const { documentJobViewCell, ICON_SVGS } = loadFixture();
+  const cell = documentJobViewCell({ id: 'j1' });
+  const link = cell.querySelector('a');
+  assert.equal(link.href.endsWith('/admin/document-upload/j1'), true);
+  assert.equal(link.innerHTML, normalizedSVG(ICON_SVGS.view));
+  assert.equal(link.title, 'View');
+});
+
+test('renderDocumentJobs shows a status message when there are none', () => {
+  const { renderDocumentJobs } = loadFixture();
+  renderDocumentJobs([]);
+  assert.equal(document.getElementById('document-jobs-status').textContent, 'No documents uploaded yet.');
+  assert.equal(document.querySelectorAll('#document-jobs-table table').length, 0);
+});
+
+test('renderDocumentJobs lists filename/content type/status/created plus a View action', () => {
+  const { renderDocumentJobs } = loadFixture();
+  renderDocumentJobs([{ id: 'j1', filename: 'notes.txt', content_type: 'text/plain', status: 'done', created_at: '2026-01-01T00:00:00Z' }]);
+  const headers = Array.from(document.querySelectorAll('#document-jobs-table th')).map((th) => th.textContent);
+  assert.deepEqual(headers, ['filename', 'content type', 'status', 'created', '']);
+  const firstRow = document.querySelectorAll('#document-jobs-table tbody tr')[0];
+  assert.equal(firstRow.children[0].textContent, 'notes.txt');
+  assert.equal(firstRow.children[2].textContent, 'Done');
+  assert.equal(document.getElementById('document-jobs-status').textContent, '');
+});
+
+// loadDocumentJobs itself (the fetch-wrapping loader) is deliberately not tested directly with a
+// custom mock -- admin_jobs.js's very own module load already fires it once via the shared
+// default fetch mock above (same as loadJobs/loadCrawls), so a second call racing a distinct
+// mock is nondeterministic about which write to #document-jobs-status wins. renderDocumentJobs
+// (tested above) covers the same rendering logic deterministically; loadJobs/loadCrawls follow
+// the identical convention of only unit-testing their own pure render/filter functions, never
+// themselves.
