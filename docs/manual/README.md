@@ -1,6 +1,6 @@
 # User manual
 
-Everything about running and using searchengine: installing and configuring a deployment, and every admin settings page and the public search/chat page, each screenshotted and explained field by field. For how the system is built rather than how to run it, see [docs/architecture/](../architecture/README.md).
+Everything about running and using SE: installing and configuring a deployment, and every admin settings page and the public search/chat page, each screenshotted and explained field by field. For how the system is built rather than how to run it, see [docs/architecture/](../architecture/README.md).
 
 ## Installation & configuration
 

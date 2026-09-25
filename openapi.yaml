@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: searchengine API
+  title: SE - AI chatbot API
   version: "1.0"
   description: |
     A self-hosted AI chatbot with search-engine features, deployed as three
