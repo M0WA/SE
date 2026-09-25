@@ -86,10 +86,11 @@ least one exists, `/admin` sign-in always refuses -- the most common reason
 a fresh install "looks broken." `packaging/create-admin.sh` seeds the
 first one directly against the database (there's no admin session yet to
 create it through the API); needs `apache2-utils` for `htpasswd` (bcrypt
-hashing) and, for Postgres, the `postgresql-client` package for `psql`:
+hashing) and, depending on `DB_DRIVER`, either `sqlite3` (the default) or
+the `postgresql-client` package for `psql`:
 
 ```
-apt-get install apache2-utils   # + postgresql-client if DB_DRIVER=pgx
+apt-get install apache2-utils sqlite3   # sqlite3 for the default DB_DRIVER=sqlite, + postgresql-client instead if DB_DRIVER=pgx
 ./packaging/create-admin.sh admin
 # prompts for a password (bcrypt-hashed locally, never logged), then
 # inserts a users row with is_admin=true using the DB_DRIVER/DB_DSN

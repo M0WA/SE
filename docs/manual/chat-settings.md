@@ -4,7 +4,7 @@
 
 *`/admin/chat/settings`*
 
-Configures the chat-completions backend powering Chat mode on the public search page, plus the system prompt, default agent, web-search behavior, and context-length budget every chat turn uses. Found under Chat -> Settings in the admin sidebar.
+Configures the chat-completions backend powering Chat mode on the public search page, plus the system prompt, default agent, web-search behavior, and context-length budget every chat turn uses. This instance's own crawled index can also be blended into those web-search results, by adding it as a SearXNG engine (see packaging/searxng-engine/README.md) rather than via any separate setting on this page. Found under Chat -> Settings in the admin sidebar.
 
 ![Chat Settings](images/chat-settings.png)
 

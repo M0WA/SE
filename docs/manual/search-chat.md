@@ -14,7 +14,7 @@ The pill-shaped control at the top switches the whole page between Chat and Sear
 
 ## Search mode: the query box and syntax
 
-Type a query and press Search (or Enter) to run it against indexed content -- results are ranked by a blend of keyword matching and semantic similarity, so a query sharing no exact words with a page can still surface it if the meaning is close. The "Search syntax" disclosure lists the operators: plain words match loosely, +word forces presence, -word excludes, "exact phrase" matches literally (and -"exact phrase" excludes it), and site:example.com (or -site:example.com) restricts to or excludes a domain and its subdomains. These combine freely, e.g. cats +shelter -kitten site:example.com. A misspelled query gets a quiet note above the results naming which term(s) were fuzzy-corrected for scoring -- your typed query is never silently rewritten, only substituted for ranking.
+Type a query and press Search (or Enter) to run it against indexed content -- results are ranked by a blend of keyword matching and semantic similarity, so a query sharing no exact words with a page can still surface it if the meaning is close. The "Search syntax" disclosure lists the operators: plain words match loosely, +word forces presence, -word excludes, "exact phrase" matches literally (and -"exact phrase" excludes it), and site:example.com (or -site:example.com) restricts to or excludes a domain and its subdomains. These combine freely, e.g. cats +shelter -kitten site:example.com. Appending &top_k=N to the page's URL (e.g. /?q=cats&top_k=50) requests more than the default number of results. A misspelled query gets a quiet note above the results naming which term(s) were fuzzy-corrected for scoring -- your typed query is never silently rewritten, only substituted for ranking.
 
 ## Sort order
 
@@ -42,7 +42,7 @@ The strip above the transcript holds one tab per open conversation -- the + butt
 
 ## Pinning, renaming, and closing chats
 
-Each tab has its own pin button. An unpinned tab is session-only: closing or reloading the page discards it, and it can't attach files (see "Attaching files" below). A signed-in account's chats are pinned by default -- every new tab (though not a fork, see above) is saved to your account as soon as you create it, reloading automatically next time (most recently updated first) and able to attach files right away. Clicking the pin unpins a tab, deleting the saved chat and its attached files, though the tab stays open as a plain, session-only conversation; clicking it again re-pins it. An anonymous (signed-out) visitor's chats stay session-only regardless -- pinning requires a signed-in account (any account -- admin included, since every account is a real one now) with the files feature configured.
+Each tab has its own pin button. An unpinned tab is session-only: closing or reloading the page discards it, and it can't attach files (see "Attaching files" below). A signed-in account's chats are pinned by default -- every new tab (though not a fork, see above) is saved to your account as soon as you create it, reloading automatically next time (most recently updated first) and able to attach files right away. Clicking the pin unpins a tab, deleting the saved chat and its attached files, though the tab stays open as a plain, session-only conversation; clicking it again re-pins it. Pinning additionally requires the files feature to be configured (see Settings > System); without it, every account's chats stay session-only the same way an unpinned tab does.
 
 Click a tab's own name to rename it, but only while it's already active -- clicking a background tab's name switches to it instead. A pinned tab's rename saves immediately; an unpinned tab's title is session-only, same as its history.
 
@@ -50,7 +50,7 @@ The × on a tab closes it. For an unpinned tab this discards it with no confirma
 
 ## Attaching files
 
-The paperclip button uploads a file for the model to read during this conversation -- it doesn't inject the contents into your message; the model discovers and reads it via its file-access tools the next time it looks. Attached files (and any the model produces via write_file) show up as small boxes below the transcript with a download link and a × to delete immediately, no confirmation needed. Only a pinned tab can attach files -- the paperclip is disabled (with a tooltip explaining why) until you pin the tab. Requires a signed-in account with the files feature configured; a deployment without that feature shows no file boxes.
+The paperclip button uploads a file for the model to read during this conversation -- it doesn't inject the contents into your message; the model discovers and reads it via its file-access tools the next time it looks. Attached files (and any the model produces via write_file) show up as small boxes below the transcript with a real download link, a view (eye) icon that opens an inline preview -- images render directly, text/JSON/YAML files show in a plain-text view, anything else shows a "no preview available" message with a note to use the download link instead -- and a × to delete immediately, no confirmation needed. Only a pinned tab can attach files -- the paperclip is disabled (with a tooltip explaining why) until you pin the tab. Requires a signed-in account with the files feature configured; a deployment without that feature shows no file boxes.
 
 ## Citations and tool results
 
@@ -66,7 +66,7 @@ The header's top-right icons adapt to who's signed in: an admin sees a gear icon
 
 > **Worth knowing:**
 > - Combine search operators freely in one query, e.g. cats +shelter -kitten site:example.com -- there's no separate advanced-search form.
-> - Signed in, a new chat tab is pinned (and attachable) automatically -- unpin it if you'd rather it stayed session-only; an unpinned tab (or any tab for a signed-out visitor) is discarded on reload or close, so export it first if you might want it later.
+> - Signed in, a new chat tab is pinned (and attachable) automatically -- unpin it if you'd rather it stayed session-only; an unpinned tab is discarded on reload or close, so export it first if you might want it later.
 > - If a search result's ranking looks off, open its Details fold to see whether keyword (bm25) or meaning-based (semantic) matching drove the score.
 
 ---

@@ -18,7 +18,7 @@ Capped at 5 MiB per file and 100 files per account, not admin-configurable. File
 
 ## Downloading and deleting
 
-Each row has Download and Delete links -- deleting has no confirmation prompt, so download anything worth keeping first.
+Each row has Download and Delete links -- Delete asks you to confirm ('Delete "&lt;filename&gt;"? This cannot be undone.') before removing the file, and there's no way to recover it afterward, so make sure you actually want it gone before confirming.
 
 ---
 ← [Your MCP servers](account-mcp-servers.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Documents](documents.md) →

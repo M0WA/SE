@@ -10,11 +10,11 @@ Start a new crawl of a site, either a one-off run or a repeating schedule. Every
 
 ## URL and max pages
 
-Type the site's URL and hit Crawl (or Enter). The field normalizes scheme/trailing slash when you tab away, adding https:// and stripping stray whitespace. Max pages caps how many pages this crawl fetches before stopping (default 20,000) — lower it for a quick spot-check, raise it for a complete pass of a larger site.
+Type the site's URL and hit Crawl (or Enter). The field normalizes the scheme when you tab away: it trims stray whitespace and, if the value doesn't already start with a scheme like https://, prepends https:// — it doesn't otherwise rewrite the URL (a trailing slash, for instance, is left as typed). Max pages caps how many pages this crawl fetches before stopping (default 20,000) — lower it for a quick spot-check, raise it for a complete pass of a larger site.
 
 ## Scheduling: interval and max runs
 
-Leave Interval at 0 (or blank) for a one-off crawl — the submit button reads "Crawl." A positive number of minutes relabels it "Schedule": the crawl repeats on that interval until paused or deleted from the Jobs page's Schedules table. Max runs only matters for a repeating crawl — blank for unlimited, or set it to disable the schedule automatically after that many runs (e.g. a nightly crawl that stops after 30 nights).
+Interval starts pre-filled at 360 (6 hours), not blank — the page opens already in Schedule mode, and the submit button already reads "Schedule" until you change this field. Clear Interval to 0 (or blank) for a one-off crawl instead — the button then reads "Crawl." Any positive number of minutes keeps it labeled "Schedule": the crawl repeats on that interval until paused or deleted from the Jobs page's Schedules table. Max runs only matters for a repeating crawl — blank for unlimited, or set it to disable the schedule automatically after that many runs (e.g. a nightly crawl that stops after 30 nights).
 
 ## Rendering
 
@@ -57,7 +57,7 @@ Fetch timeout, Minimum text length, Delay between fetches, and Max response size
 Submitting always creates the same kind of record — a crawl definition — regardless of interval. A one-off crawl is due immediately; crawl-server's scheduler picks it up within seconds and creates the Job you'll see on the Jobs page. A repeating crawl shows up under Schedules on the Jobs page instead, where you can pause, edit, or delete it later.
 
 > **Worth knowing:**
-> - Submitting a URL whose domain already has a schedule or pending one-off crawl replaces that entry's options in place rather than duplicating — at most one schedule per domain.
+> - Submitting a URL whose exact host already has a schedule or pending one-off crawl replaces that entry's options in place rather than duplicating — at most one schedule per host, not per domain (www.example.com and blog.example.com dedup separately, even though "Seed's domain, including subdomains" link scope would follow both from either one).
 > - To change a crawl's options after creating it, go to the Jobs page and click its row's edit icon — that opens schedule-detail, with the same fields plus a few schedule-only ones (Enabled, stored credentials).
 
 ---

@@ -30,7 +30,7 @@ Connects to the server exactly as the form is currently filled in — even unsav
 
 ## Prompt (optional)
 
-Not where you describe what the server does — each tool's own name and description (via List tools above) already tells the model that. Prompt is for extra cross-tool steering no single tool's description can carry, e.g. "after searching, fetch results from different domains — not just the top-ranked ones — until you can validate the answer across independent sources; if a fetch is blocked, try a different domain rather than the same one again." A fixed count (e.g. "fetch the top 3") is the wrong shape for this: the top-ranked results can all share one domain, and if that domain blocks fetching, the model has nothing left to fall back to — a validation-based stopping condition survives that case, a fixed count doesn't. When non-empty and the server is active, it's injected as a system message after the chat endpoint's persistent prompt (Settings → Chat), in addition to it. Leave empty if tool descriptions already say enough; most servers don't need one.
+Not where you describe what the server does — each tool's own name and description (via List tools above) already tells the model that. Prompt is for extra cross-tool steering no single tool's description can carry, e.g. "after searching, fetch results from different domains — not just the top-ranked ones — until you can validate the answer across independent sources; if a fetch is blocked, try a different domain rather than the same one again." A fixed count (e.g. "fetch the top 3") is the wrong shape for this: the top-ranked results can all share one domain, and if that domain blocks fetching, the model has nothing left to fall back to — a validation-based stopping condition survives that case, a fixed count doesn't. When non-empty and the server is active, it's injected as a system message after the chat endpoint's persistent prompt (Chat -> Settings), in addition to it. Leave empty if tool descriptions already say enough; most servers don't need one.
 
 ## Enabled
 
@@ -38,7 +38,7 @@ Turns this server on or off. A disabled server is never connected to and its too
 
 ## Gated by web search
 
-When checked, this server (and its Prompt) is only active on a turn where the chat's "Web" toggle is on — the same setting under Settings → Chat, overridable per-question. There's no separate control; it reuses that toggle. Unchecked (default), the server is active whenever Enabled is checked, regardless of web search. This lets a server like mcp-web run only when the user has actually asked for web-grounded answers.
+When checked, this server (and its Prompt) is only active on a turn where the chat's "Web" toggle is on — the same setting under Chat -> Settings, overridable per-question. There's no separate control; it reuses that toggle. Unchecked (default), the server is active whenever Enabled is checked, regardless of web search. This lets a server like mcp-web run only when the user has actually asked for web-grounded answers.
 
 ## Save and Delete
 

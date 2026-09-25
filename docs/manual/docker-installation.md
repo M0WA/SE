@@ -16,8 +16,8 @@ An alternative to [Installation](installation.md)'s `.deb` + systemd + Postgres 
 
 ```sh
 cp .env.example .env
-# edit .env: set SETTINGS_ENCRYPTION_KEY and CRAWL_INTERNAL_TOKEN
-# (openssl rand -hex 32 for each)
+# edit .env: set SETTINGS_ENCRYPTION_KEY, CRAWL_INTERNAL_TOKEN, and POSTGRES_PASSWORD
+# (openssl rand -hex 32 for each of the first two; any strong password for POSTGRES_PASSWORD)
 docker compose up -d
 ```
 
