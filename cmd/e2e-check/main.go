@@ -59,10 +59,6 @@ import (
 // they shouldn't fail the whole run the way a real error does.
 var errSkip = errors.New("skip")
 
-// errSandboxToolNotCalled marks checkSandboxFileFormat's one retryable
-// failure mode -- see that function's own comment for why.
-var errSandboxToolNotCalled = errors.New("sandbox tool not called")
-
 // REST paths/headers referenced from more than one check below -- named
 // once each so a route rename (or the header name) needs one edit, and so
 // SonarCloud's go:S1192 (repeated string literal) doesn't flag the
@@ -184,6 +180,7 @@ func main() {
 			{"persistent chat: fork (independent copy)", c.checkChatFork},
 			{"mcp-files tool (attach + read)", c.checkFilesTool},
 			{"mcp-files tool: write_file", c.checkWriteFile},
+			{"mcp-files tool: write_file with a large generated document (CV/resume)", c.checkWriteFileLargeGeneratedContent},
 			{"account: personal MCP server (http-only)", c.checkAccountMCPServerCRUD},
 			{"account: your files (unscoped listing)", c.checkAccountFilesUnscoped},
 			{"account: change password (round trip)", c.checkAccountPasswordRoundTrip(creds.TestUser, creds.TestUserPassword)},
@@ -1556,63 +1553,67 @@ func (c *client) checkSandboxFileFormat(filename, contentType string, fixtureDat
 	defer c.deleteRequest("/account/api/files/" + uploaded.ID)
 
 	runWith := func(tool, packagesClause, script string) error {
-		attempt := func() (string, error) {
-			prompt := fmt.Sprintf(
-				"Use %s with file_ids [%q]%s to run this exact script verbatim, then reply with only its stdout:\n\n%s",
-				tool, uploaded.ID, packagesClause, script)
+		prompt := fmt.Sprintf(
+			"Use %s with file_ids [%q]%s to run this exact script verbatim, then reply with only its stdout:\n\n%s",
+			tool, uploaded.ID, packagesClause, script)
+
+		attempt := func() error {
 			out, err := c.chatOnce(prompt, chatOptions{chatID: c.testChatID})
 			if err != nil {
-				return "", err
+				return err
 			}
 			if err := checkNoToolErrors(out); err != nil {
-				return "", err
+				return err
 			}
+			var stdout string
+			var called bool
 			for _, tr := range out.ToolResults {
 				if tr.ToolName == tool {
-					return tr.Output, nil
+					stdout, called = tr.Output, true
+					break
 				}
 			}
-			return "", fmt.Errorf("expected %s to be called, got no matching tool_results entry (got %d other tool call(s)): %w",
-				tool, len(out.ToolResults), errSandboxToolNotCalled)
+			if !called {
+				return fmt.Errorf("expected %s to be called, got no matching tool_results entry (got %d other tool call(s))", tool, len(out.ToolResults))
+			}
+			// Checked against the tool's own raw stdout (now exposed via
+			// tool_results[].output), never the model's final prose answer --
+			// confirmed live, a model sometimes paraphrases/reformats real
+			// stdout into a summary even when explicitly told to reply with
+			// only the raw output (e.g. a literal "IMAGE:yes" line coming
+			// back as reworded prose, or as "IMAGE: yes" with an inserted
+			// space). The tool's own Output field is authoritative and
+			// unaffected by that -- this is a strictly stronger check than
+			// testing the model's retelling, not a loosened one.
+			if !strings.Contains(stdout, marker) {
+				return fmt.Errorf("expected %s's raw output to contain the file's own marker text %q, got %q", tool, marker, stdout)
+			}
+			if requireImage && !strings.Contains(stdout, "IMAGE:yes") {
+				return fmt.Errorf("expected %s's raw output to confirm the file's embedded image was found (IMAGE:yes), got %q", tool, stdout)
+			}
+			return nil
 		}
 
-		// One retry, but ONLY for the "tool never got called" outcome --
-		// confirmed live, a model occasionally answers a script-running
-		// instruction directly instead of actually invoking the sandbox
-		// tool, same sampling-variance-in-instruction-following as
-		// checkToolFunctions' identical precedent below. A genuine
-		// regression (the tool called but erroring, or called but its own
-		// output missing the expected marker/image) is never retried --
-		// see errors.Is gate below.
+		// Two attempts total, same established precedent as
+		// checkToolFunctions/attemptToolCall below: a live model
+		// occasionally fails to faithfully follow a "run this exact script
+		// verbatim" instruction -- either by not invoking the tool at all,
+		// or (confirmed live: the XLSX Go script's escape-heavy
+		// backtick-in-backtick struct-tag syntax) by mistyping the relayed
+		// code enough to break compilation, which then also fails the
+		// marker check below since the script never got to print it. Both
+		// are sampling variance in instruction-following, not a
+		// reachability/functionality problem this check exists to catch --
+		// the same failure reproducing on both attempts is what would
+		// actually signal a real regression.
 		const attempts = 2
-		var stdout string
 		var lastErr error
 		for i := 1; i <= attempts; i++ {
-			stdout, lastErr = attempt()
-			if lastErr == nil || !errors.Is(lastErr, errSandboxToolNotCalled) {
-				break
+			if lastErr = attempt(); lastErr == nil {
+				return nil
 			}
 		}
-		if lastErr != nil {
-			return lastErr
-		}
-
-		// Checked against the tool's own raw stdout (now exposed via
-		// tool_results[].output), never the model's final prose answer --
-		// confirmed live, a model sometimes paraphrases/reformats real
-		// stdout into a summary even when explicitly told to reply with
-		// only the raw output (e.g. a literal "IMAGE:yes" line coming back
-		// as reworded prose, or as "IMAGE: yes" with an inserted space).
-		// The tool's own Output field is authoritative and unaffected by
-		// that -- this is a strictly stronger check than testing the
-		// model's retelling, not a loosened one.
-		if !strings.Contains(stdout, marker) {
-			return fmt.Errorf("expected %s's raw output to contain the file's own marker text %q, got %q", tool, marker, stdout)
-		}
-		if requireImage && !strings.Contains(stdout, "IMAGE:yes") {
-			return fmt.Errorf("expected %s's raw output to confirm the file's embedded image was found (IMAGE:yes), got %q", tool, stdout)
-		}
-		return nil
+		return lastErr
 	}
 
 	packagesClause := ""
@@ -2543,27 +2544,22 @@ func (c *client) checkFilesTool() error {
 	return nil
 }
 
-// checkWriteFile proves mcp-files' write_file tool -- distinct from
-// list_files/read_file/read_file_base64, all exercised by checkFilesTool
-// above, and previously the one tool on this server with zero coverage
-// anywhere in this suite. Asks for a specific, checkable filename and
-// content, then confirms via the real REST listing (not just the model's
-// own say-so) that a file matching both actually exists, and cleans it up
-// afterward regardless of outcome.
-func (c *client) checkWriteFile() error {
+// checkWriteFileProducesFile drives one chat turn expected to call
+// write_file, then confirms via the real REST listing (not just the
+// model's own say-so) that a file named exactly filename actually exists
+// afterward, cleaning it up regardless of outcome -- the shared body
+// behind checkWriteFile and checkWriteFileLargeGeneratedContent below,
+// which differ only in prompt/filename and what each is trying to prove.
+func (c *client) checkWriteFileProducesFile(prompt, filename string) error {
 	if c.testChatID == "" {
 		return skip(skipNoPinnedChat)
 	}
-	const filename = "e2e-check-written.txt"
-	const marker = "E2E-CHECK-WRITE-MARKER-9b3d2a"
-	out, err := c.chatOnce(
-		fmt.Sprintf("Use write_file to create a file named exactly %q containing exactly this text: %s", filename, marker),
-		chatOptions{chatID: c.testChatID})
+	out, err := c.chatOnce(prompt, chatOptions{chatID: c.testChatID})
 	if err != nil {
 		return err
 	}
 	if len(out.ToolResults) == 0 {
-		return fmt.Errorf("expected write_file to be called, got no tool_results")
+		return fmt.Errorf("expected write_file to be called, got no tool_results -- got this answer instead: %q", truncate([]byte(out.Answer), 500))
 	}
 	if err := checkNoToolErrors(out); err != nil {
 		return err
@@ -2586,6 +2582,40 @@ func (c *client) checkWriteFile() error {
 		return fmt.Errorf("expected a file named %q to exist after write_file, got %+v", filename, list)
 	}
 	return nil
+}
+
+// checkWriteFile proves mcp-files' write_file tool -- distinct from
+// list_files/read_file/read_file_base64, all exercised by checkFilesTool
+// above, and previously the one tool on this server with zero coverage
+// anywhere in this suite. Asks for a specific, checkable filename and
+// content.
+func (c *client) checkWriteFile() error {
+	const filename = "e2e-check-written.txt"
+	const marker = "E2E-CHECK-WRITE-MARKER-9b3d2a"
+	return c.checkWriteFileProducesFile(
+		fmt.Sprintf("Use write_file to create a file named exactly %q containing exactly this text: %s", filename, marker),
+		filename)
+}
+
+// checkWriteFileLargeGeneratedContent proves write_file still works as a real,
+// native tool call when its own content argument is large and open-ended
+// (the model has to generate it, not just relay a short fixed marker) --
+// unlike checkWriteFile's tiny exact-text case above. Confirmed live: asking
+// for "a sample CV docx" reproducibly made the model emit the entire
+// write_file call as literal ChatML-style `<tool_call>{...}</tool_call>`
+// text inside its plain answer instead of issuing a real tool call (no
+// tool_results at all) -- the file is silently never written, and the user
+// sees raw, unexecuted tool-call JSON as if it were the answer. Root cause
+// looks like the self-hosted model-serving stack's tool-call parser not
+// reliably recognizing its own output once the generated argument gets long,
+// not a bug in this repo's own (thin, structural) tool_calls parsing -- but
+// this check exists so that regression (or a fix) is visible here regardless
+// of where the real fix eventually lands.
+func (c *client) checkWriteFileLargeGeneratedContent() error {
+	const filename = "e2e-check-generated-cv.docx"
+	return c.checkWriteFileProducesFile(
+		fmt.Sprintf("Use write_file to create a file named exactly %q with a full, realistic sample CV/resume as its content -- multiple sections (contact info, summary, work experience, education, skills), at least a few hundred words.", filename),
+		filename)
 }
 
 // checkAccountFilesUnscoped proves GET /account/api/files with no
