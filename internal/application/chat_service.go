@@ -276,7 +276,7 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 	tokenUsage.HistoryTokens = estimateTokens(messages[len(leading):])
 
 	tools := toolDefsFrom(discoveredTools)
-	assistantMsg, err := s.completer.Complete(ctx, endpoint, messages, tools)
+	assistantMsg, messages, err := s.completeDetectingLeakedToolCalls(ctx, endpoint, messages, tools)
 	if err != nil {
 		return ChatResult{}, fmt.Errorf("chat: %w", err)
 	}
@@ -299,14 +299,14 @@ func (s *ChatService) Chat(ctx context.Context, history []domain.ChatMessage, op
 		followUp = append(followUp, assistantMsg)
 		followUp = append(followUp, toolResultMessages(roundResults)...)
 
-		nextMsg, err := s.completer.Complete(ctx, endpoint, followUp, tools)
+		nextMsg, updatedFollowUp, err := s.completeDetectingLeakedToolCalls(ctx, endpoint, followUp, tools)
 		if err != nil {
 			// Best-effort: keep the current assistantMsg (which may still
 			// carry unresolved tool calls) rather than fail the turn.
 			break
 		}
 		assistantMsg = nextMsg
-		currentMessages = followUp
+		currentMessages = updatedFollowUp
 	}
 
 	answer := assistantMsg.Content
