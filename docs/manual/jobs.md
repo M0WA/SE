@@ -10,7 +10,7 @@ The operational view of crawling on this instance: every schedule set up, and ev
 
 ## Schedules table
 
-Lists every crawl set up on this instance, one-off or repeating, with options saved for reuse. The first column is an Enabled checkbox to pause/resume directly — the same dedicated toggle as schedule-detail's Enabled field, so pausing/resuming never reschedules the next run — followed by seed, next run time, and last run time (repeat interval and link scope stay on schedule-detail, not repeated here). Per-row icons: Run now (▶), Edit (✎, opens schedule-detail), Delete (trash).
+Lists every crawl set up on this instance, one-off or repeating, with options saved for reuse. The first column is an Enabled checkbox to pause/resume directly — a dedicated toggle endpoint that never reschedules the next run, unlike toggling Enabled on schedule-detail's own form and clicking Save, which reschedules it the same as any other field edit there — followed by seed, next run time, and last run time (repeat interval and link scope stay on schedule-detail, not repeated here). Per-row icons: Run now (▶), Edit (✎, opens schedule-detail), Delete (trash).
 
 ## Jobs table
 
@@ -26,11 +26,11 @@ Both tables get a regex filter box once they have a row — Schedules filters by
 
 ## Document uploads table
 
-A third table lists every job from [Document upload](document-upload.md), most recent first -- filename, content type, status, and created-at. It's a separate table from Jobs above rather than merged into it: a Document job is always a single file with none of that table's crawl-specific columns (seed, pages crawled, speed), so forcing the two shapes together would mean mostly-empty cells either way. Its View action opens the same job detail page Document upload's own list links to.
+A second table — placed between Schedules and Jobs on the page — lists every job from [Document upload](document-upload.md), most recent first — filename, content type, status, and created-at. It's a separate table from Jobs rather than merged into it: a Document job is always a single file with none of that table's crawl-specific columns (seed, pages crawled, speed), so forcing the two shapes together would mean mostly-empty cells either way. Its View action opens the same job detail page Document upload's own list links to.
 
 ## One-off Crawl vs. recurring schedule
 
-The Crawl page's form always creates the same kind of record regardless of interval — the difference shows up only here. A one-off crawl (Interval 0) creates an already-due schedule, runs once, and shows up only as a Jobs row, never in Schedules. A repeating crawl shows up in both: as a Schedules row you manage, and, each time it fires, a fresh Jobs row you inspect after. This page keeps polling briefly right after you're redirected from creating a crawl, since the job appears only once crawl-server's scheduler next ticks, typically within seconds.
+The Crawl page's form always creates the same kind of record regardless of interval — the difference shows up only here. A one-off crawl (Interval 0) creates an already-due schedule, runs once, and shows up only as a Jobs row, never in Schedules. A repeating crawl shows up in both: as a Schedules row you manage, and, each time it fires, a fresh Jobs row you inspect after. The Crawl page doesn't navigate you here automatically — after submitting, it shows an inline status message ("...see it on the Jobs page") and leaves you there; you switch to this page yourself. Once here, the Jobs table's own auto-refresh (see below) picks up the new job as soon as crawl-server's scheduler next ticks, typically within seconds — no separate redirect-triggered polling window is involved.
 
 > **Worth knowing:**
 > - The Jobs table auto-refreshes every 1.5s whenever a job is Queued or Running, and stops once nothing is active — leave this page open during a large crawl to watch it live.
