@@ -25,6 +25,16 @@ created from `/admin/users` by an existing admin.
 | `CRAWL_SERVER_URL` | `"http://127.0.0.1:8082"` | admin | Base URL admin-server uses to reach the crawl-server binary over the network. |
 | `ADMIN_LISTEN_ADDR` | `"127.0.0.1:8081"` | admin | The host:port the internal admin HTTP server binds and listens on. |
 | `CRAWL_LISTEN_ADDR` | `"127.0.0.1:8082"` | crawl | The host:port the internal-only crawl HTTP server binds and listens on. |
+| `SE_SANDBOX_NETWORK` | `"false"` | mcp-sandbox | Alternate way to set the `-network` flag -- see [MCP Server detail](mcp-server-detail.md). An explicit `-network` on the MCPServer row's Args still always wins. |
+| `SE_SANDBOX_ALLOW_SYSTEM_PACKAGES` | `"false"` | mcp-sandbox | Alternate way to set the `-system-packages` flag. |
+| `SE_SANDBOX_MEMORY` | `"512m"` | mcp-sandbox | Alternate way to set the `-memory` flag. |
+| `SE_SANDBOX_CPUS` | `"1"` | mcp-sandbox | Alternate way to set the `-cpus` flag. |
+| `SE_SANDBOX_PIDS_LIMIT` | `"128"` | mcp-sandbox | Alternate way to set the `-pids-limit` flag. |
+| `SE_SANDBOX_TIMEOUT` | `"15s"` | mcp-sandbox | Alternate way to set the `-timeout` flag (a Go duration string, e.g. `"2m"`). |
+| `SE_SANDBOX_DNS` | none, empty | mcp-sandbox | Alternate way to set the `-dns` flag (comma-separated). |
+| `SE_SANDBOX_HOST_DNS` | `"false"` | mcp-sandbox | Alternate way to set the `-host-dns` flag. |
+| `SE_SANDBOX_HOST_NETWORK` | `"false"` | mcp-sandbox | Alternate way to set the `-host-network` flag. |
+| `SE_SANDBOX_BASE_URL` | `"http://127.0.0.1:8080"` | mcp-sandbox | Alternate way to set the `-base-url` flag. |
 
 ---
 ← [Docker Compose installation](docker-installation.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Config files](config-files.md) →
