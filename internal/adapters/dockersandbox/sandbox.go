@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -116,7 +117,14 @@ type languageConfig struct {
 	// referenced only via "$@", never string-concatenated, so a
 	// model-supplied package name can never break out of its argument.
 	installArgv func(path string, packages []string) []string
-	env         []string
+	// systemInstallScript is the shell script that installs OS-level packages named in the
+	// SE_SANDBOX_SYSTEM_PACKAGES env var (newline-separated, read via IFS splitting -- never
+	// string-concatenated -- then handed to the real package manager as real argv elements,
+	// same injection-proofing reasoning as installArgv). Run as a standalone container's entire
+	// command by provisionImage, not chained with the code-running one -- see that function's
+	// own doc comment for why the two never share a container.
+	systemInstallScript string
+	env                 []string
 }
 
 var languageConfigs = map[Language]languageConfig{
@@ -132,6 +140,18 @@ var languageConfigs = map[Language]languageConfig{
 				`PYTHONPATH=/tmp/pip-packages exec python3 ` + path
 			return append([]string{"sh", "-c", script, "sh"}, packages...)
 		},
+		// python:3-slim is Debian-based -- apt-get. -qq/--no-install-recommends keep it
+		// reasonably fast; DEBIAN_FRONTEND=noninteractive avoids a debconf prompt hanging the
+		// call forever on a package that has one. -o APT::Sandbox::User=root skips apt's own
+		// internal privilege-drop for its download step (normally to an unprivileged _apt user)
+		// -- that drop needs CAP_CHOWN/CAP_FOWNER/CAP_SETUID/CAP_SETGID just to set up its own
+		// sandboxed directories, capabilities not worth granting provisionImage's already
+		// isolated, single-purpose, never-runs-untrusted-code container just to satisfy a
+		// redundant second layer of sandboxing on top of Docker's own. sandboxSplitEnvVarIntoArgs
+		// (below) rebuilds "$@" from SE_SANDBOX_SYSTEM_PACKAGES before this ever touches a
+		// package name.
+		systemInstallScript: `export DEBIAN_FRONTEND=noninteractive; apt-get -o APT::Sandbox::User=root update -qq; ` +
+			sandboxSplitEnvVarIntoArgs + `apt-get -o APT::Sandbox::User=root install -y -qq --no-install-recommends "$@"`,
 		// PYTHONDONTWRITEBYTECODE: skip .pyc writes under the read-only root.
 		// PYTHONUNBUFFERED: flush stdout as written, so a timeout-killed
 		// script still has its output captured.
@@ -154,11 +174,23 @@ var languageConfigs = map[Language]languageConfig{
 			script := `set -e; mkdir -p /tmp/sandbox-mod; cp ` + path + ` /tmp/sandbox-mod/main.go; cd /tmp/sandbox-mod; go mod init sandbox >/dev/null 2>&1; go get "$@"; exec go run main.go`
 			return append([]string{"sh", "-c", script, "sh"}, packages...)
 		},
+		// golang:1-alpine is Alpine-based -- apk. --no-cache skips the local package index
+		// cache (pointless in a throwaway container).
+		systemInstallScript: sandboxSplitEnvVarIntoArgs + `apk add --no-cache "$@"`,
 		// GOCACHE/GOPATH/GOMODCACHE/HOME must point at writable /tmp -- Go's
 		// caches default to $HOME, which fails under --read-only otherwise.
 		env: []string{"HOME=/tmp", "GOCACHE=/tmp/go-cache", "GOPATH=/tmp/go-path", "GOMODCACHE=/tmp/go-mod"},
 	},
 }
+
+// sandboxSplitEnvVarIntoArgs rebuilds "$@" from SE_SANDBOX_SYSTEM_PACKAGES (newline-separated,
+// set via docker run -e, never shell-interpolated) using IFS-splitting restricted to newlines
+// (set -f additionally disables globbing) -- the standard POSIX-sh way to turn a safely-passed
+// string back into a real positional-parameter list without eval or arrays, so a package name
+// reaches the real package manager as a genuine argv element, the same injection-proofing
+// installArgv already gives Packages above.
+const sandboxSplitEnvVarIntoArgs = `IFS='
+'; set -f; set -- $SE_SANDBOX_SYSTEM_PACKAGES; unset IFS; set +f; `
 
 // RunOptions is one sandboxed execution request.
 type RunOptions struct {
@@ -184,6 +216,18 @@ type RunOptions struct {
 	// slice actually came from; Run itself only guards against a filename
 	// escaping the sandbox directory (see filepath.Base below).
 	Files map[string][]byte
+	// SystemPackages is zero or more OS-level package names (apt for
+	// Python's Debian-based image, apk for Go's Alpine-based one) to
+	// install before running Code. Only takes effect when Network is also
+	// true; otherwise silently ignored -- same rule as Packages, since
+	// installing anything needs to actually reach a package repository.
+	// Unlike Packages/Files, this also makes the container's root
+	// filesystem writable (see Run) -- a real, deliberate privilege step
+	// beyond Packages' own /tmp-scoped installs, since apt/apk write
+	// system-wide (/usr, /var, /etc). Model-supplied, passed to
+	// apt-get/apk as real argv elements (see systemInstallScript's own
+	// IFS-splitting), never through a shell string.
+	SystemPackages []string
 }
 
 // Result is one sandboxed execution's outcome. A non-zero ExitCode or
@@ -266,12 +310,41 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 		defer cancel()
 	}
 
-	// tmpfsSize is bumped past the plain default (64m) when installing
-	// packages -- a real "no space left on device" failure was observed
-	// compiling stdlib for a Go run pulling in just 3 dependencies.
+	// image is what the actual code-execution container below runs from. When SystemPackages is
+	// requested, provisionImage builds a throwaway image with them already installed as plain
+	// files -- via a SEPARATE, short-lived container that gets the elevated privileges apt/apk
+	// themselves need (see provisionImage's own doc comment), one that NEVER runs opts.Code. The
+	// execution container below then runs from that image under the sandbox's normal,
+	// unconditional lockdown (--cap-drop ALL, --read-only, no elevated caps at all) -- installing
+	// packages and running untrusted code never happen in the same container.
+	image := cfg.image
+	if opts.Network && len(opts.SystemPackages) > 0 {
+		provisioned, failResult, err := r.provisionImage(runCtx, cfg, opts.SystemPackages)
+		if err != nil {
+			return Result{}, err
+		}
+		if failResult != nil {
+			// The install script itself failed (e.g. an unknown package name) -- ordinary
+			// information for the caller, same as opts.Code itself exiting non-zero; opts.Code
+			// never even runs.
+			return *failResult, nil
+		}
+		defer func() {
+			rmCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			_ = exec.CommandContext(rmCtx, "docker", "rmi", "-f", provisioned).Run()
+			cancel()
+		}()
+		image = provisioned
+	}
+
+	// tmpfsSize is bumped past the plain default (64m) when installing packages -- a real "no
+	// space left on device" failure was observed compiling stdlib for a Go run pulling in just
+	// 3 dependencies, and again compiling against packages installed via SystemPackages.
+	// 1024m is generous headroom for either case (a pip/go-get pull, or a go build against
+	// newly apt/apk-installed system libraries), not a tight fit.
 	tmpfsSize := "64m"
-	if opts.Network && len(opts.Packages) > 0 {
-		tmpfsSize = "256m"
+	if (opts.Network && len(opts.Packages) > 0) || len(opts.SystemPackages) > 0 {
+		tmpfsSize = "1024m"
 	}
 	name := "se-sandbox-" + randomHex(8)
 	args := []string{
@@ -302,7 +375,7 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 	for _, e := range cfg.env {
 		args = append(args, "-e", e)
 	}
-	args = append(args, cfg.image)
+	args = append(args, image)
 	codeInContainer := "/sandbox/" + cfg.filename
 	if opts.Network && len(opts.Packages) > 0 {
 		args = append(args, cfg.installArgv(codeInContainer, opts.Packages)...)
@@ -339,6 +412,76 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 		return result, fmt.Errorf("running sandbox: %w", runErr)
 	}
 	return result, nil
+}
+
+// provisionImage installs packages into a throwaway image via a separate, short-lived
+// container that never runs opts.Code -- only the fixed, admin-controlled install script (see
+// languageConfig.systemInstallScript). Unlike the real execution container in Run, this one
+// keeps Docker's own ordinary default capability set (no --cap-drop at all -- the same posture
+// virtually any everyday container runs under, not host-root-equivalent) and a writable root
+// filesystem: apt/apk both write system-wide (/usr, /var, /etc) and, on Debian, chmod/chown
+// files the base image already owns as a different uid (_apt) -- operations that need
+// CAP_FOWNER/CAP_DAC_OVERRIDE/CAP_CHOWN even for uid 0 once any capability is dropped, so trying
+// to hand back just enough individual capabilities turned into chasing apt's exact internal
+// needs one failure at a time. This container's actual attack surface is narrow regardless
+// (a fixed, non-model-supplied command, never opts.Code), so its own isolation comes from being
+// short-lived, single-purpose, and separate from code execution -- not from capability-dropping
+// on top of that. Once packages are installed, they're just ordinary files -- the actual
+// code-execution container in Run runs from the committed image under the sandbox's completely
+// normal lockdown (--cap-drop ALL, --read-only), no elevated privileges or writable root at all,
+// so installing packages and running untrusted code never happen in the same container. Returns
+// (image, nil, nil) on success -- caller must docker rmi it once done -- (_, non-nil Result,
+// nil) if the install script itself failed (ordinary information, same as opts.Code exiting
+// non-zero), or (_, nil, error) only for a genuine infrastructure failure.
+func (r *Runner) provisionImage(ctx context.Context, cfg languageConfig, packages []string) (string, *Result, error) {
+	if err := ensureImage(ctx, cfg.image); err != nil {
+		return "", nil, err
+	}
+	name := "se-sandbox-provision-" + randomHex(8)
+	image := "se-sandbox-provisioned:" + randomHex(8)
+	args := []string{
+		"run", "--name", name,
+		"--memory", r.limits.Memory, "--memory-swap", r.limits.Memory,
+		"--cpus", r.limits.CPUs,
+		"--pids-limit", r.limits.PidsLimit,
+		"--security-opt", "no-new-privileges:true",
+		"-e", "SE_SANDBOX_SYSTEM_PACKAGES=" + strings.Join(packages, "\n"),
+	}
+	if r.limits.HostNetwork {
+		args = append(args, "--network", "host")
+	}
+	for _, d := range r.limits.DNS {
+		args = append(args, "--dns", d)
+	}
+	args = append(args, cfg.image, "sh", "-c", cfg.systemInstallScript)
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	var stdout, stderr limitedBuffer
+	stdout.limit, stderr.limit = maxOutputBytes, maxOutputBytes
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+
+	// The stopped container must still exist for "docker commit" below -- no --rm here.
+	// Cleanup happens unconditionally once we're done with it, success or failure.
+	defer func() {
+		rmCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		_ = exec.CommandContext(rmCtx, "docker", "rm", "-f", name).Run()
+		cancel()
+	}()
+
+	var exitErr *exec.ExitError
+	if errors.As(runErr, &exitErr) {
+		return "", &Result{ExitCode: exitErr.ExitCode(), Stdout: stdout.String(), Stderr: stderr.String()}, nil
+	}
+	if runErr != nil {
+		return "", nil, fmt.Errorf("dockersandbox: installing system packages: %w", runErr)
+	}
+	commitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if out, err := exec.CommandContext(commitCtx, "docker", "commit", name, image).CombinedOutput(); err != nil {
+		return "", nil, fmt.Errorf("dockersandbox: committing provisioned image: %w (%s)", err, out)
+	}
+	return image, nil, nil
 }
 
 // imagePullTimeout bounds a cold "docker pull" of a sandbox image --

@@ -194,6 +194,120 @@ func main() { fmt.Println(quote.Hello()) }
 	}
 }
 
+// TestRun_SystemPackagesInstalledOnDebianImage proves SystemPackages reaches a real apt-get
+// install on Python's Debian-based image, and that the resulting binary is actually runnable
+// (on PATH, not just "installed" in some inert sense) -- jq is a small, fast-installing real
+// apt package, not present in python:3-slim by default.
+func TestRun_SystemPackagesInstalledOnDebianImage(t *testing.T) {
+	requireDockerTests(t)
+	r := New(Limits{Timeout: 60 * time.Second})
+	res, err := r.Run(context.Background(), RunOptions{
+		Language: Python, Network: true, SystemPackages: []string{"jq"},
+		Code: `import subprocess
+print(subprocess.run(["jq", "--version"], capture_output=True, text=True).stdout.strip())
+`,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.ExitCode != 0 || !strings.Contains(res.Stdout, "jq-") {
+		t.Errorf("expected jq installed and runnable, got %+v", res)
+	}
+}
+
+// TestRun_SystemPackagesInstalledOnAlpineImage proves the same for Go's Alpine-based image via
+// apk -- a different package manager and base image entirely, so this isn't redundant with the
+// Debian/apt test above.
+func TestRun_SystemPackagesInstalledOnAlpineImage(t *testing.T) {
+	requireDockerTests(t)
+	r := New(Limits{Timeout: 60 * time.Second})
+	res, err := r.Run(context.Background(), RunOptions{
+		Language: Go, Network: true, SystemPackages: []string{"jq"},
+		Code: `package main
+
+import (
+	"fmt"
+	"os/exec"
+)
+
+func main() {
+	out, err := exec.Command("jq", "--version").CombinedOutput()
+	if err != nil {
+		panic(err)
+	}
+	fmt.Print(string(out))
+}
+`,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.ExitCode != 0 || !strings.Contains(res.Stdout, "jq-") {
+		t.Errorf("expected jq installed and runnable, got %+v", res)
+	}
+}
+
+// TestRun_SystemPackagesIgnoredWithoutNetwork mirrors Packages' own "meaningless without
+// Network" convention -- no apt-get/apk attempt at all, so the binary is simply never there.
+func TestRun_SystemPackagesIgnoredWithoutNetwork(t *testing.T) {
+	requireDockerTests(t)
+	r := New(Limits{})
+	res, err := r.Run(context.Background(), RunOptions{
+		Language: Python, SystemPackages: []string{"jq"},
+		Code: `import subprocess
+print(subprocess.run(["jq", "--version"], capture_output=True, text=True))
+`,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.ExitCode == 0 {
+		t.Errorf("expected jq NOT installed (no network), got %+v", res)
+	}
+}
+
+// TestRun_SystemPackagesCodeContainerStaysReadOnly proves the two-phase design's whole point:
+// the writable root filesystem apt/apk need only ever applies to provisionImage's own separate,
+// short-lived container (never running opts.Code) -- by the time opts.Code actually runs, it's
+// in a fresh container from the committed image under the sandbox's completely normal lockdown,
+// same as TestRun_ReadOnlyRootFilesystem below asserts for an ordinary run with no
+// SystemPackages at all. Installing system packages must never loosen the container the
+// untrusted code itself runs in.
+func TestRun_SystemPackagesCodeContainerStaysReadOnly(t *testing.T) {
+	requireDockerTests(t)
+	r := New(Limits{Timeout: 60 * time.Second})
+	res, err := r.Run(context.Background(), RunOptions{
+		Language: Python, Network: true, SystemPackages: []string{"jq"},
+		Code: `open("/usr/write-test", "w").write("ok")
+print("wrote to /usr")
+`,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.ExitCode == 0 || !strings.Contains(res.Stderr, "Read-only file system") {
+		t.Errorf("expected the code-execution container to still be read-only even after installing system packages, got %+v", res)
+	}
+}
+
+// TestRun_SystemPackagesInstallFailureIsOrdinaryResultNotError proves an unknown package name
+// surfaces as ordinary Result information (same as opts.Code itself exiting non-zero), not a Go
+// error -- opts.Code never even runs in that case.
+func TestRun_SystemPackagesInstallFailureIsOrdinaryResultNotError(t *testing.T) {
+	requireDockerTests(t)
+	r := New(Limits{Timeout: 60 * time.Second})
+	res, err := r.Run(context.Background(), RunOptions{
+		Language: Python, Network: true, SystemPackages: []string{"this-package-definitely-does-not-exist-xyz"},
+		Code: "print('should never get here')\n",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error (expected an ordinary non-zero Result instead): %v", err)
+	}
+	if res.ExitCode == 0 || strings.Contains(res.Stdout, "should never get here") {
+		t.Errorf("expected the install failure to be reported and opts.Code never run, got %+v", res)
+	}
+}
+
 // TestRun_CustomDNSServerAppliedToContainer proves Limits.DNS reaches the
 // container as a real --dns flag, read back via /etc/resolv.conf from
 // inside the sandbox.

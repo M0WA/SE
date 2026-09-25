@@ -31,6 +31,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,15 +48,22 @@ import (
 const maxSandboxInputFileBytes = 5 * 1024 * 1024
 
 func main() {
-	baseURL := flag.String("base-url", "http://127.0.0.1:8080", "search-server's own base URL, for fetching file_ids' content")
-	network := flag.Bool("network", false, "give sandboxed containers real outbound network access (default: none)")
-	memory := flag.String("memory", dockersandbox.DefaultMemory, "Docker --memory value for each sandboxed container, e.g. 512m or 1g")
-	cpus := flag.String("cpus", dockersandbox.DefaultCPUs, "Docker --cpus value for each sandboxed container, e.g. 1 or 0.5")
-	pidsLimit := flag.String("pids-limit", dockersandbox.DefaultPidsLimit, "Docker --pids-limit value for each sandboxed container")
-	timeout := flag.Duration("timeout", dockersandbox.DefaultTimeout, "wall-clock time limit for a single run_python/run_go call")
-	dns := flag.String("dns", "", "comma-separated DNS server IP(s) for a network-enabled sandbox (Docker --dns); only meaningful with -network")
-	hostDNS := flag.Bool("host-dns", false, "use this host's own real upstream DNS servers inside a network-enabled sandbox, instead of Docker's default embedded DNS -- merged with -dns if both are set; only meaningful with -network")
-	hostNetwork := flag.Bool("host-network", false, "run network-enabled sandboxes with Docker's --network host instead of the default bridge network -- shares the host's own network namespace outright, so DNS resolution just works with no -dns/-host-dns needed, at the cost of a bigger privilege elevation (the container can see/bind the host's own network interfaces directly); only meaningful with -network")
+	// Every flag below also reads a SE_SANDBOX_* env var as its own default, so an admin can
+	// configure this binary the same way as any other (bootstrap.GetEnv, e.g. via
+	// /etc/searchengine/searchengine.env or a Docker Compose .env file) instead of only through
+	// the MCPServer row's own Args -- an explicit flag on Args still always wins, same as any
+	// CLI flag overriding its own default. Still never model- or per-call-configurable either
+	// way -- see this package's own doc comment.
+	baseURL := flag.String("base-url", bootstrap.GetEnv("SE_SANDBOX_BASE_URL", "http://127.0.0.1:8080"), "search-server's own base URL, for fetching file_ids' content")
+	network := flag.Bool("network", envBool("SE_SANDBOX_NETWORK", false), "give sandboxed containers real outbound network access (default: none)")
+	systemPackages := flag.Bool("system-packages", envBool("SE_SANDBOX_ALLOW_SYSTEM_PACKAGES", false), "let the model additionally request OS-level packages (apt/apk) installed before its code runs -- a bigger privilege step than -network's own \"packages\" (pip/go-get) alone, see dockersandbox.RunOptions.SystemPackages; only meaningful with -network")
+	memory := flag.String("memory", bootstrap.GetEnv("SE_SANDBOX_MEMORY", dockersandbox.DefaultMemory), "Docker --memory value for each sandboxed container, e.g. 512m or 1g")
+	cpus := flag.String("cpus", bootstrap.GetEnv("SE_SANDBOX_CPUS", dockersandbox.DefaultCPUs), "Docker --cpus value for each sandboxed container, e.g. 1 or 0.5")
+	pidsLimit := flag.String("pids-limit", bootstrap.GetEnv("SE_SANDBOX_PIDS_LIMIT", dockersandbox.DefaultPidsLimit), "Docker --pids-limit value for each sandboxed container")
+	timeout := flag.Duration("timeout", envDuration("SE_SANDBOX_TIMEOUT", dockersandbox.DefaultTimeout), "wall-clock time limit for a single run_python/run_go call")
+	dns := flag.String("dns", bootstrap.GetEnv("SE_SANDBOX_DNS", ""), "comma-separated DNS server IP(s) for a network-enabled sandbox (Docker --dns); only meaningful with -network")
+	hostDNS := flag.Bool("host-dns", envBool("SE_SANDBOX_HOST_DNS", false), "use this host's own real upstream DNS servers inside a network-enabled sandbox, instead of Docker's default embedded DNS -- merged with -dns if both are set; only meaningful with -network")
+	hostNetwork := flag.Bool("host-network", envBool("SE_SANDBOX_HOST_NETWORK", false), "run network-enabled sandboxes with Docker's --network host instead of the default bridge network -- shares the host's own network namespace outright, so DNS resolution just works with no -dns/-host-dns needed, at the cost of a bigger privilege elevation (the container can see/bind the host's own network interfaces directly); only meaningful with -network")
 	flag.Parse()
 
 	dnsServers := splitNonEmpty(*dns)
@@ -84,11 +92,33 @@ func main() {
 		token:   bootstrap.GetEnv("SE_FILES_API_TOKEN", ""),
 		http:    &http.Client{Timeout: 20 * time.Second},
 	}
-	server := newServer(runner, *network, files)
+	server := newServer(runner, *network, *systemPackages, files)
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// envBool/envDuration mirror bootstrap.GetEnv's own "env var, falling back to a default"
+// convention for the two flag types it doesn't already cover (GetEnv is string-only). An unset
+// or unparseable value is silently treated as unset (falls back), same as flag.Bool/
+// flag.Duration's own behavior for a malformed literal flag value would be a hard error at
+// startup instead -- deliberately more forgiving here, since a typo'd env var shouldn't crash
+// the whole server when the flag-level default is a perfectly safe fallback.
+func envBool(key string, fallback bool) bool {
+	v, err := strconv.ParseBool(bootstrap.GetEnv(key, ""))
+	if err != nil {
+		return fallback
+	}
+	return v
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	v, err := time.ParseDuration(bootstrap.GetEnv(key, ""))
+	if err != nil {
+		return fallback
+	}
+	return v
 }
 
 // splitNonEmpty splits a comma-separated flag value into its trimmed,
@@ -124,6 +154,18 @@ type runArgsWithPackages struct {
 	FileIDs  []string `json:"file_ids,omitempty" jsonschema:"optional ids (from list_files) of the current user's own files to make available to the code, written into its working directory under their real filenames"`
 }
 
+// runArgsWithSystemPackages is runArgsWithPackages plus SystemPackages, used only when started
+// with both -network and -system-packages -- same "only discoverable when actually usable"
+// reasoning as runArgsWithPackages itself.
+type runArgsWithSystemPackages struct {
+	Code     string   `json:"code" jsonschema:"the complete, runnable source code to execute"`
+	Packages []string `json:"packages,omitempty" jsonschema:"optional package names to install before running the code -- pip package names for run_python, Go module import paths (optionally with an @version) for run_go"`
+	// SystemPackages is model-supplied, like Packages -- passed to apt/apk as real argv
+	// elements (see dockersandbox.RunOptions.SystemPackages), never through a shell string.
+	SystemPackages []string `json:"system_packages,omitempty" jsonschema:"optional OS-level package names to install before running the code -- apt package names for run_python's Debian-based image, apk package names for run_go's Alpine-based one. A bigger privilege step than packages alone (see that field): installing these also makes the container's filesystem writable during the install step. Independent of file_ids."`
+	FileIDs        []string `json:"file_ids,omitempty" jsonschema:"optional ids (from list_files) of the current user's own files to make available to the code, written into its working directory under their real filenames"`
+}
+
 // runResult is the tool's wire shape -- a small, self-describing JSON
 // object so the model can read exit_code/timed_out programmatically.
 type runResult struct {
@@ -136,7 +178,9 @@ type runResult struct {
 // newServer builds the mcp.Server exposing "run_python"/"run_go", factored
 // out of main so a test can connect via an in-memory transport instead of
 // a real stdio subprocess. files is nil-safe -- see resolveFiles.
-func newServer(runner *dockersandbox.Runner, network bool, files *filesClient) *mcp.Server {
+// systemPackages is only meaningful when network is also true (see main's own -system-packages
+// flag doc and dockersandbox.RunOptions.SystemPackages).
+func newServer(runner *dockersandbox.Runner, network, systemPackages bool, files *filesClient) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "mcp-sandbox", Version: "1"}, nil)
 
 	networkNote := "This sandbox has NO network access -- any attempt to reach the network will fail."
@@ -163,6 +207,25 @@ func newServer(runner *dockersandbox.Runner, network bool, files *filesClient) *
 		"will fail to resolve even if network access is enabled. Nothing persists between calls -- each " +
 		"call gets a brand new sandbox with no files or state from any previous call. " + networkNote + fileIDsNote
 
+	if network && systemPackages {
+		pythonDesc += " Pass \"packages\" to install extra pip packages before the script runs, if the standard " +
+			"library alone isn't enough. Pass \"system_packages\" (apt package names) for anything pip can't " +
+			"provide -- a real system tool/library the script shells out to or links against."
+		goDesc += " Pass \"packages\" (Go module import paths, optionally \"@version\") to \"go get\" them into a " +
+			"throwaway module before running, if the standard library alone isn't enough. Pass " +
+			"\"system_packages\" (apk package names) for anything beyond a Go module -- a real system tool " +
+			"the program shells out to."
+		mcp.AddTool(server, &mcp.Tool{Name: "run_python", Description: pythonDesc},
+			func(ctx context.Context, req *mcp.CallToolRequest, args runArgsWithSystemPackages) (*mcp.CallToolResult, any, error) {
+				return runInSandbox(ctx, runner, files, dockersandbox.Python, args.Code, args.Packages, args.SystemPackages, args.FileIDs, network)
+			})
+		mcp.AddTool(server, &mcp.Tool{Name: "run_go", Description: goDesc},
+			func(ctx context.Context, req *mcp.CallToolRequest, args runArgsWithSystemPackages) (*mcp.CallToolResult, any, error) {
+				return runInSandbox(ctx, runner, files, dockersandbox.Go, args.Code, args.Packages, args.SystemPackages, args.FileIDs, network)
+			})
+		return server
+	}
+
 	if network {
 		pythonDesc += " Pass \"packages\" to install extra pip packages before the script runs, if the standard " +
 			"library alone isn't enough."
@@ -170,22 +233,22 @@ func newServer(runner *dockersandbox.Runner, network bool, files *filesClient) *
 			"throwaway module before running, if the standard library alone isn't enough."
 		mcp.AddTool(server, &mcp.Tool{Name: "run_python", Description: pythonDesc},
 			func(ctx context.Context, req *mcp.CallToolRequest, args runArgsWithPackages) (*mcp.CallToolResult, any, error) {
-				return runInSandbox(ctx, runner, files, dockersandbox.Python, args.Code, args.Packages, args.FileIDs, network)
+				return runInSandbox(ctx, runner, files, dockersandbox.Python, args.Code, args.Packages, nil, args.FileIDs, network)
 			})
 		mcp.AddTool(server, &mcp.Tool{Name: "run_go", Description: goDesc},
 			func(ctx context.Context, req *mcp.CallToolRequest, args runArgsWithPackages) (*mcp.CallToolResult, any, error) {
-				return runInSandbox(ctx, runner, files, dockersandbox.Go, args.Code, args.Packages, args.FileIDs, network)
+				return runInSandbox(ctx, runner, files, dockersandbox.Go, args.Code, args.Packages, nil, args.FileIDs, network)
 			})
 		return server
 	}
 
 	mcp.AddTool(server, &mcp.Tool{Name: "run_python", Description: pythonDesc},
 		func(ctx context.Context, req *mcp.CallToolRequest, args runArgs) (*mcp.CallToolResult, any, error) {
-			return runInSandbox(ctx, runner, files, dockersandbox.Python, args.Code, nil, args.FileIDs, network)
+			return runInSandbox(ctx, runner, files, dockersandbox.Python, args.Code, nil, nil, args.FileIDs, network)
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: "run_go", Description: goDesc},
 		func(ctx context.Context, req *mcp.CallToolRequest, args runArgs) (*mcp.CallToolResult, any, error) {
-			return runInSandbox(ctx, runner, files, dockersandbox.Go, args.Code, nil, args.FileIDs, network)
+			return runInSandbox(ctx, runner, files, dockersandbox.Go, args.Code, nil, nil, args.FileIDs, network)
 		})
 
 	return server
@@ -195,12 +258,12 @@ func newServer(runner *dockersandbox.Runner, network bool, files *filesClient) *
 // differs. IsError is reserved for a genuine infrastructure failure; the
 // sandboxed code exiting non-zero or timing out is ordinary information
 // the model should see, not a tool-call failure.
-func runInSandbox(ctx context.Context, runner *dockersandbox.Runner, files *filesClient, lang dockersandbox.Language, code string, packages []string, fileIDs []string, network bool) (*mcp.CallToolResult, any, error) {
+func runInSandbox(ctx context.Context, runner *dockersandbox.Runner, files *filesClient, lang dockersandbox.Language, code string, packages, systemPackages, fileIDs []string, network bool) (*mcp.CallToolResult, any, error) {
 	inputFiles, err := resolveFiles(ctx, files, fileIDs)
 	if err != nil {
 		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}}}, nil, nil
 	}
-	res, err := runner.Run(ctx, dockersandbox.RunOptions{Language: lang, Code: code, Packages: packages, Network: network, Files: inputFiles})
+	res, err := runner.Run(ctx, dockersandbox.RunOptions{Language: lang, Code: code, Packages: packages, SystemPackages: systemPackages, Network: network, Files: inputFiles})
 	if err != nil {
 		return &mcp.CallToolResult{
 			IsError: true,

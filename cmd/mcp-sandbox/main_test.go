@@ -28,9 +28,9 @@ func requireDockerTests(t *testing.T) {
 // over an in-memory transport, mirroring cmd/mcp-web/cmd/mcp-datetime's
 // own test helper -- exercises each tool exactly as a real chat turn
 // would, through CallTool, not by calling runInSandbox directly.
-func connectedTestServer(t *testing.T, runner *dockersandbox.Runner, network bool, files *filesClient) *mcp.ClientSession {
+func connectedTestServer(t *testing.T, runner *dockersandbox.Runner, network, systemPackages bool, files *filesClient) *mcp.ClientSession {
 	t.Helper()
-	server := newServer(runner, network, files)
+	server := newServer(runner, network, systemPackages, files)
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1"}, nil)
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 
@@ -63,7 +63,7 @@ func textContent(t *testing.T, result *mcp.CallToolResult) string {
 
 func TestRunPythonTool_Success(t *testing.T) {
 	requireDockerTests(t)
-	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, nil)
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, false, nil)
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "run_python",
 		Arguments: map[string]any{"code": "print('hi')"},
@@ -85,7 +85,7 @@ func TestRunPythonTool_Success(t *testing.T) {
 
 func TestRunGoTool_Success(t *testing.T) {
 	requireDockerTests(t)
-	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, nil)
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, false, nil)
 	code := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"hi\")\n}\n"
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "run_go",
@@ -108,7 +108,7 @@ func TestRunGoTool_Success(t *testing.T) {
 
 func TestRunPythonTool_NonZeroExitIsNotAToolError(t *testing.T) {
 	requireDockerTests(t)
-	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, nil)
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, false, nil)
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "run_python",
 		Arguments: map[string]any{"code": "import sys\nsys.exit(3)\n"},
@@ -131,7 +131,7 @@ func TestRunPythonTool_NonZeroExitIsNotAToolError(t *testing.T) {
 func TestRunPythonTool_InfrastructureFailureIsToolError(t *testing.T) {
 	requireDockerTests(t)
 	t.Setenv("PATH", t.TempDir())
-	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, nil)
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, false, nil)
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "run_python",
 		Arguments: map[string]any{"code": "print(1)"},
@@ -146,7 +146,7 @@ func TestRunPythonTool_InfrastructureFailureIsToolError(t *testing.T) {
 
 func TestRunPythonTool_NetworkBlockedByDefault(t *testing.T) {
 	requireDockerTests(t)
-	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, nil)
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, false, nil)
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "run_python",
 		Arguments: map[string]any{"code": "import urllib.request\ntry:\n" +
@@ -169,7 +169,7 @@ func TestRunPythonTool_NetworkBlockedByDefault(t *testing.T) {
 
 func TestRunPythonTool_NetworkAllowedWhenServerConfiguredWithIt(t *testing.T) {
 	requireDockerTests(t)
-	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), true, nil)
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), true, false, nil)
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "run_python",
 		Arguments: map[string]any{"code": "import urllib.request\n" +
@@ -195,7 +195,7 @@ func TestRunPythonTool_NetworkAllowedWhenServerConfiguredWithIt(t *testing.T) {
 func TestListTools_PackagesParamOnlyPresentWhenNetworkEnabled(t *testing.T) {
 	requireDockerTests(t)
 
-	withoutNetwork := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, nil)
+	withoutNetwork := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, false, nil)
 	listWithout, err := withoutNetwork.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("listing tools (no network): %v", err)
@@ -211,7 +211,7 @@ func TestListTools_PackagesParamOnlyPresentWhenNetworkEnabled(t *testing.T) {
 		}
 	}
 
-	withNetwork := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), true, nil)
+	withNetwork := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), true, false, nil)
 	listWith, err := withNetwork.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("listing tools (with network): %v", err)
@@ -225,6 +225,41 @@ func TestListTools_PackagesParamOnlyPresentWhenNetworkEnabled(t *testing.T) {
 	}
 }
 
+// TestListTools_SystemPackagesParamOnlyPresentWhenBothNetworkAndSystemPackagesEnabled proves
+// "system_packages" is gated on BOTH flags together, not just -network the way "packages" is --
+// network alone must not leak it. Schema-only (ListTools), no container ever spawned, so this
+// doesn't touch the provisioning path main_test.go's SystemPackages tests do.
+func TestListTools_SystemPackagesParamOnlyPresentWhenBothNetworkAndSystemPackagesEnabled(t *testing.T) {
+	requireDockerTests(t)
+
+	hasSystemPackagesProp := func(t *testing.T, network, systemPackages bool) bool {
+		t.Helper()
+		cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), network, systemPackages, nil)
+		list, err := cs.ListTools(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("listing tools (network=%v, systemPackages=%v): %v", network, systemPackages, err)
+		}
+		for _, tool := range list.Tools {
+			schema, _ := tool.InputSchema.(map[string]any)
+			props, _ := schema["properties"].(map[string]any)
+			if _, ok := props["system_packages"]; ok {
+				return true
+			}
+		}
+		return false
+	}
+
+	if hasSystemPackagesProp(t, false, false) {
+		t.Error("expected no system_packages property with neither flag set")
+	}
+	if hasSystemPackagesProp(t, true, false) {
+		t.Error("expected no system_packages property with -network alone (matches -packages' own gating, not this)")
+	}
+	if !hasSystemPackagesProp(t, true, true) {
+		t.Error("expected a system_packages property with both -network and -system-packages set")
+	}
+}
+
 // TestRunPythonTool_PackagesInstalledEndToEnd proves the "packages"
 // argument actually reaches dockersandbox and gets installed -- "six" is
 // tiny/pure-Python, chosen only to keep this test fast (mirrors
@@ -233,7 +268,7 @@ func TestListTools_PackagesParamOnlyPresentWhenNetworkEnabled(t *testing.T) {
 // Runner.Run directly).
 func TestRunPythonTool_PackagesInstalledEndToEnd(t *testing.T) {
 	requireDockerTests(t)
-	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{Timeout: 30 * time.Second}), true, nil)
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{Timeout: 30 * time.Second}), true, false, nil)
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "run_python",
 		Arguments: map[string]any{
@@ -253,9 +288,35 @@ func TestRunPythonTool_PackagesInstalledEndToEnd(t *testing.T) {
 	}
 }
 
+// TestRunPythonTool_SystemPackagesInstalledEndToEnd proves the "system_packages" argument
+// reaches dockersandbox's own SystemPackages field through the real MCP tool-call path (mirrors
+// dockersandbox's own TestRun_SystemPackagesInstalledOnDebianImage, one layer up) -- jq is a
+// small, fast-installing real apt package, not present in python:3-slim by default.
+func TestRunPythonTool_SystemPackagesInstalledEndToEnd(t *testing.T) {
+	requireDockerTests(t)
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{Timeout: 60 * time.Second}), true, true, nil)
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "run_python",
+		Arguments: map[string]any{
+			"code":            "import subprocess\nprint(subprocess.run(['jq', '--version'], capture_output=True, text=True).stdout.strip())\n",
+			"system_packages": []string{"jq"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got runResult
+	if err := json.Unmarshal([]byte(textContent(t, result)), &got); err != nil {
+		t.Fatalf("decoding tool result: %v", err)
+	}
+	if got.ExitCode != 0 || !strings.Contains(got.Stdout, "jq-") {
+		t.Errorf("expected jq installed and runnable via the system_packages argument, got %+v", got)
+	}
+}
+
 func TestRunPythonTool_TimeoutReported(t *testing.T) {
 	requireDockerTests(t)
-	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{Timeout: 2 * time.Second}), false, nil)
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{Timeout: 2 * time.Second}), false, false, nil)
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "run_python",
 		Arguments: map[string]any{"code": "import time\ntime.sleep(30)\n"},
@@ -269,6 +330,36 @@ func TestRunPythonTool_TimeoutReported(t *testing.T) {
 	}
 	if !got.TimedOut {
 		t.Errorf("expected timed_out=true, got %+v", got)
+	}
+}
+
+func TestEnvBool(t *testing.T) {
+	t.Setenv("SE_TEST_BOOL_UNSET_EXAMPLE", "")
+	if envBool("SE_TEST_BOOL_UNSET_EXAMPLE", true) != true {
+		t.Error("expected the fallback for an unset env var")
+	}
+	t.Setenv("SE_TEST_BOOL_TRUE", "true")
+	if envBool("SE_TEST_BOOL_TRUE", false) != true {
+		t.Error("expected true for SE_TEST_BOOL_TRUE=true")
+	}
+	t.Setenv("SE_TEST_BOOL_GARBAGE", "not-a-bool")
+	if envBool("SE_TEST_BOOL_GARBAGE", true) != true {
+		t.Error("expected the fallback for an unparseable value, not a crash")
+	}
+}
+
+func TestEnvDuration(t *testing.T) {
+	t.Setenv("SE_TEST_DURATION_UNSET_EXAMPLE", "")
+	if envDuration("SE_TEST_DURATION_UNSET_EXAMPLE", 5*time.Second) != 5*time.Second {
+		t.Error("expected the fallback for an unset env var")
+	}
+	t.Setenv("SE_TEST_DURATION_SET", "90s")
+	if envDuration("SE_TEST_DURATION_SET", time.Second) != 90*time.Second {
+		t.Error("expected 90s for SE_TEST_DURATION_SET=90s")
+	}
+	t.Setenv("SE_TEST_DURATION_GARBAGE", "not-a-duration")
+	if envDuration("SE_TEST_DURATION_GARBAGE", time.Second) != time.Second {
+		t.Error("expected the fallback for an unparseable value, not a crash")
 	}
 }
 
@@ -415,7 +506,7 @@ func TestRunPythonTool_FileIDsMakesAnUploadedFileReadable(t *testing.T) {
 	requireDockerTests(t)
 	srv := fakeFilesServer(t, "tok123", "input.csv", []byte("a,b\n1,2\n"))
 	fc := &filesClient{baseURL: srv.URL, token: "tok123", http: srv.Client()}
-	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, fc)
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, false, fc)
 
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "run_python",
@@ -439,7 +530,7 @@ func TestRunPythonTool_FileIDsMakesAnUploadedFileReadable(t *testing.T) {
 func TestRunPythonTool_FileIDsWithoutASignedInUserIsAToolError(t *testing.T) {
 	// No docker needed: resolveFiles's no-token check fails before runInSandbox ever calls
 	// runner.Run, so this never actually touches Docker.
-	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, &filesClient{})
+	cs := connectedTestServer(t, dockersandbox.New(dockersandbox.Limits{}), false, false, &filesClient{})
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "run_python",
 		Arguments: map[string]any{"code": "print('unused')", "file_ids": []string{"f1"}},
