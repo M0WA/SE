@@ -180,6 +180,7 @@ func main() {
 			{"persistent chat: fork (independent copy)", c.checkChatFork},
 			{"mcp-files tool (attach + read)", c.checkFilesTool},
 			{"mcp-files tool: write_file", c.checkWriteFile},
+			{"mcp-files tool: write_file with a large generated document (CV/resume)", c.checkWriteFileLargeGeneratedContent},
 			{"account: personal MCP server (http-only)", c.checkAccountMCPServerCRUD},
 			{"account: your files (unscoped listing)", c.checkAccountFilesUnscoped},
 			{"account: change password (round trip)", c.checkAccountPasswordRoundTrip(creds.TestUser, creds.TestUserPassword)},
@@ -2564,6 +2565,57 @@ func (c *client) checkWriteFile() error {
 	}
 	if len(out.ToolResults) == 0 {
 		return fmt.Errorf("expected write_file to be called, got no tool_results")
+	}
+	if err := checkNoToolErrors(out); err != nil {
+		return err
+	}
+
+	var list []fileResponse
+	if _, err := c.getJSON(pathAccountFiles, &list); err != nil {
+		return err
+	}
+	var createdID string
+	for _, f := range list {
+		if f.Filename == filename {
+			createdID = f.ID
+		}
+	}
+	if createdID != "" {
+		defer c.deleteRequest("/account/api/files/" + createdID)
+	}
+	if createdID == "" {
+		return fmt.Errorf("expected a file named %q to exist after write_file, got %+v", filename, list)
+	}
+	return nil
+}
+
+// checkWriteFileLargeGeneratedContent proves write_file still works as a real,
+// native tool call when its own content argument is large and open-ended
+// (the model has to generate it, not just relay a short fixed marker) --
+// unlike checkWriteFile's tiny exact-text case above. Confirmed live: asking
+// for "a sample CV docx" reproducibly made the model emit the entire
+// write_file call as literal ChatML-style `<tool_call>{...}</tool_call>`
+// text inside its plain answer instead of issuing a real tool call (no
+// tool_results at all) -- the file is silently never written, and the user
+// sees raw, unexecuted tool-call JSON as if it were the answer. Root cause
+// looks like the self-hosted model-serving stack's tool-call parser not
+// reliably recognizing its own output once the generated argument gets long,
+// not a bug in this repo's own (thin, structural) tool_calls parsing -- but
+// this check exists so that regression (or a fix) is visible here regardless
+// of where the real fix eventually lands.
+func (c *client) checkWriteFileLargeGeneratedContent() error {
+	if c.testChatID == "" {
+		return skip(skipNoPinnedChat)
+	}
+	const filename = "e2e-check-generated-cv.docx"
+	out, err := c.chatOnce(
+		fmt.Sprintf("Use write_file to create a file named exactly %q with a full, realistic sample CV/resume as its content -- multiple sections (contact info, summary, work experience, education, skills), at least a few hundred words.", filename),
+		chatOptions{chatID: c.testChatID})
+	if err != nil {
+		return err
+	}
+	if len(out.ToolResults) == 0 {
+		return fmt.Errorf("expected write_file to be called for a large generated document, got no tool_results -- got this answer instead: %q", truncate([]byte(out.Answer), 500))
 	}
 	if err := checkNoToolErrors(out); err != nil {
 		return err
