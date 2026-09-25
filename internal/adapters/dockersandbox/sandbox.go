@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -248,11 +249,34 @@ type Result struct {
 // or reused across calls.
 type Runner struct {
 	limits Limits
+
+	dockerOnce sync.Once
+	dockerBin  string
+	dockerErr  error
 }
 
 // New returns a Runner enforcing limits (zero fields fall back to their
 // Default* constants -- see Limits.withDefaults).
 func New(limits Limits) *Runner { return &Runner{limits: limits.withDefaults()} }
+
+// dockerPath resolves the "docker" CLI's absolute path once per Runner (via exec.LookPath),
+// cached for that Runner's lifetime and used everywhere this package invokes docker for it -- a
+// fixed, resolved path rather than a bare command name repeated at every call site (a bare name
+// is technically PATH-order-dependent; go:S4036 flags exactly this). Falls back to the literal
+// "docker" if LookPath itself fails, so a misconfigured PATH still surfaces as the same
+// "executable file not found" error a bare exec.Command("docker", ...) would already give, not a
+// new failure mode. Cached per-Runner rather than process-wide so a test constructing a fresh
+// Runner after changing PATH (simulating docker missing) gets a fresh lookup, not a stale one
+// from an earlier Runner in the same test binary.
+func (r *Runner) dockerPath() string {
+	r.dockerOnce.Do(func() {
+		r.dockerBin, r.dockerErr = exec.LookPath("docker")
+	})
+	if r.dockerErr != nil {
+		return "docker"
+	}
+	return r.dockerBin
+}
 
 // Run executes opts.Code in a fresh, locked-down container and returns
 // its outcome. See the package doc comment for the confinement this
@@ -265,7 +289,7 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 		return Result{}, fmt.Errorf("dockersandbox: unsupported language %q", opts.Language)
 	}
 
-	if err := ensureImage(ctx, cfg.image); err != nil {
+	if err := r.ensureImage(ctx, cfg.image); err != nil {
 		return Result{}, err
 	}
 
@@ -331,7 +355,7 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 		}
 		defer func() {
 			rmCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			_ = exec.CommandContext(rmCtx, "docker", "rmi", "-f", provisioned).Run()
+			_ = exec.CommandContext(rmCtx, r.dockerPath(), "rmi", "-f", provisioned).Run()
 			cancel()
 		}()
 		image = provisioned
@@ -383,7 +407,7 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 		args = append(args, cfg.argv(codeInContainer)...)
 	}
 
-	cmd := exec.CommandContext(runCtx, "docker", args...)
+	cmd := exec.CommandContext(runCtx, r.dockerPath(), args...)
 	var stdout, stderr limitedBuffer
 	stdout.limit, stderr.limit = maxOutputBytes, maxOutputBytes
 	cmd.Stdout = &stdout
@@ -395,7 +419,7 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 	// launched (client and container are independent to the daemon). A
 	// fresh context is required since runCtx may already be Done().
 	killCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	_ = exec.CommandContext(killCtx, "docker", "rm", "-f", name).Run()
+	_ = exec.CommandContext(killCtx, r.dockerPath(), "rm", "-f", name).Run()
 	cancel()
 
 	result := Result{Stdout: stdout.String(), Stderr: stderr.String()}
@@ -434,7 +458,7 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 // nil) if the install script itself failed (ordinary information, same as opts.Code exiting
 // non-zero), or (_, nil, error) only for a genuine infrastructure failure.
 func (r *Runner) provisionImage(ctx context.Context, cfg languageConfig, packages []string) (string, *Result, error) {
-	if err := ensureImage(ctx, cfg.image); err != nil {
+	if err := r.ensureImage(ctx, cfg.image); err != nil {
 		return "", nil, err
 	}
 	name := "se-sandbox-provision-" + randomHex(8)
@@ -454,7 +478,7 @@ func (r *Runner) provisionImage(ctx context.Context, cfg languageConfig, package
 		args = append(args, "--dns", d)
 	}
 	args = append(args, cfg.image, "sh", "-c", cfg.systemInstallScript)
-	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd := exec.CommandContext(ctx, r.dockerPath(), args...)
 	var stdout, stderr limitedBuffer
 	stdout.limit, stderr.limit = maxOutputBytes, maxOutputBytes
 	cmd.Stdout = &stdout
@@ -465,7 +489,7 @@ func (r *Runner) provisionImage(ctx context.Context, cfg languageConfig, package
 	// Cleanup happens unconditionally once we're done with it, success or failure.
 	defer func() {
 		rmCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		_ = exec.CommandContext(rmCtx, "docker", "rm", "-f", name).Run()
+		_ = exec.CommandContext(rmCtx, r.dockerPath(), "rm", "-f", name).Run()
 		cancel()
 	}()
 
@@ -478,7 +502,7 @@ func (r *Runner) provisionImage(ctx context.Context, cfg languageConfig, package
 	}
 	commitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	if out, err := exec.CommandContext(commitCtx, "docker", "commit", name, image).CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(commitCtx, r.dockerPath(), "commit", name, image).CombinedOutput(); err != nil {
 		return "", nil, fmt.Errorf("dockersandbox: committing provisioned image: %w (%s)", err, out)
 	}
 	return image, nil, nil
@@ -495,13 +519,13 @@ const imagePullTimeout = 5 * time.Minute
 // the container's captured stdout/stderr, and its time would count against
 // Limits.Timeout. "docker image inspect" is a fast local check, so the
 // common (cached) case costs nothing.
-func ensureImage(ctx context.Context, image string) error {
-	if err := exec.CommandContext(ctx, "docker", "image", "inspect", image).Run(); err == nil {
+func (r *Runner) ensureImage(ctx context.Context, image string) error {
+	if err := exec.CommandContext(ctx, r.dockerPath(), "image", "inspect", image).Run(); err == nil {
 		return nil
 	}
 	pullCtx, cancel := context.WithTimeout(ctx, imagePullTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(pullCtx, "docker", "pull", image).CombinedOutput()
+	out, err := exec.CommandContext(pullCtx, r.dockerPath(), "pull", image).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("pulling sandbox image %s: %w: %s", image, err, out)
 	}
