@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.95 - 2026-09-25
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* chat: repair raw control chars so leaked-tool-call detection actually fires by @M0WA in https://github.com/M0WA/SE/pull/360
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.94...v4.13.95
+
+
 ## v4.13.94 - 2026-09-25
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
