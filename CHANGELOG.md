@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.93 - 2026-09-25
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* e2e-check: fix flaky sandbox file-format checks (PDF/DOCX/XLSX/TXT) by @M0WA in https://github.com/M0WA/SE/pull/354
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.92...v4.13.93
+
+
 ## v4.13.92 - 2026-09-25
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
