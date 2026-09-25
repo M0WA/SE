@@ -166,6 +166,7 @@
     }
   });
 
+  renderAdminNav();
   wireSignOut();
   load();
 

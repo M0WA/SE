@@ -288,6 +288,7 @@
     }
   }
 
+  renderAdminNav();
   wireSignOut();
   load();
 
