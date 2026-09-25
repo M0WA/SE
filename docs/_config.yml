@@ -12,6 +12,6 @@
 # palette (see that file's own comment) rather than leaving the stock
 # theme colors as an unrelated skin.
 theme: jekyll-theme-minimal
-title: searchengine docs
-description: User manual, architecture, and installation reference for searchengine
+title: SE - AI chatbot docs
+description: User manual, architecture, and installation reference for SE - AI chatbot
 show_downloads: false
