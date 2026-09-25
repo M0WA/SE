@@ -1,0 +1,16 @@
+QUARTERLY REPORT
+
+Section 1: Introduction
+This is a multi-section plain text report generated for an automated end-to-end test.
+
+Section 2: Data
+Region,Revenue,Growth
+North,120000,4.2%
+South,98000,-1.1%
+East,143000,7.8%
+
+Section 3: Marker
+The secret marker for this test is E2E-CHECK-TXT-MARKER-J3V7L.
+
+Section 4: Conclusion
+End of report.
