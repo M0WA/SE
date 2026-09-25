@@ -1644,9 +1644,15 @@ func (c *client) checkSandboxFileDOCXBothLanguages() error {
 }
 
 func (c *client) checkSandboxFileXLSXBothLanguages() error {
+	// Pillow alongside openpyxl: confirmed live (and reproduced in the exact
+	// python:3-slim sandbox base image) that openpyxl silently leaves
+	// ws._images empty -- with no error or warning -- when Pillow isn't
+	// installed, even though the workbook's own drawing/relationship data is
+	// present and otherwise parses fine. openpyxl needs Pillow to actually
+	// decode/attach an embedded image, not just to read the sheet's cell data.
 	return c.checkSandboxFileFormat("sample.xlsx",
 		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", sandboxFixtureXLSX, sandboxMarkerXLSX, true,
-		[]string{"openpyxl"}, sandboxPythonScriptXLSX, sandboxGoScriptXLSX)
+		[]string{"openpyxl", "Pillow"}, sandboxPythonScriptXLSX, sandboxGoScriptXLSX)
 }
 
 func (c *client) checkSandboxFileTXTBothLanguages() error {

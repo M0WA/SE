@@ -361,13 +361,16 @@ func (r *Runner) Run(ctx context.Context, opts RunOptions) (Result, error) {
 		image = provisioned
 	}
 
-	// tmpfsSize is bumped past the plain default (64m) when installing packages -- a real "no
-	// space left on device" failure was observed compiling stdlib for a Go run pulling in just
-	// 3 dependencies, and again compiling against packages installed via SystemPackages.
-	// 1024m is generous headroom for either case (a pip/go-get pull, or a go build against
-	// newly apt/apk-installed system libraries), not a tight fit.
+	// tmpfsSize is bumped past the plain default (64m) for any Go run, and when installing
+	// packages -- a real "no space left on device" failure was observed compiling stdlib for a
+	// Go run pulling in zero external dependencies at all (confirmed live: `go build` always
+	// writes to $GOCACHE under /tmp, and a stdlib-heavy program -- archive/zip, encoding/xml,
+	// image, crypto/* -- can exceed 64m on its own, package installs or not), and again
+	// compiling against packages installed via SystemPackages. 1024m is generous headroom for
+	// any of these cases (a plain go build, a pip/go-get pull, or a go build against newly
+	// apt/apk-installed system libraries), not a tight fit.
 	tmpfsSize := "64m"
-	if (opts.Network && len(opts.Packages) > 0) || len(opts.SystemPackages) > 0 {
+	if opts.Language == Go || (opts.Network && len(opts.Packages) > 0) || len(opts.SystemPackages) > 0 {
 		tmpfsSize = "1024m"
 	}
 	name := "se-sandbox-" + randomHex(8)
