@@ -42,4 +42,4 @@ Removes every page in the domain in one action. After confirming, the server que
 > - Like Documents search, this page is capped at 1000 pages per domain; an unusually large domain may have more indexed than shown here.
 
 ---
-← [Documents](documents.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Vocabulary term detail](vocabulary-term.md) →
+← [Document upload](document-upload.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Vocabulary term detail](vocabulary-term.md) →

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>se. — document upload</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+</head>
+<body class="admin">
+<div class="page-header">
+  <a class="mark" href="/">se.</a>
+  <button id="sign-out" class="header-icon-button" type="button" title="Sign out" aria-label="Sign out"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
+</div>
+<div class="admin-shell">
+<nav class="admin-rail" id="admin-rail" aria-label="Admin sections"></nav>
+<main>
+  <h2>Document upload</h2>
+  <p class="lede" style="margin: 0 0 1.5rem;">Index a plain text or image file directly, the same way a crawled page is indexed -- with no PageRank (an upload has no link graph) and, for text, an optional vocabulary/keyword-search toggle. For PDFs, Word/Excel documents, or other formats, attach the file to a chat turn instead; the model can process it via the sandbox. Every upload shows up here and in <a href="/admin/jobs">Jobs</a>.</p>
+
+  <section class="panel">
+    <h3>Upload a file</h3>
+    <form id="upload-form" class="crawl-form stacked-form">
+      <div class="form-row">
+        <label for="upload-file">File</label>
+        <input type="file" id="upload-file" required>
+      </div>
+      <div class="form-row form-row-check">
+        <label for="upload-index-vocabulary">
+          <input type="checkbox" id="upload-index-vocabulary" checked>
+          Index vocabulary (BM25/keyword search) -- only affects text files
+        </label>
+      </div>
+      <button type="submit" id="upload-submit" class="text-button">Upload</button>
+    </form>
+    <div id="upload-status" class="panel-status"></div>
+  </section>
+
+  <section class="panel">
+    <h3>Import from S3</h3>
+    <p class="lede">Credentials are used once to fetch the object and are never stored.</p>
+    <form id="s3-form" class="crawl-form stacked-form" autocomplete="off">
+      <div class="form-row">
+        <label for="s3-endpoint">Endpoint (optional -- leave blank for AWS)</label>
+        <input class="field" type="text" id="s3-endpoint" placeholder="https://s3.example.com" autocomplete="off">
+      </div>
+      <div class="form-row">
+        <label for="s3-region">Region</label>
+        <input class="field" type="text" id="s3-region" required autocomplete="off">
+      </div>
+      <div class="form-row">
+        <label for="s3-bucket">Bucket</label>
+        <input class="field" type="text" id="s3-bucket" required autocomplete="off">
+      </div>
+      <div class="form-row">
+        <label for="s3-key">Key</label>
+        <input class="field" type="text" id="s3-key" required autocomplete="off">
+      </div>
+      <div class="form-row">
+        <label for="s3-access-key-id">Access key ID</label>
+        <input class="field" type="text" id="s3-access-key-id" required autocomplete="off">
+      </div>
+      <div class="form-row">
+        <label for="s3-secret-access-key">Secret access key</label>
+        <input class="field" type="password" id="s3-secret-access-key" required autocomplete="off">
+      </div>
+      <div class="form-row">
+        <label for="s3-session-token">Session token (optional)</label>
+        <input class="field" type="password" id="s3-session-token" autocomplete="off">
+      </div>
+      <div class="form-row form-row-check">
+        <label for="s3-index-vocabulary">
+          <input type="checkbox" id="s3-index-vocabulary" checked>
+          Index vocabulary (BM25/keyword search) -- only affects text files
+        </label>
+      </div>
+      <button type="submit" id="s3-submit" class="text-button">Import</button>
+    </form>
+    <div id="s3-status" class="panel-status"></div>
+  </section>
+
+  <h3>Past uploads</h3>
+  <div id="jobs-status" class="panel-status"></div>
+  <div id="jobs-table"></div>
+</main>
+</div>
+<script src="/admin.js"></script>
+<script src="/admin_document_upload.js"></script>
+</body>
+</html>

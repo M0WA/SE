@@ -301,7 +301,7 @@ func (e *textAwareEmbedder) Embed(_ context.Context, text string) ([]float32, er
 func (e *textAwareEmbedder) Dimensions() int { return 2 }
 
 // TestSQLCrawlerService_Crawl_BlendsTitleAndBodyEmbeddingsWhenWeightConfigured
-// proves EmbeddingTitleWeight actually reaches embedTitleWeighted at crawl
+// proves EmbeddingTitleWeight actually reaches EmbedTitleWeighted at crawl
 // time: with a title and body that embed to orthogonal vectors, the saved
 // embedding must be their weighted combination, not either one alone.
 func TestSQLCrawlerService_Crawl_BlendsTitleAndBodyEmbeddingsWhenWeightConfigured(t *testing.T) {

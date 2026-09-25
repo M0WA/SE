@@ -254,6 +254,7 @@ const ADMIN_NAV_GROUPS = [
     label: 'Content',
     items: [
       { label: 'Documents', href: '/admin/documents' },
+      { label: 'Upload', href: '/admin/document-upload' },
       { label: 'Content dedup', href: '/admin/content_dedup' },
     ],
   },

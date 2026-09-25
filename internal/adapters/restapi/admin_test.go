@@ -91,6 +91,11 @@ type fakeAdminRepo struct {
 	// (touched synchronously), this needs real synchronization.
 	mu         sync.Mutex
 	deletedIDs []string
+
+	savedDocs            []domain.Document
+	savedEmbeddings      []map[string][]float32
+	savedIndexVocabulary []bool
+	saveDocumentErr      error
 }
 
 // DeletedIDs returns every ID DeleteDocument has been called with so far,
@@ -136,6 +141,17 @@ func (f *fakeAdminRepo) DeleteDocument(_ context.Context, id string) error {
 	f.deletedIDs = append(f.deletedIDs, id)
 	f.mu.Unlock()
 	return f.deleteErr
+}
+func (f *fakeAdminRepo) SaveDocumentOptionalVocabulary(_ context.Context, doc domain.Document, embeddings map[string][]float32, _, _ int, indexVocabulary bool) error {
+	if f.saveDocumentErr != nil {
+		return f.saveDocumentErr
+	}
+	f.mu.Lock()
+	f.savedDocs = append(f.savedDocs, doc)
+	f.savedEmbeddings = append(f.savedEmbeddings, embeddings)
+	f.savedIndexVocabulary = append(f.savedIndexVocabulary, indexVocabulary)
+	f.mu.Unlock()
+	return nil
 }
 func (f *fakeAdminRepo) PostingsForTerm(_ context.Context, _ string, limit int) ([]domain.PostingStats, error) {
 	f.gotLimit = limit

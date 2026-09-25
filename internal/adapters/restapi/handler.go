@@ -34,6 +34,12 @@ var adminHTML []byte
 //go:embed admin_documents.html
 var adminDocumentsHTML []byte
 
+//go:embed admin_document_upload.html
+var adminDocumentUploadHTML []byte
+
+//go:embed admin_document_detail.html
+var adminDocumentDetailHTML []byte
+
 //go:embed admin_domain.html
 var adminDomainHTML []byte
 
@@ -127,6 +133,12 @@ var adminContentDedupJS []byte
 
 //go:embed admin_documents.js
 var adminDocumentsJS []byte
+
+//go:embed admin_document_upload.js
+var adminDocumentUploadJS []byte
+
+//go:embed admin_document_detail.js
+var adminDocumentDetailJS []byte
 
 //go:embed admin_domain.js
 var adminDomainJS []byte
@@ -237,6 +249,9 @@ type Handler struct {
 	// chatVision backs the admin API's chat vision settings CRUD -- set on
 	// admin-server only, same *sqlrepo.Repository as chatEndpoints.
 	chatVision ports.ChatVisionStore
+	// documentJobs backs the admin Document-upload feature's job CRUD --
+	// set on admin-server only, same *sqlrepo.Repository as chatEndpoints.
+	documentJobs ports.DocumentJobStore
 	// semanticMatcher backs the internal vision-similarity endpoint (see
 	// handleVisionSimilarity) -- set on search-server only, same
 	// *sqlrepo.Repository as embeddingRepo.
@@ -363,6 +378,9 @@ type Config struct {
 	// ChatVision is set on admin-server only, backing the chat vision
 	// settings CRUD API -- same *sqlrepo.Repository as ChatEndpoints.
 	ChatVision ports.ChatVisionStore
+	// DocumentJobs is set on admin-server only, backing the Document-upload
+	// feature's job CRUD API -- same *sqlrepo.Repository as ChatEndpoints.
+	DocumentJobs ports.DocumentJobStore
 	// MCPServers is set on admin-server only, backing the MCP server CRUD
 	// API -- same *sqlrepo.Repository as ChatEndpoints/EmbeddingEndpoints.
 	MCPServers ports.MCPServerStore
@@ -457,6 +475,7 @@ func New(cfg Config) *Handler {
 		chat:                  cfg.Chat,
 		chatEndpoints:         cfg.ChatEndpoints,
 		chatVision:            cfg.ChatVision,
+		documentJobs:          cfg.DocumentJobs,
 		mcpServers:            cfg.MCPServers,
 		mcpTools:              cfg.MCPTools,
 		agents:                cfg.Agents,
@@ -564,6 +583,10 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("/admin_page.js", h.handleAdminPageJS)
 	mux.HandleFunc("/admin/documents", h.requireAdminAuthPage(h.handleAdminDocumentsPage))
 	mux.HandleFunc("/admin_documents.js", h.handleAdminDocumentsJS)
+	mux.HandleFunc("/admin/document-upload", h.requireAdminAuthPage(h.handleAdminDocumentUploadPage))
+	mux.HandleFunc("/admin_document_upload.js", h.handleAdminDocumentUploadJS)
+	mux.HandleFunc("/admin/document-upload/{id}", h.requireAdminAuthPage(h.handleAdminDocumentDetailPage))
+	mux.HandleFunc("/admin_document_detail.js", h.handleAdminDocumentDetailJS)
 	mux.HandleFunc("/admin/documents/{host}", h.requireAdminAuthPage(h.handleAdminDomainPage))
 	mux.HandleFunc("/admin_domain.js", h.handleAdminDomainJS)
 	mux.HandleFunc("/admin/vocabulary/term", h.requireAdminAuthPage(h.handleAdminVocabularyTermPage))
@@ -615,6 +638,12 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("GET /admin/api/overview/metrics", h.requireAdminAuthAPI(h.handleAdminOverviewMetrics))
 	mux.HandleFunc("DELETE /admin/api/documents/{id}", h.requireAdminAuthAPI(h.handleAdminDeleteDocument))
 	mux.HandleFunc("GET /admin/api/documents/{id}/versions", h.requireAdminAuthAPI(h.handleAdminDocumentVersions))
+	mux.HandleFunc("GET /admin/api/documents/{id}", h.requireAdminAuthAPI(h.handleAdminGetDocument))
+	mux.HandleFunc("/admin/api/document-jobs", h.requireAdminAuthAPI(h.handleAdminDocumentJobs))
+	mux.HandleFunc("POST /admin/api/document-jobs/import-s3", h.requireAdminAuthAPI(h.handleAdminImportDocumentFromS3))
+	mux.HandleFunc("GET /admin/api/document-jobs/{id}", h.requireAdminAuthAPI(h.handleAdminDocumentJob))
+	mux.HandleFunc("DELETE /admin/api/document-jobs/{id}", h.requireAdminAuthAPI(h.handleAdminDeleteDocumentJob))
+	mux.HandleFunc("GET /admin/api/document-jobs/{id}/data", h.requireAdminAuthAPI(h.handleAdminDocumentJobData))
 	mux.HandleFunc("/admin/api/domains", h.requireAdminAuthAPI(h.handleAdminSearchDomains))
 	mux.HandleFunc("/admin/api/postings", h.requireAdminAuthAPI(h.handleAdminPostings))
 	mux.HandleFunc("/admin/api/search", h.requireAdminAuthAPI(h.handleAdminSearch))
@@ -709,6 +738,22 @@ func (h *Handler) handleAdminContentDedupJS(w http.ResponseWriter, r *http.Reque
 
 func (h *Handler) handleAdminDocumentsJS(w http.ResponseWriter, r *http.Request) {
 	serveStatic(w, r, jsContentType, adminDocumentsJS)
+}
+
+func (h *Handler) handleAdminDocumentUploadPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, contentTypeHTML, adminDocumentUploadHTML)
+}
+
+func (h *Handler) handleAdminDocumentUploadJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, jsContentType, adminDocumentUploadJS)
+}
+
+func (h *Handler) handleAdminDocumentDetailPage(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, contentTypeHTML, adminDocumentDetailHTML)
+}
+
+func (h *Handler) handleAdminDocumentDetailJS(w http.ResponseWriter, r *http.Request) {
+	serveStatic(w, r, jsContentType, adminDocumentDetailJS)
 }
 
 func (h *Handler) handleAdminDomainJS(w http.ResponseWriter, r *http.Request) {

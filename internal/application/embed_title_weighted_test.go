@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// recordingEmbed returns an embed closure (see embedTitleWeighted's embed
+// recordingEmbed returns an embed closure (see EmbedTitleWeighted's embed
 // parameter) that records every input it was called with, and returns a
 // distinguishable vector per input so a test can assert exactly which
 // text(s) reached it.
@@ -26,7 +26,7 @@ func recordingEmbed(calls *[]string) func(context.Context, string) ([]float32, e
 
 func TestEmbedTitleWeighted_EmptyTitleEmbedsBodyOnly(t *testing.T) {
 	var calls []string
-	vec, err := embedTitleWeighted(context.Background(), recordingEmbed(&calls), "", "body", 0.5)
+	vec, err := EmbedTitleWeighted(context.Background(), recordingEmbed(&calls), "", "body", 0.5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestEmbedTitleWeighted_EmptyTitleEmbedsBodyOnly(t *testing.T) {
 
 func TestEmbedTitleWeighted_EmptyBodyEmbedsTitleOnly(t *testing.T) {
 	var calls []string
-	vec, err := embedTitleWeighted(context.Background(), recordingEmbed(&calls), "title", "", 0.5)
+	vec, err := EmbedTitleWeighted(context.Background(), recordingEmbed(&calls), "title", "", 0.5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestEmbedTitleWeighted_EmptyBodyEmbedsTitleOnly(t *testing.T) {
 
 func TestEmbedTitleWeighted_WhitespaceOnlyTitleTreatedAsEmpty(t *testing.T) {
 	var calls []string
-	_, err := embedTitleWeighted(context.Background(), recordingEmbed(&calls), "   ", "body", 0.5)
+	_, err := EmbedTitleWeighted(context.Background(), recordingEmbed(&calls), "   ", "body", 0.5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestEmbedTitleWeighted_WhitespaceOnlyTitleTreatedAsEmpty(t *testing.T) {
 
 func TestEmbedTitleWeighted_ZeroWeightEmbedsBodyOnlyEvenWithATitle(t *testing.T) {
 	var calls []string
-	_, err := embedTitleWeighted(context.Background(), recordingEmbed(&calls), "title", "body", 0)
+	_, err := EmbedTitleWeighted(context.Background(), recordingEmbed(&calls), "title", "body", 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestEmbedTitleWeighted_ZeroWeightEmbedsBodyOnlyEvenWithATitle(t *testing.T)
 
 func TestEmbedTitleWeighted_FullWeightEmbedsTitleOnlyEvenWithABody(t *testing.T) {
 	var calls []string
-	_, err := embedTitleWeighted(context.Background(), recordingEmbed(&calls), "title", "body", 1)
+	_, err := EmbedTitleWeighted(context.Background(), recordingEmbed(&calls), "title", "body", 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestEmbedTitleWeighted_FullWeightEmbedsTitleOnlyEvenWithABody(t *testing.T)
 
 func TestEmbedTitleWeighted_InRangeWeightEmbedsBothAndCombines(t *testing.T) {
 	var calls []string
-	vec, err := embedTitleWeighted(context.Background(), recordingEmbed(&calls), "title", "body", 0.5)
+	vec, err := EmbedTitleWeighted(context.Background(), recordingEmbed(&calls), "title", "body", 0.5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestEmbedTitleWeighted_PropagatesTitleEmbedError(t *testing.T) {
 		}
 		return []float32{0, 1}, nil
 	}
-	_, err := embedTitleWeighted(context.Background(), embed, "title", "body", 0.5)
+	_, err := EmbedTitleWeighted(context.Background(), embed, "title", "body", 0.5)
 	if !errors.Is(err, wantErr) {
 		t.Errorf("expected the title embed's error to propagate, got %v", err)
 	}
@@ -121,7 +121,7 @@ func TestEmbedTitleWeighted_PropagatesBodyEmbedError(t *testing.T) {
 		}
 		return []float32{1, 0}, nil
 	}
-	_, err := embedTitleWeighted(context.Background(), embed, "title", "body", 0.5)
+	_, err := EmbedTitleWeighted(context.Background(), embed, "title", "body", 0.5)
 	if !errors.Is(err, wantErr) {
 		t.Errorf("expected the body embed's error to propagate, got %v", err)
 	}
