@@ -65,6 +65,7 @@
     }
   }
 
+  renderAdminNav();
   wireSignOut();
   loadEndpoints();
 

@@ -74,6 +74,7 @@
     }
   }
 
+  renderAdminNav();
   wireSignOut();
   load();
 
