@@ -25,6 +25,13 @@ h1, h2, h3, h4, h5, h6 {
   font-family: "Source Serif 4", Georgia, serif;
 }
 
+/* jekyll-theme-minimal hardcodes strong/dt/th to near-black (#222/#444) with
+   no dark-mode variant of its own -- unreadable against this file's dark
+   background below unless overridden here too, same as every other color. */
+strong, dt, th {
+  color: #15202b;
+}
+
 a {
   color: #7a2035;
 }
@@ -63,6 +70,10 @@ img {
   }
 
   h1, h2, h3, h4, h5, h6 {
+    color: #e7ecef;
+  }
+
+  strong, dt, th {
     color: #e7ecef;
   }
 
