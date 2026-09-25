@@ -2544,27 +2544,22 @@ func (c *client) checkFilesTool() error {
 	return nil
 }
 
-// checkWriteFile proves mcp-files' write_file tool -- distinct from
-// list_files/read_file/read_file_base64, all exercised by checkFilesTool
-// above, and previously the one tool on this server with zero coverage
-// anywhere in this suite. Asks for a specific, checkable filename and
-// content, then confirms via the real REST listing (not just the model's
-// own say-so) that a file matching both actually exists, and cleans it up
-// afterward regardless of outcome.
-func (c *client) checkWriteFile() error {
+// checkWriteFileProducesFile drives one chat turn expected to call
+// write_file, then confirms via the real REST listing (not just the
+// model's own say-so) that a file named exactly filename actually exists
+// afterward, cleaning it up regardless of outcome -- the shared body
+// behind checkWriteFile and checkWriteFileLargeGeneratedContent below,
+// which differ only in prompt/filename and what each is trying to prove.
+func (c *client) checkWriteFileProducesFile(prompt, filename string) error {
 	if c.testChatID == "" {
 		return skip(skipNoPinnedChat)
 	}
-	const filename = "e2e-check-written.txt"
-	const marker = "E2E-CHECK-WRITE-MARKER-9b3d2a"
-	out, err := c.chatOnce(
-		fmt.Sprintf("Use write_file to create a file named exactly %q containing exactly this text: %s", filename, marker),
-		chatOptions{chatID: c.testChatID})
+	out, err := c.chatOnce(prompt, chatOptions{chatID: c.testChatID})
 	if err != nil {
 		return err
 	}
 	if len(out.ToolResults) == 0 {
-		return fmt.Errorf("expected write_file to be called, got no tool_results")
+		return fmt.Errorf("expected write_file to be called, got no tool_results -- got this answer instead: %q", truncate([]byte(out.Answer), 500))
 	}
 	if err := checkNoToolErrors(out); err != nil {
 		return err
@@ -2589,6 +2584,19 @@ func (c *client) checkWriteFile() error {
 	return nil
 }
 
+// checkWriteFile proves mcp-files' write_file tool -- distinct from
+// list_files/read_file/read_file_base64, all exercised by checkFilesTool
+// above, and previously the one tool on this server with zero coverage
+// anywhere in this suite. Asks for a specific, checkable filename and
+// content.
+func (c *client) checkWriteFile() error {
+	const filename = "e2e-check-written.txt"
+	const marker = "E2E-CHECK-WRITE-MARKER-9b3d2a"
+	return c.checkWriteFileProducesFile(
+		fmt.Sprintf("Use write_file to create a file named exactly %q containing exactly this text: %s", filename, marker),
+		filename)
+}
+
 // checkWriteFileLargeGeneratedContent proves write_file still works as a real,
 // native tool call when its own content argument is large and open-ended
 // (the model has to generate it, not just relay a short fixed marker) --
@@ -2604,40 +2612,10 @@ func (c *client) checkWriteFile() error {
 // this check exists so that regression (or a fix) is visible here regardless
 // of where the real fix eventually lands.
 func (c *client) checkWriteFileLargeGeneratedContent() error {
-	if c.testChatID == "" {
-		return skip(skipNoPinnedChat)
-	}
 	const filename = "e2e-check-generated-cv.docx"
-	out, err := c.chatOnce(
+	return c.checkWriteFileProducesFile(
 		fmt.Sprintf("Use write_file to create a file named exactly %q with a full, realistic sample CV/resume as its content -- multiple sections (contact info, summary, work experience, education, skills), at least a few hundred words.", filename),
-		chatOptions{chatID: c.testChatID})
-	if err != nil {
-		return err
-	}
-	if len(out.ToolResults) == 0 {
-		return fmt.Errorf("expected write_file to be called for a large generated document, got no tool_results -- got this answer instead: %q", truncate([]byte(out.Answer), 500))
-	}
-	if err := checkNoToolErrors(out); err != nil {
-		return err
-	}
-
-	var list []fileResponse
-	if _, err := c.getJSON(pathAccountFiles, &list); err != nil {
-		return err
-	}
-	var createdID string
-	for _, f := range list {
-		if f.Filename == filename {
-			createdID = f.ID
-		}
-	}
-	if createdID != "" {
-		defer c.deleteRequest("/account/api/files/" + createdID)
-	}
-	if createdID == "" {
-		return fmt.Errorf("expected a file named %q to exist after write_file, got %+v", filename, list)
-	}
-	return nil
+		filename)
 }
 
 // checkAccountFilesUnscoped proves GET /account/api/files with no
