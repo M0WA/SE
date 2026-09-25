@@ -59,10 +59,6 @@ import (
 // they shouldn't fail the whole run the way a real error does.
 var errSkip = errors.New("skip")
 
-// errSandboxToolNotCalled marks checkSandboxFileFormat's one retryable
-// failure mode -- see that function's own comment for why.
-var errSandboxToolNotCalled = errors.New("sandbox tool not called")
-
 // REST paths/headers referenced from more than one check below -- named
 // once each so a route rename (or the header name) needs one edit, and so
 // SonarCloud's go:S1192 (repeated string literal) doesn't flag the
@@ -1556,63 +1552,67 @@ func (c *client) checkSandboxFileFormat(filename, contentType string, fixtureDat
 	defer c.deleteRequest("/account/api/files/" + uploaded.ID)
 
 	runWith := func(tool, packagesClause, script string) error {
-		attempt := func() (string, error) {
-			prompt := fmt.Sprintf(
-				"Use %s with file_ids [%q]%s to run this exact script verbatim, then reply with only its stdout:\n\n%s",
-				tool, uploaded.ID, packagesClause, script)
+		prompt := fmt.Sprintf(
+			"Use %s with file_ids [%q]%s to run this exact script verbatim, then reply with only its stdout:\n\n%s",
+			tool, uploaded.ID, packagesClause, script)
+
+		attempt := func() error {
 			out, err := c.chatOnce(prompt, chatOptions{chatID: c.testChatID})
 			if err != nil {
-				return "", err
+				return err
 			}
 			if err := checkNoToolErrors(out); err != nil {
-				return "", err
+				return err
 			}
+			var stdout string
+			var called bool
 			for _, tr := range out.ToolResults {
 				if tr.ToolName == tool {
-					return tr.Output, nil
+					stdout, called = tr.Output, true
+					break
 				}
 			}
-			return "", fmt.Errorf("expected %s to be called, got no matching tool_results entry (got %d other tool call(s)): %w",
-				tool, len(out.ToolResults), errSandboxToolNotCalled)
+			if !called {
+				return fmt.Errorf("expected %s to be called, got no matching tool_results entry (got %d other tool call(s))", tool, len(out.ToolResults))
+			}
+			// Checked against the tool's own raw stdout (now exposed via
+			// tool_results[].output), never the model's final prose answer --
+			// confirmed live, a model sometimes paraphrases/reformats real
+			// stdout into a summary even when explicitly told to reply with
+			// only the raw output (e.g. a literal "IMAGE:yes" line coming
+			// back as reworded prose, or as "IMAGE: yes" with an inserted
+			// space). The tool's own Output field is authoritative and
+			// unaffected by that -- this is a strictly stronger check than
+			// testing the model's retelling, not a loosened one.
+			if !strings.Contains(stdout, marker) {
+				return fmt.Errorf("expected %s's raw output to contain the file's own marker text %q, got %q", tool, marker, stdout)
+			}
+			if requireImage && !strings.Contains(stdout, "IMAGE:yes") {
+				return fmt.Errorf("expected %s's raw output to confirm the file's embedded image was found (IMAGE:yes), got %q", tool, stdout)
+			}
+			return nil
 		}
 
-		// One retry, but ONLY for the "tool never got called" outcome --
-		// confirmed live, a model occasionally answers a script-running
-		// instruction directly instead of actually invoking the sandbox
-		// tool, same sampling-variance-in-instruction-following as
-		// checkToolFunctions' identical precedent below. A genuine
-		// regression (the tool called but erroring, or called but its own
-		// output missing the expected marker/image) is never retried --
-		// see errors.Is gate below.
+		// Two attempts total, same established precedent as
+		// checkToolFunctions/attemptToolCall below: a live model
+		// occasionally fails to faithfully follow a "run this exact script
+		// verbatim" instruction -- either by not invoking the tool at all,
+		// or (confirmed live: the XLSX Go script's escape-heavy
+		// backtick-in-backtick struct-tag syntax) by mistyping the relayed
+		// code enough to break compilation, which then also fails the
+		// marker check below since the script never got to print it. Both
+		// are sampling variance in instruction-following, not a
+		// reachability/functionality problem this check exists to catch --
+		// the same failure reproducing on both attempts is what would
+		// actually signal a real regression.
 		const attempts = 2
-		var stdout string
 		var lastErr error
 		for i := 1; i <= attempts; i++ {
-			stdout, lastErr = attempt()
-			if lastErr == nil || !errors.Is(lastErr, errSandboxToolNotCalled) {
-				break
+			if lastErr = attempt(); lastErr == nil {
+				return nil
 			}
 		}
-		if lastErr != nil {
-			return lastErr
-		}
-
-		// Checked against the tool's own raw stdout (now exposed via
-		// tool_results[].output), never the model's final prose answer --
-		// confirmed live, a model sometimes paraphrases/reformats real
-		// stdout into a summary even when explicitly told to reply with
-		// only the raw output (e.g. a literal "IMAGE:yes" line coming back
-		// as reworded prose, or as "IMAGE: yes" with an inserted space).
-		// The tool's own Output field is authoritative and unaffected by
-		// that -- this is a strictly stronger check than testing the
-		// model's retelling, not a loosened one.
-		if !strings.Contains(stdout, marker) {
-			return fmt.Errorf("expected %s's raw output to contain the file's own marker text %q, got %q", tool, marker, stdout)
-		}
-		if requireImage && !strings.Contains(stdout, "IMAGE:yes") {
-			return fmt.Errorf("expected %s's raw output to confirm the file's embedded image was found (IMAGE:yes), got %q", tool, stdout)
-		}
-		return nil
+		return lastErr
 	}
 
 	packagesClause := ""
