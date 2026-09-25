@@ -18,7 +18,7 @@ Seed URLs takes one URL per line — most schedules have just one, but a crawl c
 
 ## Interval, max runs, and Enabled
 
-Interval is minutes between runs; 0 means run once and stop. Max runs caps how many times a recurring schedule repeats before disabling itself — 0 means unlimited, and it's meaningless if Interval is 0. Enabled is the whole schedule's on/off switch: unlike editing other fields (which always reschedules the next run to Interval minutes from now), toggling Enabled — here or on the Jobs page's Schedules table — doesn't touch the next-run time, so pausing/resuming is a simple pause.
+Interval is minutes between runs; 0 means run once and stop. Max runs caps how many times a recurring schedule repeats before disabling itself — 0 means unlimited, and it's meaningless if Interval is 0. Enabled is the whole schedule's on/off switch, but on this page it's just another field: clicking Save writes it as part of the full replacement below and reschedules the next run to Interval minutes from now, the same as changing any other field here. Only the Jobs page's Schedules table has a dedicated Enabled checkbox that calls a separate toggle endpoint and leaves the next-run time untouched — use that one there if you want to pause/resume without rescheduling.
 
 ## Rendering, link scope, and domain rules
 
@@ -38,7 +38,7 @@ Fetch timeout, Minimum text length, Delay between fetches, and Max response size
 
 ## Save, Run now, and Delete
 
-Save writes every field as a full replacement and reschedules the next run to Interval minutes from now (why toggling Enabled has its own separate path — see above). Run now marks the schedule due immediately; crawl-server's scheduler picks it up within seconds, same as a freshly created one-off crawl, and it appears as a running Job on the Jobs page. Delete removes the schedule after confirmation — it doesn't stop or affect a job already in progress from a previous run.
+Save writes every field — including Enabled — as a full replacement and reschedules the next run to Interval minutes from now; unlike the Jobs page's Schedules table, this page has no separate toggle path for Enabled. Run now marks the schedule due immediately; crawl-server's scheduler picks it up within seconds, same as a freshly created one-off crawl, and it appears as a running Job on the Jobs page. Delete removes the schedule after confirmation — it doesn't stop or affect a job already in progress from a previous run.
 
 > **Worth knowing:**
 > - Running a schedule already mid-run returns a conflict rather than starting a second overlapping crawl — the same seed can't have two active jobs at once.

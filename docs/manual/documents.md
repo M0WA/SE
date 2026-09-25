@@ -18,11 +18,11 @@ The first search fetches up to 1000 domains and 2000 documents and caches them i
 
 ## Domain results
 
-Each match shows the host and how many pages are indexed under it. Click a row to open that domain's page (`/admin/documents/{host}`), which lists every one of its pages, not just this search's up-to-2000-document sample.
+Each match shows the host and how many pages are indexed under it. Click a row to open that domain's page (`/admin/documents/{host}`), which lists up to 1000 of its pages — far more complete than this search's shared up-to-2000-document sample across the whole corpus.
 
 ## Document results
 
-Below the domain list, matching pages show as a table of URL, title, and host — matched against all three, so a company name finds pages whose title mentions it even without a URL match. Clicking a URL opens the live page; there's no delete here — that's on the domain detail page, which shows the full, current list rather than this search sample.
+Below the domain list, matching pages show as a table of URL, title, and host — matched against all three, so a company name finds pages whose title mentions it even without a URL match. Clicking a URL opens the live page; there's no delete here — that's on the domain detail page, which shows up to 1000 of the domain's pages directly rather than pulling from this search's capped sample.
 
 ## Vocabulary
 
@@ -41,7 +41,7 @@ This is the same term list the public search's typo correction draws from: a zer
 Click any term to open its detail page, showing exactly which documents contain it and how strongly. Use this to sanity-check a term came from real content, not boilerplate or a crawl artifact, before trusting how it influences ranking or fuzzy correction.
 
 > **Worth knowing:**
-> - Domain/URL search sees only a capped in-memory sample (1000 domains, 2000 documents) — open a domain's detail page for the complete picture.
+> - Domain/URL search sees only a capped in-memory sample (1000 domains, 2000 documents) — open a domain's detail page for a much larger, up-to-1000-page view of that domain.
 > - The domain/URL box takes a regex; the vocabulary box takes a plain substring, so regex syntax there is searched literally.
 
 ---

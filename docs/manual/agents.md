@@ -4,13 +4,13 @@
 
 *`/admin/agents`*
 
-Under Settings -> Chat -> Agents, this list shows every agent you've defined and lets you add or edit one.
+Under Chat -> Agents, this list shows every agent you've defined and lets you add or edit one.
 
 ![Agents](images/agents.png)
 
 ## What an agent is
 
-An agent is a named specialization: a fixed system prompt bundled with a scoped subset of the MCP servers on the MCP servers page. Instead of writing one persona into the endpoint's global system prompt (Settings -> Chat -> Settings) for every conversation, define a handful of agents -- a fact-checker, a code reviewer, a terse summarizer -- each with its own instructions and tools, and let whoever's chatting pick the one that fits. An agent never changes the underlying model or endpoint; it only adds a leading instruction and narrows tool access for its active turns.
+An agent is a named specialization: a fixed system prompt bundled with a scoped subset of the MCP servers on the MCP servers page. Instead of writing one persona into the endpoint's global system prompt (Chat -> Settings) for every conversation, define a handful of agents -- a fact-checker, a code reviewer, a terse summarizer -- each with its own instructions and tools, and let whoever's chatting pick the one that fits. An agent never changes the underlying model or endpoint; it only adds a leading instruction and narrows tool access for its active turns.
 
 ## The list and its columns
 
@@ -22,7 +22,7 @@ Click "Add agent" for a blank detail page (/admin/agents/new -- the same form as
 
 ## Enabled vs. disabled
 
-Disabling removes an agent from the chat page's picker (GET /agents returns only enabled agents) without deleting its configuration. Use this to retire an agent temporarily while tuning its prompt, or to line it up as a default-agent candidate (Settings -> Chat -> Settings allows picking a disabled agent as default) before rolling it out.
+Disabling removes an agent from the chat page's picker (GET /agents returns only enabled agents) without deleting its configuration. Use this to retire an agent temporarily while tuning its prompt, or to line it up as a default-agent candidate (Chat -> Settings allows picking a disabled agent as default) before rolling it out.
 
 ## If the page says agents aren't configured
 

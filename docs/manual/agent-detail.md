@@ -14,11 +14,11 @@ Name is the required label shown everywhere this agent appears: this list, the e
 
 ## System prompt
 
-This is what makes the agent do anything: it's injected as the agent's own leading system message on every turn it's active for, layered in after the chat endpoint's persistent system prompt (Settings -> Chat -> Settings) and any per-user custom prompt, before conversation history. Write it like any system prompt -- concrete instructions and constraints, not a description of the agent. An empty prompt is valid: the agent adds nothing beyond the baseline, which only makes sense paired with a restricted MCP-server scope (an agent that exists purely to gate tool access).
+This is what makes the agent do anything: it's injected as the agent's own leading system message on every turn it's active for, layered in after the chat endpoint's persistent system prompt (Chat -> Settings) and any per-user custom prompt, before conversation history. Write it like any system prompt -- concrete instructions and constraints, not a description of the agent. An empty prompt is valid: the agent adds nothing beyond the baseline, which only makes sense paired with a restricted MCP-server scope (an agent that exists purely to gate tool access).
 
 ## MCP servers
 
-This checkbox list scopes which globally configured MCP servers (Settings -> Chat -> MCP servers) this agent may call tools from. There's no "unscoped" option: every box unchecked means no global tools at all, not "everything available" -- check every box explicitly for full access. This only narrows the shared/admin catalog; a user's own personal MCP servers stay available to every agent regardless. A turn with no agent selected skips this scoping entirely and offers every globally active server.
+This checkbox list scopes which globally configured MCP servers (Chat -> MCP servers) this agent may call tools from. There's no "unscoped" option: every box unchecked means no global tools at all, not "everything available" -- check every box explicitly for full access. This only narrows the shared/admin catalog; a user's own personal MCP servers stay available to every agent regardless. A turn with no agent selected skips this scoping entirely and offers every globally active server.
 
 ## Enabled
 
@@ -34,7 +34,7 @@ Delete (shown only when editing an existing agent) removes it immediately after 
 
 ## How a chat user picks this agent, and how it relates to the default agent
 
-On the public chat page, an agent picker (every enabled agent) lets a person choose which agent handles the conversation in their tab; the choice is remembered per tab and sent with every message as agent_id. Left on "Default agent," the conversation uses whatever's set as DefaultAgentID on the chat endpoint (Settings -> Chat -> Settings) -- which can be any agent, enabled or not, so an admin can line one up ahead of enabling it. With neither set, the conversation runs with no agent specialization at all.
+On the public chat page, an agent picker (every enabled agent) lets a person choose which agent handles the conversation in their tab; the choice is remembered per tab and sent with every message as agent_id. Left on "Default agent," the conversation uses whatever's set as DefaultAgentID on the chat endpoint (Chat -> Settings) -- which can be any agent, enabled or not, so an admin can line one up ahead of enabling it. With neither set, the conversation runs with no agent specialization at all.
 
 > **Worth knowing:**
 > - A new MCP server doesn't automatically join an existing agent's scope -- re-check its boxes if it needs broad tool access.

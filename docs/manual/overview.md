@@ -10,7 +10,7 @@ The page you land on right after signing in, and the top entry in the admin nav 
 
 ## The navigation rail
 
-Every admin page shares the same sidebar, grouped by intent rather than one flat menu: Content (Documents, Content dedup) for browsing and de-duplicating what's indexed; Index (Crawler, Jobs); Relevance (Search, PageRank, Embeddings) for ranking tuning; Chat (Settings, MCP servers, Agents); and System (Settings, Database, Users). Overview sits above all groups as a single top-level link. The current page is visually marked in the rail, so you always know where you are.
+Every admin page shares the same sidebar, grouped by intent rather than one flat menu: Content (Documents, Upload, Content dedup) for browsing, importing (browser or S3, see [Document upload](document-upload.md)), and de-duplicating what's indexed; Index (Crawler, Jobs); Relevance (Search, PageRank, Embeddings) for ranking tuning; Chat (Settings, MCP servers, Agents); and System (Settings, Database, Users). Overview sits above all groups as a single top-level link. The current page is visually marked in the rail, so you always know where you are.
 
 ## Signing out
 
@@ -18,7 +18,7 @@ The icon button at the top right of every admin page ends your session and sends
 
 ## Index stats
 
-"Index stats" shows the three plainest numbers about your corpus: documents indexed, their average length in tokens, and the running database driver (SQLite or Postgres). Average length matters more than it looks -- a sudden drop usually means a crawl started pulling in boilerplate or near-empty pages, worth checking on Documents.
+"Index stats" shows five numbers about your corpus: documents indexed, their average length in tokens, the running database driver (SQLite or Postgres), the number of distinct domains, and the vocabulary size (distinct indexed terms). Average length matters more than it looks -- a sudden drop usually means a crawl started pulling in boilerplate or near-empty pages, worth checking on Documents.
 
 ## Pages per domain and content age
 
@@ -34,7 +34,7 @@ Actively running jobs are listed here with seed URLs and a live pages-crawled co
 
 ## Trend charts
 
-Four more charts appear once there's enough history: a 30-day crawl outcomes donut (finished/failed/cancelled); a 14-day fetch throughput chart stacking each day's outcomes; a 30-day documents-indexed-per-day line chart; and a 14-day average fetch duration line chart, useful for spotting a slowing target site or a less efficient crawler config. A PageRank distribution histogram appears once PageRank has run, showing the full score spread rather than just the orphan-count tile.
+Four more charts appear once there's enough history: a 30-day crawl outcomes donut (done/failed/cancelled); a 14-day fetch throughput chart stacking each day's outcomes; a 30-day documents-indexed-per-day line chart; and a 14-day average fetch duration line chart, useful for spotting a slowing target site or a less efficient crawler config. A PageRank distribution histogram appears once PageRank has run, showing the full score spread rather than just the orphan-count tile.
 
 > **Worth knowing:**
 > - Every chart is read-only -- notice a problem here, then go to the relevant page (Jobs, Schedule, PageRank, Documents) to act on it.

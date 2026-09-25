@@ -25,6 +25,9 @@ Every file this project's packaging touches or ships, and how it gets installed.
 | `packaging/searxng/searxng.service` | `/etc/systemd/system/searxng.service` | Manual | systemd unit wrapping `docker compose up`/`down`. |
 | `packaging/prometheus-gpu/prometheus.yml` | `/etc/prometheus/prometheus.yml` (on the GPU host) | Manual | Prometheus agent-mode scrape/`remote_write` config for the GPU host. See [packaging/prometheus-gpu/README.md](https://github.com/M0WA/SE/blob/main/packaging/prometheus-gpu/README.md). |
 | `packaging/grafana/dashboards/*.json` | Imported via Grafana's API | Manual | Tracked source of truth for every Grafana dashboard. See [packaging/grafana/README.md](https://github.com/M0WA/SE/blob/main/packaging/grafana/README.md). |
+| `docker-compose.yml` | n/a -- read directly from repo root by `docker compose up` | Manual (Docker Compose install only) | Defines the four-container Postgres+search+admin+crawl stack. See [Docker Compose installation](docker-installation.md). |
+| `Dockerfile` | n/a -- built into `ghcr.io/m0wa/se` images | Auto (build-time, `.github/workflows/release.yml`'s `package-docker` job) | Multi-stage build producing the distroless image all eight binaries ship in. |
+| `.env.example` | `.env` (git-ignored, copied by hand) | Manual | Template for `docker compose up`'s required/optional variables (`SETTINGS_ENCRYPTION_KEY`, `CRAWL_INTERNAL_TOKEN`, `POSTGRES_PASSWORD`, etc.) -- see [Docker Compose installation](docker-installation.md). |
 
 ---
 ← [Environment variables](environment-variables.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Signing In](login.md) →

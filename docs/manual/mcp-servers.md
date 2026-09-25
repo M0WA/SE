@@ -28,6 +28,10 @@ Five first-party stdio servers, each a separate binary, you can point Command at
 
 Nothing restricts you to the five built-ins — any process speaking MCP over stdio, or any remote endpoint speaking Streamable HTTP, can be added the same way. Click "Add server" and fill in the detail form; see mcp-server-detail for what each field means.
 
+## If the page says MCP servers aren't configured
+
+This feature depends on an MCP-server store being wired into the admin server; if it isn't, every MCP-servers endpoint returns 503 and the list page shows "not configured" instead of a table — same degradation pattern as Agents and other optional admin features. It's a deployment/config state, not something clicking around this page fixes.
+
 > **Worth knowing:**
 > - If a server's tools never show up in a chat, check in order: is the chat endpoint launched with tool-calling enabled, is Enabled on, and — if gated — is the Web toggle on for that turn.
 

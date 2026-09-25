@@ -10,7 +10,7 @@ Finds documents that are byte-identical or near-identical to another already-ind
 
 ## What content dedup actually does
 
-A document fingerprint comes from its normalized text: an exact hash for byte-identical matches, and (when "simhash" is enabled) a 64-bit SimHash fingerprint for near-duplicates, such as two copies of the same article with a different ad banner. When two or more documents share a fingerprint (exact match, or within the configured SimHash distance), the job keeps one — shortest hostname, ties broken by earliest crawl — and merges the rest into it. Merging is destructive: losing documents are deleted from the index, and their URLs are recorded as aliases of the survivor. This is why content dedup is off by default and must be turned on explicitly on the Settings page, with a matching method and threshold, before this page has anything to do.
+A document fingerprint comes from its normalized text: an exact hash for byte-identical matches, and (when "simhash" is enabled) a 64-bit SimHash fingerprint for near-duplicates, such as two copies of the same article with a different ad banner. When two or more documents share a fingerprint (exact match, or within the configured SimHash distance), the job keeps one — shortest hostname, ties broken by earliest crawl — and merges the rest into it. Merging is destructive: losing documents are deleted from the index, and their URLs are recorded as aliases of the survivor. This is on by default — a search should never list the same content twice — but it's destructive (a merge permanently deletes the losing documents' rows), so review its matching method and near-duplicate threshold on the Settings page, and turn it off there if you'd rather not have documents merged automatically.
 
 ## Recompute now
 
@@ -25,7 +25,7 @@ Shows whether a recompute is running, when the last one finished, and its result
 Lists every canonical document with at least one alias, so a merge's effect stays visible rather than a black-box count. Each row shows the canonical URL — the survivor, served in search results — and its aliases, each with why it was folded. "canonical tag" is ordinary crawl-time bookkeeping (a `rel=canonical` link, or a www/bare-domain fold) where no document was ever deleted; "exact-content merge" and "near-duplicate merge" mean a real dedup pass deleted that row. A canonical document can accumulate aliases from more than one source over time, hence listing them individually. Paginated 20 rows at a time; shows "No documents have been merged yet" when clean.
 
 > **Worth knowing:**
-> - Content dedup must be turned on and configured (matching method, threshold, recompute interval) on Settings first — it does nothing while disabled.
+> - Content dedup runs by default; its matching method, near-duplicate threshold, and recompute interval are configurable on Settings, including turning it off entirely if you'd rather review duplicates manually.
 > - A merge deletes losing documents permanently. With near-duplicate (SimHash) matching, review the Merged documents table after a recompute — too loose a threshold can fold together documents that only coincidentally look similar.
 
 ---

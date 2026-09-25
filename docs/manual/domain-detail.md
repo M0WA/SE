@@ -4,7 +4,7 @@
 
 *`/admin/documents/{host}`*
 
-The complete, current view of every page indexed under one domain — reached by clicking a domain from the Documents search. Review a site's crawl results in detail, spot pages worth re-crawling or removing, and see a page's edit history across re-crawls.
+A view of every page indexed under one domain, up to 1000 — for a domain that large, this is the same practical ceiling as the Documents search, just scoped to one host — reached by clicking a domain from the Documents search. Review a site's crawl results in detail, spot pages worth re-crawling or removing, and see a page's edit history across re-crawls.
 
 ![Domain detail](images/domain-detail.png)
 
@@ -39,6 +39,7 @@ Removes every page in the domain in one action. After confirming, the server que
 > **Worth knowing:**
 > - Deleting all pages in a domain is irreversible and starts immediately on confirm — only re-crawling from scratch brings them back.
 > - If "Delete all" reports stuck pages, check the server log for the failed document IDs rather than assuming the whole domain is gone.
+> - Like Documents search, this page is capped at 1000 pages per domain; an unusually large domain may have more indexed than shown here.
 
 ---
 ← [Documents](documents.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Vocabulary term detail](vocabulary-term.md) →
