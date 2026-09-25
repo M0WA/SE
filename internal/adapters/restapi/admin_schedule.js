@@ -159,6 +159,7 @@
     }
   });
 
+  renderAdminNav();
   wireSignOut();
   load();
 
