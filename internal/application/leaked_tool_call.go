@@ -93,7 +93,8 @@ func detectLeakedToolCall(content string, tools []domain.ToolDef) bool {
 
 		insideFence := fences%2 == 1
 		var parsed wireLeakedToolCall
-		if !insideFence && json.Unmarshal([]byte(strings.TrimSpace(jsonText)), &parsed) == nil &&
+		repaired := repairRawControlCharsInJSONStrings(strings.TrimSpace(jsonText))
+		if !insideFence && json.Unmarshal([]byte(repaired), &parsed) == nil &&
 			parsed.Name != "" && allowed[parsed.Name] {
 			return true
 		}
@@ -102,6 +103,55 @@ func detectLeakedToolCall(content string, tools []domain.ToolDef) bool {
 		}
 		remaining = rest
 	}
+}
+
+// repairRawControlCharsInJSONStrings escapes a literal newline/carriage-
+// return/tab byte that appears INSIDE a JSON string literal, leaving
+// everything already properly escaped, and everything outside a string,
+// untouched. Confirmed live: the model's own leaked JSON routinely embeds
+// a real multi-line document as a string value using literal newline
+// bytes rather than the required "\n" escape sequence -- technically
+// invalid JSON even though every other part of the structure is
+// well-formed. A spec-compliant parser (Go's encoding/json included)
+// correctly rejects a raw control character inside a string, so without
+// this repair, detection would essentially never fire for the one case
+// -- large, multi-line generated content -- this mitigation exists to
+// catch in the first place.
+func repairRawControlCharsInJSONStrings(s string) string {
+	var out strings.Builder
+	out.Grow(len(s))
+	inString := false
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inString && !escaped {
+			switch c {
+			case '\n':
+				out.WriteString(`\n`)
+				continue
+			case '\r':
+				out.WriteString(`\r`)
+				continue
+			case '\t':
+				out.WriteString(`\t`)
+				continue
+			}
+		}
+		out.WriteByte(c)
+		switch {
+		case !inString:
+			if c == '"' {
+				inString = true
+			}
+		case escaped:
+			escaped = false
+		case c == '\\':
+			escaped = true
+		case c == '"':
+			inString = false
+		}
+	}
+	return out.String()
 }
 
 // completeDetectingLeakedToolCalls wraps completer.Complete with one

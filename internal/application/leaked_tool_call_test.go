@@ -74,11 +74,71 @@ func TestDetectLeakedToolCall_InsideCodeFence(t *testing.T) {
 	}
 }
 
+// TestDetectLeakedToolCall_LiteralNewlineInsideJSONStringValue reproduces
+// the exact live failure this whole mitigation initially missed: the
+// model's own leaked JSON embeds a real multi-line document as a string
+// value using a literal newline BYTE, not the "\n" escape sequence --
+// technically invalid JSON that a spec-compliant parser (encoding/json
+// included) correctly rejects on its own. Without
+// repairRawControlCharsInJSONStrings, this never gets detected at all
+// (confirmed live: 0/6 real chat attempts triggered the nudge before this
+// fix landed, each completing in ~1x a single completion's latency, not
+// ~2x -- direct evidence no retry ever fired).
+func TestDetectLeakedToolCall_LiteralNewlineInsideJSONStringValue(t *testing.T) {
+	content := "<tool_call>\n" +
+		`{"name": "write_file", "arguments": {"filename": "cv.docx", "content": "---` + "\n" +
+		`title: Sample CV` + "\n" +
+		`---` + "\n\n" +
+		`## Summary` + "\n" +
+		`Experienced engineer."}}` + "\n</tool_call>"
+	if !detectLeakedToolCall(content, []domain.ToolDef{writeFileTool}) {
+		t.Error("expected detection despite a literal newline embedded inside the JSON string value")
+	}
+}
+
 func TestDetectLeakedToolCall_AfterAClosedCodeFence(t *testing.T) {
 	content := "Some code:\n```\nfmt.Println(1)\n```\n<tool_call>\n" +
 		`{"name": "write_file", "arguments": {}}` + "\n</tool_call>"
 	if !detectLeakedToolCall(content, []domain.ToolDef{writeFileTool}) {
 		t.Error("expected detection after an earlier, already-closed code fence")
+	}
+}
+
+func TestRepairRawControlCharsInJSONStrings_EscapesLiteralNewlineInsideString(t *testing.T) {
+	in := `{"a": "line one` + "\n" + `line two"}`
+	want := `{"a": "line one\nline two"}`
+	if got := repairRawControlCharsInJSONStrings(in); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestRepairRawControlCharsInJSONStrings_EscapesCarriageReturnAndTabInsideString(t *testing.T) {
+	in := "{\"a\": \"one\ttwo\rthree\"}"
+	want := `{"a": "one\ttwo\rthree"}`
+	if got := repairRawControlCharsInJSONStrings(in); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestRepairRawControlCharsInJSONStrings_LeavesAlreadyEscapedSequencesAlone(t *testing.T) {
+	in := `{"a": "already escaped\nnewline"}`
+	if got := repairRawControlCharsInJSONStrings(in); got != in {
+		t.Errorf("expected an already-valid escape sequence left untouched, got %q", got)
+	}
+}
+
+func TestRepairRawControlCharsInJSONStrings_LeavesWhitespaceOutsideStringsAlone(t *testing.T) {
+	in := "{\n  \"a\": \"b\"\n}"
+	if got := repairRawControlCharsInJSONStrings(in); got != in {
+		t.Errorf("expected structural whitespace outside strings left untouched, got %q", got)
+	}
+}
+
+func TestRepairRawControlCharsInJSONStrings_HandlesEscapedQuoteWithoutEndingStringEarly(t *testing.T) {
+	in := `{"a": "she said \"hi` + "\n" + `there\""}`
+	want := `{"a": "she said \"hi\nthere\""}`
+	if got := repairRawControlCharsInJSONStrings(in); got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
