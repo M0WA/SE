@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"searchengine/internal/adapters/netguard"
 	"searchengine/internal/application"
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
@@ -374,6 +375,13 @@ func (h *Handler) handleAdminImportDocumentFromS3(w http.ResponseWriter, r *http
 // pull down an unbounded amount of data.
 const s3MaxObjectBytes = maxDocumentUploadBytes
 
+// s3HTTPClient routes every dial through netguard.ConfiguredEndpointDialContext,
+// so a redirect hop or a changed DNS answer can't land on a blocked address --
+// the belt-and-suspenders pair to s3GetObject's own pre-request
+// ConfiguredEndpointURLAllowed check, same convention as httpembed/httpchat's
+// identically-purposed client field.
+var s3HTTPClient = &http.Client{Transport: netguard.ConfiguredEndpointTransport()}
+
 // s3GetObject fetches one object via a hand-signed AWS Signature Version 4
 // request -- no AWS SDK dependency, since a single authenticated GET is a
 // small, well-documented algorithm (stdlib crypto/hmac + crypto/sha256
@@ -382,6 +390,13 @@ const s3MaxObjectBytes = maxDocumentUploadBytes
 func s3GetObject(ctx context.Context, req s3ImportRequest) (data []byte, contentType string, err error) {
 	pathStyle := req.Endpoint != ""
 	host, rawURL := s3RequestURL(req, pathStyle)
+	// Same SSRF guard every other admin-configured-endpoint caller in this
+	// codebase uses (httpembed/httpchat's checkEndpointURL) -- an admin
+	// typing "endpoint" controls this URL entirely, so it must never be
+	// allowed to reach a link-local/private/cloud-metadata address.
+	if !netguard.ConfiguredEndpointURLAllowed(rawURL) {
+		return nil, "", fmt.Errorf("endpoint URL is not allowed: %s", rawURL)
+	}
 
 	amzDate := time.Now().UTC().Format("20060102T150405Z")
 	dateStamp := amzDate[:8]
@@ -425,7 +440,7 @@ func s3GetObject(ctx context.Context, req s3ImportRequest) (data []byte, content
 	}
 	httpReq.Header.Set("Authorization", authHeader)
 
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := s3HTTPClient.Do(httpReq)
 	if err != nil {
 		return nil, "", err
 	}

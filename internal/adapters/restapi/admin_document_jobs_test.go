@@ -465,6 +465,30 @@ func TestHandleAdminImportDocumentFromS3_FetchFailureIsBadGateway(t *testing.T) 
 	}
 }
 
+// TestHandleAdminImportDocumentFromS3_LinkLocalEndpointRejected proves the
+// S3 import path is guarded by the same netguard.ConfiguredEndpointURLAllowed
+// check every other admin-configured-endpoint caller in this codebase uses
+// (httpembed/httpchat) -- an admin-supplied "endpoint" must never be able to
+// reach a link-local address (e.g. cloud metadata services).
+func TestHandleAdminImportDocumentFromS3_LinkLocalEndpointRejected(t *testing.T) {
+	h, cookie := documentJobsHandler(t, newFakeDocumentJobStore(), &fakeAdminRepo{})
+	body, _ := json.Marshal(map[string]any{
+		"endpoint": "http://169.254.169.254/",
+		"region":   "us-east-1", "bucket": "b", "key": "k",
+		"access_key_id": "a", "secret_access_key": "s",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/document-jobs/import-s3", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "not allowed") {
+		t.Errorf("expected a not-allowed message, got %q", rec.Body.String())
+	}
+}
+
 func TestHandleAdminImportDocumentFromS3_Succeeds(t *testing.T) {
 	var gotAuth, gotAmzDate, gotContentSHA string
 	s3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

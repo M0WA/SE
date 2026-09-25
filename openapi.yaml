@@ -1913,8 +1913,12 @@ paths:
         (virtual-hosted-style, `https://<bucket>.s3.<region>.amazonaws.com`);
         a non-empty `endpoint` always uses path-style
         (`<endpoint>/<bucket>/<key>`), for any other S3-compatible provider.
-        Otherwise behaves exactly like the multipart upload endpoint above
-        (content-type validation, background indexing).
+        `endpoint` is checked against the same SSRF guard every other
+        admin-configured endpoint in this app goes through (blocks
+        link-local/multicast/unspecified addresses, e.g. cloud metadata
+        services) before any request is made. Otherwise behaves exactly like
+        the multipart upload endpoint above (content-type validation,
+        background indexing).
       requestBody:
         required: true
         content:

@@ -29,6 +29,7 @@ A table of every job this page has created, most recent first — filename, cont
 > **Worth knowing:**
 > - Every upload also shows up in [Jobs](jobs.md), alongside crawl jobs.
 > - S3 credentials are genuinely never persisted anywhere — not in the job record, not in a settings row.
+> - "Endpoint" is checked against the same guard every other admin-configured endpoint in this app goes through — it can't be pointed at a link-local address (e.g. a cloud metadata service), even though it's otherwise fully admin-controlled.
 
 ---
 ← [Documents](documents.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Domain detail](domain-detail.md) →

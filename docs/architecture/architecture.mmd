@@ -65,6 +65,7 @@ flowchart LR
 
   App --> SQLRepo
   RestAPI --> SettingsCrypto
+  RestAPI --> Netguard
   Admin --> CrawlClient
   SQLRepo --> DB
 
@@ -99,7 +100,7 @@ flowchart LR
   MCPVision -->|"HTTP, per-turn bearer token<br/>/account/api/files"| Search
   MCPVision -->|"HTTP, X-Internal-API-Key<br/>/search/api/vision-similarity"| Search
 
-  RestAPI -->|"HTTPS, hand-signed SigV4<br/>per-request creds, never stored"| S3
+  RestAPI -->|"HTTPS, hand-signed SigV4, netguard-checked<br/>per-request creds, never stored"| S3
 
   Nginx -.->|"stub_status via<br/>prometheus-nginx-exporter"| IONOSMon
   SQLRepo -.->|"postgres-exporter"| IONOSMon

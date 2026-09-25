@@ -44,7 +44,7 @@ Pure logic — every file imports only the Go standard library, with no SQL, HTT
 
 ### Ports (`internal/ports`)
 
-33 interfaces defining pure contracts between the core and adapters; the package imports `database/sql` only for the `sql.DBStats` value type, performing no I/O itself.
+34 interfaces defining pure contracts between the core and adapters; the package imports `database/sql` only for the `sql.DBStats` value type, performing no I/O itself.
 
 | Port | Responsibility | Implemented by |
 |---|---|---|
@@ -105,7 +105,7 @@ Orchestration/use-case layer; verified to import only `internal/domain` and `int
 | `browserfetcher` | Renders JS-heavy pages via a headless Chromium or Firefox browser over Playwright. |
 | `htmlparser` | Pure HTML title/text/link/canonical-URL extraction. |
 | `robots` | Fetches, caches, and evaluates robots.txt rules. |
-| `netguard` | Shared SSRF guard (custom `DialContext`), with two policies: a strict one (`AllowedIP`) blocking every private/reserved range, used by every outbound crawler fetch; and a permissive one (`AllowedConfiguredEndpointIP`) for admin-configured endpoints (`httpembed`/`httpchat`'s `BaseURL`/`TokenizeURL`) that only blocks link-local/multicast/unspecified addresses, since a self-hosted embeddings/chat backend legitimately lives on a private network or loopback. |
+| `netguard` | Shared SSRF guard (custom `DialContext`), with two policies: a strict one (`AllowedIP`) blocking every private/reserved range, used by every outbound crawler fetch; and a permissive one (`AllowedConfiguredEndpointIP`) for admin-configured endpoints (`httpembed`/`httpchat`'s `BaseURL`/`TokenizeURL`, and `restapi`'s Document-upload S3 import's `endpoint`) that only blocks link-local/multicast/unspecified addresses, since a self-hosted embeddings/chat backend (or an S3-compatible endpoint) legitimately lives on a private network or loopback. |
 | `hashembed` | Dependency-free fallback embedding provider via feature hashing. |
 | `httpembed` | Calls an OpenAI-compatible embeddings HTTP endpoint (e.g. IONOS AI Model Hub) with chunking and rate-limit-aware retry; outbound calls routed through `netguard`'s configured-endpoint policy. Also implements `ImageEmbedder` -- a chat-completions-style `image_url` content request against the same endpoint, for a vision-language embedding model. |
 | `httpchat` | Calls an OpenAI-compatible chat-completions endpoint; outbound calls routed through `netguard`'s configured-endpoint policy. |
@@ -129,7 +129,7 @@ At runtime, the three binaries coordinate almost entirely through the shared SQL
 
 ## Deployment
 
-The dev/test deployment (`se.mo-sys.de`) runs all three Go binaries as independent, hardened systemd services from one Debian package: `searchengine-search.service`, `searchengine-admin.service`, `searchengine-crawl.service` (each `NoNewPrivileges=true`, `ProtectSystem=strict`, `ProtectHome=true`, `Restart=on-failure`), sharing one system user (`searchengine`) and one `EnvironmentFile` (`/etc/searchengine/searchengine.env`) holding `DB_DRIVER`/`DB_DSN`, admin credentials, per-service listen addresses (loopback-only by default), `CRAWL_SERVER_URL`/`CRAWL_INTERNAL_TOKEN`, and `SETTINGS_ENCRYPTION_KEY`. `postinst` creates the user and starts all three services, but deliberately does **not** install or reload nginx config -- the tracked `packaging/nginx/searchengine.conf` can drift from the live `/etc/nginx/...` unless manually re-synced.
+The dev/test deployment (`se.mo-sys.de`) runs all three Go binaries as independent, hardened systemd services from one Debian package: `searchengine-search.service`, `searchengine-admin.service`, `searchengine-crawl.service` (each `NoNewPrivileges=true`, `ProtectSystem=strict`, `ProtectHome=true`, `Restart=on-failure`), sharing one system user (`searchengine`) and one `EnvironmentFile` (`/etc/searchengine/searchengine.env`) holding `DB_DRIVER`/`DB_DSN`, per-service listen addresses (loopback-only by default), `CRAWL_SERVER_URL`/`CRAWL_INTERNAL_TOKEN`, and `SETTINGS_ENCRYPTION_KEY` -- no admin credentials live here; the first admin account is a `users` row seeded via `packaging/create-admin.sh` (see `docs/manual/installation.md` step 7). `postinst` creates the user and starts all three services, but deliberately does **not** install or reload nginx config -- the tracked `packaging/nginx/searchengine.conf` can drift from the live `/etc/nginx/...` unless manually re-synced.
 
 nginx is the public entrypoint on 80/443, splitting traffic by path: `/login`, `/logout`, `/admin` (a plain string-prefix match, not path-segment-aware) route to admin-server (`127.0.0.1:8081`); everything else falls through to search-server (`127.0.0.1:8080`). crawl-server (`127.0.0.1:8082`) gets no location block and must never be exposed publicly. A separate, non-public block on `127.0.0.1:8090` exposes nginx's `stub_status` for scraping.
 
