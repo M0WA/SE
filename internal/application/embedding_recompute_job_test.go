@@ -17,7 +17,7 @@ import (
 
 // noTitleWeight is passed to RunEmbeddingRecomputeJob(WithStatus) by every
 // test that isn't specifically exercising title/body blending -- 0
-// disables it entirely (see embedTitleWeighted's doc comment), reproducing
+// disables it entirely (see EmbedTitleWeighted's doc comment), reproducing
 // this job's old body-only Embed behavior exactly.
 const noTitleWeight = 0
 
@@ -360,7 +360,7 @@ func (e *textAwareRecomputeEmbedder) Embed(_ context.Context, text string) ([]fl
 func (e *textAwareRecomputeEmbedder) Dimensions() int { return 2 }
 
 // TestRunEmbeddingRecomputeJob_BlendsTitleAndBodyWhenWeightConfigured
-// proves titleWeight actually reaches embedTitleWeighted here too -- the
+// proves titleWeight actually reaches EmbedTitleWeighted here too -- the
 // same mechanism sqlCrawlerService.Crawl uses at crawl time -- so a
 // recompute reproduces exactly what a fresh crawl would now embed, rather
 // than the old body-only recompute that silently dropped every

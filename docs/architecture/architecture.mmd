@@ -8,6 +8,7 @@ flowchart LR
     end
     SearXNG["SearXNG metasearch<br/>127.0.0.1:8888"]
     Sites["Crawled websites"]
+    S3["S3(-compatible) bucket<br/>admin-chosen per import"]
     IONOSMon["IONOS Monitoring Service"]
     Docker["Docker daemon<br/>(local, opt-in via docker group)"]
   end
@@ -97,6 +98,8 @@ flowchart LR
   MCPFiles -->|"HTTP, per-turn bearer token<br/>/account/api/files"| Search
   MCPVision -->|"HTTP, per-turn bearer token<br/>/account/api/files"| Search
   MCPVision -->|"HTTP, X-Internal-API-Key<br/>/search/api/vision-similarity"| Search
+
+  RestAPI -->|"HTTPS, hand-signed SigV4<br/>per-request creds, never stored"| S3
 
   Nginx -.->|"stub_status via<br/>prometheus-nginx-exporter"| IONOSMon
   SQLRepo -.->|"postgres-exporter"| IONOSMon

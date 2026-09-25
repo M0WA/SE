@@ -24,6 +24,10 @@ Click the magnifying-glass icon to load a job's detail: the exact options it ran
 
 Both tables get a regex filter box once they have a row — Schedules filters by seed, Jobs by seed or status text (e.g. "failed"). The job-detail page has its own filter (URL, status, title, or error detail), pagination past 50 attempted pages, and click-to-sort columns. "Clear ended jobs" removes every non-Queued/Running job (Done, Failed, Cancelled) in one action, reporting how many it removed.
 
+## Document uploads table
+
+A third table lists every job from [Document upload](document-upload.md), most recent first -- filename, content type, status, and created-at. It's a separate table from Jobs above rather than merged into it: a Document job is always a single file with none of that table's crawl-specific columns (seed, pages crawled, speed), so forcing the two shapes together would mean mostly-empty cells either way. Its View action opens the same job detail page Document upload's own list links to.
+
 ## One-off Crawl vs. recurring schedule
 
 The Crawl page's form always creates the same kind of record regardless of interval — the difference shows up only here. A one-off crawl (Interval 0) creates an already-due schedule, runs once, and shows up only as a Jobs row, never in Schedules. A repeating crawl shows up in both: as a Schedules row you manage, and, each time it fires, a fresh Jobs row you inspect after. This page keeps polling briefly right after you're redirected from creating a crawl, since the job appears only once crawl-server's scheduler next ticks, typically within seconds.

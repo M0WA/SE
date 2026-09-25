@@ -838,6 +838,28 @@ paths:
         "503": { $ref: "#/components/responses/NotConfigured" }
 
   /admin/api/documents/{id}:
+    get:
+      tags: [admin]
+      summary: One indexed document's full metadata and text
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  url: { type: string }
+                  title: { type: string }
+                  text: { type: string }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
     delete:
       tags: [admin]
       summary: Remove one document
@@ -1833,6 +1855,151 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
           description: The job exists but isn't currently queued or running.
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/document-jobs:
+    get:
+      tags: [admin]
+      summary: List every Document-upload job (most recent first)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/DocumentJob" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    post:
+      tags: [admin]
+      summary: Index a file directly (browser upload)
+      description: >-
+        Multipart upload: `file` (required) plus `index_vocabulary`
+        ("true"/"false", default false). Only plain UTF-8 text and image/*
+        content are supported -- anything else is a 400; attach the file to
+        a chat turn instead, where the model can process it via the
+        sandbox. Responds immediately with the queued job, then indexes it
+        in the background (no PageRank; ANN similarity for both text and
+        images, through the same provider chat's own vision-similarity
+        feature uses for an image).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                index_vocabulary: { type: string, enum: ["true", "false"] }
+      responses:
+        "201":
+          description: Created (queued)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentJob" }
+        "400":
+          description: Missing file field, or unsupported content (neither text nor image).
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/document-jobs/import-s3:
+    post:
+      tags: [admin]
+      summary: Index a file fetched from an S3(-compatible) bucket
+      description: >-
+        Credentials are used once to fetch the object via a hand-signed AWS
+        Signature Version 4 request, then discarded -- never stored,
+        alongside the job. `endpoint` empty selects real AWS
+        (virtual-hosted-style, `https://<bucket>.s3.<region>.amazonaws.com`);
+        a non-empty `endpoint` always uses path-style
+        (`<endpoint>/<bucket>/<key>`), for any other S3-compatible provider.
+        Otherwise behaves exactly like the multipart upload endpoint above
+        (content-type validation, background indexing).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [region, bucket, key, access_key_id, secret_access_key]
+              properties:
+                endpoint: { type: string, description: 'Empty for real AWS.' }
+                region: { type: string }
+                bucket: { type: string }
+                key: { type: string }
+                access_key_id: { type: string }
+                secret_access_key: { type: string }
+                session_token: { type: string, description: Optional. }
+                index_vocabulary: { type: boolean, default: false }
+      responses:
+        "201":
+          description: Created (queued)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentJob" }
+        "400":
+          description: A required field was missing, or the fetched content is unsupported.
+        "502":
+          description: Fetching the object from S3 failed.
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/document-jobs/{id}:
+    get:
+      tags: [admin]
+      summary: One Document-upload job's metadata
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentJob" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    delete:
+      tags: [admin]
+      summary: Remove a Document-upload job
+      description: >-
+        Also removes the resulting indexed document (postings, embeddings,
+        links, versions all cascade with it), if the job finished indexing
+        one.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { ok: { type: boolean } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /admin/api/document-jobs/{id}/data:
+    get:
+      tags: [admin]
+      summary: A Document-upload job's raw uploaded/imported bytes
+      description: >-
+        An image preview, primarily -- works even before indexing finishes.
+        A text job's extracted content is instead read via
+        `GET /admin/api/documents/{doc_id}` once indexed.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/octet-stream: {}
+        "404": { $ref: "#/components/responses/NotFound" }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
   /admin/api/schedules:
@@ -3511,6 +3678,28 @@ components:
             pages:
               type: array
               items: { $ref: "#/components/schemas/CrawlPageEvent" }
+
+    DocumentJob:
+      description: >-
+        One admin-triggered Document-upload job -- always exactly one file,
+        indexed with no PageRank and, for text content, an optional
+        vocabulary/BM25-postings toggle. See /admin/api/document-jobs.
+      type: object
+      properties:
+        id: { type: string }
+        filename: { type: string }
+        content_type: { type: string }
+        size: { type: integer }
+        source: { type: string, enum: [upload, s3] }
+        index_vocabulary: { type: boolean }
+        status: { type: string, enum: [queued, running, done, failed] }
+        doc_id:
+          type: string
+          description: The resulting documents.id once indexed -- empty until Status is "done".
+        error: { type: string }
+        created_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
 
     ScheduledCrawlOptions:
       description: >-

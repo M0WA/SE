@@ -56,7 +56,7 @@ func (c *sqlCrawlerService) Crawl(ctx context.Context, opts ports.CrawlOptions, 
 		v := c.settings.Get()
 		embeddings := make(map[string][]float32, len(c.embedders))
 		for provider, embedder := range c.embedders {
-			vec, err := embedTitleWeighted(ctx, embedder.Embed, doc.Title, doc.Text, v.EmbeddingTitleWeight)
+			vec, err := EmbedTitleWeighted(ctx, embedder.Embed, doc.Title, doc.Text, v.EmbeddingTitleWeight)
 			if err != nil {
 				return err
 			}

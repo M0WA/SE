@@ -861,8 +861,25 @@ func (r *Repository) Ping(ctx context.Context) error {
 // SaveDocument upserts doc keyed by its ID (deterministic from URL, so a
 // re-crawl lands on the same row). When content changes, the previous
 // version is archived to document_versions and pruned to maxVersions-1
-// (oldest first); unchanged content just refreshes crawled_at.
+// (oldest first); unchanged content just refreshes crawled_at. Always
+// indexes vocabulary (BM25 postings) -- the crawl path's only entry point,
+// where every document is meant to surface in ordinary keyword search. See
+// SaveDocumentOptionalVocabulary for the Document-upload path, which can
+// skip that.
 func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embeddings map[string][]float32, maxVersions, titleWeight int) error {
+	return r.saveDocument(ctx, doc, embeddings, maxVersions, titleWeight, true)
+}
+
+// SaveDocumentOptionalVocabulary is SaveDocument's Document-upload sibling:
+// identical indexing (embeddings, dedup fingerprints, version history), but
+// indexVocabulary=false skips BM25 postings entirely -- for uploaded
+// content an admin wants findable only via similarity search, not ordinary
+// keyword search.
+func (r *Repository) SaveDocumentOptionalVocabulary(ctx context.Context, doc domain.Document, embeddings map[string][]float32, maxVersions, titleWeight int, indexVocabulary bool) error {
+	return r.saveDocument(ctx, doc, embeddings, maxVersions, titleWeight, indexVocabulary)
+}
+
+func (r *Repository) saveDocument(ctx context.Context, doc domain.Document, embeddings map[string][]float32, maxVersions, titleWeight int, indexVocabulary bool) error {
 	// The title is repeated titleWeight times before the body -- no
 	// BM25F-style fielded formula, so this is how a title match counts
 	// more than a body match. A non-positive value (e.g. an older test's
@@ -977,25 +994,30 @@ func (r *Repository) SaveDocument(ctx context.Context, doc domain.Document, embe
 		return err
 	}
 
+	// Always clears any postings from a prior save of this same doc.ID --
+	// needed even when indexVocabulary is now false, in case an earlier
+	// save (or a re-import with the toggle flipped) left rows behind.
 	if _, err := tx.ExecContext(ctx, r.ph(`DELETE FROM postings WHERE doc_id = %s`, 1), doc.ID); err != nil {
 		return fmt.Errorf("deleting old postings: %w", err)
 	}
 
-	counts := make(map[string]int)
-	for _, t := range tokens {
-		counts[t]++
-	}
-	terms := make([]string, 0, len(counts))
-	for term := range counts {
-		terms = append(terms, term)
-	}
-	for start := 0; start < len(terms); start += saveDocumentInsertBatchSize {
-		end := start + saveDocumentInsertBatchSize
-		if end > len(terms) {
-			end = len(terms)
+	if indexVocabulary {
+		counts := make(map[string]int)
+		for _, t := range tokens {
+			counts[t]++
 		}
-		if err := r.insertPostingsBatch(ctx, tx, doc.ID, terms[start:end], counts); err != nil {
-			return err
+		terms := make([]string, 0, len(counts))
+		for term := range counts {
+			terms = append(terms, term)
+		}
+		for start := 0; start < len(terms); start += saveDocumentInsertBatchSize {
+			end := start + saveDocumentInsertBatchSize
+			if end > len(terms) {
+				end = len(terms)
+			}
+			if err := r.insertPostingsBatch(ctx, tx, doc.ID, terms[start:end], counts); err != nil {
+				return err
+			}
 		}
 	}
 

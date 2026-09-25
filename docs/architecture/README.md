@@ -57,11 +57,12 @@ Pure logic — every file imports only the Go standard library, with no SQL, HTT
 | `SessionStore` | Shared-DB login session tokens, each carrying a role (admin vs. regular user) and, for a regular user, which `User` it belongs to. | `sqlrepo` |
 | `UserStore` | CRUD for every DB-backed account -- there is no separate hardcoded admin account; `User.IsAdmin` is what additionally grants `/admin/*` access on top of the same self-service search/chat access every account gets. An admin manages create/delete/`IsAdmin`; each account self-serves its own password and personal chat prompt (`User.CustomPrompt`, injected into every turn) via search-server's `/account` page. | `sqlrepo` |
 | `HealthChecker` | Cheap DB liveness check backing `/healthz`. | `sqlrepo` |
-| `AdminRepository` | Read-mostly admin diagnostics port (stats, listings, time series, pool stats). | `sqlrepo` |
+| `AdminRepository` | Read-mostly admin diagnostics port (stats, listings, time series, pool stats); also carries `SaveDocumentOptionalVocabulary` (the Document-upload feature's own indexing entry point -- see `DocumentJobStore` below). | `sqlrepo` |
 | `SearchService` | Primary driving port for public search. | `internal/application` (hybrid search use case) |
 | `CrawlerService` | Executes an actual crawl with live per-page progress. | `internal/application` (crawl loop) |
 | `CrawlJobService` | Network contract admin-server uses to poll/control crawl-server's jobs. | HTTP client adapter (`crawlclient`) |
 | `CrawlJobStore` | crawl-server's own job/page-history persistence. | `domain.CrawlJobStore` (in-memory/test), `sqlrepo` (production) |
+| `DocumentJobStore` | admin-server's own persistence for Document-upload jobs (see `admin_document_jobs.go`) -- always local/synchronous, unlike `CrawlJobStore` there's no separate crawl-server network hop. Method names are fully qualified (`CreateDocumentJob`, not `Create`) since the same `*sqlrepo.Repository` also implements `CrawlJobStore`'s bare `Create`/`Get`/`List`/`Delete` for a different table. | `sqlrepo` |
 | `DebugSearchService` | Raw, unblended BM25/semantic/PageRank score breakdown for admin diagnostics. | `internal/application` |
 | `SettingsStore` | Generic key/value settings persistence shared by every process. | `sqlrepo` |
 | `ScheduledCrawlStore` | CRUD + scheduling operations on `ScheduledCrawl`, shared by admin CRUD and the crawl-server ticker. | `sqlrepo` |
@@ -98,7 +99,7 @@ Orchestration/use-case layer; verified to import only `internal/domain` and `int
 
 | Adapter | Responsibility |
 |---|---|
-| `sqlrepo` | SQL persistence layer shared by all three binaries (SQLite locally/CI, Postgres in the dev deployment); implements `SQLRepository`, `PageRankRepository`, `ContentDedupRepository`, `EmbeddingRepository`, `SemanticMatcher`, `SessionStore`, `AdminRepository`, `CrawlJobStore`, `SettingsStore`, `ScheduledCrawlStore`, `EmbeddingEndpointStore`, `ChatEndpointStore`, `ChatVisionStore`, `UserStore`, `FileStore`, `ChatStore`, and more. |
+| `sqlrepo` | SQL persistence layer shared by all three binaries (SQLite locally/CI, Postgres in the dev deployment); implements `SQLRepository`, `PageRankRepository`, `ContentDedupRepository`, `EmbeddingRepository`, `SemanticMatcher`, `SessionStore`, `AdminRepository`, `CrawlJobStore`, `DocumentJobStore`, `SettingsStore`, `ScheduledCrawlStore`, `EmbeddingEndpointStore`, `ChatEndpointStore`, `ChatVisionStore`, `UserStore`, `FileStore`, `ChatStore`, and more. |
 | `restapi` | HTTP handler layer for both the public search UI/API and the admin UI/API — routing, JSON REST endpoints, embedded static assets, auth/session and crawl-internal-token checks. |
 | `httpfetcher` | Default plain-HTTP page fetcher with timeout/UA/cookie/basic-auth support, routed through `netguard`. |
 | `browserfetcher` | Renders JS-heavy pages via a headless Chromium or Firefox browser over Playwright. |

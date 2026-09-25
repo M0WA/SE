@@ -161,6 +161,7 @@ func main() {
 		{"admin: agent with empty mcp_server_ids gets no tools", c.checkAgentToolIsolation},
 		{"admin: embedding endpoints (list)", c.checkAdminEmbeddingEndpointsList},
 		{"admin: embeddings recompute status", c.checkAdminEmbeddingsRecomputeStatus},
+		{"admin: document upload indexes a text file, then cleans up", c.checkAdminDocumentUpload},
 		// Last admin-session check on purpose -- see checkLogout's own doc
 		// comment for why.
 		{"auth: logout clears session", c.checkLogout},
@@ -2210,6 +2211,124 @@ func (c *client) checkAdminEmbeddingsRecomputeStatus() error {
 	}
 	if status != http.StatusOK {
 		return fmt.Errorf("expected 200, got %d", status)
+	}
+	return nil
+}
+
+type documentJobResponse struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	DocID  string `json:"doc_id"`
+	Error  string `json:"error"`
+}
+
+// uploadDocumentJob POSTs a multipart/form-data "file" field (plus
+// "index_vocabulary") to /admin/api/document-jobs -- the same encoding
+// admin_document_upload.js's own upload form uses.
+func (c *client) uploadDocumentJob(filename, contentType string, data []byte, indexVocabulary bool) (documentJobResponse, error) {
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	if err := w.WriteField("index_vocabulary", strconv.FormatBool(indexVocabulary)); err != nil {
+		return documentJobResponse{}, err
+	}
+	part, err := w.CreatePart(map[string][]string{
+		"Content-Disposition": {fmt.Sprintf(`form-data; name="file"; filename=%q`, filename)},
+		headerContentType:     {contentType},
+	})
+	if err != nil {
+		return documentJobResponse{}, err
+	}
+	if _, err := part.Write(data); err != nil {
+		return documentJobResponse{}, err
+	}
+	if err := w.Close(); err != nil {
+		return documentJobResponse{}, err
+	}
+	req, err := http.NewRequest(http.MethodPost, c.base+"/admin/api/document-jobs", &buf)
+	if err != nil {
+		return documentJobResponse{}, err
+	}
+	req.Header.Set(headerContentType, w.FormDataContentType())
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return documentJobResponse{}, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return documentJobResponse{}, err
+	}
+	if resp.StatusCode >= 400 {
+		return documentJobResponse{}, fmt.Errorf("POST /admin/api/document-jobs: %d: %s", resp.StatusCode, truncate(body, 300))
+	}
+	var out documentJobResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		return documentJobResponse{}, fmt.Errorf("decoding upload response %q: %w", truncate(body, 200), err)
+	}
+	return out, nil
+}
+
+// checkAdminDocumentUpload proves the admin Document-upload feature end to
+// end against a real deployment: uploads a small text fixture, polls until
+// it's indexed, confirms the resulting document's text round-trips through
+// GET /admin/api/documents/{doc_id}, then deletes the job (and its
+// document) to leave the corpus exactly as it found it -- safe and
+// reversible, unlike a real crawl (see this file's own top doc comment for
+// why a live crawl is deliberately never triggered here).
+func (c *client) checkAdminDocumentUpload() error {
+	const marker = "E2E-CHECK-DOCUMENT-UPLOAD-MARKER"
+	job, err := c.uploadDocumentJob("e2e-check.txt", "text/plain", []byte(marker), true)
+	if err != nil {
+		return err
+	}
+	defer c.deleteRequest("/admin/api/document-jobs/" + job.ID)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var got documentJobResponse
+		status, err := c.getJSON("/admin/api/document-jobs/"+job.ID, &got)
+		if err != nil {
+			return err
+		}
+		if status != http.StatusOK {
+			return fmt.Errorf("expected 200 polling job status, got %d", status)
+		}
+		if got.Status == "done" {
+			job = got
+			break
+		}
+		if got.Status == "failed" {
+			return fmt.Errorf("document job failed: %s", got.Error)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for document job to finish (last status: %s)", got.Status)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if job.DocID == "" {
+		return fmt.Errorf("expected doc_id to be set once done")
+	}
+
+	var doc struct {
+		Text string `json:"text"`
+	}
+	status, err := c.getJSON("/admin/api/documents/"+job.DocID, &doc)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("expected 200 fetching indexed document, got %d", status)
+	}
+	if doc.Text != marker {
+		return fmt.Errorf("expected the indexed text to round-trip exactly, got %q", doc.Text)
+	}
+
+	status, err = c.deleteRequest("/admin/api/document-jobs/" + job.ID)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("expected 200 deleting the job, got %d", status)
 	}
 	return nil
 }

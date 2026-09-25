@@ -41,4 +41,4 @@ Removes every page in the domain in one action. After confirming, the server que
 > - If "Delete all" reports stuck pages, check the server log for the failed document IDs rather than assuming the whole domain is gone.
 
 ---
-← [Documents](documents.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Vocabulary term detail](vocabulary-term.md) →
+← [Document upload](document-upload.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Vocabulary term detail](vocabulary-term.md) →

@@ -22,6 +22,7 @@ Everything about running and using SE: installing and configuring a deployment, 
 ## Content
 
 - **[Documents](documents.md)** -- Where you find indexed pages and their domains, and where the crawl vocabulary lives.
+- **[Document upload](document-upload.md)** -- Index a plain text or image file directly, with no PageRank and an optional vocabulary toggle.
 - **[Domain detail](domain-detail.md)** -- The complete, current view of every page indexed under one domain.
 - **[Vocabulary term detail](vocabulary-term.md)** -- Shows exactly which indexed pages contain one specific term, how strongly, and with what context -- the postings list underlying BM25 ranking and typo/fuzzy correction.
 - **[Content Dedup](content-dedup.md)** -- Finds documents byte-identical or near-identical to another already-indexed one and merges each group into one canonical document.
