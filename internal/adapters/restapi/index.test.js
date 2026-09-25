@@ -1573,7 +1573,10 @@ test('sendChatMessage shows the persistent token-usage badge next to the Web che
   assert.equal(document.getElementById('chat-token-usage-summary').textContent, '20 / 1,000');
   const donut = document.getElementById('chat-token-usage-donut');
   assert.equal(donut.querySelectorAll('svg.donut-chart').length, 1);
-  assert.equal(donut.querySelectorAll('.donut-legend-row').length, 5);
+  // 5 fixed categories + a trailing Free row (1,000 - 20 remaining).
+  assert.equal(donut.querySelectorAll('.donut-legend-row').length, 6);
+  const legendText = Array.from(donut.querySelectorAll('.donut-legend-row')).map((row) => row.textContent);
+  assert.ok(legendText.some((text) => text.startsWith('Free: 980')));
   const mini = document.getElementById('chat-token-usage-mini');
   assert.equal(mini.querySelectorAll('svg.donut-chart').length, 1);
 });
@@ -1625,6 +1628,21 @@ test('tokenUsageSegments maps the flat response shape to the five fixed chart se
   assert.deepEqual(segments.map((s) => s.label), ['Global prompt', 'Tool prompts', 'Your prompt', 'Agent prompt', 'Conversation history']);
 });
 
+test('tokenUsageSegments appends a Free segment sized to the remaining context budget when max_context_tokens is known', () => {
+  const { tokenUsageSegments } = loadFixture();
+  const segments = tokenUsageSegments({ global_prompt_tokens: 100, tool_prompt_tokens: 0, user_prompt_tokens: 0, agent_prompt_tokens: 0, history_tokens: 0, max_context_tokens: 1000 });
+  assert.equal(segments.length, 6);
+  const free = segments[segments.length - 1];
+  assert.equal(free.label, 'Free');
+  assert.equal(free.value, 900);
+});
+
+test('tokenUsageSegments floors Free at zero when usage meets or exceeds max_context_tokens', () => {
+  const { tokenUsageSegments } = loadFixture();
+  const segments = tokenUsageSegments({ global_prompt_tokens: 1200, tool_prompt_tokens: 0, user_prompt_tokens: 0, agent_prompt_tokens: 0, history_tokens: 0, max_context_tokens: 1000 });
+  assert.equal(segments[segments.length - 1].value, 0);
+});
+
 test('renderTokenUsage renders an all-zero donut, without a max-context suffix, for a falsy tokenUsage', () => {
   const { renderTokenUsage } = loadFixture();
   renderTokenUsage(null);
@@ -1645,6 +1663,14 @@ test('renderTokenUsage centers a rounded usage percentage in the hover donut onc
   // The always-visible mini donut is too small to hold legible text.
   const mini = document.getElementById('chat-token-usage-mini');
   assert.equal(mini.querySelector('.donut-center-label'), null);
+});
+
+test('renderTokenUsage shows a Free row in the legend once max_context_tokens is known', () => {
+  const { renderTokenUsage } = loadFixture();
+  renderTokenUsage({ global_prompt_tokens: 100, tool_prompt_tokens: 0, user_prompt_tokens: 0, agent_prompt_tokens: 0, history_tokens: 0, max_context_tokens: 1000 });
+  const donut = document.getElementById('chat-token-usage-donut');
+  const rows = Array.from(donut.querySelectorAll('.donut-legend-row')).map((row) => row.textContent);
+  assert.ok(rows.some((text) => text.startsWith('Free: 900')));
 });
 
 test('sendChatMessage renders the server error text on a non-ok response', async () => {
