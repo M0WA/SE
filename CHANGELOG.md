@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.98 - 2026-09-26
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* vision: add GPU mode (Vision) settings data model and admin UI by @M0WA in https://github.com/M0WA/SE/pull/372
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.97...v4.13.98
+
+
 ## v4.13.97 - 2026-09-26
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
