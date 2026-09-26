@@ -171,6 +171,101 @@ jobs:
           name: searchengine-ubuntu-amd64-deb
           path: build/searchengine_${{ env.PKG_VERSION }}_ubuntu_amd64.deb
 
+  # Separate .deb from package-debian/package-ubuntu above -- see
+  # packaging/gpu-control/README.md for why gpu-control is never bundled
+  # into the main searchengine package.
+  package-debian-gpu-control:
+    name: Build .deb (Debian, gpu-control)
+    needs: test
+    runs-on: ubuntu-latest
+    container: golang:1.27-bookworm
+    permissions:
+      contents: read
+    steps:
+      - run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - env:
+          CGO_ENABLED: "0"
+        run: make deb-gpu-control PKG_VERSION=${{ env.PKG_VERSION }}
+      - run: mv build/searchengine-gpu-control_${{ env.PKG_VERSION }}_amd64.deb build/searchengine-gpu-control_${{ env.PKG_VERSION }}_debian_amd64.deb
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: searchengine-gpu-control-debian-amd64-deb
+          path: build/searchengine-gpu-control_${{ env.PKG_VERSION }}_debian_amd64.deb
+
+  package-ubuntu-gpu-control:
+    name: Build .deb (Ubuntu, gpu-control)
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - env:
+          CGO_ENABLED: "0"
+        run: make deb-gpu-control PKG_VERSION=${{ env.PKG_VERSION }}
+      - run: mv build/searchengine-gpu-control_${{ env.PKG_VERSION }}_amd64.deb build/searchengine-gpu-control_${{ env.PKG_VERSION }}_ubuntu_amd64.deb
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: searchengine-gpu-control-ubuntu-amd64-deb
+          path: build/searchengine-gpu-control_${{ env.PKG_VERSION }}_ubuntu_amd64.deb
+
+  verify-install-gpu-control:
+    name: Verify install (${{ matrix.distro }}, gpu-control)
+    needs: [package-debian-gpu-control, package-ubuntu-gpu-control]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: debian
+            image: debian:12
+            artifact: searchengine-gpu-control-debian-amd64-deb
+          - distro: ubuntu
+            image: ubuntu:22.04
+            artifact: searchengine-gpu-control-ubuntu-amd64-deb
+    container: ${{ matrix.image }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.artifact }}
+          path: pkg
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /var/cache/apt/archives
+          key: apt-archives-${{ matrix.distro }}-v1
+      - name: Install package
+        run: |
+          for attempt in 1 2; do
+            apt-get update && apt-get install -y ./pkg/*.deb && break
+            if [ "$attempt" = 2 ]; then exit 1; fi
+            echo "apt-get install failed, retrying in 10s (attempt $attempt/2)..."
+            sleep 10
+          done
+      - name: Smoke test
+        run: |
+          dpkg -s searchengine-gpu-control
+          test -x /usr/bin/searchengine-gpu-control
+          test -f /etc/searchengine/gpu-control.env
+          test -f /lib/systemd/system/searchengine-gpu-control.service
+          # No systemd PID 1 in this container, so postinst's own
+          # [ -d /run/systemd/system ] check already skipped enable/start
+          # -- this instead directly proves main()'s own "refuse to start
+          # with no token" behavior (see cmd/gpu-control/main.go), the one
+          # piece of that file no Go unit test can cover (see
+          # sonar-project.properties' cmd/*/main.go exclusion).
+          if timeout 2 /usr/bin/searchengine-gpu-control; then
+            echo "expected searchengine-gpu-control to refuse to start with no GPU_CONTROL_TOKEN"
+            exit 1
+          fi
+
   verify-install:
     name: Verify install (${{ matrix.distro }})
     needs: [package-debian, package-ubuntu]

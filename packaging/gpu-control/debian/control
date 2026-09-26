@@ -1,0 +1,17 @@
+Package: searchengine-gpu-control
+Version: 1.0.0
+Section: admin
+Priority: optional
+Architecture: amd64
+Maintainer: Your Name <your-email@example.com>
+Depends: libc6 (>= 2.31), systemd
+Description: GPU control service for SE's Vision (image/video generation) mode
+ A small, root-privileged HTTP control service, installed only on the
+ dedicated GPU host, that switches the shared GPU between its normal
+ chat role (vllm-chat.service) and image/video generation
+ (comfyui.service, LTX-2.5), since both can't fit in VRAM at once. See
+ https://github.com/M0WA/SE/blob/main/packaging/gpu-control/README.md.
+ .
+ Deliberately packaged separately from the main searchengine package --
+ it runs as root and holds a distinct secret (GPU_CONTROL_TOKEN), neither
+ of which the main search/admin/crawl host should have.

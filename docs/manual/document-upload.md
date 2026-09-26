@@ -19,7 +19,7 @@ An alternative to a browser upload: fetch an object from an S3(-compatible) buck
 ## What happens after upload
 
 - **Text**: indexed for similarity search against every enabled embedding provider, and — if the checkbox was on — for keyword/BM25 search too.
-- **Image**: embedded for similarity search only through the same provider Chat's own vision-similarity feature uses (Settings → Chat → Vision → Similarity search). If that isn't configured, the image still gets indexed with its metadata, just without a similarity vector.
+- **Image**: embedded for similarity search only through the same provider Chat's own vision-similarity feature uses (Settings → Chat → Image understanding → Similarity search). If that isn't configured, the image still gets indexed with its metadata, just without a similarity vector.
 - Either way, the resulting document has no PageRank and never appears in a crawl's link graph.
 
 ## Past uploads

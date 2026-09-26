@@ -5,6 +5,8 @@ flowchart LR
     subgraph GPUBox["gpu.mo-sys.de (H200 NVL, vLLM)"]
       EmbedAPI["vLLM: Qwen3-VL-Embedding-8B<br/>pooling/embed mode, :8000"]
       ChatAPI["vLLM: Qwen2.5-72B-Instruct-FP8<br/>chat/generate mode, :8001"]
+      ComfyUI["ComfyUI + LTX-2.5<br/>image/video generation, :8188<br/>(Vision mode only, mutually<br/>exclusive with ChatAPI)"]
+      GPUControl["cmd/gpu-control<br/>root, private LAN, :8002"]
     end
     SearXNG["SearXNG metasearch<br/>127.0.0.1:8888"]
     Sites["Crawled websites"]
@@ -105,3 +107,6 @@ flowchart LR
   Nginx -.->|"stub_status via<br/>prometheus-nginx-exporter"| IONOSMon
   SQLRepo -.->|"postgres-exporter"| IONOSMon
   GPUBox -.->|"vLLM /metrics +<br/>DCGM GPU exporter"| IONOSMon
+
+  GPUControl -.->|"systemctl stop/start"| ChatAPI
+  GPUControl -.->|"systemctl stop/start"| ComfyUI

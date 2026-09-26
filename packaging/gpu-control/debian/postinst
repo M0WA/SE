@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+chmod 600 /etc/searchengine/gpu-control.env
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+    systemctl enable searchengine-gpu-control.service
+    systemctl start searchengine-gpu-control.service || true
+fi
+echo "searchengine-gpu-control installed. Set GPU_CONTROL_TOKEN in /etc/searchengine/gpu-control.env, then: systemctl restart searchengine-gpu-control"
+exit 0

@@ -1,10 +1,11 @@
-BINARY      := searchengine
-PKG_VERSION := 1.0.0
-BUILD_DIR   := build
-DEB_DIR     := $(BUILD_DIR)/deb
-BINARIES    := search admin crawl mcp-web mcp-datetime mcp-sandbox mcp-files mcp-vision
+BINARY          := searchengine
+PKG_VERSION     := 1.0.0
+BUILD_DIR       := build
+DEB_DIR         := $(BUILD_DIR)/deb
+GPU_CONTROL_DEB_DIR := $(BUILD_DIR)/deb-gpu-control
+BINARIES        := search admin crawl mcp-web mcp-datetime mcp-sandbox mcp-files mcp-vision
 
-.PHONY: all build test test-race cover coverage-check lint clean deb run docker
+.PHONY: all build build-gpu-control test test-race cover coverage-check lint clean deb deb-gpu-control run docker
 
 all: test build
 
@@ -17,6 +18,12 @@ build:
 	go build -o $(BUILD_DIR)/$(BINARY)-mcp-sandbox ./cmd/mcp-sandbox
 	go build -o $(BUILD_DIR)/$(BINARY)-mcp-files ./cmd/mcp-files
 	go build -o $(BUILD_DIR)/$(BINARY)-mcp-vision ./cmd/mcp-vision
+
+# gpu-control is built separately from build/deb above -- it's packaged
+# into its own .deb (see deb-gpu-control below) since it installs only on
+# gpu.mo-sys.de, never alongside search/admin/crawl.
+build-gpu-control:
+	go build -o $(BUILD_DIR)/$(BINARY)-gpu-control ./cmd/gpu-control
 
 run: build
 	./$(BUILD_DIR)/$(BINARY)-search
@@ -64,6 +71,25 @@ deb: build
 	chmod 755 $(DEB_DIR)/DEBIAN/postinst $(DEB_DIR)/DEBIAN/prerm
 	dpkg-deb --build --root-owner-group $(DEB_DIR) $(BUILD_DIR)/$(BINARY)_$(PKG_VERSION)_amd64.deb
 	@echo "Package built: $(BUILD_DIR)/$(BINARY)_$(PKG_VERSION)_amd64.deb"
+
+# Separate .deb, separate install target (gpu.mo-sys.de only) -- see
+# packaging/gpu-control/README.md for why this isn't folded into deb above.
+deb-gpu-control: build-gpu-control
+	mkdir -p $(GPU_CONTROL_DEB_DIR)/DEBIAN
+	mkdir -p $(GPU_CONTROL_DEB_DIR)/usr/bin
+	mkdir -p $(GPU_CONTROL_DEB_DIR)/lib/systemd/system
+	mkdir -p $(GPU_CONTROL_DEB_DIR)/etc/searchengine
+	cp $(BUILD_DIR)/$(BINARY)-gpu-control $(GPU_CONTROL_DEB_DIR)/usr/bin/searchengine-gpu-control
+	chmod 755 $(GPU_CONTROL_DEB_DIR)/usr/bin/searchengine-gpu-control
+	sed 's/^Version: .*/Version: $(PKG_VERSION)/' packaging/gpu-control/debian/control > $(GPU_CONTROL_DEB_DIR)/DEBIAN/control
+	cp packaging/gpu-control/debian/postinst $(GPU_CONTROL_DEB_DIR)/DEBIAN/postinst
+	cp packaging/gpu-control/debian/prerm $(GPU_CONTROL_DEB_DIR)/DEBIAN/prerm
+	cp packaging/gpu-control/searchengine-gpu-control.service $(GPU_CONTROL_DEB_DIR)/lib/systemd/system/searchengine-gpu-control.service
+	cp packaging/gpu-control/gpu-control.env $(GPU_CONTROL_DEB_DIR)/etc/searchengine/gpu-control.env
+	echo "/etc/searchengine/gpu-control.env" > $(GPU_CONTROL_DEB_DIR)/DEBIAN/conffiles
+	chmod 755 $(GPU_CONTROL_DEB_DIR)/DEBIAN/postinst $(GPU_CONTROL_DEB_DIR)/DEBIAN/prerm
+	dpkg-deb --build --root-owner-group $(GPU_CONTROL_DEB_DIR) $(BUILD_DIR)/searchengine-gpu-control_$(PKG_VERSION)_amd64.deb
+	@echo "Package built: $(BUILD_DIR)/searchengine-gpu-control_$(PKG_VERSION)_amd64.deb"
 
 docker:
 	docker build -t $(BINARY):$(PKG_VERSION) .
