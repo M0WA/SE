@@ -12,6 +12,8 @@ A plain virtual machine -- [IONOS Cloud Compute Engine](https://cloud.ionos.de/c
 
 An [IONOS GPU Server](https://www.ionos.de/server/gpu-server) -- a dedicated GPU host running the two vLLM processes (the reference deployment uses one NVIDIA H200 NVL for both embedding and chat inference). See [Installation](installation.md) step 17 and [packaging/prometheus-gpu/README.md](https://github.com/M0WA/SE/blob/main/packaging/prometheus-gpu/README.md) for monitoring it.
 
+This same host also runs `cmd/gpu-control` (a separate `.deb`, see [packaging/gpu-control/README.md](https://github.com/M0WA/SE/blob/main/packaging/gpu-control/README.md)) and, when the public chat page's GPU mode (Vision) feature is enabled, ComfyUI+LTX-2.5 -- since generation and chat can't both fit in the GPU's VRAM at once, `gpu-control` switches between them on demand.
+
 ## Hosted AI instead of self-hosting
 
 If managing GPU capacity isn't for you, [IONOS AI Model Hub](https://cloud.ionos.de/managed/ai-model-hub) is a managed, hosted-model alternative to running vLLM yourself. [Embedding endpoints](embedding-endpoint-detail.md) and [Chat settings](chat-settings.md) both just need a plain OpenAI-compatible HTTP endpoint, so pointing at Model Hub instead needs no code changes, only a different Base URL/API key.
@@ -23,7 +25,7 @@ curl https://inference.de-txl.ionos.com/v1/models \
   -H "Authorization: Bearer $IONOS_TOKEN"
 ```
 
-This reference deployment actually uses Model Hub for one capability that isn't a good fit for the self-hosted H200 above: [Chat settings](chat-settings.md)'s Vision -> Captioning endpoint, pointed at Model Hub with model `Qwen/Qwen3.5-397B-A17B` -- a vision-capable chat-completions model, distinct from the embedding-only models the self-hosted GPU serves. Vision -> Similarity search, by contrast, still reuses the self-hosted H200 embedding endpoint (see [Embedding endpoints](embedding-endpoints.md)), since that's the same model search's own ranking already depends on.
+This reference deployment actually uses Model Hub for one capability that isn't a good fit for the self-hosted H200 above: [Chat settings](chat-settings.md)'s Image understanding -> Captioning endpoint, pointed at Model Hub with model `Qwen/Qwen3.5-397B-A17B` -- a vision-capable chat-completions model, distinct from the embedding-only models the self-hosted GPU serves. Image understanding -> Similarity search, by contrast, still reuses the self-hosted H200 embedding endpoint (see [Embedding endpoints](embedding-endpoints.md)), since that's the same model search's own ranking already depends on.
 
 [Embedding endpoints](embedding-endpoints.md) also lists a handful of other Model Hub models on this deployment, pre-staged as **disabled** rows (their Base URL/Model already filled in against Model Hub's endpoint, no API key set) -- convenience placeholders an admin can enable and add a key to, rather than creating a new endpoint from scratch, if search's active provider ever needs to change. This is deployment-specific data seeded directly into this instance's database, not something a fresh install gets automatically -- unlike the starter agents `internal/adapters/sqlrepo/default_agents.go` seeds for every install, there's no code-level default for a starter embedding-endpoint catalog.
 

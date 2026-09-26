@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    if systemctl is-active --quiet searchengine-gpu-control; then
+        systemctl stop searchengine-gpu-control
+    fi
+    systemctl disable searchengine-gpu-control.service || true
+fi
+exit 0

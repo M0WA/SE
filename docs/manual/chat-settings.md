@@ -45,7 +45,7 @@ Configures what the mcp-vision MCP server's two tools can do with an image attac
 
 **Captioning** lets the vision_caption tool describe an image (or answer a question about it) via a configured vision-language chat-completions endpoint — a different capability from Similarity (generation, not embedding/search), almost certainly a different model deployment (an embedding-only model, like the one commonly used for Similarity, cannot do this). Base URL/Model/API key work exactly like the chat endpoint's own fields above — root URL only (posted to `<base_url>/chat/completions`), API key blank-means-unchanged with its own "Remove the stored API key" checkbox. A vision-capable hosted model (e.g. [IONOS AI Model Hub](infrastructure.md#hosted-ai-instead-of-self-hosting)) is a common choice here when self-hosting a second, vision-capable model alongside the main chat endpoint isn't worth the GPU capacity.
 
-> **Worth knowing (Vision):**
+> **Worth knowing (Image understanding):**
 > - Both tools independently report themselves unavailable to the model (not an error, just a plain "not configured" message) when their own Enabled toggle is off or unconfigured — enabling one doesn't require the other.
 > - The Image analyst agent (Chat -> Agents) is the suggested starting point for using either tool from the chat page.
 > - Either tool accepts an already-attached file **or** a plain image URL the model was given (e.g. one the user pasted in chat), never both at once. A pasted URL is fetched directly by mcp-vision, guarded against SSRF the same way crawling/web_fetch are — an internal/private-network URL is always rejected.

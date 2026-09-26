@@ -17,12 +17,14 @@ also served as a site at https://m0wa.github.io/SE/.
 | `cmd/admin` | Internal. Every admin settings page and `/admin/api/*`. |
 | `cmd/crawl` | Internal only. Runs crawls, tracks job state. |
 | `cmd/mcp-{web,datetime,sandbox,files,vision}` | First-party MCP tool servers, spawned on demand as `stdio` subprocesses. |
+| `cmd/gpu-control` | Internal only, installs on the dedicated GPU host, never alongside the others. Root-privileged; switches the shared GPU between chat and Vision (image/video generation). Packaged separately -- see [packaging/gpu-control/](packaging/gpu-control/README.md). |
 
 ## Packaging
 
 | Directory | What it's for |
 |---|---|
 | [packaging/docker/](packaging/docker/README.md) | `docker compose up` -- an alternative to the `.deb` install below, same three binaries + Postgres in containers. Image published to `ghcr.io/m0wa/se` on every release. |
+| [packaging/gpu-control/](packaging/gpu-control/README.md) | `cmd/gpu-control`'s own systemd unit/env file, packaged as a separate `.deb` for the dedicated GPU host. |
 | [packaging/nginx/](packaging/nginx/README.md) | Routes the binaries behind one public domain + TLS. |
 | [packaging/prometheus/](packaging/prometheus/README.md) | Host/nginx/Postgres metrics → IONOS monitoring. |
 | [packaging/prometheus-gpu/](packaging/prometheus-gpu/README.md) | Same, for the GPU inference host. |

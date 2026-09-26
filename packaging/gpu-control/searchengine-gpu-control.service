@@ -1,0 +1,18 @@
+[Unit]
+Description=SE GPU control service - switches the GPU between chat and Vision (ComfyUI/LTX)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+EnvironmentFile=/etc/searchengine/gpu-control.env
+ExecStart=/usr/bin/searchengine-gpu-control
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
