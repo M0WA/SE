@@ -8,12 +8,19 @@ const { setupDOM, teardownDOM, requireFresh } = require('./dom_helper.test_util'
 const INDEX_HTML = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 
 // lastFixture is loadFixture's own most recently returned module -- afterEach
-// uses it to always stop a real vision-heartbeat interval (see
-// startVisionHeartbeat) a test may have started via setMode('vision') without
-// itself switching back to chat or stubbing global.setInterval. Without this,
-// a single forgotten real interval keeps Node's test runner process alive
+// uses it to always stop two kinds of real leftover timer a test may have
+// started without itself cleaning up or stubbing global.setInterval/
+// setTimeout: the vision-heartbeat interval (see startVisionHeartbeat,
+// started via setMode('vision')) and the 2s one-shot GPU-mode poll timer
+// (see visionModePollWhileInProgress, armed whenever a switch is left "in
+// progress"). An uncleared interval keeps Node's test runner process alive
 // indefinitely (neither `npm test` nor scripts/js-test-coverage.js pass
-// --test-force-exit), hanging the whole suite rather than just one test.
+// --test-force-exit), hanging the whole suite; an uncleared one-shot poll
+// timer instead fires ~2s later during a *different*, later test's own
+// execution window and calls that test's global.fetch mock, corrupting its
+// assertions with an unrelated URL -- a real, order-dependent flake caught
+// in CI (not locally, where the timing didn't line up) on this exact test
+// file before this cleanup existed.
 let lastFixture = null;
 
 function loadFixture() {
@@ -25,6 +32,9 @@ function loadFixture() {
 test.afterEach(() => {
   if (lastFixture && typeof lastFixture.stopVisionHeartbeat === 'function') {
     lastFixture.stopVisionHeartbeat();
+  }
+  if (lastFixture && typeof lastFixture.stopVisionPolling === 'function') {
+    lastFixture.stopVisionPolling();
   }
   lastFixture = null;
   teardownDOM();

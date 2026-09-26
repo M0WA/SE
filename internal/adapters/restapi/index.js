@@ -1486,6 +1486,21 @@
     }
   }
 
+  // stopVisionPolling clears the 2s one-shot poll timer (loadVisionMode/
+  // requestVisionSwitch/refreshVisionStatus all arm it via
+  // visionModePollWhileInProgress while a switch is in progress). Exported
+  // purely for index.test.js's own central afterEach -- without it, a
+  // test that leaves a switch "in progress" (without stubbing
+  // global.setTimeout) leaks a real timer that can fire during a *later*
+  // test's own execution window and call that test's global.fetch mock,
+  // corrupting its assertions.
+  function stopVisionPolling() {
+    if (visionPollTimer) {
+      clearTimeout(visionPollTimer);
+      visionPollTimer = null;
+    }
+  }
+
   // updateModeSwitchIndicator positions the sliding indicator from the
   // checked, visible option's own real layout (via --indicator-left/
   // --indicator-width custom properties -- see style.css) rather than a
@@ -1661,6 +1676,6 @@
       uploadAttachedFile, renderChatFiles, loadChatFiles, deleteChatFile,
       loadVisionMode, requestVisionSwitch, refreshVisionStatus, renderVisionStatus,
       updateChatAvailability, updateModeSwitchIndicator, visionModePollWhileInProgress,
-      startVisionHeartbeat, stopVisionHeartbeat,
+      startVisionHeartbeat, stopVisionHeartbeat, stopVisionPolling,
     };
   }
