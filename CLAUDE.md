@@ -99,6 +99,22 @@ template variable, a new dashboard entirely -- re-export it into
 README for the exact export command). Treat a live-only dashboard edit as
 incomplete work, same as every other rule in this section.
 
+## Keep firewall rules in sync
+
+`packaging/firewall/` (`se-mo-sys-de.sh`, `gpu-mo-sys-de.sh`, and its own
+README) is the tracked source of truth for each host's iptables `INPUT`
+chain -- an optional, additional layer on top of every service's own
+bind-address choice (nginx/sshd are the only things meant to be publicly
+reachable; everything else already binds loopback or a private-LAN IP, so
+this firewall is defense in depth, not the only thing preventing exposure
+today). **Whenever a service's bind address changes on either host -- a
+new port opened on a public interface, a new private-LAN peer this
+deployment depends on -- update the matching script in the same change**,
+same as every other rule in this file. Never apply a live firewall change
+without following that README's verify-before-persist steps first: a
+misapplied rule can permanently lock out the only way in, and there is no
+console/KVM fallback assumed here.
+
 ## Keep the user manual in sync
 
 `docs/manual/` is the single reference for everything about running and

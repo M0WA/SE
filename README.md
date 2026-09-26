@@ -29,6 +29,7 @@ also served as a site at https://m0wa.github.io/SE/.
 | [packaging/grafana/](packaging/grafana/README.md) | Dashboards for both Prometheus pipelines. |
 | [packaging/searxng/](packaging/searxng/README.md) | Self-hosted SearXNG for the chat feature's live web search. |
 | [packaging/searxng-engine/](packaging/searxng-engine/README.md) | Custom SearXNG engine folding this instance's own index in. |
+| [packaging/firewall/](packaging/firewall/README.md) | Optional host-level iptables hardening for both deployment hosts. |
 
 ## Development
 

@@ -14,6 +14,7 @@ Every file this project's packaging touches or ships, and how it gets installed.
 | `packaging/debian/{control,postinst,prerm}` | n/a -- become the `.deb`'s own metadata/maintainer scripts | Auto (build-time) | Package metadata, dependencies, install/removal behavior. |
 | `packaging/nginx/searchengine.conf` | `/etc/nginx/sites-available/searchengine` | Manual | nginx reverse-proxy routing split between search-server and admin-server. See [packaging/nginx/README.md](https://github.com/M0WA/SE/blob/main/packaging/nginx/README.md). |
 | `packaging/nginx/stub_status.conf` | `/etc/nginx/conf.d/stub_status.conf` | Manual | Loopback-only nginx `stub_status` page for `prometheus-nginx-exporter`. |
+| `packaging/firewall/{se-mo-sys-de,gpu-mo-sys-de}.sh` | n/a -- run directly from a repo checkout, never installed anywhere | Manual, not shipped in the `.deb` | Optional host-level iptables hardening for each host. See [packaging/firewall/README.md](https://github.com/M0WA/SE/blob/main/packaging/firewall/README.md) and [Installation](installation.md) step 18. |
 | `packaging/prometheus/prometheus.yml` | `/etc/prometheus/prometheus.yml` | Manual | Prometheus agent-mode scrape/`remote_write` config. See [packaging/prometheus/README.md](https://github.com/M0WA/SE/blob/main/packaging/prometheus/README.md). |
 | `packaging/prometheus/prometheus.default` | `/etc/default/prometheus` | Manual | `prometheus.service` ARGS (agent mode). |
 | `packaging/prometheus/prometheus-nginx-exporter.default` | `/etc/default/prometheus-nginx-exporter` | Manual | Exporter ARGS. |
