@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.96 - 2026-09-26
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* chat: widen leaked-tool-call retry budget; raise completion timeout to 300s by @M0WA in https://github.com/M0WA/SE/pull/362
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.95...v4.13.96
+
+
 ## v4.13.95 - 2026-09-25
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
