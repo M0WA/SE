@@ -92,6 +92,7 @@ func main() {
 		EmbeddingEndpoints:    repo,
 		ChatEndpoints:         repo,
 		ChatVision:            repo,
+		GPUMode:               repo,
 		DocumentJobs:          repo,
 		MCPServers:            repo,
 		MCPTools:              mcpclient.New(),

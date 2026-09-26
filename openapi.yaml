@@ -1216,6 +1216,49 @@ paths:
         "405": { $ref: "#/components/responses/BadRequest" }
         "503": { $ref: "#/components/responses/NotConfigured" }
 
+  /admin/api/gpu-mode:
+    get:
+      tags: [admin]
+      summary: Get the current GPU mode (Vision) settings
+      description: >-
+        Single-row Get/Set, same shape as /admin/api/chat-vision, for the
+        same reason (one active configuration). Distinct from chat vision
+        above (image/video understanding via a captioning model) -- this
+        controls switching the shared self-hosted GPU between its normal
+        chat role and image/video generation (ComfyUI+LTX), driven by the
+        public chat page's Chat/Vision/Search toggle. Never fails just
+        because nothing's been saved yet.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GPUModeSettings" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    patch:
+      tags: [admin]
+      summary: Upsert the GPU mode (Vision) settings
+      description: >-
+        Full replace, not a merge, for every field except control_api_key:
+        since a GET/PATCH response never echoes the real token back (see
+        has_control_api_key), leaving control_api_key blank here preserves
+        whatever's already stored rather than clearing it --
+        clear_control_api_key is the explicit way to actually remove it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GPUModeSettingsRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GPUModeSettings" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "405": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
   /admin/api/mcp-servers:
     get:
       tags: [admin]
@@ -3124,6 +3167,59 @@ components:
             has_caption_api_key:
               type: boolean
               description: Whether a captioning API key is stored -- its actual value is never returned.
+            updated_at: { type: string, format: date-time }
+
+    GPUModeSettingsOptions:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          description: >-
+            Master switch: while off, the Vision option is entirely absent
+            from the public chat page's Chat/Vision/Search toggle and every
+            /vision/api/* route returns 404, regardless of anything else
+            here.
+        control_base_url:
+          type: string
+          description: >-
+            The GPU-side control service's (cmd/gpu-control) own base URL,
+            reached over the private LAN only, e.g. http://10.7.226.11:8002
+            -- never a public address.
+        switch_timeout_seconds:
+          type: integer
+          description: >-
+            How long a single chat<->vision switch may take before it's
+            reported as failed. <=0 uses the built-in default.
+        idle_revert_minutes:
+          type: integer
+          description: >-
+            Automatically reverts to chat mode after this many minutes with
+            no Vision activity -- chat is the shared default every user
+            depends on, so a forgotten tab must not leave the deployment
+            chat-less indefinitely. <=0 disables the revert.
+
+    GPUModeSettingsRequest:
+      description: >-
+        The request shape for PATCH /admin/api/gpu-mode. control_api_key is
+        write-only -- a GPUModeSettings response never echoes it back (see
+        its own has_control_api_key). Leaving it blank means "keep whatever
+        is already stored," not "clear it" -- clear_control_api_key is the
+        explicit way to actually remove it.
+      allOf:
+        - $ref: "#/components/schemas/GPUModeSettingsOptions"
+        - type: object
+          properties:
+            control_api_key: { type: string, description: "Sent as an X-Internal-Token header authenticating to cmd/gpu-control; optional. Blank preserves the existing value unless clear_control_api_key is set." }
+            clear_control_api_key: { type: boolean, default: false, description: "Removes the stored token instead of preserving it when control_api_key is left blank." }
+
+    GPUModeSettings:
+      allOf:
+        - $ref: "#/components/schemas/GPUModeSettingsOptions"
+        - type: object
+          properties:
+            has_control_api_key:
+              type: boolean
+              description: Whether a control endpoint token is stored -- its actual value is never returned.
             updated_at: { type: string, format: date-time }
 
     VisionSimilarityRequest:

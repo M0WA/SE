@@ -1815,6 +1815,111 @@ func (h *Handler) handleAdminChatVision(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+type gpuModeSettingsRequest struct {
+	Enabled              bool   `json:"enabled"`
+	ControlBaseURL       string `json:"control_base_url"`
+	ControlAPIKey        string `json:"control_api_key"`
+	SwitchTimeoutSeconds int    `json:"switch_timeout_seconds"`
+	IdleRevertMinutes    int    `json:"idle_revert_minutes"`
+	// ClearControlAPIKey mirrors chatVisionRequest.ClearCaptionAPIKey
+	// exactly -- see its doc comment for the shared "blank means
+	// unchanged" convention.
+	ClearControlAPIKey bool `json:"clear_control_api_key"`
+}
+
+type gpuModeSettingsResponse struct {
+	Enabled        bool   `json:"enabled"`
+	ControlBaseURL string `json:"control_base_url"`
+	// HasControlAPIKey mirrors chatVisionResponse.HasCaptionAPIKey exactly
+	// -- reports only whether a key is set, never its value.
+	HasControlAPIKey     bool      `json:"has_control_api_key"`
+	SwitchTimeoutSeconds int       `json:"switch_timeout_seconds"`
+	IdleRevertMinutes    int       `json:"idle_revert_minutes"`
+	UpdatedAt            time.Time `json:"updated_at"`
+}
+
+func toGPUModeSettingsResponse(v domain.GPUModeSettings) gpuModeSettingsResponse {
+	return gpuModeSettingsResponse{
+		Enabled: v.Enabled, ControlBaseURL: v.ControlBaseURL,
+		HasControlAPIKey:     v.ControlAPIKey != "",
+		SwitchTimeoutSeconds: v.SwitchTimeoutSeconds, IdleRevertMinutes: v.IdleRevertMinutes,
+		UpdatedAt: v.UpdatedAt,
+	}
+}
+
+// defaultGPUModeSettingsResponse mirrors defaultChatVisionResponse -- a
+// settings page GET should never fail just for being unconfigured.
+func defaultGPUModeSettingsResponse() gpuModeSettingsResponse {
+	return gpuModeSettingsResponse{}
+}
+
+func validateGPUModeSettingsRequest(w http.ResponseWriter, req gpuModeSettingsRequest) bool {
+	if req.SwitchTimeoutSeconds < 0 {
+		http.Error(w, "switch_timeout_seconds must not be negative", http.StatusBadRequest)
+		return false
+	}
+	if req.IdleRevertMinutes < 0 {
+		http.Error(w, "idle_revert_minutes must not be negative", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// handleAdminGPUMode is single-row CRUD for the GPU mode (Vision image/
+// video generation) settings (GET current config, PATCH to upsert),
+// mirroring handleAdminChatVision's style exactly. Enabled defaults false
+// (see domain.GPUModeSettings.Enabled's own doc comment): the public
+// Vision toggle and every /vision/api/* route stay entirely absent until
+// an admin deliberately turns this on.
+func (h *Handler) handleAdminGPUMode(w http.ResponseWriter, r *http.Request) {
+	if !requireConfigured(w, h.gpuMode != nil, "gpu mode settings") {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		v, err := h.gpuMode.GetGPUModeSettings(r.Context())
+		if errors.Is(err, ports.ErrGPUModeSettingsNotConfigured) {
+			writeJSON(w, http.StatusOK, defaultGPUModeSettingsResponse())
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, toGPUModeSettingsResponse(v))
+	case http.MethodPatch:
+		req, ok := decodeJSON[gpuModeSettingsRequest](w, r)
+		if !ok {
+			return
+		}
+		if !validateGPUModeSettingsRequest(w, req) {
+			return
+		}
+		apiKey := ""
+		existing, err := h.gpuMode.GetGPUModeSettings(r.Context())
+		if err == nil {
+			apiKey = existing.ControlAPIKey
+		} else if !errors.Is(err, ports.ErrGPUModeSettingsNotConfigured) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		apiKey = h.resolveUpdatedAPIKey(apiKey, req.ControlAPIKey, req.ClearControlAPIKey)
+		v := domain.GPUModeSettings{
+			Enabled: req.Enabled, ControlBaseURL: req.ControlBaseURL,
+			ControlAPIKey:        apiKey,
+			SwitchTimeoutSeconds: req.SwitchTimeoutSeconds, IdleRevertMinutes: req.IdleRevertMinutes,
+			UpdatedAt: time.Now().UTC(),
+		}
+		if err := h.gpuMode.SetGPUModeSettings(r.Context(), v); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, toGPUModeSettingsResponse(v))
+	default:
+		http.Error(w, msgMethodNotAllowed, http.StatusMethodNotAllowed)
+	}
+}
+
 func (h *Handler) currentSettings() settingsResponse {
 	alpha, k1, b := h.settings.Get()
 	return settingsResponse{

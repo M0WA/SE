@@ -130,8 +130,8 @@
   </section>
 
   <section class="panel">
-    <h2>Vision</h2>
-    <p class="lede" style="margin: 0 0 1rem;">Lets the chat model make use of an image attached to a turn -- configured entirely separately from search's own embedding endpoint(s) and from the chat endpoint above, even when Similarity search ends up pointed at the same underlying model search itself uses.</p>
+    <h2>Image understanding</h2>
+    <p class="lede" style="margin: 0 0 1rem;">Lets the chat model make use of an image attached to a turn -- configured entirely separately from search's own embedding endpoint(s) and from the chat endpoint above, even when Similarity search ends up pointed at the same underlying model search itself uses. Distinct from GPU mode (Vision) below, which is image/video <em>generation</em>, not understanding.</p>
 
     <h3>Similarity search</h3>
     <div class="form-row form-row-check">
@@ -187,6 +187,55 @@
 
     <button id="save-vision-settings-btn" type="button">Save vision settings</button>
     <span id="vision-settings-status" class="error-text"></span>
+  </section>
+
+  <section class="panel">
+    <h2>GPU mode (Vision)</h2>
+    <p class="lede" style="margin: 0 0 1rem;">A separate capability from Image understanding above: lets the public chat page's Chat/Vision/Search toggle switch the shared self-hosted GPU between its normal chat role and image/video <em>generation</em> (ComfyUI+LTX) -- since both can't run at once on one GPU's worth of memory, switching to Vision stops the chat model until switched back.</p>
+    <div class="form-row form-row-check">
+      <label for="gpu-mode-enabled">
+        <span class="field-wrap" data-default="Off"><input id="gpu-mode-enabled" type="checkbox"></span>
+        Enabled
+      </label>
+      <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Master switch: while off, the Vision option is entirely absent from the public chat page's toggle and every /vision/api/* route returns 404, regardless of anything else here.</span></button>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="gpu-mode-control-base-url">Control endpoint URL</label>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">The GPU-side control service's own base URL, reached over the private LAN only, e.g. http://10.7.226.11:8002 -- never a public address.</span></button>
+      </div>
+      <span class="field-wrap" data-default="(none)"><input id="gpu-mode-control-base-url" class="field" type="text" placeholder="http://10.7.226.11:8002"></span>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="gpu-mode-control-api-key">Control endpoint token</label>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Sent as an X-Internal-Token header authenticating to the control service. Leave blank when editing to keep the currently stored token.</span></button>
+      </div>
+      <input id="gpu-mode-control-api-key" class="field" type="password" autocomplete="new-password" placeholder="Leave blank to keep the current token">
+    </div>
+    <div class="form-row form-row-check">
+      <label for="gpu-mode-clear-control-api-key">
+        <input id="gpu-mode-clear-control-api-key" type="checkbox">
+        Remove the stored token
+      </label>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="gpu-mode-switch-timeout-seconds">Switch timeout (seconds)</label>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How long a single chat&lt;-&gt;vision switch may take before it's reported as failed. Leave at 0 to use the built-in default.</span></button>
+      </div>
+      <span class="field-wrap" data-default="300 (built-in default)"><input id="gpu-mode-switch-timeout-seconds" class="field" type="number" step="1" min="0"></span>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
+        <label for="gpu-mode-idle-revert-minutes">Idle revert (minutes)</label>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Automatically reverts to chat mode after this many minutes with no Vision activity -- chat is the shared default every user depends on, so a forgotten tab must not leave the deployment chat-less indefinitely. 0 disables the revert.</span></button>
+      </div>
+      <span class="field-wrap" data-default="15"><input id="gpu-mode-idle-revert-minutes" class="field" type="number" step="1" min="0"></span>
+    </div>
+
+    <button id="save-gpu-mode-settings-btn" type="button">Save GPU mode settings</button>
+    <span id="gpu-mode-settings-status" class="error-text"></span>
   </section>
 </main>
 </div>

@@ -2243,6 +2243,7 @@ var adminReadOnlyEndpoints = []struct {
 	{"settings", "/admin/api/settings"},
 	{"chat endpoint", "/admin/api/chat-endpoint"},
 	{"chat vision", "/admin/api/chat-vision"},
+	{"gpu mode", "/admin/api/gpu-mode"},
 }
 
 // buildAdminReadOnlyChecks turns adminReadOnlyEndpoints into one check

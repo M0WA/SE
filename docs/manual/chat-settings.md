@@ -37,9 +37,9 @@ Save writes every field in one request — a full replace, not a per-field patch
 > - The API key field is always blank on load by design — don't mistake that for the key being lost.
 > - Auto-detecting the budget needs Base URL and Model already filled in and reachable; if the probe fails, it falls back to 0 (no trimming) rather than blocking the save.
 
-## Vision
+## Image understanding
 
-Configures what the mcp-vision MCP server's two tools can do with an image attached to a chat turn, or an image URL pasted into one — its own "Save vision settings" button, a separate request from the rest of this page above. Deliberately independent of both the chat endpoint above and search's own embedding endpoints (Embeddings -> HTTP endpoints), even where Similarity search ends up pointed at the same underlying model search itself uses.
+Configures what the mcp-vision MCP server's two tools can do with an image attached to a chat turn, or an image URL pasted into one — its own "Save vision settings" button, a separate request from the rest of this page above. Deliberately independent of both the chat endpoint above and search's own embedding endpoints (Embeddings -> HTTP endpoints), even where Similarity search ends up pointed at the same underlying model search itself uses. Distinct from GPU mode (Vision) below, which is image/video generation, not understanding.
 
 **Similarity search** lets the vision_similarity tool embed an image and vector-search this instance's own indexed documents with it — "reverse image search into your own index." Embedding provider picks which configured HTTP embedding endpoint (Embeddings -> HTTP endpoints) to reuse for this: its own base URL/model/API key, so there's nothing new to enter here, just a reference. Keep it pointed at the same model search itself uses (visible on the Embeddings page) — a mismatched model still runs without erroring, just produces meaningless results, since the two embedding spaces aren't comparable. Enabling a provider here never changes whether it contributes to search's own blended score, and vice versa.
 
@@ -49,6 +49,17 @@ Configures what the mcp-vision MCP server's two tools can do with an image attac
 > - Both tools independently report themselves unavailable to the model (not an error, just a plain "not configured" message) when their own Enabled toggle is off or unconfigured — enabling one doesn't require the other.
 > - The Image analyst agent (Chat -> Agents) is the suggested starting point for using either tool from the chat page.
 > - Either tool accepts an already-attached file **or** a plain image URL the model was given (e.g. one the user pasted in chat), never both at once. A pasted URL is fetched directly by mcp-vision, guarded against SSRF the same way crawling/web_fetch are — an internal/private-network URL is always rejected.
+
+## GPU mode (Vision)
+
+A separate capability from Image understanding above: lets the public chat page's Chat/Vision/Search toggle switch the shared self-hosted GPU between its normal chat role and image/video generation (ComfyUI+LTX) — since both can't run at once on one GPU's worth of memory, switching to Vision stops the chat model until switched back. Its own "Save GPU mode settings" button, a separate request from the rest of this page.
+
+Enabled is the master switch: while off, the Vision option is entirely absent from the public chat page's toggle and every `/vision/api/*` route returns 404, regardless of anything else here. Control endpoint URL is the GPU-side control service's (`cmd/gpu-control`) own base URL, reached over the private LAN only, e.g. `http://10.7.226.11:8002` — never a public address. Control endpoint token is sent as an `X-Internal-Token` header authenticating to that service; blank-means-unchanged with its own "Remove the stored token" checkbox, same convention as every other API key/token field on this page. Switch timeout (seconds) bounds how long a single chat↔vision switch may take before it's reported as failed — leave at 0 to use the built-in default. Idle revert (minutes) automatically reverts to chat mode after that many minutes with no Vision activity, since chat is the shared default every user depends on and a forgotten tab must not leave the deployment chat-less indefinitely — 0 disables the revert.
+
+> **Worth knowing (GPU mode):**
+> - This is intentionally separate from Image understanding above — that's a chat model *reading* an image; this is *generating* one/a video, and the two can be configured (and enabled) completely independently.
+> - Enabling this has no effect until the GPU-side control service is deployed and reachable at Control endpoint URL — see `docs/architecture/README.md` for how `cmd/gpu-control` fits into the overall deployment.
+> - Because the underlying GPU can only run one workload at a time, switching to Vision mode makes chat briefly unavailable for every user, not just the one who switched — the public chat page surfaces this plainly rather than showing a generic connection error.
 
 ---
 ← [Embedding endpoint detail](embedding-endpoint-detail.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [MCP Servers](mcp-servers.md) →
