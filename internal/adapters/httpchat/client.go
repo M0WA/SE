@@ -29,7 +29,16 @@ import (
 // real answer, not just a degenerate one. See mcp-vision's own
 // captionCallTimeout for the same class of fix on the separate
 // vision-captioning HTTP call.
-const requestTimeout = 180 * time.Second
+//
+// Raised again from 180s to match nginx's own proxy_read_timeout
+// (packaging/nginx/searchengine.conf, 300s on the "/" location that
+// proxies /chat) -- a single completion call being cut off at 180s while
+// nginx itself would have tolerated up to 300s was a needless mismatch,
+// especially now that one turn can chain multiple sequential completions
+// (see completeDetectingLeakedToolCalls's own bounded retries plus the
+// existing tool-calling follow-up loop) -- each individual call deserves
+// the same runway nginx already grants the turn as a whole.
+const requestTimeout = 300 * time.Second
 
 // maxResponseBytes caps how much of the HTTP response body is ever read --
 // a safety bound against a misbehaving or malicious endpoint, not a real
