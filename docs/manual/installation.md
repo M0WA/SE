@@ -232,7 +232,20 @@ vllm serve Qwen/Qwen3-VL-Embedding-8B --runner pooling --convert embed --gpu-mem
 vllm serve RedHatAI/Qwen2.5-72B-Instruct-FP8-dynamic --max-model-len 32768 --enable-auto-tool-choice --tool-call-parser hermes
 ```
 
-## 18. Final smoke test of the whole stack
+## 18. (Optional) Harden the host firewall
+
+Every service above already binds `127.0.0.1` or a private-LAN IP except
+nginx and sshd, so a host firewall is a second, independent layer rather
+than the only thing preventing exposure -- see
+[`packaging/firewall/README.md`](https://github.com/M0WA/SE/blob/main/packaging/firewall/README.md)
+for the exact policy (SSH everywhere; nginx also public on the webserver
+host; a GPU/inference host's own embedding/chat ports stay private-LAN-only
+either way) and, critically, its verify-before-persist steps -- a
+misapplied rule can permanently lock out the only way into a host with no
+console/KVM fallback, so never skip confirming the change from a fresh
+connection before making it survive a reboot.
+
+## 19. Final smoke test of the whole stack
 
 ```
 systemctl is-active searchengine-search searchengine-admin searchengine-crawl nginx
