@@ -87,7 +87,19 @@ func main() {
 	host := flag.String("host", "se.mo-sys.de", "target deployment's hostname (no scheme)")
 	credsPath := flag.String("creds", "cmd/e2e-check/credentials.json", "path to a JSON credentials file for -host (see credentials.example.json)")
 	includeSlow := flag.Bool("include-slow", false, "also run slow/known-heavy checks (sandbox package install, image OCR) that can take minutes")
-	timeout := flag.Duration("chat-timeout", 90*time.Second, "per-request HTTP client timeout -- deliberately close to nginx's own proxy_read_timeout, so a check FAILS instead of hanging when that's misconfigured")
+	// 290s: nginx's own proxy_read_timeout is 300s
+	// (packaging/nginx/searchengine.conf) -- close enough to give a real,
+	// slow-but-legitimate turn the same headroom nginx itself grants (one
+	// turn can now chain several sequential completions: the leaked-tool-
+	// call recovery's own bounded retries, plus the existing tool-calling
+	// follow-up loop), while still failing via a clean Go HTTP client
+	// timeout slightly before nginx would forcibly cut the connection,
+	// rather than an ambiguous connection-reset. Previously 90s, stale
+	// from before nginx's own timeout was raised to 300s -- confirmed live
+	// (XLSX file_ids check): a real, non-buggy turn needing multiple
+	// sequential completions legitimately took over 90s and was cut off
+	// here first, misreported as a hang rather than a slow-but-working turn.
+	timeout := flag.Duration("chat-timeout", 290*time.Second, "per-request HTTP client timeout -- deliberately close to nginx's own proxy_read_timeout, so a check FAILS instead of hanging when that's misconfigured")
 	flag.Parse()
 
 	creds, err := loadCredentials(*credsPath)
@@ -1930,6 +1942,24 @@ func looksAuthRelated(errMsg string) bool {
 	return false
 }
 
+// concreteArgumentHints appends a specific, concrete suggested argument
+// for any tool name in names known to have no reasonable "invent one"
+// default without further context -- currently just web_fetch's own URL.
+// See checkToolFunctions' own doc comment on the prompt for why this
+// exists: without it, a model asked to call web_fetch with nothing yet
+// fetched to give it a URL sometimes asks a clarifying question instead
+// of calling anything at all, rather than picking a different one of the
+// same server's tools (already tolerated) or a sensible example value.
+// Returns "" when nothing in names needs this.
+func concreteArgumentHints(names []string) string {
+	for _, n := range names {
+		if n == "web_fetch" {
+			return " If you use web_fetch, fetch https://example.com specifically."
+		}
+	}
+	return ""
+}
+
 // checkToolFunctions actually CALLS one of a server's own discovered
 // tools through a real chat turn -- proving the tool's handler genuinely
 // works, not just that the server is reachable and describes tools it
@@ -1961,12 +1991,23 @@ func (c *client) checkToolFunctions(serverName string, gatedByWebSearch bool, to
 	// the model called "web_search" first, which is the more sensible
 	// choice with no URL in hand yet) -- that's still a genuine,
 	// successful functional call to this server, not a failure.
+	//
+	// concreteArgumentHints closes a real gap this same ambiguity left
+	// open: confirmed live, a model asked to call "web_fetch" with no
+	// concrete URL in hand sometimes asks a clarifying question in plain
+	// prose instead of calling anything at all ("I'll need a specific
+	// URL... could you please provide one?") -- worse than falling back
+	// to a different tool, and a genuine instruction-following gap this
+	// check exists to catch, not something to keep tolerating as
+	// unavoidable sampling variance. Giving a concrete value up front
+	// removes the ambiguity at its root instead of working around
+	// whatever the model decides to do with it.
 	prompt := fmt.Sprintf(
 		"You have access to an MCP server named %q whose tools include: %v. "+
 			"Call the %q tool (or, if that one specifically doesn't make sense without more context, "+
 			"whichever of this server's own tools listed above does) with reasonable arguments and "+
-			"report what it returns.",
-		serverName, names, chosen.Name)
+			"report what it returns.%s",
+		serverName, names, chosen.Name, concreteArgumentHints(names))
 
 	// One retry before failing: a model occasionally answers a loosely-
 	// worded "call one of your tools" instruction directly instead of

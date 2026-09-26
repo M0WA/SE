@@ -60,10 +60,28 @@ func TestDetectLeakedToolCall_UnclosedButValidJSON(t *testing.T) {
 	}
 }
 
-func TestDetectLeakedToolCall_UnclosedAndUnparseable(t *testing.T) {
+// TestDetectLeakedToolCall_UnclosedButNameStillExtractable covers a block
+// truncated by max_tokens before the "arguments" object ever completes
+// (no closing tag at all) -- still detected, via the same regex fallback
+// that recovers a malformed-but-real name from broken arguments
+// elsewhere (see TestDetectLeakedToolCall_MalformedArgumentsButExtractableName):
+// a truncated attempt is just as much evidence of genuine intent as a
+// malformed one, and the nudge never depends on the arguments parsing
+// either way.
+func TestDetectLeakedToolCall_UnclosedButNameStillExtractable(t *testing.T) {
 	content := `<tool_call>` + "\n" + `{"name": "write_file", "arguments": {"filename": "a`
+	if !detectLeakedToolCall(content, []domain.ToolDef{writeFileTool}) {
+		t.Error("expected detection via the regex fallback even for an unclosed, truncated block")
+	}
+}
+
+// TestDetectLeakedToolCall_UnclosedWithNoExtractableNameEither covers a
+// block truncated so early that not even the name field ever completed
+// -- genuinely nothing to detect.
+func TestDetectLeakedToolCall_UnclosedWithNoExtractableNameEither(t *testing.T) {
+	content := `<tool_call>` + "\n" + `{"nam`
 	if detectLeakedToolCall(content, []domain.ToolDef{writeFileTool}) {
-		t.Error("expected no detection for an unclosed, unparseable block")
+		t.Error("expected no detection when not even the name field is extractable")
 	}
 }
 
@@ -93,6 +111,28 @@ func TestDetectLeakedToolCall_LiteralNewlineInsideJSONStringValue(t *testing.T) 
 		`Experienced engineer."}}` + "\n</tool_call>"
 	if !detectLeakedToolCall(content, []domain.ToolDef{writeFileTool}) {
 		t.Error("expected detection despite a literal newline embedded inside the JSON string value")
+	}
+}
+
+var runPythonTool = domain.ToolDef{Name: "run_python"}
+
+// TestDetectLeakedToolCall_MalformedArgumentsButExtractableName reproduces
+// a second exact live failure the newline-repair fix alone didn't catch
+// (confirmed live: 6 of 8 real attempts at the exact same sandbox
+// file_ids scenario): the model relaying Python code containing an
+// already-escaped quote (print(open(\"sample.txt\").read())) over-escapes
+// the backslash again for the JSON layer, producing a genuinely
+// unparseable "arguments" object -- Go's own encoding/json fails with
+// "Expecting ',' delimiter" partway through it. The block's "name" field
+// itself, appearing earlier and undamaged, must still be found via the
+// regex fallback (leakedToolCallNamePattern) even though the block as a
+// whole never parses as valid JSON.
+func TestDetectLeakedToolCall_MalformedArgumentsButExtractableName(t *testing.T) {
+	content := "<tool_call>\n" +
+		`{"name": "run_python", "arguments": {"code": "print(open(\\"sample.txt\\").read())", "file_ids": ["abc123"]}}` +
+		"\n</tool_call>"
+	if !detectLeakedToolCall(content, []domain.ToolDef{runPythonTool}) {
+		t.Error("expected detection via the regex name-extraction fallback despite genuinely malformed arguments JSON")
 	}
 }
 

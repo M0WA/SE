@@ -3009,7 +3009,7 @@ components:
             "stdio" MCP server's spawned process as the
             WEB_SEARCH_RESULT_COUNT environment variable. 0 means no cap --
             SearXNG's own full result set is returned as-is. Keep this
-            generous (20+): too small a cap can leave the model with only
+            generous (50+): too small a cap can leave the model with only
             a couple of same-domain results, and nothing to fall back to
             if that domain blocks fetching. A negative value is rejected
             with 400.
