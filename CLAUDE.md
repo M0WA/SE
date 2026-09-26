@@ -248,7 +248,7 @@ cross-service layer neither of those reaches on their own.
   `internal/adapters/restapi/*.js` — see "Test coverage" below.
 - Push your branch and open a PR (`gh pr create`), then watch CI go green on
   it — **not** a direct push to `main`; see "Branch, PR & release workflow"
-  below, since `main` is ruleset-protected with no bypass for anyone.
+  below for what `main`'s ruleset actually requires and who can bypass it.
 - Commits end with:
   ```
   Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
@@ -257,21 +257,36 @@ cross-service layer neither of those reaches on their own.
 
 ## Branch, PR & release workflow
 
-`main` is protected by a repository ruleset (`main-protection`) with **no
-bypass for anyone, admins included** (`bypass_actors: []`,
-`current_user_can_bypass: "never"` — checked via `gh api
-repos/M0WA/SE/rulesets`). It requires, for every change: a PR (no direct
-pushes, no force-pushes) with a green "Build, vet & test" status check
-(`ci.yml`'s `test` job — its `name:` must keep matching that exact string,
-since the ruleset names it literally, not by job ID). An approving review
-is *not* required (`required_approving_review_count: 0` — deliberately
-dropped from an initial `1`, since a solo/single-session workflow can never
-supply a second approver to self-approve against), so a PR can be merged
-the moment CI goes green on it, same-session, with no one else needed — but
-one still always has to exist and pass CI first; there is no path that
-skips that. A companion ruleset (`release-tag-immutability`) makes every
-`v*.*.*` tag immutable the same way — once published, a release tag can
-never be deleted or moved, only superseded by a new one.
+`main` is protected by a repository ruleset (`main-protection`) requiring,
+for every change: a PR (no direct pushes, no force-pushes) with green
+"Build, vet & test" and "SonarCloud Code Analysis" status checks
+(`required_status_checks`; `ci.yml`'s `test` job's `name:` must keep
+matching that exact string, since the ruleset names it literally, not by
+job ID), plus a `code_scanning` rule (CodeQL, blocking on
+medium-or-higher-severity alerts), a `code_quality` rule (`warnings`
+severity), and a `code_coverage` rule (95% minimum, 5% max drop) — checked
+via `gh api repos/M0WA/SE/rulesets/<id>`. An approving review is *not*
+required (`required_approving_review_count: 0` — deliberately dropped from
+an initial `1`, since a solo/single-session workflow can never supply a
+second approver to self-approve against), so a PR can be merged the moment
+every check goes green on it, same-session, with no one else needed — but
+one still always has to exist and pass CI first for anyone without a
+bypass; there is no path that skips that for them.
+
+**This does NOT mean no bypass exists.** The ruleset currently has one
+bypass actor (`bypass_actors: [{actor_id: 5, actor_type:
+"RepositoryRole", bypass_mode: "always"}]`) and reports
+`current_user_can_bypass: "always"` for the repo owner's own account — a
+real capability, not theoretical: the ruleset's own rule-suites history
+(`gh api repos/M0WA/SE/rulesets/rule-suites`) shows at least two real
+pushes to `main` recorded with `"result": "bypass"`. Treat bypass as
+available only to whoever the repo owner explicitly grants it to, and
+never invoke it yourself (still always open a PR and wait for every check
+to go green) unless the user explicitly asks you to push directly to
+`main` — this repo's own history of using it is the owner's call, not a
+default working mode. A companion ruleset (`release-tag-immutability`)
+makes every `v*.*.*` tag immutable the same way — once published, a
+release tag can never be deleted or moved, only superseded by a new one.
 
 **Standard change flow** — this applies to every change from here on,
 including a routine fix or a small doc update, not just large features:
