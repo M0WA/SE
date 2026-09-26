@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"strings"
 
 	"searchengine/internal/domain"
@@ -38,11 +39,28 @@ type wireLeakedToolCall struct {
 	Name string `json:"name"`
 }
 
+// leakedToolCallNamePattern extracts a plausible "name" field from a
+// leaked tool-call block via a simple, tolerant regex, for use only when
+// the block doesn't fully parse as JSON (see detectLeakedToolCall).
+// Confirmed live: a model relaying code containing an already-escaped
+// quote (e.g. Python's own \") sometimes over- or under-escapes it again
+// for the JSON layer, producing a "name" field that's perfectly
+// extractable even though the surrounding "arguments" object is
+// genuinely malformed JSON as a whole
+// (`{"name": "run_python", "arguments": {"code": "print(open(\\"x\\")...`
+// -- the doubled backslash breaks the string boundary right after
+// "arguments", but "name" itself, appearing earlier and un-embedded, is
+// unaffected). Detection only needs to know the model named a real,
+// offered tool -- it never parses or executes the arguments themselves
+// (see completeDetectingLeakedToolCalls), so tolerating malformed
+// arguments here doesn't weaken that guarantee.
+var leakedToolCallNamePattern = regexp.MustCompile(`"name"\s*:\s*"([^"]*)"`)
+
 // detectLeakedToolCall reports whether content contains at least one
 // plausible leaked tool call: a literal "<tool_call>{...}</tool_call>"
-// block (or an unclosed one, e.g. truncated by max_tokens) whose JSON
-// names one of the tools actually offered this turn, and which doesn't
-// fall inside an open Markdown code fence.
+// block (or an unclosed one, e.g. truncated by max_tokens) that names one
+// of the tools actually offered this turn, and which doesn't fall inside
+// an open Markdown code fence.
 //
 // This is a known, still-open vLLM bug (github.com/vllm-project/vllm/
 // issues/45167): the hermes tool-call parser locates a call's end via a
@@ -92,10 +110,8 @@ func detectLeakedToolCall(content string, tools []domain.ToolDef) bool {
 		}
 
 		insideFence := fences%2 == 1
-		var parsed wireLeakedToolCall
-		repaired := repairRawControlCharsInJSONStrings(strings.TrimSpace(jsonText))
-		if !insideFence && json.Unmarshal([]byte(repaired), &parsed) == nil &&
-			parsed.Name != "" && allowed[parsed.Name] {
+		name := leakedToolCallName(jsonText)
+		if !insideFence && name != "" && allowed[name] {
 			return true
 		}
 		if end == -1 {
@@ -103,6 +119,24 @@ func detectLeakedToolCall(content string, tools []domain.ToolDef) bool {
 		}
 		remaining = rest
 	}
+}
+
+// leakedToolCallName extracts a leaked block's tool name, trying strict
+// JSON parsing first (after repairRawControlCharsInJSONStrings' repair)
+// and falling back to leakedToolCallNamePattern's looser regex extraction
+// when the block doesn't fully parse -- see that pattern's own doc
+// comment for why a malformed "arguments" object shouldn't stop the name
+// itself from being found. Returns "" when neither approach finds one.
+func leakedToolCallName(jsonText string) string {
+	var parsed wireLeakedToolCall
+	repaired := repairRawControlCharsInJSONStrings(strings.TrimSpace(jsonText))
+	if json.Unmarshal([]byte(repaired), &parsed) == nil && parsed.Name != "" {
+		return parsed.Name
+	}
+	if m := leakedToolCallNamePattern.FindStringSubmatch(jsonText); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 // repairRawControlCharsInJSONStrings escapes a literal newline/carriage-
