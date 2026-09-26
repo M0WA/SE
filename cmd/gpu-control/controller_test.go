@@ -532,7 +532,7 @@ func TestHTTPReadinessChecker(t *testing.T) {
 
 func TestNewController_UsesRealDependencies(t *testing.T) {
 	c := NewController(ControllerConfig{ChatUnit: "a.service", ComfyUnit: "b.service"})
-	if _, ok := c.units.(realUnitRunner); !ok {
+	if _, ok := c.units.(*realUnitRunner); !ok {
 		t.Fatal("expected NewController to wire realUnitRunner")
 	}
 	if _, ok := c.ready.(httpReadinessChecker); !ok {
@@ -593,5 +593,13 @@ func TestRealUnitRunner_StartStopIsActive(t *testing.T) {
 	}
 	if err := r.Stop(ctx, "vllm-chat.service"); err != nil {
 		t.Fatalf("expected Stop to succeed for vllm-chat.service, got %v", err)
+	}
+}
+
+func TestRealUnitRunner_SystemctlPath_FallsBackWhenNotFoundOnPATH(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // an empty dir on PATH -- "systemctl" can't resolve
+	r := &realUnitRunner{}
+	if got := r.systemctlPath(); got != "systemctl" {
+		t.Fatalf("expected fallback to the literal \"systemctl\", got %q", got)
 	}
 }

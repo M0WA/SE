@@ -47,22 +47,45 @@ type unitRunner interface {
 // shell -- the only thing an HTTP request can ever select is which of
 // two hardcoded transitions to run, never a unit name or arbitrary
 // command.
-type realUnitRunner struct{}
-
-func (realUnitRunner) Start(ctx context.Context, unit string) error {
-	return exec.CommandContext(ctx, "systemctl", "start", unit).Run()
+type realUnitRunner struct {
+	pathOnce sync.Once
+	path     string
+	pathErr  error
 }
 
-func (realUnitRunner) Stop(ctx context.Context, unit string) error {
-	return exec.CommandContext(ctx, "systemctl", "stop", unit).Run()
+// systemctlPath resolves "systemctl"'s absolute path once (via
+// exec.LookPath) and caches it, mirroring internal/adapters/dockersandbox's
+// own dockerPath() pattern -- a fixed, resolved path rather than a bare
+// command name repeated at every call site (a bare name is technically
+// PATH-order-dependent; go:S4036 flags exactly this). Falls back to the
+// literal "systemctl" if LookPath itself fails, so a misconfigured PATH
+// still surfaces as the same "executable file not found" error a bare
+// exec.Command("systemctl", ...) would already give, not a new failure
+// mode.
+func (r *realUnitRunner) systemctlPath() string {
+	r.pathOnce.Do(func() {
+		r.path, r.pathErr = exec.LookPath("systemctl")
+	})
+	if r.pathErr != nil {
+		return "systemctl"
+	}
+	return r.path
+}
+
+func (r *realUnitRunner) Start(ctx context.Context, unit string) error {
+	return exec.CommandContext(ctx, r.systemctlPath(), "start", unit).Run()
+}
+
+func (r *realUnitRunner) Stop(ctx context.Context, unit string) error {
+	return exec.CommandContext(ctx, r.systemctlPath(), "stop", unit).Run()
 }
 
 // IsActive swallows a systemctl invocation error into false ("not
 // confirmed active") rather than propagating it -- used only for the
 // best-effort startup mode probe, where "can't tell" and "not active"
 // should behave the same (fall back to ModeUnknown).
-func (realUnitRunner) IsActive(ctx context.Context, unit string) bool {
-	return exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", unit).Run() == nil
+func (r *realUnitRunner) IsActive(ctx context.Context, unit string) bool {
+	return exec.CommandContext(ctx, r.systemctlPath(), "is-active", "--quiet", unit).Run() == nil
 }
 
 // readinessChecker reports whether a service's own HTTP endpoint is
@@ -137,7 +160,7 @@ type Controller struct {
 func NewController(cfg ControllerConfig) *Controller {
 	return &Controller{
 		mode:              ModeUnknown,
-		units:             realUnitRunner{},
+		units:             &realUnitRunner{},
 		ready:             httpReadinessChecker{client: &http.Client{Timeout: 5 * time.Second}},
 		now:               time.Now,
 		chatUnit:          cfg.ChatUnit,
