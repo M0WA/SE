@@ -44,6 +44,13 @@
     </div>
     <div class="form-row">
       <div class="label-row">
+        <label for="chat-completion-timeout-seconds">Completion timeout (seconds)</label>
+        <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">How long a single completion call to this endpoint may take before it's given up on. One chat turn can make several completion calls in a row (the tool-calling follow-up loop, plus retries recovering from a model that emits a tool call as literal text instead of a real one), each bounded independently by this value -- not a shared budget for the whole turn. Leave at 0 to use the built-in default (300s). Keep this at or below nginx's own proxy_read_timeout for the deployment, since a call that runs longer than that gets disconnected by the proxy regardless of this setting.</span></button>
+      </div>
+      <span class="field-wrap" data-default="300 (built-in default)"><input id="chat-completion-timeout-seconds" class="field" type="number" step="1" min="0"></span>
+    </div>
+    <div class="form-row">
+      <div class="label-row">
         <label for="chat-api-key">API key</label>
         <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Sent as an Authorization: Bearer header. Optional for a local server. Leave blank when editing to keep the currently stored key.</span></button>
       </div>

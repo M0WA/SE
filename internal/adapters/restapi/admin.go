@@ -997,6 +997,10 @@ func validateChatEndpointRequest(w http.ResponseWriter, req chatEndpointRequest)
 		http.Error(w, "web_search_result_count must not be negative", http.StatusBadRequest)
 		return false
 	}
+	if req.CompletionTimeoutSeconds < 0 {
+		http.Error(w, "completion_timeout_seconds must not be negative", http.StatusBadRequest)
+		return false
+	}
 	return true
 }
 
@@ -1578,6 +1582,10 @@ type chatEndpointRequest struct {
 	// empty means no agent specialization. Not cross-checked against
 	// agents, same convention as domain.Agent.MCPServerIDs.
 	DefaultAgentID string `json:"default_agent_id"`
+	// CompletionTimeoutSeconds mirrors domain.ChatEndpoint.
+	// CompletionTimeoutSeconds exactly -- <= 0 means "use httpchat's own
+	// default (300s)."
+	CompletionTimeoutSeconds int `json:"completion_timeout_seconds"`
 	// ClearAPIKey is meaningful only to a PATCH: GET never echoes a stored
 	// key, so blank means "left unchanged," this flag means "remove it" --
 	// mirrors embeddingEndpointRequest.ClearAPIKey exactly.
@@ -1602,8 +1610,11 @@ type chatEndpointResponse struct {
 	SystemPrompt string `json:"system_prompt"`
 	// DefaultAgentID mirrors chatEndpointRequest.DefaultAgentID exactly --
 	// see that field's doc comment.
-	DefaultAgentID string    `json:"default_agent_id"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	DefaultAgentID string `json:"default_agent_id"`
+	// CompletionTimeoutSeconds mirrors chatEndpointRequest.
+	// CompletionTimeoutSeconds exactly -- see that field's doc comment.
+	CompletionTimeoutSeconds int       `json:"completion_timeout_seconds"`
+	UpdatedAt                time.Time `json:"updated_at"`
 }
 
 func toChatEndpointResponse(e domain.ChatEndpoint) chatEndpointResponse {
@@ -1611,9 +1622,10 @@ func toChatEndpointResponse(e domain.ChatEndpoint) chatEndpointResponse {
 		BaseURL: e.BaseURL, HasAPIKey: e.APIKey != "", Model: e.Model, Enabled: e.Enabled,
 		MaxContextTokens: e.MaxContextTokens, UpdatedAt: e.UpdatedAt,
 		WebSearchEnabled: e.WebSearchEnabled, WebSearchBaseURL: e.WebSearchBaseURL,
-		WebSearchResultCount: e.WebSearchResultCount,
-		SystemPrompt:         e.SystemPrompt,
-		DefaultAgentID:       e.DefaultAgentID,
+		WebSearchResultCount:     e.WebSearchResultCount,
+		SystemPrompt:             e.SystemPrompt,
+		DefaultAgentID:           e.DefaultAgentID,
+		CompletionTimeoutSeconds: e.CompletionTimeoutSeconds,
 	}
 }
 
@@ -1696,9 +1708,10 @@ func (h *Handler) handleAdminChatEndpoint(w http.ResponseWriter, r *http.Request
 			BaseURL: req.BaseURL, APIKey: apiKey, Model: req.Model, Enabled: req.Enabled,
 			MaxContextTokens: req.MaxContextTokens,
 			WebSearchEnabled: req.WebSearchEnabled, WebSearchBaseURL: req.WebSearchBaseURL,
-			WebSearchResultCount: req.WebSearchResultCount,
-			SystemPrompt:         req.SystemPrompt,
-			DefaultAgentID:       req.DefaultAgentID,
+			WebSearchResultCount:     req.WebSearchResultCount,
+			SystemPrompt:             req.SystemPrompt,
+			DefaultAgentID:           req.DefaultAgentID,
+			CompletionTimeoutSeconds: req.CompletionTimeoutSeconds,
 		}
 		if e.MaxContextTokens <= 0 {
 			e.MaxContextTokens = h.autoDetectMaxContextTokens(r.Context(), e)

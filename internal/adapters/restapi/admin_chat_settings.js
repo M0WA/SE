@@ -1,6 +1,7 @@
   const chatEnabledEl = document.getElementById('chat-enabled');
   const chatBaseURLEl = document.getElementById('chat-base-url');
   const chatModelEl = document.getElementById('chat-model');
+  const chatCompletionTimeoutSecondsEl = document.getElementById('chat-completion-timeout-seconds');
   const chatAPIKeyEl = document.getElementById('chat-api-key');
   const chatClearAPIKeyEl = document.getElementById('chat-clear-api-key');
   const chatSystemPromptEl = document.getElementById('chat-system-prompt');
@@ -57,6 +58,7 @@
     chatEnabledEl.checked = !!c.enabled;
     chatBaseURLEl.value = c.base_url || '';
     chatModelEl.value = c.model || '';
+    chatCompletionTimeoutSecondsEl.value = c.completion_timeout_seconds || 0;
     chatAPIKeyEl.value = '';
     chatAPIKeyEl.placeholder = c.has_api_key ? 'Leave blank to keep the current key' : '';
     chatClearAPIKeyEl.checked = false;
@@ -130,6 +132,7 @@
         api_key: chatAPIKeyEl.value,
         clear_api_key: chatClearAPIKeyEl.checked,
         model: chatModelEl.value,
+        completion_timeout_seconds: Number.parseInt(chatCompletionTimeoutSecondsEl.value, 10) || 0,
         enabled: chatEnabledEl.checked,
         system_prompt: chatSystemPromptEl.value,
         max_context_tokens: Number.parseInt(chatMaxContextTokensEl.value, 10) || 0,

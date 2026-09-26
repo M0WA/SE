@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"searchengine/internal/adapters/httpchat"
 	"searchengine/internal/domain"
@@ -441,6 +442,59 @@ func TestComplete_NilHTTPClient(t *testing.T) {
 	msg, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error with nil HTTPClient: %v", err)
+	}
+	if msg.Content != "ok" {
+		t.Errorf("answer = %q, want %q", msg.Content, "ok")
+	}
+}
+
+// TestComplete_CompletionTimeoutSecondsAppliesPerCallDeadline proves
+// domain.ChatEndpoint.CompletionTimeoutSeconds actually bounds the
+// individual call, not just the shared *http.Client's own generous
+// safety-ceiling timeout -- a slow server outlives a short configured
+// value and Complete returns a deadline error instead of waiting on the
+// client's much larger ceiling.
+func TestComplete_CompletionTimeoutSecondsAppliesPerCallDeadline(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(1500 * time.Millisecond)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"message": map[string]interface{}{"role": "assistant", "content": "ok"}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := httpchat.New()
+	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "m", CompletionTimeoutSeconds: 1}
+	_, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, nil)
+	if err == nil {
+		t.Fatal("expected a deadline error from a 1s configured timeout against a slower server, got nil")
+	}
+	if !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Errorf("expected a context deadline error, got: %v", err)
+	}
+}
+
+// TestComplete_ZeroCompletionTimeoutSecondsUsesDefault proves an unset
+// (<= 0) CompletionTimeoutSeconds falls back to requestTimeout rather
+// than leaving a call with no meaningful deadline at all -- a server well
+// within the default succeeds normally.
+func TestComplete_ZeroCompletionTimeoutSecondsUsesDefault(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"message": map[string]interface{}{"role": "assistant", "content": "ok"}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := httpchat.New()
+	endpoint := domain.ChatEndpoint{BaseURL: srv.URL, Model: "m"} // CompletionTimeoutSeconds left 0
+	msg, err := c.Complete(context.Background(), endpoint, []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if msg.Content != "ok" {
 		t.Errorf("answer = %q, want %q", msg.Content, "ok")

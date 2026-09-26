@@ -3033,6 +3033,17 @@ components:
             no agent specialization at all. Not cross-checked against the
             actual agents table -- a stale id just never resolves to
             anything at chat time.
+        completion_timeout_seconds:
+          type: integer
+          description: >-
+            Bounds how long a single completion call to this endpoint may
+            take before it's given up on. One chat turn can make several
+            completion calls in a row (the tool-calling follow-up loop,
+            plus retries recovering from a model that emits a tool call as
+            literal text instead of a real one), each bounded
+            independently by this value -- not a shared budget for the
+            whole turn. 0 (or omitted) uses the built-in default (300s). A
+            negative value is rejected with 400.
 
     ChatEndpointRequest:
       description: >-

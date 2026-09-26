@@ -14,6 +14,7 @@ function baseChatEndpoint(overrides) {
     model: 'llama-3',
     enabled: true,
     system_prompt: 'You are a helpful assistant.',
+    completion_timeout_seconds: 120,
     max_context_tokens: 6000,
     web_search_enabled: true,
     web_search_base_url: 'http://127.0.0.1:8888',
@@ -70,6 +71,7 @@ test('loadChatEndpoint populates every chat field from the GET response', async 
   assert.equal(document.getElementById('chat-enabled').checked, true);
   assert.equal(document.getElementById('chat-base-url').value, 'http://localhost:8000/v1');
   assert.equal(document.getElementById('chat-model').value, 'llama-3');
+  assert.equal(document.getElementById('chat-completion-timeout-seconds').value, '120');
   assert.equal(document.getElementById('chat-system-prompt').value, 'You are a helpful assistant.');
   assert.equal(document.getElementById('chat-max-context-tokens').value, '6000');
   assert.equal(document.getElementById('chat-web-search-enabled').checked, true);
@@ -173,6 +175,7 @@ test('saveChatEndpoint PATCHes every field, including max_context_tokens', async
   document.getElementById('chat-enabled').checked = true;
   document.getElementById('chat-base-url').value = 'http://localhost:9000/v1';
   document.getElementById('chat-model').value = 'gpt-oss';
+  document.getElementById('chat-completion-timeout-seconds').value = '240';
   document.getElementById('chat-api-key').value = 'sk-new-key';
   document.getElementById('chat-system-prompt').value = 'Answer tersely.';
   document.getElementById('chat-max-context-tokens').value = '8000';
@@ -196,6 +199,7 @@ test('saveChatEndpoint PATCHes every field, including max_context_tokens', async
   assert.equal(gotURL, '/admin/api/chat-endpoint');
   assert.equal(gotBody.base_url, 'http://localhost:9000/v1');
   assert.equal(gotBody.model, 'gpt-oss');
+  assert.equal(gotBody.completion_timeout_seconds, 240);
   assert.equal(gotBody.api_key, 'sk-new-key');
   assert.equal(gotBody.system_prompt, 'Answer tersely.');
   assert.equal(gotBody.max_context_tokens, 8000);
@@ -260,6 +264,24 @@ test('saveChatEndpoint defaults max_context_tokens to 0 for an unparseable value
   const { saveChatEndpoint } = requireFresh('./admin_chat_settings.js');
   await saveChatEndpoint();
   assert.equal(gotBody.max_context_tokens, 0);
+});
+
+test('saveChatEndpoint defaults completion_timeout_seconds to 0 for an unparseable value', async () => {
+  loadFixture();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  document.getElementById('chat-completion-timeout-seconds').value = 'abc';
+
+  let gotBody;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/chat-endpoint') && opts && opts.method === 'PATCH') {
+      gotBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => baseChatEndpoint() };
+    }
+    return { ok: true, json: async () => baseChatEndpoint() };
+  };
+  const { saveChatEndpoint } = requireFresh('./admin_chat_settings.js');
+  await saveChatEndpoint();
+  assert.equal(gotBody.completion_timeout_seconds, 0);
 });
 
 test('saveChatEndpoint shows an error message and re-enables the button on failure', async () => {

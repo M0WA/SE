@@ -93,7 +93,17 @@ type ChatEndpoint struct {
 	// DefaultAgentID names the Agent selected by default, overridable per
 	// question by ChatOptions.AgentID. Empty means no agent specialization.
 	DefaultAgentID string
-	UpdatedAt      time.Time
+	// CompletionTimeoutSeconds bounds how long a single completion call to
+	// this endpoint is allowed to take (see httpchat.Client.Complete).
+	// <= 0 falls back to httpchat's own default. One turn can chain
+	// several completions (the tool-calling follow-up loop, plus the
+	// leaked-tool-call recovery retries), so this bounds each individual
+	// call, not the whole turn -- keep it comfortably under nginx's own
+	// proxy_read_timeout (packaging/nginx/searchengine.conf) for the
+	// FIRST call at least, since that one has no earlier partial response
+	// to fall back on if it times out.
+	CompletionTimeoutSeconds int
+	UpdatedAt                time.Time
 }
 
 // ChatCompletionReserveFraction is the fraction of a model's advertised max
