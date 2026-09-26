@@ -157,6 +157,30 @@ func validateChatMessages(messages []domain.ChatMessage) error {
 	return nil
 }
 
+// chatAvailableForGPUMode consults the cached (no network call --
+// see GPUModeService.CachedMode's own doc comment) GPU mode and, if it's
+// enabled and not currently "chat," writes a 503 explaining that plainly
+// (gpu_mode_unavailable) instead of letting handleChat fall through to a
+// confusing upstream connection error from httpchat. Reports true when
+// the turn may proceed. A disabled/never-populated cache always reports
+// available, since the vast majority of deployments never turn this
+// feature on at all.
+func (h *Handler) chatAvailableForGPUMode(w http.ResponseWriter) bool {
+	if h.gpuModeService == nil {
+		return true
+	}
+	st, enabled := h.gpuModeService.CachedMode()
+	if !enabled || st.Mode == domain.GPUModeChat {
+		return true
+	}
+	writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+		"error":       "gpu_mode_unavailable",
+		"mode":        st.Mode,
+		"in_progress": st.InProgress,
+	})
+	return false
+}
+
 // handleChat answers one chat turn against the admin-configured chat
 // endpoint (h.chat). A client-supplied message may only claim
 // ChatRoleUser/ChatRoleAssistant -- RoleSystem/RoleTool are reserved for
@@ -175,6 +199,9 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateChatMessages(req.Messages); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !h.chatAvailableForGPUMode(w) {
 		return
 	}
 

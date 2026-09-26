@@ -43,6 +43,7 @@ flowchart LR
     HashEmbed["hashembed"]
     HTTPEmbed["httpembed"]
     HTTPChat["httpchat"]
+    HTTPGPUMode["httpgpumode"]
     CrawlClient["crawlclient"]
     SettingsCrypto["settingscrypto"]
     MCPClient["mcpclient<br/>MCP client (stdio/http)"]
@@ -84,10 +85,13 @@ flowchart LR
   App --> HashEmbed
   App --> HTTPEmbed
   App --> HTTPChat
+  App --> HTTPGPUMode
   HTTPEmbed --> Netguard
   HTTPChat --> Netguard
+  HTTPGPUMode --> Netguard
   HTTPEmbed --> EmbedAPI
   HTTPChat --> ChatAPI
+  HTTPGPUMode -.->|"HTTP, X-Internal-Token<br/>private LAN"| GPUControl
   App --> MCPClient
   MCPClient -.->|"spawns as child process"| MCPWeb
   MCPClient -.->|"spawns as child process"| MCPDatetime
