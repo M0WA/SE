@@ -154,35 +154,51 @@ func repairRawControlCharsInJSONStrings(s string) string {
 	return out.String()
 }
 
-// completeDetectingLeakedToolCalls wraps completer.Complete with one
-// bounded retry for the leaked-tool-call failure mode detectLeakedToolCall
-// describes. Returns the message to use going forward and the message
-// history to continue from (unchanged unless a retry happened, in which
-// case it includes the original leaked-looking message and the nudge
-// system message, so subsequent rounds see accurate history).
+// maxLeakedToolCallRetries bounds how many extra nudge-and-retry rounds
+// completeDetectingLeakedToolCalls attempts before giving up and
+// returning whatever the last attempt produced (even if it's still
+// leaking). Confirmed live against se.mo-sys.de: a single retry (the
+// original bound, matching checkToolFunctions' own one-retry precedent
+// elsewhere in this codebase) still left the model re-leaking on its own
+// nudged retry in 3 of 6 real attempts for this specific large-argument
+// case -- a materially higher flake rate than the simpler "did it call
+// any tool at all" scenario that precedent was tuned for, warranting a
+// slightly larger, still-bounded budget here specifically.
+const maxLeakedToolCallRetries = 2
+
+// completeDetectingLeakedToolCalls wraps completer.Complete with a
+// bounded number of retries (see maxLeakedToolCallRetries) for the
+// leaked-tool-call failure mode detectLeakedToolCall describes. Returns
+// the message to use going forward and the message history to continue
+// from (unchanged unless at least one retry happened, in which case it
+// includes each leaked-looking message and its own nudge, so subsequent
+// rounds see accurate history).
 //
 // Deliberately asks the model to re-assert its own intent rather than
 // parsing and executing the leaked text's own arguments -- see
-// detectLeakedToolCall's doc comment for the full reasoning. Bounded to
-// one retry so a model that keeps leaking doesn't loop; a retry that
-// itself errors is best-effort (keeps the original message rather than
+// detectLeakedToolCall's doc comment for the full reasoning. A retry that
+// itself errors is best-effort (keeps the last good message rather than
 // failing the whole turn over a retry-specific error).
 func (s *ChatService) completeDetectingLeakedToolCalls(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage, tools []domain.ToolDef) (domain.ChatMessage, []domain.ChatMessage, error) {
 	msg, err := s.completer.Complete(ctx, endpoint, messages, tools)
 	if err != nil {
 		return domain.ChatMessage{}, messages, err
 	}
-	if len(msg.ToolCalls) > 0 || !detectLeakedToolCall(msg.Content, tools) {
-		return msg, messages, nil
-	}
+	currentMessages := messages
+	for i := 0; i < maxLeakedToolCallRetries; i++ {
+		if len(msg.ToolCalls) > 0 || !detectLeakedToolCall(msg.Content, tools) {
+			return msg, currentMessages, nil
+		}
 
-	retryMessages := make([]domain.ChatMessage, 0, len(messages)+2)
-	retryMessages = append(retryMessages, messages...)
-	retryMessages = append(retryMessages, msg, domain.ChatMessage{Role: domain.ChatRoleSystem, Content: leakedToolCallNudge})
+		retryMessages := make([]domain.ChatMessage, 0, len(currentMessages)+2)
+		retryMessages = append(retryMessages, currentMessages...)
+		retryMessages = append(retryMessages, msg, domain.ChatMessage{Role: domain.ChatRoleSystem, Content: leakedToolCallNudge})
 
-	retryMsg, err := s.completer.Complete(ctx, endpoint, retryMessages, tools)
-	if err != nil {
-		return msg, messages, nil
+		retryMsg, err := s.completer.Complete(ctx, endpoint, retryMessages, tools)
+		if err != nil {
+			return msg, currentMessages, nil
+		}
+		msg, currentMessages = retryMsg, retryMessages
 	}
-	return retryMsg, retryMessages, nil
+	return msg, currentMessages, nil
 }

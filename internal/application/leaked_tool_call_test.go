@@ -211,6 +211,56 @@ func TestCompleteDetectingLeakedToolCalls_LeakDetectedRetriesWithNudge(t *testin
 	}
 }
 
+// TestCompleteDetectingLeakedToolCalls_SecondRetrySucceeds proves the
+// budget is genuinely maxLeakedToolCallRetries attempts, not just one --
+// confirmed live this is necessary: a single retry alone still left the
+// model re-leaking on its own nudged retry in half of a 6-attempt live
+// sample, so the loop must be able to try more than once.
+func TestCompleteDetectingLeakedToolCalls_SecondRetrySucceeds(t *testing.T) {
+	leaked := plainMessage(`<tool_call>` + "\n" + `{"name": "write_file", "arguments": {"filename": "a.txt"}}` + "\n" + `</tool_call>`)
+	real := toolCallMessage("call_1", "write_file", argsJSON("filename", "a.txt"))
+	completer := &fakeLeakDetectionCompleter{responses: []domain.ChatMessage{leaked, leaked, real}, errAt: -1}
+	svc := &ChatService{completer: completer}
+
+	messages := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "write a file"}}
+	msg, gotMessages, err := svc.completeDetectingLeakedToolCalls(context.Background(), domain.ChatEndpoint{}, messages, []domain.ToolDef{writeFileTool})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msg.ToolCalls) != 1 || msg.ToolCalls[0].Name != "write_file" {
+		t.Fatalf("expected the second retry's real ToolCall returned, got %+v", msg)
+	}
+	if completer.callCount != 3 {
+		t.Fatalf("expected exactly 3 completer calls (original + two retries), got %d", completer.callCount)
+	}
+	if len(gotMessages) != len(messages)+4 {
+		t.Fatalf("expected history extended by both leaked messages + both nudges, got %d messages", len(gotMessages))
+	}
+}
+
+// TestCompleteDetectingLeakedToolCalls_ExhaustsRetryBudgetStillLeaking
+// proves a model that keeps leaking on every attempt doesn't loop forever
+// -- the budget is exhausted and the last (still-leaking) message is
+// returned as a best-effort result rather than retrying indefinitely.
+func TestCompleteDetectingLeakedToolCalls_ExhaustsRetryBudgetStillLeaking(t *testing.T) {
+	leaked := plainMessage(`<tool_call>` + "\n" + `{"name": "write_file", "arguments": {"filename": "a.txt"}}` + "\n" + `</tool_call>`)
+	completer := &fakeLeakDetectionCompleter{responses: []domain.ChatMessage{leaked, leaked, leaked, leaked}, errAt: -1}
+	svc := &ChatService{completer: completer}
+
+	messages := []domain.ChatMessage{{Role: domain.ChatRoleUser, Content: "write a file"}}
+	msg, _, err := svc.completeDetectingLeakedToolCalls(context.Background(), domain.ChatEndpoint{}, messages, []domain.ToolDef{writeFileTool})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msg.ToolCalls) != 0 || msg.Content != leaked.Content {
+		t.Fatalf("expected the last still-leaking message returned as best-effort, got %+v", msg)
+	}
+	if completer.callCount != 1+maxLeakedToolCallRetries {
+		t.Fatalf("expected exactly %d completer calls (original + %d retries), got %d",
+			1+maxLeakedToolCallRetries, maxLeakedToolCallRetries, completer.callCount)
+	}
+}
+
 func TestCompleteDetectingLeakedToolCalls_LeakDetectedButModelDeclinesOnRetry(t *testing.T) {
 	leaked := plainMessage(`<tool_call>` + "\n" + `{"name": "write_file", "arguments": {}}` + "\n" + `</tool_call>`)
 	declined := plainMessage("Never mind, I wasn't actually trying to call anything.")

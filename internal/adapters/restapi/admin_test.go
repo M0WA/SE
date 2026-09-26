@@ -5651,6 +5651,43 @@ func TestHandleAdminChatEndpoint_PatchWebSearchResultCountRoundTrips(t *testing.
 	}
 }
 
+// TestHandleAdminChatEndpoint_PatchNegativeCompletionTimeoutSecondsRejected
+// mirrors the MaxContextTokens/WebSearchResultCount cases, same "0 means
+// use the default, negative invalid" convention.
+func TestHandleAdminChatEndpoint_PatchNegativeCompletionTimeoutSecondsRejected(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
+	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{
+		"base_url": "https://example.com/v1", "model": "gpt-x", "completion_timeout_seconds": -1,
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleAdminChatEndpoint_PatchCompletionTimeoutSecondsRoundTrips
+// proves a positive completion_timeout_seconds is stored and echoed back
+// as-is.
+func TestHandleAdminChatEndpoint_PatchCompletionTimeoutSecondsRoundTrips(t *testing.T) {
+	repo := newSettingsStoreTestRepo(t)
+	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)
+	rec := patchChatEndpoint(t, h, cookie, map[string]interface{}{
+		"base_url": "https://example.com/v1", "model": "gpt-x", "completion_timeout_seconds": 600,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		CompletionTimeoutSeconds int `json:"completion_timeout_seconds"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.CompletionTimeoutSeconds != 600 {
+		t.Errorf("expected completion_timeout_seconds 600 echoed back, got %d", resp.CompletionTimeoutSeconds)
+	}
+}
+
 func TestHandleAdminChatEndpoint_PatchDefaultAgentIDRoundTrips(t *testing.T) {
 	repo := newSettingsStoreTestRepo(t)
 	h, cookie := adminAuthedHandlerWithChatEndpoints(t, repo)

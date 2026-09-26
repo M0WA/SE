@@ -18,8 +18,8 @@ import (
 	"searchengine/internal/domain"
 )
 
-// requestTimeout is the default HTTP client timeout used when Client is
-// constructed via New() with no HTTPClient override -- generous since chat
+// requestTimeout is Complete's default per-call deadline, used whenever
+// endpoint.CompletionTimeoutSeconds is <= 0 (unset) -- generous since chat
 // completions (unlike a short embeddings call) can genuinely take a while,
 // especially against a CPU-only local model or a self-hosted GPU host
 // under concurrent load. Raised from an original 60s after a live report
@@ -29,7 +29,27 @@ import (
 // real answer, not just a degenerate one. See mcp-vision's own
 // captionCallTimeout for the same class of fix on the separate
 // vision-captioning HTTP call.
-const requestTimeout = 180 * time.Second
+//
+// Raised again from 180s to match nginx's own proxy_read_timeout
+// (packaging/nginx/searchengine.conf, 300s on the "/" location that
+// proxies /chat) -- a single completion call being cut off at 180s while
+// nginx itself would have tolerated up to 300s was a needless mismatch,
+// especially now that one turn can chain multiple sequential completions
+// (see completeDetectingLeakedToolCalls's own bounded retries plus the
+// existing tool-calling follow-up loop) -- each individual call deserves
+// the same runway nginx already grants the turn as a whole. Now also
+// admin-configurable per endpoint (domain.ChatEndpoint.
+// CompletionTimeoutSeconds) for a deployment whose own nginx timeout, or
+// whose model's own typical latency, differs from this default.
+const requestTimeout = 300 * time.Second
+
+// maxHTTPClientTimeout is a generous safety ceiling on the shared
+// *http.Client itself, well above any sane admin-configured
+// CompletionTimeoutSeconds -- the actual, meaningful per-call deadline is
+// always the context timeout Complete derives from the endpoint's own
+// config (see completionTimeout), never this. This exists only so a
+// context-wiring bug can't turn into a truly unbounded hang.
+const maxHTTPClientTimeout = 30 * time.Minute
 
 // maxResponseBytes caps how much of the HTTP response body is ever read --
 // a safety bound against a misbehaving or malicious endpoint, not a real
@@ -55,7 +75,16 @@ func New() *Client {
 // on a blocked address (see the checkEndpointURL pre-request check below
 // for why both layers exist).
 func defaultHTTPClient() *http.Client {
-	return &http.Client{Timeout: requestTimeout, Transport: netguard.ConfiguredEndpointTransport()}
+	return &http.Client{Timeout: maxHTTPClientTimeout, Transport: netguard.ConfiguredEndpointTransport()}
+}
+
+// completionTimeout resolves endpoint's own configured per-call deadline,
+// falling back to requestTimeout when unset (<= 0).
+func completionTimeout(endpoint domain.ChatEndpoint) time.Duration {
+	if endpoint.CompletionTimeoutSeconds > 0 {
+		return time.Duration(endpoint.CompletionTimeoutSeconds) * time.Second
+	}
+	return requestTimeout
 }
 
 // checkEndpointURL rejects a BaseURL-derived URL that
@@ -162,6 +191,9 @@ type chatCompletionResponse struct {
 // OpenAI-compatible response, and returns the first choice's message
 // (content and/or tool_calls). A non-2xx status or empty choices is an error.
 func (c *Client) Complete(ctx context.Context, endpoint domain.ChatEndpoint, messages []domain.ChatMessage, tools []domain.ToolDef) (domain.ChatMessage, error) {
+	ctx, cancel := context.WithTimeout(ctx, completionTimeout(endpoint))
+	defer cancel()
+
 	reqPayload := chatCompletionRequest{Model: endpoint.Model, Messages: toWireMessages(messages), Tools: toWireTools(tools)}
 	if len(tools) > 0 {
 		reqPayload.ToolChoice = "auto"
