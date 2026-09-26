@@ -485,6 +485,22 @@ routine and doesn't need per-instance confirmation. Downwards compatibility does
 not matter (no migration shims needed for breaking changes) — this does not excuse
 actual correctness bugs.
 
+**While actively debugging/iterating on a live-verified fix**, shortcut the full
+branch → PR → CI → merge → release → tag → publish → download → `dpkg -i` cycle
+(minutes per round trip) by building locally and `scp`ing the binary straight to
+the target systemd unit's own path, then restarting just that service:
+
+```
+go build -o /tmp/searchengine-search ./cmd/search   # or -admin/-crawl, matching Makefile's own build target
+scp /tmp/searchengine-search root@se.mo-sys.de:/usr/bin/searchengine-search
+ssh root@se.mo-sys.de "systemctl restart searchengine-search"
+```
+
+This is a debugging shortcut only, never a substitute for the real PR/CI/release
+flow once a fix is confirmed working — `dpkg -i` will overwrite a manually-scp'd
+binary on the next real release anyway (nothing tracks the scp'd version), so
+still land the change through the normal flow above once verified.
+
 ## Patterns worth knowing
 
 - **Fire-and-forget background work**: HTTP handlers that kick off long-running
