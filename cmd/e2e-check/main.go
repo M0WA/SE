@@ -87,7 +87,19 @@ func main() {
 	host := flag.String("host", "se.mo-sys.de", "target deployment's hostname (no scheme)")
 	credsPath := flag.String("creds", "cmd/e2e-check/credentials.json", "path to a JSON credentials file for -host (see credentials.example.json)")
 	includeSlow := flag.Bool("include-slow", false, "also run slow/known-heavy checks (sandbox package install, image OCR) that can take minutes")
-	timeout := flag.Duration("chat-timeout", 90*time.Second, "per-request HTTP client timeout -- deliberately close to nginx's own proxy_read_timeout, so a check FAILS instead of hanging when that's misconfigured")
+	// 290s: nginx's own proxy_read_timeout is 300s
+	// (packaging/nginx/searchengine.conf) -- close enough to give a real,
+	// slow-but-legitimate turn the same headroom nginx itself grants (one
+	// turn can now chain several sequential completions: the leaked-tool-
+	// call recovery's own bounded retries, plus the existing tool-calling
+	// follow-up loop), while still failing via a clean Go HTTP client
+	// timeout slightly before nginx would forcibly cut the connection,
+	// rather than an ambiguous connection-reset. Previously 90s, stale
+	// from before nginx's own timeout was raised to 300s -- confirmed live
+	// (XLSX file_ids check): a real, non-buggy turn needing multiple
+	// sequential completions legitimately took over 90s and was cut off
+	// here first, misreported as a hang rather than a slow-but-working turn.
+	timeout := flag.Duration("chat-timeout", 290*time.Second, "per-request HTTP client timeout -- deliberately close to nginx's own proxy_read_timeout, so a check FAILS instead of hanging when that's misconfigured")
 	flag.Parse()
 
 	creds, err := loadCredentials(*credsPath)
