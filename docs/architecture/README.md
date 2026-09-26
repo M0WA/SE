@@ -67,6 +67,7 @@ Pure logic — every file imports only the Go standard library, with no SQL, HTT
 | `SettingsStore` | Generic key/value settings persistence shared by every process. | `sqlrepo` |
 | `ScheduledCrawlStore` | CRUD + scheduling operations on `ScheduledCrawl`, shared by admin CRUD and the crawl-server ticker. | `sqlrepo` |
 | `EmbeddingEndpointStore`, `ChatEndpointStore`, `ChatVisionStore` | CRUD/get-set for admin-configured embedding, chat, and chat-vision endpoint config. | `sqlrepo` |
+| `GPUModeStore` | Single-row get/set for GPU mode (Vision) settings -- the admin-configured control endpoint (`cmd/gpu-control`, not yet built) that will let the public chat page's Chat/Vision/Search toggle switch the shared self-hosted GPU between its normal chat role and image/video generation (ComfyUI+LTX). This first slice is data-model/admin-UI only, `Enabled` defaulting false; no runtime switching exists yet. | `sqlrepo` |
 | `MCPServerStore` | CRUD for admin-configured MCP server connections. | `sqlrepo` |
 | `UserMCPServerStore` | CRUD for per-user, self-service MCP server connections (`/account/mcp-servers`) -- same `MCPServer` shape, but each row is owned by and scoped to one userID; `http` transport only (no `stdio`, which grants local command execution -- admin rows only). | `sqlrepo` |
 | `AgentStore` | CRUD for admin-defined agents -- a named specialization (static system prompt + optional MCP server scope), resolved by `ChatService.Chat` each turn. | `sqlrepo` |
@@ -99,7 +100,7 @@ Orchestration/use-case layer; verified to import only `internal/domain` and `int
 
 | Adapter | Responsibility |
 |---|---|
-| `sqlrepo` | SQL persistence layer shared by all three binaries (SQLite locally/CI, Postgres in the dev deployment); implements `SQLRepository`, `PageRankRepository`, `ContentDedupRepository`, `EmbeddingRepository`, `SemanticMatcher`, `SessionStore`, `AdminRepository`, `CrawlJobStore`, `DocumentJobStore`, `SettingsStore`, `ScheduledCrawlStore`, `EmbeddingEndpointStore`, `ChatEndpointStore`, `ChatVisionStore`, `UserStore`, `FileStore`, `ChatStore`, and more. |
+| `sqlrepo` | SQL persistence layer shared by all three binaries (SQLite locally/CI, Postgres in the dev deployment); implements `SQLRepository`, `PageRankRepository`, `ContentDedupRepository`, `EmbeddingRepository`, `SemanticMatcher`, `SessionStore`, `AdminRepository`, `CrawlJobStore`, `DocumentJobStore`, `SettingsStore`, `ScheduledCrawlStore`, `EmbeddingEndpointStore`, `ChatEndpointStore`, `ChatVisionStore`, `GPUModeStore`, `UserStore`, `FileStore`, `ChatStore`, and more. |
 | `restapi` | HTTP handler layer for both the public search UI/API and the admin UI/API — routing, JSON REST endpoints, embedded static assets, auth/session and crawl-internal-token checks. |
 | `httpfetcher` | Default plain-HTTP page fetcher with timeout/UA/cookie/basic-auth support, routed through `netguard`. |
 | `browserfetcher` | Renders JS-heavy pages via a headless Chromium or Firefox browser over Playwright. |

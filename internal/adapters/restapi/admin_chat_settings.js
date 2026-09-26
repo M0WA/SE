@@ -24,6 +24,15 @@
   const saveVisionSettingsBtn = document.getElementById('save-vision-settings-btn');
   const visionSettingsStatusEl = document.getElementById('vision-settings-status');
 
+  const gpuModeEnabledEl = document.getElementById('gpu-mode-enabled');
+  const gpuModeControlBaseURLEl = document.getElementById('gpu-mode-control-base-url');
+  const gpuModeControlAPIKeyEl = document.getElementById('gpu-mode-control-api-key');
+  const gpuModeClearControlAPIKeyEl = document.getElementById('gpu-mode-clear-control-api-key');
+  const gpuModeSwitchTimeoutSecondsEl = document.getElementById('gpu-mode-switch-timeout-seconds');
+  const gpuModeIdleRevertMinutesEl = document.getElementById('gpu-mode-idle-revert-minutes');
+  const saveGPUModeSettingsBtn = document.getElementById('save-gpu-mode-settings-btn');
+  const gpuModeSettingsStatusEl = document.getElementById('gpu-mode-settings-status');
+
   // enabledServerPrompts is populated once by loadChatEndpoint, then re-rendered on every prompt
   // textarea change, so the split updates live without needing a save.
   let enabledServerPrompts = [];
@@ -231,15 +240,65 @@
 
   saveVisionSettingsBtn.addEventListener('click', saveChatVision);
 
+  // applyGPUModeSettings mirrors applyChatEndpoint's API-key masking convention exactly.
+  function applyGPUModeSettings(g) {
+    gpuModeEnabledEl.checked = !!g.enabled;
+    gpuModeControlBaseURLEl.value = g.control_base_url || '';
+    gpuModeControlAPIKeyEl.value = '';
+    gpuModeControlAPIKeyEl.placeholder = g.has_control_api_key ? 'Leave blank to keep the current token' : '';
+    gpuModeClearControlAPIKeyEl.checked = false;
+    gpuModeClearControlAPIKeyEl.disabled = !g.has_control_api_key;
+    gpuModeSwitchTimeoutSecondsEl.value = g.switch_timeout_seconds || 0;
+    gpuModeIdleRevertMinutesEl.value = g.idle_revert_minutes || 0;
+  }
+
+  async function loadGPUModeSettings() {
+    try {
+      applyGPUModeSettings(await getJSON('/admin/api/gpu-mode'));
+    } catch (err) {
+      gpuModeSettingsStatusEl.style.color = 'var(--accent)';
+      gpuModeSettingsStatusEl.textContent = 'Could not load GPU mode settings: ' + err.message;
+    }
+  }
+
+  async function saveGPUModeSettings() {
+    setButtonLoading(saveGPUModeSettingsBtn, true, 'Saving…');
+    gpuModeSettingsStatusEl.textContent = '';
+    try {
+      await patchJSON('/admin/api/gpu-mode', {
+        enabled: gpuModeEnabledEl.checked,
+        control_base_url: gpuModeControlBaseURLEl.value,
+        control_api_key: gpuModeControlAPIKeyEl.value,
+        clear_control_api_key: gpuModeClearControlAPIKeyEl.checked,
+        switch_timeout_seconds: Number.parseInt(gpuModeSwitchTimeoutSecondsEl.value, 10) || 0,
+        idle_revert_minutes: Number.parseInt(gpuModeIdleRevertMinutesEl.value, 10) || 0,
+      });
+      gpuModeSettingsStatusEl.style.color = 'var(--ink-muted)';
+      gpuModeSettingsStatusEl.textContent = 'Saved.';
+      // Re-fetch so the API-key field reflects the masked state, same post-save refresh as
+      // saveChatEndpoint/saveChatVision.
+      await loadGPUModeSettings();
+    } catch (err) {
+      gpuModeSettingsStatusEl.style.color = 'var(--accent)';
+      gpuModeSettingsStatusEl.textContent = 'Could not save: ' + err.message;
+    } finally {
+      setButtonLoading(saveGPUModeSettingsBtn, false);
+    }
+  }
+
+  saveGPUModeSettingsBtn.addEventListener('click', saveGPUModeSettings);
+
   renderAdminNav();
   wireSignOut();
   loadChatEndpoint();
   loadChatVision();
+  loadGPUModeSettings();
 
   // Node test-runner export only; no-op in a browser <script> tag.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       applyChatEndpoint, loadChatEndpoint, saveChatEndpoint, renderTokenUsageDonut, loadAgentOptions,
       applyChatVision, loadChatVision, saveChatVision, loadEmbeddingProviderOptions,
+      applyGPUModeSettings, loadGPUModeSettings, saveGPUModeSettings,
     };
   }

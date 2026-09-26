@@ -249,6 +249,10 @@ type Handler struct {
 	// chatVision backs the admin API's chat vision settings CRUD -- set on
 	// admin-server only, same *sqlrepo.Repository as chatEndpoints.
 	chatVision ports.ChatVisionStore
+	// gpuMode backs the admin API's GPU mode (Vision image/video
+	// generation) settings CRUD -- set on admin-server only, same
+	// *sqlrepo.Repository as chatEndpoints.
+	gpuMode ports.GPUModeStore
 	// documentJobs backs the admin Document-upload feature's job CRUD --
 	// set on admin-server only, same *sqlrepo.Repository as chatEndpoints.
 	documentJobs ports.DocumentJobStore
@@ -378,6 +382,10 @@ type Config struct {
 	// ChatVision is set on admin-server only, backing the chat vision
 	// settings CRUD API -- same *sqlrepo.Repository as ChatEndpoints.
 	ChatVision ports.ChatVisionStore
+	// GPUMode is set on admin-server only, backing the GPU mode (Vision
+	// image/video generation) settings CRUD API -- same *sqlrepo.Repository
+	// as ChatEndpoints.
+	GPUMode ports.GPUModeStore
 	// DocumentJobs is set on admin-server only, backing the Document-upload
 	// feature's job CRUD API -- same *sqlrepo.Repository as ChatEndpoints.
 	DocumentJobs ports.DocumentJobStore
@@ -475,6 +483,7 @@ func New(cfg Config) *Handler {
 		chat:                  cfg.Chat,
 		chatEndpoints:         cfg.ChatEndpoints,
 		chatVision:            cfg.ChatVision,
+		gpuMode:               cfg.GPUMode,
 		documentJobs:          cfg.DocumentJobs,
 		mcpServers:            cfg.MCPServers,
 		mcpTools:              cfg.MCPTools,
@@ -650,6 +659,7 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("/admin/api/settings", h.requireAdminAuthAPI(h.handleAdminSettings))
 	mux.HandleFunc("/admin/api/chat-endpoint", h.requireAdminAuthAPI(h.handleAdminChatEndpoint))
 	mux.HandleFunc("/admin/api/chat-vision", h.requireAdminAuthAPI(h.handleAdminChatVision))
+	mux.HandleFunc("/admin/api/gpu-mode", h.requireAdminAuthAPI(h.handleAdminGPUMode))
 	mux.HandleFunc("/admin/api/mcp-servers", h.requireAdminAuthAPI(h.handleAdminMCPServers))
 	mux.HandleFunc("POST /admin/api/mcp-servers/test", h.requireAdminAuthAPI(h.handleAdminMCPServersTest))
 	mux.HandleFunc("GET /admin/api/mcp-servers/{id}", h.requireAdminAuthAPI(h.handleAdminGetMCPServer))

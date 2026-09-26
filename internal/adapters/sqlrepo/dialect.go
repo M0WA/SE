@@ -11,6 +11,7 @@ type Dialect interface {
 	UpsertDocumentAliasSQL() string
 	UpsertChatEndpointSQL() string
 	UpsertChatVisionSettingsSQL() string
+	UpsertGPUModeSettingsSQL() string
 	// SeedContentDedupLockSQL atomically inserts content_dedup_lock's
 	// sentinel row (id=1, in_progress=false) if missing -- a
 	// SELECT-then-INSERT would race the same way CreateSchemaSQL's doc
@@ -65,6 +66,14 @@ func (sqliteDialect) UpsertChatVisionSettingsSQL() string {
 	          similarity_enabled=excluded.similarity_enabled, similarity_provider_id=excluded.similarity_provider_id,
 	          caption_enabled=excluded.caption_enabled, caption_base_url=excluded.caption_base_url,
 	          caption_api_key=excluded.caption_api_key, caption_model=excluded.caption_model,
+	          updated_at=excluded.updated_at`
+}
+func (sqliteDialect) UpsertGPUModeSettingsSQL() string {
+	return `INSERT INTO gpu_mode_settings (id, enabled, control_base_url, control_api_key, switch_timeout_seconds, idle_revert_minutes, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+	        ON CONFLICT(id) DO UPDATE SET
+	          enabled=excluded.enabled, control_base_url=excluded.control_base_url,
+	          control_api_key=excluded.control_api_key, switch_timeout_seconds=excluded.switch_timeout_seconds,
+	          idle_revert_minutes=excluded.idle_revert_minutes,
 	          updated_at=excluded.updated_at`
 }
 func (sqliteDialect) SeedContentDedupLockSQL() string {
@@ -180,6 +189,23 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 			caption_base_url TEXT NOT NULL DEFAULT '',
 			caption_api_key TEXT NOT NULL DEFAULT '',
 			caption_model TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL
+		)`,
+		// gpu_mode_settings holds the single admin-configured
+		// domain.GPUModeSettings row (id = gpuModeRowID) -- same
+		// sentinel-row shape as chat_vision_settings, for the same reason
+		// (one active configuration). Deliberately its own table: this is
+		// an unrelated capability (switching the shared GPU's own running
+		// model between vLLM and ComfyUI+LTX) from ChatVisionSettings
+		// (image understanding against an attached image, never touching
+		// the GPU's own role).
+		`CREATE TABLE IF NOT EXISTS gpu_mode_settings (
+			id TEXT PRIMARY KEY,
+			enabled BOOLEAN NOT NULL DEFAULT false,
+			control_base_url TEXT NOT NULL DEFAULT '',
+			control_api_key TEXT NOT NULL DEFAULT '',
+			switch_timeout_seconds INTEGER NOT NULL DEFAULT 0,
+			idle_revert_minutes INTEGER NOT NULL DEFAULT 0,
 			updated_at TEXT NOT NULL
 		)`,
 		// mcp_servers lists admin-configured MCP server connections
@@ -363,6 +389,14 @@ func (mysqlDialect) UpsertChatVisionSettingsSQL() string {
 	          caption_api_key=VALUES(caption_api_key), caption_model=VALUES(caption_model),
 	          updated_at=VALUES(updated_at)`
 }
+func (mysqlDialect) UpsertGPUModeSettingsSQL() string {
+	return `INSERT INTO gpu_mode_settings (id, enabled, control_base_url, control_api_key, switch_timeout_seconds, idle_revert_minutes, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+	        ON DUPLICATE KEY UPDATE
+	          enabled=VALUES(enabled), control_base_url=VALUES(control_base_url),
+	          control_api_key=VALUES(control_api_key), switch_timeout_seconds=VALUES(switch_timeout_seconds),
+	          idle_revert_minutes=VALUES(idle_revert_minutes),
+	          updated_at=VALUES(updated_at)`
+}
 func (mysqlDialect) SeedContentDedupLockSQL() string {
 	return `INSERT IGNORE INTO content_dedup_lock (id, in_progress) VALUES (1, false)`
 }
@@ -468,6 +502,16 @@ func (mysqlDialect) CreateSchemaSQL() []string {
 			caption_base_url TEXT NOT NULL,
 			caption_api_key TEXT NOT NULL,
 			caption_model VARCHAR(255) NOT NULL,
+			updated_at VARCHAR(64) NOT NULL
+		) ENGINE=InnoDB`,
+		// See the sqlite dialect's gpu_mode_settings comment.
+		`CREATE TABLE IF NOT EXISTS gpu_mode_settings (
+			id VARCHAR(20) PRIMARY KEY,
+			enabled BOOLEAN NOT NULL DEFAULT false,
+			control_base_url TEXT NOT NULL,
+			control_api_key TEXT NOT NULL,
+			switch_timeout_seconds INT NOT NULL DEFAULT 0,
+			idle_revert_minutes INT NOT NULL DEFAULT 0,
 			updated_at VARCHAR(64) NOT NULL
 		) ENGINE=InnoDB`,
 		// See the sqlite dialect's mcp_servers comment.
@@ -613,6 +657,14 @@ func (postgresDialect) UpsertChatVisionSettingsSQL() string {
 	          caption_api_key=EXCLUDED.caption_api_key, caption_model=EXCLUDED.caption_model,
 	          updated_at=EXCLUDED.updated_at`
 }
+func (postgresDialect) UpsertGPUModeSettingsSQL() string {
+	return `INSERT INTO gpu_mode_settings (id, enabled, control_base_url, control_api_key, switch_timeout_seconds, idle_revert_minutes, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)
+	        ON CONFLICT (id) DO UPDATE SET
+	          enabled=EXCLUDED.enabled, control_base_url=EXCLUDED.control_base_url,
+	          control_api_key=EXCLUDED.control_api_key, switch_timeout_seconds=EXCLUDED.switch_timeout_seconds,
+	          idle_revert_minutes=EXCLUDED.idle_revert_minutes,
+	          updated_at=EXCLUDED.updated_at`
+}
 func (postgresDialect) SeedContentDedupLockSQL() string {
 	return `INSERT INTO content_dedup_lock (id, in_progress) VALUES (1, false) ON CONFLICT (id) DO NOTHING`
 }
@@ -710,6 +762,16 @@ func (postgresDialect) CreateSchemaSQL() []string {
 			caption_base_url TEXT NOT NULL DEFAULT '',
 			caption_api_key TEXT NOT NULL DEFAULT '',
 			caption_model TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL
+		)`,
+		// See the sqlite dialect's gpu_mode_settings comment.
+		`CREATE TABLE IF NOT EXISTS gpu_mode_settings (
+			id TEXT PRIMARY KEY,
+			enabled BOOLEAN NOT NULL DEFAULT false,
+			control_base_url TEXT NOT NULL DEFAULT '',
+			control_api_key TEXT NOT NULL DEFAULT '',
+			switch_timeout_seconds INT NOT NULL DEFAULT 0,
+			idle_revert_minutes INT NOT NULL DEFAULT 0,
 			updated_at TEXT NOT NULL
 		)`,
 		// See the sqlite dialect's mcp_servers comment.

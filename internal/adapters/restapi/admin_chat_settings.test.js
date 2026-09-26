@@ -35,7 +35,18 @@ function baseChatVision(overrides) {
   }, overrides);
 }
 
-function loadFixture(chatEndpoint, fetchImpl, mcpServers, agents, chatVision, embeddingEndpoints) {
+function baseGPUMode(overrides) {
+  return Object.assign({
+    enabled: false,
+    control_base_url: '',
+    has_control_api_key: false,
+    switch_timeout_seconds: 0,
+    idle_revert_minutes: 0,
+    updated_at: '2026-01-02T03:04:05Z',
+  }, overrides);
+}
+
+function loadFixture(chatEndpoint, fetchImpl, mcpServers, agents, chatVision, embeddingEndpoints, gpuMode) {
   setupDOM(CHAT_SETTINGS_HTML);
   const adminHelpers = requireFresh('./admin.js');
   Object.assign(global, adminHelpers);
@@ -45,6 +56,9 @@ function loadFixture(chatEndpoint, fetchImpl, mcpServers, agents, chatVision, em
     }
     if (url.includes('/admin/api/chat-vision')) {
       return { ok: true, json: async () => chatVision || baseChatVision() };
+    }
+    if (url.includes('/admin/api/gpu-mode')) {
+      return { ok: true, json: async () => gpuMode || baseGPUMode() };
     }
     if (url.includes('/admin/api/agents')) {
       return { ok: true, json: async () => agents || [] };
@@ -528,6 +542,122 @@ test('clicking "Save vision settings" invokes saveChatVision', async () => {
     return { ok: true, json: async () => baseChatVision() };
   };
   document.getElementById('save-vision-settings-btn').dispatchEvent(new window.Event('click'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(patched, true);
+});
+
+test('loadGPUModeSettings populates every field from the GET response', async () => {
+  loadFixture(undefined, undefined, undefined, undefined, undefined, undefined, baseGPUMode({
+    enabled: true,
+    control_base_url: 'http://10.7.226.11:8002',
+    switch_timeout_seconds: 300,
+    idle_revert_minutes: 15,
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('gpu-mode-enabled').checked, true);
+  assert.equal(document.getElementById('gpu-mode-control-base-url').value, 'http://10.7.226.11:8002');
+  assert.equal(document.getElementById('gpu-mode-switch-timeout-seconds').value, '300');
+  assert.equal(document.getElementById('gpu-mode-idle-revert-minutes').value, '15');
+});
+
+test('loadGPUModeSettings never populates the control token field, even when one is stored', async () => {
+  loadFixture(undefined, undefined, undefined, undefined, undefined, undefined, baseGPUMode({ has_control_api_key: true }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('gpu-mode-control-api-key').value, '');
+  assert.equal(document.getElementById('gpu-mode-control-api-key').placeholder, 'Leave blank to keep the current token');
+  assert.equal(document.getElementById('gpu-mode-clear-control-api-key').disabled, false);
+});
+
+test('loadGPUModeSettings disables "remove stored token" when nothing is stored', async () => {
+  loadFixture(undefined, undefined, undefined, undefined, undefined, undefined, baseGPUMode({ has_control_api_key: false }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('gpu-mode-control-api-key').placeholder, '');
+  assert.equal(document.getElementById('gpu-mode-clear-control-api-key').disabled, true);
+});
+
+test('loadGPUModeSettings reports an error message on a failed fetch', async () => {
+  loadFixture(undefined, async (url) => {
+    if (url.includes('/admin/api/gpu-mode')) return { ok: false, status: 500, text: async () => 'gpu mode down' };
+    return { ok: true, json: async () => ({}) };
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('gpu-mode-settings-status').textContent.includes('gpu mode down'), true);
+});
+
+test('saveGPUModeSettings PATCHes every field', async () => {
+  loadFixture();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  document.getElementById('gpu-mode-enabled').checked = true;
+  document.getElementById('gpu-mode-control-base-url').value = 'http://10.7.226.11:8002';
+  document.getElementById('gpu-mode-control-api-key').value = 'sk-new-token';
+  document.getElementById('gpu-mode-switch-timeout-seconds').value = '300';
+  document.getElementById('gpu-mode-idle-revert-minutes').value = '15';
+  let gotURL, gotBody;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/gpu-mode') && opts && opts.method === 'PATCH') {
+      gotURL = url;
+      gotBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => baseGPUMode(gotBody) };
+    }
+    return { ok: true, json: async () => baseGPUMode() };
+  };
+  const chatSvc = requireFresh('./admin_chat_settings.js');
+  await chatSvc.saveGPUModeSettings();
+  assert.equal(gotURL, '/admin/api/gpu-mode');
+  assert.equal(gotBody.enabled, true);
+  assert.equal(gotBody.control_base_url, 'http://10.7.226.11:8002');
+  assert.equal(gotBody.control_api_key, 'sk-new-token');
+  assert.equal(gotBody.switch_timeout_seconds, 300);
+  assert.equal(gotBody.idle_revert_minutes, 15);
+  assert.equal(document.getElementById('gpu-mode-settings-status').textContent, 'Saved.');
+});
+
+test('saveGPUModeSettings sends clear_control_api_key when the "remove stored token" box is checked', async () => {
+  loadFixture();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  document.getElementById('gpu-mode-clear-control-api-key').checked = true;
+  let gotBody;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/gpu-mode') && opts && opts.method === 'PATCH') {
+      gotBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => baseGPUMode({ has_control_api_key: false }) };
+    }
+    return { ok: true, json: async () => baseGPUMode() };
+  };
+  const { saveGPUModeSettings } = requireFresh('./admin_chat_settings.js');
+  await saveGPUModeSettings();
+  assert.equal(gotBody.clear_control_api_key, true);
+});
+
+test('saveGPUModeSettings shows an error message and re-enables the button on failure', async () => {
+  loadFixture();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  global.fetch = async (url) => {
+    if (url.includes('/admin/api/gpu-mode')) {
+      return { ok: false, status: 500, text: async () => 'gpu mode save failed' };
+    }
+    return { ok: true, json: async () => baseGPUMode() };
+  };
+  const { saveGPUModeSettings } = requireFresh('./admin_chat_settings.js');
+  await saveGPUModeSettings();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const status = document.getElementById('gpu-mode-settings-status');
+  assert.equal(status.textContent.includes('gpu mode save failed'), true);
+  assert.equal(document.getElementById('save-gpu-mode-settings-btn').disabled, false);
+});
+
+test('clicking "Save GPU mode settings" invokes saveGPUModeSettings', async () => {
+  loadFixture();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  let patched = false;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/gpu-mode') && opts && opts.method === 'PATCH') {
+      patched = true;
+      return { ok: true, json: async () => baseGPUMode() };
+    }
+    return { ok: true, json: async () => baseGPUMode() };
+  };
+  document.getElementById('save-gpu-mode-settings-btn').dispatchEvent(new window.Event('click'));
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(patched, true);
 });

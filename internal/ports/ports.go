@@ -630,6 +630,21 @@ type ChatVisionStore interface {
 	SetChatVisionSettings(ctx context.Context, v domain.ChatVisionSettings) error
 }
 
+// ErrGPUModeSettingsNotConfigured is returned by GPUModeStore.
+// GetGPUModeSettings when nothing has ever been saved.
+var ErrGPUModeSettingsNotConfigured = errors.New("gpu mode settings not configured")
+
+// GPUModeStore persists the single admin-configured domain.GPUModeSettings
+// -- same single-row Get/Set shape as ChatVisionStore, for the same reason
+// (one active configuration, not a collection).
+type GPUModeStore interface {
+	// GetGPUModeSettings returns ErrGPUModeSettingsNotConfigured if never
+	// saved.
+	GetGPUModeSettings(ctx context.Context) (domain.GPUModeSettings, error)
+	// SetGPUModeSettings upserts the single settings row.
+	SetGPUModeSettings(ctx context.Context, v domain.GPUModeSettings) error
+}
+
 // ChatCompleter calls an OpenAI-compatible chat-completions endpoint,
 // optionally with a native "tools" list -- tools is nil/empty for a turn
 // with no active MCP tools, in which case the implementation must omit the

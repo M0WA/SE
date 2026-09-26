@@ -1491,7 +1491,7 @@ func (r *Repository) PageRankDistribution(ctx context.Context) (minRank, maxRank
 // page shows them.
 var diagnosticsTables = []string{
 	"documents", "postings", "document_versions", "document_embeddings", "links",
-	"app_settings", "scheduled_crawls", "embedding_http_endpoints", "chat_endpoint", "chat_vision_settings", "crawl_jobs", "crawl_job_pages", "sessions",
+	"app_settings", "scheduled_crawls", "embedding_http_endpoints", "chat_endpoint", "chat_vision_settings", "gpu_mode_settings", "crawl_jobs", "crawl_job_pages", "sessions",
 }
 
 // TableRowCounts reports how many rows each of diagnosticsTables currently
@@ -2175,7 +2175,7 @@ var (
 		"postings", "document_versions", "document_embeddings", "links",
 		"documents", "document_aliases", "crawl_job_pages", "crawl_jobs",
 	}
-	settingsTables = []string{"app_settings", "chat_endpoint", "chat_vision_settings", "embedding_http_endpoints", "scheduled_crawls"}
+	settingsTables = []string{"app_settings", "chat_endpoint", "chat_vision_settings", "gpu_mode_settings", "embedding_http_endpoints", "scheduled_crawls"}
 )
 
 func deleteAllRows(ctx context.Context, tx *sql.Tx, tables []string) error {
@@ -3150,6 +3150,54 @@ func scanChatVisionSettings(row scanner) (domain.ChatVisionSettings, error) {
 	if err := row.Scan(&v.SimilarityEnabled, &v.SimilarityProviderID, &v.CaptionEnabled,
 		&v.CaptionBaseURL, &v.CaptionAPIKey, &v.CaptionModel, &updatedAt); err != nil {
 		return domain.ChatVisionSettings{}, err
+	}
+	v.UpdatedAt = parseCrawledAt(updatedAt)
+	return v, nil
+}
+
+// gpuModeRowID is the fixed sentinel row id gpu_mode_settings' single row
+// always uses -- same reasoning as chatVisionRowID: one active
+// configuration, so Get/SetGPUModeSettings address one known row.
+const gpuModeRowID = "default"
+
+const gpuModeColumns = "enabled, control_base_url, control_api_key, switch_timeout_seconds, idle_revert_minutes, updated_at"
+
+// GetGPUModeSettings returns the single admin-configured GPU mode
+// settings, or ports.ErrGPUModeSettingsNotConfigured if never saved.
+func (r *Repository) GetGPUModeSettings(ctx context.Context) (domain.GPUModeSettings, error) {
+	query := r.ph(`SELECT `+gpuModeColumns+` FROM gpu_mode_settings WHERE id = %s`, 1)
+	row := r.db.QueryRowContext(ctx, query, gpuModeRowID)
+	v, err := scanGPUModeSettings(row)
+	if err == sql.ErrNoRows {
+		return domain.GPUModeSettings{}, ports.ErrGPUModeSettingsNotConfigured
+	}
+	if err != nil {
+		return domain.GPUModeSettings{}, fmt.Errorf("querying gpu mode settings: %w", err)
+	}
+	return v, nil
+}
+
+// SetGPUModeSettings upserts the single gpu_mode_settings sentinel row
+// (id = gpuModeRowID) with v's fields, replacing whatever was saved before
+// -- there is only ever one row, same convention as SetChatVisionSettings.
+func (r *Repository) SetGPUModeSettings(ctx context.Context, v domain.GPUModeSettings) error {
+	_, err := r.db.ExecContext(ctx, r.dialect.UpsertGPUModeSettingsSQL(),
+		gpuModeRowID, v.Enabled, v.ControlBaseURL, v.ControlAPIKey,
+		v.SwitchTimeoutSeconds, v.IdleRevertMinutes,
+		v.UpdatedAt.UTC().Format(crawledAtLayout),
+	)
+	if err != nil {
+		return fmt.Errorf("setting gpu mode settings: %w", err)
+	}
+	return nil
+}
+
+func scanGPUModeSettings(row scanner) (domain.GPUModeSettings, error) {
+	var v domain.GPUModeSettings
+	var updatedAt string
+	if err := row.Scan(&v.Enabled, &v.ControlBaseURL, &v.ControlAPIKey,
+		&v.SwitchTimeoutSeconds, &v.IdleRevertMinutes, &updatedAt); err != nil {
+		return domain.GPUModeSettings{}, err
 	}
 	v.UpdatedAt = parseCrawledAt(updatedAt)
 	return v, nil

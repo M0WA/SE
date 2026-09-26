@@ -173,3 +173,11 @@ func TestAllDialects_UpsertChatVisionSettingsSQLNonEmpty(t *testing.T) {
 		}
 	}
 }
+
+func TestAllDialects_UpsertGPUModeSettingsSQLNonEmpty(t *testing.T) {
+	for _, driver := range []string{"sqlite", "mysql", "postgres"} {
+		if sqlrepo.NewDialect(driver).UpsertGPUModeSettingsSQL() == "" {
+			t.Errorf("expected an upsert-gpu-mode-settings statement for %s", driver)
+		}
+	}
+}
