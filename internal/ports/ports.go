@@ -645,6 +645,27 @@ type GPUModeStore interface {
 	SetGPUModeSettings(ctx context.Context, v domain.GPUModeSettings) error
 }
 
+// GPUModeController calls cmd/gpu-control (the GPU-side control service)
+// over the private LAN, given the admin-configured domain.GPUModeSettings
+// on every call -- mirrors ChatCompleter's own "config per call"
+// convention, since GPUModeSettings is DB-backed and can change between
+// calls. Implemented by internal/adapters/httpgpumode.
+type GPUModeController interface {
+	Status(ctx context.Context, cfg domain.GPUModeSettings) (domain.GPUModeStatus, error)
+	// Switch returns ErrGPUModeSwitchConflict (wrapped, so errors.Is
+	// finds it) when cmd/gpu-control is already mid-switch toward a
+	// *different* target -- the returned domain.GPUModeStatus still
+	// describes what it's busy with (Target/Since/Detail), same as any
+	// other outcome.
+	Switch(ctx context.Context, cfg domain.GPUModeSettings, target domain.GPUMode) (domain.GPUModeStatus, error)
+	Heartbeat(ctx context.Context, cfg domain.GPUModeSettings) error
+}
+
+// ErrGPUModeSwitchConflict is GPUModeController.Switch's sentinel for "a
+// switch to a different target is already in progress" -- see its own
+// doc comment.
+var ErrGPUModeSwitchConflict = errors.New("a gpu mode switch is already in progress")
+
 // ChatCompleter calls an OpenAI-compatible chat-completions endpoint,
 // optionally with a native "tools" list -- tools is nil/empty for a turn
 // with no active MCP tools, in which case the implementation must omit the

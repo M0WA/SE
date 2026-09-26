@@ -5,8 +5,10 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	"searchengine/internal/adapters/httpchat"
+	"searchengine/internal/adapters/httpgpumode"
 	"searchengine/internal/adapters/mcpclient"
 	"searchengine/internal/adapters/restapi"
 	"searchengine/internal/adapters/settingscrypto"
@@ -14,6 +16,11 @@ import (
 	"searchengine/internal/bootstrap"
 	"searchengine/internal/domain"
 )
+
+// gpuModeCachePollInterval mirrors settingsPollInterval's own reasoning --
+// keeps GPUModeService.CachedMode() (handleChat's per-turn check) cheap,
+// refreshed in the background rather than a live network call per turn.
+const gpuModeCachePollInterval = 10 * time.Second
 
 func main() {
 	ctx := context.Background()
@@ -71,6 +78,16 @@ func main() {
 	// bootstrap.DecryptingChatVisionStore's doc comment for why this can't
 	// just be repo directly, unlike ChatEndpoints below.
 	chatVision := bootstrap.NewDecryptingChatVisionStore(repo, settingsEncryptionKey)
+	// gpuMode decrypts ControlAPIKey live on every call -- same reasoning
+	// as chatVision above.
+	gpuMode := bootstrap.NewDecryptingGPUModeStore(repo, settingsEncryptionKey)
+	gpuModeService := application.NewGPUModeService(gpuMode, httpgpumode.New())
+	// Keeps CachedMode() (handleChat's per-turn availability check) cheap
+	// -- see GPUModeService.RefreshCache's own doc comment. Runs
+	// regardless of whether the feature is currently enabled: cheap when
+	// off (one fast DB read per tick), and picks up an admin enabling it
+	// live without a restart.
+	bootstrap.PollRefresh(ctx, gpuModeCachePollInterval, func() { gpuModeService.RefreshCache(ctx) })
 
 	handler := restapi.New(restapi.Config{
 		Search:               searchSvc,
@@ -89,6 +106,7 @@ func main() {
 		Embedders:            embedders,
 		InternalVisionAPIKey: internalVisionAPIKey,
 		Chat:                 application.NewChatService(repo, httpchat.New(), repo, mcpclient.New(), repo, repo, application.VisionConfig{Settings: chatVision, InternalAPIKey: internalVisionAPIKey}),
+		GPUModeService:       gpuModeService,
 	})
 
 	addr := bootstrap.GetEnv("SEARCH_LISTEN_ADDR", "127.0.0.1:8080")

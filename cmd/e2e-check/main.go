@@ -143,6 +143,7 @@ func main() {
 		{"multi-turn: graceful close (no spurious tools)", c.checkGracefulClose},
 		{"out-of-scope question: hedges instead of guessing", c.checkOutOfScopeHonesty},
 		{"chat: over-length message rejected", c.checkChatValidationBoundary},
+		{"vision mode (disabled) returns 404", c.checkVisionModeDisabledIs404},
 		{"always-on MCP tool (datetime)", c.checkDatetimeTool},
 		{"sandbox MCP tool (fast, no packages)", c.checkSandboxFast},
 		{"sandbox MCP tool (run_go)", c.checkGoSandbox},
@@ -1069,6 +1070,24 @@ func (c *client) checkOutOfScopeHonesty() error {
 // Sends one clearly-too-long message rather than maxChatMessages+1 short
 // ones: cheaper, and exercises validateChatMessages' other length check
 // just as directly.
+// checkVisionModeDisabledIs404 proves GET /vision/api/mode is entirely
+// absent (404) while GPU mode (Vision) is disabled -- the default, and,
+// as of this writing, se.mo-sys.de's own actual state (cmd/gpu-control
+// isn't deployed there yet). Deliberately never enables
+// GPUModeSettings.Enabled or calls POST /vision/api/mode -- same
+// never-trigger-the-real-thing-live precedent as this package's own doc
+// comment on why a real crawl is never started here.
+func (c *client) checkVisionModeDisabledIs404() error {
+	status, body, err := c.getJSONRaw("/vision/api/mode")
+	if err != nil {
+		return err
+	}
+	if status != http.StatusNotFound {
+		return fmt.Errorf("expected 404 while GPU mode is disabled, got %d: %s", status, truncate(body, 200))
+	}
+	return nil
+}
+
 func (c *client) checkChatValidationBoundary() error {
 	const maxChatMessageContentLength = 32000 // must match chat.go's own unexported constant
 	overLong := strings.Repeat("x", maxChatMessageContentLength+1)
