@@ -4,13 +4,15 @@
 
 *`/ (search + chat page)`*
 
-The page every signed-in user lands on after logging in -- not an admin screen. Two modes, switched with one control top-right: Chat, for asking a model questions it answers using the index, the web, and your files; Search, for querying indexed pages directly. Everything here works the same for a regular account or an admin (admins additionally get a gear icon linking to /admin).
+The page every signed-in user lands on after logging in -- not an admin screen. Two or three modes, switched with one control top-right: Chat, for asking a model questions it answers using the index, the web, and your files; Search, for querying indexed pages directly; and, only on a deployment with GPU mode (Vision) enabled (see [Chat Settings](chat-settings.md)'s "GPU mode (Vision)" section), Vision, for image/video generation on the same shared GPU. Everything here works the same for a regular account or an admin (admins additionally get a gear icon linking to /admin).
 
 ![Search & Chat](images/search-chat.png)
 
-## Chat vs Search toggle
+## Chat / Vision / Search toggle
 
-The pill-shaped control at the top switches the whole page between Chat and Search -- two independent views, not tabs of the same result: switching hides one set of controls and shows the other. Chat sits on the left, selected by default. Chat is for a written answer synthesized from the index (and optionally the live web), with the model doing the reading; Search, on the right, is the plain, fast option when you already know roughly what you're looking for.
+The pill-shaped control at the top switches the whole page between its modes -- independent views, not tabs of the same result: switching hides one set of controls and shows another. Chat sits on the left, selected by default, and is for a written answer synthesized from the index (and optionally the live web), with the model doing the reading; Search, always on the right, is the plain, fast option when you already know roughly what you're looking for. Vision, between them, only ever appears at all once an admin has enabled GPU mode -- most deployments never show it.
+
+Because Chat and Vision share one physical GPU that can only run one workload at a time, picking either one asks the server to switch the GPU to it -- Search never does, since it only needs the (separately running) embedding model. Selecting Vision shows "Preparing the GPU -- this usually takes about a minute" while the chat model shuts down and image/video generation starts up; switching back to Chat is the slower direction ("this can take a few minutes"), since it's reloading a large model from disk. Because this state is shared across everyone on the deployment, not per-tab, chat can go briefly unavailable ("Chat is unavailable while the GPU is in vision mode") even for someone who never touched the toggle themselves -- if another signed-in user switched to Vision first.
 
 ## Search mode: the query box and syntax
 

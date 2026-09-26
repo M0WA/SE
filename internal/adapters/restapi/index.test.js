@@ -7,12 +7,26 @@ const { setupDOM, teardownDOM, requireFresh } = require('./dom_helper.test_util'
 
 const INDEX_HTML = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 
+// lastFixture is loadFixture's own most recently returned module -- afterEach
+// uses it to always stop a real vision-heartbeat interval (see
+// startVisionHeartbeat) a test may have started via setMode('vision') without
+// itself switching back to chat or stubbing global.setInterval. Without this,
+// a single forgotten real interval keeps Node's test runner process alive
+// indefinitely (neither `npm test` nor scripts/js-test-coverage.js pass
+// --test-force-exit), hanging the whole suite rather than just one test.
+let lastFixture = null;
+
 function loadFixture() {
   setupDOM(INDEX_HTML);
-  return requireFresh('./index.js');
+  lastFixture = requireFresh('./index.js');
+  return lastFixture;
 }
 
 test.afterEach(() => {
+  if (lastFixture && typeof lastFixture.stopVisionHeartbeat === 'function') {
+    lastFixture.stopVisionHeartbeat();
+  }
+  lastFixture = null;
   teardownDOM();
   delete global.fetch;
 });
@@ -167,14 +181,16 @@ test('defaults to chat mode on load', () => {
   loadFixture();
   assert.equal(document.getElementById('chat-panel').hidden, false);
   assert.equal(document.getElementById('search-form').hidden, true);
-  assert.equal(document.getElementById('mode-switch').getAttribute('aria-checked'), 'true');
+  assert.equal(document.querySelector('.mode-switch-option[data-mode="chat"]').getAttribute('aria-checked'), 'true');
 });
 
 test('setMode toggles the switch and swaps panel visibility in both directions', () => {
   const { setMode } = loadFixture();
-  const modeSwitch = document.getElementById('mode-switch');
+  const chatOption = document.querySelector('.mode-switch-option[data-mode="chat"]');
+  const searchOption = document.querySelector('.mode-switch-option[data-mode="search"]');
   const searchForm = document.getElementById('search-form');
   const chatPanel = document.getElementById('chat-panel');
+  const visionPanel = document.getElementById('vision-panel');
   const chatOptions = document.getElementById('chat-options');
   const syntaxNote = document.getElementById('syntax-note');
   const status = document.getElementById('status');
@@ -182,43 +198,58 @@ test('setMode toggles the switch and swaps panel visibility in both directions',
 
   // The page defaults to chat mode on load, so before any setMode call the switch is already
   // checked and the chat panel visible.
-  assert.equal(modeSwitch.getAttribute('aria-checked'), 'true');
+  assert.equal(chatOption.getAttribute('aria-checked'), 'true');
+  assert.equal(searchOption.getAttribute('aria-checked'), 'false');
   assert.equal(chatPanel.hidden, false);
   assert.equal(chatOptions.hidden, false);
 
   setMode('chat');
-  assert.equal(modeSwitch.getAttribute('aria-checked'), 'true');
+  assert.equal(chatOption.getAttribute('aria-checked'), 'true');
   assert.equal(searchForm.hidden, true);
   assert.equal(syntaxNote.hidden, true);
   assert.equal(status.hidden, true);
   assert.equal(resultsEl.hidden, true);
   assert.equal(chatPanel.hidden, false);
+  assert.equal(visionPanel.hidden, true);
   assert.equal(chatOptions.hidden, false);
 
   setMode('search');
-  assert.equal(modeSwitch.getAttribute('aria-checked'), 'false');
+  assert.equal(chatOption.getAttribute('aria-checked'), 'false');
+  assert.equal(searchOption.getAttribute('aria-checked'), 'true');
   assert.equal(searchForm.hidden, false);
   assert.equal(syntaxNote.hidden, false);
   assert.equal(status.hidden, false);
   assert.equal(resultsEl.hidden, false);
   assert.equal(chatPanel.hidden, true);
+  assert.equal(visionPanel.hidden, true);
   assert.equal(chatOptions.hidden, true);
 });
 
-test('the mode switch button toggles mode on click', () => {
+test('clicking a mode-switch option toggles mode', () => {
   loadFixture();
-  const modeSwitch = document.getElementById('mode-switch');
+  const chatOption = document.querySelector('.mode-switch-option[data-mode="chat"]');
+  const searchOption = document.querySelector('.mode-switch-option[data-mode="search"]');
   const chatPanel = document.getElementById('chat-panel');
 
-  // Chat is already the default on load, so the first click switches to
-  // search, and the second click switches back to chat.
-  modeSwitch.dispatchEvent(new window.Event('click', { bubbles: true }));
-  assert.equal(modeSwitch.getAttribute('aria-checked'), 'false');
+  // Chat is already the default on load, so clicking search switches away,
+  // and clicking chat again switches back.
+  searchOption.dispatchEvent(new window.Event('click', { bubbles: true }));
+  assert.equal(searchOption.getAttribute('aria-checked'), 'true');
   assert.equal(chatPanel.hidden, true);
 
-  modeSwitch.dispatchEvent(new window.Event('click', { bubbles: true }));
-  assert.equal(modeSwitch.getAttribute('aria-checked'), 'true');
+  chatOption.dispatchEvent(new window.Event('click', { bubbles: true }));
+  assert.equal(chatOption.getAttribute('aria-checked'), 'true');
   assert.equal(chatPanel.hidden, false);
+});
+
+test('clicking a hidden mode-switch option (e.g. Vision, when the feature is off) does nothing', () => {
+  loadFixture();
+  const visionOption = document.getElementById('mode-switch-vision');
+  const chatPanel = document.getElementById('chat-panel');
+  assert.equal(visionOption.hidden, true);
+
+  visionOption.dispatchEvent(new window.Event('click', { bubbles: true }));
+  assert.equal(chatPanel.hidden, false, 'chat mode should be unaffected by clicking a hidden option');
 });
 
 test('setMode restores a hidden correction-note rather than forcing it open', () => {
@@ -1964,4 +1995,379 @@ test('sendChatMessage renders the assistant answer as markdown', async () => {
   await sendChatMessage('q');
   const bubble = document.getElementById('chat-messages').children[1].querySelector('.chat-msg-bubble');
   assert.equal(bubble.innerHTML, '<p>a <strong>bold</strong> claim</p>');
+});
+
+// --- GPU mode (Vision) ---------------------------------------------------
+
+test('loadVisionMode enables the feature and shows the toggle on a 200 response', async () => {
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ mode: 'chat', in_progress: false }) });
+  const { loadVisionMode } = loadFixture();
+  await loadVisionMode();
+  assert.equal(document.getElementById('mode-switch-vision').hidden, false);
+});
+
+test('loadVisionMode leaves the toggle hidden on a 404 (feature disabled)', async () => {
+  global.fetch = async () => ({ ok: false, status: 404, text: async () => 'not found' });
+  const { loadVisionMode } = loadFixture();
+  await loadVisionMode();
+  assert.equal(document.getElementById('mode-switch-vision').hidden, true);
+});
+
+test('loadVisionMode leaves the toggle hidden on a 401 (anonymous)', async () => {
+  global.fetch = async () => ({ ok: false, status: 401, text: async () => 'unauthorized' });
+  const { loadVisionMode } = loadFixture();
+  await loadVisionMode();
+  assert.equal(document.getElementById('mode-switch-vision').hidden, true);
+});
+
+test('loadVisionMode leaves the toggle hidden when the fetch throws', async () => {
+  global.fetch = async () => { throw new Error('network down'); };
+  const { loadVisionMode } = loadFixture();
+  await loadVisionMode();
+  assert.equal(document.getElementById('mode-switch-vision').hidden, true);
+});
+
+test('requestVisionSwitch updates the vision status on a 200 response', async () => {
+  global.fetch = async (url, opts) => {
+    if (url === '/vision/api/mode' && opts && opts.method === 'POST') {
+      return { ok: true, status: 200, json: async () => ({ mode: 'vision', in_progress: false }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ mode: 'chat', in_progress: false }) };
+  };
+  const { loadVisionMode, requestVisionSwitch } = loadFixture();
+  await loadVisionMode();
+  await requestVisionSwitch('vision');
+  assert.equal(document.getElementById('vision-status').textContent, 'Vision mode is active.');
+});
+
+test('requestVisionSwitch sends the requested mode in the request body', async () => {
+  let gotBody;
+  global.fetch = async (url, opts) => {
+    if (url === '/vision/api/mode' && opts && opts.method === 'POST') {
+      gotBody = JSON.parse(opts.body);
+      return { ok: true, status: 200, json: async () => ({ mode: 'vision', in_progress: false }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ mode: 'chat', in_progress: false }) };
+  };
+  const { loadVisionMode, requestVisionSwitch } = loadFixture();
+  await loadVisionMode();
+  await requestVisionSwitch('vision');
+  assert.deepEqual(gotBody, { mode: 'vision' });
+});
+
+test('requestVisionSwitch treats a 409 conflict as a real status, not an error', async () => {
+  global.fetch = async (url, opts) => {
+    if (url === '/vision/api/mode' && opts && opts.method === 'POST') {
+      return { ok: false, status: 409, json: async () => ({ mode: 'chat', target: 'vision', in_progress: true }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ mode: 'chat', in_progress: false }) };
+  };
+  const { loadVisionMode, requestVisionSwitch } = loadFixture();
+  await loadVisionMode();
+  await requestVisionSwitch('chat');
+  assert.equal(document.getElementById('vision-status').textContent.includes('Preparing the GPU'), true);
+});
+
+test('requestVisionSwitch hides the toggle on a 404 (disabled mid-session)', async () => {
+  let postCalls = 0;
+  global.fetch = async (url, opts) => {
+    if (url === '/vision/api/mode' && opts && opts.method === 'POST') {
+      postCalls++;
+      return { ok: false, status: 404, text: async () => 'not found' };
+    }
+    return { ok: true, status: 200, json: async () => ({ mode: 'chat', in_progress: false }) };
+  };
+  const { loadVisionMode, requestVisionSwitch } = loadFixture();
+  await loadVisionMode();
+  await requestVisionSwitch('vision');
+  assert.equal(document.getElementById('mode-switch-vision').hidden, true);
+  assert.equal(postCalls, 1);
+});
+
+test('requestVisionSwitch shows a status message for a genuine failure', async () => {
+  global.fetch = async (url, opts) => {
+    if (url === '/vision/api/mode' && opts && opts.method === 'POST') {
+      return { ok: false, status: 429, text: async () => 'too many switches from this account recently' };
+    }
+    return { ok: true, status: 200, json: async () => ({ mode: 'chat', in_progress: false }) };
+  };
+  const { loadVisionMode, requestVisionSwitch } = loadFixture();
+  await loadVisionMode();
+  await requestVisionSwitch('vision');
+  assert.equal(document.getElementById('vision-status').textContent.includes('too many switches'), true);
+});
+
+test('requestVisionSwitch shows a status message when the fetch throws', async () => {
+  global.fetch = async (url, opts) => {
+    if (url === '/vision/api/mode' && opts && opts.method === 'POST') throw new Error('network down');
+    return { ok: true, status: 200, json: async () => ({ mode: 'chat', in_progress: false }) };
+  };
+  const { loadVisionMode, requestVisionSwitch } = loadFixture();
+  await loadVisionMode();
+  await requestVisionSwitch('vision');
+  assert.equal(document.getElementById('vision-status').textContent, 'Could not reach the server to switch modes.');
+});
+
+test('refreshVisionStatus updates status on success and re-arms polling while in progress', async () => {
+  const originalSetTimeout = global.setTimeout;
+  let scheduledFn;
+  global.setTimeout = (fn, ms) => { scheduledFn = fn; return 'fake-timer'; };
+  try {
+    global.fetch = async () => ({
+      ok: true, status: 200,
+      json: async () => ({ mode: 'chat', target: 'vision', in_progress: true, detail: 'staging model' }),
+    });
+    const { refreshVisionStatus } = loadFixture();
+    await refreshVisionStatus();
+    assert.equal(document.getElementById('vision-status').textContent.includes('staging model'), true);
+    assert.equal(typeof scheduledFn, 'function');
+  } finally {
+    global.setTimeout = originalSetTimeout;
+  }
+});
+
+test('refreshVisionStatus hides the toggle and stops polling on a 404', async () => {
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ mode: 'chat', in_progress: false }) });
+  const { loadVisionMode, refreshVisionStatus } = loadFixture();
+  await loadVisionMode();
+  global.fetch = async () => ({ ok: false, status: 404, text: async () => 'not found' });
+  await refreshVisionStatus();
+  assert.equal(document.getElementById('mode-switch-vision').hidden, true);
+});
+
+test('refreshVisionStatus is silent on a non-ok, non-404 response', async () => {
+  global.fetch = async () => ({ ok: false, status: 500, text: async () => 'db down' });
+  const { refreshVisionStatus } = loadFixture();
+  await refreshVisionStatus();
+  assert.equal(document.getElementById('vision-status').textContent, '');
+});
+
+test('refreshVisionStatus is silent when the fetch throws', async () => {
+  global.fetch = async () => { throw new Error('network down'); };
+  const { refreshVisionStatus } = loadFixture();
+  await refreshVisionStatus();
+});
+
+test('renderVisionStatus does nothing before any status has loaded', () => {
+  const { renderVisionStatus } = loadFixture();
+  renderVisionStatus();
+  assert.equal(document.getElementById('vision-status').textContent, '');
+});
+
+test('renderVisionStatus shows "Restoring the chat model" while switching back to chat', async () => {
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ mode: 'vision', target: 'chat', in_progress: true }) });
+  const { loadVisionMode } = loadFixture();
+  await loadVisionMode();
+  assert.equal(document.getElementById('vision-status').textContent.includes('Restoring the chat model'), true);
+});
+
+test('renderVisionStatus shows the unknown-mode message', async () => {
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ mode: 'unknown', in_progress: false }) });
+  const { loadVisionMode } = loadFixture();
+  await loadVisionMode();
+  assert.equal(document.getElementById('vision-status').textContent.includes('GPU mode is unknown'), true);
+});
+
+test('renderVisionStatus clears the status line once idle in chat mode', async () => {
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ mode: 'chat', in_progress: false }) });
+  const { loadVisionMode } = loadFixture();
+  await loadVisionMode();
+  assert.equal(document.getElementById('vision-status').textContent, '');
+});
+
+test('updateChatAvailability disables chat input while the GPU is in vision mode', async () => {
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ mode: 'vision', in_progress: false }) });
+  const { loadVisionMode } = loadFixture();
+  await loadVisionMode();
+  assert.equal(document.getElementById('chat-send').disabled, true);
+  assert.equal(document.getElementById('chat-input').disabled, true);
+  assert.equal(document.getElementById('chat-status').textContent, 'Chat is unavailable while the GPU is in vision mode.');
+});
+
+test('updateChatAvailability shows the in-progress variant while switching', async () => {
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ mode: 'vision', target: 'chat', in_progress: true }) });
+  const { loadVisionMode } = loadFixture();
+  await loadVisionMode();
+  assert.equal(document.getElementById('chat-status').textContent, 'Chat is temporarily unavailable while the GPU switches modes.');
+});
+
+test('updateChatAvailability names the actual mode, not always "Vision" -- e.g. before any real switch has ever happened', async () => {
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ mode: 'unknown', in_progress: false }) });
+  const { loadVisionMode } = loadFixture();
+  await loadVisionMode();
+  assert.equal(document.getElementById('chat-status').textContent, 'Chat is unavailable while the GPU is in unknown mode.');
+});
+
+test('updateChatAvailability leaves an unrelated chat-status message alone', async () => {
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ mode: 'chat', in_progress: false }) });
+  const { loadVisionMode } = loadFixture();
+  document.getElementById('chat-status').textContent = 'Type something to ask.';
+  await loadVisionMode();
+  assert.equal(document.getElementById('chat-status').textContent, 'Type something to ask.');
+});
+
+test('updateChatAvailability re-enables chat and clears its own message once back in chat mode', async () => {
+  let respMode = 'vision';
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ mode: respMode, in_progress: false }) });
+  const { loadVisionMode, refreshVisionStatus } = loadFixture();
+  await loadVisionMode();
+  assert.equal(document.getElementById('chat-send').disabled, true);
+  respMode = 'chat';
+  await refreshVisionStatus();
+  assert.equal(document.getElementById('chat-send').disabled, false);
+  assert.equal(document.getElementById('chat-input').disabled, false);
+  assert.equal(document.getElementById('chat-status').textContent, '');
+});
+
+test('updateModeSwitchIndicator does not throw and sets the CSS custom properties', () => {
+  const { updateModeSwitchIndicator } = loadFixture();
+  updateModeSwitchIndicator();
+  const style = document.getElementById('mode-switch').style;
+  assert.equal(style.getPropertyValue('--indicator-left').endsWith('px'), true);
+  assert.equal(style.getPropertyValue('--indicator-width').endsWith('px'), true);
+});
+
+test('setMode("vision") shows the vision panel and hides chat/search', () => {
+  const { setMode } = loadFixture();
+  setMode('vision');
+  assert.equal(document.getElementById('vision-panel').hidden, false);
+  assert.equal(document.getElementById('chat-panel').hidden, true);
+  assert.equal(document.getElementById('search-form').hidden, true);
+  assert.equal(document.getElementById('chat-options').hidden, true);
+  assert.equal(document.getElementById('mode-switch-vision').getAttribute('aria-checked'), 'true');
+});
+
+test('setMode requests a real GPU switch when moving to/from vision while the feature is enabled', async () => {
+  const switchCalls = [];
+  global.fetch = async (url, opts) => {
+    if (url === '/vision/api/mode' && opts && opts.method === 'POST') {
+      const mode = JSON.parse(opts.body).mode;
+      switchCalls.push(mode);
+      return { ok: true, status: 200, json: async () => ({ mode, in_progress: false }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ mode: 'chat', in_progress: false }) };
+  };
+  const { loadVisionMode, setMode } = loadFixture();
+  await loadVisionMode();
+  setMode('vision');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  setMode('chat');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(switchCalls, ['vision', 'chat']);
+});
+
+test('setMode never requests a GPU switch when moving to search', async () => {
+  let switchCalls = 0;
+  global.fetch = async (url, opts) => {
+    if (url === '/vision/api/mode' && opts && opts.method === 'POST') switchCalls++;
+    return { ok: true, status: 200, json: async () => ({ mode: 'chat', in_progress: false }) };
+  };
+  const { loadVisionMode, setMode } = loadFixture();
+  await loadVisionMode();
+  setMode('search');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(switchCalls, 0);
+});
+
+test('setMode does not request a GPU switch when the feature is not enabled', () => {
+  const { setMode } = loadFixture();
+  let called = false;
+  global.fetch = async () => { called = true; return { ok: true, status: 200, json: async () => ({}) }; };
+  setMode('vision');
+  assert.equal(called, false);
+});
+
+test('startVisionHeartbeat schedules a recurring POST /vision/api/heartbeat', () => {
+  const originalSetInterval = global.setInterval;
+  const originalClearInterval = global.clearInterval;
+  let scheduledFn, scheduledMs;
+  global.setInterval = (fn, ms) => { scheduledFn = fn; scheduledMs = ms; return 'fake-interval'; };
+  global.clearInterval = () => {};
+  try {
+    const { startVisionHeartbeat } = loadFixture();
+    startVisionHeartbeat();
+    assert.equal(scheduledMs, 60000);
+    assert.equal(typeof scheduledFn, 'function');
+  } finally {
+    global.setInterval = originalSetInterval;
+    global.clearInterval = originalClearInterval;
+  }
+});
+
+test('startVisionHeartbeat clears any previous interval before starting a new one', () => {
+  const originalSetInterval = global.setInterval;
+  const originalClearInterval = global.clearInterval;
+  let clearedWith;
+  let intervalCount = 0;
+  global.setInterval = () => { intervalCount++; return 'interval-' + intervalCount; };
+  global.clearInterval = (handle) => { clearedWith = handle; };
+  try {
+    const { startVisionHeartbeat } = loadFixture();
+    startVisionHeartbeat();
+    startVisionHeartbeat();
+    assert.equal(clearedWith, 'interval-1');
+    assert.equal(intervalCount, 2);
+  } finally {
+    global.setInterval = originalSetInterval;
+    global.clearInterval = originalClearInterval;
+  }
+});
+
+test('stopVisionHeartbeat clears the interval when one is running', () => {
+  const originalSetInterval = global.setInterval;
+  const originalClearInterval = global.clearInterval;
+  let cleared = false;
+  global.setInterval = () => 'fake-interval';
+  global.clearInterval = () => { cleared = true; };
+  try {
+    const { startVisionHeartbeat, stopVisionHeartbeat } = loadFixture();
+    startVisionHeartbeat();
+    stopVisionHeartbeat();
+    assert.equal(cleared, true);
+  } finally {
+    global.setInterval = originalSetInterval;
+    global.clearInterval = originalClearInterval;
+  }
+});
+
+test('stopVisionHeartbeat is a no-op when no interval is running', () => {
+  const { stopVisionHeartbeat } = loadFixture();
+  stopVisionHeartbeat();
+});
+
+test('the scheduled heartbeat callback POSTs /vision/api/heartbeat', async () => {
+  const originalSetInterval = global.setInterval;
+  let scheduledFn;
+  global.setInterval = (fn) => { scheduledFn = fn; return 'fake-interval'; };
+  let gotURL, gotMethod;
+  global.fetch = async (url, opts) => { gotURL = url; gotMethod = opts && opts.method; return { ok: true }; };
+  try {
+    const { startVisionHeartbeat } = loadFixture();
+    startVisionHeartbeat();
+    scheduledFn();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(gotURL, '/vision/api/heartbeat');
+    assert.equal(gotMethod, 'POST');
+  } finally {
+    global.setInterval = originalSetInterval;
+  }
+});
+
+test('setMode starts the heartbeat on entering vision and stops it on leaving', () => {
+  const originalSetInterval = global.setInterval;
+  const originalClearInterval = global.clearInterval;
+  let started = 0;
+  let cleared = false;
+  global.setInterval = () => { started++; return 'fake-interval'; };
+  global.clearInterval = () => { cleared = true; };
+  try {
+    const { setMode } = loadFixture();
+    setMode('vision');
+    assert.equal(started, 1);
+    setMode('chat');
+    assert.equal(cleared, true);
+  } finally {
+    global.setInterval = originalSetInterval;
+    global.clearInterval = originalClearInterval;
+  }
 });

@@ -87,11 +87,12 @@
         </span>
       </button>
     </div>
-    <button type="button" id="mode-switch" class="mode-switch" role="switch" aria-checked="true" aria-label="Chat or search mode">
-      <span class="mode-switch-indicator" aria-hidden="true"></span>
-      <span class="mode-switch-option" data-mode="chat">Chat</span>
-      <span class="mode-switch-option" data-mode="search">Search</span>
-    </button>
+    <div id="mode-switch" class="mode-switch" role="radiogroup" aria-label="Chat, Vision, or Search mode">
+      <span id="mode-switch-indicator" class="mode-switch-indicator" aria-hidden="true"></span>
+      <button type="button" class="mode-switch-option" role="radio" aria-checked="true" data-mode="chat">Chat</button>
+      <button type="button" id="mode-switch-vision" class="mode-switch-option" role="radio" aria-checked="false" data-mode="vision" hidden>Vision</button>
+      <button type="button" class="mode-switch-option" role="radio" aria-checked="false" data-mode="search">Search</button>
+    </div>
   </div>
 
   <form id="search-form" autocomplete="off">
@@ -148,6 +149,29 @@
       <button id="chat-send" type="submit" title="Send" aria-label="Send">▶</button>
     </form>
     <div id="chat-files" class="chat-files" hidden></div>
+  </div>
+
+  <div id="vision-panel" hidden>
+    <div id="vision-status" class="vision-status"></div>
+    <div id="vision-generate">
+      <textarea id="vision-prompt" class="field" rows="3" placeholder="Describe the image or video to generate…" aria-label="Vision generation prompt"></textarea>
+      <div class="vision-controls">
+        <label for="vision-duration">Duration (s)</label>
+        <input id="vision-duration" class="field" type="number" min="1" max="30" value="5">
+        <label for="vision-resolution">Resolution</label>
+        <select id="vision-resolution" class="field" aria-label="Resolution">
+          <option value="512x512">512×512</option>
+          <option value="768x768" selected>768×768</option>
+          <option value="1024x576">1024×576</option>
+        </select>
+        <label for="vision-seed">Seed</label>
+        <input id="vision-seed" class="field" type="number" placeholder="Random">
+        <button type="button" id="vision-generate-btn" disabled title="Generation isn't available yet">Generate</button>
+      </div>
+      <div id="vision-result" class="vision-result" hidden></div>
+      <div id="vision-history" class="vision-history"></div>
+    </div>
+    <a id="vision-comfy-link" class="vision-comfy-link" href="/vision" target="_blank" rel="noopener noreferrer">Open the full ComfyUI interface →</a>
   </div>
 </main>
 <dialog id="file-preview-dialog" class="file-preview-dialog">
