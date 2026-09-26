@@ -37,3 +37,26 @@ type GPUModeSettings struct {
 	IdleRevertMinutes int
 	UpdatedAt         time.Time
 }
+
+// GPUMode is one of the two workloads cmd/gpu-control switches the shared
+// GPU between. GPUModeUnknown is the honest value before the control
+// service's first successful probe, or after it restarts mid-switch.
+type GPUMode string
+
+const (
+	GPUModeChat    GPUMode = "chat"
+	GPUModeVision  GPUMode = "vision"
+	GPUModeUnknown GPUMode = "unknown"
+)
+
+// GPUModeStatus mirrors cmd/gpu-control's own wire shape for GET/POST
+// /gpu/api/mode exactly (see that package's own Status type) -- Target/
+// Since/ExpiresAt are only meaningful while InProgress.
+type GPUModeStatus struct {
+	Mode       GPUMode
+	Target     GPUMode
+	InProgress bool
+	Since      time.Time
+	ExpiresAt  time.Time
+	Detail     string
+}

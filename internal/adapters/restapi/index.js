@@ -7,8 +7,13 @@
 
   const mainEl = document.querySelector('main');
   const modeSwitch = document.getElementById('mode-switch');
+  const modeSwitchIndicator = document.getElementById('mode-switch-indicator');
+  const modeSwitchVisionOption = document.getElementById('mode-switch-vision');
   const chatOptions = document.getElementById('chat-options');
   const chatPanel = document.getElementById('chat-panel');
+  const visionPanel = document.getElementById('vision-panel');
+  const visionStatusEl = document.getElementById('vision-status');
+  const visionGenerateSection = document.getElementById('vision-generate');
   const chatTabList = document.getElementById('chat-tab-list');
   const chatTabNewBtn = document.getElementById('chat-tab-new');
   const chatTabForkBtn = document.getElementById('chat-tab-fork');
@@ -20,6 +25,7 @@
   const chatStatus = document.getElementById('chat-status');
   const chatForm = document.getElementById('chat-form');
   const chatInput = document.getElementById('chat-input');
+  const chatSend = document.getElementById('chat-send');
   const chatAttachBtn = document.getElementById('chat-attach');
   const chatAttachInput = document.getElementById('chat-attach-input');
   const chatWebSearch = document.getElementById('chat-web-search');
@@ -1326,38 +1332,250 @@
     }
   }
 
-  // setMode swaps between the two independent views. Only #correction-note has its own
-  // hidden-state (set by renderCorrectionNote), so it's saved/restored rather than forced open;
-  // everything else is unconditionally shown/hidden.
+  // --- GPU mode (Vision) --------------------------------------------------
+  // visionEnabled is set once loadVisionMode()'s first GET /vision/api/mode
+  // call actually returns 200 -- never assumed true, since most deployments
+  // never turn this feature on at all (domain.GPUModeSettings.Enabled
+  // defaults false). A 401 (anonymous -- loadVisionMode is only ever called
+  // once loadSession confirms a signed-in role) or 404 (disabled) both leave
+  // it false and the Vision mode-switch option stays hidden. visionStatus
+  // mirrors the server's own GPUModeStatus wire shape (mode/target/
+  // in_progress/detail). visionPollTimer re-fetches every 2s while a switch
+  // is in progress, mirroring admin.js's own pollWhileInProgress -- kept as
+  // a local copy rather than imported, since index.js is a separate bundle.
+  let visionEnabled = false;
+  let visionStatus = null;
+  let visionPollTimer = null;
+  let visionHeartbeatTimer = null;
+
+  function visionModePollWhileInProgress(inProgress, pollTimer, reload) {
+    if (inProgress) {
+      return pollTimer || setTimeout(reload, 2000);
+    }
+    if (pollTimer) clearTimeout(pollTimer);
+    return null;
+  }
+
+  // updateChatAvailability disables sending a new chat message while the
+  // shared GPU isn't in chat mode (switching or parked in Vision) --
+  // handleChat itself still enforces this server-side (503
+  // gpu_mode_unavailable) regardless; this is purely so a signed-in user
+  // sees why before wasting a submit.
+  function updateChatAvailability() {
+    const blocked = visionEnabled && visionStatus && visionStatus.mode !== 'chat';
+    chatSend.disabled = !!blocked;
+    chatInput.disabled = !!blocked;
+    if (blocked) {
+      chatStatus.textContent = visionStatus.in_progress
+        ? 'Chat is temporarily unavailable while the GPU switches modes.'
+        : 'Chat is unavailable while the GPU is in ' + visionStatus.mode + ' mode.';
+    } else if (chatStatus.textContent.indexOf('Chat is') === 0) {
+      chatStatus.textContent = '';
+    }
+  }
+
+  // renderVisionStatus applies the last-fetched visionStatus everywhere it's
+  // reflected: the vision panel's own status line and chat's own
+  // availability. Safe to call before anything has loaded (visionStatus
+  // still null).
+  function renderVisionStatus() {
+    updateChatAvailability();
+    if (!visionStatus) return;
+    const inProgress = !!visionStatus.in_progress;
+    visionStatusEl.classList.toggle('vision-pending', inProgress);
+    if (inProgress) {
+      const verb = visionStatus.target === 'vision' ? 'Preparing the GPU' : 'Restoring the chat model';
+      const hint = visionStatus.target === 'vision' ? 'usually takes about a minute' : 'can take a few minutes';
+      visionStatusEl.textContent = verb + ' — this ' + hint + (visionStatus.detail ? ' (' + visionStatus.detail + ')' : '…');
+    } else if (visionStatus.mode === 'vision') {
+      visionStatusEl.textContent = 'Vision mode is active.';
+    } else if (visionStatus.mode === 'unknown') {
+      visionStatusEl.textContent = 'GPU mode is unknown — select Vision or Chat to set it explicitly.';
+    } else {
+      visionStatusEl.textContent = '';
+    }
+  }
+
+  // refreshVisionStatus is visionPollTimer's own reload callback -- a plain
+  // GET, re-armed by visionModePollWhileInProgress below.
+  async function refreshVisionStatus() {
+    try {
+      const resp = await fetch('/vision/api/mode');
+      if (resp.status === 404) {
+        visionEnabled = false;
+        modeSwitchVisionOption.hidden = true;
+        updateModeSwitchIndicator();
+        visionPollTimer = null;
+        return;
+      }
+      if (!resp.ok) return;
+      visionStatus = await resp.json();
+      renderVisionStatus();
+      visionPollTimer = visionModePollWhileInProgress(!!visionStatus.in_progress, visionPollTimer, refreshVisionStatus);
+    } catch (err) {
+      // Transient network hiccup -- next poll tick (still armed) retries.
+    }
+  }
+
+  // requestVisionSwitch asks the server to move the shared GPU to target
+  // ("chat" or "vision") -- called only when the user explicitly picks that
+  // mode-switch option (see setMode), never automatically on page load.
+  // Idempotent server-side when already there (200); a 409 (busy with a
+  // different target) still carries a real status body, same as 200 --
+  // only a genuine failure (400/401/404/429/502) falls back to a plain
+  // status message.
+  async function requestVisionSwitch(target) {
+    try {
+      const resp = await fetch('/vision/api/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: target }),
+      });
+      if (resp.status === 404) {
+        visionEnabled = false;
+        modeSwitchVisionOption.hidden = true;
+        updateModeSwitchIndicator();
+        return;
+      }
+      if (resp.status === 200 || resp.status === 409) {
+        visionStatus = await resp.json();
+        renderVisionStatus();
+        visionPollTimer = visionModePollWhileInProgress(!!visionStatus.in_progress, visionPollTimer, refreshVisionStatus);
+        return;
+      }
+      const text = await resp.text();
+      visionStatusEl.textContent = 'Could not switch: ' + text;
+    } catch (err) {
+      visionStatusEl.textContent = 'Could not reach the server to switch modes.';
+    }
+  }
+
+  // loadVisionMode is the one-time, page-load feature-detection check --
+  // called only once loadSession confirms a signed-in session. Leaves
+  // visionEnabled false (Vision option stays hidden) for anything other
+  // than a clean 200.
+  async function loadVisionMode() {
+    try {
+      const resp = await fetch('/vision/api/mode');
+      if (resp.status !== 200) return;
+      visionEnabled = true;
+      modeSwitchVisionOption.hidden = false;
+      visionStatus = await resp.json();
+      renderVisionStatus();
+      updateModeSwitchIndicator();
+      visionPollTimer = visionModePollWhileInProgress(!!visionStatus.in_progress, visionPollTimer, refreshVisionStatus);
+    } catch (err) {
+      // Best-effort -- feature stays hidden on any network failure.
+    }
+  }
+
+  // startVisionHeartbeat/stopVisionHeartbeat keep cmd/gpu-control's own
+  // idle-revert timer reset while the Vision panel is the active tab --
+  // see domain.GPUModeSettings.IdleRevertMinutes.
+  function startVisionHeartbeat() {
+    stopVisionHeartbeat();
+    visionHeartbeatTimer = setInterval(() => {
+      fetch('/vision/api/heartbeat', { method: 'POST' }).catch(() => {});
+    }, 60000);
+  }
+
+  function stopVisionHeartbeat() {
+    if (visionHeartbeatTimer) {
+      clearInterval(visionHeartbeatTimer);
+      visionHeartbeatTimer = null;
+    }
+  }
+
+  // stopVisionPolling clears the 2s one-shot poll timer (loadVisionMode/
+  // requestVisionSwitch/refreshVisionStatus all arm it via
+  // visionModePollWhileInProgress while a switch is in progress). Exported
+  // purely for index.test.js's own central afterEach -- without it, a
+  // test that leaves a switch "in progress" (without stubbing
+  // global.setTimeout) leaks a real timer that can fire during a *later*
+  // test's own execution window and call that test's global.fetch mock,
+  // corrupting its assertions.
+  function stopVisionPolling() {
+    if (visionPollTimer) {
+      clearTimeout(visionPollTimer);
+      visionPollTimer = null;
+    }
+  }
+
+  // updateModeSwitchIndicator positions the sliding indicator from the
+  // checked, visible option's own real layout (via --indicator-left/
+  // --indicator-width custom properties -- see style.css) rather than a
+  // fixed 50%/33% split, since the Vision option can be hidden entirely.
+  function updateModeSwitchIndicator() {
+    const options = Array.from(modeSwitch.querySelectorAll('.mode-switch-option')).filter((el) => !el.hidden);
+    const active = options.find((el) => el.getAttribute('aria-checked') === 'true') || options[0];
+    if (!active) return;
+    const containerRect = modeSwitch.getBoundingClientRect();
+    const activeRect = active.getBoundingClientRect();
+    modeSwitch.style.setProperty('--indicator-left', (activeRect.left - containerRect.left) + 'px');
+    modeSwitch.style.setProperty('--indicator-width', activeRect.width + 'px');
+  }
+
+  // setMode swaps between the three independent views (chat/vision/search).
+  // Only #correction-note has its own hidden-state (set by
+  // renderCorrectionNote), so it's saved/restored around search rather than
+  // forced open; everything else is unconditionally shown/hidden. Switching
+  // to/from chat or vision (but never search, which doesn't touch the GPU
+  // at all) requests the actual GPU switch -- never on the initial page-load
+  // call, since previousMode already equals mode at that point.
   let correctionNoteHiddenBeforeChat = true;
+  let currentMode = 'chat';
 
   function setMode(mode) {
-    const isChat = mode === 'chat';
-    modeSwitch.setAttribute('aria-checked', String(isChat));
-    if (mainEl) mainEl.classList.toggle('chat-mode', isChat);
-    if (isChat) {
-      correctionNoteHiddenBeforeChat = correctionNote.hidden;
-      form.hidden = true;
-      if (syntaxNote) syntaxNote.hidden = true;
-      status.hidden = true;
-      correctionNote.hidden = true;
-      results.hidden = true;
-      chatPanel.hidden = false;
-      chatOptions.hidden = false;
-    } else {
+    const previousMode = currentMode;
+    currentMode = mode;
+
+    modeSwitch.querySelectorAll('.mode-switch-option').forEach((el) => {
+      el.setAttribute('aria-checked', String(el.dataset.mode === mode));
+    });
+    if (mainEl) mainEl.classList.toggle('chat-mode', mode === 'chat');
+
+    if (mode === 'search') {
       form.hidden = false;
       if (syntaxNote) syntaxNote.hidden = false;
       status.hidden = false;
       correctionNote.hidden = correctionNoteHiddenBeforeChat;
       results.hidden = false;
       chatPanel.hidden = true;
+      visionPanel.hidden = true;
       chatOptions.hidden = true;
+      stopVisionHeartbeat();
+    } else {
+      // Saved every time chat/vision is entered (not just when leaving
+      // search), matching the original two-mode behavior exactly: whatever
+      // hidden-state correction-note currently holds survives any number of
+      // chat<->vision bounces and is re-applied the next time search is
+      // shown again.
+      correctionNoteHiddenBeforeChat = correctionNote.hidden;
+      form.hidden = true;
+      if (syntaxNote) syntaxNote.hidden = true;
+      status.hidden = true;
+      correctionNote.hidden = true;
+      results.hidden = true;
+      chatOptions.hidden = mode !== 'chat';
+      chatPanel.hidden = mode !== 'chat';
+      visionPanel.hidden = mode !== 'vision';
+      if (mode === 'vision') {
+        startVisionHeartbeat();
+      } else {
+        stopVisionHeartbeat();
+      }
+    }
+
+    updateModeSwitchIndicator();
+    if (visionEnabled && mode !== previousMode && (mode === 'chat' || mode === 'vision')) {
+      requestVisionSwitch(mode);
     }
   }
 
-  modeSwitch.addEventListener('click', () => {
-    const isChat = modeSwitch.getAttribute('aria-checked') === 'true';
-    setMode(isChat ? 'search' : 'chat');
+  modeSwitch.addEventListener('click', (e) => {
+    const option = e.target.closest('.mode-switch-option');
+    if (!option || option.hidden) return;
+    setMode(option.dataset.mode);
   });
 
   renderTabs();
@@ -1368,6 +1586,7 @@
 
   chatForm.addEventListener('submit', (e) => {
     e.preventDefault();
+    if (chatInput.disabled) return;
     const content = chatInput.value.trim();
     if (!content) {
       chatStatus.textContent = 'Type something to ask.';
@@ -1420,6 +1639,7 @@
         accountLink.hidden = false;
         signedIn = true;
         loadPersistedChats();
+        loadVisionMode();
       }
     } catch (err) {
       // Non-critical: both links simply stay hidden.
@@ -1454,5 +1674,8 @@
       buildDonutSVG, buildDonutLegend, tokenUsageSegments, renderTokenUsage,
       loadSession, renderAgentSelectOptions, loadAgentOptions,
       uploadAttachedFile, renderChatFiles, loadChatFiles, deleteChatFile,
+      loadVisionMode, requestVisionSwitch, refreshVisionStatus, renderVisionStatus,
+      updateChatAvailability, updateModeSwitchIndicator, visionModePollWhileInProgress,
+      startVisionHeartbeat, stopVisionHeartbeat, stopVisionPolling,
     };
   }

@@ -30,6 +30,14 @@ info:
     processes. Plain HTML page routes (e.g. `GET /admin/crawl`, which just
     serves a static template) are omitted -- they carry no API contract of
     their own; their pages call the JSON endpoints documented here.
+
+    A fourth binary, `cmd/gpu-control`, runs only on the dedicated GPU host
+    (never alongside the three above) and is deliberately **not**
+    documented here -- its small HTTP API (`/gpu/api/*`) is reached only by
+    search-server's own `internal/adapters/httpgpumode` client over the
+    private LAN, never by an external caller; see
+    `packaging/gpu-control/README.md`. The `/vision/api/*` endpoints below
+    are search-server's own public-facing wrapper around it.
   license:
     name: UNLICENSED
 servers:
@@ -197,6 +205,96 @@ paths:
                     description: { type: string }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "405": { $ref: "#/components/responses/BadRequest" }
+
+  /vision/api/mode:
+    get:
+      tags: [search]
+      summary: Get the current GPU mode (Vision) status
+      description: >-
+        A live (uncached) read against cmd/gpu-control, the private-LAN
+        control service running only on the dedicated GPU host --
+        internal/adapters/httpgpumode calls it, application.GPUModeService
+        wraps that with the admin master switch above and this endpoint's
+        own security gate. Requires a signed-in session (any role), same
+        as /chat. Absent entirely (404) when GPU mode isn't enabled (see
+        /admin/api/gpu-mode) -- the public chat page's toggle treats a 404
+        here as "Vision doesn't exist on this deployment."
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GPUModeStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "405": { $ref: "#/components/responses/BadRequest" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+    post:
+      tags: [search]
+      summary: Switch the GPU between chat and Vision (image/video generation) mode
+      description: >-
+        Since the underlying GPU can only run one workload at a time,
+        switching to Vision briefly makes chat unavailable for every user,
+        not just the caller (see POST /chat's own 503 gpu_mode_unavailable
+        response) -- application.GPUModeService gates this beyond the
+        admin master switch and session auth: a global minimum dwell
+        between accepted switches and a per-account rate limit (both
+        surfaced as 429), independent of cmd/gpu-control's own single-
+        flight handling (409, still carrying a status body describing
+        what it's busy with) of a switch to a *different* target already
+        in flight. Always 200 on success -- in_progress in the response
+        body distinguishes "already there" from "switch under way,"
+        rather than overloading the HTTP status for that.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode: { type: string, enum: [chat, vision] }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GPUModeStatus" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "405": { $ref: "#/components/responses/BadRequest" }
+        "409":
+          description: >-
+            cmd/gpu-control is already mid-switch toward a different
+            target -- the response body still describes what it's busy
+            with.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GPUModeStatus" }
+        "429":
+          description: Rejected by the global dwell or per-account rate limit -- not a cmd/gpu-control conflict.
+          content:
+            text/plain:
+              schema: { type: string }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /vision/api/heartbeat:
+    post:
+      tags: [search]
+      summary: Reset cmd/gpu-control's own idle-revert timer
+      description: >-
+        Called while a Vision-mode panel stays open/active, so an idle
+        session doesn't get auto-reverted to chat out from under it (see
+        domain.GPUModeSettings.IdleRevertMinutes). No dwell/rate-limit
+        gating, unlike POST /vision/api/mode -- a heartbeat can't itself
+        thrash the GPU.
+      responses:
+        "204": { description: No Content }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "405": { $ref: "#/components/responses/BadRequest" }
+        "502": { $ref: "#/components/responses/BadGateway" }
 
   # ------------------------------------------------------------------ auth
   /login:
@@ -3221,6 +3319,31 @@ components:
               type: boolean
               description: Whether a control endpoint token is stored -- its actual value is never returned.
             updated_at: { type: string, format: date-time }
+
+    GPUModeStatus:
+      description: >-
+        The live wire shape GET/POST /vision/api/mode both return --
+        mirrors cmd/gpu-control's own Status type exactly (see
+        packaging/gpu-control/README.md).
+      type: object
+      properties:
+        mode: { type: string, enum: [chat, vision, unknown] }
+        target:
+          type: string
+          enum: [chat, vision]
+          description: Only present while in_progress -- what the GPU is switching to.
+        in_progress: { type: boolean }
+        since:
+          type: string
+          format: date-time
+          description: Only present while in_progress.
+        expires_at:
+          type: string
+          format: date-time
+          description: Only present while in_progress -- when switch_timeout_seconds would give up.
+        detail:
+          type: string
+          description: A short human-readable status line, e.g. "loading LTX transformer", or a failure reason.
 
     VisionSimilarityRequest:
       type: object

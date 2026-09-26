@@ -253,6 +253,13 @@ type Handler struct {
 	// generation) settings CRUD -- set on admin-server only, same
 	// *sqlrepo.Repository as chatEndpoints.
 	gpuMode ports.GPUModeStore
+	// gpuModeService backs the public GET/POST /vision/api/mode and POST
+	// /vision/api/heartbeat endpoints, plus handleChat's own availability
+	// check -- set on search-server only, nil (and 404-reporting)
+	// everywhere else. Distinct from gpuMode above (that's the admin CRUD
+	// port; this is the application-layer use case wrapping it plus
+	// ports.GPUModeController).
+	gpuModeService *application.GPUModeService
 	// documentJobs backs the admin Document-upload feature's job CRUD --
 	// set on admin-server only, same *sqlrepo.Repository as chatEndpoints.
 	documentJobs ports.DocumentJobStore
@@ -386,6 +393,10 @@ type Config struct {
 	// image/video generation) settings CRUD API -- same *sqlrepo.Repository
 	// as ChatEndpoints.
 	GPUMode ports.GPUModeStore
+	// GPUModeService is set on search-server only, backing the public
+	// GET/POST /vision/api/mode, POST /vision/api/heartbeat, and
+	// handleChat's own availability check.
+	GPUModeService *application.GPUModeService
 	// DocumentJobs is set on admin-server only, backing the Document-upload
 	// feature's job CRUD API -- same *sqlrepo.Repository as ChatEndpoints.
 	DocumentJobs ports.DocumentJobStore
@@ -484,6 +495,7 @@ func New(cfg Config) *Handler {
 		chatEndpoints:         cfg.ChatEndpoints,
 		chatVision:            cfg.ChatVision,
 		gpuMode:               cfg.GPUMode,
+		gpuModeService:        cfg.GPUModeService,
 		documentJobs:          cfg.DocumentJobs,
 		mcpServers:            cfg.MCPServers,
 		mcpTools:              cfg.MCPTools,
@@ -574,6 +586,9 @@ func (h *Handler) RoutesSearch() http.Handler {
 	mux.HandleFunc("/account/api/chats", h.requireAuthAPI(h.handleAccountChats))
 	mux.HandleFunc("PATCH /account/api/chats/{id}", h.requireAuthAPI(h.handleAccountUpdateChat))
 	mux.HandleFunc("DELETE /account/api/chats/{id}", h.requireAuthAPI(h.handleAccountDeleteChat))
+	mux.HandleFunc("GET /vision/api/mode", h.requireAuthAPI(h.handleVisionMode))
+	mux.HandleFunc("POST /vision/api/mode", h.requireAuthAPI(h.handleVisionModeSwitch))
+	mux.HandleFunc("POST /vision/api/heartbeat", h.requireAuthAPI(h.handleVisionHeartbeat))
 	mux.HandleFunc("/healthz", h.handleHealthz)
 	return withSecurityHeaders(mux)
 }
