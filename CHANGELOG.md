@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.100 - 2026-09-27
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* index.js: fix two SonarCloud findings from the vision-mode work by @M0WA in https://github.com/M0WA/SE/pull/379
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.99...v4.13.100
+
+
 ## v4.13.99 - 2026-09-26
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
