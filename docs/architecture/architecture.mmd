@@ -92,6 +92,7 @@ flowchart LR
   HTTPEmbed --> EmbedAPI
   HTTPChat --> ChatAPI
   HTTPGPUMode -.->|"HTTP, X-Internal-Token<br/>private LAN"| GPUControl
+  RestAPI -.->|"HTTP reverse proxy, admin-gated<br/>/admin/comfy/ -&gt; /gpu/comfy/"| GPUControl
   App --> MCPClient
   MCPClient -.->|"spawns as child process"| MCPWeb
   MCPClient -.->|"spawns as child process"| MCPDatetime
@@ -114,3 +115,5 @@ flowchart LR
 
   GPUControl -.->|"systemctl stop/start"| ChatAPI
   GPUControl -.->|"systemctl stop/start"| ComfyUI
+  GPUControl -.->|"HTTP: /prompt /history /view<br/>(generate + raw UI proxy)"| ComfyUI
+  GPUControl -.->|"HTTP GET, Bearer<br/>vLLM readiness poll"| ChatAPI

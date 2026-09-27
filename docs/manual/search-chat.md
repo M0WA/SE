@@ -16,6 +16,14 @@ Because Chat and Vision share one physical GPU that can only run one workload at
 
 Reloading the page never re-requests a GPU switch: the toggle reflects whichever mode the shared GPU is actually in at the moment (asking the server, not remembering a per-browser guess), so a reload while the GPU happens to be in Vision shows Vision, not Chat. Reloading out of Search always returns to Chat, since Search itself has no GPU state to reflect either way.
 
+## Vision mode: generating a video
+
+Once the toggle shows Vision mode is actually active (not still switching), the Generate button becomes clickable. Type a description into the prompt box and click Generate -- there's no separate resolution, duration, or seed control: every generation uses one fixed workflow (LTX-2.5, a distilled text-to-video model), producing roughly a 5-second widescreen clip. A submitted job polls automatically every few seconds; once finished, the video appears inline with playback controls. A job that finishes without producing a video (a real generation failure, not a network hiccup) shows the reason in place of the video.
+
+Only one job at a time per browser tab -- Generate stays disabled while a submission is in flight, and re-enables once it finishes (or fails). Switching back to Chat mid-generation doesn't cancel the underlying ComfyUI job, but there's no way to see its result afterward from this page.
+
+An admin viewing this page also sees a small "Open ComfyUI directly (admin)" link below the generate box -- opens ComfyUI's own full web UI (queue, node graph, manual workflow editing) in a new tab. This bypasses the Generate button's fixed workflow and the mode-switch safety limits entirely, so treat it as a maintenance/debugging tool, not a regular way to generate something. Never shown to a non-admin signed-in account.
+
 ## Search mode: the query box and syntax
 
 Type a query and press Search (or Enter) to run it against indexed content -- results are ranked by a blend of keyword matching and semantic similarity, so a query sharing no exact words with a page can still surface it if the meaning is close. The "Search syntax" disclosure lists the operators: plain words match loosely, +word forces presence, -word excludes, "exact phrase" matches literally (and -"exact phrase" excludes it), and site:example.com (or -site:example.com) restricts to or excludes a domain and its subdomains. These combine freely, e.g. cats +shelter -kitten site:example.com. Appending &top_k=N to the page's URL (e.g. /?q=cats&top_k=50) requests more than the default number of results. A misspelled query gets a quiet note above the results naming which term(s) were fuzzy-corrected for scoring -- your typed query is never silently rewritten, only substituted for ranking.

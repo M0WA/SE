@@ -2,7 +2,9 @@ package restapi
 
 import (
 	"errors"
+	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"searchengine/internal/application"
@@ -111,6 +113,136 @@ func (h *Handler) handleVisionModeSwitch(w http.ResponseWriter, r *http.Request)
 	default:
 		writeJSON(w, http.StatusOK, toGPUModeStatusResponse(st))
 	}
+}
+
+// visionGenerateRequest is POST /vision/api/generate's body.
+type visionGenerateRequest struct {
+	Prompt string `json:"prompt"`
+}
+
+type visionGenerateResponse struct {
+	JobID string `json:"job_id"`
+}
+
+// handleVisionGenerate is POST /vision/api/generate -- submits a new
+// text-to-video generation job. Only meaningful while the shared GPU is
+// already in Vision mode; the frontend only ever shows the Generate
+// button then, but this still handles the race of someone switching back
+// to Chat in between by surfacing cmd/gpu-control's own 409 as a 409
+// here too, rather than a confusing 502.
+func (h *Handler) handleVisionGenerate(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	if h.gpuModeService == nil {
+		http.NotFound(w, r)
+		return
+	}
+	req, ok := decodeJSON[visionGenerateRequest](w, r)
+	if !ok {
+		return
+	}
+	if req.Prompt == "" {
+		http.Error(w, "prompt must not be empty", http.StatusBadRequest)
+		return
+	}
+	jobID, err := h.gpuModeService.Generate(r.Context(), req.Prompt)
+	switch {
+	case errors.Is(err, application.ErrGPUModeNotEnabled):
+		http.NotFound(w, r)
+	case errors.Is(err, ports.ErrGPUGenerateNotInVisionMode):
+		http.Error(w, err.Error(), http.StatusConflict)
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusBadGateway)
+	default:
+		writeJSON(w, http.StatusAccepted, visionGenerateResponse{JobID: jobID})
+	}
+}
+
+// visionResultResponse mirrors application.GPUModeService.GenerateResult's
+// own domain.GPUGenerateResult shape.
+type visionResultResponse struct {
+	Status  string `json:"status"`
+	ViewURL string `json:"view_url,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+// handleVisionResult is GET /vision/api/result?job_id=... -- polls a
+// previously submitted generation job. ViewURL, when present, is always
+// this same handler's own package's /vision/api/asset (never
+// cmd/gpu-control's URL directly), so the browser never needs to reach
+// anything but search-server.
+func (h *Handler) handleVisionResult(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) {
+		return
+	}
+	if h.gpuModeService == nil {
+		http.NotFound(w, r)
+		return
+	}
+	jobID := r.URL.Query().Get("job_id")
+	if jobID == "" {
+		http.Error(w, "job_id is required", http.StatusBadRequest)
+		return
+	}
+	result, err := h.gpuModeService.GenerateResult(r.Context(), jobID)
+	switch {
+	case errors.Is(err, application.ErrGPUModeNotEnabled):
+		http.NotFound(w, r)
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusBadGateway)
+	default:
+		resp := visionResultResponse{Status: result.Status, Error: result.Error}
+		if result.ViewURL != "" {
+			resp.ViewURL = "/vision/api/asset?job_id=" + url.QueryEscape(jobID)
+		}
+		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+// handleVisionAsset is GET /vision/api/asset?job_id=... -- re-fetches
+// job_id's current result (cheap: cmd/gpu-control's own /history lookup)
+// to get its view_url, then streams cmd/gpu-control's own /gpu/api/view
+// bytes straight through. Re-fetching rather than trusting a client-
+// supplied view_url means a signed-in user can never ask this endpoint
+// to fetch an arbitrary ComfyUI-side path -- only whatever job_id's own
+// already-computed result names.
+func (h *Handler) handleVisionAsset(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) {
+		return
+	}
+	if h.gpuModeService == nil {
+		http.NotFound(w, r)
+		return
+	}
+	jobID := r.URL.Query().Get("job_id")
+	if jobID == "" {
+		http.Error(w, "job_id is required", http.StatusBadRequest)
+		return
+	}
+	result, err := h.gpuModeService.GenerateResult(r.Context(), jobID)
+	if errors.Is(err, application.ErrGPUModeNotEnabled) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if result.Status != "done" || result.ViewURL == "" {
+		http.Error(w, "generation is not finished", http.StatusNotFound)
+		return
+	}
+	contentType, body, err := h.gpuModeService.ViewAsset(r.Context(), result.ViewURL)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer body.Close()
+	if contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	_, _ = io.Copy(w, body)
 }
 
 // handleVisionHeartbeat is POST /vision/api/heartbeat -- resets

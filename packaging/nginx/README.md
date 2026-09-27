@@ -19,11 +19,13 @@ nginx must split traffic between search-server and admin-server by path:
   `/account.js`, `/account/api`, `/account/mcp-servers` and its subpaths
   (`/account_mcp_servers.js`, `/account/mcp-servers/{id}`,
   `/account_mcp_server.js`, `/account/api/mcp-servers...`), `/vision/api/mode`,
-  `/vision/api/heartbeat` -> search-server, `http://127.0.0.1:8080`
+  `/vision/api/heartbeat`, `/vision/api/generate`, `/vision/api/result`,
+  `/vision/api/asset` -> search-server, `http://127.0.0.1:8080`
 - `/login`, `/logout`, `/admin` and its subpaths (`/admin.js`,
   `/admin/documents`, `/admin/crawl`, `/admin/jobs`, `/admin/settings`,
-  `/admin/search`, `/admin/api/...`, and every per-page script the admin UI
-  serves -- `/admin_*.js`, `/admin_crawl.js`, `/admin_jobs.js`, `/login.js`)
+  `/admin/search`, `/admin/api/...`, `/admin/comfy/...`, and every per-page
+  script the admin UI serves -- `/admin_*.js`, `/admin_crawl.js`,
+  `/admin_jobs.js`, `/login.js`)
   -> admin-server, `http://127.0.0.1:8081`
 
 The `location /admin`/`/login`/`/logout` blocks below are plain **string
@@ -38,6 +40,18 @@ for the real incident this caused.
 crawl-server (`127.0.0.1:8082`) is an internal API only admin-server talks
 to (via `CRAWL_SERVER_URL`). Never add it to the nginx config or otherwise
 expose it on a public listener.
+
+## WebSocket passthrough
+
+`/admin/comfy/...` reverse-proxies to ComfyUI's own web UI (via
+admin-server -> `cmd/gpu-control` -> ComfyUI, see
+`packaging/gpu-control/README.md`), which uses a WebSocket for its own
+live queue/progress updates. The `/admin` block sets
+`proxy_http_version 1.1` plus `Upgrade`/`Connection` headers (driven by a
+`map $http_upgrade $connection_upgrade` block above the `server{}` block
+-- nginx's `map` directive is only valid directly in the `http{}` context)
+so that upgrade request passes through unmodified; every other `/admin`
+request never sends an `Upgrade` header, so this is a no-op for them.
 
 ## Timeouts
 
