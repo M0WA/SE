@@ -589,6 +589,9 @@ func (h *Handler) RoutesSearch() http.Handler {
 	mux.HandleFunc("GET /vision/api/mode", h.requireAuthAPI(h.handleVisionMode))
 	mux.HandleFunc("POST /vision/api/mode", h.requireAuthAPI(h.handleVisionModeSwitch))
 	mux.HandleFunc("POST /vision/api/heartbeat", h.requireAuthAPI(h.handleVisionHeartbeat))
+	mux.HandleFunc("POST /vision/api/generate", h.requireAuthAPI(h.handleVisionGenerate))
+	mux.HandleFunc("GET /vision/api/result", h.requireAuthAPI(h.handleVisionResult))
+	mux.HandleFunc("GET /vision/api/asset", h.requireAuthAPI(h.handleVisionAsset))
 	mux.HandleFunc("/healthz", h.handleHealthz)
 	return withSecurityHeaders(mux)
 }
@@ -675,6 +678,7 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("/admin/api/chat-endpoint", h.requireAdminAuthAPI(h.handleAdminChatEndpoint))
 	mux.HandleFunc("/admin/api/chat-vision", h.requireAdminAuthAPI(h.handleAdminChatVision))
 	mux.HandleFunc("/admin/api/gpu-mode", h.requireAdminAuthAPI(h.handleAdminGPUMode))
+	mux.HandleFunc("/admin/comfy/", h.requireAdminAuthPage(h.handleAdminComfyProxy))
 	mux.HandleFunc("/admin/api/mcp-servers", h.requireAdminAuthAPI(h.handleAdminMCPServers))
 	mux.HandleFunc("POST /admin/api/mcp-servers/test", h.requireAdminAuthAPI(h.handleAdminMCPServersTest))
 	mux.HandleFunc("GET /admin/api/mcp-servers/{id}", h.requireAdminAuthAPI(h.handleAdminGetMCPServer))

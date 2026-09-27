@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"sync"
 	"time"
@@ -230,4 +231,46 @@ func (s *GPUModeService) Heartbeat(ctx context.Context) error {
 		return ErrGPUModeNotEnabled
 	}
 	return s.controller.Heartbeat(ctx, cfg)
+}
+
+// Generate is POST /vision/api/generate's use case: submits a new
+// text-to-video job through the controller. No dwell/rate-limit gating
+// here (unlike Switch) -- ComfyUI's own queue already serializes
+// generation jobs one at a time, and ordinary generation traffic doesn't
+// thrash the shared GPU the way a chat<->vision mode switch does.
+func (s *GPUModeService) Generate(ctx context.Context, prompt string) (string, error) {
+	cfg, enabled, err := s.loadEnabledConfig(ctx)
+	if err != nil {
+		return "", err
+	}
+	if !enabled {
+		return "", ErrGPUModeNotEnabled
+	}
+	return s.controller.Generate(ctx, cfg, prompt)
+}
+
+// GenerateResult is GET /vision/api/result's use case: polls the
+// controller for jobID's current status.
+func (s *GPUModeService) GenerateResult(ctx context.Context, jobID string) (domain.GPUGenerateResult, error) {
+	cfg, enabled, err := s.loadEnabledConfig(ctx)
+	if err != nil {
+		return domain.GPUGenerateResult{}, err
+	}
+	if !enabled {
+		return domain.GPUGenerateResult{}, ErrGPUModeNotEnabled
+	}
+	return s.controller.GenerateResult(ctx, cfg, jobID)
+}
+
+// ViewAsset streams a finished generation's own bytes -- the caller must
+// close the returned io.ReadCloser.
+func (s *GPUModeService) ViewAsset(ctx context.Context, viewURL string) (contentType string, body io.ReadCloser, err error) {
+	cfg, enabled, err := s.loadEnabledConfig(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	if !enabled {
+		return "", nil, ErrGPUModeNotEnabled
+	}
+	return s.controller.ViewAsset(ctx, cfg, viewURL)
 }

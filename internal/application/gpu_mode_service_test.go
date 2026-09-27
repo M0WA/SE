@@ -3,6 +3,8 @@ package application
 import (
 	"context"
 	"errors"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +41,14 @@ type fakeGPUModeController struct {
 
 	switchCalls int
 	lastTarget  domain.GPUMode
+
+	generateJobID  string
+	generateErr    error
+	generateResult domain.GPUGenerateResult
+	generateResErr error
+	viewContent    string
+	viewBody       io.ReadCloser
+	viewErr        error
 }
 
 func (f *fakeGPUModeController) Status(ctx context.Context, cfg domain.GPUModeSettings) (domain.GPUModeStatus, error) {
@@ -53,6 +63,18 @@ func (f *fakeGPUModeController) Switch(ctx context.Context, cfg domain.GPUModeSe
 
 func (f *fakeGPUModeController) Heartbeat(ctx context.Context, cfg domain.GPUModeSettings) error {
 	return f.heartErr
+}
+
+func (f *fakeGPUModeController) Generate(ctx context.Context, cfg domain.GPUModeSettings, prompt string) (string, error) {
+	return f.generateJobID, f.generateErr
+}
+
+func (f *fakeGPUModeController) GenerateResult(ctx context.Context, cfg domain.GPUModeSettings, jobID string) (domain.GPUGenerateResult, error) {
+	return f.generateResult, f.generateResErr
+}
+
+func (f *fakeGPUModeController) ViewAsset(ctx context.Context, cfg domain.GPUModeSettings, viewURL string) (string, io.ReadCloser, error) {
+	return f.viewContent, f.viewBody, f.viewErr
 }
 
 func newTestGPUModeService(store *fakeGPUModeStore, controller *fakeGPUModeController) *GPUModeService {
@@ -326,6 +348,112 @@ func TestGPUModeService_Heartbeat_ControllerErrorPropagates(t *testing.T) {
 	wantErr := errors.New("gpu-control unreachable")
 	s := newTestGPUModeService(&fakeGPUModeStore{cfg: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{heartErr: wantErr})
 	if err := s.Heartbeat(context.Background()); !errors.Is(err, wantErr) {
+		t.Fatalf("expected controller error to propagate, got %v", err)
+	}
+}
+
+func TestGPUModeService_Generate_NotEnabled(t *testing.T) {
+	s := newTestGPUModeService(&fakeGPUModeStore{notConfig: true}, &fakeGPUModeController{})
+	if _, err := s.Generate(context.Background(), "a cat"); !errors.Is(err, ErrGPUModeNotEnabled) {
+		t.Fatalf("expected ErrGPUModeNotEnabled, got %v", err)
+	}
+}
+
+func TestGPUModeService_Generate_StoreErrorPropagates(t *testing.T) {
+	wantErr := errors.New("db down")
+	s := newTestGPUModeService(&fakeGPUModeStore{err: wantErr}, &fakeGPUModeController{})
+	if _, err := s.Generate(context.Background(), "a cat"); !errors.Is(err, wantErr) {
+		t.Fatalf("expected store error to propagate, got %v", err)
+	}
+}
+
+func TestGPUModeService_Generate_Success(t *testing.T) {
+	s := newTestGPUModeService(&fakeGPUModeStore{cfg: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{generateJobID: "abc-123"})
+	id, err := s.Generate(context.Background(), "a cat")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if id != "abc-123" {
+		t.Fatalf("expected abc-123, got %q", id)
+	}
+}
+
+func TestGPUModeService_Generate_ControllerErrorPropagates(t *testing.T) {
+	wantErr := errors.New("gpu-control unreachable")
+	s := newTestGPUModeService(&fakeGPUModeStore{cfg: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{generateErr: wantErr})
+	if _, err := s.Generate(context.Background(), "a cat"); !errors.Is(err, wantErr) {
+		t.Fatalf("expected controller error to propagate, got %v", err)
+	}
+}
+
+func TestGPUModeService_GenerateResult_NotEnabled(t *testing.T) {
+	s := newTestGPUModeService(&fakeGPUModeStore{notConfig: true}, &fakeGPUModeController{})
+	if _, err := s.GenerateResult(context.Background(), "abc-123"); !errors.Is(err, ErrGPUModeNotEnabled) {
+		t.Fatalf("expected ErrGPUModeNotEnabled, got %v", err)
+	}
+}
+
+func TestGPUModeService_GenerateResult_StoreErrorPropagates(t *testing.T) {
+	wantErr := errors.New("db down")
+	s := newTestGPUModeService(&fakeGPUModeStore{err: wantErr}, &fakeGPUModeController{})
+	if _, err := s.GenerateResult(context.Background(), "abc-123"); !errors.Is(err, wantErr) {
+		t.Fatalf("expected store error to propagate, got %v", err)
+	}
+}
+
+func TestGPUModeService_GenerateResult_Success(t *testing.T) {
+	s := newTestGPUModeService(&fakeGPUModeStore{cfg: domain.GPUModeSettings{Enabled: true}},
+		&fakeGPUModeController{generateResult: domain.GPUGenerateResult{Status: "done", ViewURL: "/gpu/api/view?filename=out.mp4"}})
+	result, err := s.GenerateResult(context.Background(), "abc-123")
+	if err != nil {
+		t.Fatalf("GenerateResult: %v", err)
+	}
+	if result.Status != "done" || result.ViewURL == "" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestGPUModeService_GenerateResult_ControllerErrorPropagates(t *testing.T) {
+	wantErr := errors.New("gpu-control unreachable")
+	s := newTestGPUModeService(&fakeGPUModeStore{cfg: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{generateResErr: wantErr})
+	if _, err := s.GenerateResult(context.Background(), "abc-123"); !errors.Is(err, wantErr) {
+		t.Fatalf("expected controller error to propagate, got %v", err)
+	}
+}
+
+func TestGPUModeService_ViewAsset_NotEnabled(t *testing.T) {
+	s := newTestGPUModeService(&fakeGPUModeStore{notConfig: true}, &fakeGPUModeController{})
+	if _, _, err := s.ViewAsset(context.Background(), "/gpu/api/view?filename=out.mp4"); !errors.Is(err, ErrGPUModeNotEnabled) {
+		t.Fatalf("expected ErrGPUModeNotEnabled, got %v", err)
+	}
+}
+
+func TestGPUModeService_ViewAsset_StoreErrorPropagates(t *testing.T) {
+	wantErr := errors.New("db down")
+	s := newTestGPUModeService(&fakeGPUModeStore{err: wantErr}, &fakeGPUModeController{})
+	if _, _, err := s.ViewAsset(context.Background(), "/gpu/api/view?filename=out.mp4"); !errors.Is(err, wantErr) {
+		t.Fatalf("expected store error to propagate, got %v", err)
+	}
+}
+
+func TestGPUModeService_ViewAsset_Success(t *testing.T) {
+	body := io.NopCloser(strings.NewReader("video-bytes"))
+	s := newTestGPUModeService(&fakeGPUModeStore{cfg: domain.GPUModeSettings{Enabled: true}},
+		&fakeGPUModeController{viewContent: "video/mp4", viewBody: body})
+	ct, gotBody, err := s.ViewAsset(context.Background(), "/gpu/api/view?filename=out.mp4")
+	if err != nil {
+		t.Fatalf("ViewAsset: %v", err)
+	}
+	defer gotBody.Close()
+	if ct != "video/mp4" {
+		t.Fatalf("expected video/mp4, got %q", ct)
+	}
+}
+
+func TestGPUModeService_ViewAsset_ControllerErrorPropagates(t *testing.T) {
+	wantErr := errors.New("gpu-control unreachable")
+	s := newTestGPUModeService(&fakeGPUModeStore{cfg: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{viewErr: wantErr})
+	if _, _, err := s.ViewAsset(context.Background(), "/gpu/api/view?filename=out.mp4"); !errors.Is(err, wantErr) {
 		t.Fatalf("expected controller error to propagate, got %v", err)
 	}
 }

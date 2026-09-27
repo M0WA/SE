@@ -5,9 +5,11 @@ GPU on `gpu.mo-sys.de` between its normal chat role (`vllm-chat.service`)
 and image/video generation (`comfyui.service`, running LTX-2.5), since
 both can't fit in VRAM at once. Backs the public chat page's "Vision"
 mode -- see `internal/adapters/httpgpumode`/`ports.GPUModeController`
-(later PR) for the searchengine-side client, and
-`docs/manual/chat-settings.md`'s "GPU mode (Vision)" section for the
-admin-configured settings this service's own token/URL correspond to.
+for the searchengine-side client (called by both `cmd/search`, for
+switching/generating, and `cmd/admin`, for the direct ComfyUI-UI proxy
+below), and `docs/manual/chat-settings.md`'s "GPU mode (Vision)" section
+for the admin-configured settings this service's own token/URL
+correspond to.
 
 **Installs only on `gpu.mo-sys.de`, never on the main searchengine host.**
 It is packaged as its own `.deb`
@@ -53,12 +55,44 @@ start with an empty `GPU_CONTROL_TOKEN`).
 | `GET /gpu/api/mode` | Current `{mode, target, in_progress, since, expires_at, detail}`. |
 | `POST /gpu/api/mode` `{"mode":"chat"\|"vision"}` | Begins a switch (`202`), or reports `200` if already there, or `409` if a switch to a *different* target is already in flight. Runs on a detached background goroutine, so a client disconnect never leaves the GPU half-switched. |
 | `POST /gpu/api/heartbeat` | Resets the idle-revert timer (see below). `204`. |
+| `POST /gpu/api/generate` `{"prompt":"..."}` | Submits a new text-to-video job to ComfyUI (`202` with `{"prompt_id":"..."}`), using the fixed, embedded workflow template below with only the prompt and a fresh random seed substituted in. `409` if the GPU isn't currently in Vision mode. |
+| `GET /gpu/api/generate/{id}` | Polls that job: `{"status":"pending"\|"done"\|"failed", "view_url":"...", "error":"..."}` -- `view_url` (once `"done"`) is a `GET /gpu/api/view` URL. |
+| `GET /gpu/api/view?filename=...&subfolder=...&type=...` | Narrowly forwards exactly those three (plus `preview`) query params to ComfyUI's own read-only `GET /view`, streaming the resulting file's bytes back -- never a general-purpose proxy, unlike `/gpu/comfy/` below. |
+| `GET /gpu/comfy/*` | Raw, unrestricted reverse proxy to ComfyUI's entire local web UI (including its own WebSocket for live queue/progress) -- reached only by `cmd/admin`'s own admin-gated `/admin/comfy/` (never directly by a browser, and never by `cmd/search`), for manually inspecting or debugging a workflow. |
 | `GET /healthz` | Bare liveness check, unauthenticated. |
 
-Generation endpoints (`/gpu/api/generate`, `/gpu/api/result`) are a
-later PR, designed together with searchengine's own `/vision/api/*`
-generation proxy so both sides agree on the ComfyUI blueprint-templating
-shape up front, rather than guessing at it here first.
+### The embedded text-to-video workflow template
+
+`cmd/gpu-control/ltx_t2v_workflow.json` is ComfyUI's own bundled "Text to
+Video (LTX-2.5)" template, already flattened into ComfyUI's executable
+API prompt format (node id -> `{class_type, inputs}`) -- picked because
+its baked-in model filenames (`ltx-2.5-22b-distilled-transformer-comfy-
+int8-convrot.safetensors`, the matching text encoders/VAEs) exactly match
+what's actually installed on `gpu.mo-sys.de`'s ComfyUI. The as-shipped
+template is a deeply nested subgraph (40+ primitive nodes bundled behind
+one custom node), which ComfyUI's own frontend alone knows how to expand
+into that flat, executable shape (via its `app.graphToPrompt()`) --
+hand-converting it risks a subtly wrong graph that silently produces
+nothing, so it was extracted by driving a real, running ComfyUI instance
+with a headless Chromium session over the Chrome DevTools Protocol
+(`Page.navigate` to ComfyUI's own UI, `Runtime.evaluate` to call
+`app.loadGraphData()` then `app.graphToPrompt()`, same raw-CDP-WebSocket
+technique as this repo's own screenshot recipe -- see the root
+`CLAUDE.md`) rather than reverse-engineered by hand.
+
+`cmd/gpu-control/generate.go` overrides exactly two things in that fixed
+graph per request: the positive-prompt node's text (node `405:376`) and
+one `RandomNoise` node's seed (node `405:339`, the one the template
+itself marks `randomize`) -- every other parameter (resolution, duration,
+negative prompt, sampler, the upscale/refinement pass) is whatever the
+template's own defaults are. If ComfyUI's installed models or this
+template ever change, re-extract it the same way: tunnel to ComfyUI's UI
+(`ssh -L 18188:127.0.0.1:8188 root@gpu.mo-sys.de`), drive a headless
+Chromium against it to load the matching template file (found under
+ComfyUI's own `comfyui_workflow_templates_json` package,
+`video_ltx2_5_t2v.json` as of this writing) and call `app.graphToPrompt()`,
+then update the two node-id constants in `generate.go` if the resulting
+graph's node ids for the prompt/seed happen to change.
 
 ## Idle revert
 
@@ -102,5 +136,6 @@ change, which this isn't.
 See `gpu-control.env`'s own inline comments for the full list
 (`GPU_CONTROL_TOKEN`, `GPU_CONTROL_LISTEN_ADDR`,
 `GPU_CONTROL_SWITCH_TIMEOUT_SECONDS`, `GPU_CONTROL_IDLE_REVERT_MINUTES`,
-`GPU_CONTROL_COMFY_READY_URL`, `GPU_CONTROL_VLLM_READY_URL`) -- also
-documented in `docs/manual/environment-variables.md`.
+`GPU_CONTROL_COMFY_READY_URL`, `GPU_CONTROL_VLLM_READY_URL`,
+`GPU_CONTROL_VLLM_API_KEY`) -- also documented in
+`docs/manual/environment-variables.md`.

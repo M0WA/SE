@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
 	"time"
 
 	"searchengine/internal/domain"
@@ -659,12 +660,29 @@ type GPUModeController interface {
 	// other outcome.
 	Switch(ctx context.Context, cfg domain.GPUModeSettings, target domain.GPUMode) (domain.GPUModeStatus, error)
 	Heartbeat(ctx context.Context, cfg domain.GPUModeSettings) error
+	// Generate submits a new text-to-video job (only valid while the GPU
+	// is already in domain.GPUModeVision) and returns cmd/gpu-control's
+	// own prompt id, used to poll GenerateResult. Returns
+	// ErrGPUGenerateNotInVisionMode (wrapped) when the GPU isn't
+	// currently in vision mode.
+	Generate(ctx context.Context, cfg domain.GPUModeSettings, prompt string) (string, error)
+	// GenerateResult polls cmd/gpu-control for jobID's current status.
+	GenerateResult(ctx context.Context, cfg domain.GPUModeSettings, jobID string) (domain.GPUGenerateResult, error)
+	// ViewAsset streams the finished generation's own bytes (fetched via
+	// cmd/gpu-control's narrow /gpu/api/view passthrough, itself
+	// forwarding to ComfyUI's own read-only /view) -- the caller must
+	// close the returned io.ReadCloser.
+	ViewAsset(ctx context.Context, cfg domain.GPUModeSettings, viewURL string) (contentType string, body io.ReadCloser, err error)
 }
 
 // ErrGPUModeSwitchConflict is GPUModeController.Switch's sentinel for "a
 // switch to a different target is already in progress" -- see its own
 // doc comment.
 var ErrGPUModeSwitchConflict = errors.New("a gpu mode switch is already in progress")
+
+// ErrGPUGenerateNotInVisionMode is GPUModeController.Generate's sentinel
+// for "the GPU is currently in chat mode" -- see its own doc comment.
+var ErrGPUGenerateNotInVisionMode = errors.New("the gpu is not in vision mode")
 
 // ChatCompleter calls an OpenAI-compatible chat-completions endpoint,
 // optionally with a native "tools" list -- tools is nil/empty for a turn

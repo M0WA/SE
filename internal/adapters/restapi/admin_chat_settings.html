@@ -236,6 +236,11 @@
 
     <button id="save-gpu-mode-settings-btn" type="button">Save GPU mode settings</button>
     <span id="gpu-mode-settings-status" class="error-text"></span>
+
+    <div class="form-row">
+      <a id="open-comfyui-link" href="/admin/comfy/" target="_blank" rel="noopener">Open ComfyUI &#8599;</a>
+      <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Opens ComfyUI's own web UI directly, proxied through this control endpoint -- useful for inspecting or debugging a workflow by hand. Admin-only: ComfyUI itself is never reachable except through this proxy, and running a workflow there bypasses the switch-timeout/dwell/rate-limit safety this page's own toggle enforces, so treat it as a maintenance tool, not something to link to regular users.</span></button>
+    </div>
   </section>
 </main>
 </div>

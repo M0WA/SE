@@ -36,6 +36,9 @@ test.afterEach(() => {
   if (lastFixture && typeof lastFixture.stopVisionPolling === 'function') {
     lastFixture.stopVisionPolling();
   }
+  if (lastFixture && typeof lastFixture.stopVisionGeneratePolling === 'function') {
+    lastFixture.stopVisionGeneratePolling();
+  }
   lastFixture = null;
   teardownDOM();
   delete global.fetch;
@@ -1823,14 +1826,16 @@ test('loadSession shows both the admin and account links for an admin-role sessi
   await loadSession();
   assert.equal(document.getElementById('admin-link').hidden, false);
   assert.equal(document.getElementById('account-link').hidden, false);
+  assert.equal(document.getElementById('vision-comfy-link').hidden, false, 'the direct ComfyUI link is admin-only');
 });
 
-test('loadSession shows the account link for a user-role session', async () => {
+test('loadSession shows the account link for a user-role session, but not the admin-only ComfyUI link', async () => {
   global.fetch = async () => ({ ok: true, json: async () => ({ role: 'user' }) });
   const { loadSession } = loadFixture();
   await loadSession();
   assert.equal(document.getElementById('account-link').hidden, false);
   assert.equal(document.getElementById('admin-link').hidden, true);
+  assert.equal(document.getElementById('vision-comfy-link').hidden, true);
 });
 
 test('loadSession keeps both links hidden on a non-ok /session response', async () => {
@@ -2417,4 +2422,133 @@ test('setMode starts the heartbeat on entering vision and stops it on leaving', 
     global.setInterval = originalSetInterval;
     global.clearInterval = originalClearInterval;
   }
+});
+
+// --- Generate (POST /vision/api/generate, GET /vision/api/result) ---
+
+test('updateVisionGenerateAvailability disables Generate outside vision mode, enables it in vision mode', async () => {
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ mode: 'vision', in_progress: false }) });
+  const { loadVisionMode, updateVisionGenerateAvailability } = loadFixture();
+  await loadVisionMode();
+  updateVisionGenerateAvailability();
+  assert.equal(document.getElementById('vision-generate-btn').disabled, false);
+});
+
+test('updateVisionGenerateAvailability disables Generate while the GPU is switching', async () => {
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ mode: 'vision', in_progress: true }) });
+  const { loadVisionMode, updateVisionGenerateAvailability } = loadFixture();
+  await loadVisionMode();
+  updateVisionGenerateAvailability();
+  assert.equal(document.getElementById('vision-generate-btn').disabled, true);
+});
+
+test('requestGenerate does nothing for a blank prompt', async () => {
+  let generateCalled = false;
+  global.fetch = async (url) => {
+    if (url === '/vision/api/generate') generateCalled = true;
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+  const { requestGenerate } = loadFixture();
+  document.getElementById('vision-prompt').value = '   ';
+  await requestGenerate();
+  assert.equal(generateCalled, false);
+});
+
+test('requestGenerate submits the prompt and starts polling for the result', async () => {
+  const calls = [];
+  global.fetch = async (url, opts) => {
+    if (url.startsWith('/vision/api/')) calls.push(url);
+    if (url === '/vision/api/generate') {
+      return { ok: true, json: async () => ({ job_id: 'abc-123' }) };
+    }
+    if (url === '/vision/api/result?job_id=abc-123') {
+      return { ok: true, json: async () => ({ status: 'done', view_url: '/vision/api/asset?job_id=abc-123' }) };
+    }
+    return { ok: false, status: 404, text: async () => 'not found' };
+  };
+  const { requestGenerate } = loadFixture();
+  document.getElementById('vision-prompt').value = 'a cat riding a bicycle';
+  await requestGenerate();
+  assert.deepEqual(calls, ['/vision/api/generate', '/vision/api/result?job_id=abc-123']);
+  assert.equal(document.getElementById('vision-result').hidden, false);
+  assert.equal(document.getElementById('vision-result-video').hidden, false);
+  assert.equal(document.getElementById('vision-result-video').src.endsWith('/vision/api/asset?job_id=abc-123'), true);
+});
+
+test('requestGenerate shows the server error text on a non-ok submit response', async () => {
+  global.fetch = async () => ({ ok: false, text: async () => 'prompt must not be empty' });
+  const { requestGenerate } = loadFixture();
+  document.getElementById('vision-prompt').value = 'a cat';
+  await requestGenerate();
+  assert.match(document.getElementById('vision-result-error').textContent, /prompt must not be empty/);
+});
+
+test('requestGenerate shows a generic message when the submit fetch throws', async () => {
+  global.fetch = async () => { throw new Error('network down'); };
+  const { requestGenerate } = loadFixture();
+  document.getElementById('vision-prompt').value = 'a cat';
+  await requestGenerate();
+  assert.match(document.getElementById('vision-result-error').textContent, /Could not reach the server/);
+});
+
+test('pollVisionResult re-arms itself with a 3s timer while the job is still pending', async () => {
+  const originalSetTimeout = global.setTimeout;
+  let scheduledFn, scheduledMs;
+  global.setTimeout = (fn, ms) => { scheduledFn = fn; scheduledMs = ms; return 'fake-timer'; };
+  try {
+    global.fetch = async (url, opts) => {
+      if (url === '/vision/api/generate') return { ok: true, json: async () => ({ job_id: 'abc-123' }) };
+      return { ok: true, json: async () => ({ status: 'pending' }) };
+    };
+    const { requestGenerate } = loadFixture();
+    document.getElementById('vision-prompt').value = 'a cat';
+    await requestGenerate();
+    assert.equal(scheduledMs, 3000);
+    assert.equal(typeof scheduledFn, 'function');
+  } finally {
+    global.setTimeout = originalSetTimeout;
+  }
+});
+
+test('pollVisionResult shows the failure error and re-enables Generate', async () => {
+  global.fetch = async (url) => {
+    if (url === '/vision/api/generate') return { ok: true, json: async () => ({ job_id: 'abc-123' }) };
+    if (url === '/vision/api/mode') return { ok: true, status: 200, json: async () => ({ mode: 'vision', in_progress: false }) };
+    return { ok: true, json: async () => ({ status: 'failed', error: 'generation finished without producing a video' }) };
+  };
+  const { requestGenerate, loadVisionMode } = loadFixture();
+  await loadVisionMode();
+  document.getElementById('vision-prompt').value = 'a cat';
+  await requestGenerate();
+  assert.match(document.getElementById('vision-result-error').textContent, /without producing a video/);
+  assert.equal(document.getElementById('vision-result-video').hidden, true);
+  assert.equal(document.getElementById('vision-generate-btn').disabled, false);
+});
+
+test('pollVisionResult shows a status-check error on a non-ok response', async () => {
+  global.fetch = async (url) => {
+    if (url === '/vision/api/generate') return { ok: true, json: async () => ({ job_id: 'abc-123' }) };
+    return { ok: false, status: 500 };
+  };
+  const { requestGenerate } = loadFixture();
+  document.getElementById('vision-prompt').value = 'a cat';
+  await requestGenerate();
+  assert.match(document.getElementById('vision-result-error').textContent, /Could not check/);
+});
+
+test('pollVisionResult shows a generic message when the status fetch throws', async () => {
+  global.fetch = async (url) => {
+    if (url === '/vision/api/generate') return { ok: true, json: async () => ({ job_id: 'abc-123' }) };
+    if (url.startsWith('/vision/api/result')) throw new Error('network down');
+    return { ok: true, json: async () => ({ status: 'pending' }) };
+  };
+  const { requestGenerate } = loadFixture();
+  document.getElementById('vision-prompt').value = 'a cat';
+  await requestGenerate();
+  assert.match(document.getElementById('vision-result-error').textContent, /Could not reach the server/);
+});
+
+test('stopVisionGeneratePolling is a no-op when nothing is scheduled', () => {
+  const { stopVisionGeneratePolling } = loadFixture();
+  assert.doesNotThrow(() => stopVisionGeneratePolling());
 });

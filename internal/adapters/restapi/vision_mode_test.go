@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"searchengine/internal/adapters/restapi"
@@ -25,6 +27,14 @@ type fakeGPUModeController struct {
 	statusErr error
 	switchErr error
 	heartErr  error
+
+	generateJobID  string
+	generateErr    error
+	generateResult domain.GPUGenerateResult
+	generateResErr error
+	viewContent    string
+	viewBody       io.ReadCloser
+	viewErr        error
 }
 
 func (f *fakeGPUModeController) Status(context.Context, domain.GPUModeSettings) (domain.GPUModeStatus, error) {
@@ -40,6 +50,18 @@ func (f *fakeGPUModeController) Switch(_ context.Context, _ domain.GPUModeSettin
 
 func (f *fakeGPUModeController) Heartbeat(context.Context, domain.GPUModeSettings) error {
 	return f.heartErr
+}
+
+func (f *fakeGPUModeController) Generate(context.Context, domain.GPUModeSettings, string) (string, error) {
+	return f.generateJobID, f.generateErr
+}
+
+func (f *fakeGPUModeController) GenerateResult(context.Context, domain.GPUModeSettings, string) (domain.GPUGenerateResult, error) {
+	return f.generateResult, f.generateResErr
+}
+
+func (f *fakeGPUModeController) ViewAsset(context.Context, domain.GPUModeSettings, string) (string, io.ReadCloser, error) {
+	return f.viewContent, f.viewBody, f.viewErr
 }
 
 // gpuModeAuthedHandler mirrors chatAuthedHandler, wiring GPUModeService
@@ -279,6 +301,232 @@ func TestHandleVisionHeartbeat_Success(t *testing.T) {
 	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/heartbeat", nil)
 	if rec.Code != http.StatusNoContent {
 		t.Errorf("expected 204, got %d", rec.Code)
+	}
+}
+
+// --- handleVisionGenerate/handleVisionResult/handleVisionAsset ---
+
+func TestHandleVisionGenerate_NilServiceIs404(t *testing.T) {
+	h, cookie := gpuModeAuthedHandler(t, nil, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/generate", map[string]string{"prompt": "a cat"})
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleVisionGenerate_EmptyPromptIs400(t *testing.T) {
+	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
+	h, cookie := gpuModeAuthedHandler(t, svc, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/generate", map[string]string{"prompt": ""})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleVisionGenerate_InvalidJSON(t *testing.T) {
+	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
+	h, cookie := gpuModeAuthedHandler(t, svc, nil)
+	req := httptest.NewRequest(http.MethodPost, "/vision/api/generate", bytes.NewReader([]byte("{not json")))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesSearch().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleVisionGenerate_NotEnabledIs404(t *testing.T) {
+	svc := application.NewGPUModeService(&fakeGPUModeStore{getErr: ports.ErrGPUModeSettingsNotConfigured}, &fakeGPUModeController{})
+	h, cookie := gpuModeAuthedHandler(t, svc, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/generate", map[string]string{"prompt": "a cat"})
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleVisionGenerate_NotInVisionModeIs409(t *testing.T) {
+	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
+		&fakeGPUModeController{generateErr: fmt.Errorf("wrapped: %w", ports.ErrGPUGenerateNotInVisionMode)})
+	h, cookie := gpuModeAuthedHandler(t, svc, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/generate", map[string]string{"prompt": "a cat"})
+	if rec.Code != http.StatusConflict {
+		t.Errorf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleVisionGenerate_ControllerErrorIs502(t *testing.T) {
+	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
+		&fakeGPUModeController{generateErr: errors.New("unreachable")})
+	h, cookie := gpuModeAuthedHandler(t, svc, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/generate", map[string]string{"prompt": "a cat"})
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("expected 502, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleVisionGenerate_Success(t *testing.T) {
+	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
+		&fakeGPUModeController{generateJobID: "abc-123"})
+	h, cookie := gpuModeAuthedHandler(t, svc, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/generate", map[string]string{"prompt": "a cat"})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp["job_id"] != "abc-123" {
+		t.Errorf("expected job_id=abc-123, got %v", resp)
+	}
+}
+
+func TestHandleVisionResult_NilServiceIs404(t *testing.T) {
+	h, cookie := gpuModeAuthedHandler(t, nil, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/result?job_id=abc-123", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleVisionResult_MissingJobIDIs400(t *testing.T) {
+	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
+	h, cookie := gpuModeAuthedHandler(t, svc, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/result", nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleVisionResult_NotEnabledIs404(t *testing.T) {
+	svc := application.NewGPUModeService(&fakeGPUModeStore{getErr: ports.ErrGPUModeSettingsNotConfigured}, &fakeGPUModeController{})
+	h, cookie := gpuModeAuthedHandler(t, svc, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/result?job_id=abc-123", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleVisionResult_ControllerErrorIs502(t *testing.T) {
+	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
+		&fakeGPUModeController{generateResErr: errors.New("unreachable")})
+	h, cookie := gpuModeAuthedHandler(t, svc, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/result?job_id=abc-123", nil)
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("expected 502, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleVisionResult_PendingHasNoViewURL(t *testing.T) {
+	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
+		&fakeGPUModeController{generateResult: domain.GPUGenerateResult{Status: "pending"}})
+	h, cookie := gpuModeAuthedHandler(t, svc, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/result?job_id=abc-123", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp["status"] != "pending" || resp["view_url"] != nil {
+		t.Errorf("expected pending with no view_url, got %v", resp)
+	}
+}
+
+func TestHandleVisionResult_DoneRewritesViewURLThroughSearchServer(t *testing.T) {
+	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
+		&fakeGPUModeController{generateResult: domain.GPUGenerateResult{Status: "done", ViewURL: "/gpu/api/view?filename=out.mp4"}})
+	h, cookie := gpuModeAuthedHandler(t, svc, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/result?job_id=abc-123", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp["view_url"] != "/vision/api/asset?job_id=abc-123" {
+		t.Errorf("expected the view_url rewritten to this service's own /vision/api/asset, got %v", resp)
+	}
+}
+
+func TestHandleVisionAsset_NilServiceIs404(t *testing.T) {
+	h, cookie := gpuModeAuthedHandler(t, nil, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/asset?job_id=abc-123", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleVisionAsset_MissingJobIDIs400(t *testing.T) {
+	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
+	h, cookie := gpuModeAuthedHandler(t, svc, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/asset", nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleVisionAsset_NotEnabledIs404(t *testing.T) {
+	svc := application.NewGPUModeService(&fakeGPUModeStore{getErr: ports.ErrGPUModeSettingsNotConfigured}, &fakeGPUModeController{})
+	h, cookie := gpuModeAuthedHandler(t, svc, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/asset?job_id=abc-123", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleVisionAsset_ResultControllerErrorIs502(t *testing.T) {
+	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
+		&fakeGPUModeController{generateResErr: errors.New("unreachable")})
+	h, cookie := gpuModeAuthedHandler(t, svc, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/asset?job_id=abc-123", nil)
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("expected 502, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleVisionAsset_NotDoneIs404(t *testing.T) {
+	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
+		&fakeGPUModeController{generateResult: domain.GPUGenerateResult{Status: "pending"}})
+	h, cookie := gpuModeAuthedHandler(t, svc, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/asset?job_id=abc-123", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleVisionAsset_ViewAssetErrorIs502(t *testing.T) {
+	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
+		&fakeGPUModeController{
+			generateResult: domain.GPUGenerateResult{Status: "done", ViewURL: "/gpu/api/view?filename=out.mp4"},
+			viewErr:        errors.New("unreachable"),
+		})
+	h, cookie := gpuModeAuthedHandler(t, svc, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/asset?job_id=abc-123", nil)
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("expected 502, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleVisionAsset_Success(t *testing.T) {
+	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
+		&fakeGPUModeController{
+			generateResult: domain.GPUGenerateResult{Status: "done", ViewURL: "/gpu/api/view?filename=out.mp4"},
+			viewContent:    "video/mp4",
+			viewBody:       io.NopCloser(strings.NewReader("video-bytes")),
+		})
+	h, cookie := gpuModeAuthedHandler(t, svc, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/asset?job_id=abc-123", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Content-Type") != "video/mp4" {
+		t.Errorf("expected Content-Type video/mp4, got %q", rec.Header().Get("Content-Type"))
+	}
+	if rec.Body.String() != "video-bytes" {
+		t.Errorf("expected the asset bytes streamed through, got %q", rec.Body.String())
 	}
 }
 

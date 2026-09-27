@@ -143,7 +143,10 @@ func main() {
 		{"multi-turn: graceful close (no spurious tools)", c.checkGracefulClose},
 		{"out-of-scope question: hedges instead of guessing", c.checkOutOfScopeHonesty},
 		{"chat: over-length message rejected", c.checkChatValidationBoundary},
-		{"vision mode (disabled) returns 404", c.checkVisionModeDisabledIs404},
+		{"vision mode: reachable per its documented enabled/disabled contract", c.checkVisionModeReachable},
+		{"vision generate: empty prompt rejected", c.checkVisionGenerateValidatesEmptyPrompt},
+		{"vision result: missing job_id rejected", c.checkVisionResultRequiresJobID},
+		{"vision asset: missing job_id rejected", c.checkVisionAssetRequiresJobID},
 		{"always-on MCP tool (datetime)", c.checkDatetimeTool},
 		{"sandbox MCP tool (fast, no packages)", c.checkSandboxFast},
 		{"sandbox MCP tool (run_go)", c.checkGoSandbox},
@@ -1070,20 +1073,81 @@ func (c *client) checkOutOfScopeHonesty() error {
 // Sends one clearly-too-long message rather than maxChatMessages+1 short
 // ones: cheaper, and exercises validateChatMessages' other length check
 // just as directly.
-// checkVisionModeDisabledIs404 proves GET /vision/api/mode is entirely
-// absent (404) while GPU mode (Vision) is disabled -- the default, and,
-// as of this writing, se.mo-sys.de's own actual state (cmd/gpu-control
-// isn't deployed there yet). Deliberately never enables
-// GPUModeSettings.Enabled or calls POST /vision/api/mode -- same
-// never-trigger-the-real-thing-live precedent as this package's own doc
-// comment on why a real crawl is never started here.
-func (c *client) checkVisionModeDisabledIs404() error {
+// checkVisionModeReachable proves GET /vision/api/mode behaves per its
+// own documented contract regardless of whether this deployment
+// currently has GPU mode (Vision) enabled: 404 (disabled -- the
+// feature-absent default) or 200 with a real `mode` field (enabled).
+// Deliberately never calls POST /vision/api/mode (a real chat<->vision
+// switch) or POST /vision/api/generate (a real, minutes-long GPU
+// generation job) -- same never-trigger-the-real-thing-live precedent as
+// this package's own doc comment on why a real crawl is never started
+// here.
+func (c *client) checkVisionModeReachable() error {
 	status, body, err := c.getJSONRaw("/vision/api/mode")
 	if err != nil {
 		return err
 	}
-	if status != http.StatusNotFound {
-		return fmt.Errorf("expected 404 while GPU mode is disabled, got %d: %s", status, truncate(body, 200))
+	switch status {
+	case http.StatusNotFound:
+		return nil
+	case http.StatusOK:
+		var parsed struct {
+			Mode string `json:"mode"`
+		}
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			return fmt.Errorf("decoding response body %q: %w", truncate(body, 200), err)
+		}
+		if parsed.Mode == "" {
+			return fmt.Errorf("expected a non-empty mode field, got %s", truncate(body, 200))
+		}
+		return nil
+	default:
+		return fmt.Errorf("expected 404 (disabled) or 200 (enabled), got %d: %s", status, truncate(body, 200))
+	}
+}
+
+// checkVisionGenerateValidatesEmptyPrompt proves POST /vision/api/generate
+// rejects an empty prompt with 400 -- deliberately, this validation
+// happens before this handler ever checks whether GPU mode is enabled or
+// what mode the GPU is currently in, so this one check is safe and
+// deterministic on any real deployment (enabled or not, chat or vision)
+// without ever submitting a real, minutes-long GPU generation job -- same
+// never-trigger-the-real-thing-live precedent as checkVisionModeReachable
+// above.
+func (c *client) checkVisionGenerateValidatesEmptyPrompt() error {
+	status, body, err := c.doJSONRaw(http.MethodPost, "/vision/api/generate", map[string]string{"prompt": ""})
+	if err != nil {
+		return err
+	}
+	if status != http.StatusBadRequest {
+		return fmt.Errorf("expected 400 for an empty prompt, got %d: %s", status, truncate(body, 200))
+	}
+	return nil
+}
+
+// checkVisionResultRequiresJobID proves GET /vision/api/result rejects a
+// missing job_id with 400 -- same "validates before checking
+// enabled/mode" reasoning as checkVisionGenerateValidatesEmptyPrompt.
+func (c *client) checkVisionResultRequiresJobID() error {
+	status, body, err := c.getJSONRaw("/vision/api/result")
+	if err != nil {
+		return err
+	}
+	if status != http.StatusBadRequest {
+		return fmt.Errorf("expected 400 for a missing job_id, got %d: %s", status, truncate(body, 200))
+	}
+	return nil
+}
+
+// checkVisionAssetRequiresJobID is checkVisionResultRequiresJobID's own
+// /vision/api/asset counterpart.
+func (c *client) checkVisionAssetRequiresJobID() error {
+	status, body, err := c.getJSONRaw("/vision/api/asset")
+	if err != nil {
+		return err
+	}
+	if status != http.StatusBadRequest {
+		return fmt.Errorf("expected 400 for a missing job_id, got %d: %s", status, truncate(body, 200))
 	}
 	return nil
 }

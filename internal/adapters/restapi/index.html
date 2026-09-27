@@ -154,24 +154,16 @@
   <div id="vision-panel" hidden>
     <div id="vision-status" class="vision-status"></div>
     <div id="vision-generate">
-      <textarea id="vision-prompt" class="field" rows="3" placeholder="Describe the image or video to generate…" aria-label="Vision generation prompt"></textarea>
+      <textarea id="vision-prompt" class="field" rows="3" placeholder="Describe the video to generate…" aria-label="Vision generation prompt"></textarea>
       <div class="vision-controls">
-        <label for="vision-duration">Duration (s)</label>
-        <input id="vision-duration" class="field" type="number" min="1" max="30" value="5">
-        <label for="vision-resolution">Resolution</label>
-        <select id="vision-resolution" class="field" aria-label="Resolution">
-          <option value="512x512">512×512</option>
-          <option value="768x768" selected>768×768</option>
-          <option value="1024x576">1024×576</option>
-        </select>
-        <label for="vision-seed">Seed</label>
-        <input id="vision-seed" class="field" type="number" placeholder="Random">
-        <button type="button" id="vision-generate-btn" disabled title="Generation isn't available yet">Generate</button>
+        <button type="button" id="vision-generate-btn" disabled title="Switch to Vision mode first">Generate</button>
       </div>
-      <div id="vision-result" class="vision-result" hidden></div>
-      <div id="vision-history" class="vision-history"></div>
+      <div id="vision-result" class="vision-result" hidden>
+        <video id="vision-result-video" controls hidden></video>
+        <div id="vision-result-error" class="error-text"></div>
+      </div>
     </div>
-    <a id="vision-comfy-link" class="vision-comfy-link" href="/vision" target="_blank" rel="noopener noreferrer">Open the full ComfyUI interface →</a>
+    <a id="vision-comfy-link" class="vision-comfy-link" href="/admin/comfy/" target="_blank" rel="noopener noreferrer" hidden>Open ComfyUI directly (admin) &#8599;</a>
   </div>
 </main>
 <dialog id="file-preview-dialog" class="file-preview-dialog">

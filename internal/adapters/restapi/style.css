@@ -795,27 +795,10 @@ button:focus-visible {
   gap: 0.6rem;
 }
 
-.vision-controls label {
-  font-size: 0.8rem;
-  color: var(--ink-muted);
-}
-
-.vision-controls input,
-.vision-controls select {
-  width: auto;
-}
-
 .vision-result video {
   max-width: 100%;
   border-radius: 3px;
   display: block;
-}
-
-.vision-history {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  font-size: 0.85rem;
 }
 
 .vision-comfy-link {
