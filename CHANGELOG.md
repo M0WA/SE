@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.102 - 2026-09-27
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* vision: implement real text-to-video generation, admin ComfyUI proxy by @M0WA in https://github.com/M0WA/SE/pull/383
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.101...v4.13.102
+
+
 ## v4.13.101 - 2026-09-27
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
