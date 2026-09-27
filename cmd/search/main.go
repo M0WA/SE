@@ -81,7 +81,7 @@ func main() {
 	// gpuMode decrypts ControlAPIKey live on every call -- same reasoning
 	// as chatVision above.
 	gpuMode := bootstrap.NewDecryptingGPUModeStore(repo, settingsEncryptionKey)
-	gpuModeService := application.NewGPUModeService(gpuMode, httpgpumode.New())
+	gpuModeService := application.NewGPUModeService(gpuMode, httpgpumode.New(), repo)
 	// Keeps CachedMode() (handleChat's per-turn availability check) cheap
 	// -- see GPUModeService.RefreshCache's own doc comment. Runs
 	// regardless of whether the feature is currently enabled: cheap when

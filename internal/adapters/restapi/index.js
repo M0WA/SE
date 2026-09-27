@@ -1415,9 +1415,44 @@
 
   // visionGenerateJobID/visionGeneratePollTimer track the one generation
   // job this tab is currently watching -- a new submission replaces
-  // whichever job was being polled before.
+  // whichever job was being polled before. visionGenerateJobID is also
+  // mirrored into localStorage (VISION_JOB_STORAGE_KEY) so a page reload
+  // while a job is still pending can resume watching it instead of
+  // silently losing track -- see resumeVisionGenerateJob below.
+  const VISION_JOB_STORAGE_KEY = 'se-vision-job-id';
   let visionGenerateJobID = null;
   let visionGeneratePollTimer = null;
+
+  function storeVisionGenerateJobID(jobID) {
+    try {
+      if (jobID) {
+        window.localStorage.setItem(VISION_JOB_STORAGE_KEY, jobID);
+      } else {
+        window.localStorage.removeItem(VISION_JOB_STORAGE_KEY);
+      }
+    } catch (err) {
+      // Best-effort -- a reload just won't resume the job in that case.
+    }
+  }
+
+  // resumeVisionGenerateJob re-arms polling for whatever job id survived
+  // a page reload (if any) -- called once Vision mode is confirmed
+  // active (see loadVisionMode), same gating the Generate button itself
+  // uses, so this never polls on a deployment where Vision isn't even
+  // enabled.
+  function resumeVisionGenerateJob() {
+    let jobID = null;
+    try {
+      jobID = window.localStorage.getItem(VISION_JOB_STORAGE_KEY);
+    } catch (err) {
+      return;
+    }
+    if (!jobID || visionGenerateJobID) return;
+    visionGenerateJobID = jobID;
+    visionResultEl.hidden = false;
+    visionResultError.textContent = 'Generating — this can take a few minutes…';
+    pollVisionResult();
+  }
 
   // stopVisionGeneratePolling clears the polling timer above -- exported
   // for index.test.js's own central afterEach, same reason
@@ -1447,8 +1482,9 @@
         visionGeneratePollTimer = setTimeout(pollVisionResult, 3000);
         return;
       }
+      storeVisionGenerateJobID(null);
       if (data.status === 'done') {
-        visionResultError.textContent = '';
+        visionResultError.textContent = data.file_id ? 'Saved to your files.' : '';
         visionResultVideo.src = data.view_url;
         visionResultVideo.hidden = false;
       } else {
@@ -1476,10 +1512,12 @@
     visionResultVideo.hidden = true;
     visionResultError.textContent = 'Submitting…';
     try {
+      const tab = activeTab();
+      const chatID = tab && tab.persisted ? (tab.chatId || '') : '';
       const resp = await fetch('/vision/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, chat_id: chatID }),
       });
       if (!resp.ok) {
         const text = await resp.text();
@@ -1489,6 +1527,7 @@
       }
       const data = await resp.json();
       visionGenerateJobID = data.job_id;
+      storeVisionGenerateJobID(data.job_id);
       visionResultError.textContent = 'Generating — this can take a few minutes…';
       await pollVisionResult();
     } catch (err) {
@@ -1580,6 +1619,7 @@
       renderVisionStatus();
       updateModeSwitchIndicator();
       visionPollTimer = visionModePollWhileInProgress(!!visionStatus.in_progress, visionPollTimer, refreshVisionStatus);
+      resumeVisionGenerateJob();
     } catch (err) {
       // Best-effort -- feature stays hidden on any network failure.
     }
@@ -1805,5 +1845,6 @@
       updateChatAvailability, updateModeSwitchIndicator, visionModePollWhileInProgress,
       startVisionHeartbeat, stopVisionHeartbeat, stopVisionPolling,
       updateVisionGenerateAvailability, requestGenerate, pollVisionResult, stopVisionGeneratePolling,
+      storeVisionGenerateJobID, resumeVisionGenerateJob,
     };
   }

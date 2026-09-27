@@ -2555,3 +2555,132 @@ test('stopVisionGeneratePolling is a no-op when nothing is scheduled', () => {
   const { stopVisionGeneratePolling } = loadFixture();
   assert.doesNotThrow(() => stopVisionGeneratePolling());
 });
+
+test('requestGenerate sends the active tab\'s chat_id when it is pinned', async () => {
+  let sentBody = null;
+  global.fetch = async (url, opts) => {
+    if (url === '/vision/api/generate') {
+      sentBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => ({ job_id: 'abc-123' }) };
+    }
+    return { ok: true, json: async () => ({ status: 'pending' }) };
+  };
+  const { requestGenerate, activeTab } = loadFixture();
+  const tab = activeTab();
+  tab.persisted = true;
+  tab.chatId = 'chat-42';
+  document.getElementById('vision-prompt').value = 'a cat';
+  await requestGenerate();
+  assert.equal(sentBody.chat_id, 'chat-42');
+});
+
+test('requestGenerate sends an empty chat_id for an unpinned tab', async () => {
+  let sentBody = null;
+  global.fetch = async (url, opts) => {
+    if (url === '/vision/api/generate') {
+      sentBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => ({ job_id: 'abc-123' }) };
+    }
+    return { ok: true, json: async () => ({ status: 'pending' }) };
+  };
+  const { requestGenerate, activeTab } = loadFixture();
+  const tab = activeTab();
+  tab.persisted = false;
+  document.getElementById('vision-prompt').value = 'a cat';
+  await requestGenerate();
+  assert.equal(sentBody.chat_id, '');
+});
+
+test('requestGenerate shows a "Saved to your files" note once a file_id comes back', async () => {
+  global.fetch = async (url) => {
+    if (url === '/vision/api/generate') return { ok: true, json: async () => ({ job_id: 'abc-123' }) };
+    return { ok: true, json: async () => ({ status: 'done', view_url: '/vision/api/asset?job_id=abc-123', file_id: 'file-1' }) };
+  };
+  const { requestGenerate } = loadFixture();
+  document.getElementById('vision-prompt').value = 'a cat';
+  await requestGenerate();
+  assert.match(document.getElementById('vision-result-error').textContent, /Saved to your files/);
+});
+
+test('requestGenerate persists the job id to localStorage, and clears it once done', async () => {
+  global.fetch = async (url) => {
+    if (url === '/vision/api/generate') return { ok: true, json: async () => ({ job_id: 'abc-123' }) };
+    return { ok: true, json: async () => ({ status: 'done', view_url: '/vision/api/asset?job_id=abc-123' }) };
+  };
+  const { requestGenerate } = loadFixture();
+  document.getElementById('vision-prompt').value = 'a cat';
+  await requestGenerate();
+  assert.equal(window.localStorage.getItem('se-vision-job-id'), null);
+});
+
+test('storeVisionGenerateJobID persists and clears the job id, swallowing a localStorage failure', () => {
+  const { storeVisionGenerateJobID } = loadFixture();
+  storeVisionGenerateJobID('abc-123');
+  assert.equal(window.localStorage.getItem('se-vision-job-id'), 'abc-123');
+  storeVisionGenerateJobID(null);
+  assert.equal(window.localStorage.getItem('se-vision-job-id'), null);
+
+  const original = window.localStorage.setItem;
+  window.localStorage.setItem = () => { throw new Error('blocked'); };
+  try {
+    assert.doesNotThrow(() => storeVisionGenerateJobID('xyz'));
+  } finally {
+    window.localStorage.setItem = original;
+  }
+});
+
+test('resumeVisionGenerateJob does nothing when no job id survived a reload', () => {
+  const { resumeVisionGenerateJob } = loadFixture();
+  assert.doesNotThrow(() => resumeVisionGenerateJob());
+  assert.equal(document.getElementById('vision-result').hidden, true);
+});
+
+test('resumeVisionGenerateJob resumes polling a job id that survived a reload', async () => {
+  const calls = [];
+  global.fetch = async (url) => {
+    if (url.startsWith('/vision/api/result')) calls.push(url);
+    return { ok: true, json: async () => ({ status: 'done', view_url: '/vision/api/asset?job_id=abc-123' }) };
+  };
+  const { resumeVisionGenerateJob } = loadFixture();
+  window.localStorage.setItem('se-vision-job-id', 'abc-123');
+  resumeVisionGenerateJob();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(document.getElementById('vision-result').hidden, false);
+  assert.deepEqual(calls, ['/vision/api/result?job_id=abc-123']);
+});
+
+test('resumeVisionGenerateJob is a no-op if a job is already being watched', () => {
+  let called = false;
+  global.fetch = async () => { called = true; return { ok: true, json: async () => ({ status: 'pending' }) }; };
+  const { resumeVisionGenerateJob, requestGenerate } = loadFixture();
+  window.localStorage.setItem('se-vision-job-id', 'abc-123');
+  resumeVisionGenerateJob();
+  assert.equal(called, true);
+  called = false;
+  resumeVisionGenerateJob();
+  assert.equal(called, false);
+});
+
+test('resumeVisionGenerateJob swallows a localStorage read failure', () => {
+  const { resumeVisionGenerateJob } = loadFixture();
+  const original = window.localStorage.getItem;
+  window.localStorage.getItem = () => { throw new Error('blocked'); };
+  try {
+    assert.doesNotThrow(() => resumeVisionGenerateJob());
+  } finally {
+    window.localStorage.getItem = original;
+  }
+});
+
+test('loadVisionMode resumes an in-flight generation job left over from before a reload', async () => {
+  const calls = [];
+  global.fetch = async (url) => {
+    calls.push(url);
+    if (url === '/vision/api/mode') return { ok: true, status: 200, json: async () => ({ mode: 'vision', in_progress: false }) };
+    return { ok: true, json: async () => ({ status: 'done', view_url: '/vision/api/asset?job_id=abc-123' }) };
+  };
+  const { loadVisionMode } = loadFixture();
+  window.localStorage.setItem('se-vision-job-id', 'abc-123');
+  await loadVisionMode();
+  assert.ok(calls.includes('/vision/api/result?job_id=abc-123'));
+});

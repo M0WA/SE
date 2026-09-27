@@ -321,6 +321,17 @@ paths:
               required: [prompt]
               properties:
                 prompt: { type: string }
+                chat_id:
+                  type: string
+                  description: >-
+                    One of this account's own already-pinned chats (same
+                    convention as /chat's own chat_id). Once the job
+                    finishes, the resulting video is saved into that
+                    chat's files (GET /account/api/files), so it shows up
+                    in the account's existing file list and survives a
+                    lost browser-side job id -- left empty (e.g. an
+                    unpinned/session-only tab), that save step is simply
+                    skipped.
       responses:
         "202":
           description: Accepted -- job_id names the job to poll via GET /vision/api/result.
@@ -3460,6 +3471,12 @@ components:
         error:
           type: string
           description: Only present once status is "failed".
+        file_id:
+          type: string
+          description: >-
+            Only present once status is "done" and a chat_id was given
+            at submit time -- the account file (GET
+            /account/api/files/{id}) the finished video was saved into.
 
     VisionSimilarityRequest:
       type: object
