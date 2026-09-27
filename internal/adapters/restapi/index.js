@@ -1463,6 +1463,17 @@
       visionEnabled = true;
       modeSwitchVisionOption.hidden = false;
       visionStatus = await resp.json();
+      // Reflect the shared GPU's real current mode in the UI here, rather
+      // than leaving the page's initial "chat" default in place -- Chat
+      // vs. Vision is one global setting, not a per-browser preference, so
+      // a reload (or a second signed-in device) should show what the GPU
+      // actually is, not always reset to Chat. Only correct it while the
+      // user hasn't already made an explicit choice of their own
+      // (currentMode still at its initial default) and suppress the
+      // switch-request side effect, since the GPU is already there.
+      if (currentMode === 'chat' && visionStatus.mode === 'vision') {
+        setMode('vision', { suppressSwitch: true });
+      }
       renderVisionStatus();
       updateModeSwitchIndicator();
       visionPollTimer = visionModePollWhileInProgress(!!visionStatus.in_progress, visionPollTimer, refreshVisionStatus);
@@ -1523,11 +1534,20 @@
   // forced open; everything else is unconditionally shown/hidden. Switching
   // to/from chat or vision (but never search, which doesn't touch the GPU
   // at all) requests the actual GPU switch -- never on the initial page-load
-  // call, since previousMode already equals mode at that point.
+  // call, since visionEnabled is still false at that point (it's only set
+  // once loadVisionMode's async check resolves), and never when
+  // opts.suppressSwitch is set (loadVisionMode uses this to reflect the
+  // shared GPU's real mode in the UI on load without re-requesting a
+  // switch it's already in -- see loadVisionMode). Chat vs. Vision is a
+  // single global setting shared by every client (there's one physical
+  // GPU), so there's nothing to remember per-browser the way a plain UI
+  // preference would be: the server's own GET /vision/api/mode is always
+  // the one true answer, not a local guess that could go stale or differ
+  // from what another signed-in device already set.
   let correctionNoteHiddenBeforeChat = true;
   let currentMode = 'chat';
 
-  function setMode(mode) {
+  function setMode(mode, opts) {
     const previousMode = currentMode;
     currentMode = mode;
 
@@ -1569,7 +1589,8 @@
     }
 
     updateModeSwitchIndicator();
-    if (visionEnabled && mode !== previousMode && (mode === 'chat' || mode === 'vision')) {
+    const suppressSwitch = !!(opts && opts.suppressSwitch);
+    if (!suppressSwitch && visionEnabled && mode !== previousMode && (mode === 'chat' || mode === 'vision')) {
       requestVisionSwitch(mode);
     }
   }

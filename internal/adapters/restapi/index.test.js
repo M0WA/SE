@@ -2287,6 +2287,43 @@ test('setMode does not request a GPU switch when the feature is not enabled', ()
   assert.equal(called, false);
 });
 
+test('loadVisionMode reflects the shared GPU\'s real "vision" mode in the UI on load, without requesting a redundant switch', async () => {
+  const switchCalls = [];
+  global.fetch = async (url, opts) => {
+    if (url === '/vision/api/mode' && opts && opts.method === 'POST') {
+      switchCalls.push(JSON.parse(opts.body).mode);
+      return { ok: true, status: 200, json: async () => ({ mode: 'vision', in_progress: false }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ mode: 'vision', in_progress: false }) };
+  };
+  const { loadVisionMode } = loadFixture();
+  await loadVisionMode();
+
+  assert.equal(document.getElementById('vision-panel').hidden, false);
+  assert.equal(document.getElementById('chat-panel').hidden, true);
+  assert.equal(document.getElementById('mode-switch-vision').getAttribute('aria-checked'), 'true');
+  assert.deepEqual(switchCalls, [], 'the GPU is already in vision mode -- reflecting that in the UI must not re-request the switch');
+});
+
+test('loadVisionMode leaves the UI on chat when the shared GPU is already in chat mode', async () => {
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ mode: 'chat', in_progress: false }) });
+  const { loadVisionMode } = loadFixture();
+  await loadVisionMode();
+
+  assert.equal(document.getElementById('chat-panel').hidden, false);
+  assert.equal(document.getElementById('vision-panel').hidden, true);
+});
+
+test('loadVisionMode does not override a mode the user already explicitly chose before it resolved', async () => {
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ mode: 'vision', in_progress: false }) });
+  const { loadVisionMode, setMode } = loadFixture();
+  setMode('search');
+  await loadVisionMode();
+
+  assert.equal(document.getElementById('search-form').hidden, false);
+  assert.equal(document.getElementById('vision-panel').hidden, true);
+});
+
 test('startVisionHeartbeat schedules a recurring POST /vision/api/heartbeat', () => {
   const originalSetInterval = global.setInterval;
   const originalClearInterval = global.clearInterval;

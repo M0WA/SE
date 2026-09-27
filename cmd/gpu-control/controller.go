@@ -90,20 +90,31 @@ func (r *realUnitRunner) IsActive(ctx context.Context, unit string) bool {
 
 // readinessChecker reports whether a service's own HTTP endpoint is
 // responding yet -- an interface so tests never make a real HTTP call.
+// readinessChecker's bearerToken is sent as an Authorization: Bearer
+// header when non-empty -- vLLM's own /v1/models requires its own
+// --api-key regardless of this service's separate GPU_CONTROL_TOKEN, so
+// polling it unauthenticated gets a permanent 401, never a 2xx (a real
+// incident: the switch-to-chat readiness wait ran out its full timeout
+// this way even though the chat model was actually healthy and serving
+// requests within seconds). ComfyUI's own readiness endpoint needs no
+// token, so callers pass "" for that one.
 type readinessChecker interface {
-	Ready(ctx context.Context, url string) bool
+	Ready(ctx context.Context, url, bearerToken string) bool
 }
 
 // httpReadinessChecker is the only production implementation: a bare
-// GET, any 2xx counts as ready.
+// GET (plus an optional bearer token), any 2xx counts as ready.
 type httpReadinessChecker struct {
 	client *http.Client
 }
 
-func (h httpReadinessChecker) Ready(ctx context.Context, url string) bool {
+func (h httpReadinessChecker) Ready(ctx context.Context, url, bearerToken string) bool {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return false
+	}
+	if bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+bearerToken)
 	}
 	resp, err := h.client.Do(req)
 	if err != nil {
@@ -121,6 +132,7 @@ type ControllerConfig struct {
 	ComfyUnit         string
 	ComfyReadyURL     string
 	VLLMReadyURL      string
+	VLLMAPIKey        string
 	SwitchTimeout     time.Duration
 	IdleRevertMinutes int
 	PollInterval      time.Duration
@@ -149,6 +161,7 @@ type Controller struct {
 	comfyUnit         string
 	comfyReadyURL     string
 	vllmReadyURL      string
+	vllmAPIKey        string
 	switchTimeout     time.Duration
 	idleRevertMinutes int
 	pollInterval      time.Duration
@@ -167,6 +180,7 @@ func NewController(cfg ControllerConfig) *Controller {
 		comfyUnit:         cfg.ComfyUnit,
 		comfyReadyURL:     cfg.ComfyReadyURL,
 		vllmReadyURL:      cfg.VLLMReadyURL,
+		vllmAPIKey:        cfg.VLLMAPIKey,
 		switchTimeout:     cfg.SwitchTimeout,
 		idleRevertMinutes: cfg.IdleRevertMinutes,
 		pollInterval:      cfg.PollInterval,
@@ -310,7 +324,7 @@ func (c *Controller) switchToVision(ctx context.Context) error {
 		return fmt.Errorf("starting %s: %w", c.comfyUnit, err)
 	}
 	c.setDetail("waiting for ComfyUI to become ready")
-	if !c.waitReady(ctx, c.comfyReadyURL) {
+	if !c.waitReady(ctx, c.comfyReadyURL, "") {
 		return fmt.Errorf("ComfyUI did not become ready within %s", c.effectiveTimeout())
 	}
 	return nil
@@ -330,7 +344,7 @@ func (c *Controller) switchToChat(ctx context.Context) error {
 		return fmt.Errorf("starting %s: %w", c.chatUnit, err)
 	}
 	c.setDetail("waiting for the chat model to become ready")
-	if !c.waitReady(ctx, c.vllmReadyURL) {
+	if !c.waitReady(ctx, c.vllmReadyURL, c.vllmAPIKey) {
 		return fmt.Errorf("chat model did not become ready within %s", c.effectiveTimeout())
 	}
 	return nil
@@ -343,10 +357,10 @@ func (c *Controller) effectivePollInterval() time.Duration {
 	return defaultPollInterval
 }
 
-// waitReady polls url until it answers 2xx or ctx is done (the caller's
-// own switch-timeout deadline).
-func (c *Controller) waitReady(ctx context.Context, url string) bool {
-	if c.ready.Ready(ctx, url) {
+// waitReady polls url (with an optional bearer token) until it answers
+// 2xx or ctx is done (the caller's own switch-timeout deadline).
+func (c *Controller) waitReady(ctx context.Context, url, bearerToken string) bool {
+	if c.ready.Ready(ctx, url, bearerToken) {
 		return true
 	}
 	ticker := time.NewTicker(c.effectivePollInterval())
@@ -356,7 +370,7 @@ func (c *Controller) waitReady(ctx context.Context, url string) bool {
 		case <-ctx.Done():
 			return false
 		case <-ticker.C:
-			if c.ready.Ready(ctx, url) {
+			if c.ready.Ready(ctx, url, bearerToken) {
 				return true
 			}
 		}

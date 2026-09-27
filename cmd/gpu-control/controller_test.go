@@ -73,7 +73,7 @@ func newFakeReady() *fakeReady {
 	return &fakeReady{callsUntilReady: map[string]int{}, calls: map[string]int{}}
 }
 
-func (f *fakeReady) Ready(_ context.Context, url string) bool {
+func (f *fakeReady) Ready(_ context.Context, url, _ string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	need, ok := f.callsUntilReady[url]
@@ -512,21 +512,34 @@ func TestHTTPReadinessChecker(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ok", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("/bad", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
+	mux.HandleFunc("/needs-auth", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer secret-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
 	checker := httpReadinessChecker{client: srv.Client()}
-	if !checker.Ready(context.Background(), srv.URL+"/ok") {
+	if !checker.Ready(context.Background(), srv.URL+"/ok", "") {
 		t.Fatal("expected /ok to report ready")
 	}
-	if checker.Ready(context.Background(), srv.URL+"/bad") {
+	if checker.Ready(context.Background(), srv.URL+"/bad", "") {
 		t.Fatal("expected /bad to report not ready")
 	}
-	if checker.Ready(context.Background(), "://not-a-url") {
+	if checker.Ready(context.Background(), "://not-a-url", "") {
 		t.Fatal("expected a malformed URL to report not ready")
 	}
-	if checker.Ready(context.Background(), "http://127.0.0.1:1/nothing-listens-here") {
+	if checker.Ready(context.Background(), "http://127.0.0.1:1/nothing-listens-here", "") {
 		t.Fatal("expected an unreachable URL to report not ready")
+	}
+	if checker.Ready(context.Background(), srv.URL+"/needs-auth", "") {
+		t.Fatal("expected /needs-auth without a bearer token to report not ready")
+	}
+	if !checker.Ready(context.Background(), srv.URL+"/needs-auth", "secret-token") {
+		t.Fatal("expected /needs-auth with the correct bearer token to report ready")
 	}
 }
 
