@@ -2757,7 +2757,10 @@ test('resumeVisionGenerateJob swallows a localStorage read failure', () => {
 
 test('resumeVisionGenerateJob discards (rather than resumes) a stale job id older than the max age', () => {
   let called = false;
-  global.fetch = async () => { called = true; return { ok: true, json: async () => ({ status: 'pending' }) }; };
+  global.fetch = async (url) => {
+    if (url.startsWith('/vision/api/result')) called = true;
+    return { ok: true, json: async () => ({ status: 'pending' }) };
+  };
   const { resumeVisionGenerateJob } = loadFixture();
   const sixteenMinutesAgo = Date.now() - 16 * 60 * 1000;
   window.localStorage.setItem('se-vision-job-id', JSON.stringify({ jobID: 'abc-123', startedAt: sixteenMinutesAgo }));
@@ -2769,7 +2772,10 @@ test('resumeVisionGenerateJob discards (rather than resumes) a stale job id olde
 
 test('resumeVisionGenerateJob discards a leftover plain (pre-timestamp) job id string', () => {
   let called = false;
-  global.fetch = async () => { called = true; return { ok: true, json: async () => ({ status: 'pending' }) }; };
+  global.fetch = async (url) => {
+    if (url.startsWith('/vision/api/result')) called = true;
+    return { ok: true, json: async () => ({ status: 'pending' }) };
+  };
   const { resumeVisionGenerateJob } = loadFixture();
   window.localStorage.setItem('se-vision-job-id', 'abc-123');
   resumeVisionGenerateJob();
@@ -2781,7 +2787,7 @@ test('pollVisionResult gives up on a job stuck pending past the max age, even mi
   let calls = 0;
   global.fetch = async (url) => {
     if (url === '/vision/api/generate') return { ok: true, json: async () => ({ job_id: 'abc-123' }) };
-    calls++;
+    if (url.startsWith('/vision/api/result')) calls++;
     return { ok: true, json: async () => ({ status: 'pending' }) };
   };
   // Capture (never invoke) the scheduled retry, same pattern as
