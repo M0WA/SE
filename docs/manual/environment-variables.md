@@ -41,6 +41,7 @@ created from `/admin/users` by an existing admin.
 | `GPU_CONTROL_IDLE_REVERT_MINUTES` | `15` | gpu-control | Automatically reverts to chat mode after this many idle minutes in Vision mode (`0` disables the revert). |
 | `GPU_CONTROL_COMFY_READY_URL` | `"http://127.0.0.1:8188/system_stats"` | gpu-control | Readiness-probe URL polled after starting ComfyUI. |
 | `GPU_CONTROL_VLLM_READY_URL` | `"http://10.7.226.11:8001/v1/models"` | gpu-control | Readiness-probe URL polled after starting the chat model. |
+| `GPU_CONTROL_VLLM_API_KEY` | none, empty | gpu-control | vllm-chat.service's own `--api-key`, sent as `Authorization: Bearer` on every `GPU_CONTROL_VLLM_READY_URL` poll -- required if vllm-chat is started with `--api-key`, since vLLM then rejects an unauthenticated `/v1/models` request and the readiness poll would otherwise never succeed. Not the same secret as `GPU_CONTROL_TOKEN`. |
 
 ---
 ← [Docker Compose installation](docker-installation.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Config files](config-files.md) →

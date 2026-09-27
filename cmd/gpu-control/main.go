@@ -57,12 +57,14 @@ func main() {
 	idleRevertMinutes := envInt("GPU_CONTROL_IDLE_REVERT_MINUTES", defaultIdleRevertMinutes)
 	comfyReadyURL := bootstrap.GetEnv("GPU_CONTROL_COMFY_READY_URL", defaultComfyReadyURL)
 	vllmReadyURL := bootstrap.GetEnv("GPU_CONTROL_VLLM_READY_URL", defaultVLLMReadyURL)
+	vllmAPIKey := bootstrap.GetEnv("GPU_CONTROL_VLLM_API_KEY", "")
 
 	c := NewController(ControllerConfig{
 		ChatUnit:          chatUnit,
 		ComfyUnit:         comfyUnit,
 		ComfyReadyURL:     comfyReadyURL,
 		VLLMReadyURL:      vllmReadyURL,
+		VLLMAPIKey:        vllmAPIKey,
 		SwitchTimeout:     time.Duration(switchTimeoutSeconds) * time.Second,
 		IdleRevertMinutes: idleRevertMinutes,
 		PollInterval:      defaultPollInterval,
