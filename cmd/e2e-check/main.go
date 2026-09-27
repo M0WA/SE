@@ -147,6 +147,7 @@ func main() {
 		{"vision generate: empty prompt rejected", c.checkVisionGenerateValidatesEmptyPrompt},
 		{"vision generate: invalid aspect_ratio rejected", c.checkVisionGenerateValidatesAspectRatio},
 		{"vision generate: out-of-bounds duration_seconds rejected", c.checkVisionGenerateValidatesDuration},
+		{"vision generate: out-of-bounds megapixels rejected", c.checkVisionGenerateValidatesMegapixels},
 		{"vision result: missing job_id rejected", c.checkVisionResultRequiresJobID},
 		{"vision asset: missing job_id rejected", c.checkVisionAssetRequiresJobID},
 		{"always-on MCP tool (datetime)", c.checkDatetimeTool},
@@ -1155,6 +1156,20 @@ func (c *client) checkVisionGenerateValidatesDuration() error {
 	}
 	if status != http.StatusBadRequest {
 		return fmt.Errorf("expected 400 for an out-of-bounds duration_seconds, got %d: %s", status, truncate(body, 200))
+	}
+	return nil
+}
+
+// checkVisionGenerateValidatesMegapixels is
+// checkVisionGenerateValidatesAspectRatio's own megapixels counterpart.
+func (c *client) checkVisionGenerateValidatesMegapixels() error {
+	status, body, err := c.doJSONRaw(http.MethodPost, "/vision/api/generate",
+		map[string]any{"prompt": "a cat", "megapixels": 9.9})
+	if err != nil {
+		return err
+	}
+	if status != http.StatusBadRequest {
+		return fmt.Errorf("expected 400 for an out-of-bounds megapixels, got %d: %s", status, truncate(body, 200))
 	}
 	return nil
 }

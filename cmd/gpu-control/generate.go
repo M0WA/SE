@@ -30,16 +30,24 @@ import (
 var ltxT2VWorkflowTemplate []byte
 
 // positivePromptNodeID/positivePromptInputKey, seedNodeID/seedInputKey,
-// aspectRatioNodeID/aspectRatioInputKey, and durationNodeID/
-// durationInputKey name exactly which node+input this file overrides per
-// request -- every other parameter (negative prompt, model, sampler)
-// comes from the template's own fixed defaults. aspectRatioNodeID is the
-// template's ResolutionSelector node ("Resolution Selector" in the
-// ComfyUI UI); durationNodeID is the PrimitiveInt node titled "Duration"
-// feeding the frame-count math node (frames = duration_seconds *
-// frame_rate + 1, frame_rate itself fixed at the template's own 24fps).
-// saveVideoNodeID is the template's terminal SaveVideo node, whose entry
-// in ComfyUI's own /history response names the resulting file.
+// aspectRatioNodeID/aspectRatioInputKey, durationNodeID/durationInputKey,
+// megapixelsNodeID/megapixelsInputKey, negativePromptNodeID/
+// negativePromptInputKey, and enhancePromptNodeID/enhancePromptInputKey
+// name exactly which node+input this file overrides per request -- every
+// other parameter (model, sampler, sigmas schedule) comes from the
+// template's own fixed defaults. aspectRatioNodeID/megapixelsNodeID are
+// the same ResolutionSelector node ("Resolution Selector" in the ComfyUI
+// UI) -- aspect_ratio picks the shape, megapixels the actual output size.
+// durationNodeID is the PrimitiveInt node titled "Duration" feeding the
+// frame-count math node (frames = duration_seconds * frame_rate + 1,
+// frame_rate itself fixed at the template's own 24fps). negativePromptNodeID
+// is the CLIPTextEncode node holding the "what to avoid" text.
+// enhancePromptNodeID is a PrimitiveBoolean gating a real switch node in
+// the graph between the raw prompt and an LLM-rewritten version of it
+// (TextGenerateLTX2Prompt) -- a genuine template feature, not something
+// this file implements itself. saveVideoNodeID is the template's
+// terminal SaveVideo node, whose entry in ComfyUI's own /history response
+// names the resulting file.
 const (
 	positivePromptNodeID   = "405:376"
 	positivePromptInputKey = "value"
@@ -47,20 +55,34 @@ const (
 	seedInputKey           = "noise_seed"
 	aspectRatioNodeID      = "409"
 	aspectRatioInputKey    = "aspect_ratio"
+	megapixelsNodeID       = "409"
+	megapixelsInputKey     = "megapixels"
 	durationNodeID         = "405:362"
 	durationInputKey       = "value"
+	negativePromptNodeID   = "405:373"
+	negativePromptInputKey = "text"
+	enhancePromptNodeID    = "405:383"
+	enhancePromptInputKey  = "value"
 	saveVideoNodeID        = "75"
 )
 
-// defaultAspectRatio/defaultDurationSeconds match the template's own
-// original baked-in values -- used whenever a caller leaves either
-// unset, so an old/minimal request body keeps behaving exactly as
-// before this file gained per-request overrides.
+// defaultAspectRatio/defaultDurationSeconds/defaultMegapixels match the
+// template's own original baked-in values -- used whenever a caller
+// leaves the corresponding field unset, so an old/minimal request body
+// keeps behaving exactly as before this file gained per-request
+// overrides. minMegapixels/maxMegapixels are deliberately narrower than
+// ComfyUI's own ResolutionSelector range (0.1-16.0, confirmed live via
+// GET /object_info/ResolutionSelector) -- this is video, not a single
+// image, so every extra megapixel multiplies cost by the frame count
+// too; 1.5 already roughly doubles the template's own 0.9 default.
 const (
 	defaultAspectRatio     = "16:9 (Widescreen)"
 	defaultDurationSeconds = 5
 	minDurationSeconds     = 3
 	maxDurationSeconds     = 10
+	defaultMegapixels      = 0.9
+	minMegapixels          = 0.3
+	maxMegapixels          = 1.5
 )
 
 // visionAspectRatios lists exactly the enum values ComfyUI's own
@@ -85,6 +107,7 @@ var (
 	errNotInVisionMode    = errors.New("the GPU is not in vision mode -- switch to vision first")
 	errInvalidAspectRatio = errors.New("aspect_ratio must be one of the supported values")
 	errInvalidDuration    = fmt.Errorf("duration_seconds must be between %d and %d", minDurationSeconds, maxDurationSeconds)
+	errInvalidMegapixels  = fmt.Errorf("megapixels must be between %g and %g", minMegapixels, maxMegapixels)
 )
 
 // generateHTTPTimeout bounds the two short calls Generate/GenerateResult
@@ -109,29 +132,51 @@ type comfyPromptResponse struct {
 	NodeErrors map[string]json.RawMessage `json:"node_errors"`
 }
 
+// GenerateParams is Controller.Generate's own request shape -- a local
+// mirror of domain.VisionGenerateOptions' fields (this binary never
+// imports internal/domain -- see requireToken's own doc comment on why),
+// kept in sync by convention the same way generateRequest/generateResponse
+// already are between this package and internal/adapters/httpgpumode.
+type GenerateParams struct {
+	Prompt          string
+	AspectRatio     string
+	DurationSeconds int
+	Megapixels      float64
+	NegativePrompt  string
+	EnhancePrompt   bool
+}
+
 // Generate submits a new text-to-video generation job to ComfyUI, using
-// ltxT2VWorkflowTemplate with the prompt text, a fresh random seed, and
-// the requested aspect ratio/duration substituted in. aspectRatio/
-// durationSeconds left zero-valued fall back to defaultAspectRatio/
-// defaultDurationSeconds (the template's own original fixed values), so
-// an older caller that never sends them keeps getting identical
+// ltxT2VWorkflowTemplate with params' fields (plus a fresh random seed)
+// substituted in. Every zero-valued field falls back to this file's own
+// default* constant (the template's own original fixed values), so an
+// older caller that only ever sent Prompt keeps getting identical
 // behavior. Only valid while the controller's own mode is already
 // ModeVision -- ComfyUI isn't even running otherwise.
-func (c *Controller) Generate(ctx context.Context, prompt, aspectRatio string, durationSeconds int) (string, error) {
-	if strings.TrimSpace(prompt) == "" {
+func (c *Controller) Generate(ctx context.Context, params GenerateParams) (string, error) {
+	if strings.TrimSpace(params.Prompt) == "" {
 		return "", errEmptyPrompt
 	}
+	aspectRatio := params.AspectRatio
 	if aspectRatio == "" {
 		aspectRatio = defaultAspectRatio
 	}
 	if !visionAspectRatios[aspectRatio] {
 		return "", errInvalidAspectRatio
 	}
+	durationSeconds := params.DurationSeconds
 	if durationSeconds == 0 {
 		durationSeconds = defaultDurationSeconds
 	}
 	if durationSeconds < minDurationSeconds || durationSeconds > maxDurationSeconds {
 		return "", errInvalidDuration
+	}
+	megapixels := params.Megapixels
+	if megapixels == 0 {
+		megapixels = defaultMegapixels
+	}
+	if megapixels < minMegapixels || megapixels > maxMegapixels {
+		return "", errInvalidMegapixels
 	}
 	c.mu.Lock()
 	mode := c.mode
@@ -144,7 +189,7 @@ func (c *Controller) Generate(ctx context.Context, prompt, aspectRatio string, d
 	if err := json.Unmarshal(ltxT2VWorkflowTemplate, &graph); err != nil {
 		return "", fmt.Errorf("decoding workflow template: %w", err)
 	}
-	if err := setNodeInput(graph, positivePromptNodeID, positivePromptInputKey, prompt); err != nil {
+	if err := setNodeInput(graph, positivePromptNodeID, positivePromptInputKey, params.Prompt); err != nil {
 		return "", err
 	}
 	if err := setNodeInput(graph, seedNodeID, seedInputKey, rand.Int64N(1<<62)); err != nil {
@@ -154,6 +199,17 @@ func (c *Controller) Generate(ctx context.Context, prompt, aspectRatio string, d
 		return "", err
 	}
 	if err := setNodeInput(graph, durationNodeID, durationInputKey, durationSeconds); err != nil {
+		return "", err
+	}
+	if err := setNodeInput(graph, megapixelsNodeID, megapixelsInputKey, megapixels); err != nil {
+		return "", err
+	}
+	if params.NegativePrompt != "" {
+		if err := setNodeInput(graph, negativePromptNodeID, negativePromptInputKey, params.NegativePrompt); err != nil {
+			return "", err
+		}
+	}
+	if err := setNodeInput(graph, enhancePromptNodeID, enhancePromptInputKey, params.EnhancePrompt); err != nil {
 		return "", err
 	}
 

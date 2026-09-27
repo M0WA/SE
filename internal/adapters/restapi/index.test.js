@@ -2622,6 +2622,43 @@ test('requestGenerate sends the aspect ratio and duration selected in the UI con
   assert.equal(sentBody.duration_seconds, 8);
 });
 
+test('requestGenerate sends megapixels/negative_prompt/enhance_prompt selected in the UI controls', async () => {
+  let sentBody = null;
+  global.fetch = async (url, opts) => {
+    if (url === '/vision/api/generate') {
+      sentBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => ({ job_id: 'abc-123' }) };
+    }
+    return { ok: true, json: async () => ({ status: 'pending' }) };
+  };
+  const { requestGenerate } = loadFixture();
+  document.getElementById('vision-prompt').value = 'a cat';
+  document.getElementById('vision-megapixels').value = '1.2';
+  document.getElementById('vision-negative-prompt').value = '  blurry  ';
+  document.getElementById('vision-enhance-prompt').checked = true;
+  await requestGenerate();
+  assert.equal(sentBody.megapixels, 1.2);
+  assert.equal(sentBody.negative_prompt, 'blurry');
+  assert.equal(sentBody.enhance_prompt, true);
+});
+
+test('requestGenerate defaults megapixels/negative_prompt/enhance_prompt when left untouched', async () => {
+  let sentBody = null;
+  global.fetch = async (url, opts) => {
+    if (url === '/vision/api/generate') {
+      sentBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => ({ job_id: 'abc-123' }) };
+    }
+    return { ok: true, json: async () => ({ status: 'pending' }) };
+  };
+  const { requestGenerate } = loadFixture();
+  document.getElementById('vision-prompt').value = 'a cat';
+  await requestGenerate();
+  assert.equal(sentBody.megapixels, 0.9);
+  assert.equal(sentBody.negative_prompt, '');
+  assert.equal(sentBody.enhance_prompt, false);
+});
+
 test('requestGenerate shows a "Saved to your files" note once a file_id comes back', async () => {
   global.fetch = async (url) => {
     if (url === '/vision/api/generate') return { ok: true, json: async () => ({ job_id: 'abc-123' }) };
@@ -2644,10 +2681,12 @@ test('requestGenerate persists the job id to localStorage, and clears it once do
   assert.equal(window.localStorage.getItem('se-vision-job-id'), null);
 });
 
-test('storeVisionGenerateJobID persists and clears the job id, swallowing a localStorage failure', () => {
+test('storeVisionGenerateJobID persists (with a timestamp) and clears the job id, swallowing a localStorage failure', () => {
   const { storeVisionGenerateJobID } = loadFixture();
   storeVisionGenerateJobID('abc-123');
-  assert.equal(window.localStorage.getItem('se-vision-job-id'), 'abc-123');
+  const stored = JSON.parse(window.localStorage.getItem('se-vision-job-id'));
+  assert.equal(stored.jobID, 'abc-123');
+  assert.equal(typeof stored.startedAt, 'number');
   storeVisionGenerateJobID(null);
   assert.equal(window.localStorage.getItem('se-vision-job-id'), null);
 
@@ -2673,7 +2712,7 @@ test('resumeVisionGenerateJob resumes polling a job id that survived a reload', 
     return { ok: true, json: async () => ({ status: 'done', view_url: '/vision/api/asset?job_id=abc-123' }) };
   };
   const { resumeVisionGenerateJob } = loadFixture();
-  window.localStorage.setItem('se-vision-job-id', 'abc-123');
+  window.localStorage.setItem('se-vision-job-id', JSON.stringify({ jobID: 'abc-123', startedAt: Date.now() }));
   resumeVisionGenerateJob();
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(document.getElementById('vision-result').hidden, false);
@@ -2684,7 +2723,7 @@ test('resumeVisionGenerateJob is a no-op if a job is already being watched', () 
   let called = false;
   global.fetch = async () => { called = true; return { ok: true, json: async () => ({ status: 'pending' }) }; };
   const { resumeVisionGenerateJob, requestGenerate } = loadFixture();
-  window.localStorage.setItem('se-vision-job-id', 'abc-123');
+  window.localStorage.setItem('se-vision-job-id', JSON.stringify({ jobID: 'abc-123', startedAt: Date.now() }));
   resumeVisionGenerateJob();
   assert.equal(called, true);
   called = false;
@@ -2703,6 +2742,59 @@ test('resumeVisionGenerateJob swallows a localStorage read failure', () => {
   }
 });
 
+test('resumeVisionGenerateJob discards (rather than resumes) a stale job id older than the max age', () => {
+  let called = false;
+  global.fetch = async () => { called = true; return { ok: true, json: async () => ({ status: 'pending' }) }; };
+  const { resumeVisionGenerateJob } = loadFixture();
+  const sixteenMinutesAgo = Date.now() - 16 * 60 * 1000;
+  window.localStorage.setItem('se-vision-job-id', JSON.stringify({ jobID: 'abc-123', startedAt: sixteenMinutesAgo }));
+  resumeVisionGenerateJob();
+  assert.equal(called, false);
+  assert.equal(window.localStorage.getItem('se-vision-job-id'), null);
+  assert.equal(document.getElementById('vision-result').hidden, true);
+});
+
+test('resumeVisionGenerateJob discards a leftover plain (pre-timestamp) job id string', () => {
+  let called = false;
+  global.fetch = async () => { called = true; return { ok: true, json: async () => ({ status: 'pending' }) }; };
+  const { resumeVisionGenerateJob } = loadFixture();
+  window.localStorage.setItem('se-vision-job-id', 'abc-123');
+  resumeVisionGenerateJob();
+  assert.equal(called, false);
+  assert.equal(window.localStorage.getItem('se-vision-job-id'), null);
+});
+
+test('pollVisionResult gives up on a job stuck pending past the max age, even mid-session', async () => {
+  let calls = 0;
+  global.fetch = async (url) => {
+    if (url === '/vision/api/generate') return { ok: true, json: async () => ({ job_id: 'abc-123' }) };
+    calls++;
+    return { ok: true, json: async () => ({ status: 'pending' }) };
+  };
+  // Capture (never invoke) the scheduled retry, same pattern as
+  // "pollVisionResult re-arms itself with a 3s timer" above -- this test
+  // only cares about what a manual next poll does once max age has
+  // passed, not about actually letting the 3s timer chain fire.
+  const originalSetTimeout = global.setTimeout;
+  global.setTimeout = () => 'fake-timer';
+  const { requestGenerate, pollVisionResult } = loadFixture();
+  document.getElementById('vision-prompt').value = 'a cat';
+  await requestGenerate();
+  global.setTimeout = originalSetTimeout;
+  assert.equal(calls, 1);
+
+  const originalNow = Date.now;
+  Date.now = () => originalNow() + 16 * 60 * 1000;
+  try {
+    await pollVisionResult();
+  } finally {
+    Date.now = originalNow;
+  }
+  assert.equal(calls, 1);
+  assert.match(document.getElementById('vision-result-error').textContent, /timed out or could not be found/);
+  assert.equal(window.localStorage.getItem('se-vision-job-id'), null);
+});
+
 test('loadVisionMode resumes an in-flight generation job left over from before a reload', async () => {
   const calls = [];
   global.fetch = async (url) => {
@@ -2711,7 +2803,7 @@ test('loadVisionMode resumes an in-flight generation job left over from before a
     return { ok: true, json: async () => ({ status: 'done', view_url: '/vision/api/asset?job_id=abc-123' }) };
   };
   const { loadVisionMode } = loadFixture();
-  window.localStorage.setItem('se-vision-job-id', 'abc-123');
+  window.localStorage.setItem('se-vision-job-id', JSON.stringify({ jobID: 'abc-123', startedAt: Date.now() }));
   await loadVisionMode();
   assert.ok(calls.includes('/vision/api/result?job_id=abc-123'));
 });

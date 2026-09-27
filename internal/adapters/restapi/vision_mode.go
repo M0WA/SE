@@ -31,12 +31,14 @@ var visionAspectRatios = map[string]bool{
 	"21:9 (Ultrawide)":           true,
 }
 
-// visionMinDurationSeconds/visionMaxDurationSeconds mirror
-// cmd/gpu-control/generate.go's own minDurationSeconds/
-// maxDurationSeconds bounds.
+// visionMinDurationSeconds/visionMaxDurationSeconds and
+// visionMinMegapixels/visionMaxMegapixels mirror
+// cmd/gpu-control/generate.go's own equally-named bounds.
 const (
 	visionMinDurationSeconds = 3
 	visionMaxDurationSeconds = 10
+	visionMinMegapixels      = 0.3
+	visionMaxMegapixels      = 1.5
 )
 
 // gpuModeStatusResponse is the wire shape GET/POST /vision/api/mode both
@@ -150,17 +152,21 @@ func (h *Handler) handleVisionModeSwitch(w http.ResponseWriter, r *http.Request)
 // through a job id a browser tab happened to still hold. Left empty
 // (e.g. an unpinned/session-only tab), that save step is simply
 // skipped -- same "files require a pinned chat" rule as everywhere else
-// files are involved. AspectRatio/DurationSeconds are both optional --
-// left unset, cmd/gpu-control falls back to its own defaults (matching
-// this feature's original fixed values) -- but when given, are
-// validated against the exact same whitelist/bounds cmd/gpu-control
-// itself enforces, so a bad value fails fast here instead of after a
-// network round trip.
+// files are involved. Every field but Prompt/ChatID is optional -- left
+// unset, cmd/gpu-control falls back to its own defaults (matching this
+// feature's original fixed values) -- but when given, is validated
+// against the exact same whitelist/bounds cmd/gpu-control itself
+// enforces, so a bad value fails fast here instead of after a network
+// round trip. NegativePrompt/EnhancePrompt need no such validation
+// (freeform text / a plain bool), so they're passed straight through.
 type visionGenerateRequest struct {
-	Prompt          string `json:"prompt"`
-	ChatID          string `json:"chat_id,omitempty"`
-	AspectRatio     string `json:"aspect_ratio,omitempty"`
-	DurationSeconds int    `json:"duration_seconds,omitempty"`
+	Prompt          string  `json:"prompt"`
+	ChatID          string  `json:"chat_id,omitempty"`
+	AspectRatio     string  `json:"aspect_ratio,omitempty"`
+	DurationSeconds int     `json:"duration_seconds,omitempty"`
+	Megapixels      float64 `json:"megapixels,omitempty"`
+	NegativePrompt  string  `json:"negative_prompt,omitempty"`
+	EnhancePrompt   bool    `json:"enhance_prompt,omitempty"`
 }
 
 type visionGenerateResponse struct {
@@ -197,8 +203,19 @@ func (h *Handler) handleVisionGenerate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("duration_seconds must be between %d and %d", visionMinDurationSeconds, visionMaxDurationSeconds), http.StatusBadRequest)
 		return
 	}
+	if req.Megapixels != 0 && (req.Megapixels < visionMinMegapixels || req.Megapixels > visionMaxMegapixels) {
+		http.Error(w, fmt.Sprintf("megapixels must be between %g and %g", visionMinMegapixels, visionMaxMegapixels), http.StatusBadRequest)
+		return
+	}
 	_, userID, _ := h.sessionRoleFor(r)
-	jobID, err := h.gpuModeService.Generate(r.Context(), userID, req.ChatID, req.Prompt, req.AspectRatio, req.DurationSeconds)
+	jobID, err := h.gpuModeService.Generate(r.Context(), userID, req.ChatID, domain.VisionGenerateOptions{
+		Prompt:          req.Prompt,
+		AspectRatio:     req.AspectRatio,
+		DurationSeconds: req.DurationSeconds,
+		Megapixels:      req.Megapixels,
+		NegativePrompt:  req.NegativePrompt,
+		EnhancePrompt:   req.EnhancePrompt,
+	})
 	switch {
 	case errors.Is(err, application.ErrGPUModeNotEnabled):
 		http.NotFound(w, r)

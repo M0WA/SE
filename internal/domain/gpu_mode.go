@@ -61,6 +61,31 @@ type GPUModeStatus struct {
 	Detail     string
 }
 
+// VisionGenerateOptions carries POST /vision/api/generate's caller-
+// selectable generation parameters (every other workflow parameter --
+// model, sampler, sigmas, seed -- is fixed/randomized by cmd/gpu-control's
+// own embedded template, never caller-selectable). Every field left at
+// its zero value falls back to the template's own original fixed default
+// (see cmd/gpu-control/generate.go's own defaults), so an older caller
+// that only ever sent Prompt keeps getting identical behavior.
+type VisionGenerateOptions struct {
+	Prompt          string
+	AspectRatio     string
+	DurationSeconds int
+	// Megapixels is the ResolutionSelector node's own actual output-size
+	// dial (AspectRatio only picks the shape) -- 0 means "use the
+	// template's own default".
+	Megapixels float64
+	// NegativePrompt overrides the template's own fixed "what to avoid"
+	// text -- left empty, that fixed text is used unchanged.
+	NegativePrompt string
+	// EnhancePrompt toggles the template's own built-in LLM prompt-
+	// rewrite pass (a real switch node in the graph, not a searchengine-
+	// side feature) -- false (its own zero value) matches the template's
+	// original default of leaving it off.
+	EnhancePrompt bool
+}
+
 // GPUGenerateResult mirrors cmd/gpu-control's own GET /gpu/api/generate/{id}
 // wire shape: Status is one of "pending", "done" (ViewURL set), or
 // "failed" (Error set) -- see that package's own generate.go for what

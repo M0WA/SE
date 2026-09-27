@@ -15,8 +15,11 @@
   const visionStatusEl = document.getElementById('vision-status');
   const visionGenerateSection = document.getElementById('vision-generate');
   const visionPromptEl = document.getElementById('vision-prompt');
+  const visionNegativePromptEl = document.getElementById('vision-negative-prompt');
   const visionAspectRatioEl = document.getElementById('vision-aspect-ratio');
+  const visionMegapixelsEl = document.getElementById('vision-megapixels');
   const visionDurationEl = document.getElementById('vision-duration');
+  const visionEnhancePromptEl = document.getElementById('vision-enhance-prompt');
   const visionGenerateBtn = document.getElementById('vision-generate-btn');
   const visionResultEl = document.getElementById('vision-result');
   const visionResultVideo = document.getElementById('vision-result-video');
@@ -1417,18 +1420,29 @@
 
   // visionGenerateJobID/visionGeneratePollTimer track the one generation
   // job this tab is currently watching -- a new submission replaces
-  // whichever job was being polled before. visionGenerateJobID is also
-  // mirrored into localStorage (VISION_JOB_STORAGE_KEY) so a page reload
-  // while a job is still pending can resume watching it instead of
-  // silently losing track -- see resumeVisionGenerateJob below.
+  // whichever job was being polled before. visionGenerateJobID (plus a
+  // start timestamp) is also mirrored into localStorage
+  // (VISION_JOB_STORAGE_KEY) so a page reload while a job is still
+  // pending can resume watching it instead of silently losing track --
+  // see resumeVisionGenerateJob below. VISION_GENERATE_MAX_AGE_MS bounds
+  // how long a job is ever treated as still-pending: ComfyUI's own
+  // /history entry for a job disappears once its process restarts (which
+  // happens on every chat<->vision mode switch, not just a crash), and a
+  // now-unknown job id reads back from GET /vision/api/result identically
+  // to a genuinely still-queued one ("pending") -- without this cap, a
+  // stale job id surviving in localStorage from a much earlier session
+  // would resume as "Generating" forever on every future reload, with no
+  // way to ever resolve.
   const VISION_JOB_STORAGE_KEY = 'se-vision-job-id';
+  const VISION_GENERATE_MAX_AGE_MS = 15 * 60 * 1000;
   let visionGenerateJobID = null;
+  let visionGenerateStartedAt = null;
   let visionGeneratePollTimer = null;
 
   function storeVisionGenerateJobID(jobID) {
     try {
       if (jobID) {
-        window.localStorage.setItem(VISION_JOB_STORAGE_KEY, jobID);
+        window.localStorage.setItem(VISION_JOB_STORAGE_KEY, JSON.stringify({ jobID, startedAt: Date.now() }));
       } else {
         window.localStorage.removeItem(VISION_JOB_STORAGE_KEY);
       }
@@ -1441,16 +1455,32 @@
   // a page reload (if any) -- called once Vision mode is confirmed
   // active (see loadVisionMode), same gating the Generate button itself
   // uses, so this never polls on a deployment where Vision isn't even
-  // enabled.
+  // enabled. A stored entry older than VISION_GENERATE_MAX_AGE_MS (or one
+  // that isn't even valid JSON, e.g. a plain job id string left over from
+  // before this timestamp was added) is discarded rather than resumed --
+  // see the storage constants' own doc comment for why.
   function resumeVisionGenerateJob() {
-    let jobID = null;
+    let stored = null;
     try {
-      jobID = window.localStorage.getItem(VISION_JOB_STORAGE_KEY);
+      stored = window.localStorage.getItem(VISION_JOB_STORAGE_KEY);
     } catch (err) {
       return;
     }
-    if (!jobID || visionGenerateJobID) return;
-    visionGenerateJobID = jobID;
+    if (!stored || visionGenerateJobID) return;
+    let parsed = null;
+    try {
+      parsed = JSON.parse(stored);
+    } catch (err) {
+      // Not valid JSON -- a leftover plain job-id string from before this
+      // timestamp was added.
+    }
+    if (!parsed || !parsed.jobID || typeof parsed.startedAt !== 'number' ||
+        Date.now() - parsed.startedAt > VISION_GENERATE_MAX_AGE_MS) {
+      storeVisionGenerateJobID(null);
+      return;
+    }
+    visionGenerateJobID = parsed.jobID;
+    visionGenerateStartedAt = parsed.startedAt;
     visionResultEl.hidden = false;
     visionResultError.textContent = 'Generating — this can take a few minutes…';
     pollVisionResult();
@@ -1470,8 +1500,20 @@
   // while still "pending" -- ComfyUI's own text-to-video generation
   // realistically takes at least tens of seconds, so this is deliberately
   // much coarser than visionModePollWhileInProgress's 2s mode-switch poll.
+  // Gives up once VISION_GENERATE_MAX_AGE_MS has passed since submission
+  // (see that constant's own doc comment) rather than polling "pending"
+  // forever.
   async function pollVisionResult() {
     if (!visionGenerateJobID) return;
+    if (typeof visionGenerateStartedAt === 'number' && Date.now() - visionGenerateStartedAt > VISION_GENERATE_MAX_AGE_MS) {
+      storeVisionGenerateJobID(null);
+      visionGenerateJobID = null;
+      visionGenerateStartedAt = null;
+      visionResultVideo.hidden = true;
+      visionResultError.textContent = 'Generation timed out or could not be found (the GPU may have restarted since it was submitted).';
+      updateVisionGenerateAvailability();
+      return;
+    }
     try {
       const resp = await fetch('/vision/api/result?job_id=' + encodeURIComponent(visionGenerateJobID));
       if (!resp.ok) {
@@ -1485,6 +1527,7 @@
         return;
       }
       storeVisionGenerateJobID(null);
+      visionGenerateStartedAt = null;
       // view_url is never assigned to the video element's src as-is (a DOM
       // XSS sink if anything upstream were ever compromised or buggy) --
       // instead its job_id is extracted and re-encoded into a freshly
@@ -1529,10 +1572,16 @@
       const chatID = tab && tab.persisted ? (tab.chatId || '') : '';
       const aspectRatio = visionAspectRatioEl ? visionAspectRatioEl.value : '';
       const durationSeconds = visionDurationEl ? parseInt(visionDurationEl.value, 10) || 0 : 0;
+      const megapixels = visionMegapixelsEl ? parseFloat(visionMegapixelsEl.value) || 0 : 0;
+      const negativePrompt = visionNegativePromptEl ? visionNegativePromptEl.value.trim() : '';
+      const enhancePrompt = visionEnhancePromptEl ? visionEnhancePromptEl.checked : false;
       const resp = await fetch('/vision/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, chat_id: chatID, aspect_ratio: aspectRatio, duration_seconds: durationSeconds }),
+        body: JSON.stringify({
+          prompt, chat_id: chatID, aspect_ratio: aspectRatio, duration_seconds: durationSeconds,
+          megapixels, negative_prompt: negativePrompt, enhance_prompt: enhancePrompt,
+        }),
       });
       if (!resp.ok) {
         const text = await resp.text();
@@ -1542,6 +1591,7 @@
       }
       const data = await resp.json();
       visionGenerateJobID = data.job_id;
+      visionGenerateStartedAt = Date.now();
       storeVisionGenerateJobID(data.job_id);
       visionResultError.textContent = 'Generating — this can take a few minutes…';
       await pollVisionResult();

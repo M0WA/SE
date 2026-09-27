@@ -14,9 +14,12 @@ import (
 )
 
 type generateRequest struct {
-	Prompt          string `json:"prompt"`
-	AspectRatio     string `json:"aspect_ratio,omitempty"`
-	DurationSeconds int    `json:"duration_seconds,omitempty"`
+	Prompt          string  `json:"prompt"`
+	AspectRatio     string  `json:"aspect_ratio,omitempty"`
+	DurationSeconds int     `json:"duration_seconds,omitempty"`
+	Megapixels      float64 `json:"megapixels,omitempty"`
+	NegativePrompt  string  `json:"negative_prompt,omitempty"`
+	EnhancePrompt   bool    `json:"enhance_prompt,omitempty"`
 }
 
 type generateResponse struct {
@@ -24,12 +27,19 @@ type generateResponse struct {
 }
 
 // Generate POSTs /gpu/api/generate.
-func (c *Client) Generate(ctx context.Context, cfg domain.GPUModeSettings, prompt, aspectRatio string, durationSeconds int) (string, error) {
+func (c *Client) Generate(ctx context.Context, cfg domain.GPUModeSettings, opts domain.VisionGenerateOptions) (string, error) {
 	url := strings.TrimRight(cfg.ControlBaseURL, "/") + "/gpu/api/generate"
 	if err := checkEndpointURL(url); err != nil {
 		return "", err
 	}
-	encoded, err := json.Marshal(generateRequest{Prompt: prompt, AspectRatio: aspectRatio, DurationSeconds: durationSeconds})
+	encoded, err := json.Marshal(generateRequest{
+		Prompt:          opts.Prompt,
+		AspectRatio:     opts.AspectRatio,
+		DurationSeconds: opts.DurationSeconds,
+		Megapixels:      opts.Megapixels,
+		NegativePrompt:  opts.NegativePrompt,
+		EnhancePrompt:   opts.EnhancePrompt,
+	})
 	if err != nil {
 		return "", fmt.Errorf("httpgpumode: encoding request: %w", err)
 	}

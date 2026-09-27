@@ -38,15 +38,14 @@ type fakeGPUModeController struct {
 	switchErr error
 	heartErr  error
 
-	generateJobID       string
-	generateErr         error
-	generateResult      domain.GPUGenerateResult
-	generateResErr      error
-	lastAspectRatio     string
-	lastDurationSeconds int
-	viewContent         string
-	viewBody            io.ReadCloser
-	viewErr             error
+	generateJobID  string
+	generateErr    error
+	generateResult domain.GPUGenerateResult
+	generateResErr error
+	lastOpts       domain.VisionGenerateOptions
+	viewContent    string
+	viewBody       io.ReadCloser
+	viewErr        error
 }
 
 func (f *fakeGPUModeController) Status(context.Context, domain.GPUModeSettings) (domain.GPUModeStatus, error) {
@@ -64,9 +63,8 @@ func (f *fakeGPUModeController) Heartbeat(context.Context, domain.GPUModeSetting
 	return f.heartErr
 }
 
-func (f *fakeGPUModeController) Generate(_ context.Context, _ domain.GPUModeSettings, _, aspectRatio string, durationSeconds int) (string, error) {
-	f.lastAspectRatio = aspectRatio
-	f.lastDurationSeconds = durationSeconds
+func (f *fakeGPUModeController) Generate(_ context.Context, _ domain.GPUModeSettings, opts domain.VisionGenerateOptions) (string, error) {
+	f.lastOpts = opts
 	return f.generateJobID, f.generateErr
 }
 
@@ -415,18 +413,33 @@ func TestHandleVisionGenerate_DurationOutOfBoundsIs400(t *testing.T) {
 	}
 }
 
-func TestHandleVisionGenerate_AspectRatioAndDurationPassThrough(t *testing.T) {
+func TestHandleVisionGenerate_OptionsPassThrough(t *testing.T) {
 	controller := &fakeGPUModeController{generateJobID: "abc-123"}
 	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, controller)
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
-	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/generate",
-		map[string]any{"prompt": "a cat", "aspect_ratio": "1:1 (Square)", "duration_seconds": 7})
+	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/generate", map[string]any{
+		"prompt": "a cat", "aspect_ratio": "1:1 (Square)", "duration_seconds": 7,
+		"megapixels": 1.2, "negative_prompt": "blurry", "enhance_prompt": true,
+	})
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if controller.lastAspectRatio != "1:1 (Square)" || controller.lastDurationSeconds != 7 {
-		t.Errorf("expected aspect_ratio/duration_seconds passed through, got %q/%d",
-			controller.lastAspectRatio, controller.lastDurationSeconds)
+	want := domain.VisionGenerateOptions{
+		Prompt: "a cat", AspectRatio: "1:1 (Square)", DurationSeconds: 7,
+		Megapixels: 1.2, NegativePrompt: "blurry", EnhancePrompt: true,
+	}
+	if controller.lastOpts != want {
+		t.Errorf("expected options passed through, got %+v want %+v", controller.lastOpts, want)
+	}
+}
+
+func TestHandleVisionGenerate_InvalidMegapixelsIs400(t *testing.T) {
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
+	h, cookie := gpuModeAuthedHandler(t, svc, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/generate",
+		map[string]any{"prompt": "a cat", "megapixels": 9.9})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
