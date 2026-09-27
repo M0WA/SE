@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.107 - 2026-09-27
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* vision: remove invented duration/megapixels limits, fix stale-job detection at the source by @M0WA in https://github.com/M0WA/SE/pull/395
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.106...v4.13.107
+
+
 ## v4.13.106 - 2026-09-27
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
