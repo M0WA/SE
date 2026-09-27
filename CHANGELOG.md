@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.104 - 2026-09-27
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* vision: any signed-in user can open ComfyUI directly, not admin-only by @M0WA in https://github.com/M0WA/SE/pull/388
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.103...v4.13.104
+
+
 ## v4.13.103 - 2026-09-27
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
