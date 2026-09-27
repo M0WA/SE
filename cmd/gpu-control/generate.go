@@ -70,19 +70,22 @@ const (
 // template's own original baked-in values -- used whenever a caller
 // leaves the corresponding field unset, so an old/minimal request body
 // keeps behaving exactly as before this file gained per-request
-// overrides. minMegapixels/maxMegapixels are deliberately narrower than
-// ComfyUI's own ResolutionSelector range (0.1-16.0, confirmed live via
-// GET /object_info/ResolutionSelector) -- this is video, not a single
-// image, so every extra megapixel multiplies cost by the frame count
-// too; 1.5 already roughly doubles the template's own 0.9 default.
+// overrides. minMegapixels/maxMegapixels are ComfyUI's own
+// ResolutionSelector range, confirmed live via
+// GET /object_info/ResolutionSelector -- not this file's own guess (an
+// earlier, narrower range here was invented without ever testing where
+// video generation actually degrades, and got called out as such).
+// duration_seconds has no upper bound for the same reason: only a lower
+// bound of 1 (a request must ask for a positive amount of video),
+// nothing above it -- a longer clip just costs more time/VRAM, which is
+// the caller's tradeoff to make, not a limit for this file to guess at.
 const (
 	defaultAspectRatio     = "16:9 (Widescreen)"
 	defaultDurationSeconds = 5
-	minDurationSeconds     = 3
-	maxDurationSeconds     = 10
+	minDurationSeconds     = 1
 	defaultMegapixels      = 0.9
-	minMegapixels          = 0.3
-	maxMegapixels          = 1.5
+	minMegapixels          = 0.1
+	maxMegapixels          = 16.0
 )
 
 // visionAspectRatios lists exactly the enum values ComfyUI's own
@@ -106,7 +109,7 @@ var (
 	errEmptyPrompt        = errors.New("prompt must not be empty")
 	errNotInVisionMode    = errors.New("the GPU is not in vision mode -- switch to vision first")
 	errInvalidAspectRatio = errors.New("aspect_ratio must be one of the supported values")
-	errInvalidDuration    = fmt.Errorf("duration_seconds must be between %d and %d", minDurationSeconds, maxDurationSeconds)
+	errInvalidDuration    = fmt.Errorf("duration_seconds must be at least %d", minDurationSeconds)
 	errInvalidMegapixels  = fmt.Errorf("megapixels must be between %g and %g", minMegapixels, maxMegapixels)
 )
 
@@ -168,7 +171,7 @@ func (c *Controller) Generate(ctx context.Context, params GenerateParams) (strin
 	if durationSeconds == 0 {
 		durationSeconds = defaultDurationSeconds
 	}
-	if durationSeconds < minDurationSeconds || durationSeconds > maxDurationSeconds {
+	if durationSeconds < minDurationSeconds {
 		return "", errInvalidDuration
 	}
 	megapixels := params.Megapixels
@@ -195,13 +198,13 @@ func (c *Controller) Generate(ctx context.Context, params GenerateParams) (strin
 	if err := setNodeInput(graph, seedNodeID, seedInputKey, rand.Int64N(1<<62)); err != nil {
 		return "", err
 	}
-	if err := setNodeInput(graph, aspectRatioNodeID, aspectRatioInputKey, aspectRatio); err != nil {
+	if err := setNodeInputs(graph, aspectRatioNodeID, map[string]any{
+		aspectRatioInputKey: aspectRatio,
+		megapixelsInputKey:  megapixels,
+	}); err != nil {
 		return "", err
 	}
 	if err := setNodeInput(graph, durationNodeID, durationInputKey, durationSeconds); err != nil {
-		return "", err
-	}
-	if err := setNodeInput(graph, megapixelsNodeID, megapixelsInputKey, megapixels); err != nil {
 		return "", err
 	}
 	if params.NegativePrompt != "" {
@@ -248,6 +251,12 @@ func (c *Controller) Generate(ctx context.Context, params GenerateParams) (strin
 	if parsed.PromptID == "" {
 		return "", fmt.Errorf("ComfyUI did not return a prompt id")
 	}
+	c.mu.Lock()
+	if c.knownGenerateJobs == nil {
+		c.knownGenerateJobs = make(map[string]struct{})
+	}
+	c.knownGenerateJobs[parsed.PromptID] = struct{}{}
+	c.mu.Unlock()
 	return parsed.PromptID, nil
 }
 
@@ -273,6 +282,25 @@ func setNodeInput(graph map[string]any, nodeID, inputKey string, value any) erro
 		return fmt.Errorf("workflow template node %q inputs have an unexpected shape", nodeID)
 	}
 	inputs[inputKey] = value
+	return nil
+}
+
+// setNodeInputs is setNodeInput's own multi-key sibling -- used for
+// aspectRatioNodeID/megapixelsNodeID, which name the exact same
+// underlying ResolutionSelector node ("409") under two different widget
+// keys. Delegates to setNodeInput per key rather than duplicating its
+// node/inputs-shape validation -- two separate setNodeInput calls would
+// give the second one an error branch that can never actually differ
+// from the first (both fail or succeed together, since the failure
+// conditions only depend on graph[nodeID]'s own shape, never the key
+// being set), so this at least shares one already-tested implementation
+// instead of two copies of the same untestable-in-isolation branch.
+func setNodeInputs(graph map[string]any, nodeID string, values map[string]any) error {
+	for k, v := range values {
+		if err := setNodeInput(graph, nodeID, k, v); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -312,11 +340,21 @@ type comfyHistoryEntry struct {
 }
 
 // GenerateResult polls ComfyUI's own GET /history/{promptID}. Returns
-// status "pending" while promptID hasn't finished yet (absent from
-// history, or present but not yet completed), "done" with file set once
-// saveVideoNodeID's output names a real file, or "failed" (with a
-// non-nil error) if ComfyUI reports the job completed without ever
-// producing one.
+// "done" with file set once saveVideoNodeID's output names a real file,
+// or "failed" (with a non-nil error) if ComfyUI reports the job
+// completed without ever producing one. Otherwise (absent from
+// history): "pending" if promptID is one Generate submitted to the
+// CURRENT ComfyUI process (see knownGenerateJobs), meaning it's
+// genuinely still queued and just hasn't appeared in /history yet; or
+// "failed" if it isn't, since ComfyUI's own history for a job vanishes
+// once its process restarts (which happens on every chat<->vision mode
+// switch), so an absent, not-currently-known job can never resolve on
+// its own no matter how long something kept polling it. This doesn't
+// cover cmd/gpu-control's own process restarting independently of
+// ComfyUI (e.g. mid-deploy) -- a genuinely in-flight job submitted just
+// before that would be misreported as failed, since knownGenerateJobs is
+// in-memory only; accepted as a rare, self-limited tradeoff against the
+// alternative of guessing an arbitrary staleness cutoff.
 func (c *Controller) GenerateResult(ctx context.Context, promptID string) (status string, file comfyOutputFile, err error) {
 	origin, err := comfyOrigin(c.comfyReadyURL)
 	if err != nil {
@@ -344,7 +382,13 @@ func (c *Controller) GenerateResult(ctx context.Context, promptID string) (statu
 	}
 	entry, ok := history[promptID]
 	if !ok {
-		return "pending", comfyOutputFile{}, nil
+		c.mu.Lock()
+		_, known := c.knownGenerateJobs[promptID]
+		c.mu.Unlock()
+		if known {
+			return "pending", comfyOutputFile{}, nil
+		}
+		return "failed", comfyOutputFile{}, fmt.Errorf("job not found -- ComfyUI may have restarted since it was submitted")
 	}
 	for _, items := range entry.Outputs[saveVideoNodeID] {
 		for _, item := range items {

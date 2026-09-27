@@ -153,6 +153,17 @@ type Controller struct {
 
 	lastHeartbeat time.Time
 
+	// knownGenerateJobs is every promptID Generate has successfully
+	// submitted to the CURRENT ComfyUI process -- reset (see runSwitch)
+	// each time a switch into ModeVision completes, since that starts a
+	// fresh ComfyUI process with its own, empty /history. GenerateResult
+	// uses this to tell "genuinely still queued, just not in /history
+	// yet" apart from "this job belongs to a ComfyUI process that has
+	// since restarted and will never resolve" -- see generate.go's own
+	// doc comment on GenerateResult for the tradeoff this doesn't cover
+	// (this package's own process restarting independently of ComfyUI).
+	knownGenerateJobs map[string]struct{}
+
 	units unitRunner
 	ready readinessChecker
 	now   func() time.Time
@@ -312,6 +323,9 @@ func (c *Controller) runSwitch(target Mode) {
 		c.mode = target
 		c.detail = ""
 		c.lastHeartbeat = c.now()
+		if target == ModeVision {
+			c.knownGenerateJobs = make(map[string]struct{})
+		}
 	}
 	c.mu.Unlock()
 }

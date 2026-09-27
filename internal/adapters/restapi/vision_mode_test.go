@@ -403,13 +403,26 @@ func TestHandleVisionGenerate_InvalidAspectRatioIs400(t *testing.T) {
 	}
 }
 
-func TestHandleVisionGenerate_DurationOutOfBoundsIs400(t *testing.T) {
+func TestHandleVisionGenerate_NegativeDurationIs400(t *testing.T) {
 	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/generate",
-		map[string]any{"prompt": "a cat", "duration_seconds": 99})
+		map[string]any{"prompt": "a cat", "duration_seconds": -1})
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleVisionGenerate_LargeDurationIsAccepted proves duration_seconds
+// has no invented upper bound -- see visionMinDurationSeconds's own doc
+// comment.
+func TestHandleVisionGenerate_LargeDurationIsAccepted(t *testing.T) {
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{generateJobID: "abc-123"})
+	h, cookie := gpuModeAuthedHandler(t, svc, nil)
+	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/generate",
+		map[string]any{"prompt": "a cat", "duration_seconds": 999})
+	if rec.Code != http.StatusAccepted {
+		t.Errorf("expected 202, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -437,7 +450,7 @@ func TestHandleVisionGenerate_InvalidMegapixelsIs400(t *testing.T) {
 	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/generate",
-		map[string]any{"prompt": "a cat", "megapixels": 9.9})
+		map[string]any{"prompt": "a cat", "megapixels": 20.0})
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
 	}

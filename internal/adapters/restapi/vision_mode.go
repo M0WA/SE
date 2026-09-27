@@ -31,14 +31,17 @@ var visionAspectRatios = map[string]bool{
 	"21:9 (Ultrawide)":           true,
 }
 
-// visionMinDurationSeconds/visionMaxDurationSeconds and
-// visionMinMegapixels/visionMaxMegapixels mirror
-// cmd/gpu-control/generate.go's own equally-named bounds.
+// visionMinDurationSeconds and visionMinMegapixels/visionMaxMegapixels
+// mirror cmd/gpu-control/generate.go's own equally-named bounds --
+// duration_seconds has no upper bound (see that file's own doc comment
+// on why), only a structural lower bound of 1 (0 is the "use the
+// default" sentinel). megapixels' bounds are ComfyUI's own
+// ResolutionSelector range, confirmed live via
+// GET /object_info/ResolutionSelector -- not a guess.
 const (
-	visionMinDurationSeconds = 3
-	visionMaxDurationSeconds = 10
-	visionMinMegapixels      = 0.3
-	visionMaxMegapixels      = 1.5
+	visionMinDurationSeconds = 1
+	visionMinMegapixels      = 0.1
+	visionMaxMegapixels      = 16.0
 )
 
 // gpuModeStatusResponse is the wire shape GET/POST /vision/api/mode both
@@ -199,8 +202,8 @@ func (h *Handler) handleVisionGenerate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "aspect_ratio must be one of the supported values", http.StatusBadRequest)
 		return
 	}
-	if req.DurationSeconds != 0 && (req.DurationSeconds < visionMinDurationSeconds || req.DurationSeconds > visionMaxDurationSeconds) {
-		http.Error(w, fmt.Sprintf("duration_seconds must be between %d and %d", visionMinDurationSeconds, visionMaxDurationSeconds), http.StatusBadRequest)
+	if req.DurationSeconds != 0 && req.DurationSeconds < visionMinDurationSeconds {
+		http.Error(w, fmt.Sprintf("duration_seconds must be at least %d", visionMinDurationSeconds), http.StatusBadRequest)
 		return
 	}
 	if req.Megapixels != 0 && (req.Megapixels < visionMinMegapixels || req.Megapixels > visionMaxMegapixels) {

@@ -351,23 +351,22 @@ paths:
                     - "21:9 (Ultrawide)"
                 duration_seconds:
                   type: integer
-                  minimum: 3
-                  maximum: 10
+                  minimum: 1
                   description: >-
                     Clip duration in seconds. Left unset (or 0), defaults
-                    to 5 (this feature's original fixed value).
+                    to 5 (this feature's original fixed value). No upper
+                    bound -- a longer clip just costs more time/VRAM,
+                    which is the caller's tradeoff to make.
                 megapixels:
                   type: number
-                  minimum: 0.3
-                  maximum: 1.5
+                  minimum: 0.1
+                  maximum: 16.0
                   description: >-
                     The ResolutionSelector node's own output-size dial
                     (aspect_ratio only picks the shape). Left unset (or
                     0), defaults to 0.9 (this feature's original fixed
-                    value). Bounded narrower than ComfyUI's own node
-                    range (0.1-16.0) since this is video, not a single
-                    image -- every extra megapixel multiplies cost by the
-                    frame count too.
+                    value). Bounds are ComfyUI's own real node range,
+                    confirmed via GET /object_info/ResolutionSelector.
                 negative_prompt:
                   type: string
                   description: >-
