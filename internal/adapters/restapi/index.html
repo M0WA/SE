@@ -155,6 +155,7 @@
     <div id="vision-status" class="vision-status"></div>
     <div id="vision-generate">
       <textarea id="vision-prompt" class="field" rows="3" placeholder="Describe the video to generate…" aria-label="Vision generation prompt"></textarea>
+      <textarea id="vision-negative-prompt" class="field" rows="1" placeholder="What to avoid (optional)…" aria-label="Negative prompt"></textarea>
       <div class="vision-controls">
         <label for="vision-aspect-ratio">Aspect ratio</label>
         <select id="vision-aspect-ratio" class="field" aria-label="Aspect ratio">
@@ -167,8 +168,14 @@
           <option value="2:3 (Portrait Photo)">2:3 portrait photo</option>
           <option value="21:9 (Ultrawide)">21:9 ultrawide</option>
         </select>
+        <label for="vision-megapixels">Size (MP)</label>
+        <input type="number" id="vision-megapixels" class="field" min="0.3" max="1.5" step="0.1" value="0.9" aria-label="Output size in megapixels">
         <label for="vision-duration">Duration (s)</label>
         <input type="number" id="vision-duration" class="field" min="3" max="10" step="1" value="5" aria-label="Duration in seconds">
+        <label class="checkbox-list-row" for="vision-enhance-prompt">
+          <input type="checkbox" id="vision-enhance-prompt" aria-label="Automatically enhance my prompt">
+          Enhance prompt
+        </label>
         <button type="button" id="vision-generate-btn" disabled title="Switch to Vision mode first">Generate</button>
       </div>
       <div id="vision-result" class="vision-result" hidden>

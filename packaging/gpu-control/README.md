@@ -55,7 +55,7 @@ start with an empty `GPU_CONTROL_TOKEN`).
 | `GET /gpu/api/mode` | Current `{mode, target, in_progress, since, expires_at, detail}`. |
 | `POST /gpu/api/mode` `{"mode":"chat"\|"vision"}` | Begins a switch (`202`), or reports `200` if already there, or `409` if a switch to a *different* target is already in flight. Runs on a detached background goroutine, so a client disconnect never leaves the GPU half-switched. |
 | `POST /gpu/api/heartbeat` | Resets the idle-revert timer (see below). `204`. |
-| `POST /gpu/api/generate` `{"prompt":"..."}` | Submits a new text-to-video job to ComfyUI (`202` with `{"prompt_id":"..."}`), using the fixed, embedded workflow template below with only the prompt and a fresh random seed substituted in. `409` if the GPU isn't currently in Vision mode. |
+| `POST /gpu/api/generate` `{"prompt":"...", "aspect_ratio":"...", "duration_seconds":N, "megapixels":N, "negative_prompt":"...", "enhance_prompt":bool}` | Submits a new text-to-video job to ComfyUI (`202` with `{"prompt_id":"..."}`), using the fixed, embedded workflow template below with the prompt, a fresh random seed, and every other given field substituted in (each optional field left unset/zero uses the template's own original default). `400` for an out-of-range `aspect_ratio`/`duration_seconds`/`megapixels`. `409` if the GPU isn't currently in Vision mode. |
 | `GET /gpu/api/generate/{id}` | Polls that job: `{"status":"pending"\|"done"\|"failed", "view_url":"...", "error":"..."}` -- `view_url` (once `"done"`) is a `GET /gpu/api/view` URL. |
 | `GET /gpu/api/view?filename=...&subfolder=...&type=...` | Narrowly forwards exactly those three (plus `preview`) query params to ComfyUI's own read-only `GET /view`, streaming the resulting file's bytes back -- never a general-purpose proxy, unlike `/gpu/comfy/` below. |
 | `GET /gpu/comfy/*` | Raw, unrestricted reverse proxy to ComfyUI's entire local web UI (including its own WebSocket for live queue/progress) -- reached only by `cmd/admin`'s own admin-gated `/admin/comfy/` (never directly by a browser, and never by `cmd/search`), for manually inspecting or debugging a workflow. |
@@ -80,16 +80,23 @@ with a headless Chromium session over the Chrome DevTools Protocol
 technique as this repo's own screenshot recipe -- see the root
 `CLAUDE.md`) rather than reverse-engineered by hand.
 
-`cmd/gpu-control/generate.go` overrides four things in that fixed graph
+`cmd/gpu-control/generate.go` overrides seven things in that fixed graph
 per request: the positive-prompt node's text (node `405:376`), one
 `RandomNoise` node's seed (node `405:339`, the one the template itself
-marks `randomize`), the `ResolutionSelector` node's aspect ratio (node
-`409`, one of the exact 8 enum values ComfyUI's own
-`GET /object_info/ResolutionSelector` reports), and the `Duration`
+marks `randomize`), the `ResolutionSelector` node's aspect ratio and
+megapixels (node `409` -- aspect ratio is one of the exact 8 enum values
+ComfyUI's own `GET /object_info/ResolutionSelector` reports; megapixels
+is clamped to `minMegapixels`-`maxMegapixels`, narrower than that node's
+own 0.1-16.0 range since this is video, not a single image -- every
+extra megapixel multiplies cost by the frame count too), the `Duration`
 `PrimitiveInt` node's value in seconds (node `405:362`, clamped to
-`minDurationSeconds`-`maxDurationSeconds`) -- every other parameter
-(negative prompt, sampler, the upscale/refinement pass) is whatever the
-template's own defaults are. If ComfyUI's installed models or this
+`minDurationSeconds`-`maxDurationSeconds`), the negative-prompt
+`CLIPTextEncode` node's text (node `405:373`, left at the template's own
+fixed text when not given), and the "Enable Prompt Enhance"
+`PrimitiveBoolean` node (node `405:383`, gating a real switch node
+already in the graph between the raw prompt and an LLM-rewritten version
+of it) -- every other parameter (sampler, the upscale/refinement pass) is
+whatever the template's own defaults are. If ComfyUI's installed models or this
 template ever change, re-extract it the same way: tunnel to ComfyUI's UI
 (`ssh -L 18188:127.0.0.1:8188 root@gpu.mo-sys.de`), drive a headless
 Chromium against it to load the matching template file (found under

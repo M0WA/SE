@@ -303,16 +303,16 @@ paths:
       description: >-
         Submits prompt to cmd/gpu-control, which runs it against a fixed,
         embedded ComfyUI workflow template (LTX-2.5 text-to-video) --
-        aspect_ratio and duration_seconds are the only other caller-
-        selectable parameters (model, negative prompt, sampler, seed are
-        fixed/randomized by that template). Only meaningful while the
-        shared GPU is already in Vision mode (409 otherwise, surfacing
-        cmd/gpu-control's own conflict); the frontend only shows the
-        Generate button then, but this still handles the race of someone
-        switching back to Chat in between. Requires a signed-in session
-        (any role), same as /vision/api/mode. No dwell/rate-limit gating
-        of its own -- ComfyUI's own queue already serializes jobs one at
-        a time.
+        aspect_ratio, duration_seconds, megapixels, negative_prompt, and
+        enhance_prompt are the only other caller-selectable parameters
+        (model, sampler, seed are fixed/randomized by that template).
+        Only meaningful while the shared GPU is already in Vision mode
+        (409 otherwise, surfacing cmd/gpu-control's own conflict); the
+        frontend only shows the Generate button then, but this still
+        handles the race of someone switching back to Chat in between.
+        Requires a signed-in session (any role), same as
+        /vision/api/mode. No dwell/rate-limit gating of its own --
+        ComfyUI's own queue already serializes jobs one at a time.
       requestBody:
         required: true
         content:
@@ -356,6 +356,30 @@ paths:
                   description: >-
                     Clip duration in seconds. Left unset (or 0), defaults
                     to 5 (this feature's original fixed value).
+                megapixels:
+                  type: number
+                  minimum: 0.3
+                  maximum: 1.5
+                  description: >-
+                    The ResolutionSelector node's own output-size dial
+                    (aspect_ratio only picks the shape). Left unset (or
+                    0), defaults to 0.9 (this feature's original fixed
+                    value). Bounded narrower than ComfyUI's own node
+                    range (0.1-16.0) since this is video, not a single
+                    image -- every extra megapixel multiplies cost by the
+                    frame count too.
+                negative_prompt:
+                  type: string
+                  description: >-
+                    Overrides the template's own fixed "what to avoid"
+                    text. Left empty, that fixed text is used unchanged.
+                enhance_prompt:
+                  type: boolean
+                  description: >-
+                    Toggles the template's own built-in LLM prompt-
+                    rewrite pass (a real switch node in the graph, not a
+                    searchengine-side feature). Defaults to false,
+                    matching the template's own original default.
       responses:
         "202":
           description: Accepted -- job_id names the job to poll via GET /vision/api/result.

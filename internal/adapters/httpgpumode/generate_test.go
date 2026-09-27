@@ -16,20 +16,19 @@ import (
 )
 
 func TestGenerate_Success(t *testing.T) {
-	var gotPath, gotToken, gotPrompt, gotAspectRatio string
-	var gotDurationSeconds int
+	var gotPath, gotToken string
+	var gotBody struct {
+		Prompt          string  `json:"prompt"`
+		AspectRatio     string  `json:"aspect_ratio"`
+		DurationSeconds int     `json:"duration_seconds"`
+		Megapixels      float64 `json:"megapixels"`
+		NegativePrompt  string  `json:"negative_prompt"`
+		EnhancePrompt   bool    `json:"enhance_prompt"`
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotToken = r.Header.Get("X-Internal-Token")
-		var body struct {
-			Prompt          string `json:"prompt"`
-			AspectRatio     string `json:"aspect_ratio"`
-			DurationSeconds int    `json:"duration_seconds"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		gotPrompt = body.Prompt
-		gotAspectRatio = body.AspectRatio
-		gotDurationSeconds = body.DurationSeconds
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]string{"prompt_id": "abc-123"})
@@ -37,7 +36,14 @@ func TestGenerate_Success(t *testing.T) {
 	defer srv.Close()
 
 	c := &httpgpumode.Client{HTTPClient: srv.Client()}
-	id, err := c.Generate(context.Background(), cfgFor(srv.URL), "a cat", "9:16 (Portrait Widescreen)", 8)
+	id, err := c.Generate(context.Background(), cfgFor(srv.URL), domain.VisionGenerateOptions{
+		Prompt:          "a cat",
+		AspectRatio:     "9:16 (Portrait Widescreen)",
+		DurationSeconds: 8,
+		Megapixels:      1.2,
+		NegativePrompt:  "blurry",
+		EnhancePrompt:   true,
+	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -50,11 +56,14 @@ func TestGenerate_Success(t *testing.T) {
 	if gotToken != "s3cr3t" {
 		t.Fatalf("expected X-Internal-Token forwarded, got %q", gotToken)
 	}
-	if gotPrompt != "a cat" {
-		t.Fatalf("expected the prompt forwarded, got %q", gotPrompt)
+	if gotBody.Prompt != "a cat" {
+		t.Fatalf("expected the prompt forwarded, got %q", gotBody.Prompt)
 	}
-	if gotAspectRatio != "9:16 (Portrait Widescreen)" || gotDurationSeconds != 8 {
-		t.Fatalf("expected aspect_ratio/duration_seconds forwarded, got %q/%d", gotAspectRatio, gotDurationSeconds)
+	if gotBody.AspectRatio != "9:16 (Portrait Widescreen)" || gotBody.DurationSeconds != 8 {
+		t.Fatalf("expected aspect_ratio/duration_seconds forwarded, got %q/%d", gotBody.AspectRatio, gotBody.DurationSeconds)
+	}
+	if gotBody.Megapixels != 1.2 || gotBody.NegativePrompt != "blurry" || !gotBody.EnhancePrompt {
+		t.Fatalf("expected megapixels/negative_prompt/enhance_prompt forwarded, got %+v", gotBody)
 	}
 }
 
@@ -65,7 +74,7 @@ func TestGenerate_ConflictReturnsErrGPUGenerateNotInVisionMode(t *testing.T) {
 	defer srv.Close()
 
 	c := &httpgpumode.Client{HTTPClient: srv.Client()}
-	_, err := c.Generate(context.Background(), cfgFor(srv.URL), "a cat", "", 0)
+	_, err := c.Generate(context.Background(), cfgFor(srv.URL), domain.VisionGenerateOptions{Prompt: "a cat"})
 	if !errors.Is(err, ports.ErrGPUGenerateNotInVisionMode) {
 		t.Fatalf("expected ErrGPUGenerateNotInVisionMode, got %v", err)
 	}
@@ -78,7 +87,7 @@ func TestGenerate_ServerErrorIsError(t *testing.T) {
 	defer srv.Close()
 
 	c := &httpgpumode.Client{HTTPClient: srv.Client()}
-	_, err := c.Generate(context.Background(), cfgFor(srv.URL), "a cat", "", 0)
+	_, err := c.Generate(context.Background(), cfgFor(srv.URL), domain.VisionGenerateOptions{Prompt: "a cat"})
 	if err == nil {
 		t.Fatal("expected an error for a 500 response")
 	}
@@ -89,7 +98,7 @@ func TestGenerate_ServerErrorIsError(t *testing.T) {
 
 func TestGenerate_RejectsDisallowedURL(t *testing.T) {
 	c := &httpgpumode.Client{}
-	_, err := c.Generate(context.Background(), cfgFor("http://169.254.169.254"), "a cat", "", 0)
+	_, err := c.Generate(context.Background(), cfgFor("http://169.254.169.254"), domain.VisionGenerateOptions{Prompt: "a cat"})
 	if err == nil {
 		t.Fatal("expected the link-local control URL to be rejected")
 	}
@@ -103,7 +112,7 @@ func TestGenerate_MalformedJSONResponseIsError(t *testing.T) {
 	defer srv.Close()
 
 	c := &httpgpumode.Client{HTTPClient: srv.Client()}
-	_, err := c.Generate(context.Background(), cfgFor(srv.URL), "a cat", "", 0)
+	_, err := c.Generate(context.Background(), cfgFor(srv.URL), domain.VisionGenerateOptions{Prompt: "a cat"})
 	if err == nil {
 		t.Fatal("expected an error decoding a malformed response")
 	}
@@ -230,7 +239,7 @@ func TestGenerate_ExpiredContextIsError(t *testing.T) {
 	c := &httpgpumode.Client{HTTPClient: http.DefaultClient}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
 	defer cancel()
-	if _, err := c.Generate(ctx, domain.GPUModeSettings{ControlBaseURL: "http://127.0.0.1", ControlAPIKey: "x"}, "a cat", "", 0); err == nil {
+	if _, err := c.Generate(ctx, domain.GPUModeSettings{ControlBaseURL: "http://127.0.0.1", ControlAPIKey: "x"}, domain.VisionGenerateOptions{Prompt: "a cat"}); err == nil {
 		t.Fatal("expected an error for an already-expired context")
 	}
 }
@@ -243,7 +252,7 @@ func TestGenerate_ReadingResponseBodyFails(t *testing.T) {
 	defer srv.Close()
 
 	c := &httpgpumode.Client{HTTPClient: &http.Client{Transport: erroringBodyTransport{base: srv.Client().Transport}}}
-	if _, err := c.Generate(context.Background(), cfgFor(srv.URL), "a cat", "", 0); err == nil {
+	if _, err := c.Generate(context.Background(), cfgFor(srv.URL), domain.VisionGenerateOptions{Prompt: "a cat"}); err == nil {
 		t.Fatal("expected an error when the response body fails to read")
 	}
 }

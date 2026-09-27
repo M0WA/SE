@@ -662,11 +662,11 @@ type GPUModeController interface {
 	Heartbeat(ctx context.Context, cfg domain.GPUModeSettings) error
 	// Generate submits a new text-to-video job (only valid while the GPU
 	// is already in domain.GPUModeVision) and returns cmd/gpu-control's
-	// own prompt id, used to poll GenerateResult. aspectRatio/
-	// durationSeconds left zero-valued use cmd/gpu-control's own
-	// defaults. Returns ErrGPUGenerateNotInVisionMode (wrapped) when the
-	// GPU isn't currently in vision mode.
-	Generate(ctx context.Context, cfg domain.GPUModeSettings, prompt, aspectRatio string, durationSeconds int) (string, error)
+	// own prompt id, used to poll GenerateResult. opts' zero-valued
+	// fields use cmd/gpu-control's own defaults. Returns
+	// ErrGPUGenerateNotInVisionMode (wrapped) when the GPU isn't
+	// currently in vision mode.
+	Generate(ctx context.Context, cfg domain.GPUModeSettings, opts domain.VisionGenerateOptions) (string, error)
 	// GenerateResult polls cmd/gpu-control for jobID's current status.
 	GenerateResult(ctx context.Context, cfg domain.GPUModeSettings, jobID string) (domain.GPUGenerateResult, error)
 	// ViewAsset streams the finished generation's own bytes (fetched via

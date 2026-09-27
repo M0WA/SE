@@ -783,7 +783,8 @@ button:focus-visible {
   color: var(--accent);
 }
 
-#vision-prompt {
+#vision-prompt,
+#vision-negative-prompt {
   width: 100%;
   resize: vertical;
 }
@@ -795,15 +796,17 @@ button:focus-visible {
   gap: 0.6rem;
 }
 
-/* #vision-aspect-ratio/#vision-duration share .field's dark-mode-aware
-   colors/font (same reason #sort does, above) but not its flex: 1 --
-   sized to their own content instead of competing for the row's width
-   against the Generate button. */
+/* #vision-aspect-ratio/#vision-megapixels/#vision-duration share .field's
+   dark-mode-aware colors/font (same reason #sort does, above) but not
+   its flex: 1 -- sized to their own content instead of competing for the
+   row's width against the Generate button. */
 #vision-aspect-ratio,
+#vision-megapixels,
 #vision-duration {
   flex: 0 1 auto;
 }
 
+#vision-megapixels,
 #vision-duration {
   width: 4.5rem;
 }

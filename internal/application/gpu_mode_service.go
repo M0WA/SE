@@ -265,7 +265,7 @@ func (s *GPUModeService) Heartbeat(ctx context.Context) error {
 // own files -- chatID may be empty (an unpinned/session-only tab), in
 // which case that save step is simply skipped, same as every other
 // files-requires-a-pinned-chat path in this codebase.
-func (s *GPUModeService) Generate(ctx context.Context, userID, chatID, prompt, aspectRatio string, durationSeconds int) (string, error) {
+func (s *GPUModeService) Generate(ctx context.Context, userID, chatID string, opts domain.VisionGenerateOptions) (string, error) {
 	cfg, enabled, err := s.loadEnabledConfig(ctx)
 	if err != nil {
 		return "", err
@@ -273,7 +273,7 @@ func (s *GPUModeService) Generate(ctx context.Context, userID, chatID, prompt, a
 	if !enabled {
 		return "", ErrGPUModeNotEnabled
 	}
-	jobID, err := s.controller.Generate(ctx, cfg, prompt, aspectRatio, durationSeconds)
+	jobID, err := s.controller.Generate(ctx, cfg, opts)
 	if err != nil {
 		return "", err
 	}

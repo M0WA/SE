@@ -31,7 +31,7 @@ func newTestControllerForGenerate(t *testing.T, comfyURL string) *Controller {
 func TestGenerate_EmptyPromptRejected(t *testing.T) {
 	c := newTestControllerForGenerate(t, "http://comfy")
 	c.mode = ModeVision
-	if _, err := c.Generate(context.Background(), "   ", "", 0); err != errEmptyPrompt {
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "   "}); err != errEmptyPrompt {
 		t.Fatalf("expected errEmptyPrompt, got %v", err)
 	}
 }
@@ -39,7 +39,7 @@ func TestGenerate_EmptyPromptRejected(t *testing.T) {
 func TestGenerate_NotInVisionModeRejected(t *testing.T) {
 	c := newTestControllerForGenerate(t, "http://comfy")
 	c.mode = ModeChat
-	if _, err := c.Generate(context.Background(), "a cat", "", 0); err != errNotInVisionMode {
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat"}); err != errNotInVisionMode {
 		t.Fatalf("expected errNotInVisionMode, got %v", err)
 	}
 }
@@ -61,7 +61,7 @@ func TestGenerate_SubmitsPromptAndSeedToComfyUI(t *testing.T) {
 	c := newTestControllerForGenerate(t, upstream.URL)
 	c.mode = ModeVision
 
-	id, err := c.Generate(context.Background(), "a cat riding a bicycle", "9:16 (Portrait Widescreen)", 8)
+	id, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat riding a bicycle", AspectRatio: "9:16 (Portrait Widescreen)", DurationSeconds: 8})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestGenerate_DefaultsUsedWhenAspectRatioAndDurationOmitted(t *testing.T) {
 
 	c := newTestControllerForGenerate(t, upstream.URL)
 	c.mode = ModeVision
-	if _, err := c.Generate(context.Background(), "a cat", "", 0); err != nil {
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -139,7 +139,7 @@ func TestGenerate_DefaultsUsedWhenAspectRatioAndDurationOmitted(t *testing.T) {
 func TestGenerate_InvalidAspectRatioRejected(t *testing.T) {
 	c := newTestControllerForGenerate(t, "http://comfy")
 	c.mode = ModeVision
-	if _, err := c.Generate(context.Background(), "a cat", "not-a-real-ratio", 0); err != errInvalidAspectRatio {
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat", AspectRatio: "not-a-real-ratio"}); err != errInvalidAspectRatio {
 		t.Fatalf("expected errInvalidAspectRatio, got %v", err)
 	}
 }
@@ -147,10 +147,10 @@ func TestGenerate_InvalidAspectRatioRejected(t *testing.T) {
 func TestGenerate_DurationOutOfBoundsRejected(t *testing.T) {
 	c := newTestControllerForGenerate(t, "http://comfy")
 	c.mode = ModeVision
-	if _, err := c.Generate(context.Background(), "a cat", "", minDurationSeconds-1); err != errInvalidDuration {
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat", DurationSeconds: minDurationSeconds - 1}); err != errInvalidDuration {
 		t.Fatalf("expected errInvalidDuration for too-short duration, got %v", err)
 	}
-	if _, err := c.Generate(context.Background(), "a cat", "", maxDurationSeconds+1); err != errInvalidDuration {
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat", DurationSeconds: maxDurationSeconds + 1}); err != errInvalidDuration {
 		t.Fatalf("expected errInvalidDuration for too-long duration, got %v", err)
 	}
 }
@@ -168,7 +168,7 @@ func TestGenerate_ComfyUINodeErrorsRejected(t *testing.T) {
 	c := newTestControllerForGenerate(t, upstream.URL)
 	c.mode = ModeVision
 
-	if _, err := c.Generate(context.Background(), "a cat", "", 0); err == nil {
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat"}); err == nil {
 		t.Fatal("expected an error when ComfyUI reports node_errors")
 	}
 }
@@ -183,7 +183,7 @@ func TestGenerate_ComfyUINonOKStatusRejected(t *testing.T) {
 	c := newTestControllerForGenerate(t, upstream.URL)
 	c.mode = ModeVision
 
-	if _, err := c.Generate(context.Background(), "a cat", "", 0); err == nil {
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat"}); err == nil {
 		t.Fatal("expected an error on a non-200 ComfyUI response")
 	}
 }
@@ -440,7 +440,7 @@ func TestGenerate_UsesInjectedHTTPClient(t *testing.T) {
 	c.mode = ModeVision
 	c.genHTTP = upstream.Client()
 
-	if _, err := c.Generate(context.Background(), "a cat", "", 0); err != nil {
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat"}); err != nil {
 		t.Fatalf("unexpected error using the injected client: %v", err)
 	}
 }
@@ -450,7 +450,7 @@ func TestGenerate_MisconfiguredComfyReadyURLRejected(t *testing.T) {
 	c.comfyReadyURL = "://not-a-url"
 	c.mode = ModeVision
 
-	if _, err := c.Generate(context.Background(), "a cat", "", 0); err == nil {
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat"}); err == nil {
 		t.Fatal("expected an error for a malformed comfyReadyURL")
 	}
 }
@@ -459,7 +459,7 @@ func TestGenerate_UnreachableComfyUIRejected(t *testing.T) {
 	c := newTestControllerForGenerate(t, "http://127.0.0.1:1/nothing-listens-here")
 	c.mode = ModeVision
 
-	if _, err := c.Generate(context.Background(), "a cat", "", 0); err == nil {
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat"}); err == nil {
 		t.Fatal("expected an error when ComfyUI is unreachable")
 	}
 }
@@ -469,7 +469,7 @@ func TestGenerate_MalformedTemplateJSONRejected(t *testing.T) {
 	c := newTestControllerForGenerate(t, "http://comfy")
 	c.mode = ModeVision
 
-	if _, err := c.Generate(context.Background(), "a cat", "", 0); err == nil {
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat"}); err == nil {
 		t.Fatal("expected an error decoding a malformed workflow template")
 	}
 }
@@ -479,7 +479,7 @@ func TestGenerate_TemplateMissingPromptNodeRejected(t *testing.T) {
 	c := newTestControllerForGenerate(t, "http://comfy")
 	c.mode = ModeVision
 
-	if _, err := c.Generate(context.Background(), "a cat", "", 0); err == nil {
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat"}); err == nil {
 		t.Fatal("expected an error when the template is missing the prompt node")
 	}
 }
@@ -489,7 +489,7 @@ func TestGenerate_TemplateMissingSeedNodeRejected(t *testing.T) {
 	c := newTestControllerForGenerate(t, "http://comfy")
 	c.mode = ModeVision
 
-	if _, err := c.Generate(context.Background(), "a cat", "", 0); err == nil {
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat"}); err == nil {
 		t.Fatal("expected an error when the template is missing the seed node")
 	}
 }
@@ -525,7 +525,7 @@ func TestGenerate_MalformedComfyUIResponseRejected(t *testing.T) {
 	c := newTestControllerForGenerate(t, upstream.URL)
 	c.mode = ModeVision
 
-	if _, err := c.Generate(context.Background(), "a cat", "", 0); err == nil {
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat"}); err == nil {
 		t.Fatal("expected an error decoding a malformed ComfyUI response")
 	}
 }
@@ -540,7 +540,7 @@ func TestGenerate_EmptyPromptIDFromComfyUIRejected(t *testing.T) {
 	c := newTestControllerForGenerate(t, upstream.URL)
 	c.mode = ModeVision
 
-	if _, err := c.Generate(context.Background(), "a cat", "", 0); err == nil {
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat"}); err == nil {
 		t.Fatal("expected an error when ComfyUI returns no prompt id")
 	}
 }
