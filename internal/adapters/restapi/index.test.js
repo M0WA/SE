@@ -2528,6 +2528,19 @@ test('pollVisionResult shows the failure error and re-enables Generate', async (
   assert.equal(document.getElementById('vision-generate-btn').disabled, false);
 });
 
+test('pollVisionResult refuses to load a view_url that is not the expected same-origin asset path', async () => {
+  global.fetch = async (url) => {
+    if (url === '/vision/api/generate') return { ok: true, json: async () => ({ job_id: 'abc-123' }) };
+    return { ok: true, json: async () => ({ status: 'done', view_url: 'javascript:alert(1)' }) };
+  };
+  const { requestGenerate } = loadFixture();
+  document.getElementById('vision-prompt').value = 'a cat';
+  await requestGenerate();
+  assert.match(document.getElementById('vision-result-error').textContent, /could not be loaded safely/);
+  assert.equal(document.getElementById('vision-result-video').hidden, true);
+  assert.equal(document.getElementById('vision-result-video').src, '');
+});
+
 test('pollVisionResult shows a status-check error on a non-ok response', async () => {
   global.fetch = async (url) => {
     if (url === '/vision/api/generate') return { ok: true, json: async () => ({ job_id: 'abc-123' }) };

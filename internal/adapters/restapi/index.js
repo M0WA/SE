@@ -1483,10 +1483,20 @@
         return;
       }
       storeVisionGenerateJobID(null);
-      if (data.status === 'done') {
+      // view_url is only ever trusted when it matches the exact same-origin
+      // path this handler's own server builds it as (see
+      // handleVisionResult's doc comment) -- never assigned to a media
+      // element's src straight from the response otherwise, since that's a
+      // DOM XSS sink if anything upstream were ever compromised or buggy.
+      const isSafeVisionAssetURL = (url) =>
+        typeof url === 'string' && /^\/vision\/api\/asset\?job_id=[^"'<>\s]+$/.test(url);
+      if (data.status === 'done' && isSafeVisionAssetURL(data.view_url)) {
         visionResultError.textContent = data.file_id ? 'Saved to your files.' : '';
         visionResultVideo.src = data.view_url;
         visionResultVideo.hidden = false;
+      } else if (data.status === 'done') {
+        visionResultVideo.hidden = true;
+        visionResultError.textContent = 'Generation finished but the result could not be loaded safely.';
       } else {
         visionResultVideo.hidden = true;
         visionResultError.textContent = data.error || 'Generation failed.';
