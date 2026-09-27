@@ -678,7 +678,7 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("/admin/api/chat-endpoint", h.requireAdminAuthAPI(h.handleAdminChatEndpoint))
 	mux.HandleFunc("/admin/api/chat-vision", h.requireAdminAuthAPI(h.handleAdminChatVision))
 	mux.HandleFunc("/admin/api/gpu-mode", h.requireAdminAuthAPI(h.handleAdminGPUMode))
-	mux.HandleFunc("/admin/comfy/", h.requireAdminAuthPage(h.handleAdminComfyProxy))
+	mux.HandleFunc("/admin/comfy/", h.requireAuthPage(h.handleAdminComfyProxy))
 	mux.HandleFunc("/admin/api/mcp-servers", h.requireAdminAuthAPI(h.handleAdminMCPServers))
 	mux.HandleFunc("POST /admin/api/mcp-servers/test", h.requireAdminAuthAPI(h.handleAdminMCPServersTest))
 	mux.HandleFunc("GET /admin/api/mcp-servers/{id}", h.requireAdminAuthAPI(h.handleAdminGetMCPServer))

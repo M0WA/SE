@@ -19,15 +19,19 @@ const adminComfyProxyPrefix = "/admin/comfy"
 
 // handleAdminComfyProxy reverse-proxies every request under
 // /admin/comfy/ through to cmd/gpu-control's own /gpu/comfy/ passthrough
-// (which itself proxies to ComfyUI's local web UI) -- lets an
-// authenticated admin open ComfyUI directly (e.g. to inspect or debug a
-// running workflow) even though ComfyUI itself only ever binds 127.0.0.1
-// on the GPU host, never reachable from outside it. Gated by
-// requireAdminAuthPage at the route registration (see handler.go), same
-// as every other /admin/* page -- running a workflow here bypasses the
-// switch-timeout/dwell/rate-limit safety GPUModeService enforces for the
-// public toggle, so this is deliberately an admin-only maintenance path,
-// never linked to a regular signed-in user.
+// (which itself proxies to ComfyUI's local web UI) -- lets any
+// authenticated signed-in user (any role, not admin-only -- gated by
+// requireAuthPage at the route registration, see handler.go) open
+// ComfyUI directly, even though ComfyUI itself only ever binds
+// 127.0.0.1 on the GPU host, never reachable from outside it. Living
+// under the /admin path prefix is purely an nginx-routing artifact (see
+// packaging/nginx/README.md's own string-prefix gotcha) -- the auth
+// check here is independent of that prefix and deliberately not
+// admin-only, unlike every real /admin/* page. Running a workflow here
+// bypasses the switch-timeout/dwell/rate-limit safety GPUModeService
+// enforces for the public toggle, same as it would for an admin, so
+// this is still a maintenance/debugging path, just not a
+// privilege-gated one.
 //
 // Built fresh per request rather than cached at startup, so a changed
 // admin-configured ControlBaseURL/ControlAPIKey takes effect immediately
