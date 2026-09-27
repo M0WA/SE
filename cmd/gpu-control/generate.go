@@ -176,8 +176,18 @@ type comfyOutputFile struct {
 	Type      string `json:"type"`
 }
 
+// comfyNodeOutput is one node's entry in /history's own "outputs" map --
+// keyed by output-list name (varies by node type: SaveVideo's own real
+// shape, confirmed live, is "images" holding the actual file plus a
+// sibling "animated" key holding a plain bool array, not a file list at
+// all) -- so every value is decoded generically here and only
+// individually re-decoded into comfyOutputFile where that succeeds (see
+// GenerateResult below), rather than assuming every key under a node
+// holds a uniform file-list shape.
+type comfyNodeOutput map[string][]json.RawMessage
+
 type comfyHistoryEntry struct {
-	Outputs map[string]map[string][]comfyOutputFile `json:"outputs"`
+	Outputs map[string]comfyNodeOutput `json:"outputs"`
 	Status  struct {
 		Completed bool   `json:"completed"`
 		StatusStr string `json:"status_str"`
@@ -219,9 +229,10 @@ func (c *Controller) GenerateResult(ctx context.Context, promptID string) (statu
 	if !ok {
 		return "pending", comfyOutputFile{}, nil
 	}
-	for _, files := range entry.Outputs[saveVideoNodeID] {
-		for _, f := range files {
-			if f.Filename != "" {
+	for _, items := range entry.Outputs[saveVideoNodeID] {
+		for _, item := range items {
+			var f comfyOutputFile
+			if err := json.Unmarshal(item, &f); err == nil && f.Filename != "" {
 				return "done", f, nil
 			}
 		}

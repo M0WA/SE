@@ -164,6 +164,32 @@ func TestGenerateResult_DoneWithFileOnce(t *testing.T) {
 	}
 }
 
+// TestGenerateResult_RealSaveVideoOutputShape reproduces the exact
+// history shape a real ComfyUI instance returned for SaveVideo (found
+// live, against gpu.mo-sys.de): the file list is under "images" (not
+// "videos"), with a sibling "animated" key holding a plain bool array,
+// not a file list at all -- decoding that key generically must not
+// error out or otherwise prevent finding the real file under "images".
+func TestGenerateResult_RealSaveVideoOutputShape(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"abc-123":{"outputs":{"405:381":{"text":["a prompt echoed back, not a file"]},"75":{"images":[{"filename":"LTX_2.5_t2v_00004_.mp4","subfolder":"video","type":"output"}],"animated":[true]}},"status":{"completed":true,"status_str":"success"}}}`))
+	}))
+	defer upstream.Close()
+
+	c := newTestControllerForGenerate(t, upstream.URL)
+	status, file, err := c.GenerateResult(context.Background(), "abc-123")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != "done" {
+		t.Fatalf("expected done, got %q", status)
+	}
+	if file.Filename != "LTX_2.5_t2v_00004_.mp4" || file.Subfolder != "video" || file.Type != "output" {
+		t.Fatalf("unexpected file: %+v", file)
+	}
+}
+
 func TestGenerateResult_FailedWhenCompletedWithNoOutput(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
