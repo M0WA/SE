@@ -2722,20 +2722,23 @@ test('resumeVisionGenerateJob resumes polling a job id that survived a reload', 
 test('resumeVisionGenerateJob is a no-op if a job is already being watched', async () => {
   let called = false;
   global.fetch = async () => { called = true; return { ok: true, json: async () => ({ status: 'pending' }) }; };
-  const { resumeVisionGenerateJob, stopVisionGeneratePolling } = loadFixture();
+  const { resumeVisionGenerateJob } = loadFixture();
   window.localStorage.setItem('se-vision-job-id', JSON.stringify({ jobID: 'abc-123', startedAt: Date.now() }));
+  // pollVisionResult (called fire-and-forget by resumeVisionGenerateJob,
+  // never awaited) would otherwise schedule a REAL 3s timer for this
+  // "pending" response -- racing afterEach's own cleanup (same class of
+  // flake this file's own lastFixture doc comment already describes for
+  // a different timer) and potentially leaking a live timer into a later
+  // test. Capturing (never invoking) whatever setTimeout schedules here
+  // sidesteps that race entirely, rather than trying to time a flush
+  // against pollVisionResult's own exact microtask count.
+  const originalSetTimeout = global.setTimeout;
+  global.setTimeout = () => 'fake-timer';
   resumeVisionGenerateJob();
   assert.equal(called, true);
-  // pollVisionResult (called fire-and-forget by resumeVisionGenerateJob,
-  // never awaited) is still mid-flight here -- flush its own two awaits
-  // (fetch, then resp.json()) before it reaches the real setTimeout it
-  // schedules for a "pending" status, then cancel that timer explicitly.
-  // Otherwise it races afterEach's own cleanup (same class of flake this
-  // file's own lastFixture doc comment already describes for a different
-  // timer) and can leak a live 3s timer into a later test.
   await Promise.resolve();
   await Promise.resolve();
-  stopVisionGeneratePolling();
+  global.setTimeout = originalSetTimeout;
   called = false;
   resumeVisionGenerateJob();
   assert.equal(called, false);
