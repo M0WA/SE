@@ -1369,7 +1369,7 @@
       chatStatus.textContent = visionStatus.in_progress
         ? 'Chat is temporarily unavailable while the GPU switches modes.'
         : 'Chat is unavailable while the GPU is in ' + visionStatus.mode + ' mode.';
-    } else if (chatStatus.textContent.indexOf('Chat is') === 0) {
+    } else if (chatStatus.textContent.startsWith('Chat is')) {
       chatStatus.textContent = '';
     }
   }
@@ -1446,6 +1446,8 @@
       const text = await resp.text();
       visionStatusEl.textContent = 'Could not switch: ' + text;
     } catch (err) {
+      // err's own message isn't shown -- a plain, stable status line reads
+      // better here than a raw fetch/network exception's own wording.
       visionStatusEl.textContent = 'Could not reach the server to switch modes.';
     }
   }
