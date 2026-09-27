@@ -1817,7 +1817,7 @@ test('sign-out posts to /logout on click', async () => {
   assert.equal(fetchedOpts.method, 'POST');
 });
 
-test('loadSession shows both the admin and account links for an admin-role session', async () => {
+test('loadSession shows the admin, account, and ComfyUI links for an admin-role session', async () => {
   global.fetch = async (url) => {
     if (url === '/session') return { ok: true, json: async () => ({ role: 'admin' }) };
     return { ok: false, status: 404, text: async () => 'not found' };
@@ -1826,16 +1826,19 @@ test('loadSession shows both the admin and account links for an admin-role sessi
   await loadSession();
   assert.equal(document.getElementById('admin-link').hidden, false);
   assert.equal(document.getElementById('account-link').hidden, false);
-  assert.equal(document.getElementById('vision-comfy-link').hidden, false, 'the direct ComfyUI link is admin-only');
+  assert.equal(document.getElementById('vision-comfy-link').hidden, false);
 });
 
-test('loadSession shows the account link for a user-role session, but not the admin-only ComfyUI link', async () => {
-  global.fetch = async () => ({ ok: true, json: async () => ({ role: 'user' }) });
+test('loadSession shows the account and ComfyUI links (but not admin) for a user-role session', async () => {
+  global.fetch = async (url) => {
+    if (url === '/session') return { ok: true, json: async () => ({ role: 'user' }) };
+    return { ok: false, status: 404, text: async () => 'not found' };
+  };
   const { loadSession } = loadFixture();
   await loadSession();
   assert.equal(document.getElementById('account-link').hidden, false);
   assert.equal(document.getElementById('admin-link').hidden, true);
-  assert.equal(document.getElementById('vision-comfy-link').hidden, true);
+  assert.equal(document.getElementById('vision-comfy-link').hidden, false, 'the direct ComfyUI link is for any signed-in user, not admin-only');
 });
 
 test('loadSession keeps both links hidden on a non-ok /session response', async () => {

@@ -1760,10 +1760,10 @@
       const data = await resp.json();
       if (data.role === 'admin') {
         adminLink.hidden = false;
-        visionComfyLink.hidden = false;
       }
       if (data.role === 'admin' || data.role === 'user') {
         accountLink.hidden = false;
+        visionComfyLink.hidden = false;
         signedIn = true;
         loadPersistedChats();
         loadVisionMode();

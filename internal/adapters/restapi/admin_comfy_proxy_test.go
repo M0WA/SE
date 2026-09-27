@@ -103,6 +103,38 @@ func TestHandleAdminComfyProxy_ForwardsWithTokenAndStrippedPrefix(t *testing.T) 
 	}
 }
 
+// TestHandleAdminComfyProxy_RegularUserAllowed proves this route is
+// deliberately not admin-only: any authenticated signed-in user (role
+// "user", not "admin") reaches it too -- see handleAdminComfyProxy's own
+// doc comment for why.
+func TestHandleAdminComfyProxy_RegularUserAllowed(t *testing.T) {
+	var gotToken string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotToken = r.Header.Get("X-Internal-Token")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("comfy-ui-body"))
+	}))
+	defer upstream.Close()
+
+	store := &fakeGPUModeStore{settings: domain.GPUModeSettings{
+		Enabled: true, ControlBaseURL: upstream.URL, ControlAPIKey: "shh-token",
+	}}
+	h := restapi.New(restapi.Config{Admin: &fakeAdminRepo{}, Debug: &fakeDebugSearch{}, GPUMode: store, Sessions: fakeUserRoleSessionStore{}})
+	cookie := &http.Cookie{Name: "se_session", Value: "user-test-token"}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/comfy/queue", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for a regular signed-in user, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if gotToken != "shh-token" {
+		t.Fatalf("expected the control API key forwarded as X-Internal-Token, got %q", gotToken)
+	}
+}
+
 func TestHandleAdminComfyProxy_UnauthenticatedRedirectsToLogin(t *testing.T) {
 	store := &fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true, ControlBaseURL: "http://10.7.226.11:8002"}}
 	h, _ := adminAuthedHandlerWithGPUMode(t, store)

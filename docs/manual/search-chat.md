@@ -22,7 +22,7 @@ Once the toggle shows Vision mode is actually active (not still switching), the 
 
 Only one job at a time per browser tab -- Generate stays disabled while a submission is in flight, and re-enables once it finishes (or fails). Switching back to Chat mid-generation doesn't cancel the underlying ComfyUI job, but there's no way to see its result afterward from this page.
 
-An admin viewing this page also sees a small "Open ComfyUI directly (admin)" link below the generate box -- opens ComfyUI's own full web UI (queue, node graph, manual workflow editing) in a new tab. This bypasses the Generate button's fixed workflow and the mode-switch safety limits entirely, so treat it as a maintenance/debugging tool, not a regular way to generate something. Never shown to a non-admin signed-in account.
+Any signed-in account (not just an admin) also sees a small "Open ComfyUI directly" link below the generate box -- opens ComfyUI's own full web UI (queue, node graph, manual workflow editing) in a new tab. This bypasses the Generate button's fixed workflow and the mode-switch safety limits entirely, so treat it as a maintenance/debugging tool, not the regular way to generate something.
 
 ## Search mode: the query box and syntax
 
