@@ -1,5 +1,7 @@
 /build/
 *.db
+*.db-shm
+*.db-wal
 .claude/
 /node_modules/
 # Real e2e-check credentials -- see cmd/e2e-check/credentials.example.json
