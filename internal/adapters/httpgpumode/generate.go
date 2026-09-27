@@ -14,7 +14,9 @@ import (
 )
 
 type generateRequest struct {
-	Prompt string `json:"prompt"`
+	Prompt          string `json:"prompt"`
+	AspectRatio     string `json:"aspect_ratio,omitempty"`
+	DurationSeconds int    `json:"duration_seconds,omitempty"`
 }
 
 type generateResponse struct {
@@ -22,12 +24,12 @@ type generateResponse struct {
 }
 
 // Generate POSTs /gpu/api/generate.
-func (c *Client) Generate(ctx context.Context, cfg domain.GPUModeSettings, prompt string) (string, error) {
+func (c *Client) Generate(ctx context.Context, cfg domain.GPUModeSettings, prompt, aspectRatio string, durationSeconds int) (string, error) {
 	url := strings.TrimRight(cfg.ControlBaseURL, "/") + "/gpu/api/generate"
 	if err := checkEndpointURL(url); err != nil {
 		return "", err
 	}
-	encoded, err := json.Marshal(generateRequest{Prompt: prompt})
+	encoded, err := json.Marshal(generateRequest{Prompt: prompt, AspectRatio: aspectRatio, DurationSeconds: durationSeconds})
 	if err != nil {
 		return "", fmt.Errorf("httpgpumode: encoding request: %w", err)
 	}

@@ -303,15 +303,16 @@ paths:
       description: >-
         Submits prompt to cmd/gpu-control, which runs it against a fixed,
         embedded ComfyUI workflow template (LTX-2.5 text-to-video) --
-        every other generation parameter (resolution, duration, model,
-        negative prompt, sampler) is fixed by that template, not caller-
-        selectable. Only meaningful while the shared GPU is already in
-        Vision mode (409 otherwise, surfacing cmd/gpu-control's own
-        conflict); the frontend only shows the Generate button then, but
-        this still handles the race of someone switching back to Chat in
-        between. Requires a signed-in session (any role), same as
-        /vision/api/mode. No dwell/rate-limit gating of its own --
-        ComfyUI's own queue already serializes jobs one at a time.
+        aspect_ratio and duration_seconds are the only other caller-
+        selectable parameters (model, negative prompt, sampler, seed are
+        fixed/randomized by that template). Only meaningful while the
+        shared GPU is already in Vision mode (409 otherwise, surfacing
+        cmd/gpu-control's own conflict); the frontend only shows the
+        Generate button then, but this still handles the race of someone
+        switching back to Chat in between. Requires a signed-in session
+        (any role), same as /vision/api/mode. No dwell/rate-limit gating
+        of its own -- ComfyUI's own queue already serializes jobs one at
+        a time.
       requestBody:
         required: true
         content:
@@ -332,6 +333,29 @@ paths:
                     lost browser-side job id -- left empty (e.g. an
                     unpinned/session-only tab), that save step is simply
                     skipped.
+                aspect_ratio:
+                  type: string
+                  description: >-
+                    One of the exact enum values ComfyUI's own
+                    ResolutionSelector node accepts. Left empty, defaults
+                    to "16:9 (Widescreen)" (this feature's original fixed
+                    value).
+                  enum:
+                    - "1:1 (Square)"
+                    - "2:3 (Portrait Photo)"
+                    - "3:2 (Photo)"
+                    - "3:4 (Portrait Standard)"
+                    - "4:3 (Standard)"
+                    - "9:16 (Portrait Widescreen)"
+                    - "16:9 (Widescreen)"
+                    - "21:9 (Ultrawide)"
+                duration_seconds:
+                  type: integer
+                  minimum: 3
+                  maximum: 10
+                  description: >-
+                    Clip duration in seconds. Left unset (or 0), defaults
+                    to 5 (this feature's original fixed value).
       responses:
         "202":
           description: Accepted -- job_id names the job to poll via GET /vision/api/result.

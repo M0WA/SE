@@ -29,23 +29,62 @@ import (
 //go:embed ltx_t2v_workflow.json
 var ltxT2VWorkflowTemplate []byte
 
-// positivePromptNodeID/positivePromptInputKey and seedNodeID/seedInputKey
-// name exactly which node+input this file overrides per request --
-// every other parameter (negative prompt, resolution, duration, model,
-// sampler) comes from the template's own fixed defaults. saveVideoNodeID
-// is the template's terminal SaveVideo node, whose entry in ComfyUI's own
-// /history response names the resulting file.
+// positivePromptNodeID/positivePromptInputKey, seedNodeID/seedInputKey,
+// aspectRatioNodeID/aspectRatioInputKey, and durationNodeID/
+// durationInputKey name exactly which node+input this file overrides per
+// request -- every other parameter (negative prompt, model, sampler)
+// comes from the template's own fixed defaults. aspectRatioNodeID is the
+// template's ResolutionSelector node ("Resolution Selector" in the
+// ComfyUI UI); durationNodeID is the PrimitiveInt node titled "Duration"
+// feeding the frame-count math node (frames = duration_seconds *
+// frame_rate + 1, frame_rate itself fixed at the template's own 24fps).
+// saveVideoNodeID is the template's terminal SaveVideo node, whose entry
+// in ComfyUI's own /history response names the resulting file.
 const (
 	positivePromptNodeID   = "405:376"
 	positivePromptInputKey = "value"
 	seedNodeID             = "405:339"
 	seedInputKey           = "noise_seed"
+	aspectRatioNodeID      = "409"
+	aspectRatioInputKey    = "aspect_ratio"
+	durationNodeID         = "405:362"
+	durationInputKey       = "value"
 	saveVideoNodeID        = "75"
 )
 
+// defaultAspectRatio/defaultDurationSeconds match the template's own
+// original baked-in values -- used whenever a caller leaves either
+// unset, so an old/minimal request body keeps behaving exactly as
+// before this file gained per-request overrides.
+const (
+	defaultAspectRatio     = "16:9 (Widescreen)"
+	defaultDurationSeconds = 5
+	minDurationSeconds     = 3
+	maxDurationSeconds     = 10
+)
+
+// visionAspectRatios lists exactly the enum values ComfyUI's own
+// ResolutionSelector node accepts for its aspect_ratio widget --
+// confirmed live against gpu.mo-sys.de's ComfyUI via
+// GET /object_info/ResolutionSelector. Anything else is rejected here
+// rather than forwarded, since ComfyUI's own error for an invalid combo
+// value is far less clear than this package's own.
+var visionAspectRatios = map[string]bool{
+	"1:1 (Square)":               true,
+	"2:3 (Portrait Photo)":       true,
+	"3:2 (Photo)":                true,
+	"3:4 (Portrait Standard)":    true,
+	"4:3 (Standard)":             true,
+	"9:16 (Portrait Widescreen)": true,
+	"16:9 (Widescreen)":          true,
+	"21:9 (Ultrawide)":           true,
+}
+
 var (
-	errEmptyPrompt     = errors.New("prompt must not be empty")
-	errNotInVisionMode = errors.New("the GPU is not in vision mode -- switch to vision first")
+	errEmptyPrompt        = errors.New("prompt must not be empty")
+	errNotInVisionMode    = errors.New("the GPU is not in vision mode -- switch to vision first")
+	errInvalidAspectRatio = errors.New("aspect_ratio must be one of the supported values")
+	errInvalidDuration    = fmt.Errorf("duration_seconds must be between %d and %d", minDurationSeconds, maxDurationSeconds)
 )
 
 // generateHTTPTimeout bounds the two short calls Generate/GenerateResult
@@ -71,12 +110,28 @@ type comfyPromptResponse struct {
 }
 
 // Generate submits a new text-to-video generation job to ComfyUI, using
-// ltxT2VWorkflowTemplate with the prompt text and a fresh random seed
-// substituted in. Only valid while the controller's own mode is already
+// ltxT2VWorkflowTemplate with the prompt text, a fresh random seed, and
+// the requested aspect ratio/duration substituted in. aspectRatio/
+// durationSeconds left zero-valued fall back to defaultAspectRatio/
+// defaultDurationSeconds (the template's own original fixed values), so
+// an older caller that never sends them keeps getting identical
+// behavior. Only valid while the controller's own mode is already
 // ModeVision -- ComfyUI isn't even running otherwise.
-func (c *Controller) Generate(ctx context.Context, prompt string) (string, error) {
+func (c *Controller) Generate(ctx context.Context, prompt, aspectRatio string, durationSeconds int) (string, error) {
 	if strings.TrimSpace(prompt) == "" {
 		return "", errEmptyPrompt
+	}
+	if aspectRatio == "" {
+		aspectRatio = defaultAspectRatio
+	}
+	if !visionAspectRatios[aspectRatio] {
+		return "", errInvalidAspectRatio
+	}
+	if durationSeconds == 0 {
+		durationSeconds = defaultDurationSeconds
+	}
+	if durationSeconds < minDurationSeconds || durationSeconds > maxDurationSeconds {
+		return "", errInvalidDuration
 	}
 	c.mu.Lock()
 	mode := c.mode
@@ -93,6 +148,12 @@ func (c *Controller) Generate(ctx context.Context, prompt string) (string, error
 		return "", err
 	}
 	if err := setNodeInput(graph, seedNodeID, seedInputKey, rand.Int64N(1<<62)); err != nil {
+		return "", err
+	}
+	if err := setNodeInput(graph, aspectRatioNodeID, aspectRatioInputKey, aspectRatio); err != nil {
+		return "", err
+	}
+	if err := setNodeInput(graph, durationNodeID, durationInputKey, durationSeconds); err != nil {
 		return "", err
 	}
 
