@@ -140,6 +140,68 @@ func TestHandleHeartbeat_ReturnsNoContentAndResetsTimer(t *testing.T) {
 	}
 }
 
+func TestComfyProxy_ForwardsWithStrippedPrefixAndRequiresToken(t *testing.T) {
+	var gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("comfy-ui-body"))
+	}))
+	defer upstream.Close()
+
+	c := newTestController(newFakeUnits(), newFakeReady())
+	c.comfyReadyURL = upstream.URL + "/system_stats"
+	mux := newMux(c, testToken)
+
+	rec := doRequest(t, mux, http.MethodGet, "/gpu/comfy/queue", "", nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 with no token, got %d", rec.Code)
+	}
+
+	rec = doRequest(t, mux, http.MethodGet, "/gpu/comfy/queue", testToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Body.String() != "comfy-ui-body" {
+		t.Fatalf("expected the upstream body to be proxied through, got %q", rec.Body.String())
+	}
+	if gotPath != "/queue" {
+		t.Fatalf("expected the /gpu/comfy prefix to be stripped, upstream saw %q", gotPath)
+	}
+}
+
+func TestComfyProxy_RootPathForwardsAsSlash(t *testing.T) {
+	var gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	c := newTestController(newFakeUnits(), newFakeReady())
+	c.comfyReadyURL = upstream.URL + "/system_stats"
+	mux := newMux(c, testToken)
+
+	rec := doRequest(t, mux, http.MethodGet, "/gpu/comfy/", testToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if gotPath != "/" {
+		t.Fatalf("expected the bare /gpu/comfy/ to forward as /, got %q", gotPath)
+	}
+}
+
+func TestComfyProxy_MisconfiguredReadyURLReturnsBadGateway(t *testing.T) {
+	c := newTestController(newFakeUnits(), newFakeReady())
+	c.comfyReadyURL = "://not-a-url"
+	mux := newMux(c, testToken)
+
+	rec := doRequest(t, mux, http.MethodGet, "/gpu/comfy/queue", testToken, nil)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleHealthz_NoTokenRequired(t *testing.T) {
 	c := newTestController(newFakeUnits(), newFakeReady())
 	mux := newMux(c, testToken)

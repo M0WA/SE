@@ -157,6 +157,12 @@ type Controller struct {
 	ready readinessChecker
 	now   func() time.Time
 
+	// genHTTP is Generate/GenerateResult's own HTTP client for calling
+	// ComfyUI's /prompt and /history endpoints directly (distinct from
+	// ready, which only ever does a bare GET) -- nil outside a test uses
+	// generateHTTPClient's own default.
+	genHTTP *http.Client
+
 	chatUnit          string
 	comfyUnit         string
 	comfyReadyURL     string

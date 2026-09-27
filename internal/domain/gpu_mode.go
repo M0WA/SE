@@ -60,3 +60,13 @@ type GPUModeStatus struct {
 	ExpiresAt  time.Time
 	Detail     string
 }
+
+// GPUGenerateResult mirrors cmd/gpu-control's own GET /gpu/api/generate/{id}
+// wire shape: Status is one of "pending", "done" (ViewURL set), or
+// "failed" (Error set) -- see that package's own generate.go for what
+// produces each.
+type GPUGenerateResult struct {
+	Status  string
+	ViewURL string
+	Error   string
+}

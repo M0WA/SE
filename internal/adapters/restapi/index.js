@@ -14,6 +14,12 @@
   const visionPanel = document.getElementById('vision-panel');
   const visionStatusEl = document.getElementById('vision-status');
   const visionGenerateSection = document.getElementById('vision-generate');
+  const visionPromptEl = document.getElementById('vision-prompt');
+  const visionGenerateBtn = document.getElementById('vision-generate-btn');
+  const visionResultEl = document.getElementById('vision-result');
+  const visionResultVideo = document.getElementById('vision-result-video');
+  const visionResultError = document.getElementById('vision-result-error');
+  const visionComfyLink = document.getElementById('vision-comfy-link');
   const chatTabList = document.getElementById('chat-tab-list');
   const chatTabNewBtn = document.getElementById('chat-tab-new');
   const chatTabForkBtn = document.getElementById('chat-tab-fork');
@@ -1394,7 +1400,104 @@
     } else {
       visionStatusEl.textContent = '';
     }
+    updateVisionGenerateAvailability();
   }
+
+  // updateVisionGenerateAvailability keeps the Generate button's own
+  // enabled/title state in sync with the live GPU mode -- generation is
+  // only meaningful while the shared GPU is actually in Vision mode and
+  // not itself mid-switch.
+  function updateVisionGenerateAvailability() {
+    const canGenerate = visionEnabled && visionStatus && visionStatus.mode === 'vision' && !visionStatus.in_progress;
+    visionGenerateBtn.disabled = !canGenerate;
+    visionGenerateBtn.title = canGenerate ? '' : 'Switch to Vision mode first';
+  }
+
+  // visionGenerateJobID/visionGeneratePollTimer track the one generation
+  // job this tab is currently watching -- a new submission replaces
+  // whichever job was being polled before.
+  let visionGenerateJobID = null;
+  let visionGeneratePollTimer = null;
+
+  // stopVisionGeneratePolling clears the polling timer above -- exported
+  // for index.test.js's own central afterEach, same reason
+  // stopVisionPolling is (see its own doc comment).
+  function stopVisionGeneratePolling() {
+    if (visionGeneratePollTimer) {
+      clearTimeout(visionGeneratePollTimer);
+      visionGeneratePollTimer = null;
+    }
+  }
+
+  // pollVisionResult re-fetches visionGenerateJobID's own status every 3s
+  // while still "pending" -- ComfyUI's own text-to-video generation
+  // realistically takes at least tens of seconds, so this is deliberately
+  // much coarser than visionModePollWhileInProgress's 2s mode-switch poll.
+  async function pollVisionResult() {
+    if (!visionGenerateJobID) return;
+    try {
+      const resp = await fetch('/vision/api/result?job_id=' + encodeURIComponent(visionGenerateJobID));
+      if (!resp.ok) {
+        visionResultError.textContent = 'Could not check the generation status.';
+        updateVisionGenerateAvailability();
+        return;
+      }
+      const data = await resp.json();
+      if (data.status === 'pending') {
+        visionGeneratePollTimer = setTimeout(pollVisionResult, 3000);
+        return;
+      }
+      if (data.status === 'done') {
+        visionResultError.textContent = '';
+        visionResultVideo.src = data.view_url;
+        visionResultVideo.hidden = false;
+      } else {
+        visionResultVideo.hidden = true;
+        visionResultError.textContent = data.error || 'Generation failed.';
+      }
+      updateVisionGenerateAvailability();
+    } catch (err) {
+      visionResultError.textContent = 'Could not reach the server to check the generation status.';
+      updateVisionGenerateAvailability();
+    }
+  }
+
+  // requestGenerate is the Generate button's own click handler -- submits
+  // the prompt box's current text as a new job, then starts polling for
+  // its result. A blank prompt is simply ignored (the server would 400 it
+  // anyway); no separate validation message, since the button itself is
+  // only enabled while Vision mode is active, not while a prompt exists.
+  async function requestGenerate() {
+    const prompt = visionPromptEl.value.trim();
+    if (!prompt) return;
+    stopVisionGeneratePolling();
+    visionGenerateBtn.disabled = true;
+    visionResultEl.hidden = false;
+    visionResultVideo.hidden = true;
+    visionResultError.textContent = 'Submitting…';
+    try {
+      const resp = await fetch('/vision/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt }),
+      });
+      if (!resp.ok) {
+        const text = await resp.text();
+        visionResultError.textContent = 'Could not start generation: ' + text;
+        updateVisionGenerateAvailability();
+        return;
+      }
+      const data = await resp.json();
+      visionGenerateJobID = data.job_id;
+      visionResultError.textContent = 'Generating — this can take a few minutes…';
+      await pollVisionResult();
+    } catch (err) {
+      visionResultError.textContent = 'Could not reach the server to start generation.';
+      updateVisionGenerateAvailability();
+    }
+  }
+
+  visionGenerateBtn.addEventListener('click', requestGenerate);
 
   // refreshVisionStatus is visionPollTimer's own reload callback -- a plain
   // GET, re-armed by visionModePollWhileInProgress below.
@@ -1657,6 +1760,7 @@
       const data = await resp.json();
       if (data.role === 'admin') {
         adminLink.hidden = false;
+        visionComfyLink.hidden = false;
       }
       if (data.role === 'admin' || data.role === 'user') {
         accountLink.hidden = false;
@@ -1700,5 +1804,6 @@
       loadVisionMode, requestVisionSwitch, refreshVisionStatus, renderVisionStatus,
       updateChatAvailability, updateModeSwitchIndicator, visionModePollWhileInProgress,
       startVisionHeartbeat, stopVisionHeartbeat, stopVisionPolling,
+      updateVisionGenerateAvailability, requestGenerate, pollVisionResult, stopVisionGeneratePolling,
     };
   }

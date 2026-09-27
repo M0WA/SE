@@ -296,6 +296,105 @@ paths:
         "405": { $ref: "#/components/responses/BadRequest" }
         "502": { $ref: "#/components/responses/BadGateway" }
 
+  /vision/api/generate:
+    post:
+      tags: [search]
+      summary: Submit a new text-to-video generation job
+      description: >-
+        Submits prompt to cmd/gpu-control, which runs it against a fixed,
+        embedded ComfyUI workflow template (LTX-2.5 text-to-video) --
+        every other generation parameter (resolution, duration, model,
+        negative prompt, sampler) is fixed by that template, not caller-
+        selectable. Only meaningful while the shared GPU is already in
+        Vision mode (409 otherwise, surfacing cmd/gpu-control's own
+        conflict); the frontend only shows the Generate button then, but
+        this still handles the race of someone switching back to Chat in
+        between. Requires a signed-in session (any role), same as
+        /vision/api/mode. No dwell/rate-limit gating of its own --
+        ComfyUI's own queue already serializes jobs one at a time.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prompt]
+              properties:
+                prompt: { type: string }
+      responses:
+        "202":
+          description: Accepted -- job_id names the job to poll via GET /vision/api/result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "405": { $ref: "#/components/responses/BadRequest" }
+        "409":
+          description: The GPU is not currently in Vision mode.
+          content:
+            text/plain:
+              schema: { type: string }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /vision/api/result:
+    get:
+      tags: [search]
+      summary: Poll a previously submitted generation job
+      description: >-
+        Re-fetches job_id's current status from cmd/gpu-control on every
+        call (no local caching) -- cheap, since it's just ComfyUI's own
+        /history lookup. Requires a signed-in session (any role).
+      parameters:
+        - name: job_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GPUGenerateResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "405": { $ref: "#/components/responses/BadRequest" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
+  /vision/api/asset:
+    get:
+      tags: [search]
+      summary: Stream a finished generation's own video bytes
+      description: >-
+        Re-fetches job_id's own result (to get its view_url) rather than
+        trusting a client-supplied one, so a signed-in user can never ask
+        this endpoint to fetch an arbitrary ComfyUI-side path -- only
+        whatever job_id's own already-computed result names. Streams
+        cmd/gpu-control's own GET /gpu/api/view response straight through
+        (which itself narrowly forwards to ComfyUI's own read-only
+        /view). Requires a signed-in session (any role).
+      parameters:
+        - name: job_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The generated video's raw bytes.
+          content:
+            video/mp4: { schema: { type: string, format: binary } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: GPU mode isn't enabled, or job_id hasn't finished (or doesn't exist).
+        "405": { $ref: "#/components/responses/BadRequest" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+
   # ------------------------------------------------------------------ auth
   /login:
     post:
@@ -3344,6 +3443,23 @@ components:
         detail:
           type: string
           description: A short human-readable status line, e.g. "loading LTX transformer", or a failure reason.
+
+    GPUGenerateResult:
+      description: >-
+        The wire shape GET /vision/api/result returns -- mirrors
+        cmd/gpu-control's own GET /gpu/api/generate/{id} response.
+      type: object
+      properties:
+        status: { type: string, enum: [pending, done, failed] }
+        view_url:
+          type: string
+          description: >-
+            Only present once status is "done" -- this same service's own
+            GET /vision/api/asset URL (never cmd/gpu-control's or
+            ComfyUI's directly), suitable for a <video> src.
+        error:
+          type: string
+          description: Only present once status is "failed".
 
     VisionSimilarityRequest:
       type: object
