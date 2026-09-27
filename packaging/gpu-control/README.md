@@ -56,7 +56,7 @@ start with an empty `GPU_CONTROL_TOKEN`).
 | `POST /gpu/api/mode` `{"mode":"chat"\|"vision"}` | Begins a switch (`202`), or reports `200` if already there, or `409` if a switch to a *different* target is already in flight. Runs on a detached background goroutine, so a client disconnect never leaves the GPU half-switched. |
 | `POST /gpu/api/heartbeat` | Resets the idle-revert timer (see below). `204`. |
 | `POST /gpu/api/generate` `{"prompt":"...", "aspect_ratio":"...", "duration_seconds":N, "megapixels":N, "negative_prompt":"...", "enhance_prompt":bool}` | Submits a new text-to-video job to ComfyUI (`202` with `{"prompt_id":"..."}`), using the fixed, embedded workflow template below with the prompt, a fresh random seed, and every other given field substituted in (each optional field left unset/zero uses the template's own original default). `400` for an out-of-range `aspect_ratio`/`duration_seconds`/`megapixels`. `409` if the GPU isn't currently in Vision mode. |
-| `GET /gpu/api/generate/{id}` | Polls that job: `{"status":"pending"\|"done"\|"failed", "view_url":"...", "error":"..."}` -- `view_url` (once `"done"`) is a `GET /gpu/api/view` URL. |
+| `GET /gpu/api/generate/{id}` | Polls that job: `{"status":"pending"\|"done"\|"failed", "view_url":"...", "error":"..."}` -- `view_url` (once `"done"`) is a `GET /gpu/api/view` URL. An id absent from ComfyUI's own `/history` is `"pending"` only if this process's own `Generate` submitted it (this ComfyUI process's history is still intact); otherwise `"failed"`, since ComfyUI's history for a job vanishes once its process restarts (every chat<->vision switch), so an unknown, absent id can never resolve on its own. |
 | `GET /gpu/api/view?filename=...&subfolder=...&type=...` | Narrowly forwards exactly those three (plus `preview`) query params to ComfyUI's own read-only `GET /view`, streaming the resulting file's bytes back -- never a general-purpose proxy, unlike `/gpu/comfy/` below. |
 | `GET /gpu/comfy/*` | Raw, unrestricted reverse proxy to ComfyUI's entire local web UI (including its own WebSocket for live queue/progress) -- reached only by `cmd/admin`'s own admin-gated `/admin/comfy/` (never directly by a browser, and never by `cmd/search`), for manually inspecting or debugging a workflow. |
 | `GET /healthz` | Bare liveness check, unauthenticated. |
@@ -86,11 +86,14 @@ per request: the positive-prompt node's text (node `405:376`), one
 marks `randomize`), the `ResolutionSelector` node's aspect ratio and
 megapixels (node `409` -- aspect ratio is one of the exact 8 enum values
 ComfyUI's own `GET /object_info/ResolutionSelector` reports; megapixels
-is clamped to `minMegapixels`-`maxMegapixels`, narrower than that node's
-own 0.1-16.0 range since this is video, not a single image -- every
-extra megapixel multiplies cost by the frame count too), the `Duration`
-`PrimitiveInt` node's value in seconds (node `405:362`, clamped to
-`minDurationSeconds`-`maxDurationSeconds`), the negative-prompt
+is clamped to `minMegapixels`-`maxMegapixels`, that same node's own real
+0.1-16.0 range -- an earlier, narrower range here was invented without
+ever testing where video generation actually degrades, and got corrected
+after being called out as such), the `Duration` `PrimitiveInt` node's
+value in seconds (node `405:362`, only a lower bound of
+`minDurationSeconds` -- no upper bound; a longer clip just costs more
+time/VRAM, which is the caller's tradeoff to make, not a limit for this
+file to guess at), the negative-prompt
 `CLIPTextEncode` node's text (node `405:373`, left at the template's own
 fixed text when not given), and the "Enable Prompt Enhance"
 `PrimitiveBoolean` node (node `405:383`, gating a real switch node

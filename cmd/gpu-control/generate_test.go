@@ -8,6 +8,7 @@ import (
 	"net/http/httputil"
 	"strings"
 	"testing"
+	"time"
 )
 
 // withTemplate temporarily swaps the embedded workflow template for raw,
@@ -134,6 +135,55 @@ func TestGenerate_DefaultsUsedWhenAspectRatioAndDurationOmitted(t *testing.T) {
 	if durationInputs[durationInputKey] != float64(defaultDurationSeconds) {
 		t.Fatalf("expected default duration %d, got %+v", defaultDurationSeconds, durationInputs)
 	}
+	megapixelsNode := gotBody.Prompt[megapixelsNodeID].(map[string]any)
+	megapixelsInputs := megapixelsNode["inputs"].(map[string]any)
+	if megapixelsInputs[megapixelsInputKey] != float64(defaultMegapixels) {
+		t.Fatalf("expected default megapixels %g, got %+v", defaultMegapixels, megapixelsInputs)
+	}
+	negNode := gotBody.Prompt[negativePromptNodeID].(map[string]any)
+	negInputs := negNode["inputs"].(map[string]any)
+	if negInputs[negativePromptInputKey] == "" {
+		t.Fatalf("expected the template's own negative prompt text left untouched when omitted, got %+v", negInputs)
+	}
+	enhanceNode := gotBody.Prompt[enhancePromptNodeID].(map[string]any)
+	enhanceInputs := enhanceNode["inputs"].(map[string]any)
+	if enhanceInputs[enhancePromptInputKey] != false {
+		t.Fatalf("expected enhance_prompt to default to false, got %+v", enhanceInputs)
+	}
+}
+
+func TestGenerate_NegativePromptAndEnhancePromptSubmittedWhenGiven(t *testing.T) {
+	var gotBody comfyPromptRequest
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(comfyPromptResponse{PromptID: "abc-123"})
+	}))
+	defer upstream.Close()
+
+	c := newTestControllerForGenerate(t, upstream.URL)
+	c.mode = ModeVision
+	if _, err := c.Generate(context.Background(), GenerateParams{
+		Prompt: "a cat", NegativePrompt: "blurry, low quality", EnhancePrompt: true, Megapixels: 1.2,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	negNode := gotBody.Prompt[negativePromptNodeID].(map[string]any)
+	negInputs := negNode["inputs"].(map[string]any)
+	if negInputs[negativePromptInputKey] != "blurry, low quality" {
+		t.Fatalf("expected the given negative prompt substituted, got %+v", negInputs)
+	}
+	enhanceNode := gotBody.Prompt[enhancePromptNodeID].(map[string]any)
+	enhanceInputs := enhanceNode["inputs"].(map[string]any)
+	if enhanceInputs[enhancePromptInputKey] != true {
+		t.Fatalf("expected enhance_prompt true substituted, got %+v", enhanceInputs)
+	}
+	megapixelsNode := gotBody.Prompt[megapixelsNodeID].(map[string]any)
+	megapixelsInputs := megapixelsNode["inputs"].(map[string]any)
+	if megapixelsInputs[megapixelsInputKey] != 1.2 {
+		t.Fatalf("expected the given megapixels substituted, got %+v", megapixelsInputs)
+	}
 }
 
 func TestGenerate_InvalidAspectRatioRejected(t *testing.T) {
@@ -144,14 +194,22 @@ func TestGenerate_InvalidAspectRatioRejected(t *testing.T) {
 	}
 }
 
-func TestGenerate_DurationOutOfBoundsRejected(t *testing.T) {
+func TestGenerate_NegativeDurationRejected(t *testing.T) {
 	c := newTestControllerForGenerate(t, "http://comfy")
 	c.mode = ModeVision
-	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat", DurationSeconds: minDurationSeconds - 1}); err != errInvalidDuration {
-		t.Fatalf("expected errInvalidDuration for too-short duration, got %v", err)
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat", DurationSeconds: -1}); err != errInvalidDuration {
+		t.Fatalf("expected errInvalidDuration for a negative duration, got %v", err)
 	}
-	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat", DurationSeconds: maxDurationSeconds + 1}); err != errInvalidDuration {
-		t.Fatalf("expected errInvalidDuration for too-long duration, got %v", err)
+}
+
+func TestGenerate_InvalidMegapixelsRejected(t *testing.T) {
+	c := newTestControllerForGenerate(t, "http://comfy")
+	c.mode = ModeVision
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat", Megapixels: minMegapixels - 0.05}); err != errInvalidMegapixels {
+		t.Fatalf("expected errInvalidMegapixels for too-small megapixels, got %v", err)
+	}
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat", Megapixels: maxMegapixels + 0.1}); err != errInvalidMegapixels {
+		t.Fatalf("expected errInvalidMegapixels for too-large megapixels, got %v", err)
 	}
 }
 
@@ -188,7 +246,30 @@ func TestGenerate_ComfyUINonOKStatusRejected(t *testing.T) {
 	}
 }
 
-func TestGenerateResult_PendingWhenAbsentFromHistory(t *testing.T) {
+func TestGenerateResult_PendingWhenAbsentFromHistoryButKnown(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer upstream.Close()
+
+	c := newTestControllerForGenerate(t, upstream.URL)
+	c.knownGenerateJobs = map[string]struct{}{"abc-123": {}}
+	status, _, err := c.GenerateResult(context.Background(), "abc-123")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("expected pending, got %q", status)
+	}
+}
+
+// TestGenerateResult_FailedWhenAbsentFromHistoryAndUnknown proves a job
+// id GenerateResult has never heard Generate submit -- either because it
+// belongs to a ComfyUI process that has since restarted (losing its own
+// history), or was simply never real -- is reported as "failed" rather
+// than "pending" forever. See GenerateResult's own doc comment.
+func TestGenerateResult_FailedWhenAbsentFromHistoryAndUnknown(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{}`))
@@ -197,11 +278,48 @@ func TestGenerateResult_PendingWhenAbsentFromHistory(t *testing.T) {
 
 	c := newTestControllerForGenerate(t, upstream.URL)
 	status, _, err := c.GenerateResult(context.Background(), "abc-123")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if status != "failed" || err == nil {
+		t.Fatalf("expected failed status with an error, got status=%q err=%v", status, err)
 	}
-	if status != "pending" {
-		t.Fatalf("expected pending, got %q", status)
+}
+
+// TestGenerate_RegistersJobAsKnown proves a successful Generate call
+// makes GenerateResult treat that job id as known (see the previous two
+// tests) -- the actual end-to-end wiring, not just the two halves in
+// isolation.
+func TestGenerate_RegistersJobAsKnown(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(comfyPromptResponse{PromptID: "abc-123"})
+	}))
+	defer upstream.Close()
+
+	c := newTestControllerForGenerate(t, upstream.URL)
+	c.mode = ModeVision
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat"}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if _, known := c.knownGenerateJobs["abc-123"]; !known {
+		t.Fatal("expected Generate to record the returned prompt id as known")
+	}
+}
+
+// TestRunSwitch_EnteringVisionResetsKnownGenerateJobs proves a fresh
+// ComfyUI process (a completed switch into ModeVision) forgets any job
+// ids from a previous one -- see knownGenerateJobs' own doc comment.
+func TestRunSwitch_EnteringVisionResetsKnownGenerateJobs(t *testing.T) {
+	units := newFakeUnits()
+	ready := newFakeReady()
+	ready.callsUntilReady["http://comfy/ready"] = 0
+	c := newTestController(units, ready)
+	c.pollInterval = time.Millisecond
+	c.knownGenerateJobs = map[string]struct{}{"stale-job": {}}
+	c.runSwitch(ModeVision)
+	if c.mode != ModeVision {
+		t.Fatalf("expected the switch to succeed, got mode=%v detail=%q", c.mode, c.detail)
+	}
+	if _, known := c.knownGenerateJobs["stale-job"]; known {
+		t.Fatal("expected knownGenerateJobs to be reset once a switch into ModeVision completes")
 	}
 }
 
@@ -327,10 +445,22 @@ func TestHandleGenerate_InvalidDurationReturnsBadRequest(t *testing.T) {
 	c.mode = ModeVision
 	mux := newMux(c, testToken)
 
-	body, _ := json.Marshal(generateRequest{Prompt: "a cat", DurationSeconds: maxDurationSeconds + 1})
+	body, _ := json.Marshal(generateRequest{Prompt: "a cat", DurationSeconds: -1})
 	rec := doRequest(t, mux, http.MethodPost, "/gpu/api/generate", testToken, body)
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for out-of-bounds duration_seconds, got %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("expected 400 for a negative duration_seconds, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleGenerate_InvalidMegapixelsReturnsBadRequest(t *testing.T) {
+	c := newTestControllerForGenerate(t, "http://comfy")
+	c.mode = ModeVision
+	mux := newMux(c, testToken)
+
+	body, _ := json.Marshal(generateRequest{Prompt: "a cat", Megapixels: maxMegapixels + 1})
+	rec := doRequest(t, mux, http.MethodPost, "/gpu/api/generate", testToken, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for out-of-bounds megapixels, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -491,6 +621,17 @@ func TestGenerate_TemplateMissingSeedNodeRejected(t *testing.T) {
 
 	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat"}); err == nil {
 		t.Fatal("expected an error when the template is missing the seed node")
+	}
+}
+
+func TestGenerate_TemplateMissingAspectRatioNodeRejected(t *testing.T) {
+	withTemplate(t, `{"`+positivePromptNodeID+`":{"inputs":{"`+positivePromptInputKey+`":""}},`+
+		`"`+seedNodeID+`":{"inputs":{"`+seedInputKey+`":1}}}`)
+	c := newTestControllerForGenerate(t, "http://comfy")
+	c.mode = ModeVision
+
+	if _, err := c.Generate(context.Background(), GenerateParams{Prompt: "a cat"}); err == nil {
+		t.Fatal("expected an error when the template is missing the aspect-ratio/megapixels node")
 	}
 }
 

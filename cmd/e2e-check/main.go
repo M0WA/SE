@@ -1147,24 +1147,27 @@ func (c *client) checkVisionGenerateValidatesAspectRatio() error {
 
 // checkVisionGenerateValidatesDuration is
 // checkVisionGenerateValidatesAspectRatio's own duration_seconds
-// counterpart.
+// counterpart -- duration_seconds has no upper bound (see
+// visionMinDurationSeconds's own doc comment), only a negative value is
+// ever rejected.
 func (c *client) checkVisionGenerateValidatesDuration() error {
 	status, body, err := c.doJSONRaw(http.MethodPost, "/vision/api/generate",
-		map[string]any{"prompt": "a cat", "duration_seconds": 999})
+		map[string]any{"prompt": "a cat", "duration_seconds": -1})
 	if err != nil {
 		return err
 	}
 	if status != http.StatusBadRequest {
-		return fmt.Errorf("expected 400 for an out-of-bounds duration_seconds, got %d: %s", status, truncate(body, 200))
+		return fmt.Errorf("expected 400 for a negative duration_seconds, got %d: %s", status, truncate(body, 200))
 	}
 	return nil
 }
 
 // checkVisionGenerateValidatesMegapixels is
-// checkVisionGenerateValidatesAspectRatio's own megapixels counterpart.
+// checkVisionGenerateValidatesAspectRatio's own megapixels counterpart --
+// bounds are ComfyUI's own real ResolutionSelector range (0.1-16.0).
 func (c *client) checkVisionGenerateValidatesMegapixels() error {
 	status, body, err := c.doJSONRaw(http.MethodPost, "/vision/api/generate",
-		map[string]any{"prompt": "a cat", "megapixels": 9.9})
+		map[string]any{"prompt": "a cat", "megapixels": 20.0})
 	if err != nil {
 		return err
 	}
