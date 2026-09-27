@@ -18,6 +18,16 @@ import (
 	"searchengine/internal/ports"
 )
 
+// newGPUModeServiceForTest wraps application.NewGPUModeService with a
+// throwaway fakeFileStore for every test in this file that doesn't
+// itself care about the save-generated-video-to-files side effect --
+// see TestHandleVisionResult_SavesGeneratedFileOnce/
+// TestHandleVisionGenerate_PassesChatIDThrough below for the tests that
+// do, which construct application.NewGPUModeService directly instead.
+func newGPUModeServiceForTest(store ports.GPUModeStore, controller ports.GPUModeController) *application.GPUModeService {
+	return application.NewGPUModeService(store, controller, &fakeFileStore{})
+}
+
 // fakeGPUModeController is a local copy of internal/application's own
 // unexported test fake -- restapi_test can't reach it from a different
 // package. fakeGPUModeStore itself is already defined in
@@ -120,7 +130,7 @@ func TestHandleVisionMode_NilServiceIs404(t *testing.T) {
 // the 405 requireMethod would give -- same reasoning as
 // TestHandleChat_MethodNotAllowed.
 func TestHandleVisionMode_MethodNotAllowed(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodDelete, "/vision/api/mode", nil)
 	if rec.Code != http.StatusNotFound {
@@ -129,7 +139,7 @@ func TestHandleVisionMode_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHandleVisionMode_NotEnabledIs404(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{getErr: ports.ErrGPUModeSettingsNotConfigured}, &fakeGPUModeController{})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{getErr: ports.ErrGPUModeSettingsNotConfigured}, &fakeGPUModeController{})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/mode", nil)
 	if rec.Code != http.StatusNotFound {
@@ -138,7 +148,7 @@ func TestHandleVisionMode_NotEnabledIs404(t *testing.T) {
 }
 
 func TestHandleVisionMode_StoreErrorIs502(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{getErr: errors.New("db down")}, &fakeGPUModeController{})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{getErr: errors.New("db down")}, &fakeGPUModeController{})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/mode", nil)
 	if rec.Code != http.StatusBadGateway {
@@ -147,7 +157,7 @@ func TestHandleVisionMode_StoreErrorIs502(t *testing.T) {
 }
 
 func TestHandleVisionMode_ControllerErrorIs502(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{statusErr: errors.New("unreachable")})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{statusErr: errors.New("unreachable")})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/mode", nil)
 	if rec.Code != http.StatusBadGateway {
@@ -156,7 +166,7 @@ func TestHandleVisionMode_ControllerErrorIs502(t *testing.T) {
 }
 
 func TestHandleVisionMode_Success(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{status: domain.GPUModeStatus{Mode: domain.GPUModeChat}})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{status: domain.GPUModeStatus{Mode: domain.GPUModeChat}})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/mode", nil)
 	if rec.Code != http.StatusOK {
@@ -180,7 +190,7 @@ func TestHandleVisionModeSwitch_NilServiceIs404(t *testing.T) {
 }
 
 func TestHandleVisionModeSwitch_InvalidJSON(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/mode", "{not json")
 	if rec.Code != http.StatusBadRequest {
@@ -189,7 +199,7 @@ func TestHandleVisionModeSwitch_InvalidJSON(t *testing.T) {
 }
 
 func TestHandleVisionModeSwitch_InvalidMode(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/mode", map[string]string{"mode": "sleep"})
 	if rec.Code != http.StatusBadRequest {
@@ -198,7 +208,7 @@ func TestHandleVisionModeSwitch_InvalidMode(t *testing.T) {
 }
 
 func TestHandleVisionModeSwitch_NotEnabledIs404(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{getErr: ports.ErrGPUModeSettingsNotConfigured}, &fakeGPUModeController{})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{getErr: ports.ErrGPUModeSettingsNotConfigured}, &fakeGPUModeController{})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/mode", map[string]string{"mode": "vision"})
 	if rec.Code != http.StatusNotFound {
@@ -211,7 +221,7 @@ func TestHandleVisionModeSwitch_ConflictIs409(t *testing.T) {
 		status:    domain.GPUModeStatus{Mode: domain.GPUModeChat, Target: domain.GPUModeVision, InProgress: true},
 		switchErr: fmt.Errorf("busy: %w", ports.ErrGPUModeSwitchConflict),
 	}
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, controller)
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, controller)
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/mode", map[string]string{"mode": "chat"})
 	if rec.Code != http.StatusConflict {
@@ -220,7 +230,7 @@ func TestHandleVisionModeSwitch_ConflictIs409(t *testing.T) {
 }
 
 func TestHandleVisionModeSwitch_ControllerErrorIs502(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{switchErr: errors.New("unreachable")})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{switchErr: errors.New("unreachable")})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/mode", map[string]string{"mode": "vision"})
 	if rec.Code != http.StatusBadGateway {
@@ -229,7 +239,7 @@ func TestHandleVisionModeSwitch_ControllerErrorIs502(t *testing.T) {
 }
 
 func TestHandleVisionModeSwitch_Success(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/mode", map[string]string{"mode": "vision"})
 	if rec.Code != http.StatusOK {
@@ -245,7 +255,7 @@ func TestHandleVisionModeSwitch_Success(t *testing.T) {
 }
 
 func TestHandleVisionModeSwitch_RateLimitedIs429(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	// First switch succeeds; the second, immediately after, must be
 	// blocked by the global dwell (see application.GPUModeService.Switch).
@@ -269,7 +279,7 @@ func TestHandleVisionHeartbeat_NilServiceIs404(t *testing.T) {
 // heartbeat" is registered only as "POST ...", so a GET falls through to
 // the "/" catch-all (404), never reaching requireMethod's own 405.
 func TestHandleVisionHeartbeat_MethodNotAllowed(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/heartbeat", nil)
 	if rec.Code != http.StatusNotFound {
@@ -278,7 +288,7 @@ func TestHandleVisionHeartbeat_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHandleVisionHeartbeat_NotEnabledIs404(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{getErr: ports.ErrGPUModeSettingsNotConfigured}, &fakeGPUModeController{})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{getErr: ports.ErrGPUModeSettingsNotConfigured}, &fakeGPUModeController{})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/heartbeat", nil)
 	if rec.Code != http.StatusNotFound {
@@ -287,7 +297,7 @@ func TestHandleVisionHeartbeat_NotEnabledIs404(t *testing.T) {
 }
 
 func TestHandleVisionHeartbeat_ControllerErrorIs502(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{heartErr: errors.New("unreachable")})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{heartErr: errors.New("unreachable")})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/heartbeat", nil)
 	if rec.Code != http.StatusBadGateway {
@@ -296,7 +306,7 @@ func TestHandleVisionHeartbeat_ControllerErrorIs502(t *testing.T) {
 }
 
 func TestHandleVisionHeartbeat_Success(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/heartbeat", nil)
 	if rec.Code != http.StatusNoContent {
@@ -315,7 +325,7 @@ func TestHandleVisionGenerate_NilServiceIs404(t *testing.T) {
 }
 
 func TestHandleVisionGenerate_EmptyPromptIs400(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/generate", map[string]string{"prompt": ""})
 	if rec.Code != http.StatusBadRequest {
@@ -324,7 +334,7 @@ func TestHandleVisionGenerate_EmptyPromptIs400(t *testing.T) {
 }
 
 func TestHandleVisionGenerate_InvalidJSON(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	req := httptest.NewRequest(http.MethodPost, "/vision/api/generate", bytes.NewReader([]byte("{not json")))
 	req.AddCookie(cookie)
@@ -336,7 +346,7 @@ func TestHandleVisionGenerate_InvalidJSON(t *testing.T) {
 }
 
 func TestHandleVisionGenerate_NotEnabledIs404(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{getErr: ports.ErrGPUModeSettingsNotConfigured}, &fakeGPUModeController{})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{getErr: ports.ErrGPUModeSettingsNotConfigured}, &fakeGPUModeController{})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/generate", map[string]string{"prompt": "a cat"})
 	if rec.Code != http.StatusNotFound {
@@ -345,7 +355,7 @@ func TestHandleVisionGenerate_NotEnabledIs404(t *testing.T) {
 }
 
 func TestHandleVisionGenerate_NotInVisionModeIs409(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
 		&fakeGPUModeController{generateErr: fmt.Errorf("wrapped: %w", ports.ErrGPUGenerateNotInVisionMode)})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/generate", map[string]string{"prompt": "a cat"})
@@ -355,7 +365,7 @@ func TestHandleVisionGenerate_NotInVisionModeIs409(t *testing.T) {
 }
 
 func TestHandleVisionGenerate_ControllerErrorIs502(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
 		&fakeGPUModeController{generateErr: errors.New("unreachable")})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/generate", map[string]string{"prompt": "a cat"})
@@ -365,7 +375,7 @@ func TestHandleVisionGenerate_ControllerErrorIs502(t *testing.T) {
 }
 
 func TestHandleVisionGenerate_Success(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
 		&fakeGPUModeController{generateJobID: "abc-123"})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/generate", map[string]string{"prompt": "a cat"})
@@ -381,6 +391,51 @@ func TestHandleVisionGenerate_Success(t *testing.T) {
 	}
 }
 
+// TestHandleVisionGenerate_ChatIDFlowsThroughToSavedFile is an
+// end-to-end check (through the real application.GPUModeService, not
+// newGPUModeServiceForTest's throwaway fake) that a chat_id given at
+// submit time results in GET /vision/api/result later reporting a
+// file_id once the job is done -- proving the whole request/response
+// wiring (not just GPUModeService's own already-thoroughly-unit-tested
+// internals) actually threads chat_id/file_id end to end.
+func TestHandleVisionGenerate_ChatIDFlowsThroughToSavedFile(t *testing.T) {
+	files := &fakeFileStore{}
+	controller := &fakeGPUModeController{
+		generateJobID:  "abc-123",
+		generateResult: domain.GPUGenerateResult{Status: "done", ViewURL: "/gpu/api/view?filename=out.mp4"},
+		viewContent:    "video/mp4",
+		viewBody:       io.NopCloser(strings.NewReader("video-bytes")),
+	}
+	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, controller, files)
+	h, cookie := gpuModeAuthedHandler(t, svc, nil)
+
+	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/generate", map[string]string{"prompt": "a cat", "chat_id": "chat-42"})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/result?job_id=abc-123", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp["file_id"] == nil || resp["file_id"] == "" {
+		t.Fatalf("expected a non-empty file_id, got %v", resp)
+	}
+	var foundChatID string
+	for _, ownerFiles := range files.byOwner {
+		for _, f := range ownerFiles {
+			foundChatID = f.meta.ChatID
+		}
+	}
+	if foundChatID != "chat-42" {
+		t.Fatalf("expected the submitted chat_id threaded through to the saved file, got %+v", files.byOwner)
+	}
+}
+
 func TestHandleVisionResult_NilServiceIs404(t *testing.T) {
 	h, cookie := gpuModeAuthedHandler(t, nil, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/result?job_id=abc-123", nil)
@@ -390,7 +445,7 @@ func TestHandleVisionResult_NilServiceIs404(t *testing.T) {
 }
 
 func TestHandleVisionResult_MissingJobIDIs400(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/result", nil)
 	if rec.Code != http.StatusBadRequest {
@@ -399,7 +454,7 @@ func TestHandleVisionResult_MissingJobIDIs400(t *testing.T) {
 }
 
 func TestHandleVisionResult_NotEnabledIs404(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{getErr: ports.ErrGPUModeSettingsNotConfigured}, &fakeGPUModeController{})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{getErr: ports.ErrGPUModeSettingsNotConfigured}, &fakeGPUModeController{})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/result?job_id=abc-123", nil)
 	if rec.Code != http.StatusNotFound {
@@ -408,7 +463,7 @@ func TestHandleVisionResult_NotEnabledIs404(t *testing.T) {
 }
 
 func TestHandleVisionResult_ControllerErrorIs502(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
 		&fakeGPUModeController{generateResErr: errors.New("unreachable")})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/result?job_id=abc-123", nil)
@@ -418,7 +473,7 @@ func TestHandleVisionResult_ControllerErrorIs502(t *testing.T) {
 }
 
 func TestHandleVisionResult_PendingHasNoViewURL(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
 		&fakeGPUModeController{generateResult: domain.GPUGenerateResult{Status: "pending"}})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/result?job_id=abc-123", nil)
@@ -435,7 +490,7 @@ func TestHandleVisionResult_PendingHasNoViewURL(t *testing.T) {
 }
 
 func TestHandleVisionResult_DoneRewritesViewURLThroughSearchServer(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
 		&fakeGPUModeController{generateResult: domain.GPUGenerateResult{Status: "done", ViewURL: "/gpu/api/view?filename=out.mp4"}})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/result?job_id=abc-123", nil)
@@ -460,7 +515,7 @@ func TestHandleVisionAsset_NilServiceIs404(t *testing.T) {
 }
 
 func TestHandleVisionAsset_MissingJobIDIs400(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/asset", nil)
 	if rec.Code != http.StatusBadRequest {
@@ -469,7 +524,7 @@ func TestHandleVisionAsset_MissingJobIDIs400(t *testing.T) {
 }
 
 func TestHandleVisionAsset_NotEnabledIs404(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{getErr: ports.ErrGPUModeSettingsNotConfigured}, &fakeGPUModeController{})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{getErr: ports.ErrGPUModeSettingsNotConfigured}, &fakeGPUModeController{})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/asset?job_id=abc-123", nil)
 	if rec.Code != http.StatusNotFound {
@@ -478,7 +533,7 @@ func TestHandleVisionAsset_NotEnabledIs404(t *testing.T) {
 }
 
 func TestHandleVisionAsset_ResultControllerErrorIs502(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
 		&fakeGPUModeController{generateResErr: errors.New("unreachable")})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/asset?job_id=abc-123", nil)
@@ -488,7 +543,7 @@ func TestHandleVisionAsset_ResultControllerErrorIs502(t *testing.T) {
 }
 
 func TestHandleVisionAsset_NotDoneIs404(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
 		&fakeGPUModeController{generateResult: domain.GPUGenerateResult{Status: "pending"}})
 	h, cookie := gpuModeAuthedHandler(t, svc, nil)
 	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/asset?job_id=abc-123", nil)
@@ -498,7 +553,7 @@ func TestHandleVisionAsset_NotDoneIs404(t *testing.T) {
 }
 
 func TestHandleVisionAsset_ViewAssetErrorIs502(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
 		&fakeGPUModeController{
 			generateResult: domain.GPUGenerateResult{Status: "done", ViewURL: "/gpu/api/view?filename=out.mp4"},
 			viewErr:        errors.New("unreachable"),
@@ -511,7 +566,7 @@ func TestHandleVisionAsset_ViewAssetErrorIs502(t *testing.T) {
 }
 
 func TestHandleVisionAsset_Success(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
 		&fakeGPUModeController{
 			generateResult: domain.GPUGenerateResult{Status: "done", ViewURL: "/gpu/api/view?filename=out.mp4"},
 			viewContent:    "video/mp4",
@@ -533,7 +588,7 @@ func TestHandleVisionAsset_Success(t *testing.T) {
 // --- handleChat's own GPU-mode availability check ---
 
 func TestHandleChat_GPUModeVisionMakesChatUnavailable(t *testing.T) {
-	svc := application.NewGPUModeService(
+	svc := newGPUModeServiceForTest(
 		&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
 		&fakeGPUModeController{status: domain.GPUModeStatus{Mode: domain.GPUModeVision, InProgress: false}},
 	)
@@ -560,7 +615,7 @@ func TestHandleChat_GPUModeVisionMakesChatUnavailable(t *testing.T) {
 }
 
 func TestHandleChat_GPUModeChatAllowsChatThrough(t *testing.T) {
-	svc := application.NewGPUModeService(
+	svc := newGPUModeServiceForTest(
 		&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}},
 		&fakeGPUModeController{status: domain.GPUModeStatus{Mode: domain.GPUModeChat}},
 	)
@@ -578,7 +633,7 @@ func TestHandleChat_GPUModeChatAllowsChatThrough(t *testing.T) {
 }
 
 func TestHandleChat_GPUModeDisabledAllowsChatThrough(t *testing.T) {
-	svc := application.NewGPUModeService(&fakeGPUModeStore{getErr: ports.ErrGPUModeSettingsNotConfigured}, &fakeGPUModeController{})
+	svc := newGPUModeServiceForTest(&fakeGPUModeStore{getErr: ports.ErrGPUModeSettingsNotConfigured}, &fakeGPUModeController{})
 	svc.RefreshCache(context.Background())
 
 	chatSvc := application.NewChatService(&fakeChatEndpointStore{endpoint: domain.ChatEndpoint{Enabled: true}}, &fakeChatCompleter{answer: "hi there"}, nil, nil, nil, nil, application.VisionConfig{})

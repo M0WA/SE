@@ -64,9 +64,14 @@ type GPUModeStatus struct {
 // GPUGenerateResult mirrors cmd/gpu-control's own GET /gpu/api/generate/{id}
 // wire shape: Status is one of "pending", "done" (ViewURL set), or
 // "failed" (Error set) -- see that package's own generate.go for what
-// produces each.
+// produces each. FileID is application-layer only (never comes from
+// cmd/gpu-control) -- set once GPUModeService has saved the finished
+// video into the requesting account's own files, so it survives a page
+// reload/lost job id instead of being reachable only through the
+// in-memory job id a browser tab happened to still have.
 type GPUGenerateResult struct {
 	Status  string
 	ViewURL string
 	Error   string
+	FileID  string
 }

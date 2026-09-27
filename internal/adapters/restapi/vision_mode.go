@@ -115,9 +115,18 @@ func (h *Handler) handleVisionModeSwitch(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// visionGenerateRequest is POST /vision/api/generate's body.
+// visionGenerateRequest is POST /vision/api/generate's body. ChatID, when
+// given, is a signed-in account's own already-pinned chat (same
+// convention as /chat's own chat_id) -- once the job finishes, the
+// resulting video is saved into that chat's files, so it shows up in
+// the account's existing file list rather than only being reachable
+// through a job id a browser tab happened to still hold. Left empty
+// (e.g. an unpinned/session-only tab), that save step is simply
+// skipped -- same "files require a pinned chat" rule as everywhere else
+// files are involved.
 type visionGenerateRequest struct {
 	Prompt string `json:"prompt"`
+	ChatID string `json:"chat_id,omitempty"`
 }
 
 type visionGenerateResponse struct {
@@ -146,7 +155,8 @@ func (h *Handler) handleVisionGenerate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "prompt must not be empty", http.StatusBadRequest)
 		return
 	}
-	jobID, err := h.gpuModeService.Generate(r.Context(), req.Prompt)
+	_, userID, _ := h.sessionRoleFor(r)
+	jobID, err := h.gpuModeService.Generate(r.Context(), userID, req.ChatID, req.Prompt)
 	switch {
 	case errors.Is(err, application.ErrGPUModeNotEnabled):
 		http.NotFound(w, r)
@@ -160,11 +170,14 @@ func (h *Handler) handleVisionGenerate(w http.ResponseWriter, r *http.Request) {
 }
 
 // visionResultResponse mirrors application.GPUModeService.GenerateResult's
-// own domain.GPUGenerateResult shape.
+// own domain.GPUGenerateResult shape. FileID, once set, names the
+// account file (GET /account/api/files/{id}) the finished video was
+// saved into -- see GPUModeService.saveGeneratedFileOnce.
 type visionResultResponse struct {
 	Status  string `json:"status"`
 	ViewURL string `json:"view_url,omitempty"`
 	Error   string `json:"error,omitempty"`
+	FileID  string `json:"file_id,omitempty"`
 }
 
 // handleVisionResult is GET /vision/api/result?job_id=... -- polls a
@@ -192,7 +205,7 @@ func (h *Handler) handleVisionResult(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		http.Error(w, err.Error(), http.StatusBadGateway)
 	default:
-		resp := visionResultResponse{Status: result.Status, Error: result.Error}
+		resp := visionResultResponse{Status: result.Status, Error: result.Error, FileID: result.FileID}
 		if result.ViewURL != "" {
 			resp.ViewURL = "/vision/api/asset?job_id=" + url.QueryEscape(jobID)
 		}
