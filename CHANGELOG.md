@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.103 - 2026-09-27
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* gpu-control: fix a real crash decoding a completed generation's history by @M0WA in https://github.com/M0WA/SE/pull/386
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.102...v4.13.103
+
+
 ## v4.13.102 - 2026-09-27
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
