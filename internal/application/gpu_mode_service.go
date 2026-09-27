@@ -53,6 +53,7 @@ var (
 type GPUModeService struct {
 	settings   ports.GPUModeStore
 	controller ports.GPUModeController
+	files      ports.FileStore
 	now        func() time.Time
 
 	mu                   sync.Mutex
@@ -60,14 +61,35 @@ type GPUModeService struct {
 	cachedStatus         domain.GPUModeStatus
 	lastSwitchAcceptedAt time.Time
 	accountSwitches      map[string][]time.Time
+	generateJobs         map[string]generateJobRecord
+}
+
+// generateJobRecord remembers which account/chat a generation job
+// belongs to, recorded at submit time (Generate) and consulted once by
+// GenerateResult the first time it observes "done", to save the
+// finished video into that account's own files -- so it shows up in
+// the account's existing file list and survives a lost browser-side job
+// id (e.g. after a page reload), not just a raw ComfyUI-backed URL only
+// this process ever knew about. In-memory only, same trade-off as
+// accountSwitches above: an in-flight job across a searchengine restart
+// just never gets auto-saved -- the video is still reachable via its
+// own ViewURL in the meantime, this is a best-effort convenience layered
+// on top, not the only way to reach it.
+type generateJobRecord struct {
+	userID string
+	chatID string
+	saved  bool
 }
 
 // NewGPUModeService wires the real dependencies -- tests construct a
-// GPUModeService literal directly to override now.
-func NewGPUModeService(settings ports.GPUModeStore, controller ports.GPUModeController) *GPUModeService {
+// GPUModeService literal directly to override now. files may be nil
+// (e.g. in a test that doesn't care about the save-to-account-files side
+// effect) -- Generate/GenerateResult simply skip that step when it is.
+func NewGPUModeService(settings ports.GPUModeStore, controller ports.GPUModeController, files ports.FileStore) *GPUModeService {
 	return &GPUModeService{
-		settings: settings, controller: controller, now: time.Now,
+		settings: settings, controller: controller, files: files, now: time.Now,
 		accountSwitches: make(map[string][]time.Time),
+		generateJobs:    make(map[string]generateJobRecord),
 	}
 }
 
@@ -238,7 +260,12 @@ func (s *GPUModeService) Heartbeat(ctx context.Context) error {
 // here (unlike Switch) -- ComfyUI's own queue already serializes
 // generation jobs one at a time, and ordinary generation traffic doesn't
 // thrash the shared GPU the way a chat<->vision mode switch does.
-func (s *GPUModeService) Generate(ctx context.Context, prompt string) (string, error) {
+// userID/chatID are recorded (not sent to the controller) so
+// GenerateResult can later save the finished video into that account's
+// own files -- chatID may be empty (an unpinned/session-only tab), in
+// which case that save step is simply skipped, same as every other
+// files-requires-a-pinned-chat path in this codebase.
+func (s *GPUModeService) Generate(ctx context.Context, userID, chatID, prompt string) (string, error) {
 	cfg, enabled, err := s.loadEnabledConfig(ctx)
 	if err != nil {
 		return "", err
@@ -246,11 +273,20 @@ func (s *GPUModeService) Generate(ctx context.Context, prompt string) (string, e
 	if !enabled {
 		return "", ErrGPUModeNotEnabled
 	}
-	return s.controller.Generate(ctx, cfg, prompt)
+	jobID, err := s.controller.Generate(ctx, cfg, prompt)
+	if err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	s.generateJobs[jobID] = generateJobRecord{userID: userID, chatID: chatID}
+	s.mu.Unlock()
+	return jobID, nil
 }
 
 // GenerateResult is GET /vision/api/result's use case: polls the
-// controller for jobID's current status.
+// controller for jobID's current status, additionally saving the
+// finished video into the submitting account's own files the first time
+// it observes "done" (see saveGeneratedFileOnce).
 func (s *GPUModeService) GenerateResult(ctx context.Context, jobID string) (domain.GPUGenerateResult, error) {
 	cfg, enabled, err := s.loadEnabledConfig(ctx)
 	if err != nil {
@@ -259,7 +295,57 @@ func (s *GPUModeService) GenerateResult(ctx context.Context, jobID string) (doma
 	if !enabled {
 		return domain.GPUGenerateResult{}, ErrGPUModeNotEnabled
 	}
-	return s.controller.GenerateResult(ctx, cfg, jobID)
+	result, err := s.controller.GenerateResult(ctx, cfg, jobID)
+	if err != nil {
+		return result, err
+	}
+	if result.Status == "done" {
+		result.FileID = s.saveGeneratedFileOnce(ctx, cfg, jobID, result)
+	}
+	return result, nil
+}
+
+// saveGeneratedFileOnce downloads a finished generation's own bytes and
+// saves them into the owning account's files, exactly once per job id
+// (guarded by the "saved" flag in generateJobs, not by whether the save
+// itself succeeded -- a transient failure isn't retried on every future
+// poll). Best-effort: any failure here is logged, never surfaced as an
+// error from GenerateResult, since the video stays viewable via its own
+// ViewURL regardless of whether this side effect succeeds. Returns the
+// new file's id, or "" if nothing was (or needed to be) saved.
+func (s *GPUModeService) saveGeneratedFileOnce(ctx context.Context, cfg domain.GPUModeSettings, jobID string, result domain.GPUGenerateResult) string {
+	s.mu.Lock()
+	rec, ok := s.generateJobs[jobID]
+	alreadyHandled := !ok || rec.saved || rec.chatID == "" || s.files == nil
+	if ok && !rec.saved {
+		rec.saved = true
+		s.generateJobs[jobID] = rec
+	}
+	s.mu.Unlock()
+	if alreadyHandled {
+		return ""
+	}
+
+	contentType, body, err := s.controller.ViewAsset(ctx, cfg, result.ViewURL)
+	if err != nil {
+		log.Printf("gpu mode: saving generated video for job %s: fetching asset: %v", jobID, err)
+		return ""
+	}
+	defer body.Close()
+	data, err := io.ReadAll(body)
+	if err != nil {
+		log.Printf("gpu mode: saving generated video for job %s: reading asset: %v", jobID, err)
+		return ""
+	}
+	if contentType == "" {
+		contentType = "video/mp4"
+	}
+	f, err := s.files.SaveFile(ctx, rec.userID, rec.chatID, "vision-"+jobID+".mp4", contentType, data)
+	if err != nil {
+		log.Printf("gpu mode: saving generated video for job %s: %v", jobID, err)
+		return ""
+	}
+	return f.ID
 }
 
 // ViewAsset streams a finished generation's own bytes -- the caller must
