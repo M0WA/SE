@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.106 - 2026-09-27
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* vision: expose megapixels/negative prompt/enhance-prompt, fix stale reload-resume state by @M0WA in https://github.com/M0WA/SE/pull/393
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.105...v4.13.106
+
+
 ## v4.13.105 - 2026-09-27
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
