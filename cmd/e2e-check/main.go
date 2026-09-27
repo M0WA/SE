@@ -145,6 +145,8 @@ func main() {
 		{"chat: over-length message rejected", c.checkChatValidationBoundary},
 		{"vision mode: reachable per its documented enabled/disabled contract", c.checkVisionModeReachable},
 		{"vision generate: empty prompt rejected", c.checkVisionGenerateValidatesEmptyPrompt},
+		{"vision generate: invalid aspect_ratio rejected", c.checkVisionGenerateValidatesAspectRatio},
+		{"vision generate: out-of-bounds duration_seconds rejected", c.checkVisionGenerateValidatesDuration},
 		{"vision result: missing job_id rejected", c.checkVisionResultRequiresJobID},
 		{"vision asset: missing job_id rejected", c.checkVisionAssetRequiresJobID},
 		{"always-on MCP tool (datetime)", c.checkDatetimeTool},
@@ -1121,6 +1123,38 @@ func (c *client) checkVisionGenerateValidatesEmptyPrompt() error {
 	}
 	if status != http.StatusBadRequest {
 		return fmt.Errorf("expected 400 for an empty prompt, got %d: %s", status, truncate(body, 200))
+	}
+	return nil
+}
+
+// checkVisionGenerateValidatesAspectRatio proves POST /vision/api/generate
+// rejects an aspect_ratio outside the exact enum ComfyUI's own
+// ResolutionSelector node accepts -- same before-enabled/mode-check
+// validation ordering (and same never-trigger-a-real-generation
+// reasoning) as checkVisionGenerateValidatesEmptyPrompt.
+func (c *client) checkVisionGenerateValidatesAspectRatio() error {
+	status, body, err := c.doJSONRaw(http.MethodPost, "/vision/api/generate",
+		map[string]string{"prompt": "a cat", "aspect_ratio": "not-a-real-ratio"})
+	if err != nil {
+		return err
+	}
+	if status != http.StatusBadRequest {
+		return fmt.Errorf("expected 400 for an invalid aspect_ratio, got %d: %s", status, truncate(body, 200))
+	}
+	return nil
+}
+
+// checkVisionGenerateValidatesDuration is
+// checkVisionGenerateValidatesAspectRatio's own duration_seconds
+// counterpart.
+func (c *client) checkVisionGenerateValidatesDuration() error {
+	status, body, err := c.doJSONRaw(http.MethodPost, "/vision/api/generate",
+		map[string]any{"prompt": "a cat", "duration_seconds": 999})
+	if err != nil {
+		return err
+	}
+	if status != http.StatusBadRequest {
+		return fmt.Errorf("expected 400 for an out-of-bounds duration_seconds, got %d: %s", status, truncate(body, 200))
 	}
 	return nil
 }

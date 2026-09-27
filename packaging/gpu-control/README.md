@@ -80,19 +80,29 @@ with a headless Chromium session over the Chrome DevTools Protocol
 technique as this repo's own screenshot recipe -- see the root
 `CLAUDE.md`) rather than reverse-engineered by hand.
 
-`cmd/gpu-control/generate.go` overrides exactly two things in that fixed
-graph per request: the positive-prompt node's text (node `405:376`) and
-one `RandomNoise` node's seed (node `405:339`, the one the template
-itself marks `randomize`) -- every other parameter (resolution, duration,
-negative prompt, sampler, the upscale/refinement pass) is whatever the
+`cmd/gpu-control/generate.go` overrides four things in that fixed graph
+per request: the positive-prompt node's text (node `405:376`), one
+`RandomNoise` node's seed (node `405:339`, the one the template itself
+marks `randomize`), the `ResolutionSelector` node's aspect ratio (node
+`409`, one of the exact 8 enum values ComfyUI's own
+`GET /object_info/ResolutionSelector` reports), and the `Duration`
+`PrimitiveInt` node's value in seconds (node `405:362`, clamped to
+`minDurationSeconds`-`maxDurationSeconds`) -- every other parameter
+(negative prompt, sampler, the upscale/refinement pass) is whatever the
 template's own defaults are. If ComfyUI's installed models or this
 template ever change, re-extract it the same way: tunnel to ComfyUI's UI
 (`ssh -L 18188:127.0.0.1:8188 root@gpu.mo-sys.de`), drive a headless
 Chromium against it to load the matching template file (found under
 ComfyUI's own `comfyui_workflow_templates_json` package,
 `video_ltx2_5_t2v.json` as of this writing) and call `app.graphToPrompt()`,
-then update the two node-id constants in `generate.go` if the resulting
-graph's node ids for the prompt/seed happen to change.
+then update the node-id constants in `generate.go` if the resulting
+graph's node ids happen to change. If the aspect-ratio enum itself ever
+changes, re-confirm it live via
+`curl http://127.0.0.1:8188/object_info/ResolutionSelector` (tunneled the
+same way) and update `visionAspectRatios` in both `cmd/gpu-control/
+generate.go` and `internal/adapters/restapi/vision_mode.go` (the latter
+deliberately duplicates the whitelist rather than importing this binary's
+own package -- see that file's own doc comment for why).
 
 ## Idle revert
 

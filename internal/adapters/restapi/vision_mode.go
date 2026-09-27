@@ -2,6 +2,7 @@ package restapi
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -10,6 +11,32 @@ import (
 	"searchengine/internal/application"
 	"searchengine/internal/domain"
 	"searchengine/internal/ports"
+)
+
+// visionAspectRatios lists exactly the values cmd/gpu-control's own
+// generate.go accepts for its aspect_ratio override (itself matching
+// ComfyUI's ResolutionSelector node's enum) -- duplicated here (this
+// package deliberately never imports cmd/gpu-control, which runs as its
+// own separate binary on a separate host) so a bad value gets a quick,
+// friendly 400 without a network round trip, same as the existing
+// empty-prompt check below.
+var visionAspectRatios = map[string]bool{
+	"1:1 (Square)":               true,
+	"2:3 (Portrait Photo)":       true,
+	"3:2 (Photo)":                true,
+	"3:4 (Portrait Standard)":    true,
+	"4:3 (Standard)":             true,
+	"9:16 (Portrait Widescreen)": true,
+	"16:9 (Widescreen)":          true,
+	"21:9 (Ultrawide)":           true,
+}
+
+// visionMinDurationSeconds/visionMaxDurationSeconds mirror
+// cmd/gpu-control/generate.go's own minDurationSeconds/
+// maxDurationSeconds bounds.
+const (
+	visionMinDurationSeconds = 3
+	visionMaxDurationSeconds = 10
 )
 
 // gpuModeStatusResponse is the wire shape GET/POST /vision/api/mode both
@@ -123,10 +150,17 @@ func (h *Handler) handleVisionModeSwitch(w http.ResponseWriter, r *http.Request)
 // through a job id a browser tab happened to still hold. Left empty
 // (e.g. an unpinned/session-only tab), that save step is simply
 // skipped -- same "files require a pinned chat" rule as everywhere else
-// files are involved.
+// files are involved. AspectRatio/DurationSeconds are both optional --
+// left unset, cmd/gpu-control falls back to its own defaults (matching
+// this feature's original fixed values) -- but when given, are
+// validated against the exact same whitelist/bounds cmd/gpu-control
+// itself enforces, so a bad value fails fast here instead of after a
+// network round trip.
 type visionGenerateRequest struct {
-	Prompt string `json:"prompt"`
-	ChatID string `json:"chat_id,omitempty"`
+	Prompt          string `json:"prompt"`
+	ChatID          string `json:"chat_id,omitempty"`
+	AspectRatio     string `json:"aspect_ratio,omitempty"`
+	DurationSeconds int    `json:"duration_seconds,omitempty"`
 }
 
 type visionGenerateResponse struct {
@@ -155,8 +189,16 @@ func (h *Handler) handleVisionGenerate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "prompt must not be empty", http.StatusBadRequest)
 		return
 	}
+	if req.AspectRatio != "" && !visionAspectRatios[req.AspectRatio] {
+		http.Error(w, "aspect_ratio must be one of the supported values", http.StatusBadRequest)
+		return
+	}
+	if req.DurationSeconds != 0 && (req.DurationSeconds < visionMinDurationSeconds || req.DurationSeconds > visionMaxDurationSeconds) {
+		http.Error(w, fmt.Sprintf("duration_seconds must be between %d and %d", visionMinDurationSeconds, visionMaxDurationSeconds), http.StatusBadRequest)
+		return
+	}
 	_, userID, _ := h.sessionRoleFor(r)
-	jobID, err := h.gpuModeService.Generate(r.Context(), userID, req.ChatID, req.Prompt)
+	jobID, err := h.gpuModeService.Generate(r.Context(), userID, req.ChatID, req.Prompt, req.AspectRatio, req.DurationSeconds)
 	switch {
 	case errors.Is(err, application.ErrGPUModeNotEnabled):
 		http.NotFound(w, r)

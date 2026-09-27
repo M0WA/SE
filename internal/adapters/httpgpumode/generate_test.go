@@ -16,15 +16,20 @@ import (
 )
 
 func TestGenerate_Success(t *testing.T) {
-	var gotPath, gotToken, gotPrompt string
+	var gotPath, gotToken, gotPrompt, gotAspectRatio string
+	var gotDurationSeconds int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotToken = r.Header.Get("X-Internal-Token")
 		var body struct {
-			Prompt string `json:"prompt"`
+			Prompt          string `json:"prompt"`
+			AspectRatio     string `json:"aspect_ratio"`
+			DurationSeconds int    `json:"duration_seconds"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		gotPrompt = body.Prompt
+		gotAspectRatio = body.AspectRatio
+		gotDurationSeconds = body.DurationSeconds
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]string{"prompt_id": "abc-123"})
@@ -32,7 +37,7 @@ func TestGenerate_Success(t *testing.T) {
 	defer srv.Close()
 
 	c := &httpgpumode.Client{HTTPClient: srv.Client()}
-	id, err := c.Generate(context.Background(), cfgFor(srv.URL), "a cat")
+	id, err := c.Generate(context.Background(), cfgFor(srv.URL), "a cat", "9:16 (Portrait Widescreen)", 8)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -48,6 +53,9 @@ func TestGenerate_Success(t *testing.T) {
 	if gotPrompt != "a cat" {
 		t.Fatalf("expected the prompt forwarded, got %q", gotPrompt)
 	}
+	if gotAspectRatio != "9:16 (Portrait Widescreen)" || gotDurationSeconds != 8 {
+		t.Fatalf("expected aspect_ratio/duration_seconds forwarded, got %q/%d", gotAspectRatio, gotDurationSeconds)
+	}
 }
 
 func TestGenerate_ConflictReturnsErrGPUGenerateNotInVisionMode(t *testing.T) {
@@ -57,7 +65,7 @@ func TestGenerate_ConflictReturnsErrGPUGenerateNotInVisionMode(t *testing.T) {
 	defer srv.Close()
 
 	c := &httpgpumode.Client{HTTPClient: srv.Client()}
-	_, err := c.Generate(context.Background(), cfgFor(srv.URL), "a cat")
+	_, err := c.Generate(context.Background(), cfgFor(srv.URL), "a cat", "", 0)
 	if !errors.Is(err, ports.ErrGPUGenerateNotInVisionMode) {
 		t.Fatalf("expected ErrGPUGenerateNotInVisionMode, got %v", err)
 	}
@@ -70,7 +78,7 @@ func TestGenerate_ServerErrorIsError(t *testing.T) {
 	defer srv.Close()
 
 	c := &httpgpumode.Client{HTTPClient: srv.Client()}
-	_, err := c.Generate(context.Background(), cfgFor(srv.URL), "a cat")
+	_, err := c.Generate(context.Background(), cfgFor(srv.URL), "a cat", "", 0)
 	if err == nil {
 		t.Fatal("expected an error for a 500 response")
 	}
@@ -81,7 +89,7 @@ func TestGenerate_ServerErrorIsError(t *testing.T) {
 
 func TestGenerate_RejectsDisallowedURL(t *testing.T) {
 	c := &httpgpumode.Client{}
-	_, err := c.Generate(context.Background(), cfgFor("http://169.254.169.254"), "a cat")
+	_, err := c.Generate(context.Background(), cfgFor("http://169.254.169.254"), "a cat", "", 0)
 	if err == nil {
 		t.Fatal("expected the link-local control URL to be rejected")
 	}
@@ -95,7 +103,7 @@ func TestGenerate_MalformedJSONResponseIsError(t *testing.T) {
 	defer srv.Close()
 
 	c := &httpgpumode.Client{HTTPClient: srv.Client()}
-	_, err := c.Generate(context.Background(), cfgFor(srv.URL), "a cat")
+	_, err := c.Generate(context.Background(), cfgFor(srv.URL), "a cat", "", 0)
 	if err == nil {
 		t.Fatal("expected an error decoding a malformed response")
 	}
@@ -222,7 +230,7 @@ func TestGenerate_ExpiredContextIsError(t *testing.T) {
 	c := &httpgpumode.Client{HTTPClient: http.DefaultClient}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
 	defer cancel()
-	if _, err := c.Generate(ctx, domain.GPUModeSettings{ControlBaseURL: "http://127.0.0.1", ControlAPIKey: "x"}, "a cat"); err == nil {
+	if _, err := c.Generate(ctx, domain.GPUModeSettings{ControlBaseURL: "http://127.0.0.1", ControlAPIKey: "x"}, "a cat", "", 0); err == nil {
 		t.Fatal("expected an error for an already-expired context")
 	}
 }
@@ -235,7 +243,7 @@ func TestGenerate_ReadingResponseBodyFails(t *testing.T) {
 	defer srv.Close()
 
 	c := &httpgpumode.Client{HTTPClient: &http.Client{Transport: erroringBodyTransport{base: srv.Client().Transport}}}
-	if _, err := c.Generate(context.Background(), cfgFor(srv.URL), "a cat"); err == nil {
+	if _, err := c.Generate(context.Background(), cfgFor(srv.URL), "a cat", "", 0); err == nil {
 		t.Fatal("expected an error when the response body fails to read")
 	}
 }

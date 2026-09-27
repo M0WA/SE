@@ -191,12 +191,15 @@ func (c *Controller) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// generateRequest is POST /gpu/api/generate's body -- the only thing a
-// caller selects is the text prompt; every other workflow parameter
-// (resolution, duration, model, negative prompt) comes from the fixed
-// embedded template (see generate.go's own doc comment).
+// generateRequest is POST /gpu/api/generate's body. AspectRatio/
+// DurationSeconds left unset use generate.go's own defaults (matching
+// the template's original fixed values) -- every other workflow
+// parameter (model, sampler, negative prompt) comes from the fixed
+// embedded template regardless (see generate.go's own doc comment).
 type generateRequest struct {
-	Prompt string `json:"prompt"`
+	Prompt          string `json:"prompt"`
+	AspectRatio     string `json:"aspect_ratio,omitempty"`
+	DurationSeconds int    `json:"duration_seconds,omitempty"`
 }
 
 type generateResponse struct {
@@ -209,9 +212,9 @@ func (c *Controller) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	promptID, err := c.Generate(r.Context(), req.Prompt)
+	promptID, err := c.Generate(r.Context(), req.Prompt, req.AspectRatio, req.DurationSeconds)
 	switch {
-	case errors.Is(err, errEmptyPrompt):
+	case errors.Is(err, errEmptyPrompt), errors.Is(err, errInvalidAspectRatio), errors.Is(err, errInvalidDuration):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, errNotInVisionMode):
 		http.Error(w, err.Error(), http.StatusConflict)

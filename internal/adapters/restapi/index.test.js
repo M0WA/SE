@@ -2604,6 +2604,24 @@ test('requestGenerate sends an empty chat_id for an unpinned tab', async () => {
   assert.equal(sentBody.chat_id, '');
 });
 
+test('requestGenerate sends the aspect ratio and duration selected in the UI controls', async () => {
+  let sentBody = null;
+  global.fetch = async (url, opts) => {
+    if (url === '/vision/api/generate') {
+      sentBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => ({ job_id: 'abc-123' }) };
+    }
+    return { ok: true, json: async () => ({ status: 'pending' }) };
+  };
+  const { requestGenerate } = loadFixture();
+  document.getElementById('vision-prompt').value = 'a cat';
+  document.getElementById('vision-aspect-ratio').value = '9:16 (Portrait Widescreen)';
+  document.getElementById('vision-duration').value = '8';
+  await requestGenerate();
+  assert.equal(sentBody.aspect_ratio, '9:16 (Portrait Widescreen)');
+  assert.equal(sentBody.duration_seconds, 8);
+});
+
 test('requestGenerate shows a "Saved to your files" note once a file_id comes back', async () => {
   global.fetch = async (url) => {
     if (url === '/vision/api/generate') return { ok: true, json: async () => ({ job_id: 'abc-123' }) };

@@ -15,6 +15,8 @@
   const visionStatusEl = document.getElementById('vision-status');
   const visionGenerateSection = document.getElementById('vision-generate');
   const visionPromptEl = document.getElementById('vision-prompt');
+  const visionAspectRatioEl = document.getElementById('vision-aspect-ratio');
+  const visionDurationEl = document.getElementById('vision-duration');
   const visionGenerateBtn = document.getElementById('vision-generate-btn');
   const visionResultEl = document.getElementById('vision-result');
   const visionResultVideo = document.getElementById('vision-result-video');
@@ -1525,10 +1527,12 @@
     try {
       const tab = activeTab();
       const chatID = tab && tab.persisted ? (tab.chatId || '') : '';
+      const aspectRatio = visionAspectRatioEl ? visionAspectRatioEl.value : '';
+      const durationSeconds = visionDurationEl ? parseInt(visionDurationEl.value, 10) || 0 : 0;
       const resp = await fetch('/vision/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, chat_id: chatID }),
+        body: JSON.stringify({ prompt, chat_id: chatID, aspect_ratio: aspectRatio, duration_seconds: durationSeconds }),
       });
       if (!resp.ok) {
         const text = await resp.text();
