@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.13.109 - 2026-09-28
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Other Changes
+* document-upload: stream a direct image upload straight to the embedding API, never persist it by @M0WA in https://github.com/M0WA/SE/pull/399
+
+
+**Full Changelog**: https://github.com/M0WA/SE/compare/v4.13.108...v4.13.109
+
+
 ## v4.13.108 - 2026-09-28
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
