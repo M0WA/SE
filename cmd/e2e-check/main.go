@@ -87,6 +87,7 @@ func main() {
 	host := flag.String("host", "se.mo-sys.de", "target deployment's hostname (no scheme)")
 	credsPath := flag.String("creds", "cmd/e2e-check/credentials.json", "path to a JSON credentials file for -host (see credentials.example.json)")
 	includeSlow := flag.Bool("include-slow", false, "also run slow/known-heavy checks (sandbox package install, image OCR) that can take minutes")
+	includeVisionGenerate := flag.Bool("include-vision-generate", false, "also run a real Vision-mode generation round trip -- switches the shared GPU to Vision mode itself (taking chat offline for every real user until the generation finishes and it switches back), unlike every other vision check here, which is validation-only and never triggers this live")
 	// 290s: nginx's own proxy_read_timeout is 300s
 	// (packaging/nginx/searchengine.conf) -- close enough to give a real,
 	// slow-but-legitimate turn the same headroom nginx itself grants (one
@@ -178,11 +179,20 @@ func main() {
 		{"admin CRUD: agent", c.checkAdminAgentCRUD},
 		{"admin CRUD: user", c.checkAdminUserCRUD},
 		{"admin: agent with empty mcp_server_ids gets no tools", c.checkAgentToolIsolation},
+		{"security: cross-user resource isolation (file/mcp-server/chat by id)", c.checkCrossUserResourceIsolation(creds.TestUser, creds.TestUserPassword)},
 		{"admin: embedding endpoints (list)", c.checkAdminEmbeddingEndpointsList},
 		{"admin: embeddings recompute status", c.checkAdminEmbeddingsRecomputeStatus},
 		{"admin: document upload indexes a text file, then cleans up", c.checkAdminDocumentUpload},
 		{"admin: read configured upload size limits", c.checkReadUploadSizeLimits},
 		{"admin: document upload rejects an oversized file", c.checkAdminDocumentUploadRejectsOversized},
+	})
+	if *includeVisionGenerate {
+		run([]check{
+			{"vision: real generation round trip + job-ownership isolation (-include-vision-generate)",
+				c.checkVisionGenerateRealRoundTripAndIsolation(creds.TestUser, creds.TestUserPassword)},
+		})
+	}
+	run([]check{
 		// Last admin-session check on purpose -- see checkLogout's own doc
 		// comment for why.
 		{"auth: logout clears session", c.checkLogout},
@@ -1214,6 +1224,157 @@ func (c *client) checkVisionAssetRequiresJobID() error {
 		return fmt.Errorf("expected 400 for a missing job_id, got %d: %s", status, truncate(body, 200))
 	}
 	return nil
+}
+
+// switchVisionMode POSTs /vision/api/mode toward target ("chat" or
+// "vision") and polls GET /vision/api/mode until the switch actually
+// completes, retrying the POST itself on a 429 (dwell/per-account rate
+// limit) or 409 (cmd/gpu-control already mid-switch toward something
+// else) rather than failing immediately -- both are expected, transient
+// states this deployment's own dwell/rate limiting can produce on a busy
+// instance, not real errors.
+func (c *client) switchVisionMode(target string) error {
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		status, body, err := c.doJSONRaw(http.MethodPost, "/vision/api/mode", map[string]string{"mode": target})
+		if err != nil {
+			return err
+		}
+		if status == http.StatusTooManyRequests || status == http.StatusConflict {
+			if time.Now().After(deadline) {
+				return fmt.Errorf("timed out retrying the switch to %s (last: %d %s)", target, status, truncate(body, 200))
+			}
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		if status != http.StatusOK {
+			return fmt.Errorf("expected 200 switching to %s, got %d: %s", target, status, truncate(body, 200))
+		}
+		break
+	}
+	for {
+		var st struct {
+			Mode       string `json:"mode"`
+			InProgress bool   `json:"in_progress"`
+		}
+		if _, err := c.getJSON("/vision/api/mode", &st); err != nil {
+			return err
+		}
+		if !st.InProgress && st.Mode == target {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for the switch to %s to complete (last mode=%s in_progress=%v)", target, st.Mode, st.InProgress)
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+// checkVisionGenerateRealRoundTripAndIsolation is the one real,
+// disruptive vision-generation check in this whole file -- everything
+// else vision-related above is deliberately validation-only and never
+// triggers a real generation live (see checkVisionModeReachable's own
+// doc comment). This one does, on purpose, gated behind
+// -include-vision-generate: it switches the shared GPU into Vision mode
+// itself, submits one real generation, proves job-ownership isolation
+// against a job that actually exists (not just a made-up job_id, unlike
+// checkVisionResultRequiresJobID/checkVisionAssetRequiresJobID above),
+// waits for it to finish, downloads the resulting asset, and always
+// switches the GPU back to Chat mode afterward regardless of outcome --
+// so passing this flag is a deliberate choice to take chat offline for
+// every real user on the target deployment for as long as one generation
+// takes.
+func (c *client) checkVisionGenerateRealRoundTripAndIsolation(testUser, testUserPassword string) func() error {
+	return func() error {
+		status, body, err := c.getJSONRaw("/vision/api/mode")
+		if err != nil {
+			return err
+		}
+		if status == http.StatusNotFound {
+			return skip("GPU mode (Vision) is not enabled on this deployment")
+		}
+		if status != http.StatusOK {
+			return fmt.Errorf("expected 200 or 404 from GET /vision/api/mode, got %d: %s", status, truncate(body, 200))
+		}
+
+		// However far this gets, always try to leave the GPU back in
+		// Chat mode -- a real user's chat access must not stay down
+		// because this check failed partway through.
+		defer func() {
+			_, _, _ = c.doJSONRaw(http.MethodPost, "/vision/api/mode", map[string]string{"mode": "chat"})
+		}()
+
+		if err := c.switchVisionMode("vision"); err != nil {
+			return fmt.Errorf("switching to vision mode: %w", err)
+		}
+
+		var gen struct {
+			JobID string `json:"job_id"`
+		}
+		if _, err := c.postJSON("/vision/api/generate",
+			map[string]any{"prompt": "a slowly rotating red cube on a plain white background"}, &gen); err != nil {
+			return fmt.Errorf("submitting generation: %w", err)
+		}
+		if gen.JobID == "" {
+			return fmt.Errorf("expected a non-empty job_id")
+		}
+
+		if testUser != "" {
+			other, err := c.freshClient()
+			if err != nil {
+				return err
+			}
+			if err := other.checkLogin(testUser, testUserPassword)(); err != nil {
+				return fmt.Errorf("logging the isolation-check test user in: %w", err)
+			}
+			if status, _, err := other.getJSONRaw("/vision/api/result?job_id=" + gen.JobID); err != nil {
+				return err
+			} else if status != http.StatusNotFound {
+				return fmt.Errorf("expected 404 polling another account's real generation job, got %d", status)
+			}
+			if status, _, err := other.getJSONRaw("/vision/api/asset?job_id=" + gen.JobID); err != nil {
+				return err
+			} else if status != http.StatusNotFound {
+				return fmt.Errorf("expected 404 downloading another account's real generation asset, got %d", status)
+			}
+		}
+
+		deadline := time.Now().Add(5 * time.Minute)
+		var result struct {
+			Status  string `json:"status"`
+			ViewURL string `json:"view_url"`
+			Error   string `json:"error"`
+		}
+		for {
+			if _, err := c.getJSON("/vision/api/result?job_id="+gen.JobID, &result); err != nil {
+				return err
+			}
+			if result.Status == "done" || result.Status == "failed" {
+				break
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("timed out waiting for generation %s to finish (last status: %s)", gen.JobID, result.Status)
+			}
+			time.Sleep(2 * time.Second)
+		}
+		if result.Status == "failed" {
+			return fmt.Errorf("generation failed: %s", result.Error)
+		}
+		if result.ViewURL == "" {
+			return fmt.Errorf("expected a view_url once done")
+		}
+		assetStatus, assetBody, err := c.getJSONRaw(result.ViewURL)
+		if err != nil {
+			return err
+		}
+		if assetStatus != http.StatusOK {
+			return fmt.Errorf("expected 200 downloading the finished asset, got %d", assetStatus)
+		}
+		if len(assetBody) == 0 {
+			return fmt.Errorf("expected non-empty asset bytes")
+		}
+		return nil
+	}
 }
 
 func (c *client) checkChatValidationBoundary() error {
@@ -2315,6 +2476,83 @@ func (c *client) checkAgentToolIsolation() error {
 	return nil
 }
 
+// checkCrossUserResourceIsolation proves the same "404, never 403, so a
+// foreign id never even confirms existence" ownership pattern
+// GenerateResult/ViewAsset now enforce for Vision generation jobs (see
+// domain's ErrGPUGenerateJobNotOwned) already protects every other
+// per-account by-id resource this deployment has: an uploaded file, a
+// personal MCP server, and a persisted chat. Three disposable fixtures are
+// created here (as the admin session this check runs inside of), then
+// probed by a second, completely separate session logged in as the
+// dedicated test user (freshClient, so the shared admin session is never
+// disturbed) -- each access must come back 404. Run from admin's own
+// phase, not test_user's later phase, purely so cleanup can happen in the
+// same function without threading fixture ids across the phase boundary.
+func (c *client) checkCrossUserResourceIsolation(testUser, testUserPassword string) func() error {
+	return func() error {
+		if testUser == "" {
+			return skip("no dedicated test user configured (test_user in credentials.json)")
+		}
+
+		var chat pinnedChatResponse
+		if _, err := c.postJSON(pathAccountChats, map[string]any{
+			"title": "e2e-check-isolation-fixture", "agent_id": "",
+			"history": []map[string]string{{"role": "user", "content": "fixture"}},
+		}, &chat); err != nil {
+			return err
+		}
+		defer c.deleteRequest(pathAccountChats + "/" + chat.ID)
+		if chat.ID == "" {
+			return fmt.Errorf("expected a non-empty chat id, got %+v", chat)
+		}
+
+		uploaded, err := c.uploadFile(chat.ID, "e2e-check-isolation-fixture.txt", "text/plain", []byte("fixture"))
+		if err != nil {
+			return err
+		}
+		defer c.deleteRequest("/account/api/files/" + uploaded.ID)
+
+		var server struct {
+			ID string `json:"id"`
+		}
+		if _, err := c.postJSON(pathAccountMCPServers, map[string]any{
+			"name": scratchName, "transport": "http", "base_url": "http://127.0.0.1:1", "enabled": false,
+		}, &server); err != nil {
+			return err
+		}
+		defer c.deleteRequest(pathAccountMCPServers + "/" + server.ID)
+
+		other, err := c.freshClient()
+		if err != nil {
+			return err
+		}
+		if err := other.checkLogin(testUser, testUserPassword)(); err != nil {
+			return fmt.Errorf("logging the isolation-check test user in: %w", err)
+		}
+
+		if status, _, err := other.getJSONRaw("/account/api/files/" + uploaded.ID); err != nil {
+			return err
+		} else if status != http.StatusNotFound {
+			return fmt.Errorf("expected 404 downloading another account's file by id, got %d", status)
+		}
+		if status, _, err := other.getJSONRaw(pathAccountMCPServers + "/" + server.ID); err != nil {
+			return err
+		} else if status != http.StatusNotFound {
+			return fmt.Errorf("expected 404 reading another account's personal mcp server by id, got %d", status)
+		}
+		patchStatus, _, err := other.doJSONRaw(http.MethodPatch, pathAccountChats+"/"+chat.ID, map[string]any{
+			"title": "hijacked", "agent_id": "", "history": []map[string]string{{"role": "user", "content": "x"}},
+		})
+		if err != nil {
+			return err
+		}
+		if patchStatus != http.StatusNotFound {
+			return fmt.Errorf("expected 404 modifying another account's chat by id, got %d", patchStatus)
+		}
+		return nil
+	}
+}
+
 // userResponse mirrors admin_users.go's own wire shape for a domain.User
 // (PasswordHash never included).
 type userResponse struct {
@@ -2568,6 +2806,18 @@ func (c *client) checkAdminDocumentUpload() error {
 	}
 	if status != http.StatusOK {
 		return fmt.Errorf("expected 200 deleting the job, got %d", status)
+	}
+
+	// Deleting the job must also delete the document it produced (and,
+	// transitively, its embeddings/postings) -- not just the job row --
+	// so confirm the indexed document is actually gone, not merely
+	// unreferenced.
+	docStatus, _, docErr := c.getJSONRaw("/admin/api/documents/" + job.DocID)
+	if docErr != nil {
+		return docErr
+	}
+	if docStatus != http.StatusNotFound {
+		return fmt.Errorf("expected 404 for the indexed document after its owning job was deleted, got %d", docStatus)
 	}
 	return nil
 }
