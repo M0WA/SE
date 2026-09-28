@@ -42,6 +42,8 @@ const FULL_SETTINGS = {
     pagerank_enabled: true,
     pagerank_recompute_interval_minutes: 60,
     session_ttl_hours: 12,
+    max_file_upload_kb: 5120,
+    max_document_upload_kb: 20480,
   },
 };
 
@@ -82,6 +84,8 @@ test('applySettings fills every field, applying the renderer/link-scope fallback
   assert.equal(document.getElementById('default-link-scope').value, 'domain');
   assert.equal(document.getElementById('ann-search-enabled').checked, true);
   assert.equal(document.getElementById('session-ttl').value, '12');
+  assert.equal(document.getElementById('max-file-upload-kb').value, '5120');
+  assert.equal(document.getElementById('max-document-upload-kb').value, '20480');
 });
 
 test('applySettings falls back to "none"/"domain" when renderer/link_scope are unset', () => {
@@ -142,6 +146,24 @@ test('saveSettings posts 0 for an unparseable embedding title weight field', asy
   };
   await saveSettings();
   assert.equal(gotBody.operational.embedding_title_weight, 0);
+});
+
+test('saveSettings posts the configured upload size limits', async () => {
+  const { saveSettings } = loadFixture();
+  await flush();
+  document.getElementById('max-file-upload-kb').value = '10240';
+  document.getElementById('max-document-upload-kb').value = '40960';
+  let gotBody;
+  global.fetch = async (url, opts) => {
+    if (url.includes('/admin/api/settings')) {
+      gotBody = JSON.parse(opts.body);
+      return { ok: true, json: async () => FULL_SETTINGS };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  await saveSettings();
+  assert.equal(gotBody.operational.max_file_upload_kb, 10240);
+  assert.equal(gotBody.operational.max_document_upload_kb, 40960);
 });
 
 test('saveSettings posts the checked state of the hash-enabled checkbox and the collected weights', async () => {

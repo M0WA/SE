@@ -37,11 +37,9 @@ const (
 	chatUnit  = "vllm-chat.service"
 	comfyUnit = "comfyui.service"
 
-	defaultListenAddr        = "10.7.226.11:8002"
-	defaultSwitchTimeout     = 300 * time.Second
-	defaultIdleRevertMinutes = 15
-	defaultPollInterval      = 2 * time.Second
-	defaultIdleCheckInterval = 30 * time.Second
+	defaultListenAddr    = "10.7.226.11:8002"
+	defaultSwitchTimeout = 300 * time.Second
+	defaultPollInterval  = 2 * time.Second
 
 	defaultComfyReadyURL = "http://127.0.0.1:8188/system_stats"
 	defaultVLLMReadyURL  = "http://10.7.226.11:8001/v1/models"
@@ -54,27 +52,23 @@ func main() {
 	}
 	addr := bootstrap.GetEnv("GPU_CONTROL_LISTEN_ADDR", defaultListenAddr)
 	switchTimeoutSeconds := envInt("GPU_CONTROL_SWITCH_TIMEOUT_SECONDS", int(defaultSwitchTimeout/time.Second))
-	idleRevertMinutes := envInt("GPU_CONTROL_IDLE_REVERT_MINUTES", defaultIdleRevertMinutes)
 	comfyReadyURL := bootstrap.GetEnv("GPU_CONTROL_COMFY_READY_URL", defaultComfyReadyURL)
 	vllmReadyURL := bootstrap.GetEnv("GPU_CONTROL_VLLM_READY_URL", defaultVLLMReadyURL)
 	vllmAPIKey := bootstrap.GetEnv("GPU_CONTROL_VLLM_API_KEY", "")
 
 	c := NewController(ControllerConfig{
-		ChatUnit:          chatUnit,
-		ComfyUnit:         comfyUnit,
-		ComfyReadyURL:     comfyReadyURL,
-		VLLMReadyURL:      vllmReadyURL,
-		VLLMAPIKey:        vllmAPIKey,
-		SwitchTimeout:     time.Duration(switchTimeoutSeconds) * time.Second,
-		IdleRevertMinutes: idleRevertMinutes,
-		PollInterval:      defaultPollInterval,
+		ChatUnit:      chatUnit,
+		ComfyUnit:     comfyUnit,
+		ComfyReadyURL: comfyReadyURL,
+		VLLMReadyURL:  vllmReadyURL,
+		VLLMAPIKey:    vllmAPIKey,
+		SwitchTimeout: time.Duration(switchTimeoutSeconds) * time.Second,
+		PollInterval:  defaultPollInterval,
 	})
 
 	startupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	c.DetectInitialMode(startupCtx)
 	cancel()
-
-	go c.RunIdleRevertLoop(context.Background(), defaultIdleCheckInterval)
 
 	log.Printf("gpu-control running on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, newMux(c, token)))

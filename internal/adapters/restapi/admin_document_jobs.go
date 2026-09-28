@@ -21,14 +21,6 @@ import (
 	"searchengine/internal/ports"
 )
 
-// maxDocumentUploadBytes bounds a single Document-upload job's raw content --
-// independent of content type (text vs image), same "one flat ceiling,
-// never a per-format special case" convention as maxUploadedFileBytes.
-// Generous relative to that constant since this is an admin-only,
-// trusted-caller feature indexing corpus content, not a per-chat-turn
-// attachment.
-const maxDocumentUploadBytes = 20 * 1024 * 1024
-
 const configNameDocumentJobs = "document jobs"
 
 // classifyDocumentContent decides whether data should be indexed as text or
@@ -107,10 +99,16 @@ func (h *Handler) handleAdminDocumentJobs(w http.ResponseWriter, r *http.Request
 	}
 }
 
+// handleUploadDocumentJob is bounded by the admin-configured
+// OperationalSettingsValues.MaxDocumentUploadBytes -- independent of
+// content type (text vs image), same "one flat ceiling, never a
+// per-format special case" convention as the account file upload's own
+// MaxFileUploadBytes.
 func (h *Handler) handleUploadDocumentJob(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxDocumentUploadBytes+1)
-	if err := r.ParseMultipartForm(maxDocumentUploadBytes + 1); err != nil {
-		http.Error(w, fmt.Sprintf("invalid or oversized upload (max %d bytes)", maxDocumentUploadBytes), http.StatusBadRequest)
+	maxUploadBytes := int64(h.opSettings.Get().MaxDocumentUploadBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes+1)
+	if err := r.ParseMultipartForm(maxUploadBytes + 1); err != nil {
+		http.Error(w, fmt.Sprintf("invalid or oversized upload (max %d bytes)", maxUploadBytes), http.StatusBadRequest)
 		return
 	}
 	file, header, err := r.FormFile("file")
@@ -358,7 +356,7 @@ func (h *Handler) handleAdminImportDocumentFromS3(w http.ResponseWriter, r *http
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	data, contentType, err := s3GetObject(r.Context(), req)
+	data, contentType, err := s3GetObject(r.Context(), req, int64(h.opSettings.Get().MaxDocumentUploadBytes))
 	if err != nil {
 		http.Error(w, "fetching from S3: "+err.Error(), http.StatusBadGateway)
 		return
@@ -369,11 +367,6 @@ func (h *Handler) handleAdminImportDocumentFromS3(w http.ResponseWriter, r *http
 	}
 	h.createAndProcessDocumentJob(w, r, filename, contentType, data, domain.DocumentJobSourceS3, req.IndexVocabulary)
 }
-
-// s3MaxObjectBytes bounds a single S3 GetObject fetch -- same ceiling as a
-// direct upload (maxDocumentUploadBytes), so neither path can be used to
-// pull down an unbounded amount of data.
-const s3MaxObjectBytes = maxDocumentUploadBytes
 
 // s3HTTPClient routes every dial through netguard.ConfiguredEndpointDialContext,
 // so a redirect hop or a changed DNS answer can't land on a blocked address --
@@ -387,7 +380,10 @@ var s3HTTPClient = &http.Client{Transport: netguard.ConfiguredEndpointTransport(
 // small, well-documented algorithm (stdlib crypto/hmac + crypto/sha256
 // only), consistent with this codebase's preference for a small,
 // dependency-free implementation over a heavy SDK for one API call.
-func s3GetObject(ctx context.Context, req s3ImportRequest) (data []byte, contentType string, err error) {
+// maxObjectBytes bounds the fetch -- same admin-configured ceiling as a
+// direct document upload (OperationalSettingsValues.MaxDocumentUploadBytes),
+// so neither path can be used to pull down an unbounded amount of data.
+func s3GetObject(ctx context.Context, req s3ImportRequest, maxObjectBytes int64) (data []byte, contentType string, err error) {
 	pathStyle := req.Endpoint != ""
 	host, rawURL := s3RequestURL(req, pathStyle)
 	// Same SSRF guard every other admin-configured-endpoint caller in this
@@ -449,12 +445,12 @@ func s3GetObject(ctx context.Context, req s3ImportRequest) (data []byte, content
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return nil, "", fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, s3MaxObjectBytes+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxObjectBytes+1))
 	if err != nil {
 		return nil, "", err
 	}
-	if len(body) > s3MaxObjectBytes {
-		return nil, "", fmt.Errorf("object exceeds %d byte limit", s3MaxObjectBytes)
+	if int64(len(body)) > maxObjectBytes {
+		return nil, "", fmt.Errorf("object exceeds %d byte limit", maxObjectBytes)
 	}
 	return body, resp.Header.Get("Content-Type"), nil
 }

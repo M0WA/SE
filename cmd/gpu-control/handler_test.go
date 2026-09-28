@@ -129,17 +129,6 @@ func TestHandlePostMode_ConflictReturnsErrorBody(t *testing.T) {
 	}
 }
 
-func TestHandleHeartbeat_ReturnsNoContentAndResetsTimer(t *testing.T) {
-	c := newTestController(newFakeUnits(), newFakeReady())
-	c.lastHeartbeat = c.now().Add(-time.Hour)
-	mux := newMux(c, testToken)
-
-	rec := doRequest(t, mux, http.MethodPost, "/gpu/api/heartbeat", testToken, nil)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("expected 204, got %d", rec.Code)
-	}
-}
-
 func TestComfyProxy_ForwardsWithStrippedPrefixAndRequiresToken(t *testing.T) {
 	var gotPath string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -29,13 +29,7 @@ type GPUModeSettings struct {
 	// is allowed to take before it's reported as failed. <= 0 uses a
 	// built-in default.
 	SwitchTimeoutSeconds int
-	// IdleRevertMinutes reverts an idle Vision session back to chat mode
-	// automatically after this many minutes with no activity (see the
-	// heartbeat mechanism) -- chat is the shared default every user
-	// depends on, so a forgotten tab must not leave the deployment
-	// chat-less indefinitely. 0 disables the revert.
-	IdleRevertMinutes int
-	UpdatedAt         time.Time
+	UpdatedAt            time.Time
 }
 
 // GPUMode is one of the two workloads cmd/gpu-control switches the shared

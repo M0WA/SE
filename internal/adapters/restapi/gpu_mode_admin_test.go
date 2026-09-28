@@ -45,7 +45,6 @@ type gpuModeResp struct {
 	ControlBaseURL       string    `json:"control_base_url"`
 	HasControlAPIKey     bool      `json:"has_control_api_key"`
 	SwitchTimeoutSeconds int       `json:"switch_timeout_seconds"`
-	IdleRevertMinutes    int       `json:"idle_revert_minutes"`
 	UpdatedAt            time.Time `json:"updated_at"`
 }
 
@@ -122,7 +121,7 @@ func TestHandleAdminGPUMode_GetSavedValueMasksKey(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithGPUMode(t, &fakeGPUModeStore{})
 	patchGPUMode(t, h, cookie, map[string]interface{}{
 		"enabled": true, "control_base_url": "http://10.7.226.11:8002",
-		"control_api_key": "sk-secret", "switch_timeout_seconds": 300, "idle_revert_minutes": 15,
+		"control_api_key": "sk-secret", "switch_timeout_seconds": 300,
 	})
 
 	code, resp := getGPUMode(t, h, cookie)
@@ -132,8 +131,8 @@ func TestHandleAdminGPUMode_GetSavedValueMasksKey(t *testing.T) {
 	if !resp.Enabled || resp.ControlBaseURL != "http://10.7.226.11:8002" || !resp.HasControlAPIKey {
 		t.Errorf("expected control fields, got %+v", resp)
 	}
-	if resp.SwitchTimeoutSeconds != 300 || resp.IdleRevertMinutes != 15 {
-		t.Errorf("expected timeout/revert fields, got %+v", resp)
+	if resp.SwitchTimeoutSeconds != 300 {
+		t.Errorf("expected the timeout field, got %+v", resp)
 	}
 }
 
@@ -153,7 +152,7 @@ func TestHandleAdminGPUMode_PatchCreatesNewConfig(t *testing.T) {
 	h, cookie := adminAuthedHandlerWithGPUMode(t, store)
 	rec := patchGPUMode(t, h, cookie, map[string]interface{}{
 		"enabled": true, "control_base_url": "http://10.7.226.11:8002",
-		"control_api_key": "sk-test", "switch_timeout_seconds": 300, "idle_revert_minutes": 15,
+		"control_api_key": "sk-test", "switch_timeout_seconds": 300,
 	})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
@@ -254,16 +253,6 @@ func TestHandleAdminGPUMode_PatchNegativeSwitchTimeoutSecondsRejected(t *testing
 	h, cookie := adminAuthedHandlerWithGPUMode(t, &fakeGPUModeStore{})
 	rec := patchGPUMode(t, h, cookie, map[string]interface{}{
 		"control_base_url": "http://10.7.226.11:8002", "switch_timeout_seconds": -1,
-	})
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestHandleAdminGPUMode_PatchNegativeIdleRevertMinutesRejected(t *testing.T) {
-	h, cookie := adminAuthedHandlerWithGPUMode(t, &fakeGPUModeStore{})
-	rec := patchGPUMode(t, h, cookie, map[string]interface{}{
-		"control_base_url": "http://10.7.226.11:8002", "idle_revert_minutes": -1,
 	})
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())

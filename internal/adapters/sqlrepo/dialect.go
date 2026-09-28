@@ -69,11 +69,10 @@ func (sqliteDialect) UpsertChatVisionSettingsSQL() string {
 	          updated_at=excluded.updated_at`
 }
 func (sqliteDialect) UpsertGPUModeSettingsSQL() string {
-	return `INSERT INTO gpu_mode_settings (id, enabled, control_base_url, control_api_key, switch_timeout_seconds, idle_revert_minutes, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+	return `INSERT INTO gpu_mode_settings (id, enabled, control_base_url, control_api_key, switch_timeout_seconds, updated_at) VALUES (?, ?, ?, ?, ?, ?)
 	        ON CONFLICT(id) DO UPDATE SET
 	          enabled=excluded.enabled, control_base_url=excluded.control_base_url,
 	          control_api_key=excluded.control_api_key, switch_timeout_seconds=excluded.switch_timeout_seconds,
-	          idle_revert_minutes=excluded.idle_revert_minutes,
 	          updated_at=excluded.updated_at`
 }
 func (sqliteDialect) SeedContentDedupLockSQL() string {
@@ -390,11 +389,10 @@ func (mysqlDialect) UpsertChatVisionSettingsSQL() string {
 	          updated_at=VALUES(updated_at)`
 }
 func (mysqlDialect) UpsertGPUModeSettingsSQL() string {
-	return `INSERT INTO gpu_mode_settings (id, enabled, control_base_url, control_api_key, switch_timeout_seconds, idle_revert_minutes, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+	return `INSERT INTO gpu_mode_settings (id, enabled, control_base_url, control_api_key, switch_timeout_seconds, updated_at) VALUES (?, ?, ?, ?, ?, ?)
 	        ON DUPLICATE KEY UPDATE
 	          enabled=VALUES(enabled), control_base_url=VALUES(control_base_url),
 	          control_api_key=VALUES(control_api_key), switch_timeout_seconds=VALUES(switch_timeout_seconds),
-	          idle_revert_minutes=VALUES(idle_revert_minutes),
 	          updated_at=VALUES(updated_at)`
 }
 func (mysqlDialect) SeedContentDedupLockSQL() string {
@@ -658,11 +656,10 @@ func (postgresDialect) UpsertChatVisionSettingsSQL() string {
 	          updated_at=EXCLUDED.updated_at`
 }
 func (postgresDialect) UpsertGPUModeSettingsSQL() string {
-	return `INSERT INTO gpu_mode_settings (id, enabled, control_base_url, control_api_key, switch_timeout_seconds, idle_revert_minutes, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)
+	return `INSERT INTO gpu_mode_settings (id, enabled, control_base_url, control_api_key, switch_timeout_seconds, updated_at) VALUES ($1, $2, $3, $4, $5, $6)
 	        ON CONFLICT (id) DO UPDATE SET
 	          enabled=EXCLUDED.enabled, control_base_url=EXCLUDED.control_base_url,
 	          control_api_key=EXCLUDED.control_api_key, switch_timeout_seconds=EXCLUDED.switch_timeout_seconds,
-	          idle_revert_minutes=EXCLUDED.idle_revert_minutes,
 	          updated_at=EXCLUDED.updated_at`
 }
 func (postgresDialect) SeedContentDedupLockSQL() string {

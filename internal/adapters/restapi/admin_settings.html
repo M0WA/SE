@@ -391,6 +391,24 @@
           <span class="field-wrap" data-default="12"><input id="session-ttl" class="field" type="number" step="1" min="1" required></span>
         </div>
       </div>
+
+      <div class="subpanel">
+        <h4>Uploads</h4>
+        <div class="form-row">
+          <div class="label-row">
+            <label for="max-file-upload-kb">Max chat file upload size</label>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Kilobytes allowed for a single account/chat file attachment (both a browser upload and the write_file MCP tool).</span></button>
+          </div>
+          <span class="field-wrap" data-default="5120"><input id="max-file-upload-kb" class="field" type="number" step="1" min="1" required></span>
+        </div>
+        <div class="form-row">
+          <div class="label-row">
+            <label for="max-document-upload-kb">Max document upload size</label>
+            <button type="button" class="hint" aria-label="More information"><span class="hint-icon" aria-hidden="true">i</span><span class="hint-bubble">Kilobytes allowed for a single admin Document upload or S3 import fetch.</span></button>
+          </div>
+          <span class="field-wrap" data-default="20480"><input id="max-document-upload-kb" class="field" type="number" step="1" min="1" required></span>
+        </div>
+      </div>
     </details>
 
     <div class="form-actions sticky-save">

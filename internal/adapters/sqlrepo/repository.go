@@ -3160,7 +3160,7 @@ func scanChatVisionSettings(row scanner) (domain.ChatVisionSettings, error) {
 // configuration, so Get/SetGPUModeSettings address one known row.
 const gpuModeRowID = "default"
 
-const gpuModeColumns = "enabled, control_base_url, control_api_key, switch_timeout_seconds, idle_revert_minutes, updated_at"
+const gpuModeColumns = "enabled, control_base_url, control_api_key, switch_timeout_seconds, updated_at"
 
 // GetGPUModeSettings returns the single admin-configured GPU mode
 // settings, or ports.ErrGPUModeSettingsNotConfigured if never saved.
@@ -3183,7 +3183,7 @@ func (r *Repository) GetGPUModeSettings(ctx context.Context) (domain.GPUModeSett
 func (r *Repository) SetGPUModeSettings(ctx context.Context, v domain.GPUModeSettings) error {
 	_, err := r.db.ExecContext(ctx, r.dialect.UpsertGPUModeSettingsSQL(),
 		gpuModeRowID, v.Enabled, v.ControlBaseURL, v.ControlAPIKey,
-		v.SwitchTimeoutSeconds, v.IdleRevertMinutes,
+		v.SwitchTimeoutSeconds,
 		v.UpdatedAt.UTC().Format(crawledAtLayout),
 	)
 	if err != nil {
@@ -3196,7 +3196,7 @@ func scanGPUModeSettings(row scanner) (domain.GPUModeSettings, error) {
 	var v domain.GPUModeSettings
 	var updatedAt string
 	if err := row.Scan(&v.Enabled, &v.ControlBaseURL, &v.ControlAPIKey,
-		&v.SwitchTimeoutSeconds, &v.IdleRevertMinutes, &updatedAt); err != nil {
+		&v.SwitchTimeoutSeconds, &updatedAt); err != nil {
 		return domain.GPUModeSettings{}, err
 	}
 	v.UpdatedAt = parseCrawledAt(updatedAt)

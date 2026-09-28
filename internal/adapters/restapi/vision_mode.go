@@ -246,7 +246,9 @@ type visionResultResponse struct {
 // previously submitted generation job. ViewURL, when present, is always
 // this same handler's own package's /vision/api/asset (never
 // cmd/gpu-control's URL directly), so the browser never needs to reach
-// anything but search-server.
+// anything but search-server. 404s (rather than revealing anything) a
+// job_id GPUModeService knows belongs to a different account -- see
+// application.ErrGPUGenerateJobNotOwned's own doc comment.
 func (h *Handler) handleVisionResult(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) {
 		return
@@ -260,9 +262,10 @@ func (h *Handler) handleVisionResult(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "job_id is required", http.StatusBadRequest)
 		return
 	}
-	result, err := h.gpuModeService.GenerateResult(r.Context(), jobID)
+	_, userID, _ := h.sessionRoleFor(r)
+	result, err := h.gpuModeService.GenerateResult(r.Context(), userID, jobID)
 	switch {
-	case errors.Is(err, application.ErrGPUModeNotEnabled):
+	case errors.Is(err, application.ErrGPUModeNotEnabled), errors.Is(err, application.ErrGPUGenerateJobNotOwned):
 		http.NotFound(w, r)
 	case err != nil:
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -281,7 +284,10 @@ func (h *Handler) handleVisionResult(w http.ResponseWriter, r *http.Request) {
 // bytes straight through. Re-fetching rather than trusting a client-
 // supplied view_url means a signed-in user can never ask this endpoint
 // to fetch an arbitrary ComfyUI-side path -- only whatever job_id's own
-// already-computed result names.
+// already-computed result names. Same ownership check (and same 404,
+// not revealing anything) as handleVisionResult -- this is the endpoint
+// that actually streams the video bytes, so it matters at least as much
+// here.
 func (h *Handler) handleVisionAsset(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) {
 		return
@@ -295,8 +301,9 @@ func (h *Handler) handleVisionAsset(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "job_id is required", http.StatusBadRequest)
 		return
 	}
-	result, err := h.gpuModeService.GenerateResult(r.Context(), jobID)
-	if errors.Is(err, application.ErrGPUModeNotEnabled) {
+	_, userID, _ := h.sessionRoleFor(r)
+	result, err := h.gpuModeService.GenerateResult(r.Context(), userID, jobID)
+	if errors.Is(err, application.ErrGPUModeNotEnabled) || errors.Is(err, application.ErrGPUGenerateJobNotOwned) {
 		http.NotFound(w, r)
 		return
 	}
@@ -318,27 +325,4 @@ func (h *Handler) handleVisionAsset(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", contentType)
 	}
 	_, _ = io.Copy(w, body)
-}
-
-// handleVisionHeartbeat is POST /vision/api/heartbeat -- resets
-// cmd/gpu-control's own idle-revert timer while a Vision-mode panel
-// stays open. No dwell/rate-limit gating (see GPUModeService.Heartbeat's
-// own doc comment): a heartbeat can't itself thrash the GPU.
-func (h *Handler) handleVisionHeartbeat(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
-		return
-	}
-	if h.gpuModeService == nil {
-		http.NotFound(w, r)
-		return
-	}
-	err := h.gpuModeService.Heartbeat(r.Context())
-	switch {
-	case errors.Is(err, application.ErrGPUModeNotEnabled):
-		http.NotFound(w, r)
-	case err != nil:
-		http.Error(w, err.Error(), http.StatusBadGateway)
-	default:
-		w.WriteHeader(http.StatusNoContent)
-	}
 }

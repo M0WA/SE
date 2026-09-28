@@ -13,8 +13,8 @@ import (
 // ControlAPIKey on every GetGPUModeSettings call -- same reasoning as
 // DecryptingChatVisionStore (chat_vision.go): gpu mode settings are read
 // live, not just once at startup (application.GPUModeService reloads
-// them on every Status/Switch/Heartbeat call, since an admin can change
-// them without a restart), so decryption happens here, at the one point
+// them on every Status/Switch call, since an admin can change them
+// without a restart), so decryption happens here, at the one point
 // cmd/search's own construction can reach both the raw store and
 // SETTINGS_ENCRYPTION_KEY, keeping internal/application free of any
 // adapter dependency.

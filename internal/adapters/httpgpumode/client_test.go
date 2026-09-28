@@ -141,35 +141,6 @@ func TestSwitch_ServerErrorIsError(t *testing.T) {
 	}
 }
 
-func TestHeartbeat_Success(t *testing.T) {
-	var gotPath string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer srv.Close()
-
-	c := &httpgpumode.Client{HTTPClient: srv.Client()}
-	if err := c.Heartbeat(context.Background(), cfgFor(srv.URL)); err != nil {
-		t.Fatalf("Heartbeat: %v", err)
-	}
-	if gotPath != "/gpu/api/heartbeat" {
-		t.Fatalf("expected POST /gpu/api/heartbeat, got %s", gotPath)
-	}
-}
-
-func TestHeartbeat_Error(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "invalid or missing internal token", http.StatusUnauthorized)
-	}))
-	defer srv.Close()
-
-	c := &httpgpumode.Client{HTTPClient: srv.Client()}
-	if err := c.Heartbeat(context.Background(), cfgFor(srv.URL)); err == nil {
-		t.Fatal("expected an error for a 401 response")
-	}
-}
-
 func TestNew_UsesDefaultHTTPClient(t *testing.T) {
 	c := httpgpumode.New()
 	if c.HTTPClient == nil {

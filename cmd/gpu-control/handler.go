@@ -37,7 +37,6 @@ func newMux(c *Controller, token string) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /gpu/api/mode", requireToken(token, c.handleGetMode))
 	mux.HandleFunc("POST /gpu/api/mode", requireToken(token, c.handlePostMode))
-	mux.HandleFunc("POST /gpu/api/heartbeat", requireToken(token, c.handleHeartbeat))
 	mux.Handle("/gpu/comfy/", requireToken(token, newComfyProxy(c.comfyReadyURL).ServeHTTP))
 	mux.HandleFunc("POST /gpu/api/generate", requireToken(token, c.handleGenerate))
 	mux.HandleFunc("GET /gpu/api/generate/{id}", requireToken(token, c.handleGenerateResult))
@@ -180,11 +179,6 @@ func (c *Controller) handlePostMode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, code, st)
-}
-
-func (c *Controller) handleHeartbeat(w http.ResponseWriter, _ *http.Request) {
-	c.Heartbeat()
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func (c *Controller) handleHealthz(w http.ResponseWriter, _ *http.Request) {

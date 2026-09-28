@@ -87,6 +87,7 @@ func main() {
 	host := flag.String("host", "se.mo-sys.de", "target deployment's hostname (no scheme)")
 	credsPath := flag.String("creds", "cmd/e2e-check/credentials.json", "path to a JSON credentials file for -host (see credentials.example.json)")
 	includeSlow := flag.Bool("include-slow", false, "also run slow/known-heavy checks (sandbox package install, image OCR) that can take minutes")
+	includeVisionGenerate := flag.Bool("include-vision-generate", false, "also run a real Vision-mode generation round trip -- switches the shared GPU to Vision mode itself (taking chat offline for every real user until the generation finishes and it switches back), unlike every other vision check here, which is validation-only and never triggers this live")
 	// 290s: nginx's own proxy_read_timeout is 300s
 	// (packaging/nginx/searchengine.conf) -- close enough to give a real,
 	// slow-but-legitimate turn the same headroom nginx itself grants (one
@@ -178,9 +179,20 @@ func main() {
 		{"admin CRUD: agent", c.checkAdminAgentCRUD},
 		{"admin CRUD: user", c.checkAdminUserCRUD},
 		{"admin: agent with empty mcp_server_ids gets no tools", c.checkAgentToolIsolation},
+		{"security: cross-user resource isolation (file/mcp-server/chat by id)", c.checkCrossUserResourceIsolation(creds.TestUser, creds.TestUserPassword)},
 		{"admin: embedding endpoints (list)", c.checkAdminEmbeddingEndpointsList},
 		{"admin: embeddings recompute status", c.checkAdminEmbeddingsRecomputeStatus},
 		{"admin: document upload indexes a text file, then cleans up", c.checkAdminDocumentUpload},
+		{"admin: read configured upload size limits", c.checkReadUploadSizeLimits},
+		{"admin: document upload rejects an oversized file", c.checkAdminDocumentUploadRejectsOversized},
+	})
+	if *includeVisionGenerate {
+		run([]check{
+			{"vision: real generation round trip + job-ownership isolation (-include-vision-generate)",
+				c.checkVisionGenerateRealRoundTripAndIsolation(creds.TestUser, creds.TestUserPassword)},
+		})
+	}
+	run([]check{
 		// Last admin-session check on purpose -- see checkLogout's own doc
 		// comment for why.
 		{"auth: logout clears session", c.checkLogout},
@@ -198,6 +210,7 @@ func main() {
 			{"persistent chat: rename", c.checkChatRename},
 			{"persistent chat: fork (independent copy)", c.checkChatFork},
 			{"mcp-files tool (attach + read)", c.checkFilesTool},
+			{"account: file upload rejects an oversized file", c.checkUploadSizeLimitEnforced},
 			{"mcp-files tool: write_file", c.checkWriteFile},
 			{"mcp-files tool: write_file with a large generated document (CV/resume)", c.checkWriteFileLargeGeneratedContent},
 			{"account: personal MCP server (http-only)", c.checkAccountMCPServerCRUD},
@@ -310,6 +323,15 @@ type client struct {
 	http           *http.Client
 	testChatID     string
 	testForkChatID string
+	// maxFileUploadKB/maxDocumentUploadKB are read once (as admin) by
+	// checkReadUploadSizeLimits. maxDocumentUploadKB is consumed
+	// immediately after by checkAdminDocumentUploadRejectsOversized (still
+	// admin); maxFileUploadKB is reused later by
+	// checkUploadSizeLimitEnforced, once the session has switched to the
+	// regular test user -- /admin/api/settings is admin-only, so it can't
+	// be re-read at that point.
+	maxFileUploadKB     int
+	maxDocumentUploadKB int
 }
 
 // freshClient shares nothing with c -- its own empty cookie jar -- for a
@@ -1204,6 +1226,157 @@ func (c *client) checkVisionAssetRequiresJobID() error {
 	return nil
 }
 
+// switchVisionMode POSTs /vision/api/mode toward target ("chat" or
+// "vision") and polls GET /vision/api/mode until the switch actually
+// completes, retrying the POST itself on a 429 (dwell/per-account rate
+// limit) or 409 (cmd/gpu-control already mid-switch toward something
+// else) rather than failing immediately -- both are expected, transient
+// states this deployment's own dwell/rate limiting can produce on a busy
+// instance, not real errors.
+func (c *client) switchVisionMode(target string) error {
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		status, body, err := c.doJSONRaw(http.MethodPost, "/vision/api/mode", map[string]string{"mode": target})
+		if err != nil {
+			return err
+		}
+		if status == http.StatusTooManyRequests || status == http.StatusConflict {
+			if time.Now().After(deadline) {
+				return fmt.Errorf("timed out retrying the switch to %s (last: %d %s)", target, status, truncate(body, 200))
+			}
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		if status != http.StatusOK {
+			return fmt.Errorf("expected 200 switching to %s, got %d: %s", target, status, truncate(body, 200))
+		}
+		break
+	}
+	for {
+		var st struct {
+			Mode       string `json:"mode"`
+			InProgress bool   `json:"in_progress"`
+		}
+		if _, err := c.getJSON("/vision/api/mode", &st); err != nil {
+			return err
+		}
+		if !st.InProgress && st.Mode == target {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for the switch to %s to complete (last mode=%s in_progress=%v)", target, st.Mode, st.InProgress)
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+// checkVisionGenerateRealRoundTripAndIsolation is the one real,
+// disruptive vision-generation check in this whole file -- everything
+// else vision-related above is deliberately validation-only and never
+// triggers a real generation live (see checkVisionModeReachable's own
+// doc comment). This one does, on purpose, gated behind
+// -include-vision-generate: it switches the shared GPU into Vision mode
+// itself, submits one real generation, proves job-ownership isolation
+// against a job that actually exists (not just a made-up job_id, unlike
+// checkVisionResultRequiresJobID/checkVisionAssetRequiresJobID above),
+// waits for it to finish, downloads the resulting asset, and always
+// switches the GPU back to Chat mode afterward regardless of outcome --
+// so passing this flag is a deliberate choice to take chat offline for
+// every real user on the target deployment for as long as one generation
+// takes.
+func (c *client) checkVisionGenerateRealRoundTripAndIsolation(testUser, testUserPassword string) func() error {
+	return func() error {
+		status, body, err := c.getJSONRaw("/vision/api/mode")
+		if err != nil {
+			return err
+		}
+		if status == http.StatusNotFound {
+			return skip("GPU mode (Vision) is not enabled on this deployment")
+		}
+		if status != http.StatusOK {
+			return fmt.Errorf("expected 200 or 404 from GET /vision/api/mode, got %d: %s", status, truncate(body, 200))
+		}
+
+		// However far this gets, always try to leave the GPU back in
+		// Chat mode -- a real user's chat access must not stay down
+		// because this check failed partway through.
+		defer func() {
+			_, _, _ = c.doJSONRaw(http.MethodPost, "/vision/api/mode", map[string]string{"mode": "chat"})
+		}()
+
+		if err := c.switchVisionMode("vision"); err != nil {
+			return fmt.Errorf("switching to vision mode: %w", err)
+		}
+
+		var gen struct {
+			JobID string `json:"job_id"`
+		}
+		if _, err := c.postJSON("/vision/api/generate",
+			map[string]any{"prompt": "a slowly rotating red cube on a plain white background"}, &gen); err != nil {
+			return fmt.Errorf("submitting generation: %w", err)
+		}
+		if gen.JobID == "" {
+			return fmt.Errorf("expected a non-empty job_id")
+		}
+
+		if testUser != "" {
+			other, err := c.freshClient()
+			if err != nil {
+				return err
+			}
+			if err := other.checkLogin(testUser, testUserPassword)(); err != nil {
+				return fmt.Errorf("logging the isolation-check test user in: %w", err)
+			}
+			if status, _, err := other.getJSONRaw("/vision/api/result?job_id=" + gen.JobID); err != nil {
+				return err
+			} else if status != http.StatusNotFound {
+				return fmt.Errorf("expected 404 polling another account's real generation job, got %d", status)
+			}
+			if status, _, err := other.getJSONRaw("/vision/api/asset?job_id=" + gen.JobID); err != nil {
+				return err
+			} else if status != http.StatusNotFound {
+				return fmt.Errorf("expected 404 downloading another account's real generation asset, got %d", status)
+			}
+		}
+
+		deadline := time.Now().Add(5 * time.Minute)
+		var result struct {
+			Status  string `json:"status"`
+			ViewURL string `json:"view_url"`
+			Error   string `json:"error"`
+		}
+		for {
+			if _, err := c.getJSON("/vision/api/result?job_id="+gen.JobID, &result); err != nil {
+				return err
+			}
+			if result.Status == "done" || result.Status == "failed" {
+				break
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("timed out waiting for generation %s to finish (last status: %s)", gen.JobID, result.Status)
+			}
+			time.Sleep(2 * time.Second)
+		}
+		if result.Status == "failed" {
+			return fmt.Errorf("generation failed: %s", result.Error)
+		}
+		if result.ViewURL == "" {
+			return fmt.Errorf("expected a view_url once done")
+		}
+		assetStatus, assetBody, err := c.getJSONRaw(result.ViewURL)
+		if err != nil {
+			return err
+		}
+		if assetStatus != http.StatusOK {
+			return fmt.Errorf("expected 200 downloading the finished asset, got %d", assetStatus)
+		}
+		if len(assetBody) == 0 {
+			return fmt.Errorf("expected non-empty asset bytes")
+		}
+		return nil
+	}
+}
+
 func (c *client) checkChatValidationBoundary() error {
 	const maxChatMessageContentLength = 32000 // must match chat.go's own unexported constant
 	overLong := strings.Repeat("x", maxChatMessageContentLength+1)
@@ -2020,13 +2193,14 @@ func (c *client) buildMCPConnectivityChecks() []check {
 				// unlike mcp-files' read_file_base64/list_files, there's no
 				// zero-context call of its own this generic check (no attached
 				// file, no specific agent/prompt) could ever reasonably trigger.
-				// checkImageVision below is the real, fully-attached functional
-				// test for this server; this one would either 404 fetching a
-				// guessed file_id or (as reasonably observed live) have the
-				// model call a DIFFERENT server's tool (e.g. list_files)
-				// instead of guessing -- neither is a regression.
+				// So this attaches a real generated image itself (via
+				// checkVisionServerFunctionality, its own throwaway-chat
+				// wrapper around checkVisionTool) rather than skipping --
+				// deliberately duplicate coverage of vision_similarity, not a
+				// gap: only a real attached picture exercises this tool
+				// properly at all.
 				if s.Name == "vision" {
-					return skip("vision's own tools all require a real attached image -- see checkImageVision for the real functional test")
+					return c.checkVisionServerFunctionality()
 				}
 				if len(tools) == 0 {
 					return skip("connectivity check didn't discover any tools to call")
@@ -2302,6 +2476,83 @@ func (c *client) checkAgentToolIsolation() error {
 	return nil
 }
 
+// checkCrossUserResourceIsolation proves the same "404, never 403, so a
+// foreign id never even confirms existence" ownership pattern
+// GenerateResult/ViewAsset now enforce for Vision generation jobs (see
+// domain's ErrGPUGenerateJobNotOwned) already protects every other
+// per-account by-id resource this deployment has: an uploaded file, a
+// personal MCP server, and a persisted chat. Three disposable fixtures are
+// created here (as the admin session this check runs inside of), then
+// probed by a second, completely separate session logged in as the
+// dedicated test user (freshClient, so the shared admin session is never
+// disturbed) -- each access must come back 404. Run from admin's own
+// phase, not test_user's later phase, purely so cleanup can happen in the
+// same function without threading fixture ids across the phase boundary.
+func (c *client) checkCrossUserResourceIsolation(testUser, testUserPassword string) func() error {
+	return func() error {
+		if testUser == "" {
+			return skip("no dedicated test user configured (test_user in credentials.json)")
+		}
+
+		var chat pinnedChatResponse
+		if _, err := c.postJSON(pathAccountChats, map[string]any{
+			"title": "e2e-check-isolation-fixture", "agent_id": "",
+			"history": []map[string]string{{"role": "user", "content": "fixture"}},
+		}, &chat); err != nil {
+			return err
+		}
+		defer c.deleteRequest(pathAccountChats + "/" + chat.ID)
+		if chat.ID == "" {
+			return fmt.Errorf("expected a non-empty chat id, got %+v", chat)
+		}
+
+		uploaded, err := c.uploadFile(chat.ID, "e2e-check-isolation-fixture.txt", "text/plain", []byte("fixture"))
+		if err != nil {
+			return err
+		}
+		defer c.deleteRequest("/account/api/files/" + uploaded.ID)
+
+		var server struct {
+			ID string `json:"id"`
+		}
+		if _, err := c.postJSON(pathAccountMCPServers, map[string]any{
+			"name": scratchName, "transport": "http", "base_url": "http://127.0.0.1:1", "enabled": false,
+		}, &server); err != nil {
+			return err
+		}
+		defer c.deleteRequest(pathAccountMCPServers + "/" + server.ID)
+
+		other, err := c.freshClient()
+		if err != nil {
+			return err
+		}
+		if err := other.checkLogin(testUser, testUserPassword)(); err != nil {
+			return fmt.Errorf("logging the isolation-check test user in: %w", err)
+		}
+
+		if status, _, err := other.getJSONRaw("/account/api/files/" + uploaded.ID); err != nil {
+			return err
+		} else if status != http.StatusNotFound {
+			return fmt.Errorf("expected 404 downloading another account's file by id, got %d", status)
+		}
+		if status, _, err := other.getJSONRaw(pathAccountMCPServers + "/" + server.ID); err != nil {
+			return err
+		} else if status != http.StatusNotFound {
+			return fmt.Errorf("expected 404 reading another account's personal mcp server by id, got %d", status)
+		}
+		patchStatus, _, err := other.doJSONRaw(http.MethodPatch, pathAccountChats+"/"+chat.ID, map[string]any{
+			"title": "hijacked", "agent_id": "", "history": []map[string]string{{"role": "user", "content": "x"}},
+		})
+		if err != nil {
+			return err
+		}
+		if patchStatus != http.StatusNotFound {
+			return fmt.Errorf("expected 404 modifying another account's chat by id, got %d", patchStatus)
+		}
+		return nil
+	}
+}
+
 // userResponse mirrors admin_users.go's own wire shape for a domain.User
 // (PasswordHash never included).
 type userResponse struct {
@@ -2555,6 +2806,88 @@ func (c *client) checkAdminDocumentUpload() error {
 	}
 	if status != http.StatusOK {
 		return fmt.Errorf("expected 200 deleting the job, got %d", status)
+	}
+
+	// Deleting the job must also delete the document it produced (and,
+	// transitively, its embeddings/postings) -- not just the job row --
+	// so confirm the indexed document is actually gone, not merely
+	// unreferenced.
+	docStatus, _, docErr := c.getJSONRaw("/admin/api/documents/" + job.DocID)
+	if docErr != nil {
+		return docErr
+	}
+	if docStatus != http.StatusNotFound {
+		return fmt.Errorf("expected 404 for the indexed document after its owning job was deleted, got %d", docStatus)
+	}
+	return nil
+}
+
+// settingsOperationalUploadLimits is the small slice of GET
+// /admin/api/settings' operational object this file actually needs --
+// deliberately not the full settingsResponse shape, since decoding into a
+// partial struct that only names these two fields is enough here and
+// avoids keeping a second full copy of every operational field in sync.
+type settingsOperationalUploadLimits struct {
+	Operational struct {
+		MaxFileUploadKB     int `json:"max_file_upload_kb"`
+		MaxDocumentUploadKB int `json:"max_document_upload_kb"`
+	} `json:"operational"`
+}
+
+// checkReadUploadSizeLimits reads (never mutates -- a live settings write
+// here would be exactly the kind of disruptive action
+// checkAdminEmbeddingEndpointsList's own doc comment already explains
+// avoiding) the two admin-configured upload-size ceilings, storing
+// max_file_upload_kb on c for checkUploadSizeLimitEnforced to reuse once
+// the session switches to the regular test user (where /admin/api/settings
+// is no longer reachable), and using max_document_upload_kb immediately
+// below for checkAdminDocumentUploadRejectsOversized.
+func (c *client) checkReadUploadSizeLimits() error {
+	var got settingsOperationalUploadLimits
+	status, err := c.getJSON("/admin/api/settings", &got)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("expected 200, got %d", status)
+	}
+	if got.Operational.MaxFileUploadKB <= 0 || got.Operational.MaxDocumentUploadKB <= 0 {
+		return fmt.Errorf("expected positive configured upload limits, got %+v", got.Operational)
+	}
+	c.maxFileUploadKB = got.Operational.MaxFileUploadKB
+	c.maxDocumentUploadKB = got.Operational.MaxDocumentUploadKB
+	return nil
+}
+
+// checkAdminDocumentUploadRejectsOversized proves
+// OperationalSettingsValues.MaxDocumentUploadBytes is actually enforced by
+// the live handler, not just reported in the settings response: an upload
+// one byte over the currently configured limit is rejected.
+func (c *client) checkAdminDocumentUploadRejectsOversized() error {
+	if c.maxDocumentUploadKB <= 0 {
+		return skip("checkReadUploadSizeLimits must have failed")
+	}
+	oversized := bytes.Repeat([]byte("x"), c.maxDocumentUploadKB*1024+1)
+	if _, err := c.uploadDocumentJob("e2e-check-oversized.bin", "application/octet-stream", oversized, false); err == nil {
+		return fmt.Errorf("expected a document upload one byte over the configured %d KB limit to be rejected, but it succeeded", c.maxDocumentUploadKB)
+	}
+	return nil
+}
+
+// checkUploadSizeLimitEnforced is checkAdminDocumentUploadRejectsOversized's
+// counterpart for the account/chat file upload limit -- run later, as the
+// regular test user, reusing the value checkReadUploadSizeLimits already
+// read as admin.
+func (c *client) checkUploadSizeLimitEnforced() error {
+	if c.testChatID == "" {
+		return skip(skipNoPinnedChat)
+	}
+	if c.maxFileUploadKB <= 0 {
+		return skip("checkReadUploadSizeLimits must have failed")
+	}
+	oversized := bytes.Repeat([]byte("x"), c.maxFileUploadKB*1024+1)
+	if _, err := c.uploadFile(c.testChatID, "e2e-check-oversized.bin", "application/octet-stream", oversized); err == nil {
+		return fmt.Errorf("expected an upload one byte over the configured %d KB limit to be rejected, but it succeeded", c.maxFileUploadKB)
 	}
 	return nil
 }
@@ -2811,18 +3144,34 @@ func (c *client) checkAccountFilesUnscoped() error {
 	return nil
 }
 
+// testImagePNGPalette gives each testImagePNG variant its own two colors
+// (rather than just shifting the same black/white checkerboard) so
+// distinct callers upload genuinely different image content, not
+// byte-for-byte identical pictures under different filenames.
+var testImagePNGPalette = [][2]color.Color{
+	{color.Black, color.White},
+	{color.RGBA{200, 30, 30, 255}, color.RGBA{30, 30, 200, 255}},
+	{color.RGBA{30, 160, 60, 255}, color.RGBA{230, 200, 40, 255}},
+}
+
 // testImagePNG is a small, real (not 1x1) PNG generated at startup -- a
-// 32x32 two-color checkerboard, real enough for checkImageVision's
-// vision_similarity call to actually embed and search with, not a
-// pipeline-completes-regardless 1x1 pixel.
-func testImagePNG() ([]byte, error) {
+// 32x32 two-color checkerboard, real enough for a vision_similarity/
+// vision_caption call to actually embed/caption, not a
+// pipeline-completes-regardless 1x1 pixel. variant selects a distinct
+// color pair from testImagePNGPalette (wrapping around) -- every call
+// site attaching a real image to the pinned test chat uses its own
+// variant, so a bug that only manifests for specific image content (or a
+// caching layer wrongly treating two different images as the same one)
+// has a chance to surface.
+func testImagePNG(variant int) ([]byte, error) {
+	colors := testImagePNGPalette[variant%len(testImagePNGPalette)]
 	img := image.NewRGBA(image.Rect(0, 0, 32, 32))
 	for y := 0; y < 32; y++ {
 		for x := 0; x < 32; x++ {
 			if (x/4+y/4)%2 == 0 {
-				img.Set(x, y, color.Black)
+				img.Set(x, y, colors[0])
 			} else {
-				img.Set(x, y, color.White)
+				img.Set(x, y, colors[1])
 			}
 		}
 	}
@@ -2877,7 +3226,7 @@ func (c *client) imageAnalystAgentID() (string, error) {
 	return "", skip(`no "Image analyst" agent configured on this deployment`)
 }
 
-func (c *client) checkVisionTool(toolName, filename, question, settingsSubPage, imageURL string) error {
+func (c *client) checkVisionTool(toolName, filename, question, settingsSubPage, imageURL string, variant int) error {
 	if c.testChatID == "" {
 		return skip(skipNoPinnedChat)
 	}
@@ -2886,7 +3235,7 @@ func (c *client) checkVisionTool(toolName, filename, question, settingsSubPage, 
 		return err
 	}
 	if imageURL == "" {
-		png, err := testImagePNG()
+		png, err := testImagePNG(variant)
 		if err != nil {
 			return err
 		}
@@ -2915,13 +3264,43 @@ func (c *client) checkVisionTool(toolName, filename, question, settingsSubPage, 
 	return nil
 }
 
+// checkVisionServerFunctionality is buildMCPConnectivityChecks' own "mcp
+// functionality: vision" case. It can't rely on the shared c.testChatID
+// checkImageVision/checkVisionCaption use below, since this generic
+// per-server loop runs earlier in main's own check order than
+// checkChatPin populates it -- so it pins its own throwaway chat instead
+// (deleted again once done, checks here run strictly sequentially so
+// there's no concurrent access to worry about) and temporarily points
+// c.testChatID at it for checkVisionTool's own duration.
+func (c *client) checkVisionServerFunctionality() error {
+	var out pinnedChatResponse
+	if _, err := c.postJSON(pathAccountChats, map[string]any{
+		"title": "e2e-check-mcp-functionality", "agent_id": "",
+		"history": []map[string]string{{"role": "user", "content": "e2e-check smoke test"}},
+	}, &out); err != nil {
+		return err
+	}
+	if out.ID == "" {
+		return fmt.Errorf("expected a non-empty chat id, got %+v", out)
+	}
+	defer func() { _, _ = c.deleteRequest(pathAccountChats + "/" + out.ID) }()
+
+	original := c.testChatID
+	c.testChatID = out.ID
+	defer func() { c.testChatID = original }()
+
+	return c.checkVisionTool("vision_similarity", "e2e-check-mcp-functionality.png",
+		"Use vision_similarity to find pages related to the image named e2e-check-mcp-functionality.png, and tell me what you find.",
+		"Similarity search", "", 2)
+}
+
 // checkImageVision exercises cmd/mcp-vision's vision_similarity tool end
 // to end (a real image embed against the configured provider, then a
 // real pgvector ANN search) -- see checkVisionTool's own doc comment.
 func (c *client) checkImageVision() error {
 	return c.checkVisionTool("vision_similarity", "e2e-check.png",
 		"Use vision_similarity to find pages related to the image named e2e-check.png, and tell me what you find.",
-		"Similarity search", "")
+		"Similarity search", "", 0)
 }
 
 // checkVisionCaption exercises cmd/mcp-vision's OTHER tool,
@@ -2939,7 +3318,7 @@ func (c *client) checkImageVision() error {
 func (c *client) checkVisionCaption() error {
 	return c.checkVisionTool("vision_caption", "e2e-check-caption.png",
 		"Use vision_caption to describe the image named e2e-check-caption.png.",
-		"Captioning", "")
+		"Captioning", "", 1)
 }
 
 // testVisionImageURL is a small, stable, long-standing httpbin.org
@@ -2954,7 +3333,7 @@ const testVisionImageURL = "https://httpbin.org/image/png"
 func (c *client) checkImageVisionByURL() error {
 	return c.checkVisionTool("vision_similarity", "",
 		fmt.Sprintf("Use vision_similarity with image_url set to %s (not file_id -- there is no attached file) to find pages related to it, and tell me what you find.", testVisionImageURL),
-		"Similarity search", testVisionImageURL)
+		"Similarity search", testVisionImageURL, 0)
 }
 
 // checkVisionCaptionByURL is checkVisionCaption's image_url counterpart --
@@ -2964,7 +3343,7 @@ func (c *client) checkImageVisionByURL() error {
 func (c *client) checkVisionCaptionByURL() error {
 	return c.checkVisionTool("vision_caption", "",
 		fmt.Sprintf("Use vision_caption with image_url set to %s (not file_id -- there is no attached file) to describe what the image shows.", testVisionImageURL),
-		"Captioning", testVisionImageURL)
+		"Captioning", testVisionImageURL, 0)
 }
 
 // blockedImageURL is AWS/GCP/Azure's shared link-local instance-metadata

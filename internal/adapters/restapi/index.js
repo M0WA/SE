@@ -1357,7 +1357,6 @@
   let visionEnabled = false;
   let visionStatus = null;
   let visionPollTimer = null;
-  let visionHeartbeatTimer = null;
 
   function visionModePollWhileInProgress(inProgress, pollTimer, reload) {
     if (inProgress) {
@@ -1643,7 +1642,15 @@
       // user hasn't already made an explicit choice of their own
       // (currentMode still at its initial default) and suppress the
       // switch-request side effect, since the GPU is already there.
-      if (currentMode === 'chat' && visionStatus.mode === 'vision') {
+      // Also true mid-switch *into* vision (mode still "chat", target
+      // "vision") -- not just once it's already fully "vision" -- since
+      // otherwise a reload during exactly that window silently bounced
+      // back to the Chat tab, losing the visible "Preparing the GPU…"
+      // status even though nothing about the real switch changed (it's
+      // still running; only the page reflecting it got reset).
+      const gpuIsOrIsBecomingVision = visionStatus.mode === 'vision' ||
+        (visionStatus.in_progress && visionStatus.target === 'vision');
+      if (currentMode === 'chat' && gpuIsOrIsBecomingVision) {
         setMode('vision', { suppressSwitch: true });
       }
       renderVisionStatus();
@@ -1652,23 +1659,6 @@
       resumeVisionGenerateJob();
     } catch (err) {
       // Best-effort -- feature stays hidden on any network failure.
-    }
-  }
-
-  // startVisionHeartbeat/stopVisionHeartbeat keep cmd/gpu-control's own
-  // idle-revert timer reset while the Vision panel is the active tab --
-  // see domain.GPUModeSettings.IdleRevertMinutes.
-  function startVisionHeartbeat() {
-    stopVisionHeartbeat();
-    visionHeartbeatTimer = setInterval(() => {
-      fetch('/vision/api/heartbeat', { method: 'POST' }).catch(() => {});
-    }, 60000);
-  }
-
-  function stopVisionHeartbeat() {
-    if (visionHeartbeatTimer) {
-      clearInterval(visionHeartbeatTimer);
-      visionHeartbeatTimer = null;
     }
   }
 
@@ -1738,7 +1728,6 @@
       chatPanel.hidden = true;
       visionPanel.hidden = true;
       chatOptions.hidden = true;
-      stopVisionHeartbeat();
     } else {
       // Saved every time chat/vision is entered (not just when leaving
       // search), matching the original two-mode behavior exactly: whatever
@@ -1754,11 +1743,6 @@
       chatOptions.hidden = mode !== 'chat';
       chatPanel.hidden = mode !== 'chat';
       visionPanel.hidden = mode !== 'vision';
-      if (mode === 'vision') {
-        startVisionHeartbeat();
-      } else {
-        stopVisionHeartbeat();
-      }
     }
 
     updateModeSwitchIndicator();
@@ -1873,7 +1857,7 @@
       uploadAttachedFile, renderChatFiles, loadChatFiles, deleteChatFile,
       loadVisionMode, requestVisionSwitch, refreshVisionStatus, renderVisionStatus,
       updateChatAvailability, updateModeSwitchIndicator, visionModePollWhileInProgress,
-      startVisionHeartbeat, stopVisionHeartbeat, stopVisionPolling,
+      stopVisionPolling,
       updateVisionGenerateAvailability, requestGenerate, pollVisionResult, stopVisionGeneratePolling,
       storeVisionGenerateJobID, resumeVisionGenerateJob,
     };

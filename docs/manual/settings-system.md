@@ -22,5 +22,13 @@ How many minutes a pooled connection is reused before being recycled — default
 
 How many hours a signed-in admin session stays valid before expiring — default 12. Only applies to sessions created after saving; anyone already signed in keeps their session's original expiration. Shorten it for more frequent re-authentication in a security-sensitive deployment; lengthen it if 12 hours is genuinely too short day to day.
 
+## Uploads: Max chat file upload size
+
+Kilobytes allowed for a single account/chat file attachment — both a browser upload through [Account](account.md) and a file the `write_file` MCP tool creates — default 5120 (5MB). An upload over this limit is rejected before it's saved. 0 or blank falls back to the default.
+
+## Uploads: Max document upload size
+
+Kilobytes allowed for a single [Document upload](document-upload.md) or S3 import fetch — default 20480 (20MB), independently configurable from the chat file upload limit above since the two serve very different content (a per-user chat attachment vs. an admin-triggered corpus import). An upload or S3 fetch over this limit is rejected. 0 or blank falls back to the default.
+
 ---
 ← [Settings: Content rules](settings-content-rules.md) &nbsp;·&nbsp; [↑ Manual home](README.md) &nbsp;·&nbsp; [Database](database.md) →

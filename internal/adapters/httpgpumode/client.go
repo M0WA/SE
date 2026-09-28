@@ -1,7 +1,7 @@
 // Package httpgpumode implements ports.GPUModeController by calling
-// cmd/gpu-control's own small HTTP API (GET/POST /gpu/api/mode, POST
-// /gpu/api/heartbeat) over the private LAN, mirroring httpchat's own
-// house style for calling an admin-configured HTTP endpoint.
+// cmd/gpu-control's own small HTTP API (GET/POST /gpu/api/mode) over the
+// private LAN, mirroring httpchat's own house style for calling an
+// admin-configured HTTP endpoint.
 package httpgpumode
 
 import (
@@ -19,10 +19,10 @@ import (
 	"searchengine/internal/ports"
 )
 
-// requestTimeout bounds a plain status/heartbeat call -- short, since
-// these never wait on the switch itself (POST /gpu/api/mode returns as
-// soon as cmd/gpu-control accepts the request, not once the switch
-// finishes -- see that package's own Controller.Switch doc comment).
+// requestTimeout bounds a plain status call -- short, since it never
+// waits on the switch itself (POST /gpu/api/mode returns as soon as
+// cmd/gpu-control accepts the request, not once the switch finishes --
+// see that package's own Controller.Switch doc comment).
 const requestTimeout = 10 * time.Second
 
 // maxResponseBytes caps how much of the HTTP response body is ever read
@@ -171,11 +171,4 @@ func (c *Client) Switch(ctx context.Context, cfg domain.GPUModeSettings, target 
 		return st.toDomain(), fmt.Errorf("httpgpumode: a switch to %s is already in progress: %w", st.Target, ports.ErrGPUModeSwitchConflict)
 	}
 	return st.toDomain(), nil
-}
-
-// Heartbeat POSTs /gpu/api/heartbeat, resetting cmd/gpu-control's own
-// idle-revert timer.
-func (c *Client) Heartbeat(ctx context.Context, cfg domain.GPUModeSettings) error {
-	_, _, err := c.do(ctx, cfg, http.MethodPost, "/gpu/api/heartbeat", nil, http.StatusNoContent)
-	return err
 }
