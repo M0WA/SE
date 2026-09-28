@@ -253,9 +253,9 @@ type Handler struct {
 	// generation) settings CRUD -- set on admin-server only, same
 	// *sqlrepo.Repository as chatEndpoints.
 	gpuMode ports.GPUModeStore
-	// gpuModeService backs the public GET/POST /vision/api/mode and POST
-	// /vision/api/heartbeat endpoints, plus handleChat's own availability
-	// check -- set on search-server only, nil (and 404-reporting)
+	// gpuModeService backs the public GET/POST /vision/api/mode endpoint,
+	// plus handleChat's own availability check -- set on search-server
+	// only, nil (and 404-reporting)
 	// everywhere else. Distinct from gpuMode above (that's the admin CRUD
 	// port; this is the application-layer use case wrapping it plus
 	// ports.GPUModeController).
@@ -394,8 +394,7 @@ type Config struct {
 	// as ChatEndpoints.
 	GPUMode ports.GPUModeStore
 	// GPUModeService is set on search-server only, backing the public
-	// GET/POST /vision/api/mode, POST /vision/api/heartbeat, and
-	// handleChat's own availability check.
+	// GET/POST /vision/api/mode and handleChat's own availability check.
 	GPUModeService *application.GPUModeService
 	// DocumentJobs is set on admin-server only, backing the Document-upload
 	// feature's job CRUD API -- same *sqlrepo.Repository as ChatEndpoints.
@@ -588,7 +587,6 @@ func (h *Handler) RoutesSearch() http.Handler {
 	mux.HandleFunc("DELETE /account/api/chats/{id}", h.requireAuthAPI(h.handleAccountDeleteChat))
 	mux.HandleFunc("GET /vision/api/mode", h.requireAuthAPI(h.handleVisionMode))
 	mux.HandleFunc("POST /vision/api/mode", h.requireAuthAPI(h.handleVisionModeSwitch))
-	mux.HandleFunc("POST /vision/api/heartbeat", h.requireAuthAPI(h.handleVisionHeartbeat))
 	mux.HandleFunc("POST /vision/api/generate", h.requireAuthAPI(h.handleVisionGenerate))
 	mux.HandleFunc("GET /vision/api/result", h.requireAuthAPI(h.handleVisionResult))
 	mux.HandleFunc("GET /vision/api/asset", h.requireAuthAPI(h.handleVisionAsset))

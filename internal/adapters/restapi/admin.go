@@ -689,6 +689,12 @@ type operationalValues struct {
 	ContentDedupMethod             string `json:"content_dedup_method"`
 	ContentDedupSimHashMaxDistance int    `json:"content_dedup_simhash_max_distance"`
 	ContentDedupIntervalMinutes    int    `json:"content_dedup_interval_minutes"`
+	// MaxFileUploadKB/MaxDocumentUploadKB mirror
+	// domain.OperationalSettingsValues.MaxFileUploadBytes/
+	// MaxDocumentUploadBytes, in KB for the same admin-UI-readability
+	// reason MaxResponseKB is KB rather than raw bytes.
+	MaxFileUploadKB     int `json:"max_file_upload_kb"`
+	MaxDocumentUploadKB int `json:"max_document_upload_kb"`
 }
 
 func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
@@ -726,6 +732,8 @@ func toOperationalValues(v domain.OperationalSettingsValues) operationalValues {
 		ContentDedupMethod:               v.ContentDedupMethod,
 		ContentDedupSimHashMaxDistance:   v.ContentDedupSimHashMaxDistance,
 		ContentDedupIntervalMinutes:      v.ContentDedupIntervalMinutes,
+		MaxFileUploadKB:                  v.MaxFileUploadBytes / 1024,
+		MaxDocumentUploadKB:              v.MaxDocumentUploadBytes / 1024,
 	}
 }
 
@@ -764,6 +772,8 @@ func (o operationalValues) toSettingsValues() domain.OperationalSettingsValues {
 		ContentDedupMethod:               o.ContentDedupMethod,
 		ContentDedupSimHashMaxDistance:   o.ContentDedupSimHashMaxDistance,
 		ContentDedupIntervalMinutes:      o.ContentDedupIntervalMinutes,
+		MaxFileUploadBytes:               o.MaxFileUploadKB * 1024,
+		MaxDocumentUploadBytes:           o.MaxDocumentUploadKB * 1024,
 	}
 }
 
@@ -1820,7 +1830,6 @@ type gpuModeSettingsRequest struct {
 	ControlBaseURL       string `json:"control_base_url"`
 	ControlAPIKey        string `json:"control_api_key"`
 	SwitchTimeoutSeconds int    `json:"switch_timeout_seconds"`
-	IdleRevertMinutes    int    `json:"idle_revert_minutes"`
 	// ClearControlAPIKey mirrors chatVisionRequest.ClearCaptionAPIKey
 	// exactly -- see its doc comment for the shared "blank means
 	// unchanged" convention.
@@ -1834,7 +1843,6 @@ type gpuModeSettingsResponse struct {
 	// -- reports only whether a key is set, never its value.
 	HasControlAPIKey     bool      `json:"has_control_api_key"`
 	SwitchTimeoutSeconds int       `json:"switch_timeout_seconds"`
-	IdleRevertMinutes    int       `json:"idle_revert_minutes"`
 	UpdatedAt            time.Time `json:"updated_at"`
 }
 
@@ -1842,8 +1850,8 @@ func toGPUModeSettingsResponse(v domain.GPUModeSettings) gpuModeSettingsResponse
 	return gpuModeSettingsResponse{
 		Enabled: v.Enabled, ControlBaseURL: v.ControlBaseURL,
 		HasControlAPIKey:     v.ControlAPIKey != "",
-		SwitchTimeoutSeconds: v.SwitchTimeoutSeconds, IdleRevertMinutes: v.IdleRevertMinutes,
-		UpdatedAt: v.UpdatedAt,
+		SwitchTimeoutSeconds: v.SwitchTimeoutSeconds,
+		UpdatedAt:            v.UpdatedAt,
 	}
 }
 
@@ -1856,10 +1864,6 @@ func defaultGPUModeSettingsResponse() gpuModeSettingsResponse {
 func validateGPUModeSettingsRequest(w http.ResponseWriter, req gpuModeSettingsRequest) bool {
 	if req.SwitchTimeoutSeconds < 0 {
 		http.Error(w, "switch_timeout_seconds must not be negative", http.StatusBadRequest)
-		return false
-	}
-	if req.IdleRevertMinutes < 0 {
-		http.Error(w, "idle_revert_minutes must not be negative", http.StatusBadRequest)
 		return false
 	}
 	return true
@@ -1907,8 +1911,8 @@ func (h *Handler) handleAdminGPUMode(w http.ResponseWriter, r *http.Request) {
 		v := domain.GPUModeSettings{
 			Enabled: req.Enabled, ControlBaseURL: req.ControlBaseURL,
 			ControlAPIKey:        apiKey,
-			SwitchTimeoutSeconds: req.SwitchTimeoutSeconds, IdleRevertMinutes: req.IdleRevertMinutes,
-			UpdatedAt: time.Now().UTC(),
+			SwitchTimeoutSeconds: req.SwitchTimeoutSeconds,
+			UpdatedAt:            time.Now().UTC(),
 		}
 		if err := h.gpuMode.SetGPUModeSettings(r.Context(), v); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

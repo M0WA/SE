@@ -28,7 +28,7 @@ const (
 	gpuModeRateLimitWindow = time.Hour
 )
 
-// ErrGPUModeNotEnabled is returned by Status/Switch/Heartbeat when the
+// ErrGPUModeNotEnabled is returned by Status/Switch when the
 // admin's GPUModeSettings.Enabled master switch is off (or never
 // configured) -- the caller (restapi) turns this into a 404, matching the
 // design's "the capability does not exist at all" behavior.
@@ -43,9 +43,15 @@ var (
 	ErrGPUModeRateLimited   = errors.New("too many switches from this account recently")
 )
 
+// ErrGPUGenerateJobNotOwned is GenerateResult's own sentinel for "jobID
+// is recorded as belonging to a different account" -- restapi turns this
+// into 404 (not 403), same "don't confirm whether it exists to someone
+// who shouldn't see it" reasoning as ErrGPUModeNotEnabled.
+var ErrGPUGenerateJobNotOwned = errors.New("this generation job does not belong to the requesting account")
+
 // GPUModeService is the application-layer use case behind
-// GET/POST /vision/api/mode, POST /vision/api/heartbeat, and handleChat's
-// own availability check. It owns the security gate beyond the admin
+// GET/POST /vision/api/mode and handleChat's own availability check. It
+// owns the security gate beyond the admin
 // master switch and session auth (both enforced by restapi itself): a
 // global minimum dwell between accepted switches and a per-account rate
 // limit, on top of ports.GPUModeController, which only talks to
@@ -240,21 +246,6 @@ func (s *GPUModeService) recordAccountSwitchLocked(accountID string, now time.Ti
 	return true
 }
 
-// Heartbeat resets cmd/gpu-control's own idle-revert timer -- called
-// while a Vision-mode client keeps the panel open/active. No dwell/
-// rate-limit gating (unlike Switch): a heartbeat can't itself thrash the
-// GPU.
-func (s *GPUModeService) Heartbeat(ctx context.Context) error {
-	cfg, enabled, err := s.loadEnabledConfig(ctx)
-	if err != nil {
-		return err
-	}
-	if !enabled {
-		return ErrGPUModeNotEnabled
-	}
-	return s.controller.Heartbeat(ctx, cfg)
-}
-
 // Generate is POST /vision/api/generate's use case: submits a new
 // text-to-video job through the controller. No dwell/rate-limit gating
 // here (unlike Switch) -- ComfyUI's own queue already serializes
@@ -286,14 +277,30 @@ func (s *GPUModeService) Generate(ctx context.Context, userID, chatID string, op
 // GenerateResult is GET /vision/api/result's use case: polls the
 // controller for jobID's current status, additionally saving the
 // finished video into the submitting account's own files the first time
-// it observes "done" (see saveGeneratedFileOnce).
-func (s *GPUModeService) GenerateResult(ctx context.Context, jobID string) (domain.GPUGenerateResult, error) {
+// it observes "done" (see saveGeneratedFileOnce). Returns
+// ErrGPUGenerateJobNotOwned if jobID is recorded as belonging to a
+// different account than userID -- generateJobs is only ever consulted
+// for this when a record actually exists; a jobID this process has no
+// record of at all (e.g. after a searchengine-search restart) is let
+// through unchanged, the same accepted best-effort tradeoff
+// generateJobRecord's own doc comment already describes for the
+// separate save-to-files feature. job_id is otherwise treated as a
+// capability token (an unguessable ComfyUI-generated id), same as
+// before this check existed -- this closes the "got handed someone
+// else's still-known job_id" case, not every conceivable one.
+func (s *GPUModeService) GenerateResult(ctx context.Context, userID, jobID string) (domain.GPUGenerateResult, error) {
 	cfg, enabled, err := s.loadEnabledConfig(ctx)
 	if err != nil {
 		return domain.GPUGenerateResult{}, err
 	}
 	if !enabled {
 		return domain.GPUGenerateResult{}, ErrGPUModeNotEnabled
+	}
+	s.mu.Lock()
+	rec, known := s.generateJobs[jobID]
+	s.mu.Unlock()
+	if known && rec.userID != userID {
+		return domain.GPUGenerateResult{}, ErrGPUGenerateJobNotOwned
 	}
 	result, err := s.controller.GenerateResult(ctx, cfg, jobID)
 	if err != nil {

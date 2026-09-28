@@ -29,7 +29,6 @@
   const gpuModeControlAPIKeyEl = document.getElementById('gpu-mode-control-api-key');
   const gpuModeClearControlAPIKeyEl = document.getElementById('gpu-mode-clear-control-api-key');
   const gpuModeSwitchTimeoutSecondsEl = document.getElementById('gpu-mode-switch-timeout-seconds');
-  const gpuModeIdleRevertMinutesEl = document.getElementById('gpu-mode-idle-revert-minutes');
   const saveGPUModeSettingsBtn = document.getElementById('save-gpu-mode-settings-btn');
   const gpuModeSettingsStatusEl = document.getElementById('gpu-mode-settings-status');
 
@@ -249,7 +248,6 @@
     gpuModeClearControlAPIKeyEl.checked = false;
     gpuModeClearControlAPIKeyEl.disabled = !g.has_control_api_key;
     gpuModeSwitchTimeoutSecondsEl.value = g.switch_timeout_seconds || 0;
-    gpuModeIdleRevertMinutesEl.value = g.idle_revert_minutes || 0;
   }
 
   async function loadGPUModeSettings() {
@@ -271,7 +269,6 @@
         control_api_key: gpuModeControlAPIKeyEl.value,
         clear_control_api_key: gpuModeClearControlAPIKeyEl.checked,
         switch_timeout_seconds: Number.parseInt(gpuModeSwitchTimeoutSecondsEl.value, 10) || 0,
-        idle_revert_minutes: Number.parseInt(gpuModeIdleRevertMinutesEl.value, 10) || 0,
       });
       gpuModeSettingsStatusEl.style.color = 'var(--ink-muted)';
       gpuModeSettingsStatusEl.textContent = 'Saved.';

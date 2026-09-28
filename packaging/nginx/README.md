@@ -19,7 +19,7 @@ nginx must split traffic between search-server and admin-server by path:
   `/account.js`, `/account/api`, `/account/mcp-servers` and its subpaths
   (`/account_mcp_servers.js`, `/account/mcp-servers/{id}`,
   `/account_mcp_server.js`, `/account/api/mcp-servers...`), `/vision/api/mode`,
-  `/vision/api/heartbeat`, `/vision/api/generate`, `/vision/api/result`,
+  `/vision/api/generate`, `/vision/api/result`,
   `/vision/api/asset` -> search-server, `http://127.0.0.1:8080`
 - `/login`, `/logout`, `/admin` and its subpaths (`/admin.js`,
   `/admin/documents`, `/admin/crawl`, `/admin/jobs`, `/admin/settings`,

@@ -128,14 +128,13 @@ func (h httpReadinessChecker) Ready(ctx context.Context, url, bearerToken string
 // compile-time constant or admin/env-configured value, never anything an
 // HTTP request supplies.
 type ControllerConfig struct {
-	ChatUnit          string
-	ComfyUnit         string
-	ComfyReadyURL     string
-	VLLMReadyURL      string
-	VLLMAPIKey        string
-	SwitchTimeout     time.Duration
-	IdleRevertMinutes int
-	PollInterval      time.Duration
+	ChatUnit      string
+	ComfyUnit     string
+	ComfyReadyURL string
+	VLLMReadyURL  string
+	VLLMAPIKey    string
+	SwitchTimeout time.Duration
+	PollInterval  time.Duration
 }
 
 // Controller owns the single, global GPU mode state machine. One process
@@ -150,8 +149,6 @@ type Controller struct {
 	inProgress bool
 	since      time.Time
 	detail     string
-
-	lastHeartbeat time.Time
 
 	// knownGenerateJobs is every promptID Generate has successfully
 	// submitted to the CURRENT ComfyUI process -- reset (see runSwitch)
@@ -174,14 +171,13 @@ type Controller struct {
 	// generateHTTPClient's own default.
 	genHTTP *http.Client
 
-	chatUnit          string
-	comfyUnit         string
-	comfyReadyURL     string
-	vllmReadyURL      string
-	vllmAPIKey        string
-	switchTimeout     time.Duration
-	idleRevertMinutes int
-	pollInterval      time.Duration
+	chatUnit      string
+	comfyUnit     string
+	comfyReadyURL string
+	vllmReadyURL  string
+	vllmAPIKey    string
+	switchTimeout time.Duration
+	pollInterval  time.Duration
 }
 
 // NewController wires a Controller against real systemctl calls and real
@@ -189,18 +185,17 @@ type Controller struct {
 // a Controller literal directly so they can inject fakes.
 func NewController(cfg ControllerConfig) *Controller {
 	return &Controller{
-		mode:              ModeUnknown,
-		units:             &realUnitRunner{},
-		ready:             httpReadinessChecker{client: &http.Client{Timeout: 5 * time.Second}},
-		now:               time.Now,
-		chatUnit:          cfg.ChatUnit,
-		comfyUnit:         cfg.ComfyUnit,
-		comfyReadyURL:     cfg.ComfyReadyURL,
-		vllmReadyURL:      cfg.VLLMReadyURL,
-		vllmAPIKey:        cfg.VLLMAPIKey,
-		switchTimeout:     cfg.SwitchTimeout,
-		idleRevertMinutes: cfg.IdleRevertMinutes,
-		pollInterval:      cfg.PollInterval,
+		mode:          ModeUnknown,
+		units:         &realUnitRunner{},
+		ready:         httpReadinessChecker{client: &http.Client{Timeout: 5 * time.Second}},
+		now:           time.Now,
+		chatUnit:      cfg.ChatUnit,
+		comfyUnit:     cfg.ComfyUnit,
+		comfyReadyURL: cfg.ComfyReadyURL,
+		vllmReadyURL:  cfg.VLLMReadyURL,
+		vllmAPIKey:    cfg.VLLMAPIKey,
+		switchTimeout: cfg.SwitchTimeout,
+		pollInterval:  cfg.PollInterval,
 	}
 }
 
@@ -217,10 +212,8 @@ func (c *Controller) DetectInitialMode(ctx context.Context) {
 	switch {
 	case chatActive && !comfyActive:
 		c.mode = ModeChat
-		c.lastHeartbeat = c.now()
 	case comfyActive && !chatActive:
 		c.mode = ModeVision
-		c.lastHeartbeat = c.now()
 	default:
 		c.mode = ModeUnknown
 	}
@@ -279,14 +272,6 @@ func (c *Controller) Switch(target Mode) (Status, int, error) {
 	return st, http.StatusAccepted, nil
 }
 
-// Heartbeat resets the idle-revert timer -- called while a Vision-mode
-// client keeps the panel open/active.
-func (c *Controller) Heartbeat() {
-	c.mu.Lock()
-	c.lastHeartbeat = c.now()
-	c.mu.Unlock()
-}
-
 func (c *Controller) setDetail(d string) {
 	c.mu.Lock()
 	c.detail = d
@@ -322,7 +307,6 @@ func (c *Controller) runSwitch(target Mode) {
 	} else {
 		c.mode = target
 		c.detail = ""
-		c.lastHeartbeat = c.now()
 		if target == ModeVision {
 			c.knownGenerateJobs = make(map[string]struct{})
 		}
@@ -394,42 +378,5 @@ func (c *Controller) waitReady(ctx context.Context, url, bearerToken string) boo
 				return true
 			}
 		}
-	}
-}
-
-// RunIdleRevertLoop blocks, periodically checking whether Vision mode
-// has gone idle long enough to auto-revert to chat -- meant to run in
-// its own goroutine for the process's lifetime. A non-positive
-// idleRevertMinutes (the "0 disables the revert" convention) returns
-// immediately without looping.
-func (c *Controller) RunIdleRevertLoop(ctx context.Context, interval time.Duration) {
-	if c.idleRevertMinutes <= 0 {
-		return
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			c.maybeRevert()
-		}
-	}
-}
-
-func (c *Controller) maybeRevert() {
-	c.mu.Lock()
-	shouldRevert := !c.inProgress && c.mode == ModeVision &&
-		c.now().Sub(c.lastHeartbeat) >= time.Duration(c.idleRevertMinutes)*time.Minute
-	if shouldRevert {
-		c.inProgress = true
-		c.target = ModeChat
-		c.since = c.now()
-		c.detail = "idle revert to chat"
-	}
-	c.mu.Unlock()
-	if shouldRevert {
-		go c.runSwitch(ModeChat)
 	}
 }

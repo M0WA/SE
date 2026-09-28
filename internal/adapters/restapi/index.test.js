@@ -8,19 +8,15 @@ const { setupDOM, teardownDOM, requireFresh } = require('./dom_helper.test_util'
 const INDEX_HTML = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 
 // lastFixture is loadFixture's own most recently returned module -- afterEach
-// uses it to always stop two kinds of real leftover timer a test may have
-// started without itself cleaning up or stubbing global.setInterval/
-// setTimeout: the vision-heartbeat interval (see startVisionHeartbeat,
-// started via setMode('vision')) and the 2s one-shot GPU-mode poll timer
-// (see visionModePollWhileInProgress, armed whenever a switch is left "in
-// progress"). An uncleared interval keeps Node's test runner process alive
-// indefinitely (neither `npm test` nor scripts/js-test-coverage.js pass
-// --test-force-exit), hanging the whole suite; an uncleared one-shot poll
-// timer instead fires ~2s later during a *different*, later test's own
-// execution window and calls that test's global.fetch mock, corrupting its
-// assertions with an unrelated URL -- a real, order-dependent flake caught
-// in CI (not locally, where the timing didn't line up) on this exact test
-// file before this cleanup existed.
+// uses it to always stop a real leftover timer a test may have started
+// without itself cleaning up or stubbing global.setTimeout: the 2s
+// one-shot GPU-mode poll timer (see visionModePollWhileInProgress, armed
+// whenever a switch is left "in progress"). Left uncleared, it instead
+// fires ~2s later during a *different*, later test's own execution
+// window and calls that test's global.fetch mock, corrupting its
+// assertions with an unrelated URL -- a real, order-dependent flake
+// caught in CI (not locally, where the timing didn't line up) on this
+// exact test file before this cleanup existed.
 let lastFixture = null;
 
 function loadFixture() {
@@ -30,9 +26,6 @@ function loadFixture() {
 }
 
 test.afterEach(() => {
-  if (lastFixture && typeof lastFixture.stopVisionHeartbeat === 'function') {
-    lastFixture.stopVisionHeartbeat();
-  }
   if (lastFixture && typeof lastFixture.stopVisionPolling === 'function') {
     lastFixture.stopVisionPolling();
   }
@@ -2313,6 +2306,19 @@ test('loadVisionMode reflects the shared GPU\'s real "vision" mode in the UI on 
   assert.deepEqual(switchCalls, [], 'the GPU is already in vision mode -- reflecting that in the UI must not re-request the switch');
 });
 
+test('loadVisionMode shows the Vision tab (with its own "Preparing the GPU" status) on reload during a chat-to-vision switch still in progress', async () => {
+  global.fetch = async () => ({
+    ok: true, status: 200,
+    json: async () => ({ mode: 'chat', target: 'vision', in_progress: true }),
+  });
+  const { loadVisionMode } = loadFixture();
+  await loadVisionMode();
+
+  assert.equal(document.getElementById('vision-panel').hidden, false, 'expected the Vision tab shown, not silently left on Chat');
+  assert.equal(document.getElementById('chat-panel').hidden, true);
+  assert.match(document.getElementById('vision-status').textContent, /Preparing the GPU/);
+});
+
 test('loadVisionMode leaves the UI on chat when the shared GPU is already in chat mode', async () => {
   global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ mode: 'chat', in_progress: false }) });
   const { loadVisionMode } = loadFixture();
@@ -2330,101 +2336,6 @@ test('loadVisionMode does not override a mode the user already explicitly chose 
 
   assert.equal(document.getElementById('search-form').hidden, false);
   assert.equal(document.getElementById('vision-panel').hidden, true);
-});
-
-test('startVisionHeartbeat schedules a recurring POST /vision/api/heartbeat', () => {
-  const originalSetInterval = global.setInterval;
-  const originalClearInterval = global.clearInterval;
-  let scheduledFn, scheduledMs;
-  global.setInterval = (fn, ms) => { scheduledFn = fn; scheduledMs = ms; return 'fake-interval'; };
-  global.clearInterval = () => {};
-  try {
-    const { startVisionHeartbeat } = loadFixture();
-    startVisionHeartbeat();
-    assert.equal(scheduledMs, 60000);
-    assert.equal(typeof scheduledFn, 'function');
-  } finally {
-    global.setInterval = originalSetInterval;
-    global.clearInterval = originalClearInterval;
-  }
-});
-
-test('startVisionHeartbeat clears any previous interval before starting a new one', () => {
-  const originalSetInterval = global.setInterval;
-  const originalClearInterval = global.clearInterval;
-  let clearedWith;
-  let intervalCount = 0;
-  global.setInterval = () => { intervalCount++; return 'interval-' + intervalCount; };
-  global.clearInterval = (handle) => { clearedWith = handle; };
-  try {
-    const { startVisionHeartbeat } = loadFixture();
-    startVisionHeartbeat();
-    startVisionHeartbeat();
-    assert.equal(clearedWith, 'interval-1');
-    assert.equal(intervalCount, 2);
-  } finally {
-    global.setInterval = originalSetInterval;
-    global.clearInterval = originalClearInterval;
-  }
-});
-
-test('stopVisionHeartbeat clears the interval when one is running', () => {
-  const originalSetInterval = global.setInterval;
-  const originalClearInterval = global.clearInterval;
-  let cleared = false;
-  global.setInterval = () => 'fake-interval';
-  global.clearInterval = () => { cleared = true; };
-  try {
-    const { startVisionHeartbeat, stopVisionHeartbeat } = loadFixture();
-    startVisionHeartbeat();
-    stopVisionHeartbeat();
-    assert.equal(cleared, true);
-  } finally {
-    global.setInterval = originalSetInterval;
-    global.clearInterval = originalClearInterval;
-  }
-});
-
-test('stopVisionHeartbeat is a no-op when no interval is running', () => {
-  const { stopVisionHeartbeat } = loadFixture();
-  stopVisionHeartbeat();
-});
-
-test('the scheduled heartbeat callback POSTs /vision/api/heartbeat', async () => {
-  const originalSetInterval = global.setInterval;
-  let scheduledFn;
-  global.setInterval = (fn) => { scheduledFn = fn; return 'fake-interval'; };
-  let gotURL, gotMethod;
-  global.fetch = async (url, opts) => { gotURL = url; gotMethod = opts && opts.method; return { ok: true }; };
-  try {
-    const { startVisionHeartbeat } = loadFixture();
-    startVisionHeartbeat();
-    scheduledFn();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(gotURL, '/vision/api/heartbeat');
-    assert.equal(gotMethod, 'POST');
-  } finally {
-    global.setInterval = originalSetInterval;
-  }
-});
-
-test('setMode starts the heartbeat on entering vision and stops it on leaving', () => {
-  const originalSetInterval = global.setInterval;
-  const originalClearInterval = global.clearInterval;
-  let started = 0;
-  let cleared = false;
-  global.setInterval = () => { started++; return 'fake-interval'; };
-  global.clearInterval = () => { cleared = true; };
-  try {
-    const { setMode } = loadFixture();
-    setMode('vision');
-    assert.equal(started, 1);
-    setMode('chat');
-    assert.equal(cleared, true);
-  } finally {
-    global.setInterval = originalSetInterval;
-    global.clearInterval = originalClearInterval;
-  }
 });
 
 // --- Generate (POST /vision/api/generate, GET /vision/api/result) ---

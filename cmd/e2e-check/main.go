@@ -181,6 +181,8 @@ func main() {
 		{"admin: embedding endpoints (list)", c.checkAdminEmbeddingEndpointsList},
 		{"admin: embeddings recompute status", c.checkAdminEmbeddingsRecomputeStatus},
 		{"admin: document upload indexes a text file, then cleans up", c.checkAdminDocumentUpload},
+		{"admin: read configured upload size limits", c.checkReadUploadSizeLimits},
+		{"admin: document upload rejects an oversized file", c.checkAdminDocumentUploadRejectsOversized},
 		// Last admin-session check on purpose -- see checkLogout's own doc
 		// comment for why.
 		{"auth: logout clears session", c.checkLogout},
@@ -198,6 +200,7 @@ func main() {
 			{"persistent chat: rename", c.checkChatRename},
 			{"persistent chat: fork (independent copy)", c.checkChatFork},
 			{"mcp-files tool (attach + read)", c.checkFilesTool},
+			{"account: file upload rejects an oversized file", c.checkUploadSizeLimitEnforced},
 			{"mcp-files tool: write_file", c.checkWriteFile},
 			{"mcp-files tool: write_file with a large generated document (CV/resume)", c.checkWriteFileLargeGeneratedContent},
 			{"account: personal MCP server (http-only)", c.checkAccountMCPServerCRUD},
@@ -310,6 +313,15 @@ type client struct {
 	http           *http.Client
 	testChatID     string
 	testForkChatID string
+	// maxFileUploadKB/maxDocumentUploadKB are read once (as admin) by
+	// checkReadUploadSizeLimits. maxDocumentUploadKB is consumed
+	// immediately after by checkAdminDocumentUploadRejectsOversized (still
+	// admin); maxFileUploadKB is reused later by
+	// checkUploadSizeLimitEnforced, once the session has switched to the
+	// regular test user -- /admin/api/settings is admin-only, so it can't
+	// be re-read at that point.
+	maxFileUploadKB     int
+	maxDocumentUploadKB int
 }
 
 // freshClient shares nothing with c -- its own empty cookie jar -- for a
@@ -2020,13 +2032,14 @@ func (c *client) buildMCPConnectivityChecks() []check {
 				// unlike mcp-files' read_file_base64/list_files, there's no
 				// zero-context call of its own this generic check (no attached
 				// file, no specific agent/prompt) could ever reasonably trigger.
-				// checkImageVision below is the real, fully-attached functional
-				// test for this server; this one would either 404 fetching a
-				// guessed file_id or (as reasonably observed live) have the
-				// model call a DIFFERENT server's tool (e.g. list_files)
-				// instead of guessing -- neither is a regression.
+				// So this attaches a real generated image itself (via
+				// checkVisionServerFunctionality, its own throwaway-chat
+				// wrapper around checkVisionTool) rather than skipping --
+				// deliberately duplicate coverage of vision_similarity, not a
+				// gap: only a real attached picture exercises this tool
+				// properly at all.
 				if s.Name == "vision" {
-					return skip("vision's own tools all require a real attached image -- see checkImageVision for the real functional test")
+					return c.checkVisionServerFunctionality()
 				}
 				if len(tools) == 0 {
 					return skip("connectivity check didn't discover any tools to call")
@@ -2559,6 +2572,76 @@ func (c *client) checkAdminDocumentUpload() error {
 	return nil
 }
 
+// settingsOperationalUploadLimits is the small slice of GET
+// /admin/api/settings' operational object this file actually needs --
+// deliberately not the full settingsResponse shape, since decoding into a
+// partial struct that only names these two fields is enough here and
+// avoids keeping a second full copy of every operational field in sync.
+type settingsOperationalUploadLimits struct {
+	Operational struct {
+		MaxFileUploadKB     int `json:"max_file_upload_kb"`
+		MaxDocumentUploadKB int `json:"max_document_upload_kb"`
+	} `json:"operational"`
+}
+
+// checkReadUploadSizeLimits reads (never mutates -- a live settings write
+// here would be exactly the kind of disruptive action
+// checkAdminEmbeddingEndpointsList's own doc comment already explains
+// avoiding) the two admin-configured upload-size ceilings, storing
+// max_file_upload_kb on c for checkUploadSizeLimitEnforced to reuse once
+// the session switches to the regular test user (where /admin/api/settings
+// is no longer reachable), and using max_document_upload_kb immediately
+// below for checkAdminDocumentUploadRejectsOversized.
+func (c *client) checkReadUploadSizeLimits() error {
+	var got settingsOperationalUploadLimits
+	status, err := c.getJSON("/admin/api/settings", &got)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("expected 200, got %d", status)
+	}
+	if got.Operational.MaxFileUploadKB <= 0 || got.Operational.MaxDocumentUploadKB <= 0 {
+		return fmt.Errorf("expected positive configured upload limits, got %+v", got.Operational)
+	}
+	c.maxFileUploadKB = got.Operational.MaxFileUploadKB
+	c.maxDocumentUploadKB = got.Operational.MaxDocumentUploadKB
+	return nil
+}
+
+// checkAdminDocumentUploadRejectsOversized proves
+// OperationalSettingsValues.MaxDocumentUploadBytes is actually enforced by
+// the live handler, not just reported in the settings response: an upload
+// one byte over the currently configured limit is rejected.
+func (c *client) checkAdminDocumentUploadRejectsOversized() error {
+	if c.maxDocumentUploadKB <= 0 {
+		return skip("checkReadUploadSizeLimits must have failed")
+	}
+	oversized := bytes.Repeat([]byte("x"), c.maxDocumentUploadKB*1024+1)
+	if _, err := c.uploadDocumentJob("e2e-check-oversized.bin", "application/octet-stream", oversized, false); err == nil {
+		return fmt.Errorf("expected a document upload one byte over the configured %d KB limit to be rejected, but it succeeded", c.maxDocumentUploadKB)
+	}
+	return nil
+}
+
+// checkUploadSizeLimitEnforced is checkAdminDocumentUploadRejectsOversized's
+// counterpart for the account/chat file upload limit -- run later, as the
+// regular test user, reusing the value checkReadUploadSizeLimits already
+// read as admin.
+func (c *client) checkUploadSizeLimitEnforced() error {
+	if c.testChatID == "" {
+		return skip(skipNoPinnedChat)
+	}
+	if c.maxFileUploadKB <= 0 {
+		return skip("checkReadUploadSizeLimits must have failed")
+	}
+	oversized := bytes.Repeat([]byte("x"), c.maxFileUploadKB*1024+1)
+	if _, err := c.uploadFile(c.testChatID, "e2e-check-oversized.bin", "application/octet-stream", oversized); err == nil {
+		return fmt.Errorf("expected an upload one byte over the configured %d KB limit to be rejected, but it succeeded", c.maxFileUploadKB)
+	}
+	return nil
+}
+
 // --- persistent chats (pin/rename/fork/delete) ---
 
 type pinnedChatResponse struct {
@@ -2811,18 +2894,34 @@ func (c *client) checkAccountFilesUnscoped() error {
 	return nil
 }
 
+// testImagePNGPalette gives each testImagePNG variant its own two colors
+// (rather than just shifting the same black/white checkerboard) so
+// distinct callers upload genuinely different image content, not
+// byte-for-byte identical pictures under different filenames.
+var testImagePNGPalette = [][2]color.Color{
+	{color.Black, color.White},
+	{color.RGBA{200, 30, 30, 255}, color.RGBA{30, 30, 200, 255}},
+	{color.RGBA{30, 160, 60, 255}, color.RGBA{230, 200, 40, 255}},
+}
+
 // testImagePNG is a small, real (not 1x1) PNG generated at startup -- a
-// 32x32 two-color checkerboard, real enough for checkImageVision's
-// vision_similarity call to actually embed and search with, not a
-// pipeline-completes-regardless 1x1 pixel.
-func testImagePNG() ([]byte, error) {
+// 32x32 two-color checkerboard, real enough for a vision_similarity/
+// vision_caption call to actually embed/caption, not a
+// pipeline-completes-regardless 1x1 pixel. variant selects a distinct
+// color pair from testImagePNGPalette (wrapping around) -- every call
+// site attaching a real image to the pinned test chat uses its own
+// variant, so a bug that only manifests for specific image content (or a
+// caching layer wrongly treating two different images as the same one)
+// has a chance to surface.
+func testImagePNG(variant int) ([]byte, error) {
+	colors := testImagePNGPalette[variant%len(testImagePNGPalette)]
 	img := image.NewRGBA(image.Rect(0, 0, 32, 32))
 	for y := 0; y < 32; y++ {
 		for x := 0; x < 32; x++ {
 			if (x/4+y/4)%2 == 0 {
-				img.Set(x, y, color.Black)
+				img.Set(x, y, colors[0])
 			} else {
-				img.Set(x, y, color.White)
+				img.Set(x, y, colors[1])
 			}
 		}
 	}
@@ -2877,7 +2976,7 @@ func (c *client) imageAnalystAgentID() (string, error) {
 	return "", skip(`no "Image analyst" agent configured on this deployment`)
 }
 
-func (c *client) checkVisionTool(toolName, filename, question, settingsSubPage, imageURL string) error {
+func (c *client) checkVisionTool(toolName, filename, question, settingsSubPage, imageURL string, variant int) error {
 	if c.testChatID == "" {
 		return skip(skipNoPinnedChat)
 	}
@@ -2886,7 +2985,7 @@ func (c *client) checkVisionTool(toolName, filename, question, settingsSubPage, 
 		return err
 	}
 	if imageURL == "" {
-		png, err := testImagePNG()
+		png, err := testImagePNG(variant)
 		if err != nil {
 			return err
 		}
@@ -2915,13 +3014,43 @@ func (c *client) checkVisionTool(toolName, filename, question, settingsSubPage, 
 	return nil
 }
 
+// checkVisionServerFunctionality is buildMCPConnectivityChecks' own "mcp
+// functionality: vision" case. It can't rely on the shared c.testChatID
+// checkImageVision/checkVisionCaption use below, since this generic
+// per-server loop runs earlier in main's own check order than
+// checkChatPin populates it -- so it pins its own throwaway chat instead
+// (deleted again once done, checks here run strictly sequentially so
+// there's no concurrent access to worry about) and temporarily points
+// c.testChatID at it for checkVisionTool's own duration.
+func (c *client) checkVisionServerFunctionality() error {
+	var out pinnedChatResponse
+	if _, err := c.postJSON(pathAccountChats, map[string]any{
+		"title": "e2e-check-mcp-functionality", "agent_id": "",
+		"history": []map[string]string{{"role": "user", "content": "e2e-check smoke test"}},
+	}, &out); err != nil {
+		return err
+	}
+	if out.ID == "" {
+		return fmt.Errorf("expected a non-empty chat id, got %+v", out)
+	}
+	defer func() { _, _ = c.deleteRequest(pathAccountChats + "/" + out.ID) }()
+
+	original := c.testChatID
+	c.testChatID = out.ID
+	defer func() { c.testChatID = original }()
+
+	return c.checkVisionTool("vision_similarity", "e2e-check-mcp-functionality.png",
+		"Use vision_similarity to find pages related to the image named e2e-check-mcp-functionality.png, and tell me what you find.",
+		"Similarity search", "", 2)
+}
+
 // checkImageVision exercises cmd/mcp-vision's vision_similarity tool end
 // to end (a real image embed against the configured provider, then a
 // real pgvector ANN search) -- see checkVisionTool's own doc comment.
 func (c *client) checkImageVision() error {
 	return c.checkVisionTool("vision_similarity", "e2e-check.png",
 		"Use vision_similarity to find pages related to the image named e2e-check.png, and tell me what you find.",
-		"Similarity search", "")
+		"Similarity search", "", 0)
 }
 
 // checkVisionCaption exercises cmd/mcp-vision's OTHER tool,
@@ -2939,7 +3068,7 @@ func (c *client) checkImageVision() error {
 func (c *client) checkVisionCaption() error {
 	return c.checkVisionTool("vision_caption", "e2e-check-caption.png",
 		"Use vision_caption to describe the image named e2e-check-caption.png.",
-		"Captioning", "")
+		"Captioning", "", 1)
 }
 
 // testVisionImageURL is a small, stable, long-standing httpbin.org
@@ -2954,7 +3083,7 @@ const testVisionImageURL = "https://httpbin.org/image/png"
 func (c *client) checkImageVisionByURL() error {
 	return c.checkVisionTool("vision_similarity", "",
 		fmt.Sprintf("Use vision_similarity with image_url set to %s (not file_id -- there is no attached file) to find pages related to it, and tell me what you find.", testVisionImageURL),
-		"Similarity search", testVisionImageURL)
+		"Similarity search", testVisionImageURL, 0)
 }
 
 // checkVisionCaptionByURL is checkVisionCaption's image_url counterpart --
@@ -2964,7 +3093,7 @@ func (c *client) checkImageVisionByURL() error {
 func (c *client) checkVisionCaptionByURL() error {
 	return c.checkVisionTool("vision_caption", "",
 		fmt.Sprintf("Use vision_caption with image_url set to %s (not file_id -- there is no attached file) to describe what the image shows.", testVisionImageURL),
-		"Captioning", testVisionImageURL)
+		"Captioning", testVisionImageURL, 0)
 }
 
 // blockedImageURL is AWS/GCP/Azure's shared link-local instance-metadata

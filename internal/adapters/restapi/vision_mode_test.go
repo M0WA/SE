@@ -36,7 +36,6 @@ type fakeGPUModeController struct {
 	status    domain.GPUModeStatus
 	statusErr error
 	switchErr error
-	heartErr  error
 
 	generateJobID  string
 	generateErr    error
@@ -57,10 +56,6 @@ func (f *fakeGPUModeController) Switch(_ context.Context, _ domain.GPUModeSettin
 		return f.status, f.switchErr
 	}
 	return domain.GPUModeStatus{Mode: f.status.Mode, Target: target, InProgress: true}, nil
-}
-
-func (f *fakeGPUModeController) Heartbeat(context.Context, domain.GPUModeSettings) error {
-	return f.heartErr
 }
 
 func (f *fakeGPUModeController) Generate(_ context.Context, _ domain.GPUModeSettings, opts domain.VisionGenerateOptions) (string, error) {
@@ -265,54 +260,6 @@ func TestHandleVisionModeSwitch_RateLimitedIs429(t *testing.T) {
 	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/mode", map[string]string{"mode": "chat"})
 	if rec.Code != http.StatusTooManyRequests {
 		t.Errorf("expected 429, got %d: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestHandleVisionHeartbeat_NilServiceIs404(t *testing.T) {
-	h, cookie := gpuModeAuthedHandler(t, nil, nil)
-	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/heartbeat", nil)
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("expected 404, got %d", rec.Code)
-	}
-}
-
-// TestHandleVisionHeartbeat_MethodNotAllowed mirrors
-// TestHandleVisionMode_MethodNotAllowed's own reasoning -- "/vision/api/
-// heartbeat" is registered only as "POST ...", so a GET falls through to
-// the "/" catch-all (404), never reaching requireMethod's own 405.
-func TestHandleVisionHeartbeat_MethodNotAllowed(t *testing.T) {
-	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
-	h, cookie := gpuModeAuthedHandler(t, svc, nil)
-	rec := doVisionRequest(t, h, cookie, http.MethodGet, "/vision/api/heartbeat", nil)
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("expected 404 (falls through to the \"/\" catch-all), got %d", rec.Code)
-	}
-}
-
-func TestHandleVisionHeartbeat_NotEnabledIs404(t *testing.T) {
-	svc := newGPUModeServiceForTest(&fakeGPUModeStore{getErr: ports.ErrGPUModeSettingsNotConfigured}, &fakeGPUModeController{})
-	h, cookie := gpuModeAuthedHandler(t, svc, nil)
-	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/heartbeat", nil)
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("expected 404, got %d", rec.Code)
-	}
-}
-
-func TestHandleVisionHeartbeat_ControllerErrorIs502(t *testing.T) {
-	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{heartErr: errors.New("unreachable")})
-	h, cookie := gpuModeAuthedHandler(t, svc, nil)
-	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/heartbeat", nil)
-	if rec.Code != http.StatusBadGateway {
-		t.Errorf("expected 502, got %d: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestHandleVisionHeartbeat_Success(t *testing.T) {
-	svc := newGPUModeServiceForTest(&fakeGPUModeStore{settings: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
-	h, cookie := gpuModeAuthedHandler(t, svc, nil)
-	rec := doVisionRequest(t, h, cookie, http.MethodPost, "/vision/api/heartbeat", nil)
-	if rec.Code != http.StatusNoContent {
-		t.Errorf("expected 204, got %d", rec.Code)
 	}
 }
 

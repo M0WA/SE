@@ -81,6 +81,54 @@ func TestOperationalSettings_SetNegativeMaxResponseBytesFallsBackToDefault(t *te
 	}
 }
 
+func TestOperationalSettings_SetZeroMaxFileUploadBytesFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{MaxFileUploadBytes: 0})
+	if v := s.Get(); v.MaxFileUploadBytes != 5*1024*1024 {
+		t.Errorf("expected a zero MaxFileUploadBytes to fall back to the default, got %d", v.MaxFileUploadBytes)
+	}
+}
+
+func TestOperationalSettings_SetNegativeMaxFileUploadBytesFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{MaxFileUploadBytes: -5})
+	if v := s.Get(); v.MaxFileUploadBytes != 5*1024*1024 {
+		t.Errorf("expected a negative MaxFileUploadBytes to fall back to the default, got %d", v.MaxFileUploadBytes)
+	}
+}
+
+func TestOperationalSettings_SetPositiveMaxFileUploadBytesIsPreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{MaxFileUploadBytes: 1024})
+	if v := s.Get(); v.MaxFileUploadBytes != 1024 {
+		t.Errorf("expected MaxFileUploadBytes=1024 to be preserved, got %d", v.MaxFileUploadBytes)
+	}
+}
+
+func TestOperationalSettings_SetZeroMaxDocumentUploadBytesFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{MaxDocumentUploadBytes: 0})
+	if v := s.Get(); v.MaxDocumentUploadBytes != 20*1024*1024 {
+		t.Errorf("expected a zero MaxDocumentUploadBytes to fall back to the default, got %d", v.MaxDocumentUploadBytes)
+	}
+}
+
+func TestOperationalSettings_SetNegativeMaxDocumentUploadBytesFallsBackToDefault(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{MaxDocumentUploadBytes: -5})
+	if v := s.Get(); v.MaxDocumentUploadBytes != 20*1024*1024 {
+		t.Errorf("expected a negative MaxDocumentUploadBytes to fall back to the default, got %d", v.MaxDocumentUploadBytes)
+	}
+}
+
+func TestOperationalSettings_SetPositiveMaxDocumentUploadBytesIsPreserved(t *testing.T) {
+	s := domain.DefaultOperationalSettings()
+	s.Set(domain.OperationalSettingsValues{MaxDocumentUploadBytes: 2048})
+	if v := s.Get(); v.MaxDocumentUploadBytes != 2048 {
+		t.Errorf("expected MaxDocumentUploadBytes=2048 to be preserved, got %d", v.MaxDocumentUploadBytes)
+	}
+}
+
 func TestOperationalSettings_SetZeroSemanticCandidatePoolSizeFallsBackToDefault(t *testing.T) {
 	s := domain.DefaultOperationalSettings()
 	s.Set(domain.OperationalSettingsValues{SemanticCandidatePoolSize: 0})
@@ -270,6 +318,8 @@ func TestDefaultOperationalSettings_ReturnsBuiltInDefaults(t *testing.T) {
 		ContentDedupSimHashMaxDistance:   3,
 		ContentDedupIntervalMinutes:      120,
 		EmbeddingRecomputeConcurrency:    4,
+		MaxFileUploadBytes:               5 * 1024 * 1024,
+		MaxDocumentUploadBytes:           20 * 1024 * 1024,
 	}
 	if !reflect.DeepEqual(v, want) {
 		t.Errorf("expected defaults %+v, got %+v", want, v)

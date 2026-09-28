@@ -279,23 +279,6 @@ paths:
               schema: { type: string }
         "502": { $ref: "#/components/responses/BadGateway" }
 
-  /vision/api/heartbeat:
-    post:
-      tags: [search]
-      summary: Reset cmd/gpu-control's own idle-revert timer
-      description: >-
-        Called while a Vision-mode panel stays open/active, so an idle
-        session doesn't get auto-reverted to chat out from under it (see
-        domain.GPUModeSettings.IdleRevertMinutes). No dwell/rate-limit
-        gating, unlike POST /vision/api/mode -- a heartbeat can't itself
-        thrash the GPU.
-      responses:
-        "204": { description: No Content }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "405": { $ref: "#/components/responses/BadRequest" }
-        "502": { $ref: "#/components/responses/BadGateway" }
-
   /vision/api/generate:
     post:
       tags: [search]
@@ -2905,6 +2888,19 @@ components:
                 "recompute now" click. Defaults 120, floored at 15 --
                 coarser than pagerank_recompute_interval_minutes's 60/5,
                 since this pass is heavier and destructive.
+            max_file_upload_kb:
+              type: integer
+              description: >-
+                Kilobytes allowed for a single account/chat file attachment
+                (POST /account/api/files -- both a browser upload and the
+                write_file MCP tool). Defaults 5120 (5MB). <=0 falls back
+                to that default.
+            max_document_upload_kb:
+              type: integer
+              description: >-
+                Kilobytes allowed for a single admin Document upload
+                (POST /admin/api/document-jobs) or S3 import fetch.
+                Defaults 20480 (20MB). <=0 falls back to that default.
 
     Overrides:
       type: object
@@ -3445,13 +3441,6 @@ components:
           description: >-
             How long a single chat<->vision switch may take before it's
             reported as failed. <=0 uses the built-in default.
-        idle_revert_minutes:
-          type: integer
-          description: >-
-            Automatically reverts to chat mode after this many minutes with
-            no Vision activity -- chat is the shared default every user
-            depends on, so a forgotten tab must not leave the deployment
-            chat-less indefinitely. <=0 disables the revert.
 
     GPUModeSettingsRequest:
       description: >-

@@ -14,15 +14,10 @@ import (
 	"searchengine/internal/ports"
 )
 
-// maxUploadedFileBytes bounds a single POST /account/api/files body -- files
-// are for the model to read as text (see cmd/mcp-files' read_file), not a
-// blob store, so this stays well under chat-turn content sizes.
 // maxFilesPerUser is a simple per-owner cap against unbounded growth, same
-// tier as maxChatMessages -- neither is admin-configurable.
-const (
-	maxUploadedFileBytes = 5 * 1024 * 1024
-	maxFilesPerUser      = 100
-)
+// tier as maxChatMessages -- not admin-configurable (unlike the upload size
+// bound below, this isn't what was asked to become one).
+const maxFilesPerUser = 100
 
 // fileTokenStore is a small in-memory table of short-lived bearer tokens,
 // each scoped to one userID -- minted per chat turn and handed to
@@ -166,8 +161,9 @@ func (h *Handler) handleAccountFiles(w http.ResponseWriter, r *http.Request) {
 // a chat: a bearer-token caller (cmd/mcp-files) gets tokenChatID; a
 // session-cookie caller supplies "chat_id", verified as one of this user's
 // own pinned chats -- a missing/foreign chat_id is rejected, never
-// silently uploaded unattached. r.Body is capped at maxUploadedFileBytes+1
-// before multipart parsing, so an oversized upload fails as a read error.
+// silently uploaded unattached. r.Body is capped at the admin-configured
+// OperationalSettingsValues.MaxFileUploadBytes+1 before multipart parsing,
+// so an oversized upload fails as a read error.
 func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request, userID, tokenChatID string) {
 	existing, err := h.files.ListFiles(r.Context(), userID)
 	if err != nil {
@@ -178,9 +174,10 @@ func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request, userI
 		http.Error(w, fmt.Sprintf("you already have %d files, the maximum allowed", maxFilesPerUser), http.StatusBadRequest)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxUploadedFileBytes+1)
-	if err := r.ParseMultipartForm(maxUploadedFileBytes + 1); err != nil {
-		http.Error(w, "invalid or oversized upload (max "+fmt.Sprintf("%d", maxUploadedFileBytes)+" bytes)", http.StatusBadRequest)
+	maxUploadBytes := int64(h.opSettings.Get().MaxFileUploadBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes+1)
+	if err := r.ParseMultipartForm(maxUploadBytes + 1); err != nil {
+		http.Error(w, "invalid or oversized upload (max "+fmt.Sprintf("%d", maxUploadBytes)+" bytes)", http.StatusBadRequest)
 		return
 	}
 	chatID := tokenChatID
@@ -204,8 +201,8 @@ func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request, userI
 	}
 	defer file.Close()
 	// No separate size check needed: r.Body is already wrapped in
-	// http.MaxBytesReader(maxUploadedFileBytes+1) above, and multipart
-	// overhead guarantees len(data) here is under that bound.
+	// http.MaxBytesReader(maxUploadBytes+1) above, and multipart overhead
+	// guarantees len(data) here is under that bound.
 	data, err := io.ReadAll(file)
 	if err != nil {
 		http.Error(w, "reading upload", http.StatusInternalServerError)

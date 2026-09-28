@@ -2057,6 +2057,71 @@ func TestHandleAdminSettings_FuzzyFieldsRoundTrip(t *testing.T) {
 	}
 }
 
+// TestHandleAdminSettings_UploadLimitFieldsRoundTrip mirrors
+// TestHandleAdminSettings_FuzzyFieldsRoundTrip for the two admin-configurable
+// upload-size ceilings (account/chat file uploads, admin document uploads).
+func TestHandleAdminSettings_UploadLimitFieldsRoundTrip(t *testing.T) {
+	settings := domain.NewTuningSettings(0.5, 1.2, 0.75)
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{
+		MaxFileUploadBytes: 10 * 1024 * 1024, MaxDocumentUploadBytes: 40 * 1024 * 1024,
+	})
+	h, cookie := adminAuthedHandlerWithSettings(t, &fakeAdminRepo{}, &fakeDebugSearch{}, settings, opSettings)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/api/settings", nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", getRec.Code)
+	}
+	var getResp struct {
+		Operational struct {
+			MaxFileUploadKB     int `json:"max_file_upload_kb"`
+			MaxDocumentUploadKB int `json:"max_document_upload_kb"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decoding GET response: %v", err)
+	}
+	if getResp.Operational.MaxFileUploadKB != 10240 || getResp.Operational.MaxDocumentUploadKB != 40960 {
+		t.Errorf("expected GET to report max_file_upload_kb=10240, max_document_upload_kb=40960, got %+v", getResp.Operational)
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"tuning": map[string]float64{"alpha": 0.5, "k1": 1.2, "b": 0.75},
+		"operational": map[string]interface{}{
+			"fetch_timeout_seconds": 8, "default_max_pages": 20, "min_text_length": 50,
+			"default_top_k": 10, "session_ttl_hours": 12, "crawl_delay_ms": 250, "max_response_kb": 5120,
+			"max_file_upload_kb": 2048, "max_document_upload_kb": 8192,
+		},
+	})
+	postReq := httptest.NewRequest(http.MethodPost, "/admin/api/settings", bytes.NewReader(body))
+	postReq.AddCookie(cookie)
+	postRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", postRec.Code, postRec.Body.String())
+	}
+
+	ov := opSettings.Get()
+	if ov.MaxFileUploadBytes != 2048*1024 || ov.MaxDocumentUploadBytes != 8192*1024 {
+		t.Errorf("expected upload limits to be updated, got %+v", ov)
+	}
+
+	var postResp struct {
+		Operational struct {
+			MaxFileUploadKB     int `json:"max_file_upload_kb"`
+			MaxDocumentUploadKB int `json:"max_document_upload_kb"`
+		} `json:"operational"`
+	}
+	if err := json.Unmarshal(postRec.Body.Bytes(), &postResp); err != nil {
+		t.Fatalf("decoding POST response: %v", err)
+	}
+	if postResp.Operational.MaxFileUploadKB != 2048 || postResp.Operational.MaxDocumentUploadKB != 8192 {
+		t.Errorf("expected the POST response to echo back max_file_upload_kb=2048, max_document_upload_kb=8192, got %+v", postResp.Operational)
+	}
+}
+
 // TestHandleAdminSettings_PageRankFieldsRoundTrip mirrors
 // TestHandleAdminSettings_FuzzyFieldsRoundTrip for the PageRank tuning
 // weight and operational recompute interval.

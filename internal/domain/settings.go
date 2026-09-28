@@ -128,6 +128,16 @@ type OperationalSettingsValues struct {
 	// unlimited (0) endpoint, this concurrency IS the only throttle, so
 	// raise it carefully there.
 	EmbeddingRecomputeConcurrency int
+	// MaxFileUploadBytes bounds a single POST /account/api/files body
+	// (account/chat file attachments, both a browser upload and the
+	// write_file MCP tool) -- see restapi's own handleUploadFile.
+	MaxFileUploadBytes int
+	// MaxDocumentUploadBytes bounds a single admin document upload (see
+	// restapi's own handleAdminDocumentUpload) and, separately, a single
+	// S3 GetObject fetch for the admin document S3-import feature (same
+	// ceiling, not a coincidence -- see s3MaxObjectBytes's own doc
+	// comment).
+	MaxDocumentUploadBytes int
 }
 
 // defaultUserAgent mimics a standard desktop Firefox so crawled sites treat
@@ -140,6 +150,11 @@ const defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Ge
 const (
 	defaultCrawlDelayMs     = 250
 	defaultMaxResponseBytes = 5 * 1024 * 1024
+	// defaultMaxFileUploadBytes/defaultMaxDocumentUploadBytes match this
+	// feature's own original fixed values (see the fields' own doc
+	// comments), preserved as the default now that both are admin-configurable.
+	defaultMaxFileUploadBytes     = 5 * 1024 * 1024
+	defaultMaxDocumentUploadBytes = 20 * 1024 * 1024
 	// defaultSemanticCandidatePoolSize keeps semantic scoring/ranking
 	// working over at most a few hundred candidates regardless of corpus size.
 	defaultSemanticCandidatePoolSize = 200
@@ -233,6 +248,8 @@ func defaultOperationalSettings() OperationalSettingsValues {
 		ContentDedupSimHashMaxDistance:   defaultContentDedupSimHashMaxDistance,
 		ContentDedupIntervalMinutes:      defaultContentDedupIntervalMinutes,
 		EmbeddingRecomputeConcurrency:    defaultEmbeddingRecomputeConcurrency,
+		MaxFileUploadBytes:               defaultMaxFileUploadBytes,
+		MaxDocumentUploadBytes:           defaultMaxDocumentUploadBytes,
 	}
 }
 
@@ -298,6 +315,12 @@ func (s *OperationalSettings) Set(v OperationalSettingsValues) {
 	}
 	if v.MaxResponseBytes <= 0 {
 		v.MaxResponseBytes = d.MaxResponseBytes
+	}
+	if v.MaxFileUploadBytes <= 0 {
+		v.MaxFileUploadBytes = d.MaxFileUploadBytes
+	}
+	if v.MaxDocumentUploadBytes <= 0 {
+		v.MaxDocumentUploadBytes = d.MaxDocumentUploadBytes
 	}
 	if v.SemanticCandidatePoolSize <= 0 {
 		v.SemanticCandidatePoolSize = d.SemanticCandidatePoolSize

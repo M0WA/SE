@@ -405,6 +405,36 @@ func TestHandleAccountFiles_UploadTooLargeRejected(t *testing.T) {
 	}
 }
 
+// TestHandleAccountFiles_UploadRespectsConfiguredLimit proves the upload
+// ceiling is the admin-configured OperationalSettingsValues.MaxFileUploadBytes,
+// not a hardcoded constant: a 2KB upload is rejected under a 1KB configured
+// limit even though it would pass under the built-in 5MB default.
+func TestHandleAccountFiles_UploadRespectsConfiguredLimit(t *testing.T) {
+	userStore := &fakeUserStore{users: []domain.User{{ID: "u1", Username: "alice", PasswordHash: testUserPasswordHash}}}
+	fileStore := &fakeFileStore{}
+	opSettings := domain.NewOperationalSettings(domain.OperationalSettingsValues{MaxFileUploadBytes: 1024})
+	cfg := restapi.Config{
+		Users: userStore, Files: fileStore, OpSettings: opSettings,
+		Chats: &fakeChatStore{byOwner: map[string][]domain.PersistedChat{
+			"u1": {{ID: testChatID, OwnerUserID: "u1", Title: "test chat"}},
+		}},
+	}
+	h := restapi.New(cfg)
+	body, _ := json.Marshal(map[string]string{"username": "alice", "password": testUserPassword})
+	loginReq := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
+	loginRec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusOK {
+		t.Fatalf("user login failed: %d %s", loginRec.Code, loginRec.Body.String())
+	}
+	cookie := loginRec.Result().Cookies()[0]
+
+	rec := uploadTestFile(t, h, func(r *http.Request) { r.AddCookie(cookie) }, "small.bin", bytes.Repeat([]byte("x"), 2048))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for a 2KB upload under a configured 1KB limit, got %d", rec.Code)
+	}
+}
+
 func TestHandleAccountFiles_UploadAtPerUserCapRejected(t *testing.T) {
 	userStore := &fakeUserStore{users: []domain.User{{ID: "u1", Username: "alice", PasswordHash: testUserPasswordHash}}}
 	fileStore := &fakeFileStore{}

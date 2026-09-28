@@ -54,7 +54,6 @@ start with an empty `GPU_CONTROL_TOKEN`).
 |---|---|
 | `GET /gpu/api/mode` | Current `{mode, target, in_progress, since, expires_at, detail}`. |
 | `POST /gpu/api/mode` `{"mode":"chat"\|"vision"}` | Begins a switch (`202`), or reports `200` if already there, or `409` if a switch to a *different* target is already in flight. Runs on a detached background goroutine, so a client disconnect never leaves the GPU half-switched. |
-| `POST /gpu/api/heartbeat` | Resets the idle-revert timer (see below). `204`. |
 | `POST /gpu/api/generate` `{"prompt":"...", "aspect_ratio":"...", "duration_seconds":N, "megapixels":N, "negative_prompt":"...", "enhance_prompt":bool}` | Submits a new text-to-video job to ComfyUI (`202` with `{"prompt_id":"..."}`), using the fixed, embedded workflow template below with the prompt, a fresh random seed, and every other given field substituted in (each optional field left unset/zero uses the template's own original default). `400` for an out-of-range `aspect_ratio`/`duration_seconds`/`megapixels`. `409` if the GPU isn't currently in Vision mode. |
 | `GET /gpu/api/generate/{id}` | Polls that job: `{"status":"pending"\|"done"\|"failed", "view_url":"...", "error":"..."}` -- `view_url` (once `"done"`) is a `GET /gpu/api/view` URL. An id absent from ComfyUI's own `/history` is `"pending"` only if this process's own `Generate` submitted it (this ComfyUI process's history is still intact); otherwise `"failed"`, since ComfyUI's history for a job vanishes once its process restarts (every chat<->vision switch), so an unknown, absent id can never resolve on its own. |
 | `GET /gpu/api/view?filename=...&subfolder=...&type=...` | Narrowly forwards exactly those three (plus `preview`) query params to ComfyUI's own read-only `GET /view`, streaming the resulting file's bytes back -- never a general-purpose proxy, unlike `/gpu/comfy/` below. |
@@ -114,14 +113,6 @@ generate.go` and `internal/adapters/restapi/vision_mode.go` (the latter
 deliberately duplicates the whitelist rather than importing this binary's
 own package -- see that file's own doc comment for why).
 
-## Idle revert
-
-While in Vision mode, if no `POST /gpu/api/heartbeat` arrives for
-`GPU_CONTROL_IDLE_REVERT_MINUTES` (default 15), the service automatically
-switches back to chat on its own -- chat is the shared default every user
-depends on, so a forgotten browser tab must not leave the deployment
-chat-less indefinitely. Set to `0` to disable.
-
 ## Install
 
 1. Build/obtain `searchengine-gpu-control_<version>_amd64.deb` (see the
@@ -155,7 +146,7 @@ change, which this isn't.
 
 See `gpu-control.env`'s own inline comments for the full list
 (`GPU_CONTROL_TOKEN`, `GPU_CONTROL_LISTEN_ADDR`,
-`GPU_CONTROL_SWITCH_TIMEOUT_SECONDS`, `GPU_CONTROL_IDLE_REVERT_MINUTES`,
+`GPU_CONTROL_SWITCH_TIMEOUT_SECONDS`,
 `GPU_CONTROL_COMFY_READY_URL`, `GPU_CONTROL_VLLM_READY_URL`,
 `GPU_CONTROL_VLLM_API_KEY`) -- also documented in
 `docs/manual/environment-variables.md`.

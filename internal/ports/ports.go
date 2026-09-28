@@ -659,7 +659,6 @@ type GPUModeController interface {
 	// describes what it's busy with (Target/Since/Detail), same as any
 	// other outcome.
 	Switch(ctx context.Context, cfg domain.GPUModeSettings, target domain.GPUMode) (domain.GPUModeStatus, error)
-	Heartbeat(ctx context.Context, cfg domain.GPUModeSettings) error
 	// Generate submits a new text-to-video job (only valid while the GPU
 	// is already in domain.GPUModeVision) and returns cmd/gpu-control's
 	// own prompt id, used to poll GenerateResult. opts' zero-valued

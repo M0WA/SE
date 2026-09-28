@@ -41,7 +41,6 @@ function baseGPUMode(overrides) {
     control_base_url: '',
     has_control_api_key: false,
     switch_timeout_seconds: 0,
-    idle_revert_minutes: 0,
     updated_at: '2026-01-02T03:04:05Z',
   }, overrides);
 }
@@ -551,13 +550,11 @@ test('loadGPUModeSettings populates every field from the GET response', async ()
     enabled: true,
     control_base_url: 'http://10.7.226.11:8002',
     switch_timeout_seconds: 300,
-    idle_revert_minutes: 15,
   }));
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(document.getElementById('gpu-mode-enabled').checked, true);
   assert.equal(document.getElementById('gpu-mode-control-base-url').value, 'http://10.7.226.11:8002');
   assert.equal(document.getElementById('gpu-mode-switch-timeout-seconds').value, '300');
-  assert.equal(document.getElementById('gpu-mode-idle-revert-minutes').value, '15');
 });
 
 test('loadGPUModeSettings never populates the control token field, even when one is stored', async () => {
@@ -591,7 +588,6 @@ test('saveGPUModeSettings PATCHes every field', async () => {
   document.getElementById('gpu-mode-control-base-url').value = 'http://10.7.226.11:8002';
   document.getElementById('gpu-mode-control-api-key').value = 'sk-new-token';
   document.getElementById('gpu-mode-switch-timeout-seconds').value = '300';
-  document.getElementById('gpu-mode-idle-revert-minutes').value = '15';
   let gotURL, gotBody;
   global.fetch = async (url, opts) => {
     if (url.includes('/admin/api/gpu-mode') && opts && opts.method === 'PATCH') {
@@ -608,7 +604,6 @@ test('saveGPUModeSettings PATCHes every field', async () => {
   assert.equal(gotBody.control_base_url, 'http://10.7.226.11:8002');
   assert.equal(gotBody.control_api_key, 'sk-new-token');
   assert.equal(gotBody.switch_timeout_seconds, 300);
-  assert.equal(gotBody.idle_revert_minutes, 15);
   assert.equal(document.getElementById('gpu-mode-settings-status').textContent, 'Saved.');
 });
 

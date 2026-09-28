@@ -37,7 +37,6 @@ type fakeGPUModeController struct {
 	status    domain.GPUModeStatus
 	statusErr error
 	switchErr error
-	heartErr  error
 
 	switchCalls int
 	lastTarget  domain.GPUMode
@@ -60,10 +59,6 @@ func (f *fakeGPUModeController) Switch(ctx context.Context, cfg domain.GPUModeSe
 	f.switchCalls++
 	f.lastTarget = target
 	return f.status, f.switchErr
-}
-
-func (f *fakeGPUModeController) Heartbeat(ctx context.Context, cfg domain.GPUModeSettings) error {
-	return f.heartErr
 }
 
 func (f *fakeGPUModeController) Generate(ctx context.Context, cfg domain.GPUModeSettings, opts domain.VisionGenerateOptions) (string, error) {
@@ -362,36 +357,6 @@ func TestGPUModeService_Switch_RateLimitIsPerAccount(t *testing.T) {
 	}
 }
 
-func TestGPUModeService_Heartbeat_NotEnabled(t *testing.T) {
-	s := newTestGPUModeService(&fakeGPUModeStore{notConfig: true}, &fakeGPUModeController{})
-	if err := s.Heartbeat(context.Background()); !errors.Is(err, ErrGPUModeNotEnabled) {
-		t.Fatalf("expected ErrGPUModeNotEnabled, got %v", err)
-	}
-}
-
-func TestGPUModeService_Heartbeat_StoreErrorPropagates(t *testing.T) {
-	wantErr := errors.New("db down")
-	s := newTestGPUModeService(&fakeGPUModeStore{err: wantErr}, &fakeGPUModeController{})
-	if err := s.Heartbeat(context.Background()); !errors.Is(err, wantErr) {
-		t.Fatalf("expected store error to propagate, got %v", err)
-	}
-}
-
-func TestGPUModeService_Heartbeat_Success(t *testing.T) {
-	s := newTestGPUModeService(&fakeGPUModeStore{cfg: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{})
-	if err := s.Heartbeat(context.Background()); err != nil {
-		t.Fatalf("Heartbeat: %v", err)
-	}
-}
-
-func TestGPUModeService_Heartbeat_ControllerErrorPropagates(t *testing.T) {
-	wantErr := errors.New("gpu-control unreachable")
-	s := newTestGPUModeService(&fakeGPUModeStore{cfg: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{heartErr: wantErr})
-	if err := s.Heartbeat(context.Background()); !errors.Is(err, wantErr) {
-		t.Fatalf("expected controller error to propagate, got %v", err)
-	}
-}
-
 func TestGPUModeService_Generate_NotEnabled(t *testing.T) {
 	s := newTestGPUModeService(&fakeGPUModeStore{notConfig: true}, &fakeGPUModeController{})
 	if _, err := s.Generate(context.Background(), "user1", "chat1", domain.VisionGenerateOptions{Prompt: "a cat"}); !errors.Is(err, ErrGPUModeNotEnabled) {
@@ -447,7 +412,7 @@ func TestGPUModeService_Generate_OptionsPassThrough(t *testing.T) {
 
 func TestGPUModeService_GenerateResult_NotEnabled(t *testing.T) {
 	s := newTestGPUModeService(&fakeGPUModeStore{notConfig: true}, &fakeGPUModeController{})
-	if _, err := s.GenerateResult(context.Background(), "abc-123"); !errors.Is(err, ErrGPUModeNotEnabled) {
+	if _, err := s.GenerateResult(context.Background(), "user1", "abc-123"); !errors.Is(err, ErrGPUModeNotEnabled) {
 		t.Fatalf("expected ErrGPUModeNotEnabled, got %v", err)
 	}
 }
@@ -455,7 +420,7 @@ func TestGPUModeService_GenerateResult_NotEnabled(t *testing.T) {
 func TestGPUModeService_GenerateResult_StoreErrorPropagates(t *testing.T) {
 	wantErr := errors.New("db down")
 	s := newTestGPUModeService(&fakeGPUModeStore{err: wantErr}, &fakeGPUModeController{})
-	if _, err := s.GenerateResult(context.Background(), "abc-123"); !errors.Is(err, wantErr) {
+	if _, err := s.GenerateResult(context.Background(), "user1", "abc-123"); !errors.Is(err, wantErr) {
 		t.Fatalf("expected store error to propagate, got %v", err)
 	}
 }
@@ -463,7 +428,7 @@ func TestGPUModeService_GenerateResult_StoreErrorPropagates(t *testing.T) {
 func TestGPUModeService_GenerateResult_Success(t *testing.T) {
 	s := newTestGPUModeService(&fakeGPUModeStore{cfg: domain.GPUModeSettings{Enabled: true}},
 		&fakeGPUModeController{generateResult: domain.GPUGenerateResult{Status: "done", ViewURL: "/gpu/api/view?filename=out.mp4"}})
-	result, err := s.GenerateResult(context.Background(), "abc-123")
+	result, err := s.GenerateResult(context.Background(), "user1", "abc-123")
 	if err != nil {
 		t.Fatalf("GenerateResult: %v", err)
 	}
@@ -475,7 +440,7 @@ func TestGPUModeService_GenerateResult_Success(t *testing.T) {
 func TestGPUModeService_GenerateResult_ControllerErrorPropagates(t *testing.T) {
 	wantErr := errors.New("gpu-control unreachable")
 	s := newTestGPUModeService(&fakeGPUModeStore{cfg: domain.GPUModeSettings{Enabled: true}}, &fakeGPUModeController{generateResErr: wantErr})
-	if _, err := s.GenerateResult(context.Background(), "abc-123"); !errors.Is(err, wantErr) {
+	if _, err := s.GenerateResult(context.Background(), "user1", "abc-123"); !errors.Is(err, wantErr) {
 		t.Fatalf("expected controller error to propagate, got %v", err)
 	}
 }
@@ -494,7 +459,7 @@ func TestGPUModeService_GenerateResult_SavesGeneratedFileOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	result, err := s.GenerateResult(context.Background(), jobID)
+	result, err := s.GenerateResult(context.Background(), "user1", jobID)
 	if err != nil {
 		t.Fatalf("GenerateResult: %v", err)
 	}
@@ -515,7 +480,7 @@ func TestGPUModeService_GenerateResult_SavesGeneratedFileOnce(t *testing.T) {
 	}
 
 	// A second poll of the same already-done job must not save again.
-	result2, err := s.GenerateResult(context.Background(), jobID)
+	result2, err := s.GenerateResult(context.Background(), "user1", jobID)
 	if err != nil {
 		t.Fatalf("GenerateResult (second poll): %v", err)
 	}
@@ -539,7 +504,7 @@ func TestGPUModeService_GenerateResult_SkipsSaveWhenChatIDEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	result, err := s.GenerateResult(context.Background(), jobID)
+	result, err := s.GenerateResult(context.Background(), "user1", jobID)
 	if err != nil {
 		t.Fatalf("GenerateResult: %v", err)
 	}
@@ -562,7 +527,7 @@ func TestGPUModeService_GenerateResult_SkipsSaveWhenFilesNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	result, err := s.GenerateResult(context.Background(), jobID)
+	result, err := s.GenerateResult(context.Background(), "user1", jobID)
 	if err != nil {
 		t.Fatalf("GenerateResult: %v", err)
 	}
@@ -585,7 +550,7 @@ func TestGPUModeService_GenerateResult_SaveFailureDoesNotFailRequest(t *testing.
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	result, err := s.GenerateResult(context.Background(), jobID)
+	result, err := s.GenerateResult(context.Background(), "user1", jobID)
 	if err != nil {
 		t.Fatalf("expected GenerateResult to still succeed despite the save failure, got %v", err)
 	}
@@ -610,7 +575,7 @@ func TestGPUModeService_GenerateResult_SaveSkipsWhenViewAssetFails(t *testing.T)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	result, err := s.GenerateResult(context.Background(), jobID)
+	result, err := s.GenerateResult(context.Background(), "user1", jobID)
 	if err != nil {
 		t.Fatalf("expected GenerateResult to still succeed, got %v", err)
 	}
@@ -643,7 +608,7 @@ func TestGPUModeService_GenerateResult_SaveSkipsWhenReadingAssetFails(t *testing
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	result, err := s.GenerateResult(context.Background(), jobID)
+	result, err := s.GenerateResult(context.Background(), "user1", jobID)
 	if err != nil {
 		t.Fatalf("expected GenerateResult to still succeed, got %v", err)
 	}
@@ -666,7 +631,7 @@ func TestGPUModeService_GenerateResult_SaveFallsBackToVideoMP4WhenContentTypeEmp
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	if _, err := s.GenerateResult(context.Background(), jobID); err != nil {
+	if _, err := s.GenerateResult(context.Background(), "user1", jobID); err != nil {
 		t.Fatalf("GenerateResult: %v", err)
 	}
 	if len(files.saved) != 1 || files.saved[0].ContentType != "video/mp4" {
@@ -683,7 +648,7 @@ func TestGPUModeService_GenerateResult_UnknownJobIDSkipsSave(t *testing.T) {
 
 	// Never called Generate for this job id -- GenerateResult must not
 	// panic or save anything.
-	result, err := s.GenerateResult(context.Background(), "never-submitted")
+	result, err := s.GenerateResult(context.Background(), "user1", "never-submitted")
 	if err != nil {
 		t.Fatalf("GenerateResult: %v", err)
 	}
@@ -692,6 +657,36 @@ func TestGPUModeService_GenerateResult_UnknownJobIDSkipsSave(t *testing.T) {
 	}
 	if len(files.saved) != 0 {
 		t.Fatalf("expected no saved file, got %d", len(files.saved))
+	}
+}
+
+func TestGPUModeService_GenerateResult_RejectsMismatchedOwner(t *testing.T) {
+	controller := &fakeGPUModeController{
+		generateResult: domain.GPUGenerateResult{Status: "done", ViewURL: "/gpu/api/view?filename=out.mp4"},
+	}
+	s := newTestGPUModeService(&fakeGPUModeStore{cfg: domain.GPUModeSettings{Enabled: true}}, controller)
+
+	jobID, err := s.Generate(context.Background(), "user1", "chat1", domain.VisionGenerateOptions{Prompt: "a cat"})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if _, err := s.GenerateResult(context.Background(), "someone-else", jobID); !errors.Is(err, ErrGPUGenerateJobNotOwned) {
+		t.Fatalf("expected ErrGPUGenerateJobNotOwned, got %v", err)
+	}
+}
+
+func TestGPUModeService_GenerateResult_AllowsMatchingOwner(t *testing.T) {
+	controller := &fakeGPUModeController{
+		generateResult: domain.GPUGenerateResult{Status: "pending"},
+	}
+	s := newTestGPUModeService(&fakeGPUModeStore{cfg: domain.GPUModeSettings{Enabled: true}}, controller)
+
+	jobID, err := s.Generate(context.Background(), "user1", "chat1", domain.VisionGenerateOptions{Prompt: "a cat"})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if _, err := s.GenerateResult(context.Background(), "user1", jobID); err != nil {
+		t.Fatalf("expected the actual owner to be allowed through, got %v", err)
 	}
 }
 

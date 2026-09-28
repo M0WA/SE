@@ -35,6 +35,8 @@
   const pageRankEnabledEl = document.getElementById('pagerank-enabled');
   const pageRankIntervalEl = document.getElementById('pagerank-interval');
   const sessionTTLEl = document.getElementById('session-ttl');
+  const maxFileUploadKBEl = document.getElementById('max-file-upload-kb');
+  const maxDocumentUploadKBEl = document.getElementById('max-document-upload-kb');
   const status = document.getElementById('settings-status');
   const blockedTermsEl = document.getElementById('blocked-terms');
   const blockedDomainsEl = document.getElementById('blocked-domains');
@@ -186,6 +188,8 @@
     pageRankEnabledEl.checked = s.operational.pagerank_enabled;
     pageRankIntervalEl.value = s.operational.pagerank_recompute_interval_minutes;
     sessionTTLEl.value = s.operational.session_ttl_hours;
+    maxFileUploadKBEl.value = s.operational.max_file_upload_kb;
+    maxDocumentUploadKBEl.value = s.operational.max_document_upload_kb;
     renderSettingsSummary(s);
   }
 
@@ -242,6 +246,8 @@
         pagerank_enabled: pageRankEnabledEl.checked,
         pagerank_recompute_interval_minutes: Number.parseInt(pageRankIntervalEl.value, 10),
         session_ttl_hours: Number.parseInt(sessionTTLEl.value, 10),
+        max_file_upload_kb: Number.parseInt(maxFileUploadKBEl.value, 10),
+        max_document_upload_kb: Number.parseInt(maxDocumentUploadKBEl.value, 10),
       },
     });
     applySettings(s);

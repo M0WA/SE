@@ -30,13 +30,3 @@ func TestHandleVisionModeSwitch_RequireMethodBranch(t *testing.T) {
 		t.Errorf("expected 405, got %d", rec.Code)
 	}
 }
-
-func TestHandleVisionHeartbeat_RequireMethodBranch(t *testing.T) {
-	h := &Handler{}
-	req := httptest.NewRequest(http.MethodGet, "/vision/api/heartbeat", nil)
-	rec := httptest.NewRecorder()
-	h.handleVisionHeartbeat(rec, req)
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Errorf("expected 405, got %d", rec.Code)
-	}
-}

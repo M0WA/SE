@@ -650,6 +650,22 @@ func TestHandleUploadDocumentJob_InvalidMultipartBody(t *testing.T) {
 	}
 }
 
+// TestHandleUploadDocumentJob_RespectsConfiguredLimit proves the upload
+// ceiling is the admin-configured OperationalSettingsValues.MaxDocumentUploadBytes,
+// not a hardcoded constant: a 2KB upload is rejected under a 1KB configured
+// limit even though it would pass under the built-in 20MB default.
+func TestHandleUploadDocumentJob_RespectsConfiguredLimit(t *testing.T) {
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		DocumentJobs: newFakeDocumentJobStore(), Admin: &fakeAdminRepo{},
+		OpSettings: domain.NewOperationalSettings(domain.OperationalSettingsValues{MaxDocumentUploadBytes: 1024}),
+		DBDriver:   "pgx",
+	})
+	rec := uploadDocumentJob(t, h, cookie, "notes.txt", "text/plain", bytes.Repeat([]byte("x"), 2048), false)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a 2KB upload under a configured 1KB limit, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleAdminDocumentJobs_UploadStoreErrorIsInternalError(t *testing.T) {
 	store := newFakeDocumentJobStore()
 	store.createErr = errors.New("db down")
