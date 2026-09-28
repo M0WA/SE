@@ -87,6 +87,18 @@ type ImageEmbedder interface {
 	EmbedImage(ctx context.Context, base64Data, mimeType string) ([]float32, error)
 }
 
+// StreamingImageEmbedder is ImageEmbedder's zero-buffering counterpart --
+// r's bytes are base64-encoded on the fly straight into the embedding
+// provider's own HTTP request body, so a caller (the admin Document-upload
+// feature's direct-upload image path) never holds the whole image in
+// memory or persists it anywhere. httpembed.Embedder implements this;
+// hashembed does not (same split as ImageEmbedder). No retry-on-429: r can
+// only be read once, so a transient rate-limit response fails the call
+// outright rather than being retried like Embed/EmbedImage's own backoff.
+type StreamingImageEmbedder interface {
+	EmbedImageStream(ctx context.Context, r io.Reader, mimeType string) ([]float32, error)
+}
+
 // SQLRepository is the port to the relational database.
 type SQLRepository interface {
 	// SaveDocument upserts doc, archiving its previous content to
@@ -452,34 +464,39 @@ type CrawlJobStore interface {
 	DeleteEndedCrawlJobs(ctx context.Context) (int, error)
 }
 
-// DocumentJobStore persists Document-upload jobs and their raw bytes --
-// admin-server's own store (unlike CrawlJobStore, there's no separate
-// crawl-server network hop; a Document job is always local, synchronous
-// work). Method names are fully qualified (CreateDocumentJob, not Create)
-// since the same *sqlrepo.Repository also implements CrawlJobStore's own
-// bare Create/Get/List/Delete for a different table -- a single Go type
-// can't have two methods named Get with different signatures.
-// GetDocumentJob/GetDocumentJobData return domain.ErrDocumentJobNotFound if
-// unretained.
+// DocumentJobStore persists Document-upload jobs -- admin-server's own
+// store (unlike CrawlJobStore, there's no separate crawl-server network
+// hop; a Document job is always local work). Method names are fully
+// qualified (CreateDocumentJob, not Create) since the same
+// *sqlrepo.Repository also implements CrawlJobStore's own bare
+// Create/Get/List/Delete for a different table -- a single Go type can't
+// have two methods named Get with different signatures.
+// GetDocumentJob returns domain.ErrDocumentJobNotFound if unretained.
+// Deliberately does NOT retain the uploaded/imported content itself --
+// text is already fully captured in the resulting Document's own Text
+// field once indexed, and an image is (for a direct upload) never even
+// buffered in this process, let alone persisted here; see
+// restapi.handleUploadDocumentJob's own doc comment.
 type DocumentJobStore interface {
-	// CreateDocumentJob stores a new queued job plus its raw bytes,
-	// returning its assigned ID and CreatedAt -- the caller never picks
-	// either.
-	CreateDocumentJob(ctx context.Context, filename, contentType string, size int64, source domain.DocumentJobSource, indexVocabulary bool, data []byte) (domain.DocumentJob, error)
+	// CreateDocumentJob stores a new queued job, returning its assigned ID
+	// and CreatedAt -- the caller never picks either. size is 0 when not
+	// yet known (the direct-upload image path only learns it once the
+	// upload stream is fully consumed -- see MarkDocumentJobDone).
+	CreateDocumentJob(ctx context.Context, filename, contentType string, size int64, source domain.DocumentJobSource, indexVocabulary bool) (domain.DocumentJob, error)
 	MarkDocumentJobRunning(ctx context.Context, id string) error
-	MarkDocumentJobDone(ctx context.Context, id, docID string) error
+	// MarkDocumentJobDone also (re)sets size -- redundant with what
+	// CreateDocumentJob already stored for a job whose size was known
+	// upfront (text, S3 import), but the only place a streamed image
+	// upload's true byte count is ever known.
+	MarkDocumentJobDone(ctx context.Context, id, docID string, size int64) error
 	MarkDocumentJobFailed(ctx context.Context, id string, failErr error) error
 	GetDocumentJob(ctx context.Context, id string) (domain.DocumentJob, error)
-	// GetDocumentJobData returns id's raw uploaded/imported bytes and
-	// content type -- separate from GetDocumentJob so a list/detail view
-	// never has to pull a potentially large blob just to show metadata.
-	GetDocumentJobData(ctx context.Context, id string) ([]byte, string, error)
 	ListDocumentJobs(ctx context.Context) ([]domain.DocumentJob, error)
-	// DeleteDocumentJob removes the job, its stored bytes, and -- if it
-	// finished indexing one -- the resulting Document itself (postings,
-	// embeddings, links, versions all cascade with it, same as any other
-	// document delete). Used both by the admin UI and by cmd/e2e-check's
-	// own cleanup after each check.
+	// DeleteDocumentJob removes the job and -- if it finished indexing one
+	// -- the resulting Document itself (postings, embeddings, links,
+	// versions all cascade with it, same as any other document delete).
+	// Used both by the admin UI and by cmd/e2e-check's own cleanup after
+	// each check.
 	DeleteDocumentJob(ctx context.Context, id string) error
 }
 

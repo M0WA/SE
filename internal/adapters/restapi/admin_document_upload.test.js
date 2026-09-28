@@ -140,6 +140,36 @@ test('submitting the upload form posts the file and vocabulary flag as multipart
   assert.equal(document.getElementById('upload-status').textContent.includes('Uploaded'), true);
 });
 
+test('submitting an image upload reports "Indexed." (it already finished synchronously)', async () => {
+  loadFixture();
+  await flush();
+  const input = document.getElementById('upload-file');
+  const file = new window.File(['fake-png-bytes'], 'photo.png', { type: 'image/png' });
+  Object.defineProperty(input, 'files', { value: [file], configurable: true });
+  global.fetch = async (url, opts) => {
+    if (opts && opts.method === 'POST') return { ok: true, json: async () => baseJob({ content_type: 'image/png', status: 'done' }) };
+    return { ok: true, json: async () => [] };
+  };
+  document.getElementById('upload-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
+  await flush();
+  assert.equal(document.getElementById('upload-status').textContent, 'Indexed.');
+});
+
+test('submitting an image upload that failed to embed reports the job\'s own error', async () => {
+  loadFixture();
+  await flush();
+  const input = document.getElementById('upload-file');
+  const file = new window.File(['fake-png-bytes'], 'photo.png', { type: 'image/png' });
+  Object.defineProperty(input, 'files', { value: [file], configurable: true });
+  global.fetch = async (url, opts) => {
+    if (opts && opts.method === 'POST') return { ok: true, json: async () => baseJob({ content_type: 'image/png', status: 'failed', error: 'vision endpoint down' }) };
+    return { ok: true, json: async () => [] };
+  };
+  document.getElementById('upload-form').dispatchEvent(new window.Event('submit', { cancelable: true }));
+  await flush();
+  assert.equal(document.getElementById('upload-status').textContent, 'Indexing failed: vision endpoint down');
+});
+
 test('a failed upload shows the error status instead of clearing the form', async () => {
   loadFixture();
   await flush();

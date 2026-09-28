@@ -12,13 +12,17 @@ import (
 )
 
 // documentJobColumns lists document_jobs' columns in the fixed order every
-// query/scan here uses, EXCLUDING data -- List/Get never pull the (possibly
-// large) blob just to show metadata; see GetData for that.
+// query/scan here uses, EXCLUDING data -- a legacy column no code reads or
+// writes meaningfully anymore (see this table's own CREATE TABLE comment
+// in dialect.go for why it's kept, unused, rather than dropped).
 const documentJobColumns = "id, filename, content_type, size, source, index_vocabulary, status, error, doc_id, created_at, started_at, finished_at"
 
-// Create persists a new Document job in domain.DocumentJobQueued status
-// along with its raw bytes.
-func (r *Repository) CreateDocumentJob(ctx context.Context, filename, contentType string, size int64, source domain.DocumentJobSource, indexVocabulary bool, data []byte) (domain.DocumentJob, error) {
+// Create persists a new Document job in domain.DocumentJobQueued status.
+// data is always written as an empty, non-nil slice -- the column is
+// NOT NULL with no default in every dialect's already-deployed schema, so
+// this is the zero-risk way to stop actually retaining upload content
+// without a live ALTER TABLE (see dialect.go's own comment).
+func (r *Repository) CreateDocumentJob(ctx context.Context, filename, contentType string, size int64, source domain.DocumentJobSource, indexVocabulary bool) (domain.DocumentJob, error) {
 	job := domain.DocumentJob{
 		ID: domain.NewDocumentJobID(), Filename: filename, ContentType: contentType, Size: size,
 		Source: source, IndexVocabulary: indexVocabulary, Status: domain.DocumentJobQueued,
@@ -28,7 +32,7 @@ func (r *Repository) CreateDocumentJob(ctx context.Context, filename, contentTyp
 		1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)
 	_, err := r.db.ExecContext(ctx, insertSQL,
 		job.ID, job.Filename, job.ContentType, job.Size, string(job.Source), job.IndexVocabulary,
-		string(job.Status), job.Error, job.DocID, job.CreatedAt.Format(crawledAtLayout), nil, nil, data,
+		string(job.Status), job.Error, job.DocID, job.CreatedAt.Format(crawledAtLayout), nil, nil, []byte{},
 	)
 	if err != nil {
 		return domain.DocumentJob{}, fmt.Errorf("creating document job: %w", err)
@@ -45,9 +49,9 @@ func (r *Repository) MarkDocumentJobRunning(ctx context.Context, id string) erro
 	return nil
 }
 
-func (r *Repository) MarkDocumentJobDone(ctx context.Context, id, docID string) error {
-	updateSQL := r.ph(`UPDATE document_jobs SET status = %s, doc_id = %s, finished_at = %s WHERE id = %s`, 1, 2, 3, 4)
-	_, err := r.db.ExecContext(ctx, updateSQL, string(domain.DocumentJobDone), docID, time.Now().UTC().Format(crawledAtLayout), id)
+func (r *Repository) MarkDocumentJobDone(ctx context.Context, id, docID string, size int64) error {
+	updateSQL := r.ph(`UPDATE document_jobs SET status = %s, doc_id = %s, size = %s, finished_at = %s WHERE id = %s`, 1, 2, 3, 4, 5)
+	_, err := r.db.ExecContext(ctx, updateSQL, string(domain.DocumentJobDone), docID, size, time.Now().UTC().Format(crawledAtLayout), id)
 	if err != nil {
 		return fmt.Errorf("marking document job %s done: %w", id, err)
 	}
@@ -77,21 +81,6 @@ func (r *Repository) GetDocumentJob(ctx context.Context, id string) (domain.Docu
 	return job, nil
 }
 
-// GetDocumentJobData returns id's raw uploaded/imported bytes and content
-// type -- separate from GetDocumentJob so a list/detail view never has to
-// pull a potentially large blob just to show metadata.
-func (r *Repository) GetDocumentJobData(ctx context.Context, id string) ([]byte, string, error) {
-	row := r.db.QueryRowContext(ctx, r.ph(`SELECT data, content_type FROM document_jobs WHERE id = %s`, 1), id)
-	var data []byte
-	var contentType string
-	if err := row.Scan(&data, &contentType); err == sql.ErrNoRows {
-		return nil, "", domain.ErrDocumentJobNotFound
-	} else if err != nil {
-		return nil, "", fmt.Errorf("querying document job data: %w", err)
-	}
-	return data, contentType, nil
-}
-
 // ListDocumentJobs returns every retained job, most recently created first.
 func (r *Repository) ListDocumentJobs(ctx context.Context) ([]domain.DocumentJob, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT `+documentJobColumns+` FROM document_jobs ORDER BY created_at DESC`)
@@ -111,8 +100,8 @@ func (r *Repository) ListDocumentJobs(ctx context.Context) ([]domain.DocumentJob
 	return out, rows.Err()
 }
 
-// DeleteDocumentJob removes the job and its stored bytes, plus -- if it
-// finished indexing one -- the resulting Document itself (postings,
+// DeleteDocumentJob removes the job row, plus -- if it finished indexing
+// one -- the resulting Document itself (postings,
 // embeddings, links, versions all cascade with it, via DeleteDocument).
 // ports.ErrDocumentNotFound from that step is tolerated, not propagated --
 // the indexed document may have already been removed independently (e.g.

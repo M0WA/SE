@@ -11,7 +11,7 @@ import (
 
 func TestRepository_CreateDocumentJobStartsQueued(t *testing.T) {
 	repo := newTestRepo(t)
-	job, err := repo.CreateDocumentJob(context.Background(), "notes.txt", "text/plain", 11, domain.DocumentJobSourceUpload, true, []byte("hello world"))
+	job, err := repo.CreateDocumentJob(context.Background(), "notes.txt", "text/plain", 11, domain.DocumentJobSourceUpload, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -29,26 +29,10 @@ func TestRepository_CreateDocumentJobStartsQueued(t *testing.T) {
 	}
 }
 
-func TestRepository_DocumentJobDataRoundTripsThroughStorage(t *testing.T) {
-	ctx := context.Background()
-	repo := newTestRepo(t)
-	job, err := repo.CreateDocumentJob(ctx, "photo.png", "image/png", 3, domain.DocumentJobSourceS3, false, []byte{0x1, 0x2, 0x3})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	data, contentType, err := repo.GetDocumentJobData(ctx, job.ID)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if string(data) != "\x01\x02\x03" || contentType != "image/png" {
-		t.Errorf("unexpected data/content type: %q %q", data, contentType)
-	}
-}
-
 func TestRepository_DocumentJobMarkRunningSetsStartedAt(t *testing.T) {
 	ctx := context.Background()
 	repo := newTestRepo(t)
-	job, _ := repo.CreateDocumentJob(ctx, "a.txt", "text/plain", 1, domain.DocumentJobSourceUpload, true, []byte("a"))
+	job, _ := repo.CreateDocumentJob(ctx, "a.txt", "text/plain", 1, domain.DocumentJobSourceUpload, true)
 	if err := repo.MarkDocumentJobRunning(ctx, job.ID); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -64,12 +48,12 @@ func TestRepository_DocumentJobMarkRunningSetsStartedAt(t *testing.T) {
 	}
 }
 
-func TestRepository_DocumentJobMarkDoneSetsFinishedAtAndDocID(t *testing.T) {
+func TestRepository_DocumentJobMarkDoneSetsFinishedAtDocIDAndSize(t *testing.T) {
 	ctx := context.Background()
 	repo := newTestRepo(t)
-	job, _ := repo.CreateDocumentJob(ctx, "a.txt", "text/plain", 1, domain.DocumentJobSourceUpload, true, []byte("a"))
+	job, _ := repo.CreateDocumentJob(ctx, "a.txt", "text/plain", 1, domain.DocumentJobSourceUpload, true)
 	_ = repo.MarkDocumentJobRunning(ctx, job.ID)
-	if err := repo.MarkDocumentJobDone(ctx, job.ID, "doc-1"); err != nil {
+	if err := repo.MarkDocumentJobDone(ctx, job.ID, "doc-1", 42); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got, _ := repo.GetDocumentJob(ctx, job.ID)
@@ -79,6 +63,12 @@ func TestRepository_DocumentJobMarkDoneSetsFinishedAtAndDocID(t *testing.T) {
 	if got.DocID != "doc-1" {
 		t.Errorf("expected doc_id doc-1, got %q", got.DocID)
 	}
+	// 42, not the 1 CreateDocumentJob was given -- proves MarkDocumentJobDone
+	// really does (re)set size, the only place a streamed upload's true byte
+	// count is ever known (see restapi.streamAndProcessImageDocumentJob).
+	if got.Size != 42 {
+		t.Errorf("expected size updated to 42, got %d", got.Size)
+	}
 	if got.FinishedAt == nil {
 		t.Error("expected FinishedAt to be set")
 	}
@@ -87,7 +77,7 @@ func TestRepository_DocumentJobMarkDoneSetsFinishedAtAndDocID(t *testing.T) {
 func TestRepository_DocumentJobMarkFailedRecordsError(t *testing.T) {
 	ctx := context.Background()
 	repo := newTestRepo(t)
-	job, _ := repo.CreateDocumentJob(ctx, "a.txt", "text/plain", 1, domain.DocumentJobSourceUpload, true, []byte("a"))
+	job, _ := repo.CreateDocumentJob(ctx, "a.txt", "text/plain", 1, domain.DocumentJobSourceUpload, true)
 	_ = repo.MarkDocumentJobRunning(ctx, job.ID)
 	if err := repo.MarkDocumentJobFailed(ctx, job.ID, errors.New("disk full")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -111,19 +101,12 @@ func TestRepository_GetDocumentJobUnknownIDReportsNotFound(t *testing.T) {
 	}
 }
 
-func TestRepository_GetDocumentJobDataUnknownIDReportsNotFound(t *testing.T) {
-	repo := newTestRepo(t)
-	if _, _, err := repo.GetDocumentJobData(context.Background(), "does-not-exist"); !errors.Is(err, domain.ErrDocumentJobNotFound) {
-		t.Errorf("expected ErrDocumentJobNotFound, got %v", err)
-	}
-}
-
 func TestRepository_ListDocumentJobsReturnsMostRecentFirst(t *testing.T) {
 	ctx := context.Background()
 	repo := newTestRepo(t)
-	a, _ := repo.CreateDocumentJob(ctx, "a.txt", "text/plain", 1, domain.DocumentJobSourceUpload, true, []byte("a"))
+	a, _ := repo.CreateDocumentJob(ctx, "a.txt", "text/plain", 1, domain.DocumentJobSourceUpload, true)
 	time.Sleep(2 * time.Millisecond) // ensure a distinct created_at ordering
-	b, _ := repo.CreateDocumentJob(ctx, "b.txt", "text/plain", 1, domain.DocumentJobSourceUpload, true, []byte("b"))
+	b, _ := repo.CreateDocumentJob(ctx, "b.txt", "text/plain", 1, domain.DocumentJobSourceUpload, true)
 
 	list, err := repo.ListDocumentJobs(ctx)
 	if err != nil {
@@ -151,7 +134,7 @@ func TestRepository_ListDocumentJobsEmpty(t *testing.T) {
 func TestRepository_DeleteDocumentJobRemovesTheJobAndItsData(t *testing.T) {
 	ctx := context.Background()
 	repo := newTestRepo(t)
-	job, _ := repo.CreateDocumentJob(ctx, "a.txt", "text/plain", 1, domain.DocumentJobSourceUpload, true, []byte("a"))
+	job, _ := repo.CreateDocumentJob(ctx, "a.txt", "text/plain", 1, domain.DocumentJobSourceUpload, true)
 	if err := repo.DeleteDocumentJob(ctx, job.ID); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -166,12 +149,12 @@ func TestRepository_DeleteDocumentJobRemovesTheJobAndItsData(t *testing.T) {
 func TestRepository_DeleteDocumentJobCascadesToItsIndexedDocument(t *testing.T) {
 	ctx := context.Background()
 	repo := newTestRepo(t)
-	job, _ := repo.CreateDocumentJob(ctx, "a.txt", "text/plain", 1, domain.DocumentJobSourceUpload, true, []byte("a"))
+	job, _ := repo.CreateDocumentJob(ctx, "a.txt", "text/plain", 1, domain.DocumentJobSourceUpload, true)
 	doc := domain.Document{ID: "doc-" + job.ID, URL: "upload://" + job.ID, Title: job.ID, Text: "hello"}
 	if err := repo.SaveDocumentOptionalVocabulary(ctx, doc, nil, 3, 2, true); err != nil {
 		t.Fatalf("unexpected error saving document: %v", err)
 	}
-	if err := repo.MarkDocumentJobDone(ctx, job.ID, doc.ID); err != nil {
+	if err := repo.MarkDocumentJobDone(ctx, job.ID, doc.ID, 5); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -193,8 +176,8 @@ func TestRepository_DeleteDocumentJobCascadesToItsIndexedDocument(t *testing.T) 
 func TestRepository_DeleteDocumentJobToleratesAnAlreadyDeletedDocument(t *testing.T) {
 	ctx := context.Background()
 	repo := newTestRepo(t)
-	job, _ := repo.CreateDocumentJob(ctx, "a.txt", "text/plain", 1, domain.DocumentJobSourceUpload, true, []byte("a"))
-	if err := repo.MarkDocumentJobDone(ctx, job.ID, "doc-never-actually-saved"); err != nil {
+	job, _ := repo.CreateDocumentJob(ctx, "a.txt", "text/plain", 1, domain.DocumentJobSourceUpload, true)
+	if err := repo.MarkDocumentJobDone(ctx, job.ID, "doc-never-actually-saved", 1); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if err := repo.DeleteDocumentJob(ctx, job.ID); err != nil {

@@ -2,6 +2,7 @@ package httpembed_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -1376,5 +1377,123 @@ func TestEmbedder_EmbedImageRetries429ThenSucceeds(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Errorf("expected exactly 2 attempts (1 retry), got %d", calls)
+	}
+}
+
+// TestEmbedder_EmbedImageStreamSendsTheSameShapeAsEmbedImage proves
+// EmbedImageStream builds byte-for-byte the same request JSON EmbedImage
+// does, just streamed rather than pre-built as one []byte -- the source
+// bytes are never given as a ready-made base64 string here, only a plain
+// io.Reader, so the server-observed base64 payload proves the streaming
+// encoder itself works, not just the surrounding JSON.
+func TestEmbedder_EmbedImageStreamSendsTheSameShapeAsEmbedImage(t *testing.T) {
+	var gotBody map[string]interface{}
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{0.4, 0.5, 0.6}}},
+		})
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, APIKey: "secret-key", Model: "vl-embed", Dimensions: 3})
+	vec, err := e.EmbedImageStream(context.Background(), strings.NewReader("ABC"), "image/png")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(vec) != 3 || vec[0] != 0.4 {
+		t.Errorf("unexpected vector: %v", vec)
+	}
+	if gotBody["model"] != "vl-embed" {
+		t.Errorf("expected model to be set, got body: %v", gotBody)
+	}
+	messages, ok := gotBody["messages"].([]interface{})
+	if !ok || len(messages) != 1 {
+		t.Fatalf("expected exactly one message, got body: %v", gotBody)
+	}
+	msg := messages[0].(map[string]interface{})
+	if msg["role"] != "user" {
+		t.Errorf("expected role user, got: %v", msg)
+	}
+	content := msg["content"].([]interface{})[0].(map[string]interface{})
+	if content["type"] != "image_url" {
+		t.Errorf("expected content type image_url, got: %v", content)
+	}
+	wantURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("ABC"))
+	imageURL := content["image_url"].(map[string]interface{})["url"]
+	if imageURL != wantURL {
+		t.Errorf("expected %q, got %v", wantURL, imageURL)
+	}
+	if gotAuth != "Bearer secret-key" {
+		t.Errorf("expected Authorization header, got %q", gotAuth)
+	}
+}
+
+// TestEmbedder_EmbedImageStreamEmptyMimeTypeFallsBackToOctetStream mirrors
+// TestEmbedder_EmbedImageEmptyMimeTypeFallsBackToOctetStream.
+func TestEmbedder_EmbedImageStreamEmptyMimeTypeFallsBackToOctetStream(t *testing.T) {
+	var gotBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1}}},
+		})
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 1})
+	if _, err := e.EmbedImageStream(context.Background(), strings.NewReader("ABC"), ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	messages := gotBody["messages"].([]interface{})
+	content := messages[0].(map[string]interface{})["content"].([]interface{})[0].(map[string]interface{})
+	imageURL := content["image_url"].(map[string]interface{})["url"]
+	wantURL := "data:application/octet-stream;base64," + base64.StdEncoding.EncodeToString([]byte("ABC"))
+	if imageURL != wantURL {
+		t.Errorf("expected octet-stream fallback mime type, got: %v", imageURL)
+	}
+}
+
+// TestEmbedder_EmbedImageStreamDimensionMismatchReturnsError proves
+// EmbedImageStream reuses the same response validation Embed/EmbedImage
+// do -- shares sendEmbedRequest.
+func TestEmbedder_EmbedImageStreamDimensionMismatchReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"embedding": []float32{1, 2, 3}}},
+		})
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 128})
+	_, err := e.EmbedImageStream(context.Background(), strings.NewReader("ABC"), "image/png")
+	if err == nil {
+		t.Fatal("expected a dimension mismatch error")
+	}
+	if !containsAll(err.Error(), "128", "3") {
+		t.Errorf("expected error to mention both dimension counts, got: %v", err)
+	}
+}
+
+// TestEmbedder_EmbedImageStreamDoesNotRetryOn429 proves EmbedImageStream
+// deliberately does NOT share embedWithRetry's backoff -- a 429 fails the
+// call outright, in exactly one attempt, since its source io.Reader can
+// only be read once (see EmbedImageStream's own doc comment).
+func TestEmbedder_EmbedImageStreamDoesNotRetryOn429(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	e := httpembed.New(httpembed.Config{BaseURL: srv.URL, Dimensions: 1, RateLimitInitialBackoff: time.Millisecond})
+	if _, err := e.EmbedImageStream(context.Background(), strings.NewReader("ABC"), "image/png"); err == nil {
+		t.Fatal("expected an error from the 429 response")
+	}
+	if calls != 1 {
+		t.Errorf("expected exactly 1 attempt (no retry), got %d", calls)
 	}
 }

@@ -27,16 +27,13 @@ async function loadJobDetail(id) {
     statusEl.textContent = '';
     renderJobMeta(job);
 
-    const isImage = job.content_type && job.content_type.startsWith('image/');
-    if (isImage) {
-      const wrap = document.getElementById('image-preview-wrap');
-      wrap.hidden = false;
-      document.getElementById('image-preview').src = '/admin/api/document-jobs/' + encodeURIComponent(id) + '/data';
-    }
-
     // An image job's resulting document has no text (see the backend's
     // classifyDocumentContent) -- skip the request rather than fetching it
-    // just to find that out.
+    // just to find that out. No image preview either: the raw bytes are
+    // never retained anywhere once indexed (a direct upload streams
+    // straight into the embedding request and is never buffered/stored at
+    // all -- see admin_document_jobs.go's own design notes).
+    const isImage = job.content_type && job.content_type.startsWith('image/');
     if (!isImage && job.status === 'done' && job.doc_id) {
       try {
         const doc = await getJSON('/admin/api/documents/' + encodeURIComponent(job.doc_id));

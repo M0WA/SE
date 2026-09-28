@@ -13,6 +13,7 @@ package httpembed
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -381,11 +382,66 @@ func (e *Embedder) EmbedImage(ctx context.Context, base64Data, mimeType string) 
 	return e.embedWithRetry(ctx, reqBody)
 }
 
+// EmbedImageStream implements ports.StreamingImageEmbedder -- r's bytes
+// are base64-encoded on the fly into the exact same request shape
+// EmbedImage builds, but never materialized as a single in-memory string
+// first: an io.Pipe carries a base64.NewEncoder-wrapped copy of r,
+// sandwiched between literal JSON prefix/suffix fragments (safe to splice
+// around a base64 stream verbatim, since base64's output alphabet -- A-Za
+// -z0-9+/= -- never contains a byte that needs JSON escaping) into one
+// io.MultiReader sent as the request body with no Content-Length (chunked
+// transfer encoding). A single attempt only -- see EmbedImageStream's own
+// interface doc comment for why there's no retry-on-429 here, unlike
+// Embed/EmbedImage's embedWithRetry.
+func (e *Embedder) EmbedImageStream(ctx context.Context, r io.Reader, mimeType string) ([]float32, error) {
+	e.rate.wait(ctx, e.rateLimitPerSecond)
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	modelJSON, err := json.Marshal(e.model)
+	if err != nil {
+		return nil, fmt.Errorf("httpembed: encoding model name: %w", err)
+	}
+	dataURIPrefixJSON, err := json.Marshal("data:" + mimeType + ";base64,")
+	if err != nil {
+		return nil, fmt.Errorf("httpembed: encoding mime type: %w", err)
+	}
+	// dataURIPrefixJSON is `"data:...;base64,"` (with the closing quote) --
+	// drop it so the base64 payload streams in as a continuation of the
+	// same JSON string, re-closed by jsonSuffix below.
+	jsonPrefix := `{"model":` + string(modelJSON) + `,"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":` +
+		string(dataURIPrefixJSON[:len(dataURIPrefixJSON)-1])
+	const jsonSuffix = `"}}]}]}`
+
+	pr, pw := io.Pipe()
+	go func() {
+		enc := base64.NewEncoder(base64.StdEncoding, pw)
+		_, copyErr := io.Copy(enc, r)
+		if closeErr := enc.Close(); copyErr == nil {
+			copyErr = closeErr
+		}
+		pw.CloseWithError(copyErr)
+	}()
+	body := io.MultiReader(strings.NewReader(jsonPrefix), pr, strings.NewReader(jsonSuffix))
+
+	vec, _, err := e.sendEmbedRequest(ctx, body)
+	return vec, err
+}
+
 // embedOnce makes a single attempt against the embeddings endpoint. resp
 // is non-nil whenever a real HTTP response was received (even non-2xx), so
 // the retry loop can inspect it; nil only for a build/network failure,
 // which is never retried.
 func (e *Embedder) embedOnce(ctx context.Context, reqBody []byte) ([]float32, *http.Response, error) {
+	return e.sendEmbedRequest(ctx, bytes.NewReader(reqBody))
+}
+
+// sendEmbedRequest is embedOnce/EmbedImageStream's shared core: build the
+// request from body (a fully-buffered *bytes.Reader for the former, a
+// streaming io.Reader for the latter), send it, and parse the response.
+// resp is non-nil whenever a real HTTP response was received (even
+// non-2xx), so embedOnce's own retry loop can inspect it.
+func (e *Embedder) sendEmbedRequest(ctx context.Context, body io.Reader) ([]float32, *http.Response, error) {
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 
@@ -393,7 +449,7 @@ func (e *Embedder) embedOnce(ctx context.Context, reqBody []byte) ([]float32, *h
 	if err := checkEndpointURL(url); err != nil {
 		return nil, nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
 	if err != nil {
 		return nil, nil, fmt.Errorf("httpembed: building request: %w", err)
 	}
@@ -408,16 +464,16 @@ func (e *Embedder) embedOnce(ctx context.Context, reqBody []byte) ([]float32, *h
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return nil, resp, fmt.Errorf("httpembed: reading response body: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, resp, fmt.Errorf("httpembed: embeddings endpoint returned status %d: %s", resp.StatusCode, domain.TruncateWithEllipsis(domain.RedactSecret(string(body), e.apiKey), 500))
+		return nil, resp, fmt.Errorf("httpembed: embeddings endpoint returned status %d: %s", resp.StatusCode, domain.TruncateWithEllipsis(domain.RedactSecret(string(respBody), e.apiKey), 500))
 	}
 
 	var parsed embeddingResponse
-	if err := json.Unmarshal(body, &parsed); err != nil {
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
 		return nil, resp, fmt.Errorf("httpembed: decoding response: %w", err)
 	}
 	if len(parsed.Data) == 0 {
