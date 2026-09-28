@@ -23,24 +23,22 @@ type fakeDocumentJobStore struct {
 	mu sync.Mutex
 
 	jobs           map[string]domain.DocumentJob
-	data           map[string][]byte
 	createErr      error
 	listErr        error
 	getErr         error
-	dataErr        error
 	deleteErr      error
 	markRunningErr error
 
-	// created records every CreateDocumentJob call's data, for tests
-	// asserting what actually got persisted.
-	created [][]byte
+	// created records every CreateDocumentJob call's filename, for tests
+	// asserting a job was actually persisted.
+	created []string
 }
 
 func newFakeDocumentJobStore() *fakeDocumentJobStore {
-	return &fakeDocumentJobStore{jobs: map[string]domain.DocumentJob{}, data: map[string][]byte{}}
+	return &fakeDocumentJobStore{jobs: map[string]domain.DocumentJob{}}
 }
 
-func (f *fakeDocumentJobStore) CreateDocumentJob(_ context.Context, filename, contentType string, size int64, source domain.DocumentJobSource, indexVocabulary bool, data []byte) (domain.DocumentJob, error) {
+func (f *fakeDocumentJobStore) CreateDocumentJob(_ context.Context, filename, contentType string, size int64, source domain.DocumentJobSource, indexVocabulary bool) (domain.DocumentJob, error) {
 	if f.createErr != nil {
 		return domain.DocumentJob{}, f.createErr
 	}
@@ -53,8 +51,7 @@ func (f *fakeDocumentJobStore) CreateDocumentJob(_ context.Context, filename, co
 		CreatedAt: time.Now().UTC(),
 	}
 	f.jobs[id] = job
-	f.data[id] = data
-	f.created = append(f.created, data)
+	f.created = append(f.created, filename)
 	return job, nil
 }
 
@@ -70,12 +67,13 @@ func (f *fakeDocumentJobStore) MarkDocumentJobRunning(_ context.Context, id stri
 	return nil
 }
 
-func (f *fakeDocumentJobStore) MarkDocumentJobDone(_ context.Context, id, docID string) error {
+func (f *fakeDocumentJobStore) MarkDocumentJobDone(_ context.Context, id, docID string, size int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	j := f.jobs[id]
 	j.Status = domain.DocumentJobDone
 	j.DocID = docID
+	j.Size = size
 	f.jobs[id] = j
 	return nil
 }
@@ -103,19 +101,6 @@ func (f *fakeDocumentJobStore) GetDocumentJob(_ context.Context, id string) (dom
 	return j, nil
 }
 
-func (f *fakeDocumentJobStore) GetDocumentJobData(_ context.Context, id string) ([]byte, string, error) {
-	if f.dataErr != nil {
-		return nil, "", f.dataErr
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	j, ok := f.jobs[id]
-	if !ok {
-		return nil, "", domain.ErrDocumentJobNotFound
-	}
-	return f.data[id], j.ContentType, nil
-}
-
 func (f *fakeDocumentJobStore) ListDocumentJobs(_ context.Context) ([]domain.DocumentJob, error) {
 	if f.listErr != nil {
 		return nil, f.listErr
@@ -139,7 +124,6 @@ func (f *fakeDocumentJobStore) DeleteDocumentJob(_ context.Context, id string) e
 		return domain.ErrDocumentJobNotFound
 	}
 	delete(f.jobs, id)
-	delete(f.data, id)
 	return nil
 }
 
@@ -347,38 +331,6 @@ func TestHandleAdminDeleteDocumentJob_NotFound(t *testing.T) {
 	}
 }
 
-func TestHandleAdminDocumentJobData_ServesRawBytes(t *testing.T) {
-	store := newFakeDocumentJobStore()
-	store.jobs["docjob-a"] = domain.DocumentJob{ID: "docjob-a", ContentType: "image/png"}
-	store.data["docjob-a"] = []byte("fake-png-bytes")
-	h, cookie := documentJobsHandler(t, store, &fakeAdminRepo{})
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/document-jobs/docjob-a/data", nil)
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-	if ct := rec.Header().Get("Content-Type"); ct != "image/png" {
-		t.Errorf("expected Content-Type image/png, got %q", ct)
-	}
-	if rec.Body.String() != "fake-png-bytes" {
-		t.Errorf("unexpected body: %q", rec.Body.String())
-	}
-}
-
-func TestHandleAdminDocumentJobData_NotFound(t *testing.T) {
-	store := newFakeDocumentJobStore()
-	h, cookie := documentJobsHandler(t, store, &fakeAdminRepo{})
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/document-jobs/missing/data", nil)
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d", rec.Code)
-	}
-}
-
 func TestHandleAdminGetDocument_Found(t *testing.T) {
 	admin := &fakeAdminRepo{postingsDocs: map[string]domain.Document{"doc-1": {ID: "doc-1", URL: "upload://doc-1", Title: "t", Text: "body text"}}}
 	h, cookie := documentJobsHandler(t, newFakeDocumentJobStore(), admin)
@@ -504,7 +456,8 @@ func TestHandleAdminImportDocumentFromS3_Succeeds(t *testing.T) {
 	defer s3.Close()
 
 	store := newFakeDocumentJobStore()
-	h, cookie := documentJobsHandler(t, store, &fakeAdminRepo{})
+	admin := &fakeAdminRepo{}
+	h, cookie := documentJobsHandler(t, store, admin)
 	body, _ := json.Marshal(map[string]any{
 		"endpoint": s3.URL, "region": "us-east-1", "bucket": "my-bucket", "key": "reports/q1.txt",
 		"access_key_id": "AKIAEXAMPLE", "secret_access_key": "secret", "index_vocabulary": true,
@@ -533,11 +486,14 @@ func TestHandleAdminImportDocumentFromS3_Succeeds(t *testing.T) {
 	}
 	jobsAwait(t, store, resp.ID, func(j domain.DocumentJob) bool { return j.Status == domain.DocumentJobDone })
 
-	store.mu.Lock()
-	data := store.created[0]
-	store.mu.Unlock()
-	if string(data) != "quarterly report" {
-		t.Errorf("unexpected imported data: %q", data)
+	// The fetched S3 object's content is never retained in document_jobs
+	// itself (see CreateDocumentJob's own doc comment) -- its own indexed
+	// Document.Text is the only place to confirm it actually round-tripped.
+	admin.mu.Lock()
+	saved := admin.savedDocs
+	admin.mu.Unlock()
+	if len(saved) != 1 || saved[0].Text != "quarterly report" {
+		t.Errorf("unexpected imported data: %+v", saved)
 	}
 }
 
@@ -615,6 +571,145 @@ func TestHandleAdminDocumentJobs_UploadImage_NoSimilarityProviderConfiguredStill
 	job := jobsAwait(t, store, resp.ID, func(j domain.DocumentJob) bool { return j.Status == domain.DocumentJobDone })
 	if job.DocID == "" {
 		t.Error("expected the job to still succeed, metadata-only, without a vision-similarity provider")
+	}
+}
+
+// TestHandleAdminDocumentJobs_UploadImage_ResponseReflectsFinalState proves
+// an image upload's own POST response already carries its finished status
+// (and true byte size) -- unlike every other job kind, which responds
+// Queued and finishes in the background (see
+// streamAndProcessImageDocumentJob's own doc comment for why this one
+// can't).
+func TestHandleAdminDocumentJobs_UploadImage_ResponseReflectsFinalState(t *testing.T) {
+	store := newFakeDocumentJobStore()
+	h, cookie := documentJobsHandler(t, store, &fakeAdminRepo{})
+
+	content := []byte("fake-png-bytes")
+	rec := uploadDocumentJob(t, h, cookie, "photo.png", "image/png", content, false)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Status string `json:"status"`
+		Size   int64  `json:"size"`
+		DocID  string `json:"doc_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.Status != string(domain.DocumentJobDone) {
+		t.Errorf("expected the response to already report status=done, got %q", resp.Status)
+	}
+	if resp.Size != int64(len(content)) {
+		t.Errorf("expected size=%d (the streamed image's true byte count), got %d", len(content), resp.Size)
+	}
+	if resp.DocID == "" {
+		t.Error("expected doc_id to already be set in the response")
+	}
+}
+
+// TestHandleAdminDocumentJobs_StreamingEmbedFailureMarksJobFailed proves a
+// genuine EmbedImageStream error (the provider WAS configured/capable,
+// the call itself failed) is treated as a real job failure -- distinct
+// from "not configured", which still succeeds metadata-only (see
+// TestHandleAdminDocumentJobs_UploadImage_NoSimilarityProviderConfiguredStillSucceeds).
+func TestHandleAdminDocumentJobs_StreamingEmbedFailureMarksJobFailed(t *testing.T) {
+	store := newFakeDocumentJobStore()
+	chatVision := &fakeChatVisionStore{settings: domain.ChatVisionSettings{SimilarityEnabled: true, SimilarityProviderID: "vision-provider"}}
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		DocumentJobs: store, Admin: &fakeAdminRepo{}, ChatVision: chatVision,
+		Embedders:  map[string]ports.EmbeddingProvider{"vision-provider": &fakeImageEmbeddingProvider{err: errors.New("vision endpoint down")}},
+		OpSettings: domain.NewOperationalSettings(domain.OperationalSettingsValues{}), DBDriver: "pgx",
+	})
+
+	rec := uploadDocumentJob(t, h, cookie, "photo.png", "image/png", []byte("fake-png-bytes"), false)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Status != string(domain.DocumentJobFailed) {
+		t.Errorf("expected status=failed, got %+v", resp)
+	}
+	if !strings.Contains(resp.Error, "embedding image") {
+		t.Errorf("expected an embedding-image failure reason, got %q", resp.Error)
+	}
+}
+
+// TestHandleUploadDocumentJob_ImageRespectsConfiguredLimit is
+// TestHandleUploadDocumentJob_RespectsConfiguredLimit's image counterpart
+// -- proves the shared MaxBytesReader/ParseMultipartForm enforcement
+// still applies before the new streamed-image branch is ever reached.
+func TestHandleUploadDocumentJob_ImageRespectsConfiguredLimit(t *testing.T) {
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		DocumentJobs: newFakeDocumentJobStore(), Admin: &fakeAdminRepo{},
+		OpSettings: domain.NewOperationalSettings(domain.OperationalSettingsValues{MaxDocumentUploadBytes: 1024}),
+		DBDriver:   "pgx",
+	})
+	rec := uploadDocumentJob(t, h, cookie, "photo.png", "image/png", bytes.Repeat([]byte("x"), 2048), false)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a 2KB image upload under a configured 1KB limit, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleAdminDocumentJobs_UploadImage_CreateJobStoreError(t *testing.T) {
+	store := newFakeDocumentJobStore()
+	store.createErr = errors.New("db down")
+	h, cookie := documentJobsHandler(t, store, &fakeAdminRepo{})
+	rec := uploadDocumentJob(t, h, cookie, "photo.png", "image/png", []byte("fake-png-bytes"), false)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleAdminDocumentJobs_UploadImage_MarkRunningStoreError(t *testing.T) {
+	store := newFakeDocumentJobStore()
+	store.markRunningErr = errors.New("db down")
+	h, cookie := documentJobsHandler(t, store, &fakeAdminRepo{})
+	rec := uploadDocumentJob(t, h, cookie, "photo.png", "image/png", []byte("fake-png-bytes"), false)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleAdminDocumentJobs_UploadImage_FinalGetErrorIsInternalError
+// covers respondWithCurrentJobState's own error branch: the job itself
+// finished successfully, but re-reading it to build the response fails.
+func TestHandleAdminDocumentJobs_UploadImage_FinalGetErrorIsInternalError(t *testing.T) {
+	store := newFakeDocumentJobStore()
+	store.getErr = errors.New("db down")
+	h, cookie := documentJobsHandler(t, store, &fakeAdminRepo{})
+	rec := uploadDocumentJob(t, h, cookie, "photo.png", "image/png", []byte("fake-png-bytes"), false)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleAdminDocumentJobs_UploadImage_IndexingFailureMarksTheJobFailed
+// is TestHandleAdminDocumentJobs_IndexingFailureMarksTheJobFailed's image
+// counterpart -- covers streamAndProcessImageDocumentJob's own "embed
+// succeeded (or wasn't attempted), but saving the document failed" branch.
+func TestHandleAdminDocumentJobs_UploadImage_IndexingFailureMarksTheJobFailed(t *testing.T) {
+	store := newFakeDocumentJobStore()
+	admin := &fakeAdminRepo{saveDocumentErr: errors.New("disk full")}
+	h, cookie := documentJobsHandler(t, store, admin)
+	rec := uploadDocumentJob(t, h, cookie, "photo.png", "image/png", []byte("fake-png-bytes"), false)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Status != string(domain.DocumentJobFailed) {
+		t.Errorf("expected status=failed, got %+v", resp)
+	}
+	if !strings.Contains(resp.Error, "indexing document") {
+		t.Errorf("expected an indexing failure reason, got %q", resp.Error)
 	}
 }
 
@@ -718,17 +813,6 @@ func TestHandleAdminDeleteDocumentJob_NotConfigured(t *testing.T) {
 	}
 }
 
-func TestHandleAdminDocumentJobData_NotConfigured(t *testing.T) {
-	h, cookie := documentJobsHandler(t, nil, &fakeAdminRepo{})
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/document-jobs/docjob-a/data", nil)
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503, got %d", rec.Code)
-	}
-}
-
 func TestHandleAdminGetDocument_RepositoryError(t *testing.T) {
 	admin := &fakeAdminRepo{err: errors.New("db down")}
 	h, cookie := documentJobsHandler(t, newFakeDocumentJobStore(), admin)
@@ -792,11 +876,16 @@ func TestHandleAdminDocumentJobs_IndexingFailureMarksTheJobFailed(t *testing.T) 
 	}
 }
 
-// embedImageForDocument's individual "no vector" reasons -- each exercised
-// through a full image upload, since the function itself is unexported.
-// Every case still expects the job to finish Done, just with no embedding
-// saved (see TestHandleAdminDocumentJobs_UploadImage_EmbedsThroughTheConfiguredSimilarityProvider
-// for the one case that DOES save an embedding).
+// streamingImageEmbedderFor's individual "no vector" reasons -- each
+// exercised through a full DIRECT image upload (always streamed, see
+// handleUploadDocumentJob's own doc comment), since the function itself
+// is unexported. Every case still expects the job to finish Done, just
+// with no embedding saved (see
+// TestHandleAdminDocumentJobs_UploadImage_EmbedsThroughTheConfiguredSimilarityProvider
+// for the one case that DOES save an embedding). embedImageForDocument --
+// the older, buffered counterpart, reachable only via S3 import now --
+// gets the exact same set of "no vector" cases below, under
+// TestEmbedImageForDocument_*.
 
 func uploadImageAndAwaitDone(t *testing.T, store *fakeDocumentJobStore, h *restapi.Handler, cookie *http.Cookie) domain.DocumentJob {
 	t.Helper()
@@ -809,7 +898,7 @@ func uploadImageAndAwaitDone(t *testing.T, store *fakeDocumentJobStore, h *resta
 	return jobsAwait(t, store, resp.ID, func(j domain.DocumentJob) bool { return j.Status == domain.DocumentJobDone })
 }
 
-func TestEmbedImageForDocument_ChatVisionSettingsFetchError(t *testing.T) {
+func TestStreamingImageEmbedderFor_ChatVisionSettingsFetchError(t *testing.T) {
 	store := newFakeDocumentJobStore()
 	admin := &fakeAdminRepo{}
 	chatVision := &fakeChatVisionStore{getErr: errors.New("db down")}
@@ -825,7 +914,7 @@ func TestEmbedImageForDocument_ChatVisionSettingsFetchError(t *testing.T) {
 	}
 }
 
-func TestEmbedImageForDocument_SimilarityDisabled(t *testing.T) {
+func TestStreamingImageEmbedderFor_SimilarityDisabled(t *testing.T) {
 	store := newFakeDocumentJobStore()
 	admin := &fakeAdminRepo{}
 	chatVision := &fakeChatVisionStore{settings: domain.ChatVisionSettings{SimilarityEnabled: false, SimilarityProviderID: "vision-provider"}}
@@ -842,7 +931,7 @@ func TestEmbedImageForDocument_SimilarityDisabled(t *testing.T) {
 	}
 }
 
-func TestEmbedImageForDocument_ProviderNotFound(t *testing.T) {
+func TestStreamingImageEmbedderFor_ProviderNotFound(t *testing.T) {
 	store := newFakeDocumentJobStore()
 	admin := &fakeAdminRepo{}
 	chatVision := &fakeChatVisionStore{settings: domain.ChatVisionSettings{SimilarityEnabled: true, SimilarityProviderID: "missing-provider"}}
@@ -858,7 +947,7 @@ func TestEmbedImageForDocument_ProviderNotFound(t *testing.T) {
 	}
 }
 
-func TestEmbedImageForDocument_ProviderNotImageCapable(t *testing.T) {
+func TestStreamingImageEmbedderFor_ProviderNotImageCapable(t *testing.T) {
 	store := newFakeDocumentJobStore()
 	admin := &fakeAdminRepo{}
 	chatVision := &fakeChatVisionStore{settings: domain.ChatVisionSettings{SimilarityEnabled: true, SimilarityProviderID: "text-only"}}
@@ -875,7 +964,147 @@ func TestEmbedImageForDocument_ProviderNotImageCapable(t *testing.T) {
 	}
 }
 
+// importImageFromS3AndAwaitDone is uploadImageAndAwaitDone's S3-import
+// counterpart -- the only remaining way to reach embedImageForDocument
+// (the older, buffered path) with an image, now that a direct upload
+// always streams.
+func importImageFromS3AndAwaitDone(t *testing.T, store *fakeDocumentJobStore, h *restapi.Handler, cookie *http.Cookie) domain.DocumentJob {
+	t.Helper()
+	s3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte("fake-png-bytes"))
+	}))
+	defer s3.Close()
+	body, _ := json.Marshal(map[string]any{
+		"endpoint": s3.URL, "region": "us-east-1", "bucket": "my-bucket", "key": "photo.png",
+		"access_key_id": "AKIAEXAMPLE", "secret_access_key": "secret",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/document-jobs/import-s3", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct{ ID string }
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	return jobsAwait(t, store, resp.ID, func(j domain.DocumentJob) bool { return j.Status == domain.DocumentJobDone })
+}
+
+func TestEmbedImageForDocument_ChatVisionSettingsFetchError(t *testing.T) {
+	store := newFakeDocumentJobStore()
+	admin := &fakeAdminRepo{}
+	chatVision := &fakeChatVisionStore{getErr: errors.New("db down")}
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		DocumentJobs: store, Admin: admin, ChatVision: chatVision,
+		OpSettings: domain.NewOperationalSettings(domain.OperationalSettingsValues{}), DBDriver: "pgx",
+	})
+	importImageFromS3AndAwaitDone(t, store, h, cookie)
+	admin.mu.Lock()
+	defer admin.mu.Unlock()
+	if len(admin.savedEmbeddings) != 1 || len(admin.savedEmbeddings[0]) != 0 {
+		t.Errorf("expected no embedding saved, got %+v", admin.savedEmbeddings)
+	}
+}
+
+func TestEmbedImageForDocument_SimilarityDisabled(t *testing.T) {
+	store := newFakeDocumentJobStore()
+	admin := &fakeAdminRepo{}
+	chatVision := &fakeChatVisionStore{settings: domain.ChatVisionSettings{SimilarityEnabled: false, SimilarityProviderID: "vision-provider"}}
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		DocumentJobs: store, Admin: admin, ChatVision: chatVision,
+		Embedders:  map[string]ports.EmbeddingProvider{"vision-provider": &fakeImageEmbeddingProvider{vec: []float32{1}}},
+		OpSettings: domain.NewOperationalSettings(domain.OperationalSettingsValues{}), DBDriver: "pgx",
+	})
+	importImageFromS3AndAwaitDone(t, store, h, cookie)
+	admin.mu.Lock()
+	defer admin.mu.Unlock()
+	if len(admin.savedEmbeddings[0]) != 0 {
+		t.Errorf("expected no embedding saved when similarity is disabled, got %+v", admin.savedEmbeddings)
+	}
+}
+
+func TestEmbedImageForDocument_ProviderNotFound(t *testing.T) {
+	store := newFakeDocumentJobStore()
+	admin := &fakeAdminRepo{}
+	chatVision := &fakeChatVisionStore{settings: domain.ChatVisionSettings{SimilarityEnabled: true, SimilarityProviderID: "missing-provider"}}
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		DocumentJobs: store, Admin: admin, ChatVision: chatVision,
+		OpSettings: domain.NewOperationalSettings(domain.OperationalSettingsValues{}), DBDriver: "pgx",
+	})
+	importImageFromS3AndAwaitDone(t, store, h, cookie)
+	admin.mu.Lock()
+	defer admin.mu.Unlock()
+	if len(admin.savedEmbeddings[0]) != 0 {
+		t.Errorf("expected no embedding saved for an unconfigured provider, got %+v", admin.savedEmbeddings)
+	}
+}
+
+func TestEmbedImageForDocument_ProviderNotImageCapable(t *testing.T) {
+	store := newFakeDocumentJobStore()
+	admin := &fakeAdminRepo{}
+	chatVision := &fakeChatVisionStore{settings: domain.ChatVisionSettings{SimilarityEnabled: true, SimilarityProviderID: "text-only"}}
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		DocumentJobs: store, Admin: admin, ChatVision: chatVision,
+		Embedders:  map[string]ports.EmbeddingProvider{"text-only": fakeEmbeddingProvider{}},
+		OpSettings: domain.NewOperationalSettings(domain.OperationalSettingsValues{}), DBDriver: "pgx",
+	})
+	importImageFromS3AndAwaitDone(t, store, h, cookie)
+	admin.mu.Lock()
+	defer admin.mu.Unlock()
+	if len(admin.savedEmbeddings[0]) != 0 {
+		t.Errorf("expected no embedding saved for a non-image-capable provider, got %+v", admin.savedEmbeddings)
+	}
+}
+
+// TestEmbedImageForDocument_Succeeds proves embedImageForDocument's own
+// success branch (a real vector saved), reachable only via S3 import now.
+// TestEmbedImageForDocument_NoChatVisionConfiguredStillSucceeds is
+// TestHandleAdminDocumentJobs_UploadImage_NoSimilarityProviderConfiguredStillSucceeds's
+// S3-import counterpart -- embedImageForDocument's own h.chatVision == nil
+// branch, distinct from a configured-but-erroring one.
+func TestEmbedImageForDocument_NoChatVisionConfiguredStillSucceeds(t *testing.T) {
+	store := newFakeDocumentJobStore()
+	admin := &fakeAdminRepo{}
+	h, cookie := documentJobsHandler(t, store, admin)
+	job := importImageFromS3AndAwaitDone(t, store, h, cookie)
+	if job.DocID == "" {
+		t.Error("expected the job to still succeed, metadata-only, without ChatVision configured")
+	}
+}
+
+func TestEmbedImageForDocument_Succeeds(t *testing.T) {
+	store := newFakeDocumentJobStore()
+	admin := &fakeAdminRepo{}
+	chatVision := &fakeChatVisionStore{settings: domain.ChatVisionSettings{SimilarityEnabled: true, SimilarityProviderID: "vision-provider"}}
+	h, cookie := adminAuthedHandlerFromConfig(t, restapi.Config{
+		DocumentJobs: store, Admin: admin, ChatVision: chatVision,
+		Embedders:  map[string]ports.EmbeddingProvider{"vision-provider": &fakeImageEmbeddingProvider{vec: []float32{0.1, 0.2}}},
+		OpSettings: domain.NewOperationalSettings(domain.OperationalSettingsValues{}), DBDriver: "pgx",
+	})
+	importImageFromS3AndAwaitDone(t, store, h, cookie)
+	admin.mu.Lock()
+	defer admin.mu.Unlock()
+	if len(admin.savedEmbeddings) != 1 || len(admin.savedEmbeddings[0]["vision-provider"]) != 2 {
+		t.Errorf("expected the image embedding to be saved under vision-provider, got %+v", admin.savedEmbeddings)
+	}
+}
+
+// TestEmbedImageForDocument_EmbedImageError exercises embedImageForDocument
+// (the buffered path), reachable ONLY via S3 import now that a direct
+// image upload always streams (see embedImageForDocumentStream's own,
+// deliberately different "a real call failure genuinely fails the job"
+// contract -- TestHandleAdminDocumentJobs_StreamingEmbedFailureMarksJobFailed
+// covers that one). S3 import keeps this function's own older contract: a
+// real EmbedImage error still isn't a hard failure, just no vector saved
+// -- unchanged behavior for that path.
 func TestEmbedImageForDocument_EmbedImageError(t *testing.T) {
+	s3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte("fake-png-bytes"))
+	}))
+	defer s3.Close()
+
 	store := newFakeDocumentJobStore()
 	admin := &fakeAdminRepo{}
 	chatVision := &fakeChatVisionStore{settings: domain.ChatVisionSettings{SimilarityEnabled: true, SimilarityProviderID: "vision-provider"}}
@@ -884,41 +1113,25 @@ func TestEmbedImageForDocument_EmbedImageError(t *testing.T) {
 		Embedders:  map[string]ports.EmbeddingProvider{"vision-provider": &fakeImageEmbeddingProvider{err: errors.New("vision endpoint down")}},
 		OpSettings: domain.NewOperationalSettings(domain.OperationalSettingsValues{}), DBDriver: "pgx",
 	})
-	uploadImageAndAwaitDone(t, store, h, cookie)
+	body, _ := json.Marshal(map[string]any{
+		"endpoint": s3.URL, "region": "us-east-1", "bucket": "my-bucket", "key": "photo.png",
+		"access_key_id": "AKIAEXAMPLE", "secret_access_key": "secret",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/document-jobs/import-s3", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.RoutesAdmin().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct{ ID string }
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	jobsAwait(t, store, resp.ID, func(j domain.DocumentJob) bool { return j.Status == domain.DocumentJobDone })
+
 	admin.mu.Lock()
 	defer admin.mu.Unlock()
 	if len(admin.savedEmbeddings[0]) != 0 {
 		t.Errorf("expected no embedding saved when EmbedImage fails, got %+v", admin.savedEmbeddings)
-	}
-}
-
-func TestHandleAdminDocumentJobData_RepositoryError(t *testing.T) {
-	store := newFakeDocumentJobStore()
-	store.dataErr = errors.New("db down")
-	h, cookie := documentJobsHandler(t, store, &fakeAdminRepo{})
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/document-jobs/docjob-a/data", nil)
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500, got %d: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestHandleAdminDocumentJobData_EmptyContentTypeOmitsHeader(t *testing.T) {
-	store := newFakeDocumentJobStore()
-	store.jobs["docjob-a"] = domain.DocumentJob{ID: "docjob-a"}
-	store.data["docjob-a"] = []byte("raw bytes")
-	h, cookie := documentJobsHandler(t, store, &fakeAdminRepo{})
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/document-jobs/docjob-a/data", nil)
-	req.AddCookie(cookie)
-	rec := httptest.NewRecorder()
-	h.RoutesAdmin().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-	if ct := rec.Header().Get("Content-Type"); ct != "" {
-		t.Errorf("expected no Content-Type header, got %q", ct)
 	}
 }
 

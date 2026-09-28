@@ -257,10 +257,16 @@ func (sqliteDialect) CreateSchemaSQL() []string {
 		// document_jobs is crawl_jobs' single-file sibling for the admin
 		// "Document" upload feature (see domain.DocumentJob) -- always
 		// exactly one file, so unlike crawl_jobs there's no per-page child
-		// table. data holds the raw uploaded/imported bytes inline, same
-		// convention as uploaded_files.data, so an image can be previewed
-		// and text content re-extracted without re-uploading. doc_id is the
-		// resulting documents.id once indexed, empty until then.
+		// table. doc_id is the resulting documents.id once indexed, empty
+		// until then. data is a deliberately unused legacy column: this
+		// feature used to hold the raw uploaded/imported bytes inline (so
+		// an image could be previewed and text re-extracted without
+		// re-uploading), but that traded away "never persist the upload
+		// content anywhere" -- Repository.CreateDocumentJob now always
+		// writes an empty, non-nil value here rather than a live ALTER
+		// TABLE to drop a NOT NULL column with no default on an
+		// already-deployed table (same reasoning as gpu_mode_settings'
+		// own idle_revert_minutes column below).
 		`CREATE TABLE IF NOT EXISTS document_jobs (
 			id TEXT PRIMARY KEY, filename TEXT NOT NULL, content_type TEXT NOT NULL DEFAULT '',
 			size INTEGER NOT NULL DEFAULT 0, data BLOB NOT NULL,

@@ -668,7 +668,6 @@ func (h *Handler) RoutesAdmin() http.Handler {
 	mux.HandleFunc("POST /admin/api/document-jobs/import-s3", h.requireAdminAuthAPI(h.handleAdminImportDocumentFromS3))
 	mux.HandleFunc("GET /admin/api/document-jobs/{id}", h.requireAdminAuthAPI(h.handleAdminDocumentJob))
 	mux.HandleFunc("DELETE /admin/api/document-jobs/{id}", h.requireAdminAuthAPI(h.handleAdminDeleteDocumentJob))
-	mux.HandleFunc("GET /admin/api/document-jobs/{id}/data", h.requireAdminAuthAPI(h.handleAdminDocumentJobData))
 	mux.HandleFunc("/admin/api/domains", h.requireAdminAuthAPI(h.handleAdminSearchDomains))
 	mux.HandleFunc("/admin/api/postings", h.requireAdminAuthAPI(h.handleAdminPostings))
 	mux.HandleFunc("/admin/api/search", h.requireAdminAuthAPI(h.handleAdminSearch))

@@ -71,10 +71,9 @@ test('loadJobDetail shows the extracted text for a done text job', async () => {
   assert.equal(document.getElementById('job-title').textContent, 'notes.txt');
   assert.equal(document.getElementById('text-preview-wrap').hidden, false);
   assert.equal(document.getElementById('text-preview').textContent, 'hello world');
-  assert.equal(document.getElementById('image-preview-wrap').hidden, true);
 });
 
-test('loadJobDetail shows an image preview for an image job, without fetching document text', async () => {
+test('loadJobDetail skips fetching document text for an image job', async () => {
   let fetchedDocumentText = false;
   loadFixture('http://x/admin/document-upload/docjob-2', async (url) => {
     if (url.includes('/admin/api/document-jobs/docjob-2')) {
@@ -85,12 +84,10 @@ test('loadJobDetail shows an image preview for an image job, without fetching do
   });
   const { loadJobDetail, documentJobIDFromPath } = require('./admin_document_detail.js');
   await loadJobDetail(documentJobIDFromPath());
-  assert.equal(document.getElementById('image-preview-wrap').hidden, false);
-  assert.equal(document.getElementById('image-preview').getAttribute('src'), '/admin/api/document-jobs/docjob-2/data');
   assert.equal(fetchedDocumentText, false);
 });
 
-test('loadJobDetail leaves both preview sections hidden for a job that has not finished indexing', async () => {
+test('loadJobDetail leaves the text preview hidden for a job that has not finished indexing', async () => {
   loadFixture('http://x/admin/document-upload/docjob-3', async (url) => {
     if (url.includes('/admin/api/document-jobs/docjob-3')) {
       return { ok: true, json: async () => baseJob({ id: 'docjob-3', status: 'running', doc_id: '' }) };
@@ -100,7 +97,6 @@ test('loadJobDetail leaves both preview sections hidden for a job that has not f
   const { loadJobDetail, documentJobIDFromPath } = require('./admin_document_detail.js');
   await loadJobDetail(documentJobIDFromPath());
   assert.equal(document.getElementById('text-preview-wrap').hidden, true);
-  assert.equal(document.getElementById('image-preview-wrap').hidden, true);
 });
 
 test('loadJobDetail tolerates the indexed document having since been deleted', async () => {

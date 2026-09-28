@@ -104,6 +104,17 @@ func (h *Handler) handleAdminDocumentJobs(w http.ResponseWriter, r *http.Request
 // content type (text vs image), same "one flat ceiling, never a
 // per-format special case" convention as the account file upload's own
 // MaxFileUploadBytes.
+//
+// Branches by content type BEFORE reading anything -- an image/* upload
+// (declared via its multipart part's own Content-Type header, no need to
+// inspect any bytes to classify it, unlike text -- see
+// classifyDocumentContent) is streamed straight into the configured
+// vision-similarity embedding provider's own HTTP request body and never
+// buffered into a []byte or persisted anywhere; see
+// streamAndProcessImageDocumentJob's own doc comment for why that
+// necessarily makes the request synchronous, unlike every other job kind
+// here. Anything else is read fully (as before) to validate it's real
+// UTF-8 text, then processed the existing fire-and-forget way.
 func (h *Handler) handleUploadDocumentJob(w http.ResponseWriter, r *http.Request) {
 	maxUploadBytes := int64(h.opSettings.Get().MaxDocumentUploadBytes)
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes+1)
@@ -117,20 +128,30 @@ func (h *Handler) handleUploadDocumentJob(w http.ResponseWriter, r *http.Request
 		return
 	}
 	defer file.Close()
+	contentType := header.Header.Get("Content-Type")
+	indexVocabulary := r.FormValue("index_vocabulary") == "true"
+
+	if strings.HasPrefix(contentType, "image/") {
+		h.streamAndProcessImageDocumentJob(w, r, header.Filename, contentType, file, indexVocabulary)
+		return
+	}
+
 	data, err := io.ReadAll(file)
 	if err != nil {
 		http.Error(w, "reading upload", http.StatusInternalServerError)
 		return
 	}
-	contentType := header.Header.Get("Content-Type")
-	indexVocabulary := r.FormValue("index_vocabulary") == "true"
 	h.createAndProcessDocumentJob(w, r, header.Filename, contentType, data, domain.DocumentJobSourceUpload, indexVocabulary)
 }
 
 // createAndProcessDocumentJob validates data's content kind, persists a new
 // queued job, responds with it, then processes it in a detached background
 // goroutine (see processDocumentJob's own doc comment for why a fresh
-// context.Background() is used instead of r.Context()).
+// context.Background() is used instead of r.Context()). Only ever called
+// with data already fully in hand (a buffered text upload, or any S3
+// import regardless of content kind -- s3GetObject already necessarily
+// buffers the whole object) -- a direct-upload image never reaches this,
+// see streamAndProcessImageDocumentJob instead.
 func (h *Handler) createAndProcessDocumentJob(w http.ResponseWriter, r *http.Request, filename, contentType string, data []byte, source domain.DocumentJobSource, indexVocabulary bool) {
 	if isText, isImage := classifyDocumentContent(contentType, data); !isText && !isImage {
 		http.Error(w, "unsupported file type -- Document upload only supports plain text and image files; "+
@@ -138,7 +159,7 @@ func (h *Handler) createAndProcessDocumentJob(w http.ResponseWriter, r *http.Req
 			"(the model can process it via the sandbox)", http.StatusBadRequest)
 		return
 	}
-	job, err := h.documentJobs.CreateDocumentJob(r.Context(), filename, contentType, int64(len(data)), source, indexVocabulary, data)
+	job, err := h.documentJobs.CreateDocumentJob(r.Context(), filename, contentType, int64(len(data)), source, indexVocabulary)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -153,7 +174,9 @@ func (h *Handler) createAndProcessDocumentJob(w http.ResponseWriter, r *http.Req
 // Runs detached from the triggering request via context.Background(),
 // same fire-and-forget convention as every other background job in this
 // codebase (crawl jobs, bulk delete) -- it must survive the request that
-// started it.
+// started it. Only reached with data already fully buffered (see
+// createAndProcessDocumentJob's own doc comment) -- an isImage job here is
+// always an S3 import, never a direct upload.
 func (h *Handler) processDocumentJob(jobID, contentType string, data []byte, indexVocabulary bool) {
 	ctx := context.Background()
 	if err := h.documentJobs.MarkDocumentJobRunning(ctx, jobID); err != nil {
@@ -189,7 +212,89 @@ func (h *Handler) processDocumentJob(jobID, contentType string, data []byte, ind
 		_ = h.documentJobs.MarkDocumentJobFailed(ctx, jobID, fmt.Errorf("indexing document: %w", err))
 		return
 	}
-	_ = h.documentJobs.MarkDocumentJobDone(ctx, jobID, docID)
+	_ = h.documentJobs.MarkDocumentJobDone(ctx, jobID, docID, int64(len(data)))
+}
+
+// countingReader wraps an io.Reader, tallying bytes actually read -- used
+// by streamAndProcessImageDocumentJob to learn a streamed image's true
+// size (never known upfront: a multipart part carries no overall
+// Content-Length of its own) without buffering it.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// streamAndProcessImageDocumentJob is handleUploadDocumentJob's image
+// branch: file's bytes are streamed straight into the configured
+// vision-similarity provider's embedding request (see
+// embedImageForDocumentStream), never buffered into a []byte or persisted
+// anywhere. This must run synchronously, unlike every other job kind's
+// fire-and-forget background goroutine -- file is a *multipart.Reader
+// backed by this request's own body, which Go closes out from under a
+// goroutine the instant this handler returns, so there is no way to keep
+// reading it after responding. The caller's HTTP call therefore blocks
+// for the embedding round-trip (typically a few seconds, bounded by
+// httpembed's own requestTimeout) -- an accepted, deliberate tradeoff for
+// never buffering/persisting the image (see this feature's own design
+// notes). The job still passes through the same
+// Queued->Running->Done/Failed states every other job does, just
+// compressed into one request instead of spread across a poll loop.
+func (h *Handler) streamAndProcessImageDocumentJob(w http.ResponseWriter, r *http.Request, filename, contentType string, file io.Reader, indexVocabulary bool) {
+	// r.Context(), deliberately -- unlike processDocumentJob's own
+	// context.Background() (fire-and-forget work that must outlive a
+	// disconnected client), everything here runs before this handler ever
+	// returns, so a client disconnect SHOULD cancel it: file itself is
+	// this same request's body and becomes invalid the moment it ends.
+	ctx := r.Context()
+	job, err := h.documentJobs.CreateDocumentJob(ctx, filename, contentType, 0, domain.DocumentJobSourceUpload, indexVocabulary)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := h.documentJobs.MarkDocumentJobRunning(ctx, job.ID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	counting := &countingReader{r: file}
+	vec, provider, embedErr := h.embedImageForDocumentStream(ctx, counting, contentType)
+	if embedErr != nil {
+		_ = h.documentJobs.MarkDocumentJobFailed(ctx, job.ID, fmt.Errorf("embedding image: %w", embedErr))
+		h.respondWithCurrentJobState(w, ctx, job.ID)
+		return
+	}
+
+	docID := "doc-" + job.ID
+	doc := domain.Document{ID: docID, URL: "upload://" + job.ID, Title: filename, CrawledAt: time.Now().UTC()}
+	embeddings := map[string][]float32{}
+	if provider != "" {
+		embeddings[provider] = vec
+	}
+	v := h.opSettings.Get()
+	if err := h.saveDocumentJobContent(ctx, doc, embeddings, v.MaxDocumentVersions, v.TitleWeight, indexVocabulary); err != nil {
+		_ = h.documentJobs.MarkDocumentJobFailed(ctx, job.ID, fmt.Errorf("indexing document: %w", err))
+	} else {
+		_ = h.documentJobs.MarkDocumentJobDone(ctx, job.ID, docID, counting.n)
+	}
+	h.respondWithCurrentJobState(w, ctx, job.ID)
+}
+
+// respondWithCurrentJobState re-reads id and writes it as the response --
+// streamAndProcessImageDocumentJob's finished (Done or Failed) job state,
+// rather than the initial Queued row every other job kind responds with.
+func (h *Handler) respondWithCurrentJobState(w http.ResponseWriter, ctx context.Context, id string) {
+	job, err := h.documentJobs.GetDocumentJob(ctx, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusCreated, toDocumentJobResponse(job))
 }
 
 // saveDocumentJobContent calls AdminRepository's
@@ -233,6 +338,63 @@ func (h *Handler) embedImageForDocument(ctx context.Context, data []byte, conten
 	return v, settings.SimilarityProviderID, true
 }
 
+// embedImageForDocumentStream is embedImageForDocument's streaming
+// counterpart -- same "only through the chat-configured vision-similarity
+// provider" rule and same "not configured/capable" contract (provider ""
+// with a nil error, not itself a failure -- see embedImageForDocument's
+// own doc comment for why), but never buffers r into a []byte: it's
+// streamed straight into the embedding request body. A non-nil error here
+// means the provider WAS configured and capable but the call itself
+// failed (network error, non-2xx, bad response shape) -- genuinely
+// distinct from "not configured", and the one case
+// streamAndProcessImageDocumentJob treats as a real job failure.
+func (h *Handler) embedImageForDocumentStream(ctx context.Context, r io.Reader, contentType string) (vec []float32, provider string, err error) {
+	streamer, provider := h.streamingImageEmbedderFor(ctx)
+	if streamer == nil {
+		// No capable/configured provider: still fully drain r (discarding
+		// the bytes, never buffering them) rather than leaving it unread --
+		// the caller's countingReader wraps r specifically so its own
+		// streamAndProcessImageDocumentJob learns the upload's true size
+		// regardless of whether an embedding was actually attempted.
+		if _, err := io.Copy(io.Discard, r); err != nil {
+			return nil, "", err
+		}
+		return nil, "", nil
+	}
+	v, err := streamer.EmbedImageStream(ctx, r, contentType)
+	if err != nil {
+		return nil, "", err
+	}
+	return v, provider, nil
+}
+
+// streamingImageEmbedderFor resolves the SAME provider chat's own
+// vision-similarity feature uses (ChatVisionSettings.SimilarityProviderID)
+// -- never by looping over every configured text-embedding provider and
+// type-asserting StreamingImageEmbedder, for the same reason
+// embedImageForDocument's own doc comment gives. streamer is nil (not an
+// error) whenever similarity search isn't configured/capable for
+// streaming -- an uploaded image with no ANN vector is a valid, expected
+// outcome.
+func (h *Handler) streamingImageEmbedderFor(ctx context.Context) (streamer ports.StreamingImageEmbedder, provider string) {
+	if h.chatVision == nil {
+		return nil, ""
+	}
+	settings, err := h.chatVision.GetChatVisionSettings(ctx)
+	if err != nil || !settings.SimilarityEnabled || settings.SimilarityProviderID == "" {
+		return nil, ""
+	}
+	embedder, exists := h.embedders[settings.SimilarityProviderID]
+	if !exists {
+		return nil, ""
+	}
+	streamer, capable := embedder.(ports.StreamingImageEmbedder)
+	if !capable {
+		return nil, ""
+	}
+	return streamer, settings.SimilarityProviderID
+}
+
 func (h *Handler) handleAdminDocumentJob(w http.ResponseWriter, r *http.Request) {
 	if !requireConfigured(w, h.documentJobs != nil, configNameDocumentJobs) {
 		return
@@ -247,30 +409,6 @@ func (h *Handler) handleAdminDeleteDocumentJob(w http.ResponseWriter, r *http.Re
 	}
 	err := h.documentJobs.DeleteDocumentJob(r.Context(), r.PathValue("id"))
 	respondOrNotFound(w, err, domain.ErrDocumentJobNotFound, "document job not found", map[string]bool{"ok": true})
-}
-
-// handleAdminDocumentJobData serves a Document job's raw bytes -- an image
-// preview, primarily; a text job's content is instead read via
-// GET /admin/api/documents/{id} once indexed (doc.Text), but this endpoint
-// works for either, even before indexing finishes.
-func (h *Handler) handleAdminDocumentJobData(w http.ResponseWriter, r *http.Request) {
-	if !requireConfigured(w, h.documentJobs != nil, configNameDocumentJobs) {
-		return
-	}
-	data, contentType, err := h.documentJobs.GetDocumentJobData(r.Context(), r.PathValue("id"))
-	if err != nil {
-		if err == domain.ErrDocumentJobNotFound {
-			http.Error(w, "document job not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if contentType != "" {
-		w.Header().Set("Content-Type", contentType)
-	}
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
 }
 
 // handleAdminGetDocument returns one indexed document's full metadata and

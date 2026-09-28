@@ -77,16 +77,24 @@ uploadForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const file = uploadFileInput.files[0];
   if (!file) return;
-  setButtonLoading(uploadSubmitBtn, true, 'Uploading…');
+  const isImage = file.type && file.type.startsWith('image/');
+  setButtonLoading(uploadSubmitBtn, true, isImage ? 'Indexing…' : 'Uploading…');
   uploadStatusEl.textContent = '';
   try {
     const body = new FormData();
     body.append('file', file);
     body.append('index_vocabulary', uploadIndexVocabulary.checked ? 'true' : 'false');
-    await checkResponse(await fetch('/admin/api/document-jobs', { method: 'POST', body }));
+    const job = await (await checkResponse(await fetch('/admin/api/document-jobs', { method: 'POST', body }))).json();
     uploadForm.reset();
     uploadIndexVocabulary.checked = true;
-    uploadStatusEl.textContent = 'Uploaded -- indexing in the background.';
+    // An image finishes synchronously (its bytes are streamed straight
+    // into the embedding request, never buffered or stored -- see
+    // admin_document_jobs.go's own design notes), so job.status is
+    // already its final done/failed by the time this resolves; text
+    // still queues and indexes in the background as before.
+    uploadStatusEl.textContent = isImage
+      ? (job.status === 'failed' ? 'Indexing failed: ' + (job.error || 'unknown error') : 'Indexed.')
+      : 'Uploaded -- indexing in the background.';
     await loadJobs();
   } catch (err) {
     uploadStatusEl.textContent = 'Could not upload: ' + err.message;

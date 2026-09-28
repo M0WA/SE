@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -34,12 +35,14 @@ func (f *fakeSemanticMatcher) TopSemanticMatches(_ context.Context, _ []float32,
 	return f.matches, f.ok, nil
 }
 
-// fakeImageEmbeddingProvider implements both ports.EmbeddingProvider and
-// ports.ImageEmbedder -- a provider that supports image embedding.
+// fakeImageEmbeddingProvider implements ports.EmbeddingProvider,
+// ports.ImageEmbedder, and ports.StreamingImageEmbedder -- a provider that
+// supports both the buffered and streaming image-embedding paths.
 type fakeImageEmbeddingProvider struct {
-	vec    []float32
-	err    error
-	gotB64 string
+	vec         []float32
+	err         error
+	gotB64      string
+	gotStreamed []byte
 }
 
 func (f *fakeImageEmbeddingProvider) Embed(context.Context, string) ([]float32, error) {
@@ -48,6 +51,14 @@ func (f *fakeImageEmbeddingProvider) Embed(context.Context, string) ([]float32, 
 func (f *fakeImageEmbeddingProvider) Dimensions() int { return len(f.vec) }
 func (f *fakeImageEmbeddingProvider) EmbedImage(_ context.Context, base64Data, _ string) ([]float32, error) {
 	f.gotB64 = base64Data
+	return f.vec, f.err
+}
+func (f *fakeImageEmbeddingProvider) EmbedImageStream(_ context.Context, r io.Reader, _ string) ([]float32, error) {
+	data, readErr := io.ReadAll(r)
+	if readErr != nil {
+		return nil, readErr
+	}
+	f.gotStreamed = data
 	return f.vec, f.err
 }
 
