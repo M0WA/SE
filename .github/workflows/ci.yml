@@ -145,7 +145,7 @@ jobs:
           CGO_ENABLED: "0"
         run: make deb PKG_VERSION=${{ env.PKG_VERSION }}
       - run: mv build/searchengine_${{ env.PKG_VERSION }}_amd64.deb build/searchengine_${{ env.PKG_VERSION }}_debian_amd64.deb
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: searchengine-debian-amd64-deb
           path: build/searchengine_${{ env.PKG_VERSION }}_debian_amd64.deb
@@ -166,7 +166,7 @@ jobs:
           CGO_ENABLED: "0"
         run: make deb PKG_VERSION=${{ env.PKG_VERSION }}
       - run: mv build/searchengine_${{ env.PKG_VERSION }}_amd64.deb build/searchengine_${{ env.PKG_VERSION }}_ubuntu_amd64.deb
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: searchengine-ubuntu-amd64-deb
           path: build/searchengine_${{ env.PKG_VERSION }}_ubuntu_amd64.deb
@@ -189,7 +189,7 @@ jobs:
           CGO_ENABLED: "0"
         run: make deb-gpu-control PKG_VERSION=${{ env.PKG_VERSION }}
       - run: mv build/searchengine-gpu-control_${{ env.PKG_VERSION }}_amd64.deb build/searchengine-gpu-control_${{ env.PKG_VERSION }}_debian_amd64.deb
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: searchengine-gpu-control-debian-amd64-deb
           path: build/searchengine-gpu-control_${{ env.PKG_VERSION }}_debian_amd64.deb
@@ -210,7 +210,7 @@ jobs:
           CGO_ENABLED: "0"
         run: make deb-gpu-control PKG_VERSION=${{ env.PKG_VERSION }}
       - run: mv build/searchengine-gpu-control_${{ env.PKG_VERSION }}_amd64.deb build/searchengine-gpu-control_${{ env.PKG_VERSION }}_ubuntu_amd64.deb
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: searchengine-gpu-control-ubuntu-amd64-deb
           path: build/searchengine-gpu-control_${{ env.PKG_VERSION }}_ubuntu_amd64.deb
